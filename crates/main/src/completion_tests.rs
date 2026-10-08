@@ -94,6 +94,7 @@ fn the_copy_has_the_parsers_visible_grammar_in_both_directions() {
 
     let paths: Vec<&str> = copy.iter().map(|shape| shape.path.as_str()).collect();
     assert!(paths.contains(&"fiber extension install"), "{paths:?}");
+    assert!(paths.contains(&"fiber extension test"), "{paths:?}");
     assert!(paths.contains(&"fiber completion"), "{paths:?}");
     for shape in &copy {
         for hidden in [
@@ -256,7 +257,7 @@ fn the_fish_script_offers_commands_and_ends_without_file_names() {
     );
     assert!(
         lines.contains(
-            &"complete -c fiber -n \"__fish_fiber_using_subcommand extension; and not __fish_seen_subcommand_from install update remove list\" -f -a \"install\" -d 'Install an extension and its dependencies'"
+            &"complete -c fiber -n \"__fish_fiber_using_subcommand extension; and not __fish_seen_subcommand_from install update remove list test\" -f -a \"install\" -d 'Install an extension and its dependencies'"
         ),
         "{text}"
     );

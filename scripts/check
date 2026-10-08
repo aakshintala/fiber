@@ -15,6 +15,7 @@ set -euo pipefail
 # The last line says pass or fail, so a caller reading only the tail of the
 # output (`| tail`) cannot mistake a failure for a pass.
 log=
+rc=0
 trap 'rc=$?; rm -f "$log"; if [ $rc -eq 0 ]; then echo "scripts/check: PASS"; else echo "scripts/check: FAIL (exit $rc)"; fi' EXIT
 cd "$(git rev-parse --show-toplevel)"
 
@@ -35,7 +36,9 @@ mode=$(value mode)
 packages=$(value packages)
 package_specs=$(value package_specs)
 library_specs=$(value library_specs)
+extension_packages=$(value extension_packages)
 echo "== selection: $mode; crates: ${packages:-none}"
+echo "== extension cases: ${extension_packages:-none}"
 
 # cargo fmt only matches a bare name among workspace members. The other
 # commands below resolve `-p` against the whole dependency graph, so they
@@ -99,6 +102,17 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   # reports every failure, so a rerun is not needed to see them.
   cargo nextest run --no-fail-fast "${package_spec_args[@]}" 2>&1 | tee "$log"
   nextest=$(count '[0-9]+ tests? run')
+  if [ -n "$extension_packages" ]; then
+    echo "== fiber extension test"
+    target_directory=$(cargo metadata --format-version 1 --no-deps | \
+      python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+    cargo build -p main --bin fiber
+    fiber="$target_directory/debug/fiber"
+    for package in $extension_packages; do
+      echo "== $fiber extension test $package"
+      "$fiber" extension test "$package"
+    done
+  fi
   # A crate with no library has no doc-tests, and cargo refuses to look.
   doctests=0
   if [ -n "$library_specs" ]; then

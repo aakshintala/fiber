@@ -35,6 +35,7 @@ Extensions:
   extension update [<name>]         Update one extension, or every installed extension, to its newest tag
   extension remove <name>           Remove an extension, the dependencies nothing else uses, and their data
   extension list                    List installed extensions: name, version and commit
+  extension test [<path>]           Run an extension's test cases against the scripted provider
 
 Configuration:
   config get <key>                              Print the effective value and the layer it came from
@@ -310,6 +311,12 @@ pub(crate) enum ExtensionCommands {
     },
     /// List installed extensions: name, version and commit
     List,
+    /// Run an extension's test cases against the scripted provider
+    Test {
+        /// The extension package; defaults to the current directory.
+        #[arg(value_name = "path")]
+        path: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

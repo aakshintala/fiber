@@ -527,6 +527,97 @@ The first-party provider extensions are the fuller examples, including
 Writing a tool or a hook has the same shape: register a name, receive a call, do
 pure work plus host calls, return. The hook points are [Hooks](#hooks).
 
+## Testing an extension
+
+Run `fiber extension test` in a package directory, or pass the package path.
+The runner reads each `*.json` file directly inside `tests/`, in filename byte
+order. Each file is one case. Its optional `name` defaults to the file stem.
+Each case runs with a fresh Fiber home and workspace.
+
+### Session cases
+
+A session case requires `script`, `prompt` and `expect`. `script` uses the
+format in `docs/model-routing.md`, "The scripted provider". `expect` lists the
+complete ordered durable event stream. Each expected object checks only its
+fields, so `{"kind":"turn_completed"}` checks the event kind. Ephemeral lines
+are ignored. Objects match a subset of fields; arrays and scalar values match
+exactly. An expected `null` matches a missing field or a field set to `null`.
+
+```json
+{
+  "script": {"steps": [{"text": "Hello."}]},
+  "prompt": "hi",
+  "expect": [
+    {"kind": "session_started"},
+    {"kind": "fiber_started"},
+    {"kind": "extensions_loaded"},
+    {"kind": "preamble_built"},
+    {"kind": "opening_message"},
+    {"kind": "turn_started"},
+    {"kind": "step_started"},
+    {"kind": "assistant_message_started"},
+    {"kind": "text_completed", "payload": {"text": "Hello."}},
+    {"kind": "usage_recorded"},
+    {"kind": "assistant_message_completed"},
+    {"kind": "turn_completed"},
+    {"kind": "fiber_exited"}
+  ]
+}
+```
+
+A case may add `config`, written as the temporary home's global
+configuration. `host.http` and `host.exec` list requests and replies in order.
+An HTTP reply has `status` and `body`, or an `error` with `code` and `message`.
+An exec reply has `code`, `stdout` and `stderr`. Requests match the fields the
+case gives; a mismatch, an unscripted call or an unused reply fails the case.
+These host replies prevent network requests and program execution.
+
+`clock` is a list of positive `advance_ms` values. An entry may use `after` to
+name the event `kind` and its optional 1-based `nth` occurrence. The runner
+advances only when the operation is parked on that clock deadline. `until`
+selects the event after which the runner closes the session; by default it
+closes after the first `turn_completed` or `turn_failed`.
+
+### Provider call cases
+
+A call case invokes a provider function without starting a session. It requires
+`call` with `provider`, `function` and `arg`, plus exactly one of `returns` or
+`error`. The runner currently supports `function: "cost"`. A return is `null`
+or a finite number at or above 0. An error checks its `code` and may also check
+its `message`. The case can script the same `host` replies as a session case.
+
+```json
+{
+  "call": {
+    "provider": "openrouter",
+    "function": "cost",
+    "arg": {
+      "generation_id": "gen-abc",
+      "base_url": "https://openrouter.ai/api/v1",
+      "key": "sk-test"
+    }
+  },
+  "host": {
+    "http": [{
+      "request": {
+        "method": "GET",
+        "url": "https://openrouter.ai/api/v1/generation?id=gen-abc",
+        "headers": {"authorization": "Bearer sk-test"}
+      },
+      "reply": {
+        "status": 200,
+        "body": "{\"data\":{\"total_cost\":0.0000072}}"
+      }
+    }]
+  },
+  "returns": 0.0000072
+}
+```
+
+A package with no case files fails the command. An invalid package path is a
+usage error. The runner reports each case and exits non-zero if any case fails
+(`docs/invocation.md`, "Commands and flags").
+
 ## Hooks
 
 A hook is asked at a fixed point in a session and may change what happens
@@ -1028,9 +1119,9 @@ When a signal stops Fiber, no extension code runs, as no hook does. The
 - Keep what must survive a resume in `state`, never in globals.
 - Need npm, a long-lived connection or a language other than Lua? Write a
   process extension.
-- Test with `fiber extension test`: cases that give the built-in `scripted`
-  provider a script and assert on the events, with host calls scripted and a
-  fake clock. Fiber tests its own extensions the same way and no other
+- Test with `fiber extension test`: use a session case to test a run or a call
+  case to test a provider function. See [Testing an extension](#testing-an-extension)
+  for the case format. Fiber tests its own extensions with the same tooling
   (`docs/testing.md`, "Testing an extension").
 
 ## The extension API version

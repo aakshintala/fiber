@@ -10,7 +10,8 @@
 //!   `packages` and `libraries` are bare names (for tools that only match
 //!   workspace members, such as `cargo fmt -p`), `package_specs` and
 //!   `library_specs` are `name@version` (for `cargo -p`, which resolves a
-//!   bare name against the whole dependency graph and can be ambiguous)
+//!   bare name against the whole dependency graph and can be ambiguous), and
+//!   `extension_packages` are first-party package directories with cases
 //! - `plan --mode M --packages "A B" --event E --bug true|false --mutants true|false`:
 //!   which CI jobs run, as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
@@ -91,6 +92,11 @@ fn run(args: &[String]) -> Result<bool, String> {
             println!("package_specs={}", package_specs.join(" "));
             println!("libraries={}", libraries.join(" "));
             println!("library_specs={}", library_specs.join(" "));
+            if let Some(extension_packages) =
+                select::extension_packages(&selection, Path::new("."))?
+            {
+                println!("extension_packages={}", extension_packages.join(" "));
+            }
             Ok(true)
         }
         "plan" => {

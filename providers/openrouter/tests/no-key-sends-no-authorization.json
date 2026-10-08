@@ -1,0 +1,26 @@
+{
+  "call": {
+    "provider": "openrouter",
+    "function": "cost",
+    "arg": {
+      "generation_id": "gen-abc",
+      "base_url": "https://openrouter.ai/api/v1"
+    }
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://openrouter.ai/api/v1/generation?id=gen-abc",
+          "headers": {"authorization": null}
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"data\":{\"total_cost\":1}}"
+        }
+      }
+    ]
+  },
+  "returns": 1
+}

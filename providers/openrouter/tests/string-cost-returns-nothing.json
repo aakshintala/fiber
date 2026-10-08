@@ -1,0 +1,27 @@
+{
+  "call": {
+    "provider": "openrouter",
+    "function": "cost",
+    "arg": {
+      "generation_id": "gen-abc",
+      "base_url": "https://openrouter.ai/api/v1",
+      "key": "sk-test"
+    }
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://openrouter.ai/api/v1/generation?id=gen-abc",
+          "headers": {"authorization": "Bearer sk-test"}
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"data\":{\"total_cost\":\"0.1\"}}"
+        }
+      }
+    ]
+  },
+  "returns": null
+}

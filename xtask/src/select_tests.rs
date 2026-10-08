@@ -1311,20 +1311,8 @@ fn main_reads_a_package() -> RustFile {
     )
 }
 
-fn extensions_reads_a_package() -> RustFile {
-    package_src(
-        "extensions",
-        "crates/extensions/tests/openrouter_cost.rs",
-        "fn package() -> PathBuf {\n    PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../providers/openrouter\")\n}\n",
-    )
-}
-
 fn package_ok_files() -> Vec<RustFile> {
-    vec![
-        config_reads_a_package(),
-        extensions_reads_a_package(),
-        main_reads_a_package(),
-    ]
+    vec![config_reads_a_package(), main_reads_a_package()]
 }
 
 /// `members()` with the `tools` and `xtask` crates: only the package-reader
@@ -1370,11 +1358,7 @@ fn an_unlisted_crate_that_reads_a_package_fails() {
 #[test]
 fn a_listed_crate_with_no_reading_source_fails() {
     assert_eq!(
-        package_reader_mismatches(
-            &[config_reads_a_package(), extensions_reads_a_package()],
-            &package_members()
-        )
-        .unwrap(),
+        package_reader_mismatches(&[config_reads_a_package()], &package_members()).unwrap(),
         ["main: listed as reading a first-party package, but no source reads one"]
     );
 }
@@ -1550,4 +1534,146 @@ fn docs_only_fails_for_empty_or_code_lists() {
     ] {
         assert!(!docs_only(&strings(&files)), "{files:?}");
     }
+}
+
+fn extension_case_repo() -> crate::test_dir::TestDir {
+    let root = crate::test_dir::TestDir::new("extension-packages");
+    root.write("providers/openrouter/tests/cost.json", "{}");
+    root.write("providers/acme/tests/case.json", "{}");
+    root.write("extensions/alpha/tests/case.json", "{}");
+    root.write("providers/no-cases/tests/notes.md", "not a case");
+    root.write("providers/no-tests/extension.json", "{}");
+    root.write("providers/nested-only/tests/sub/case.json", "{}");
+    root.write("providers/not-a-package", "not a directory");
+    root.write("extensions/alpha/tests/nested/ignored.json", "{}");
+    std::fs::create_dir(root.path().join("providers/no-cases/tests/directory.json")).unwrap();
+    root
+}
+
+fn selection_with_main_for_loop_change() -> Selection {
+    let mut members = package_members();
+    if let Some(main) = members.get_mut("main") {
+        main.deps = vec!["loop".to_owned()];
+    }
+    classify(&strings(&["crates/loop/src/x.rs"]), &members)
+}
+
+#[test]
+fn loop_change_selects_all_direct_case_packages_in_sorted_order() {
+    let root = extension_case_repo();
+    let selection = selection_with_main_for_loop_change();
+    assert!(selection.packages().iter().any(|package| package == "main"));
+    assert_eq!(
+        extension_packages(&selection, root.path()).unwrap(),
+        Some(strings(&[
+            "extensions/alpha",
+            "providers/acme",
+            "providers/openrouter"
+        ]))
+    );
+}
+
+#[test]
+fn a_diff_without_binary_tests_selects_no_extension_packages() {
+    let root = extension_case_repo();
+    let selection = classify(&strings(&["xtask/src/x.rs"]), &package_members());
+    assert!(!selection.packages().iter().any(|package| package == "main"));
+    assert_eq!(extension_packages(&selection, root.path()).unwrap(), None);
+}
+
+#[test]
+fn first_party_package_change_selects_every_package_with_cases() {
+    let root = extension_case_repo();
+    let selection = classify(
+        &strings(&["providers/openrouter/init.lua"]),
+        &package_members(),
+    );
+    assert_eq!(
+        extension_packages(&selection, root.path()).unwrap(),
+        Some(strings(&[
+            "extensions/alpha",
+            "providers/acme",
+            "providers/openrouter"
+        ]))
+    );
+}
+
+#[test]
+fn only_direct_json_files_make_a_case_package() {
+    let root = extension_case_repo();
+    let selection = selection_with_main_for_loop_change();
+    let packages = extension_packages(&selection, root.path())
+        .unwrap()
+        .unwrap();
+    for ignored in [
+        "providers/no-cases",
+        "providers/no-tests",
+        "providers/nested-only",
+    ] {
+        assert!(!packages.contains(&ignored.to_owned()), "{packages:?}");
+    }
+}
+
+#[test]
+fn a_package_root_that_is_a_file_reports_the_root_path() {
+    let selection = selection_with_main_for_loop_change();
+
+    let providers = crate::test_dir::TestDir::new("extension-packages-provider-root-file");
+    providers.write("providers", "not a directory");
+    let error = extension_packages(&selection, providers.path()).unwrap_err();
+    assert!(
+        error.starts_with(&providers.path().join("providers").display().to_string()),
+        "{error}"
+    );
+
+    let extensions = crate::test_dir::TestDir::new("extension-packages-extension-root-file");
+    extensions.write("providers/.keep", "");
+    extensions.write("extensions", "not a directory");
+    let error = extension_packages(&selection, extensions.path()).unwrap_err();
+    assert!(
+        error.starts_with(&extensions.path().join("extensions").display().to_string()),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_package_tests_path_that_is_a_file_reports_that_path() {
+    let root = crate::test_dir::TestDir::new("extension-packages-tests-file");
+    root.write("providers/acme/tests", "not a directory");
+    let selection = selection_with_main_for_loop_change();
+
+    let error = extension_packages(&selection, root.path()).unwrap_err();
+    assert!(
+        error.starts_with(
+            &root
+                .path()
+                .join("providers/acme/tests")
+                .display()
+                .to_string()
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn missing_package_roots_and_tests_are_skipped() {
+    let root = crate::test_dir::TestDir::new("extension-packages-missing");
+    root.write("providers/no-tests/extension.json", "{}");
+    let selection = selection_with_main_for_loop_change();
+
+    assert_eq!(
+        extension_packages(&selection, root.path()).unwrap(),
+        Some(Vec::<String>::new())
+    );
+}
+
+#[test]
+fn a_missing_package_root_group_is_empty() {
+    let root = crate::test_dir::TestDir::new("extension-packages-no-group");
+    root.write("providers/acme/tests/case.json", "{}");
+    let selection = selection_with_main_for_loop_change();
+    assert_eq!(
+        extension_packages(&selection, root.path()).unwrap(),
+        Some(strings(&["providers/acme"]))
+    );
 }
