@@ -101,17 +101,27 @@ for corpus in 300:25 1300:25 4000:25 1300:0; do
           evict_confirmed "$home" || { echo "eviction not confirmed: $home" >&2; exit 1; }
           left=confirmed
         fi
+        ms=
+        hits=
+        rss=
         case "$rss_mode" in
           gnu)
             out=$(/usr/bin/time -f '%M' "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
             read -r ms hits _ <<<"$out"
-            rss=$(( $(cat "$TIMEFILE") * 1024 ))
+            raw=$(cat "$TIMEFILE")
+            case "$raw" in
+              ''|*[!0-9]*) echo "could not read peak RSS" >&2; exit 1 ;;
+            esac
+            rss=$(( raw * 1024 ))
             ;;
           bsd)
             out=$(/usr/bin/time -l "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
             read -r ms hits _ <<<"$out"
             rss=$(awk '/maximum resident set size/ { print $1 }' "$TIMEFILE")
             ;;
+        esac
+        case "$ms" in
+          ''|.|*[!0-9.]*|*.*.*) echo "could not read ms" >&2; exit 1 ;;
         esac
         case "$rss" in
           ''|*[!0-9]*) echo "could not read peak RSS" >&2; exit 1 ;;
