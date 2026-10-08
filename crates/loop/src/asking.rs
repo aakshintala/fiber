@@ -13,6 +13,7 @@ use contract::commands::ReplyAnswer;
 use contract::events::{Answer, Interaction};
 use contract::tool::{Answered, Asking, Check};
 
+use crate::mint;
 use crate::progress::Stream;
 
 /// Where one call's ask stands.
@@ -29,6 +30,8 @@ enum Slot {
         interaction: Interaction,
         until: Option<Instant>,
         check: Option<Check>,
+        /// Raised with [`Asking::suspends`].
+        suspends: bool,
     },
     /// Answered; the asking thread has not taken the answer yet.
     Resolved(Answered),
@@ -39,6 +42,9 @@ enum Slot {
 struct Inner {
     slot: Slot,
     closed: bool,
+    /// The id the next raise is written under, bound by
+    /// [`AskSlot::reraise`].
+    reraise: Option<RequestId>,
 }
 
 /// One running call's ask, shared by its thread and the loop thread.
@@ -82,6 +88,7 @@ impl Default for AskSlot {
             inner: Mutex::new(Inner {
                 slot: Slot::Idle,
                 closed: false,
+                reraise: None,
             }),
             cv: Condvar::new(),
         }
@@ -137,6 +144,22 @@ impl AskSlot {
         }
     }
 
+    /// The next raise is written under `request` instead of a new id: a
+    /// request raised again on resume keeps its `request_id`
+    /// (`docs/invocation.md`, "Lifecycle").
+    pub(crate) fn reraise(&self, request: RequestId) {
+        lock(&self.inner).reraise = Some(request);
+    }
+
+    /// The id a raise is written under: the one [`AskSlot::reraise`]
+    /// bound, once, and a new one otherwise.
+    pub(crate) fn next_request(&self) -> RequestId {
+        lock(&self.inner)
+            .reraise
+            .take()
+            .unwrap_or_else(|| RequestId(mint("r_")))
+    }
+
     /// Records the taken ask as pending under `request`, once its line is
     /// written.
     pub(crate) fn pend(
@@ -145,13 +168,21 @@ impl AskSlot {
         interaction: Interaction,
         until: Option<Instant>,
         check: Option<Check>,
+        suspends: bool,
     ) {
         lock(&self.inner).slot = Slot::Pending {
             request,
             interaction,
             until,
             check,
+            suspends,
         };
+    }
+
+    /// Whether the pending interaction was raised with
+    /// [`Asking::suspends`]; false when none is pending.
+    pub(crate) fn pending_suspends(&self) -> bool {
+        matches!(lock(&self.inner).slot, Slot::Pending { suspends: true, .. })
     }
 
     /// The pending request and its `until`, if one is pending.

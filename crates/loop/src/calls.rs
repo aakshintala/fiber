@@ -23,6 +23,7 @@ use serde_json::{Map, Value};
 
 use super::completion::{completed, denied, failed, resolved};
 use crate::asking::Release;
+use crate::interactions::Suspend;
 use crate::progress::{SharedWake, Stream};
 use crate::{Error, Loop, schema};
 
@@ -56,13 +57,15 @@ fn is_done(call: &Running) -> bool {
     matches!(call.state, State::Done)
 }
 
-/// Each running call with its stream.
-fn asking(running: &[Running]) -> Vec<(&ActionId, &Stream)> {
-    let streams = running.iter().filter_map(|call| match &call.state {
-        State::Running { stream, .. } => Some((&call.id, stream.as_ref())),
-        State::Ready(_) | State::Done => None,
+/// Each call without a written completion, in request order, with its
+/// stream while it runs.
+fn unwritten(running: &[Running]) -> Vec<(&ActionId, Option<&Stream>)> {
+    let calls = running.iter().filter_map(|call| match &call.state {
+        State::Running { stream, .. } => Some((&call.id, Some(stream.as_ref()))),
+        State::Ready(_) => Some((&call.id, None)),
+        State::Done => None,
     });
-    streams.collect()
+    calls.collect()
 }
 
 /// The written delta's payload serialised as JSON, in bytes
@@ -163,16 +166,21 @@ impl Loop {
         turn: &TurnId,
     ) -> Result<bool, Error> {
         let calls = calls.into_iter().map(|(id, call)| (id, call, None));
-        self.run_batch(calls.collect(), turn)
+        self.run_batch(calls.collect(), turn, None)
     }
 
     /// [`Loop::run_calls`] over a batch some of whose calls are already
     /// decided: a call carrying its decision is not judged again, and the
-    /// rest are judged in order as `run_calls` judges them.
+    /// rest are judged in order as `run_calls` judges them. `reraise` names
+    /// a call that already has its `tool_call_started` and the request it
+    /// was waiting on: it runs again with no second `tool_call_started`, and
+    /// its ask is raised again under that `request_id` (`docs/events.md`,
+    /// "Resume").
     pub(crate) fn run_batch(
         &mut self,
         calls: Vec<(ActionId, ToolCallRequested, Option<Decided>)>,
         turn: &TurnId,
+        reraise: Option<(ActionId, RequestId)>,
     ) -> Result<bool, Error> {
         let mut decided = Vec::with_capacity(calls.len());
         for (id, call, already) in calls {
@@ -217,6 +225,7 @@ impl Loop {
             // Closes every call's ask on any return, so no worker the scope
             // joins is left blocked in one.
             let mut release = Release::default();
+            let mut suspend = Suspend::default();
             for (id, name, decision) in decided {
                 let state = match decision {
                     Err(completed) => State::Ready(completed),
@@ -226,15 +235,21 @@ impl Loop {
                     // line already written stays.
                     Ok(_) if self.turn_cancelled() => State::Ready(self.cancelled_before_ran()),
                     Ok((tool, arguments, declared)) => {
-                        self.append(
-                            &Event::ToolCallStarted(ToolCallStarted {
-                                declared: declared.clone(),
-                                arguments: None,
-                                changed_by: None,
-                            }),
-                            turn,
-                            Some(&id),
-                        )?;
+                        let again = reraise
+                            .as_ref()
+                            .filter(|(action, _)| *action == id)
+                            .map(|(_, request)| request.clone());
+                        if again.is_none() {
+                            self.append(
+                                &Event::ToolCallStarted(ToolCallStarted {
+                                    declared: declared.clone(),
+                                    arguments: None,
+                                    changed_by: None,
+                                }),
+                                turn,
+                                Some(&id),
+                            )?;
+                        }
                         let bound = tool.bound();
                         // `fiber ask`, a delegate, after `close`, or no inbox
                         // wake: nobody can answer (`docs/tools.md`, "Asking
@@ -242,6 +257,9 @@ impl Loop {
                         let answerable = self.answerable && self.inbox_wake.is_some();
                         let stream =
                             Arc::new(Stream::new(Arc::clone(&wake), id.clone(), answerable));
+                        if let Some(request) = again {
+                            stream.asking().reraise(request);
+                        }
                         release.add(Arc::clone(&stream));
                         let thread_stream = Arc::clone(&stream);
                         let call_cancel = Arc::clone(&cancel);
@@ -268,7 +286,7 @@ impl Loop {
                 running.push(Running { id, state });
             }
             loop {
-                self.serve_interactions(&asking(&running), turn)?;
+                self.serve_interactions(&unwritten(&running), turn)?;
                 let now = clock.now();
                 // Every delta due now, in request order. A held change the
                 // interval still covers stays held for the flush in
@@ -310,13 +328,17 @@ impl Loop {
                 // `until` is due, an emit, a call returning, an ask or a
                 // clock move. Each pass either wrote something above or
                 // waits here, never spins.
-                let calls = asking(&running);
+                let calls = unwritten(&running);
                 let earliest = calls
                     .iter()
-                    .filter_map(|(_, stream)| stream.deadline())
+                    .filter_map(|(_, stream)| stream.and_then(Stream::deadline))
                     .chain(Self::interaction_deadline(&calls))
                     .min();
-                self.wait_step(&wake, &calls, earliest, turn)?;
+                // Suspended on a question: nothing more is written, as an
+                // idle approval writes nothing more.
+                if self.wait_step(&wake, &calls, earliest, &mut suspend, turn)? {
+                    return Ok(false);
+                }
             }
         })
     }

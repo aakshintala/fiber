@@ -1,0 +1,817 @@
+//! A question that suspends lives like a pending approval
+//! (`docs/tools.md`, "When a person can answer"): once its call is the
+//! step's only call without a result, the idle delay or a shutdown ends
+//! the step with it still pending, and `fiber_exited` names it
+//! (`docs/invocation.md`, "Lifecycle" and "Shutdown"). While another call
+//! of the step has no result, the step waits for the answer.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test code"
+)]
+
+mod support;
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use contract::clock::Clock as _;
+use contract::commands::{Reply, ReplyAnswer};
+use contract::emit::Emit;
+use contract::events::{Answer, Control, Interaction, TurnOutcome};
+use contract::inbox::{Ack, Delivery};
+use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
+use contract::provider::ToolDefinition;
+use contract::shapes::{ContentPart, DeclaredEffects, Effect, Question};
+use contract::tool::{Answered, Ask, Asking, Cancel, Effects, EffectsError, Output, Tool};
+use contract::{Envelope, ErrorCode, JobId, RequestId};
+use fakes::Scripted;
+use fakes::clock::FakeClock;
+use r#loop::{Error, Loop};
+use serde_json::{Map, Value, json};
+
+use support::{DEADLINE, Gate, Session, Tap, TestTool, calls_reply, delivery, kinds};
+
+/// The idle delay every test but the no-timeout one sets.
+const IDLE: Duration = Duration::from_secs(60);
+
+/// The text a call returns when its questions go to the driver.
+const SENT: &str = "The questions went to the driver.";
+
+/// A tool that asks as `ask_user` does: one `form` of its questions that
+/// suspends, or the questions for the driver when nobody can answer. It
+/// records the arguments of each run.
+struct Former {
+    suspends: bool,
+    runs: Mutex<Vec<Map<String, Value>>>,
+}
+
+impl Former {
+    fn new() -> Self {
+        Self {
+            suspends: true,
+            runs: Mutex::default(),
+        }
+    }
+
+    /// One whose form does not suspend.
+    fn plain() -> Self {
+        Self {
+            suspends: false,
+            ..Self::new()
+        }
+    }
+
+    fn runs(&self) -> Vec<Map<String, Value>> {
+        self.runs.lock().unwrap().clone()
+    }
+}
+
+fn text(text: &str) -> Output {
+    Output {
+        content: vec![ContentPart::Text { text: text.into() }],
+        ..Output::default()
+    }
+}
+
+fn to_driver(questions: Vec<Question>) -> Output {
+    Output {
+        control: Some(Control {
+            handoff: None,
+            questions: Some(questions),
+        }),
+        ..text(SENT)
+    }
+}
+
+impl Tool for Former {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "former".into(),
+            description: "Asks the person a form.".into(),
+            input_schema: json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Ok(Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: Some(String::new()),
+            prefix: None,
+        })
+    }
+
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
+        panic!("the loop runs a call through run_asking")
+    }
+
+    fn run_asking(
+        &self,
+        arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        _: &dyn Emit,
+        ask: &dyn Ask,
+    ) -> Output {
+        self.runs.lock().unwrap().push(arguments.clone());
+        let questions: Vec<Question> =
+            serde_json::from_value(arguments["questions"].clone()).unwrap();
+        if !ask.answerable() {
+            return to_driver(questions);
+        }
+        let answered = ask.ask(Asking {
+            interaction: Interaction::Form {
+                fields: questions.clone(),
+            },
+            action_ids: Vec::new(),
+            until: None,
+            check: None,
+            suspends: self.suspends,
+        });
+        match answered {
+            Answered::Reply(Answer::Declined { .. }) => text("declined"),
+            Answered::Reply(answer) => text(&serde_json::to_string(&answer).unwrap()),
+            Answered::NoAnswer if cancel.is_cancelled() => text("declined"),
+            Answered::NoAnswer => to_driver(questions),
+        }
+    }
+}
+
+/// A tool whose call returns only once its gate opens.
+struct Blocker {
+    name: &'static str,
+    gate: Arc<Gate>,
+}
+
+impl Tool for Blocker {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name.into(),
+            description: "Waits.".into(),
+            input_schema: json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Former::new().effects(&Map::new())
+    }
+
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
+        self.gate.wait();
+        text("waited")
+    }
+}
+
+fn blocker(name: &'static str) -> (Arc<Blocker>, Arc<Gate>) {
+    let gate = Arc::new(Gate::default());
+    let tool = Blocker {
+        name,
+        gate: Arc::clone(&gate),
+    };
+    (Arc::new(tool), gate)
+}
+
+/// Jobs a test turns on and off: one job runs while `running` is set.
+#[derive(Default)]
+struct Toggle {
+    running: AtomicBool,
+}
+
+impl Jobs for Toggle {
+    fn open(&self, _opening: Opening) -> Result<Opened, OpenError> {
+        Err(OpenError::Io {
+            path: PathBuf::from("jobs"),
+            source: std::io::Error::other("no jobs here"),
+        })
+    }
+
+    fn stop(&self, _job_id: &JobId) -> bool {
+        false
+    }
+
+    fn background(&self) -> usize {
+        0
+    }
+
+    fn foreground(&self, _call: Foreground) {}
+
+    fn running(&self) -> Vec<JobId> {
+        if self.running.load(Ordering::SeqCst) {
+            vec![JobId("j_1".into())]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn deliver_to(&self, _inbox: mpsc::Sender<Delivery>) {}
+}
+
+/// The arguments of a `former` call: one question with two options.
+fn questions() -> Value {
+    json!({"questions": [{
+        "header": "Base",
+        "question": "Which branch?",
+        "options": [{"label": "main"}, {"label": "dev"}],
+    }]})
+}
+
+/// A session whose first reply makes `calls` and whose second says
+/// "Done.", with `tools` registered, an inbox wake, and `idle` as the idle
+/// delay.
+fn session(calls: &[&str], tools: Vec<Arc<dyn Tool>>, idle: Option<Duration>) -> Session {
+    let calls: Vec<(&str, Value)> = calls
+        .iter()
+        .map(|name| {
+            // `unread`'s call does not fit its schema, so it fails
+            // without running.
+            let arguments = match *name {
+                "former" => questions(),
+                "unread" => json!({}),
+                _ => json!({"city": "Paris"}),
+            };
+            (*name, arguments)
+        })
+        .collect();
+    let mut session = Session::with_tools(
+        vec![calls_reply("", &calls), Scripted::text("Done.")],
+        None,
+        tools,
+    )
+    .inbox_woken();
+    session.looped = session.looped.take().map(|looped| looped.idle_exit(idle));
+    session
+}
+
+type Finished = mpsc::Receiver<(Loop, Result<Option<TurnOutcome>, Error>)>;
+
+/// Sends a prompt and runs one turn on its own thread.
+fn start(session: &mut Session) -> Finished {
+    session.inbox.send(delivery("go")).unwrap();
+    let mut looped = session.looped.take().unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let outcome = looped.turn();
+        let _sent = done.send((looped, outcome));
+    });
+    finished
+}
+
+/// Waits for the turn `start` started, putting the loop back.
+fn finish(session: &mut Session, finished: &Finished) -> Option<TurnOutcome> {
+    let (looped, outcome) = finished
+        .recv_timeout(DEADLINE)
+        .expect("the turn ended in time");
+    session.looped = Some(looped);
+    outcome.unwrap()
+}
+
+/// Asserts the turn has not ended.
+fn still_running(finished: &Finished) {
+    assert!(finished.try_recv().is_err(), "the turn has not ended");
+}
+
+/// Sends `answer` to `request` and returns how the command was answered.
+fn answer(session: &Session, request: &str, answer: Value) -> contract::inbox::Answer {
+    let (tx, rx) = mpsc::channel();
+    let ack = Ack(Box::new(move |answered| {
+        let _sent = tx.send(answered);
+    }));
+    let reply = Reply {
+        request_id: RequestId(request.into()),
+        answer: serde_json::from_value::<ReplyAnswer>(answer).unwrap(),
+    };
+    session.inbox.send(Delivery::Reply(reply, ack)).unwrap();
+    rx.recv_timeout(DEADLINE).expect("the reply is answered")
+}
+
+/// A reply that fits `questions()`.
+fn main_branch() -> Value {
+    json!({"answers": [{"labels": ["main"]}]})
+}
+
+fn request_id(line: &Envelope) -> String {
+    line.payload["request_id"].as_str().unwrap().to_owned()
+}
+
+fn of_kind<'a>(lines: &'a [Envelope], kind: &str) -> Vec<&'a Envelope> {
+    lines.iter().filter(|line| line.kind == kind).collect()
+}
+
+fn no_resolution(tap: &Tap) {
+    assert!(
+        tap.pending()
+            .iter()
+            .all(|line| line.kind != "interaction_resolved"),
+        "the form is still pending"
+    );
+}
+
+/// Writes `fiber_exited` as the process does at exit, and returns every
+/// line of the session through it.
+fn exit(session: &mut Session, signal: Option<i32>) -> Vec<Envelope> {
+    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, signal).unwrap();
+    session.events_until("fiber_exited", |line| line.kind == "fiber_exited")
+}
+
+/// One call in the first reply.
+const OPENING: &[&str] = &[
+    "session_started",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "tool_call_arguments_delta",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+];
+
+/// Two calls in the first reply.
+const OPENING_TWO: &[&str] = &[
+    "session_started",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "tool_call_arguments_delta",
+    "tool_call_arguments_delta",
+    "tool_call_requested",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+];
+
+/// The second step, which says "Done.".
+const DONE: &[&str] = &[
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
+
+fn assert_kinds(lines: &[Envelope], parts: &[&[&str]]) {
+    assert_eq!(kinds(lines), parts.concat());
+}
+
+/// Waits until the step parks at `at`, then advances the clock to 1 ms
+/// before it and checks the step waits again with the form pending, then
+/// to `at`.
+fn idle_passes(session: &Session, tap: &Tap, finished: &Finished, at: Instant) {
+    let clock = Arc::clone(&session.clock);
+    assert!(
+        clock.await_parked(at, DEADLINE),
+        "the step waits until the idle deadline"
+    );
+    let left = at
+        .duration_since(clock.now())
+        .saturating_sub(Duration::from_millis(1));
+    let mark = clock.advance_marked(left);
+    assert!(
+        clock.await_parked_since(&mark, Some(at), DEADLINE),
+        "1 ms before it, the step waits again"
+    );
+    no_resolution(tap);
+    still_running(finished);
+    clock.advance(Duration::from_millis(1));
+}
+
+/// Whether the loop thread settles into a wait on the clock, rather than
+/// spinning: a park caught by a zero advance is followed by another park.
+/// Retried, with a short bound each, while the advance catches it between
+/// waits.
+fn settles(clock: &FakeClock) -> bool {
+    let short = Duration::from_millis(100);
+    (0..20).any(|_| {
+        clock.await_parked_unbounded(short) && {
+            let mark = clock.advance_marked(Duration::ZERO);
+            clock.await_parked_since(&mark, None, short)
+        }
+    })
+}
+
+#[test]
+fn the_idle_delay_exits_on_a_form_that_is_the_steps_only_call() {
+    let former = Arc::new(Former::new());
+    let mut session = session(&["former"], vec![former.clone()], Some(IDLE));
+    let tap = Tap::new(&session.log);
+    let at = session.clock.now() + IDLE;
+    let finished = start(&mut session);
+    let requested = tap.wait_for("interaction_requested");
+    assert_eq!(requested.payload["resumes"], true);
+    idle_passes(&session, &tap, &finished, at);
+
+    assert_eq!(finish(&mut session, &finished), None);
+    let lines = exit(&mut session, None);
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            &["tool_call_started", "interaction_requested", "fiber_exited"],
+        ],
+    );
+    let exited = of_kind(&lines, "fiber_exited")[0];
+    assert_eq!(exited.payload["suspended_on"], request_id(&requested));
+    assert_eq!(former.runs().len(), 1);
+}
+
+#[test]
+fn a_rejected_reply_does_not_move_the_idle_deadline() {
+    let mut session = session(&["former"], vec![Arc::new(Former::new())], Some(IDLE));
+    let clock = Arc::clone(&session.clock);
+    let tap = Tap::new(&session.log);
+    let at = clock.now() + IDLE;
+    let finished = start(&mut session);
+    let request = request_id(&tap.wait_for("interaction_requested"));
+    assert!(clock.await_parked(at, DEADLINE), "the step waits until it");
+    clock.advance(IDLE / 2);
+    let mark = clock
+        .mark_parked(at, DEADLINE)
+        .expect("the step waits again");
+    let answered = answer(&session, &request, json!({"confirmed": true}));
+    assert_eq!(answered.unwrap_err().code, ErrorCode::InvalidArguments);
+    assert!(
+        clock.await_parked_since(&mark, Some(at), DEADLINE),
+        "after the rejected reply the step waits until the same deadline"
+    );
+    idle_passes(&session, &tap, &finished, at);
+
+    assert_eq!(finish(&mut session, &finished), None);
+    let lines = exit(&mut session, None);
+    assert_eq!(
+        of_kind(&lines, "fiber_exited")[0].payload["suspended_on"],
+        request
+    );
+    assert!(of_kind(&lines, "interaction_resolved").is_empty());
+}
+
+/// Runs a step whose form comes before a call of `later`, and checks the
+/// step still waits for the answer past the idle delay, then writes both
+/// completions in request order.
+fn waits_past_the_idle_delay(later: &'static str) {
+    let other = Arc::new(TestTool::reads(later, "read"));
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(Former::new()), other.clone()];
+    let mut session = session(&["former", later], tools, Some(IDLE));
+    let clock = Arc::clone(&session.clock);
+    let tap = Tap::new(&session.log);
+    let finished = start(&mut session);
+    let request = request_id(&tap.wait_for("interaction_requested"));
+    clock.advance(IDLE * 2);
+    // A stale reply is answered from the step's wait, after the advance.
+    let stale = answer(&session, "r_nope", main_branch());
+    assert_eq!(stale.unwrap_err().code, ErrorCode::StaleRequest);
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "the step waits for the answer with no deadline"
+    );
+    still_running(&finished);
+    no_resolution(&tap);
+    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    let lines = session.lines();
+    let requested = of_kind(&lines, "tool_call_requested");
+    let completed: Vec<_> = of_kind(&lines, "tool_call_completed")
+        .iter()
+        .map(|line| line.action_id.clone())
+        .collect();
+    let asked: Vec<_> = requested
+        .iter()
+        .map(|line| line.action_id.clone())
+        .collect();
+    assert_eq!(completed, asked, "completions in request order");
+    assert_eq!(of_kind(&lines, "interaction_resolved").len(), 1);
+    let ran = usize::from(later == "reads");
+    assert_eq!(other.ran().len(), ran);
+}
+
+#[test]
+fn a_form_before_a_call_that_ran_waits_for_its_answer_past_the_idle_delay() {
+    waits_past_the_idle_delay("reads");
+}
+
+#[test]
+fn a_form_before_a_call_that_failed_waits_for_its_answer_past_the_idle_delay() {
+    waits_past_the_idle_delay("unread");
+}
+
+#[test]
+fn the_idle_delay_counts_from_when_the_earlier_call_completes() {
+    let (waits, gate) = blocker("waits");
+    let tools: Vec<Arc<dyn Tool>> = vec![waits, Arc::new(Former::new())];
+    let mut session = session(&["waits", "former"], tools, Some(IDLE));
+    let clock = Arc::clone(&session.clock);
+    let tap = Tap::new(&session.log);
+    let finished = start(&mut session);
+    let request = request_id(&tap.wait_for("interaction_requested"));
+    clock.advance(IDLE);
+    gate.open();
+    tap.wait_for("tool_call_completed");
+    let at = clock.now() + IDLE;
+    idle_passes(&session, &tap, &finished, at);
+
+    assert_eq!(finish(&mut session, &finished), None);
+    gate.check("waits");
+    let lines = exit(&mut session, None);
+    assert_kinds(
+        &lines,
+        &[
+            OPENING_TWO,
+            &[
+                "tool_call_started",
+                "tool_call_started",
+                "interaction_requested",
+                "tool_call_completed",
+                "fiber_exited",
+            ],
+        ],
+    );
+    assert_eq!(
+        of_kind(&lines, "fiber_exited")[0].payload["suspended_on"],
+        request
+    );
+}
+
+#[test]
+fn a_running_job_keeps_a_pending_form_from_going_idle() {
+    let mut session = session(&["former"], vec![Arc::new(Former::new())], Some(IDLE));
+    let jobs = Arc::new(Toggle::default());
+    jobs.running.store(true, Ordering::SeqCst);
+    let looped = session.looped.take().unwrap();
+    session.looped = Some(looped.jobs(Arc::clone(&jobs) as Arc<dyn Jobs>));
+    let clock = Arc::clone(&session.clock);
+    let tap = Tap::new(&session.log);
+    let finished = start(&mut session);
+    let request = request_id(&tap.wait_for("interaction_requested"));
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "with a job running the step waits with no deadline"
+    );
+    let mark = clock.advance_marked(IDLE * 2);
+    assert!(
+        clock.await_parked_since(&mark, None, DEADLINE),
+        "past the idle delay the step still waits with no deadline"
+    );
+    still_running(&finished);
+    no_resolution(&tap);
+    // The job ends: the delay counts from the wait that sees it.
+    jobs.running.store(false, Ordering::SeqCst);
+    session.inbox.send(Delivery::Cancelled).unwrap();
+    let at = clock.now() + IDLE;
+    idle_passes(&session, &tap, &finished, at);
+
+    assert_eq!(finish(&mut session, &finished), None);
+    let lines = exit(&mut session, None);
+    assert_eq!(
+        of_kind(&lines, "fiber_exited")[0].payload["suspended_on"],
+        request
+    );
+}
+
+#[test]
+fn a_shutdown_leaves_a_form_pending_when_it_is_the_last_call_without_a_result() {
+    let (waits, gate) = blocker("waits");
+    let tools: Vec<Arc<dyn Tool>> = vec![waits, Arc::new(Former::new())];
+    let mut session = session(&["waits", "former"], tools, Some(IDLE));
+    let tap = Tap::new(&session.log);
+    let finished = start(&mut session);
+    let request = request_id(&tap.wait_for("interaction_requested"));
+    session.cancel.shutdown(143);
+    assert!(
+        settles(&session.clock),
+        "the step waits for the earlier call to stop"
+    );
+    gate.open();
+
+    assert_eq!(finish(&mut session, &finished), None);
+    gate.check("waits");
+    let lines = exit(&mut session, Some(143));
+    assert_kinds(
+        &lines,
+        &[
+            OPENING_TWO,
+            &[
+                "tool_call_started",
+                "tool_call_started",
+                "interaction_requested",
+                "tool_call_completed",
+                "fiber_exited",
+            ],
+        ],
+    );
+    assert_eq!(
+        of_kind(&lines, "tool_call_completed")[0].payload["status"],
+        "cancelled"
+    );
+    assert_eq!(
+        of_kind(&lines, "fiber_exited")[0].payload["suspended_on"],
+        request
+    );
+}
+
+#[test]
+fn a_shutdown_resolves_a_form_with_a_later_call_without_a_result() {
+    let (waits, gate) = blocker("waits");
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(Former::new()), waits];
+    let mut session = session(&["former", "waits"], tools, Some(IDLE));
+    let tap = Tap::new(&session.log);
+    let finished = start(&mut session);
+    tap.wait_for("interaction_requested");
+    session.cancel.shutdown(143);
+    let resolved = tap.wait_for("interaction_resolved");
+    assert_eq!(resolved.payload["by"], "fiber");
+    assert_eq!(resolved.payload["declined"], true);
+    gate.open();
+
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Interrupted)
+    );
+    gate.check("waits");
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            OPENING_TWO,
+            &[
+                "tool_call_started",
+                "tool_call_started",
+                "interaction_requested",
+                "interaction_resolved",
+                "tool_call_completed",
+                "tool_call_completed",
+                "turn_completed",
+            ],
+        ],
+    );
+    let completed = of_kind(&lines, "tool_call_completed");
+    assert_eq!(completed[0].payload["status"], "cancelled");
+    assert_eq!(completed[1].payload["status"], "cancelled");
+}
+
+#[test]
+fn a_cancel_resolves_a_form_that_is_the_last_call_without_a_result() {
+    let (waits, gate) = blocker("waits");
+    let tools: Vec<Arc<dyn Tool>> = vec![waits, Arc::new(Former::new())];
+    let mut session = session(&["waits", "former"], tools, Some(IDLE));
+    let tap = Tap::new(&session.log);
+    let finished = start(&mut session);
+    tap.wait_for("interaction_requested");
+    assert!(session.cancel.cancel());
+    let resolved = tap.wait_for("interaction_resolved");
+    assert_eq!(resolved.payload["by"], "fiber");
+    assert_eq!(resolved.payload["declined"], true);
+    gate.open();
+
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Interrupted)
+    );
+    gate.check("waits");
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            OPENING_TWO,
+            &[
+                "tool_call_started",
+                "tool_call_started",
+                "interaction_requested",
+                "interaction_resolved",
+                "tool_call_completed",
+                "tool_call_completed",
+                "turn_completed",
+            ],
+        ],
+    );
+    let completed = of_kind(&lines, "tool_call_completed");
+    assert_eq!(completed[1].payload["status"], "cancelled");
+    assert_eq!(
+        completed[1].payload["content"],
+        json!([{"type": "text", "text": "declined"}])
+    );
+}
+
+#[test]
+fn a_cancel_resolves_a_form_that_is_the_steps_only_call() {
+    let mut session = session(&["former"], vec![Arc::new(Former::new())], Some(IDLE));
+    let tap = Tap::new(&session.log);
+    let finished = start(&mut session);
+    tap.wait_for("interaction_requested");
+    assert!(session.cancel.cancel());
+
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Interrupted)
+    );
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            &[
+                "tool_call_started",
+                "interaction_requested",
+                "interaction_resolved",
+                "tool_call_completed",
+                "turn_completed",
+            ],
+        ],
+    );
+    assert_eq!(
+        of_kind(&lines, "interaction_resolved")[0].payload["by"],
+        "fiber"
+    );
+}
+
+#[test]
+fn without_an_idle_delay_a_form_waits_a_day_for_its_answer() {
+    let mut session = session(&["former"], vec![Arc::new(Former::new())], None);
+    let clock = Arc::clone(&session.clock);
+    let tap = Tap::new(&session.log);
+    let finished = start(&mut session);
+    let request = request_id(&tap.wait_for("interaction_requested"));
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "the step waits with no deadline"
+    );
+    let mark = clock.advance_marked(Duration::from_secs(24 * 60 * 60));
+    assert!(
+        clock.await_parked_since(&mark, None, DEADLINE),
+        "a day later the step still waits with no deadline"
+    );
+    still_running(&finished);
+    no_resolution(&tap);
+    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            &[
+                "tool_call_started",
+                "interaction_requested",
+                "interaction_resolved",
+                "tool_call_completed",
+            ],
+            DONE,
+        ],
+    );
+    assert_eq!(
+        of_kind(&lines, "tool_call_completed")[0].payload["content"],
+        json!([{"type": "text", "text": "{\"answers\":[{\"labels\":[\"main\"]}]}"}])
+    );
+}
+
+#[test]
+fn an_ask_that_does_not_suspend_keeps_the_session_past_the_idle_delay() {
+    let mut session = session(&["former"], vec![Arc::new(Former::plain())], Some(IDLE));
+    let clock = Arc::clone(&session.clock);
+    let tap = Tap::new(&session.log);
+    let finished = start(&mut session);
+    let requested = tap.wait_for("interaction_requested");
+    assert!(requested.payload.get("resumes").is_none());
+    clock.advance(IDLE * 2);
+    let stale = answer(&session, "r_nope", main_branch());
+    assert_eq!(stale.unwrap_err().code, ErrorCode::StaleRequest);
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "the step waits for the answer with no deadline"
+    );
+    still_running(&finished);
+    no_resolution(&tap);
+    let request = request_id(&requested);
+    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Completed)
+    );
+}

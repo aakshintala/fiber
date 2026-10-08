@@ -594,7 +594,7 @@ impl Loop {
                 };
                 calls.push((id, call, already));
             }
-            let cancelled = self.run_batch(calls, &turn)?;
+            let cancelled = self.run_batch(calls, &turn, None)?;
             // A later call's approval reached the idle delay: nothing more
             // is written, as in any step. The turn resumes later, so a
             // queued switch is dropped.
@@ -706,7 +706,7 @@ impl Loop {
             };
             calls.push((id, call, already));
         }
-        let cancelled = self.run_batch(calls, &turn)?;
+        let cancelled = self.run_batch(calls, &turn, None)?;
         // A later call's approval reached the idle delay: nothing more is
         // written, as in any step. The turn resumes later, so a queued
         // switch is dropped.

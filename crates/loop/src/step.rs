@@ -255,7 +255,8 @@ impl Loop {
         }
         if self.run_calls(calls, turn)? || self.idle_left {
             // A cancel ended the step: the turn ends `interrupted` instead
-            // of taking a next step. An idle approval writes nothing more.
+            // of taking a next step. An idle approval, or a question the
+            // step suspended on, writes nothing more.
             return Ok(Step::Ended(ended(TurnOutcome::Interrupted, None)));
         }
         if let Some(blocked) = self.take_blocked_end() {
