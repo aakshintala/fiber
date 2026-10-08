@@ -1933,6 +1933,101 @@ fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
     );
 }
 
+/// An `openai-responses` stream calling `shell` with `true`. `true` is not
+/// on the shell's read-only list, so the call declares `executes` and step
+/// 7 reviews it (`docs/tools.md`, "Shell", "Effects"). Running `true`
+/// changes nothing.
+fn shell_true_call() -> Response {
+    let events = [
+        json!({"type": "response.output_item.done", "item": {
+            "type": "function_call", "id": "fc_1", "call_id": "call_1",
+            "name": "shell", "arguments": "{\"command\":\"true\"}"}}),
+        json!({"type": "response.completed", "response": {
+            "id": "resp_1", "status": "completed",
+            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}}}),
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+/// An `openai-responses` stream answering `allow` in one fragment: the
+/// reviewer's stage-1 verdict.
+fn allow_text() -> Response {
+    let events = [
+        json!({"type": "response.output_text.delta", "delta": "allow"}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "message", "content": [{"type": "output_text", "text": "allow"}]}}),
+        json!({"type": "response.completed", "response": {
+            "id": "resp_1", "status": "completed",
+            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}}}),
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+#[test]
+fn the_providers_reviewer_model_decides_a_reviewed_call() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([shell_true_call(), allow_text(), hello()]).unwrap();
+    install(
+        &setup,
+        &setup.package("muse", "https://api.meta.ai", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "muse/muse-spark-1.3", "Run true."],
+        &[("META_API_KEY", "sk-test-muse")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .expect("the reviewed call resolves");
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(resolved["payload"]["decision"], "allow");
+    assert_eq!(
+        resolved["payload"]["reviewer"]["model"],
+        "muse/muse-spark-1.3"
+    );
+}
+
 /// One recorded probe exchange as a fake-server response: the stream's
 /// bytes, or the recorded error status with its body.
 fn probe(path: &str, label: &str) -> Response {
@@ -2658,6 +2753,87 @@ fn the_first_party_key_packages_declare_their_protocol_url_and_prices() {
             }
         }
     }
+}
+
+/// The reviewer rule for first-party provider data (`docs/model-routing.md`,
+/// "What a provider extension declares"): a named `reviewer_model` is one
+/// of the provider's own models, and never a contributor model, whose id
+/// contains `contributor`. A provider that names none is valid here; which
+/// providers must name one is asserted on the real data below.
+fn reviewer_model_valid(provider: &config::ProviderData) -> bool {
+    match &provider.reviewer_model {
+        None => true,
+        Some(model) => {
+            provider.models.iter().any(|m| m.id == *model) && !model.contains("contributor")
+        }
+    }
+}
+
+#[test]
+fn first_party_reviewer_models_name_a_shipped_non_contributor_model() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers");
+    let mut packages: Vec<PathBuf> = fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
+        .collect();
+    packages.sort();
+    assert!(!packages.is_empty());
+    let mut seen: Vec<String> = Vec::new();
+    for dir in &packages {
+        for provider in config::read_providers(dir).unwrap() {
+            assert!(
+                reviewer_model_valid(&provider),
+                "{} names {:?} outside its models or a contributor model",
+                provider.name,
+                provider.reviewer_model
+            );
+            match provider.name.as_str() {
+                "muse" | "opencode-zen" => assert_eq!(
+                    provider.reviewer_model.as_deref(),
+                    Some("muse-spark-1.3"),
+                    "{}",
+                    provider.name
+                ),
+                "opencode-go" => assert_eq!(provider.reviewer_model, None, "opencode-go"),
+                _ => {}
+            }
+            seen.push(provider.name.clone());
+        }
+    }
+    for name in ["muse", "opencode-zen", "opencode-go"] {
+        assert!(seen.iter().any(|seen| seen == name), "{seen:?}");
+    }
+}
+
+#[test]
+fn a_contributor_or_unshipped_reviewer_model_is_not_valid() {
+    let setup = Setup::new();
+    let package = setup.root.path().join("pkg");
+    let read = |reviewer: Option<&str>, models: &[&str]| {
+        let models: Vec<Value> = models
+            .iter()
+            .map(|id| {
+                json!({"id": id, "protocol": "openai-responses",
+                    "base_url": "https://x/v1", "context_window": 1000})
+            })
+            .collect();
+        let mut data = json!({"name": "p", "models": models});
+        if let Some(reviewer) = reviewer {
+            data["reviewer_model"] = json!(reviewer);
+        }
+        fs::create_dir_all(package.join("providers")).unwrap();
+        fs::write(package.join("providers/p.json"), data.to_string()).unwrap();
+        config::read_providers(&package).unwrap().pop().unwrap()
+    };
+    assert!(reviewer_model_valid(&read(Some("m"), &["m"])));
+    assert!(reviewer_model_valid(&read(None, &[])));
+    assert!(!reviewer_model_valid(&read(
+        Some("m-contributor"),
+        &["m-contributor"]
+    )));
+    assert!(!reviewer_model_valid(&read(Some("ghost"), &["m"])));
+    assert!(!reviewer_model_valid(&read(Some("m"), &[])));
 }
 
 #[test]

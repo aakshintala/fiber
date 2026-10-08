@@ -3,6 +3,7 @@
   "credential": {
     "env": "META_API_KEY"
   },
+  "reviewer_model": "muse-spark-1.3",
   "models": [
     {
       "id": "muse-spark-1.3-contributor",
