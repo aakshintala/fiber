@@ -409,3 +409,107 @@ fn a_garbage_line_right_past_the_point_is_never_read() {
         .collect();
     assert_eq!(held, [1, 2]);
 }
+
+/// A log file holding `text` as it is, under `sessions/id`.
+fn write_raw(sessions: &Path, id: &str, text: &str) {
+    let dir = sessions.join(id);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(EVENTS), text).unwrap();
+}
+
+#[test]
+fn a_torn_tail_is_dropped_even_when_its_bytes_parse() {
+    // The last line has no newline, so it is torn and is not a line, even
+    // though its bytes are a whole event.
+    let home = fakes::TempDir::new("log-history-torn-parses");
+    let sessions = home.path().join("sessions");
+    let id = "s_aaaaaaaaaaaaaaaa";
+    let mut text = String::new();
+    text.push_str(&started(id, 0, None).to_string());
+    text.push('\n');
+    text.push_str(&plain(id, 1, "turn_started").to_string());
+    text.push('\n');
+    text.push_str(&plain(id, 2, "turn_completed").to_string());
+    write_raw(&sessions, id, &text);
+    let segments = history(&sessions.join(id)).unwrap();
+    let held: Vec<u64> = segments[0]
+        .lines(0)
+        .unwrap()
+        .into_iter()
+        .map(|line| line.seq.unwrap().0)
+        .collect();
+    assert_eq!(held, [0, 1]);
+}
+
+#[test]
+fn an_empty_log_holds_no_lines() {
+    let home = fakes::TempDir::new("log-history-empty");
+    let sessions = home.path().join("sessions");
+    let id = "s_aaaaaaaaaaaaaaaa";
+    write_raw(&sessions, id, "");
+    let segment = Segment {
+        session_id: SessionId(id.to_owned()),
+        dir: sessions.join(id),
+        to: None,
+    };
+    assert!(segment.lines(0).unwrap().is_empty());
+}
+
+#[test]
+fn lines_of_a_session_with_no_log_is_not_found() {
+    let home = fakes::TempDir::new("log-history-missing-log");
+    let sessions = home.path().join("sessions");
+    let id = "s_aaaaaaaaaaaaaaaa";
+    let segment = Segment {
+        session_id: SessionId(id.to_owned()),
+        dir: sessions.join(id),
+        to: None,
+    };
+    let error = match segment.lines(0) {
+        Ok(_) => panic!("a missing log is not found"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, Error::NotFound(_)));
+}
+
+#[test]
+fn a_refused_open_that_is_not_a_missing_log_is_io() {
+    // The session path is a file, so opening the log under it fails for a
+    // reason other than a missing log.
+    let home = fakes::TempDir::new("log-history-refused-open");
+    let sessions = home.path().join("sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let id = "s_aaaaaaaaaaaaaaaa";
+    fs::write(sessions.join(id), "").unwrap();
+    let segment = Segment {
+        session_id: SessionId(id.to_owned()),
+        dir: sessions.join(id),
+        to: None,
+    };
+    let error = match segment.lines(0) {
+        Ok(_) => panic!("a refused open fails"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, Error::Io { .. }));
+}
+
+#[test]
+fn an_unreadable_line_reports_its_own_one_based_number() {
+    let home = fakes::TempDir::new("log-history-unreadable-number");
+    let sessions = home.path().join("sessions");
+    let id = "s_aaaaaaaaaaaaaaaa";
+    let mut text = String::new();
+    text.push_str(&started(id, 0, None).to_string());
+    text.push('\n');
+    text.push_str(&plain(id, 1, "turn_started").to_string());
+    text.push('\n');
+    text.push_str("not an event\n");
+    write_raw(&sessions, id, &text);
+    let segments = history(&sessions.join(id)).unwrap();
+    let line = match segments[0].lines(0) {
+        Ok(_) => panic!("a garbage line is unreadable"),
+        Err(Error::Unreadable { line, .. }) => line,
+        Err(other) => panic!("expected Unreadable, got {other}"),
+    };
+    assert_eq!(line, 3);
+}

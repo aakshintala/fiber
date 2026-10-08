@@ -13,9 +13,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use contract::events::{
-    CacheLifetime, DecidedBy, Decision, Event, HandoffCompleted, InputItem, ModelChanged,
-    ModelSettings, Outcome, PermissionResolved, PreambleBuilt, PreambleReason, SessionStarted,
-    SwitchSource, ToolCallRequested, TurnStarted, UsageRecorded, Variables, VariablesSource,
+    CacheLifetime, CallStatus, DecidedBy, Decision, Event, HandoffCompleted, InputItem,
+    ModelChanged, ModelSettings, Outcome, PermissionResolved, PreambleBuilt, PreambleReason,
+    SessionStarted, SteeringApplied, SwitchSource, ToolCallCompleted, ToolCallRequested,
+    TurnStarted, UsageRecorded, Variables, VariablesSource,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Origin, Point, Sender, Tokens};
@@ -499,6 +500,83 @@ fn the_window_reader_starts_mid_chain_at_a_parents_handoff() {
                 images: Vec::new(),
             },
         ]
+    );
+}
+
+fn image_part(path: &str) -> ContentPart {
+    ContentPart::Image {
+        path: path.to_owned(),
+        mime_type: "image/png".to_owned(),
+        width: 1,
+        height: 1,
+    }
+}
+
+#[test]
+fn the_window_reader_makes_a_parents_steering_and_tool_result_images_absolute() {
+    // A steering message and a tool result carry image parts too: both are
+    // made absolute against the parent that wrote them.
+    let (_home, sessions) = sessions("steer-result-images");
+    let steering = Event::SteeringApplied(SteeringApplied {
+        content: vec![image_part("artifacts/s.png")],
+        sender: Sender {
+            origin: Origin::Driver,
+            command_id: None,
+        },
+        changed_by: None,
+    });
+    let result = Event::ToolCallCompleted(ToolCallCompleted {
+        status: CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![image_part("artifacts/t.png")],
+        details: None,
+        artifact: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        provider_item: None,
+    });
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, Some("t_1"), None, &steering),
+            envelope(A, 2, Some("t_1"), Some("a_1"), &result),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[envelope(B, 0, None, None, &started("/w", Some((A, 2))))],
+    );
+    let folded = resumed(&sessions.join(B)).unwrap();
+    let log = Log::open(
+        &sessions,
+        SessionId(B.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = read_window(&log, folded.window, folded.end).unwrap();
+    let mut paths = Vec::new();
+    for line in &lines {
+        if !matches!(
+            line.kind.as_str(),
+            "steering_applied" | "tool_call_completed"
+        ) {
+            continue;
+        }
+        let content = line.payload["content"].as_array().unwrap();
+        for part in content {
+            paths.push(part["path"].as_str().unwrap().to_owned());
+        }
+    }
+    let absolute = |name: &str| sessions.join(A).join(name).display().to_string();
+    assert_eq!(
+        paths,
+        [absolute("artifacts/s.png"), absolute("artifacts/t.png")]
     );
 }
 

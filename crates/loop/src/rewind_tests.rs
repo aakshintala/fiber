@@ -224,6 +224,26 @@ fn a_writes_call_with_no_paths_is_listed_with_the_commands() {
 }
 
 #[test]
+fn a_writes_call_with_an_empty_path_list_is_listed_like_one_with_none() {
+    // Empty `paths` names no file, so the call is listed with the commands,
+    // as a call with no `paths` is. A non-empty list is listed by path.
+    let call = |paths: Option<Vec<&str>>| {
+        note_for(&[(
+            "a_1",
+            "write",
+            json!({"city": "Paris"}),
+            vec![Effect::Writes],
+            paths,
+            None,
+        )])
+    };
+    let empty = call(Some(Vec::new()));
+    assert_eq!(empty, call(None));
+    assert!(empty.contains(r#"- write: {"city":"Paris"}"#));
+    assert_ne!(empty, call(Some(vec!["/w/a.txt"])));
+}
+
+#[test]
 fn hook_rewritten_arguments_win_over_the_requested_ones() {
     let note = note_for(&[(
         "a_1",
