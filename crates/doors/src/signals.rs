@@ -375,7 +375,8 @@ fn sleep_until(clock: &dyn Clock, until: Instant) {
 }
 
 /// Reads `input` to EOF or an error, ignoring every byte: the parent
-/// never writes to the lifeline.
+/// never writes to the lifeline. An interrupted read is retried, as
+/// `io::copy` does; any other error ends it like EOF.
 fn drain(mut input: Box<dyn Read + Send>) {
     let _copied = io::copy(&mut input, &mut io::sink());
 }
