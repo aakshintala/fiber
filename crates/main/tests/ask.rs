@@ -3057,6 +3057,41 @@ fn a_lua_providers_model_answers_with_the_token_and_sign_headers() {
 }
 
 #[test]
+fn a_provider_whose_listing_fails_with_no_cache_is_listed_once() {
+    let setup = Setup::new();
+    let server = ProviderServer::start_routed(
+        [
+            (
+                "/token",
+                Response::status(
+                    200,
+                    json!({"access_token": "tok-1", "expires_at": EXPIRES_AT}).to_string(),
+                ),
+            ),
+            ("/v1/models", Response::status(500, "{}")),
+        ],
+        Response::status(500, "{}"),
+    )
+    .unwrap();
+    fixture(&setup, &server);
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_ne!(run.code, Some(0), "no model was discovered: {}", run.stderr);
+    // With no cached copy the synchronous discovery is the only listing: the
+    // start refresh covers stale cached lists only.
+    let requests = server.requests();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "GET" && request.path == "/v1/models")
+            .count(),
+        1,
+        "{requests:?}"
+    );
+}
+
+#[test]
 fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
     let setup = Setup::new();
     // Answered by path: the background refresh races the session's own

@@ -1008,6 +1008,15 @@ fn a_fresh_list_is_not_refreshed_and_lua_never_runs() {
 }
 
 #[test]
+fn a_provider_with_no_cached_list_is_not_refreshed_at_start() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
+    assert!(lua.refresh(Some(DAY)).is_none());
+    assert!(config::read_model_cache(&home, "acme").unwrap().is_none());
+}
+
+#[test]
 fn a_list_exactly_as_old_as_the_maximum_is_not_stale() {
     let setup = Setup::new();
     let home = setup.home();
