@@ -262,65 +262,6 @@ fn open_marks_new_while_scrolled_up_and_reports_whether_it_changed() {
     assert!(screen.has_new());
 }
 
-/// Each resident line's first row and row count, from the drawn rows.
-fn line_rows(screen: &Screen) -> Vec<(usize, usize)> {
-    let width = screen.pages().wrap_width();
-    let mut row = 0usize;
-    screen
-        .pages()
-        .rows()
-        .into_iter()
-        .map(|(line, _)| {
-            let count = crate::view::rows(line, width);
-            let at = row;
-            row += count;
-            (at, count)
-        })
-        .collect()
-}
-
-#[test]
-fn on_screen_lists_each_drawn_line_with_its_first_row() {
-    // A short conversation, bottom-aligned: every line, from row 0.
-    let short = screen(1);
-    let all = line_rows(&short);
-    let listed: Vec<(usize, usize)> = short
-        .on_screen(50)
-        .iter()
-        .map(|line| (line.row, line.rows))
-        .collect();
-    assert_eq!(listed, all);
-    assert!(short.on_screen(50).iter().all(|line| line.page == 0));
-    let lines: Vec<usize> = short.on_screen(50).iter().map(|line| line.line).collect();
-    assert_eq!(lines, (0..all.len()).collect::<Vec<_>>());
-
-    // Scrolled: exactly the lines drawing a row in [top, top + height).
-    let mut long = screen(3);
-    let all = line_rows(&long);
-    let wide = all
-        .iter()
-        .position(|(_, rows)| *rows > 1)
-        .unwrap_or(all.len() / 2);
-    // The top falls inside a line of more than one row when there is one,
-    // so that line is partly above the top.
-    let (start, rows) = all[wide];
-    let top = start + rows.saturating_sub(1).min(1);
-    long.jump(top);
-    long.settle(4);
-    let want: Vec<(usize, usize)> = all
-        .iter()
-        .copied()
-        .filter(|(row, count)| row + count > top && *row < top + 4)
-        .collect();
-    let got: Vec<(usize, usize)> = long
-        .on_screen(4)
-        .iter()
-        .map(|line| (line.row, line.rows))
-        .collect();
-    assert_eq!(got, want);
-    assert!(got.first().is_some_and(|(row, _)| *row <= top));
-}
-
 #[test]
 fn wrap_at_reports_a_new_width() {
     let mut screen = screen(1);

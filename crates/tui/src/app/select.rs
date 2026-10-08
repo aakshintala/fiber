@@ -328,8 +328,8 @@ impl App {
     }
 
     /// The conversation cell under screen cell `col`, `row`: inside the
-    /// conversation area, on a row a line draws, and not the "↓ New
-    /// messages below" row.
+    /// conversation area, on a shown row, and not the "↓ New messages
+    /// below" row.
     fn point_at(&self, col: u16, row: u16) -> Option<Point> {
         let area = self.conversation_area();
         if !area.contains(Position::new(col, row)) {
@@ -340,14 +340,8 @@ impl App {
         if row < y0 || row > last {
             return None;
         }
-        let at = top.saturating_add(usize::from(row.saturating_sub(y0)));
-        let drawn = self
-            .screen
-            .on_screen(usize::from(area.height))
-            .iter()
-            .any(|line| line.row <= at && at < line.row.saturating_add(line.rows));
-        drawn.then(|| Point {
-            row: at,
+        Some(Point {
+            row: top.saturating_add(usize::from(row.saturating_sub(y0))),
             col: col.saturating_sub(area.x),
         })
     }
@@ -433,9 +427,11 @@ impl App {
                             text.push(ch);
                             started = true;
                         }
-                        Under::Outside => gap.clear(),
                         Under::Unplaced if started => gap.push(ch),
-                        Under::Unplaced => {}
+                        // The selection is one run in reading order: a
+                        // char outside it, or one drawn nowhere before it,
+                        // adds nothing.
+                        Under::Outside | Under::Unplaced => {}
                     }
                 }
                 // A blank line has no char to place: it is copied when the

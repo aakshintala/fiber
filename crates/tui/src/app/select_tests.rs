@@ -252,6 +252,38 @@ fn release_copies_the_unwrapped_text_and_shows_copied() {
 }
 
 #[test]
+fn a_selection_over_paragraphs_keeps_the_blank_line_between() {
+    let mut app = replied(40, 10, "alpha\n\nbeta");
+    let alpha = find(&app, "alpha");
+    let beta = find(&app, "beta");
+    assert_eq!(
+        select(&mut app, alpha, right(beta, 3)),
+        Effect::Copy("alpha\n\nbeta".to_owned())
+    );
+}
+
+#[test]
+fn the_highlight_stays_inside_the_area_and_off_new_below() {
+    let mut app = attached(40, 10);
+    prompt(&mut app, " ");
+    let text: Vec<String> = (0..20).map(|n| format!("paragraph {n}")).collect();
+    reply(&mut app, "a_m", &text.join("\n\n"));
+    let area = app.conversation_area();
+    select(&mut app, (0, area.y + 1), (39, area.bottom() - 1));
+    // Scrolled up three rows, the selection runs past the area's bottom,
+    // and new output shows "↓ New messages below" on its last row.
+    let (top, _) = app.scroll();
+    app.jump(top - 3);
+    reply(&mut app, "a_n", "more");
+    assert!(app.has_new());
+    let cells = app.selection_cells(area);
+    assert!(!cells.is_empty());
+    for rect in cells {
+        assert!(rect.y < area.bottom() - 1, "{rect:?} past {area:?}");
+    }
+}
+
+#[test]
 fn a_selection_over_a_list_copies_markers_without_hang_indent() {
     let mut app = replied(14, 10, "- alpha beta gamma\n- delta");
     let first = find(&app, "• alpha");
@@ -819,8 +851,10 @@ fn a_selection_over_a_dropped_page_copies_after_it_loads() {
         .expect("the top row's page");
     assert!(app.pages().part(page).is_none(), "its page stays resident");
     assert_eq!(release(&mut app, (0, bottom)), Effect::None);
+    let pinned = app.pages().pinned();
+    assert!(pinned > prior);
     assert_eq!(app.take_copy(), None, "the page is not loaded yet");
-    assert!(app.pages().pinned() > prior);
+    assert_eq!(app.pages().pinned(), pinned, "a waiting copy pins once");
     load_needed(&mut app, &lines);
     let text = app.take_copy().expect("the copy runs once the page loads");
     assert!(
