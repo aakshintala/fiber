@@ -79,9 +79,10 @@ impl WebFetch {
         self
     }
 
-    /// Fixes the proxy, `None` meaning a direct connection.
-    #[cfg(test)]
-    pub(crate) fn with_proxy(mut self, proxy: Option<ureq::Proxy>) -> Self {
+    /// Fixes the proxy, `None` meaning a direct connection, so the proxy
+    /// environment is not read.
+    #[must_use]
+    pub fn with_proxy(mut self, proxy: Option<ureq::Proxy>) -> Self {
         self.proxy = Some(proxy);
         self
     }
