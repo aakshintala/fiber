@@ -44,6 +44,7 @@ gif = { version = "0.14", default-features = false, features = ["std"], optional
 image-webp = { version = "0.2", optional = true }
 fast_image_resize = { version = "6", optional = true }
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"], optional = true }
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"], optional = true }
 
 [features]
 # The shell completion scripts `fiber completion` prints, generated from a
@@ -69,6 +70,8 @@ arborium = ["dep:arborium"]
 encoding_rs = ["dep:encoding_rs"]
 # The release install step: decompressing the docs and extensions archives.
 flate2 = ["dep:flate2"]
+# The terminal's time of day under a prompt bubble: the system zone, read once, formatting times of day.
+jiff = ["dep:jiff"]
 
 [profile.release]
 lto = "thin"

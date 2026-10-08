@@ -456,6 +456,21 @@ fn main() {
         let md = "# Heading\n\nSome *emphasis* and `code`.\n\n- item\n- item\n\n```rust\nfn main() {}\n```\n\n".repeat(20);
         black_box(pulldown_cmark::Parser::new(&md).count());
     }
+    #[cfg(feature = "jiff")]
+    {
+        // The terminal's time of day under a prompt bubble: the system
+        // zone, read once, formatting times of day.
+        let zone = jiff::tz::TimeZone::system();
+        let start = jiff::Timestamp::from_millisecond(1791468900000).unwrap();
+        let mut shown = Vec::new();
+        for i in 0..1000 {
+            let ts = start.as_millisecond().saturating_add(i * 60_000);
+            let ts = jiff::Timestamp::from_millisecond(ts).unwrap();
+            let zoned = ts.to_zoned(zone.clone());
+            shown.push(zoned.strftime("%H:%M").to_string());
+        }
+        black_box(shown);
+    }
     #[cfg(feature = "arborium")]
     {
         // The terminal highlights a reply's code blocks: one block in each
