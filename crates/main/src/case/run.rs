@@ -137,14 +137,7 @@ impl CaseRun {
             .now()
             .checked_add(self.waits.until)
             .unwrap_or_else(|| self.process_clock.now());
-        let mut watcher = match log.watch_all() {
-            Ok(watcher) => watcher,
-            Err(error) => {
-                let mut failures = vec![format!("case event watch: {error}")];
-                self.close(&driver, &cancel, &mut failures);
-                return failures;
-            }
-        };
+        let mut watcher = log.watch_all();
         let mut events = Vec::new();
         let mut failures = Vec::new();
         let mut seen = BTreeMap::<String, usize>::new();

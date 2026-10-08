@@ -399,13 +399,10 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
             let extensions = log.latest("extensions_loaded");
             (watcher, status, extensions)
         } else {
-            let watcher = match log.watch_all_seeded() {
-                Ok(watcher) => watcher,
-                Err(_) => {
-                    reject(conn, Some(id), ErrorCode::InvalidArguments, UNFIT);
-                    return;
-                }
-            };
+            // A first `full` subscribe folds the stream from the log: over
+            // an unreadable page the watcher keeps every line before the
+            // one that failed, then the connection closes at the failure.
+            let watcher = log.watch_all_seeded();
             // Probe point: the watcher is obtained and its seed queued under
             // the one log lock, before the writer starts.
             #[cfg(test)]
@@ -682,7 +679,7 @@ pub(crate) fn spawn_writer(
             if write_loop(watcher, stream, summary, switches) == Ended::Failed {
                 // The watcher failed: the reader and socket stay open, so
                 // the connection is shut and the client sees EOF after
-                // every line before the bad page.
+                // every line before the one that failed.
                 failed.shut(id);
             }
         }) {

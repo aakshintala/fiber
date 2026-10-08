@@ -427,7 +427,7 @@ impl RetryRun {
                 Ack(Box::new(|_| {})),
             ))
             .unwrap();
-        let watcher = log.watch_all().unwrap();
+        let watcher = log.watch_all();
         let (turn_tx, turn) = mpsc::channel();
         drop(thread::spawn(move || {
             let _sent = turn_tx.send(looped.turn());

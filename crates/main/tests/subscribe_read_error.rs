@@ -237,7 +237,10 @@ fn a_full_subscriber_gets_every_line_before_an_unreadable_one_then_end_of_file()
             .expect("the observer tools answer");
         observed.push(line);
         let parsed: Value = serde_json::from_str(observed.last().unwrap().trim_end()).unwrap();
-        if parsed.get("payload").and_then(|p| p.get("command_id")).and_then(Value::as_str)
+        if parsed
+            .get("payload")
+            .and_then(|p| p.get("command_id"))
+            .and_then(Value::as_str)
             == Some("c_obs_tools")
         {
             assert_eq!(parsed["kind"], "command_accepted", "{parsed}");

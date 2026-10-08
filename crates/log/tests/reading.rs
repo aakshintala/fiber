@@ -635,7 +635,7 @@ fn a_watcher_behind_by_more_than_a_queue_catches_up_through_pages_cut_by_bytes()
 #[test]
 fn a_watch_all_watcher_that_falls_behind_catches_up_past_its_end_bound() {
     let (_tmp, log, written) = steps("watch-all-lag", 2 * CAPACITY);
-    let watcher = log.watch_all().unwrap();
+    let watcher = log.watch_all();
     // Nobody drains while the flood is appended, so the queue holds its
     // first `CAPACITY` lines and drops the rest. The backlog stops at the
     // subscribe-time line count; the catch-up reads past it, to the table's
