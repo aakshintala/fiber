@@ -192,7 +192,9 @@ list, cached in Fiber home at `cache/mcp/<server>.json`, with its last prompt
 list (`docs/state.md`). The cache is keyed by a hash of
 the server's declaration: its command, arguments, environment, or URL. The
 first call waits for the server to start and list its tools, up to its startup
-deadline. The deadline is 5 seconds by default, and configuration can change
+deadline. The handshake lists tools only when the server advertises the
+tools capability, and prompts only when it advertises prompts: a server
+advertising only prompts starts with no tools. The deadline is 5 seconds by default, and configuration can change
 it per server.
 
 **Some servers start with the session:**

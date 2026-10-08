@@ -152,7 +152,8 @@ struct Inner {
 pub(crate) struct OpenServer {
     /// The running server.
     pub server: Server,
-    /// Its raw `tools/list` entries, in the order listed.
+    /// Its raw `tools/list` entries, in the order listed; empty when
+    /// the server advertises no tools capability.
     pub tools: Vec<Value>,
     /// Its raw `prompts/list` entries, in the order listed; empty when
     /// the server advertises no prompts or its list failed.
@@ -162,9 +163,9 @@ pub(crate) struct OpenServer {
 impl Server {
     /// Starts `command` with `args` in `workspace`, inheriting Fiber's
     /// environment with `env` overriding keys, and runs `initialize`,
-    /// `notifications/initialized`, `tools/list` and, when the server
-    /// advertises prompts, `prompts/list` under `startup_timeout` on
-    /// `clock`. `client_version` is Fiber's own version, sent as
+    /// `notifications/initialized`, `tools/list` when the server
+    /// advertises tools, and `prompts/list` when it advertises prompts,
+    /// under `startup_timeout` on `clock`. `client_version` is Fiber's own version, sent as
     /// `clientInfo`. A failure kills and reaps the child exactly once.
     pub(crate) fn start(
         command: &str,
@@ -246,15 +247,28 @@ impl Server {
                 }
             };
             server.notify("notifications/initialized", &serde_json::json!({}));
-            let tools = list_pages(
-                server,
-                clock,
-                "tools/list",
-                "tools",
-                deadline,
-                &stopping,
-                || Err(not_a_list()),
-            )?;
+            // `tools/list` runs only when `initialize` advertises the
+            // `tools` capability as an object: a server advertising only
+            // prompts may reject it, so without the capability the
+            // start goes on with no tools (`docs/mcp.md`, "Starting
+            // servers").
+            let advertises_tools = initialize
+                .get("capabilities")
+                .and_then(|capabilities| capabilities.get("tools"))
+                .is_some_and(Value::is_object);
+            let tools = if advertises_tools {
+                list_pages(
+                    server,
+                    clock,
+                    "tools/list",
+                    "tools",
+                    deadline,
+                    &stopping,
+                    || Err(not_a_list()),
+                )?
+            } else {
+                Vec::new()
+            };
             // `prompts/list` runs only when `initialize` advertises the
             // `prompts` capability as an object, and a list that errors
             // or is not a result leaves the server with no prompts while

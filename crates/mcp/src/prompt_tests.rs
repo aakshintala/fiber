@@ -185,6 +185,58 @@ fn a_server_without_the_prompts_capability_is_never_asked_for_prompts() {
 }
 
 #[test]
+fn tool_listing_follows_the_tools_capability() {
+    // Present: the tools list as usual, and the handshake asks for them.
+    let present = Setup::new();
+    present.tools(&json!([{"name": "echo"}]));
+    let open = present.start(Duration::from_secs(5));
+    assert_eq!(open.tools.len(), 1);
+    assert!(
+        present.requests().contains(r#""method":"tools/list""#),
+        "the handshake lists tools when advertised",
+    );
+    open.server.stop();
+    // Absent (`tools.json` holding `error`): the start succeeds with no
+    // tools, and `tools/list` is never sent, so its error answer never
+    // matters.
+    let absent = Setup::new();
+    write(&absent.dir, "tools.json", "error");
+    let open = absent.start(Duration::from_secs(5));
+    assert!(open.tools.is_empty());
+    assert!(
+        !absent.requests().contains(r#""method":"tools/list""#),
+        "no tools/list without the capability",
+    );
+    open.server.stop();
+}
+
+#[test]
+fn a_prompt_only_server_lists_prompts_with_no_tools() {
+    // A server advertising only prompts: no tools capability, and
+    // `tools/list` would answer -32601. The start succeeds, prompts
+    // list, and `tools/list` is never sent.
+    let setup = Setup::new();
+    write(&setup.dir, "tools.json", "error");
+    setup.prompts(&greet_prompts().to_string());
+    let open = setup.start(Duration::from_secs(5));
+    assert!(open.tools.is_empty());
+    assert_eq!(
+        open.prompts,
+        greet_prompts().as_array().cloned().unwrap_or_default()
+    );
+    let log = setup.requests();
+    assert!(
+        log.contains(r#""method":"prompts/list""#),
+        "the handshake lists prompts: {log}"
+    );
+    assert!(
+        !log.contains(r#""method":"tools/list""#),
+        "the handshake never lists tools: {log}"
+    );
+    open.server.stop();
+}
+
+#[test]
 fn a_failing_prompt_list_leaves_the_server_started_with_no_prompts() {
     let setup = Setup::new();
     setup.tools(&json!([{"name": "echo"}]));

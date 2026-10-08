@@ -14,17 +14,20 @@
 # first writes one line to it (`printf 'held\n' > "$dir/held-<tool>"`),
 # then blocks on `read -r _ < "$dir/release-<tool>"`, then answers. No
 # sleep, no polling. A tool without a release FIFO answers at once. A
-# `notify-<tool>`
-# file makes the server send `notifications/tools/list_changed` before it
-# answers that tool's call. A `fail-start` file makes the server exit 1
-# before reading anything.
+# `notify-<tool>` file makes the server send `notifications/tools/list_changed`
+# before it answers that tool's call. A `tools.json` file holds the `tools/list` answer, and makes
+# `initialize` advertise the tools capability; one holding exactly
+# `error` makes the server a prompt-only one: no tools capability, and
+# `tools/list` answers JSON-RPC error -32601, as a server without tools
+# support would. A `fail-start` file makes the server exit 1 before
+# reading anything.
 #
 # A `prompts.json` file, a JSON array of prompt objects, each with `name`
 # and optionally `description` and `arguments`, makes `initialize`
-# advertise `"capabilities":{"prompts":{}}` and `prompts/list` answer
-# `{"prompts":<file>}`. A `prompts.json` holding exactly `error` makes
-# `prompts/list` answer JSON-RPC error -32603 instead. `prompts/get`
-# reads the last `"name"` on the line (params encode with sorted keys,
+# advertise the prompts capability (`"prompts":{}` among its
+# `capabilities`) and `prompts/list` answer `{"prompts":<file>}`. A
+# `prompts.json` holding exactly `error` makes `prompts/list` answer
+# JSON-RPC error -32603 instead. `prompts/get` reads the last `"name"` on the line (params encode with sorted keys,
 # so the top-level `name` follows `arguments`, as for `tools/call`) and
 # answers `prompt-<name>.json` as the `result`; a result file holding
 # exactly `hang` is never answered, one holding exactly `exit` makes the
@@ -91,23 +94,32 @@ while IFS= read -r line; do
     id="$(id_of "$line")"
     case "$method" in
         initialize)
-            if [ -f "$dir/prompts.json" ]; then
-                caps='"capabilities":{"prompts":{}}'
-            else
-                caps='"capabilities":{}'
+            caps=""
+            if [ -f "$dir/tools.json" ] && [ "$(cat "$dir/tools.json")" != "error" ]; then
+                caps='"tools":{}'
             fi
-            answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":\"2025-06-18\",$caps,\"serverInfo\":{\"name\":\"fx\",\"version\":\"0.0.0\"}}}"
+            if [ -f "$dir/prompts.json" ]; then
+                if [ -n "$caps" ]; then
+                    caps="$caps,"
+                fi
+                caps="$caps\"prompts\":{}"
+            fi
+            answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{$caps},\"serverInfo\":{\"name\":\"fx\",\"version\":\"0.0.0\"}}}"
             ;;
         tools/list)
-            if [ -f "$dir/tools.json" ]; then
-                tools="$(cat "$dir/tools.json")"
+            if [ -f "$dir/tools.json" ] && [ "$(cat "$dir/tools.json")" = "error" ]; then
+                answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32601,\"message\":\"Method not found: tools/list\"}}"
             else
-                tools="[]"
-            fi
-            if pages_again "tools/list"; then
-                answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":$tools,\"nextCursor\":\"again\"}}"
-            else
-                answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":$tools}}"
+                if [ -f "$dir/tools.json" ]; then
+                    tools="$(cat "$dir/tools.json")"
+                else
+                    tools="[]"
+                fi
+                if pages_again "tools/list"; then
+                    answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":$tools,\"nextCursor\":\"again\"}}"
+                else
+                    answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":$tools}}"
+                fi
             fi
             ;;
         prompts/list)
