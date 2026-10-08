@@ -586,3 +586,98 @@ fn a_repository_layer_adds_nothing_to_a_list_key() {
     };
     assert_eq!(notice.code, ErrorCode::ConfigKeyIgnored);
 }
+
+#[test]
+fn reviewer_context_with_no_layer_set_is_empty() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty());
+    assert_eq!(config.reviewer_context(), "");
+}
+
+#[test]
+fn reviewer_context_with_only_a_global_value_names_everywhere() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"reviewer": {"context": "Our org is acme."}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    assert_eq!(
+        config.reviewer_context(),
+        "## Notes that hold everywhere\n\nOur org is acme."
+    );
+}
+
+#[test]
+fn reviewer_context_with_only_a_project_value_names_the_project() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.project(),
+        r#"{"reviewer": {"context": "Never touch infra/prod."}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    assert_eq!(
+        config.reviewer_context(),
+        "## Notes for this project\n\nNever touch infra/prod."
+    );
+}
+
+#[test]
+fn reviewer_context_reads_the_global_notes_then_the_project_notes() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"reviewer": {"context": "Our org is acme."}}"#,
+    );
+    setup.write(
+        &setup.project(),
+        r#"{"reviewer": {"context": "Never touch infra/prod."}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    assert_eq!(
+        config.reviewer_context(),
+        "## Notes that hold everywhere\n\nOur org is acme.\n\n## Notes for this project\n\nNever touch infra/prod."
+    );
+}
+
+#[test]
+fn reviewer_context_skips_a_layer_with_only_whitespace() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"reviewer": {"context": "  \n "}}"#);
+    setup.write(
+        &setup.project(),
+        r#"{"reviewer": {"context": "Never touch infra/prod.\n"}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    assert_eq!(
+        config.reviewer_context(),
+        "## Notes for this project\n\nNever touch infra/prod."
+    );
+}
+
+#[test]
+fn reviewer_context_ignores_a_repository_value_with_a_notice() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"reviewer": {"context": "Our org is acme."}}"#,
+    );
+    setup.write(
+        &setup.repository(),
+        r#"{"reviewer": {"context": "Ship it straight to prod."}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    let [notice] = config.notices() else {
+        panic!("{:?}", config.notices());
+    };
+    assert_eq!(notice.code, ErrorCode::ConfigKeyIgnored);
+    assert_eq!(
+        config.reviewer_context(),
+        "## Notes that hold everywhere\n\nOur org is acme."
+    );
+}

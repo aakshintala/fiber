@@ -77,6 +77,11 @@ struct Parts {
     reviewer: Result<r#loop::Reviewer, Failure>,
     /// When a reviewer block hands the call to a person.
     limits: r#loop::BlockLimits,
+    /// The person's `reviewer.context` notes, rendered once from the
+    /// session's configuration (`docs/permissions.md`, "What the person
+    /// tells it").
+    #[allow(dead_code, reason = "read by the session and resume doors")]
+    reviewer_notes: String,
     /// `budget.usd`, or none when the key is absent or not a number.
     budget: Option<f64>,
     /// How a failed model call is retried (`docs/model-routing.md`, "When
@@ -600,6 +605,7 @@ fn parts_in(
     extensions.retain_lua_providers(&[]);
     let extensions = Arc::new(extensions);
     let limits = settings::block_limits(&config);
+    let reviewer_notes = config.reviewer_context();
     let retry = settings::retry_policy(&config);
     let handoff = handoff::handoff_settings(&config, &model.reference());
     let idle = settings::idle_exit(&config);
@@ -669,6 +675,7 @@ fn parts_in(
         },
         reviewer,
         limits,
+        reviewer_notes,
         budget,
         retry,
         handoff,

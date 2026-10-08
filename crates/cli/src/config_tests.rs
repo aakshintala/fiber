@@ -123,6 +123,41 @@ fn a_project_value_beats_a_repository_value_and_names_the_project_file() {
 }
 
 #[test]
+fn get_of_reviewer_context_prints_both_layers_notes_with_no_layer_line() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.home().join("config.json"),
+        &json!({"reviewer": {"context": "Our org is acme."}}),
+    );
+    let (_, project) = crate::project_of(&setup.home(), &setup.workspace()).unwrap();
+    setup.write(
+        &setup
+            .home()
+            .join("projects")
+            .join(project.as_str())
+            .join("config.json"),
+        &json!({"reviewer": {"context": "Never touch infra/prod."}}),
+    );
+    let (result, out, err) = setup.get("reviewer.context");
+    result.unwrap();
+    assert_eq!(err, "");
+    assert_eq!(
+        out,
+        "## Notes that hold everywhere\n\nOur org is acme.\n\n\
+         ## Notes for this project\n\nNever touch infra/prod.\n"
+    );
+}
+
+#[test]
+fn get_of_an_unset_reviewer_context_names_it_on_stderr_and_succeeds() {
+    let setup = Setup::new();
+    let (result, out, err) = setup.get("reviewer.context");
+    result.unwrap();
+    assert_eq!(out, "");
+    assert_eq!(err, "`reviewer.context` is not set.\n");
+}
+
+#[test]
 fn get_of_an_unknown_key_is_a_usage_error_naming_the_key() {
     let setup = Setup::new();
     let (result, out, err) = setup.get("no.such.key");

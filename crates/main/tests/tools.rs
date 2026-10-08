@@ -2726,3 +2726,54 @@ fn an_ask_user_call_outside_its_limits_fails_before_it_starts() {
     assert_eq!(ended["payload"], json!({"outcome": "completed"}));
     assert_eq!(server.requests().len(), 2);
 }
+
+#[test]
+fn a_reviewed_call_carries_the_notes_after_the_shared_instructions() {
+    let setup = Setup::new();
+    let lua = setup.home().join("data/notes/x.lua").display().to_string();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "write_lua",
+            "write",
+            &json!({"path": lua, "content": "return {}\n"}),
+        )]),
+        text_reply("allow"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m",
+            "reviewer": {"model": "fake/m", "context": "Our org is acme."}}),
+    );
+    // The per-project file in Fiber home names the same project as the
+    // session's directory logic does: the workspace with `/` as `-`.
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
+    let key = workspace.to_string_lossy().replace('/', "-");
+    write(
+        &setup.home().join("projects").join(key).join("config.json"),
+        &json!({"reviewer": {"context": "Never touch infra/prod."}}),
+    );
+
+    let run = setup.run(&["ask", "save the snippet"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let instructions = body["instructions"].as_str().unwrap();
+    // The global notes, then the per-project notes, each under its own
+    // heading, after the shared instructions.
+    let shared = instructions
+        .find("The person's notes follow these instructions")
+        .unwrap();
+    let everywhere = instructions.find("## Notes that hold everywhere").unwrap();
+    let global = instructions.find("Our org is acme.").unwrap();
+    let project_heading = instructions.find("## Notes for this project").unwrap();
+    let project = instructions.find("Never touch infra/prod.").unwrap();
+    assert!(
+        shared < everywhere && everywhere < global && global < project_heading && project_heading < project,
+        "{instructions:?}"
+    );
+}

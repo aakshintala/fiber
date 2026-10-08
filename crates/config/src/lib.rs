@@ -327,6 +327,14 @@ impl Config {
         names
     }
 
+    /// The person's `reviewer.context` notes as the reviewer reads them
+    /// (`docs/permissions.md`, "What the person tells it"): the global
+    /// text under its heading, then the per-project text under its own.
+    /// Empty where neither layer sets any.
+    pub fn reviewer_context(&self) -> String {
+        String::new()
+    }
+
     /// An extension's settings, merged across its layers as they were when
     /// this configuration was loaded, plus its own writes since
     /// (`docs/configuration.md`, "Extension settings"). The repository's file

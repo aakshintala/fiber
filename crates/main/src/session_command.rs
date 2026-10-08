@@ -170,6 +170,7 @@ fn run_new(
         prompt: prompt_inputs,
         reviewer,
         limits,
+        reviewer_notes: _reviewer_notes,
         budget,
         retry,
         handoff,

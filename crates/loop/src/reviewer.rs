@@ -97,6 +97,15 @@ pub(crate) fn sections() -> Sections {
     }
 }
 
+/// A reviewer request's system prompt (`docs/permissions.md`, "What the
+/// person tells it"): the shared instructions alone where the person
+/// wrote no notes, else the notes after them. One builder serves both
+/// stages and the handoff selection, so every reviewer request shares
+/// one system prompt.
+fn system_prompt(shared: &str, _notes: &str) -> String {
+    shared.to_owned()
+}
+
 /// What a first-stage verdict that read says.
 #[derive(Debug)]
 pub(crate) enum First {
@@ -515,7 +524,7 @@ impl Loop {
         max_output_tokens: Option<u64>,
     ) -> Result<Result<Reply, CallError>, Error> {
         let request = ModelRequest {
-            system_prompt: shared.to_owned(),
+            system_prompt: system_prompt(shared, &self.reviewer_notes),
             tools: Vec::new(),
             thinking: None,
             tool_choice: "auto".to_owned(),

@@ -19,7 +19,7 @@ use contract::{ActionId, CommandId, Seq};
 use serde_json::{Map, Value, json};
 
 use super::shown::Shown;
-use super::{First, Second, read_first, read_second, render_reviewed, sections};
+use super::{First, Second, read_first, read_second, render_reviewed, sections, system_prompt};
 
 const PROMPT: &str = include_str!("../prompt/reviewer.md");
 
@@ -310,4 +310,13 @@ fn the_second_stage_reads_a_verdict_and_a_reason() {
             "{text:?}"
         );
     }
+}
+
+#[test]
+fn the_system_prompt_carries_the_notes_after_the_shared_instructions() {
+    let shared = "## shared\n\nBe careful.";
+    assert_eq!(system_prompt(shared, ""), shared);
+    assert_eq!(system_prompt(shared, "  \n "), shared);
+    let notes = "## Notes that hold everywhere\n\nOur org is acme.";
+    assert_eq!(system_prompt(shared, notes), format!("{shared}\n\n{notes}"));
 }

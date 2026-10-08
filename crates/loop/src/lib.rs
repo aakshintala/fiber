@@ -154,6 +154,12 @@ pub struct Loop {
     /// What judges step 7's calls; `Err(no_model)` until `reviewer` sets
     /// one (`docs/permissions.md`, "How it runs").
     reviewer: Result<Reviewer, Failure>,
+    /// The person's `reviewer.context` notes, rendered once when the loop
+    /// is built: every reviewer request carries them after the shared
+    /// instructions, byte-stable across a model switch and unchanged by a
+    /// config file changing on disk (`docs/permissions.md`, "What the
+    /// person tells it").
+    reviewer_notes: String,
     /// When a reviewer block hands the call to a person.
     limits: BlockLimits,
     /// What the reviewer is shown, rendered from the same events as
@@ -330,6 +336,7 @@ impl Loop {
                 provider: None,
             }),
             limits: BlockLimits::default(),
+            reviewer_notes: String::new(),
             reviewed: Vec::new(),
             reviewer_sent: None,
             consecutive: 0,
@@ -396,6 +403,16 @@ impl Loop {
     pub fn reviewer(mut self, reviewer: Result<Reviewer, Failure>, limits: BlockLimits) -> Self {
         self.reviewer = reviewer;
         self.limits = limits;
+        self
+    }
+
+    /// The person's `reviewer.context` notes, rendered once when the loop
+    /// is built (`docs/permissions.md`, "What the person tells it").
+    /// Called once, before `run`: a model switch replaces the reviewer
+    /// but not the notes, so the prefix stays byte-stable across a
+    /// switch.
+    pub fn reviewer_notes(mut self, notes: String) -> Self {
+        self.reviewer_notes = notes;
         self
     }
 }
