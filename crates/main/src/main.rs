@@ -767,6 +767,7 @@ fn choose_reviewer(
         },
         cache_lifetime: settings::cache_lifetime(config, &model.reference()),
         context_window,
+        thinking_levels: model.model.thinking_levels.clone(),
     })
 }
 

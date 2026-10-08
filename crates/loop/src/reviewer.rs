@@ -16,6 +16,7 @@ use serde_json::{Map, Value};
 use crate::calls::{Approved, Asked};
 use crate::{Error, Loop, Model};
 
+mod request;
 mod selection;
 mod shown;
 
@@ -23,14 +24,6 @@ pub(crate) use shown::{Reviewed, render_reviewed};
 
 /// What step 7 says about one call: it runs, or how its denial reads.
 type Decided = Result<Approved, Box<ToolCallCompleted>>;
-
-/// The first stage's output limit. A reviewer model that reasons before it
-/// answers spends the limit on that reasoning, so the limit covers it as well
-/// as the word. Measured against the models a first-party provider names for
-/// review (`docs/model-routing.md`): `claude-sonnet-5-5` (and OpenRouter's
-/// `anthropic/claude-sonnet-5.5`) takes 4 tokens for `allow` and 3 for `check`; `gpt-6-luna` and `gemini-3.8-flash` reasoned
-/// for up to 50 and 82 tokens before the one-token word.
-const FIRST_STAGE_OUTPUT_TOKENS: u64 = 128;
 
 /// What a `no_model` escalation and notice say: nothing chose the
 /// reviewer's model, so every reviewed call goes to a person
@@ -44,6 +37,9 @@ pub struct Reviewer {
     pub provider: Arc<dyn Provider>,
     /// The reviewer's model, and how its calls are priced.
     pub model: Model,
+    /// The thinking levels the reviewer's model declares (`docs/model-routing.md`, "Thinking").
+    /// Every reviewer request asks for the lowest; none when it declares none.
+    pub thinking_levels: Vec<contract::ThinkingLevel>,
     /// The prompt-cache lifetime its requests ask for: `cache.lifetime`
     /// resolved for the reviewer's model (`docs/prompt-cache.md`, "Cache
     /// lifetime").
@@ -197,6 +193,7 @@ struct ReviewEndpoint {
     cost: Option<Cost>,
     subscription: bool,
     cache_lifetime: CacheLifetime,
+    thinking: Option<contract::ThinkingLevel>,
 }
 
 /// What one full stage (with its one re-ask) said.
@@ -237,6 +234,7 @@ impl Loop {
                 cost: reviewer.model.cost.clone(),
                 subscription: reviewer.model.subscription,
                 cache_lifetime: reviewer.cache_lifetime,
+                thinking: request::lowest(&[]),
             },
             Err(failure) => {
                 let failure = failure.clone();
@@ -249,7 +247,7 @@ impl Loop {
             &endpoint,
             &prompt.shared,
             &prompt.first,
-            Some(FIRST_STAGE_OUTPUT_TOKENS),
+            Some(request::FIRST_STAGE_OUTPUT_TOKENS),
             read_first,
         )? {
             StageReply::Read(First::Allow) => self.second_allow(&under, &endpoint, 1, None),
@@ -529,7 +527,7 @@ impl Loop {
         let request = ModelRequest {
             system_prompt: system_prompt(shared, &self.reviewer_notes),
             tools: Vec::new(),
-            thinking: None,
+            thinking: endpoint.thinking,
             tool_choice: "auto".to_owned(),
             cache_lifetime: endpoint.cache_lifetime,
             cache_key: self.reviewer_key.clone(),

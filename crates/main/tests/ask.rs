@@ -2714,6 +2714,48 @@ fn every_go_model_is_a_subscription_on_gos_url_and_every_zen_model_is_not() {
 }
 
 #[test]
+fn the_muse_1_3_entries_declare_the_thinking_levels_their_routes_accept() {
+    use contract::ThinkingLevel::{High, Low, Max, Medium, Minimal, Xhigh};
+    let levels = vec![Minimal, Low, Medium, High, Xhigh, Max];
+    let muse = config::read_providers(&package("muse")).unwrap();
+    let muse = muse.iter().find(|p| p.name == "muse").unwrap();
+    for id in ["muse-spark-1.3", "muse-spark-1.3-contributor"] {
+        let model = muse.models.iter().find(|m| m.id == id).unwrap();
+        assert_eq!(model.thinking_levels, levels, "{id}");
+        assert_eq!(model.thinking_default, None, "{id}");
+    }
+    let opencode = config::read_providers(&package("opencode")).unwrap();
+    let go = opencode.iter().find(|p| p.name == "opencode-go").unwrap();
+    let model = go
+        .models
+        .iter()
+        .find(|m| m.id == "muse-spark-1.3-contributor")
+        .unwrap();
+    assert_eq!(model.thinking_levels, levels);
+    assert_eq!(model.thinking_default, None);
+    let old = go
+        .models
+        .iter()
+        .find(|m| m.id == "muse-spark-1.2-contributor")
+        .unwrap();
+    assert!(old.thinking_levels.is_empty());
+    let zen = opencode.iter().find(|p| p.name == "opencode-zen").unwrap();
+    let model = zen
+        .models
+        .iter()
+        .find(|m| m.id == "muse-spark-1.3")
+        .unwrap();
+    assert_eq!(model.thinking_levels, levels);
+    assert_eq!(model.thinking_default, None);
+    let free = zen
+        .models
+        .iter()
+        .find(|m| m.id == "muse-spark-1.3-contributor-free")
+        .unwrap();
+    assert!(free.thinking_levels.is_empty());
+}
+
+#[test]
 fn install_takes_one_name_or_path() {
     let setup = Setup::new();
     let missing = setup.fiber(&["extension", "install"], None);

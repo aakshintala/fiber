@@ -656,6 +656,7 @@ fn a_reviewer_call_s_cost_settles_with_no_action() {
             },
             cache_lifetime: CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
+            thinking_levels: Vec::new(),
         }),
         BlockLimits::default(),
     );

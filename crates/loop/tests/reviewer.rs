@@ -22,7 +22,7 @@ use contract::provider::{Input, ModelRequest};
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{Effect, Failure};
 use contract::tool::Tool;
-use contract::{Envelope, ErrorCode, RequestId};
+use contract::{Envelope, ErrorCode, RequestId, ThinkingLevel};
 use fakes::{Scripted, ScriptedProvider};
 use serde_json::{Value, json};
 
@@ -208,7 +208,8 @@ fn a_stage_1_allow_runs_the_call_with_one_token() {
     let requests = reviewer.requests();
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
-    assert_eq!(request.max_output_tokens, Some(128));
+    assert_eq!(request.thinking, None);
+    assert_eq!(request.max_output_tokens, Some(4096));
     assert_eq!(request.previous_end, None);
     // The session's own provider never receives a reviewer request.
     assert_eq!(session.requests().len(), 2);
@@ -331,8 +332,11 @@ fn a_check_then_an_allow_sends_two_requests_identical_up_to_the_stage() {
 
     let requests = reviewer.requests();
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].max_output_tokens, Some(128));
+    assert_eq!(requests[0].max_output_tokens, Some(4096));
     assert_eq!(requests[1].max_output_tokens, None);
+    for request in &requests {
+        assert_eq!(request.thinking, None);
+    }
     assert_eq!(requests[0].previous_end, None);
     assert_eq!(requests[1].previous_end, Some(2));
     assert_eq!(requests[0].conversation[..3], requests[1].conversation[..3]);
@@ -341,6 +345,60 @@ fn a_check_then_an_allow_sends_two_requests_identical_up_to_the_stage() {
     assert!(user_text(&requests[0].conversation[3]).starts_with("## first-pass\n"));
     assert!(user_text(&requests[1].conversation[3]).starts_with("## second-pass\n"));
     assert_eq!(session.requests().len(), 2);
+}
+
+#[test]
+fn every_reviewer_stage_asks_for_the_lowest_declared_thinking_level() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    );
+    let reviewer = session.reviewer_thinking(
+        vec![
+            Scripted::text("maybe"),
+            Scripted::text("check"),
+            Scripted::text("allow fine"),
+        ],
+        vec![ThinkingLevel::High, ThinkingLevel::Minimal],
+    );
+    let lines = go(&mut session);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ],
+            3,
+        )
+    );
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "allow");
+    assert_eq!(
+        resolved.payload["reviewer"],
+        json!({"model": REVIEWER_MODEL, "stage": 2})
+    );
+    assert_eq!(resolved.payload["reason"], "fine");
+    assert_eq!(tool.ran().len(), 1);
+
+    let requests = reviewer.requests();
+    assert_eq!(requests.len(), 3);
+    for (n, request) in requests.iter().enumerate() {
+        assert_eq!(
+            request.thinking,
+            Some(ThinkingLevel::Minimal),
+            "request {n}"
+        );
+    }
+    assert_eq!(requests[0].max_output_tokens, Some(4096));
+    assert_eq!(requests[1].max_output_tokens, Some(4096));
+    assert_eq!(requests[2].max_output_tokens, None);
 }
 
 #[test]

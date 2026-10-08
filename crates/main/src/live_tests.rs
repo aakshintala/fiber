@@ -300,6 +300,7 @@ fn live_reviewer() {
             },
             cache_lifetime: contract::events::CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
+            thinking_levels: model_data.thinking_levels.clone(),
         }),
         r#loop::BlockLimits::default(),
     );
