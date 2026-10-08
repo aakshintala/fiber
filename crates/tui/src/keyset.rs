@@ -245,23 +245,15 @@ fn entry(
     Some(kept)
 }
 
-/// The first key two actions both bind at the same variant slot, if any:
-/// only same-slot overlaps clash, since a key at another slot resolves
-/// through its own variant's event.
-fn shared_at_same_slot(
-    lower_keys: &[Stroke],
-    lower_variants: usize,
-    higher_keys: &[Stroke],
-    higher_variants: usize,
-) -> Option<Stroke> {
-    for (at, first) in lower_keys.iter().enumerate() {
-        for (later, second) in higher_keys.iter().enumerate() {
-            if first == second && at % lower_variants == later % higher_variants {
-                return Some(*first);
-            }
-        }
-    }
-    None
+/// The first key both actions bind, if any: two actions clash whenever
+/// they share a key in overlapping contexts, whatever slot each key sits
+/// at, since the earlier row resolves the stroke first and the other's
+/// key goes dead there.
+fn shared_key(lower_keys: &[Stroke], higher_keys: &[Stroke]) -> Option<Stroke> {
+    lower_keys
+        .iter()
+        .find(|first| higher_keys.contains(first))
+        .copied()
 }
 
 /// Loads the keyset from the person's `keys`, with its notices: first
@@ -322,12 +314,7 @@ pub(crate) fn load(user: &Map<String, Value>) -> (Keyset, Vec<String>) {
                 if !near.person && !far.person {
                     continue;
                 }
-                if let Some(stroke) = shared_at_same_slot(
-                    &near.keys,
-                    first.events.len().max(1),
-                    &far.keys,
-                    second.events.len().max(1),
-                ) {
+                if let Some(stroke) = shared_key(&near.keys, &far.keys) {
                     pairs.push((lower, higher, stroke));
                 }
             }

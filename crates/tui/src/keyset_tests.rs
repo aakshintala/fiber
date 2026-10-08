@@ -48,11 +48,10 @@ fn the_defaults_never_clash() {
             if !first.contexts.overlaps(second.contexts) {
                 continue;
             }
-            for (at, one) in first.defaults.iter().enumerate() {
-                for (later, other) in second.defaults.iter().enumerate() {
-                    let same_slot = at % first.events.len() == later % second.events.len();
+            for one in first.defaults.iter() {
+                for other in second.defaults.iter() {
                     assert!(
-                        one != other || !same_slot,
+                        one != other,
                         "{} and {} share {one} in overlapping contexts",
                         first.id,
                         second.id
@@ -116,7 +115,7 @@ fn space_types_where_no_action_binds_it() {
 
 #[test]
 fn a_person_key_gives_its_variant_canonical_event() {
-    let entries = &[("move_word", json!(["ctrl+b", "ctrl+f"]))];
+    let entries = &[("move_word", json!(["ctrl+b", "alt+g"]))];
     let (_, notices) = keyset(entries);
     assert!(notices.is_empty(), "{notices:?}");
     assert_eq!(
@@ -124,7 +123,7 @@ fn a_person_key_gives_its_variant_canonical_event() {
         super::Resolved::Edit(Edit::WordLeft)
     );
     assert_eq!(
-        at(entries, "ctrl+f", Context::Input),
+        at(entries, "alt+g", Context::Input),
         super::Resolved::Edit(Edit::WordRight)
     );
     // `move_word` does not act in the conversation: search keeps Ctrl+F.
@@ -146,6 +145,8 @@ fn a_default_key_in_its_default_variant_gives_its_own_default_event() {
 #[test]
 fn a_default_key_in_another_variant_gives_the_canonical_event() {
     let entries = &[("move_word", json!(["alt+right", "alt+left"]))];
+    let (_, notices) = keyset(entries);
+    assert!(notices.is_empty(), "{notices:?}");
     assert_eq!(
         at(entries, "alt+right", Context::Input),
         super::Resolved::Edit(Edit::WordLeft)
@@ -436,6 +437,72 @@ fn two_person_entries_clashing_revert_both() {
 }
 
 #[test]
+fn two_person_entries_sharing_a_key_at_different_slots_revert_both() {
+    // Ctrl+T sits at slot 1 of `move_word`'s pair and at slot 0 of
+    // `search`'s single key: different slots, still a clash in Input.
+    let entries = &[
+        ("move_word", json!(["ctrl+b", "ctrl+t"])),
+        ("search", json!("ctrl+t")),
+    ];
+    let (keys, notices) = keyset(entries);
+    assert_eq!(
+        notices,
+        ["keys.move_word and keys.search both bind Ctrl+T; both keep their defaults."]
+    );
+    assert_eq!(
+        keys.resolve(&stroke("ctrl+t"), Context::Input),
+        super::Resolved::Nothing
+    );
+    assert_eq!(
+        keys.resolve(&stroke("alt+left"), Context::Input),
+        super::Resolved::Edit(Edit::WordLeft)
+    );
+    assert_eq!(
+        keys.resolve(&stroke("ctrl+f"), Context::Input),
+        super::Resolved::Key(Key::CtrlF)
+    );
+}
+
+#[test]
+fn a_person_variant_key_at_another_slot_clashing_with_a_default_reverts() {
+    // Ctrl+F sits at slot 1 of the person's `move_word` pair and at slot
+    // 0 of `search`'s defaults: the person's side reverts on its own.
+    let entries = &[("move_word", json!(["ctrl+b", "ctrl+f"]))];
+    let (keys, notices) = keyset(entries);
+    assert_eq!(
+        notices,
+        ["keys.move_word: Ctrl+F is also Search (search); move_word keeps its default."]
+    );
+    assert_eq!(
+        keys.resolve(&stroke("ctrl+f"), Context::Input),
+        super::Resolved::Key(Key::CtrlF)
+    );
+    assert_eq!(
+        keys.resolve(&stroke("alt+left"), Context::Input),
+        super::Resolved::Edit(Edit::WordLeft)
+    );
+}
+
+#[test]
+fn two_person_variant_entries_sharing_a_key_at_the_same_slot_revert_both() {
+    // Ctrl+B sits at slot 0 of both pairs: the same-slot clash still
+    // reverts both sides.
+    let entries = &[
+        ("move_word", json!(["ctrl+b", "alt+g"])),
+        ("line_start_end", json!(["ctrl+b", "alt+h"])),
+    ];
+    let (keys, notices) = keyset(entries);
+    assert_eq!(
+        notices,
+        ["keys.line_start_end and keys.move_word both bind Ctrl+B; both keep their defaults."]
+    );
+    assert_eq!(
+        keys.resolve(&stroke("alt+left"), Context::Input),
+        super::Resolved::Edit(Edit::WordLeft)
+    );
+}
+
+#[test]
 fn one_pass_with_two_clashes_gives_two_notices_in_table_order() {
     let entries = &[
         ("search", json!("ctrl+o")),
@@ -641,13 +708,13 @@ fn shown_gives_the_doc_cell_the_labels_or_unbound() {
     let (keys, notices) = keyset(entries);
     assert!(notices.is_empty(), "{notices:?}");
     assert_eq!(keys.shown(send), "Ctrl+S, ⌥S");
-    let entries = &[("move_word", json!(["ctrl+b", "ctrl+f"]))];
+    let entries = &[("move_word", json!(["ctrl+b", "alt+g"]))];
     let (keys, _) = keyset(entries);
     let move_word = BINDINGS
         .iter()
         .find(|binding| binding.id == "move_word")
         .expect("move_word is a binding");
-    assert_eq!(keys.shown(move_word), "Ctrl+B Ctrl+F");
+    assert_eq!(keys.shown(move_word), "Ctrl+B ⌥G");
     let entries = &[("toggle_ledgers", json!([]))];
     let (keys, _) = keyset(entries);
     let toggle_ledgers = BINDINGS
