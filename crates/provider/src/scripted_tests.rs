@@ -26,6 +26,9 @@ use super::{Script, ScriptError, Scripted};
 /// The wall-clock bound on every receive and every wait for a park.
 const WITHIN: Duration = Duration::from_secs(5);
 
+/// How long a park that must not happen is waited for, in wall time.
+const QUIET: Duration = Duration::from_millis(50);
+
 fn request(text: &str) -> ModelRequest {
     ModelRequest {
         system_prompt: String::new(),
@@ -375,6 +378,62 @@ fn a_cancel_during_a_pause_wakes_it_and_returns_cancelled() {
 }
 
 #[test]
+fn a_wake_before_the_deadline_keeps_the_pause_until_every_ms_passes() {
+    let clock = FakeClock::new();
+    let scripted = provider(
+        json!([{ "text": ["a", "b", "c"], "every_ms": 200 }]),
+        &clock,
+    );
+    let call: Arc<dyn ModelCall> = Arc::from(scripted.call(&request("hi")));
+    let (fragments, received) = mpsc::channel();
+    let (ended, end) = mpsc::channel();
+    let running = Arc::clone(&call);
+    thread::spawn(move || {
+        let result = running.run(&mut |delta| {
+            fragments.send(delta).unwrap();
+        });
+        ended.send(result).unwrap();
+    });
+
+    let first = clock.origin() + Duration::from_millis(200);
+    assert_eq!(received.recv_timeout(WITHIN).unwrap(), text_delta("a"));
+    let parked = clock.mark_parked(first, WITHIN).unwrap();
+    // Time moves short of the deadline: the pause wakes, and parks again.
+    clock.advance(Duration::from_millis(100));
+    assert!(clock.await_parked_since(&parked, Some(first), WITHIN));
+    let parked_again = clock.mark_parked(first, WITHIN).unwrap();
+    // Nothing moves, so the pause parks once and does not spin into new parks.
+    assert!(!clock.await_parked_since(&parked_again, Some(first), QUIET));
+    assert!(received.try_recv().is_err());
+    clock.advance(Duration::from_millis(99));
+    assert!(clock.await_parked_since(&parked_again, Some(first), WITHIN));
+    assert!(received.try_recv().is_err());
+    clock.advance(Duration::from_millis(1));
+    assert_eq!(received.recv_timeout(WITHIN).unwrap(), text_delta("b"));
+
+    // A cancel after a wake before the next deadline still ends the pause.
+    let second = first + Duration::from_millis(200);
+    let parked = clock.mark_parked(second, WITHIN).unwrap();
+    clock.advance(Duration::from_millis(100));
+    assert!(clock.await_parked_since(&parked, Some(second), WITHIN));
+    call.cancel();
+    match end.recv_timeout(WITHIN).unwrap() {
+        Err(CallError::Cancelled { .. }) => {}
+        other => panic!("{other:?}"),
+    }
+    assert!(received.try_recv().is_err());
+}
+
+#[test]
+fn the_debug_form_names_the_path_and_the_step_count() {
+    let clock = FakeClock::new();
+    let scripted = provider(json!([{ "text": "one" }, { "text": "two" }]), &clock);
+    let shown = format!("{scripted:?}");
+    assert!(shown.contains("s.json"), "{shown}");
+    assert!(shown.contains("steps: 2"), "{shown}");
+}
+
+#[test]
 fn each_field_of_a_reply_step_parses() {
     let rows = [
         json!({ "text": "a" }),
@@ -398,6 +457,10 @@ fn each_field_of_a_reply_step_parses() {
 fn each_malformed_step_is_refused_naming_its_index_and_reason() {
     let rows = [
         (json!({ "text": [] }), "`text`"),
+        (
+            json!({ "text": [], "tool_calls": [{ "name": "read", "arguments": {} }] }),
+            "`text`",
+        ),
         (json!({ "text": 3 }), "`text`"),
         (json!({ "text": ["a", 1] }), "`text`"),
         (
