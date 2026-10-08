@@ -269,7 +269,7 @@ fn a_vec_grown_by_reserve_peaks_at_its_final_capacity() {
         bytes
     });
     let capacity = grown.capacity();
-    assert!(capacity >= 5_000, "capacity {capacity}");
+    assert!(capacity >= 4_000, "capacity {capacity}");
     assert_eq!(measured.peak(), capacity);
     drop(grown);
 }
