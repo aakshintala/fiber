@@ -25,6 +25,17 @@ fn the_screen_reports_the_tty_size_not_the_backends() {
     assert_eq!(window.columns_rows, ratatui::layout::Size::new(30, 8));
 }
 
+#[test]
+fn the_screen_area_follows_the_size_it_was_given() {
+    let mut screen =
+        Screen::new(TestBackend::new(60, 12), 40, 10).unwrap_or_else(|err| panic!("screen: {err}"));
+    assert_eq!(screen.area(), ratatui::layout::Rect::new(0, 0, 40, 10));
+    screen
+        .resize(30, 8)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
+    assert_eq!(screen.area(), ratatui::layout::Rect::new(0, 0, 30, 8));
+}
+
 /// A backend that records each call it gets.
 #[derive(Default)]
 struct Calls(Vec<String>);
