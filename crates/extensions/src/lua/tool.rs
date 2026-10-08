@@ -370,12 +370,12 @@ impl Shared {
         matches!(self.phase, Phase::Ready(_))
     }
 
-    /// Admits an exec run for the call `id` when the extension is ready:
-    /// the phase check and the registration hold one lock, so no abandon
-    /// lands between them. Returns the stop receiver the run watches, or
-    /// `None` once stopped, when no run starts.
+    /// Admits an exec run for the call `id` when the extension is ready
+    /// and the call is not cancelled: both checks and registration hold one
+    /// lock, so neither an abandon nor a cancel lands between them. Returns
+    /// the stop receiver the run watches, or `None` when no run starts.
     pub(super) fn admit_exec(&mut self, id: u64) -> Option<std::sync::mpsc::Receiver<()>> {
-        if !matches!(self.phase, Phase::Ready(_)) {
+        if !matches!(self.phase, Phase::Ready(_)) || self.cancelled.contains(&id) {
             return None;
         }
         let (stop, rx) = std::sync::mpsc::channel::<()>();

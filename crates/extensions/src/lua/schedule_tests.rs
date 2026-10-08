@@ -192,6 +192,46 @@ fn admit_exec_registers_only_while_ready() {
     assert!(shared.exec_pending(id), "the run is registered");
 }
 
+/// A cancel signal delivered before exec admission leaves no run to spawn:
+/// admitting despite the cancelled mark would fail the first assertion.
+#[test]
+fn cancel_before_exec_admission_starts_no_run() {
+    let hub = ready_hub();
+    let now = hub.clock().now();
+    let id = {
+        let mut shared = hub.lock();
+        let id = shared.push(Target::Tool("t".to_owned()), serde_json::Value::Null, now);
+        shared.calls.insert(
+            id,
+            Progress::Started {
+                deadline: None,
+                parked: false,
+            },
+        );
+        id
+    };
+    let (cancelled_tx, cancelled_rx) = std::sync::mpsc::channel();
+    let cancelling_hub = Arc::clone(&hub);
+    let cancelling = std::thread::spawn(move || {
+        cancelling_hub.lock().cancel_call(id);
+        cancelled_tx.send(()).expect("cancellation is signalled");
+    });
+    cancelled_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("cancellation is ordered before admission");
+    cancelling.join().expect("the cancellation thread ends");
+
+    let mut shared = hub.lock();
+    assert!(
+        shared.admit_exec(id).is_none(),
+        "cancelled work is not admitted"
+    );
+    assert!(
+        !shared.exec_pending(id),
+        "no stop sender or run is registered"
+    );
+}
+
 /// Host work is admitted only while the extension is ready: the drive and
 /// HTTP workers share this check, so a flipped check admitting while
 /// stopped would fail here.
