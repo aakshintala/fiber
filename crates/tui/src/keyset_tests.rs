@@ -481,6 +481,100 @@ fn a_cascade_settles_over_two_passes() {
 }
 
 #[test]
+fn an_entry_reverted_by_two_pairs_in_one_pass_stays_reverted() {
+    let entries = &[
+        ("search", json!("ctrl+o")),
+        ("toggle_ledgers", json!(["ctrl+o", "ctrl+l"])),
+    ];
+    let (keys, notices) = keyset(entries);
+    assert_eq!(
+        notices,
+        [
+            "keys.search and keys.toggle_ledgers both bind Ctrl+O; both keep their defaults.",
+            "keys.toggle_ledgers: Ctrl+L is also Open the model picker (model_picker); toggle_ledgers keeps its default.",
+        ]
+    );
+    assert_eq!(
+        keys.resolve(&stroke("ctrl+o"), Context::Input),
+        super::Resolved::Key(Key::CtrlO)
+    );
+    assert_eq!(
+        keys.resolve(&stroke("ctrl+l"), Context::Input),
+        super::Resolved::Nothing
+    );
+}
+
+#[test]
+fn variant_actions_name_their_variants() {
+    let (keys, notices) = keyset(&[("rail_row_n", json!(["alt+1", "alt+2"]))]);
+    assert_eq!(
+        notices,
+        ["keys.rail_row_n: takes keys in nines (1 to 9); rail_row_n keeps its default."]
+    );
+    assert_eq!(
+        keys.resolve(&stroke("alt+1"), Context::Overlay),
+        super::Resolved::Key(Key::AltDigit(1))
+    );
+    let (_, notices) = keyset(&[("select_steering", json!("alt+up"))]);
+    assert_eq!(
+        notices,
+        ["keys.select_steering: takes keys in twos (up, down); select_steering keeps its default."]
+    );
+    let (_, notices) = keyset(&[("line_start_end", json!("super+left"))]);
+    assert_eq!(
+        notices,
+        ["keys.line_start_end: takes keys in twos (start, end); line_start_end keeps its default."]
+    );
+    let (_, notices) = keyset(&[("focus_next_prev", json!("down"))]);
+    assert_eq!(
+        notices,
+        [
+            "keys.focus_next_prev: takes keys in twos (next, prev); focus_next_prev keeps its default."
+        ]
+    );
+    let (_, notices) = keyset(&[("select_steering", json!(["alt+up", "alt+up"]))]);
+    assert_eq!(
+        notices,
+        ["keys.select_steering: alt+up is both up and down; select_steering keeps its default."]
+    );
+    let (_, notices) = keyset(&[("line_start_end", json!(["super+left", "super+left"]))]);
+    assert_eq!(
+        notices,
+        [
+            "keys.line_start_end: super+left is both start and end; line_start_end keeps its default."
+        ]
+    );
+    let (_, notices) = keyset(&[("focus_next_prev", json!(["down", "down"]))]);
+    assert_eq!(
+        notices,
+        ["keys.focus_next_prev: down is both next and prev; focus_next_prev keeps its default."]
+    );
+    let (_, notices) = keyset(&[(
+        "rail_row_n",
+        json!([
+            "alt+1", "alt+1", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9",
+        ]),
+    )]);
+    assert_eq!(
+        notices,
+        ["keys.rail_row_n: alt+1 is both 1 and 2; rail_row_n keeps its default."]
+    );
+}
+
+#[test]
+fn a_mixed_list_gives_one_notice_and_keeps_the_default() {
+    let (keys, notices) = keyset(&[("send", json!(["a", 5]))]);
+    assert_eq!(
+        notices,
+        ["keys.send: [\"a\",5] is not a key or a list of keys; send keeps its default."]
+    );
+    assert_eq!(
+        keys.resolve(&stroke("enter"), Context::Input),
+        super::Resolved::Key(Key::Enter)
+    );
+}
+
+#[test]
 fn actions_in_disjoint_contexts_share_a_key() {
     let entries = &[("open_focused", json!("ctrl+s")), ("send", json!("ctrl+s"))];
     let (keys, notices) = keyset(entries);

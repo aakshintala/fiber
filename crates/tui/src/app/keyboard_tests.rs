@@ -432,6 +432,22 @@ fn the_plain_input_box_is_input() {
 }
 
 #[test]
+fn alt_0_goes_home() {
+    let mut app = homed(80, 24);
+    type_text(&mut app, "hi");
+    assert_eq!(press(&mut app, "alt+0"), Effect::None);
+    assert!(app.session().is_none());
+    assert_eq!(app.draft(), "");
+}
+
+#[test]
+fn an_unknown_action_does_nothing() {
+    let mut app = homed(80, 24);
+    assert_eq!(app.on_action("no_such_action"), Effect::None);
+    assert!(app.session().is_some());
+}
+
+#[test]
 fn ctrl_n_goes_home_with_an_empty_draft_as_slash_new() {
     let mut app = homed(80, 24);
     type_text(&mut app, "hi");
