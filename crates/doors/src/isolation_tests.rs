@@ -22,7 +22,7 @@ use contract::shapes::Worktree;
 use contract::{ErrorCode, SessionId};
 use log::Log;
 
-use super::{Ending, isolate};
+use super::isolate;
 use crate::project;
 
 /// One budget for the whole wait: setup, the code under test and the
@@ -360,7 +360,7 @@ fn a_fresh_worktree_is_removed_at_the_end() {
         let id = "s_0123456789abcdef";
         let isolation = isolate_now(repo.path(), home.path(), id);
         let path = isolation.path().to_path_buf();
-        assert_eq!(isolation.end(), Ending::Removed);
+        isolation.end();
         assert!(!exists(&path), "the path is gone");
         assert!(!branch_exists(repo.path(), &format!("fiber/{id}")));
         assert!(!home.path().join("logs").exists(), "no diagnostic line");
@@ -376,7 +376,8 @@ fn an_untracked_file_keeps_it() {
         let isolation = isolate_now(repo.path(), home.path(), id);
         let path = isolation.path().to_path_buf();
         fs::write(path.join("notes.txt"), "scratch").unwrap();
-        assert_eq!(isolation.end(), Ending::Kept);
+        isolation.end();
+        assert!(exists(&path));
         assert!(path.join("notes.txt").is_file());
         assert!(branch_exists(repo.path(), &format!("fiber/{id}")));
         assert!(!home.path().join("logs").exists(), "no diagnostic line");
@@ -392,7 +393,7 @@ fn a_modified_tracked_file_keeps_it() {
         let isolation = isolate_now(repo.path(), home.path(), id);
         let path = isolation.path().to_path_buf();
         fs::write(path.join("file.txt"), "precious change").unwrap();
-        assert_eq!(isolation.end(), Ending::Kept);
+        isolation.end();
         assert!(exists(&path));
         assert!(!home.path().join("logs").exists(), "no diagnostic line");
     });
@@ -409,7 +410,7 @@ fn a_commit_beyond_the_base_keeps_it() {
         fs::write(path.join("more.txt"), "y").unwrap();
         git(&path, &["add", "."]);
         git(&path, &["commit", "--quiet", "-m", "second"]);
-        assert_eq!(isolation.end(), Ending::Kept);
+        isolation.end();
         assert!(exists(&path));
         assert!(!home.path().join("logs").exists(), "no diagnostic line");
     });
@@ -431,8 +432,9 @@ fn a_commit_also_on_another_branch_still_keeps_it() {
             git(&path, &["commit", "--quiet", "-m", "second"]);
             // Elsewhere too, but still beyond the base.
             git(repo.path(), &["branch", "other", &format!("fiber/{id}")]);
-            assert_eq!(isolation.end(), Ending::Kept);
+            isolation.end();
             assert!(exists(&path));
+            assert!(!home.path().join("logs").exists(), "no diagnostic line");
         },
     );
 }
@@ -450,7 +452,7 @@ fn an_ignored_only_worktree_is_removed() {
         let path = isolation.path().to_path_buf();
         fs::create_dir_all(path.join("build")).unwrap();
         fs::write(path.join("build/out"), "build").unwrap();
-        assert_eq!(isolation.end(), Ending::Removed);
+        isolation.end();
         assert!(!exists(&path), "ignored files are not changes");
     });
 }
@@ -464,7 +466,8 @@ fn a_switched_branch_keeps_it() {
         let isolation = isolate_now(repo.path(), home.path(), id);
         let path = isolation.path().to_path_buf();
         git(&path, &["switch", "--quiet", "-c", "other"]);
-        assert_eq!(isolation.end(), Ending::Kept);
+        isolation.end();
+        assert!(exists(&path));
         assert!(branch_exists(repo.path(), "other"));
         assert!(branch_exists(repo.path(), &format!("fiber/{id}")));
         assert!(!home.path().join("logs").exists(), "no diagnostic line");
@@ -480,7 +483,7 @@ fn a_detached_head_keeps_it() {
         let isolation = isolate_now(repo.path(), home.path(), id);
         let path = isolation.path().to_path_buf();
         git(&path, &["switch", "--quiet", "--detach", "HEAD"]);
-        assert_eq!(isolation.end(), Ending::Kept);
+        isolation.end();
         assert!(exists(&path));
         assert!(!home.path().join("logs").exists(), "no diagnostic line");
     });
@@ -498,7 +501,7 @@ fn a_deleted_worktree_directory_is_failed_and_logged() {
             let isolation = isolate_now(repo.path(), home.path(), id);
             let path = isolation.path().to_path_buf();
             fs::remove_dir_all(&path).unwrap();
-            assert_eq!(isolation.end(), Ending::Failed);
+            isolation.end();
             let line = warn_line(home.path(), id);
             assert_eq!(line["level"], "warn");
             assert_eq!(line["process"], "session");
@@ -524,7 +527,7 @@ fn a_locked_worktree_is_failed_logged_and_kept() {
             let isolation = isolate_now(repo.path(), home.path(), id);
             let path = isolation.path().to_path_buf();
             git(repo.path(), &["worktree", "lock", path.to_str().unwrap()]);
-            assert_eq!(isolation.end(), Ending::Failed);
+            isolation.end();
             assert!(exists(&path), "the worktree stays");
             let line = warn_line(home.path(), id);
             assert_eq!(line["code"], "io_failed");
@@ -557,7 +560,7 @@ fn a_branch_that_cannot_be_deleted_is_failed_and_logged() {
                 "",
             )
             .unwrap();
-            assert_eq!(isolation.end(), Ending::Failed);
+            isolation.end();
             assert!(!exists(&path), "the worktree goes");
             assert!(branch_exists(repo.path(), &branch), "but the branch stays");
             assert_eq!(warn_line(home.path(), id)["code"], "io_failed");
@@ -579,7 +582,7 @@ fn a_session_a_resume_holds_keeps_its_worktree() {
             let path = isolation.path().to_path_buf();
             let sessions = home.path().join("projects").join(&key).join("sessions");
             let holder = held(&sessions, id, path.to_str().unwrap());
-            assert_eq!(isolation.end(), Ending::Kept);
+            isolation.end();
             assert!(exists(&path));
             assert!(branch_exists(repo.path(), &format!("fiber/{id}")));
             assert!(!home.path().join("logs").exists(), "no diagnostic line");
@@ -587,7 +590,9 @@ fn a_session_a_resume_holds_keeps_its_worktree() {
             // The lock was the only reason: another fresh isolation in the
             // same layout is removed.
             let other = isolate_now(repo.path(), home.path(), "s_0123456789abcde0");
-            assert_eq!(other.end(), Ending::Removed);
+            let other_path = other.path().to_path_buf();
+            other.end();
+            assert!(!exists(&other_path), "the path is gone");
         },
     );
 }
@@ -610,7 +615,7 @@ fn another_running_session_in_the_worktree_keeps_it() {
                 "s_0123456789abcde0",
                 &format!("{}/sub", path.display()),
             );
-            assert_eq!(isolation.end(), Ending::Kept);
+            isolation.end();
             assert!(exists(&path));
             assert!(!home.path().join("logs").exists(), "no diagnostic line");
         },
@@ -636,7 +641,7 @@ fn a_session_elsewhere_does_not_block() {
             "s_0123456789abcde0",
             &format!("{}x", path.display()),
         );
-        assert_eq!(isolation.end(), Ending::Removed);
+        isolation.end();
         assert!(!exists(&path));
     });
 }
@@ -666,8 +671,9 @@ fn a_session_started_after_the_first_scan_keeps_it() {
             let sessions = home.path().join("projects").join(&key).join("sessions");
             let _late = held(&sessions, "s_0123456789abcde0", path.to_str().unwrap());
             release_tx.send(()).unwrap();
-            assert_eq!(ending.join().unwrap(), Ending::Kept);
+            ending.join().unwrap();
             assert!(exists(&path));
+            assert!(!home.path().join("logs").exists(), "no diagnostic line");
         },
     );
 }
@@ -683,6 +689,7 @@ fn end_holds_every_users_lock_while_it_removes() {
             let key = key_of(repo.path());
             let id = "s_0123456789abcdef";
             let isolation = isolate_now(repo.path(), home.path(), id);
+            let path = isolation.path().to_path_buf();
             let (parked_tx, parked_rx) = mpsc::channel::<()>();
             let (release_tx, release_rx) = mpsc::channel::<()>();
             let release_rx = Mutex::new(release_rx);
@@ -703,7 +710,8 @@ fn end_holds_every_users_lock_while_it_removes() {
                 "the creator's lock is held while parked"
             );
             release_tx.send(()).unwrap();
-            assert_eq!(ending.join().unwrap(), Ending::Removed);
+            ending.join().unwrap();
+            assert!(!exists(&path), "the path is gone");
             assert!(matches!(log::try_hold(&dir).unwrap(), log::Hold::Held(_)));
         },
     );
@@ -720,7 +728,7 @@ fn a_never_prompted_creator_without_a_directory_still_removes_the_worktree() {
             let id = "s_0123456789abcdef";
             let isolation = isolate_now(repo.path(), home.path(), id);
             let path = isolation.path().to_path_buf();
-            assert_eq!(isolation.end(), Ending::Removed);
+            isolation.end();
             assert!(!exists(&path));
         },
     );
@@ -752,11 +760,14 @@ fn isolate_ignores_a_hostile_git_environment_end_to_end() {
                     "s_0123456789abcdef",
                     isolation.path().to_str().unwrap(),
                 );
-                assert_eq!(isolation.end(), Ending::Kept);
+                let held_path = isolation.path().to_path_buf();
+                isolation.end();
+                assert!(exists(&held_path));
+                assert!(!home.join("logs").exists(), "no diagnostic line");
                 drop(holder);
                 let other = isolate_now(&repo, &home, "s_0123456789abcde0");
                 let path = other.path().to_path_buf();
-                assert_eq!(other.end(), Ending::Removed);
+                other.end();
                 let listed = git_clean(&repo, &["worktree", "list"])
                     .output()
                     .unwrap()
@@ -836,7 +847,7 @@ fn no_message_or_log_line_carries_git_stderr() {
         let isolation = isolate_now(repo.path(), home.path(), id);
         let path = isolation.path().to_path_buf();
         git(repo.path(), &["worktree", "lock", path.to_str().unwrap()]);
-        assert_eq!(isolation.end(), Ending::Failed);
+        isolation.end();
         let line = warn_line(home.path(), id);
         assert_eq!(
             line["message"],

@@ -78,17 +78,6 @@ fn sentence(error: &worktree::Error, path: &Path) -> String {
     }
 }
 
-/// How `end` left the worktree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Ending {
-    /// Nothing uncommitted and no commit beyond the base: gone.
-    Removed,
-    /// In use, or holding something to lose: kept, with no line written.
-    Kept,
-    /// Uncertain: kept, with one diagnostic `warn` line.
-    Failed,
-}
-
 impl Isolation {
     /// The worktree's canonical path.
     pub fn path(&self) -> &Path {
@@ -117,7 +106,9 @@ impl Isolation {
     /// Removes the worktree when it holds nothing uncommitted and no
     /// commit beyond its base, while holding every session working in it
     /// still. Runs after `close()`, at most once: it takes `self`.
-    pub fn end(self) -> Ending {
+    /// A kept worktree writes no line; an uncertain one keeps the worktree
+    /// and writes one diagnostic `warn` line (see `failed`).
+    pub fn end(self) {
         let mut held = Vec::new();
         let mut known = Vec::new();
         for user in users(&self.home, &self.created.path) {
@@ -126,7 +117,7 @@ impl Isolation {
                     held.push(lock);
                     known.push(user.id);
                 }
-                Ok(log::Hold::Busy) | Err(_) => return Ending::Kept,
+                Ok(log::Hold::Busy) | Err(_) => return,
             }
         }
         #[cfg(test)]
@@ -140,7 +131,7 @@ impl Isolation {
             // A branch the person switched to, or a detached HEAD, was
             // the person's choice: kept, with no line.
             Ok(worktree::Inspection::Worktree(_)) | Ok(worktree::Inspection::Detached) => {
-                return Ending::Kept;
+                return;
             }
             Ok(worktree::Inspection::NotAWorktree) => {
                 return self.failed(&worktree::Error::Io {
@@ -151,12 +142,12 @@ impl Isolation {
             Err(error) => return self.failed(&error),
         };
         if inspected.uncommitted {
-            return Ending::Kept;
+            return;
         }
         match worktree::commits_beyond(&self.created.path, &self.created.branch, &self.created.base)
         {
             Ok(0) => {}
-            Ok(_) => return Ending::Kept,
+            Ok(_) => return,
             Err(error) => return self.failed(&error),
         }
         // #624 (rewind): a process whose log ends `rewound` never removes
@@ -171,11 +162,11 @@ impl Isolation {
                 Ok(log::Hold::Held(lock)) => {
                     held.push(lock);
                 }
-                Ok(log::Hold::Busy) | Err(_) => return Ending::Kept,
+                Ok(log::Hold::Busy) | Err(_) => return,
             }
         }
         match worktree::remove(&self.created.path, &inspected, false) {
-            Ok(worktree::Removed::Whole) => Ending::Removed,
+            Ok(worktree::Removed::Whole) => {}
             Ok(worktree::Removed::BranchKept(error)) => self.failed(&error),
             Err(error) => self.failed(&error),
         }
@@ -184,7 +175,7 @@ impl Isolation {
     /// Keeps the worktree and writes one diagnostic `warn` line: code
     /// `io_failed`, process `session`, attached to the session id, in
     /// `logs/session-<id>.log`. The exit code and stdout do not change.
-    fn failed(&self, error: &worktree::Error) -> Ending {
+    fn failed(&self, error: &worktree::Error) {
         let diag = Diag::new(
             &self.home,
             Process::Session,
@@ -198,7 +189,6 @@ impl Isolation {
             "io_failed",
             &sentence(error, &self.created.path),
         );
-        Ending::Failed
     }
 }
 

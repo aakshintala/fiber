@@ -32,7 +32,7 @@ use contract::shapes::Failure;
 use contract::{ErrorCode, PreSessionExit};
 
 pub use attach::attach;
-pub use isolation::{Ending, Isolation, isolate};
+pub use isolation::{Isolation, isolate};
 pub use session::{Declare, Session};
 pub use signals::{Signals, signal_code};
 
