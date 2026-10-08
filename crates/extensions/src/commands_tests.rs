@@ -435,6 +435,7 @@ impl Home {
                 &config,
                 FakeClock::new(),
                 locks,
+                None,
             ));
         });
         Arc::new(rx.recv_timeout(WAIT).expect("waited for the extensions"))

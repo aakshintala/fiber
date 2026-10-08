@@ -40,6 +40,9 @@ pub struct SessionExtensions {
     dirs: Vec<(String, PathBuf)>,
     /// Fiber home, anchoring the extensions' data directories.
     home: PathBuf,
+    /// Host-call replies supplied only by the extension case runner
+    /// (`docs/testing.md`, "Testing an extension").
+    host_script: Option<Arc<crate::host::script::HostScript>>,
     /// Each loaded extension with an `opening`: its name, slug and
     /// manifest opening, in load order.
     openings: Vec<(String, String, config::Opening)>,
@@ -77,16 +80,19 @@ impl SessionExtensions {
     /// failed is not loaded, and a hook that did not register is not run.
     /// `locks` is the session's per-path lock, offered to `host.fs`; every
     /// extension also gets its own clone of `config` and the settings keys
-    /// its manifest lists. The repository's ignored settings keys are
-    /// collected here, once, into [`notices`](Self::notices).
+    /// its manifest lists. `host` is available only to the case runner
+    /// (`docs/testing.md`, "Testing an extension"). The repository's ignored
+    /// settings keys are collected here, once, into [`notices`](Self::notices).
     pub fn load(
         home: &Path,
         config: &Config,
         clock: Arc<dyn Clock>,
         locks: Arc<dyn PathLock>,
+        host: Option<Arc<crate::host::script::HostScript>>,
     ) -> Self {
         let mut session = Self {
             home: home.to_path_buf(),
+            host_script: host.clone(),
             ..Self::default()
         };
         let listing = match crate::list(home, clock.as_ref()) {
@@ -180,7 +186,10 @@ impl SessionExtensions {
                 ) {
                     Ok((extension, mut ignored)) => {
                         session.notices.append(&mut ignored);
-                        extension
+                        match &host {
+                            Some(script) => extension.with_host_script(Arc::clone(script)),
+                            None => extension,
+                        }
                     }
                     Err(e) => {
                         session.failed(&item.name, &e);

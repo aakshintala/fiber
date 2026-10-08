@@ -100,7 +100,7 @@ impl Home {
         let home = self.home();
         let locks: Arc<dyn contract::files::PathLock> = Arc::new(FakeLock::new());
         Arc::new(bounded(move || {
-            SessionExtensions::load(&home, &config, FakeClock::new(), locks)
+            SessionExtensions::load(&home, &config, FakeClock::new(), locks, None)
         }))
     }
 }

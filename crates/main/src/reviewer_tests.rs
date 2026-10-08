@@ -169,6 +169,7 @@ fn the_reviewer_connects_with_the_lua_provider_its_access_names() {
         &config,
         fakes::clock::FakeClock::new(),
         std::sync::Arc::new(tools::PathLocks::new()),
+        None,
     );
     let lua = session_extensions
         .lua_providers()

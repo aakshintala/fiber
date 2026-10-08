@@ -491,8 +491,13 @@ fn parts_in(
     let (mut providers, _notices) = Providers::load(&home).map_err(|e| failed(e.code(), e))?;
     let locks = Arc::new(tools::PathLocks::new());
     let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
-    let mut extensions =
-        extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock), session_locks);
+    let mut extensions = extensions::SessionExtensions::load(
+        &home,
+        &config,
+        Arc::clone(&clock),
+        session_locks,
+        None,
+    );
     let naming = lua_providers::add_lua(&extensions, &mut providers, &config)?;
     scripted::prepare(&mut providers, &config, recorded);
     let owners = (extensions.lua_providers().iter())

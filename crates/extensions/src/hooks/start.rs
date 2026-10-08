@@ -84,6 +84,10 @@ impl SessionExtensions {
                 let manifest = config::read_manifest(dir)?;
                 let (lua, _) =
                     start_vm(extension, dir, &self.home, config, &manifest, clock, locks)?;
+                let lua = match &self.host_script {
+                    Some(script) => lua.with_host_script(Arc::clone(script)),
+                    None => lua,
+                };
                 Arc::new(lua)
             }
         };

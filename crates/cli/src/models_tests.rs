@@ -115,6 +115,7 @@ impl Setup {
                     config,
                     std::sync::Arc::clone(&clock),
                     locks,
+                    None,
                 )
             },
             spawn,
@@ -915,6 +916,7 @@ fn the_refresh_child_leaves_an_unnamed_uncached_provider_alone() {
         &config,
         clock.clone(),
         std::sync::Arc::new(NoLock),
+        None,
     );
     // `refresh_named` joins its refresh threads: run it on a worker and
     // receive completion under one named deadline.

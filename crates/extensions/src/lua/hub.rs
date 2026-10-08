@@ -22,6 +22,7 @@ use serde_json::Value;
 
 use crate::Error;
 use crate::host::Reply;
+use crate::host::script::HostScript;
 
 use super::asks::PendingAsk;
 use super::{ENTRY, GRACE, Target, expired};
@@ -35,6 +36,8 @@ pub(crate) struct Hub {
     shared: Mutex<Shared>,
     changed: Condvar,
     clock: Arc<dyn Clock>,
+    /// Host replies supplied only by the case runner (`docs/testing.md`, "Testing an extension").
+    host_script: Mutex<Option<Arc<HostScript>>>,
     /// A test's pause inside the hub lock where a run's delivery is routed.
     #[cfg(test)]
     window: Mutex<Option<WindowHook>>,
@@ -63,6 +66,7 @@ impl Hub {
             shared: Mutex::new(Shared::default()),
             changed: Condvar::new(),
             clock: Arc::clone(&clock),
+            host_script: Mutex::new(None),
             #[cfg(test)]
             window: Mutex::new(None),
         });
@@ -74,6 +78,20 @@ impl Hub {
 
     pub(crate) fn clock(&self) -> &dyn Clock {
         self.clock.as_ref()
+    }
+
+    pub(crate) fn set_host_script(&self, script: Arc<HostScript>) {
+        *self
+            .host_script
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(script);
+    }
+
+    pub(crate) fn host_script(&self) -> Option<Arc<HostScript>> {
+        self.host_script
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub(super) fn clock_handle(&self) -> Arc<dyn Clock> {

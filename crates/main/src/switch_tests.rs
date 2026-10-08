@@ -251,6 +251,7 @@ fn assembled(
         &config,
         fakes::clock::FakeClock::new(),
         Arc::new(tools::PathLocks::new()),
+        None,
     );
     let naming = crate::lua_providers::add_lua(&extensions, &mut providers, &config).unwrap();
     let owners = (extensions.lua_providers().iter())
@@ -301,6 +302,7 @@ fn over(
         &config,
         fakes::clock::FakeClock::new(),
         Arc::new(tools::PathLocks::new()),
+        None,
     );
     Arc::new(Switching::new(
         providers,
@@ -880,6 +882,7 @@ fn an_unconfigured_model_counts_toward_ambiguity() {
         &config,
         fakes::clock::FakeClock::new(),
         Arc::new(tools::PathLocks::new()),
+        None,
     );
     let naming = crate::lua_providers::add_lua(&extensions, &mut providers, &config).unwrap();
     assert!(
@@ -1621,6 +1624,7 @@ fn scripted_switching(fixture: &Fixture, overrides: &[&str]) -> Arc<Switching> {
         &config,
         fakes::clock::FakeClock::new(),
         Arc::new(tools::PathLocks::new()),
+        None,
     );
     let mut loader = loader(Arc::new(extensions), BTreeMap::new());
     loader.workspace = fixture.workspace.clone();

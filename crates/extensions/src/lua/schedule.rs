@@ -446,61 +446,82 @@ fn settle(
             }
         }
         Request::Http(request) => {
-            let spawned = thread::Builder::new()
-                .name(format!("http {name}"))
-                .spawn(move || deliver(Reply::Http(host::perform(&request))));
-            if let Err(source) = spawned {
-                return hub.finish(
-                    id,
-                    Err(Error::Io {
-                        path: dir.to_owned(),
-                        source,
-                    }),
-                );
+            if let Some(script) = hub.host_script() {
+                deliver(Reply::Http(script.http(request.case_value())));
+            } else {
+                let spawned = thread::Builder::new()
+                    .name(format!("http {name}"))
+                    .spawn(move || deliver(Reply::Http(host::perform(&request))));
+                if let Err(source) = spawned {
+                    return hub.finish(
+                        id,
+                        Err(Error::Io {
+                            path: dir.to_owned(),
+                            source,
+                        }),
+                    );
+                }
             }
             (None, None)
         }
         Request::Callback { port } => (oauth::listen(port, &deliver), None),
         Request::Exec(request) => {
             let hub_exec = Arc::clone(hub);
-            let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
             let meta = ExecMeta {
                 extension: name.to_owned(),
                 program: request.program.clone(),
                 args: request.args.clone(),
                 cwd: request.cwd.clone(),
             };
-            let clock = hub.clock_handle();
-            let spawned = thread::Builder::new()
-                .name(format!("exec {name}"))
-                .spawn(move || {
-                    let outcome = exec::run(&request, clock.as_ref(), deadline, cancel_rx);
-                    match &outcome {
-                        Ok(ran) => {
-                            hub_exec.send(contract::inbox::Delivery::ExtensionExec(meta.exec(ran)))
-                        }
-                        Err(failed) => {
-                            if let Some(ran) = &failed.ran {
-                                hub_exec
-                                    .send(contract::inbox::Delivery::ExtensionExec(meta.exec(ran)));
-                            }
-                        }
-                    }
-                    deliver(match outcome {
-                        Ok(ran) => Reply::Exec(Ok(ran)),
-                        Err(failed) => Reply::Exec(Err((failed.code, failed.message))),
-                    });
+            if let Some(script) = hub.host_script() {
+                let result = script.exec(request.case_value()).map(|reply| {
+                    let ran = exec::Ran {
+                        exit_code: Some(reply.code),
+                        signal: None,
+                        stdout: reply.stdout.into_bytes(),
+                        stderr: reply.stderr.into_bytes(),
+                        timed_out: false,
+                    };
+                    hub_exec.send(contract::inbox::Delivery::ExtensionExec(meta.exec(&ran)));
+                    ran
                 });
-            if let Err(source) = spawned {
-                return hub.finish(
-                    id,
-                    Err(Error::Io {
-                        path: dir.to_owned(),
-                        source,
-                    }),
-                );
+                deliver(Reply::Exec(result));
+                (None, None)
+            } else {
+                let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
+                let clock = hub.clock_handle();
+                let spawned =
+                    thread::Builder::new()
+                        .name(format!("exec {name}"))
+                        .spawn(move || {
+                            let outcome = exec::run(&request, clock.as_ref(), deadline, cancel_rx);
+                            match &outcome {
+                                Ok(ran) => hub_exec
+                                    .send(contract::inbox::Delivery::ExtensionExec(meta.exec(ran))),
+                                Err(failed) => {
+                                    if let Some(ran) = &failed.ran {
+                                        hub_exec.send(contract::inbox::Delivery::ExtensionExec(
+                                            meta.exec(ran),
+                                        ));
+                                    }
+                                }
+                            }
+                            deliver(match outcome {
+                                Ok(ran) => Reply::Exec(Ok(ran)),
+                                Err(failed) => Reply::Exec(Err((failed.code, failed.message))),
+                            });
+                        });
+                if let Err(source) = spawned {
+                    return hub.finish(
+                        id,
+                        Err(Error::Io {
+                            path: dir.to_owned(),
+                            source,
+                        }),
+                    );
+                }
+                (Some(cancel_tx), None)
             }
-            (Some(cancel_tx), None)
         }
         Request::Lock => {
             // A command, hook or timer holds no provider credential: calling
