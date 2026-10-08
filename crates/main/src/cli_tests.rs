@@ -1689,6 +1689,14 @@ fn session_rewound_from_parses_and_conflicts_with_a_fresh_start() {
         vec!["--prompt", "hi"],
         vec!["--model", "fake/m"],
         vec!["--worktree"],
+        vec![
+            "--prompt",
+            "hi",
+            "--parent",
+            "s_bbbbbbbbbbbbbbbb",
+            "--delegate-id",
+            "j_bbbbbbbbbbbbbbbb",
+        ],
     ] {
         let mut argv = vec![
             "fiber",
