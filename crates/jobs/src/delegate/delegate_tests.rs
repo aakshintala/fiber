@@ -338,10 +338,10 @@ fn a_stop_before_the_runner_connects_still_ends_cancelled() {
         &fakes::CancelToken::new(),
         &Recorder::default(),
     );
-    assert!(output.error.is_none());
-    // Guard first, for the same reason: the stop below races the
-    // runner, and any failing assert must still clean up the child.
+    // Guard first: the stop below races the runner, and any failing
+    // assert must still clean up the child.
     let _watchdog = child_group(&rig);
+    assert!(output.error.is_none());
     // Stopping at once races the runner's first watch; the stop wins and
     // the job ends cancelled once the runner reaps it.
     assert_eq!(rig.registry.stop_delegates(), 1);
