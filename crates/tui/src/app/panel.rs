@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use contract::Envelope;
+use contract::JobId;
 use contract::events::{
     CommandAccepted, CommandRejected, CommandResult, DelegateStarted, ExtensionUi, FileChange,
     JobCompleted, JobStarted, McpServerFailed, McpServerReady, ModelChanged, PreambleBuilt,
@@ -61,8 +62,8 @@ pub(crate) struct PanelState {
     speed: Option<u64>,
     down: BTreeSet<String>,
     changes: BTreeMap<String, (u64, u64)>,
-    jobs: Vec<(String, String)>,
-    delegate_jobs: BTreeSet<String>,
+    jobs: Vec<(JobId, String)>,
+    delegate_jobs: BTreeSet<JobId>,
     jobs_open: bool,
     due: bool,
     asked: Option<String>,
@@ -147,17 +148,17 @@ impl PanelState {
             }
             "job_started" => {
                 if let Some(started) = super::read!(envelope, JobStarted) {
-                    self.jobs.push((started.job_id.0, started.description));
+                    self.jobs.push((started.job_id, started.description));
                 }
             }
             "delegate_started" => {
                 if let Some(started) = super::read!(envelope, DelegateStarted) {
-                    self.delegate_jobs.insert(started.job_id.0);
+                    self.delegate_jobs.insert(started.job_id);
                 }
             }
             "job_completed" => {
                 if let Some(done) = super::read!(envelope, JobCompleted) {
-                    self.jobs.retain(|(id, _)| *id != done.job_id.0);
+                    self.jobs.retain(|(id, _)| *id != done.job_id);
                 }
             }
             _ => {}
@@ -249,13 +250,13 @@ impl PanelState {
     }
 
     /// The jobs started in start order: their ids and descriptions.
-    pub(crate) fn jobs(&self) -> &[(String, String)] {
+    pub(crate) fn jobs(&self) -> &[(JobId, String)] {
         &self.jobs
     }
 
     /// The delegates' jobs: a delegate is a job with a `delegate_started`
     /// (`docs/events.md`, "`delegate_started`").
-    pub(crate) fn delegate_jobs(&self) -> &BTreeSet<String> {
+    pub(crate) fn delegate_jobs(&self) -> &BTreeSet<JobId> {
         &self.delegate_jobs
     }
 
@@ -423,8 +424,10 @@ impl App {
         Vec::new()
     }
 
-    /// Scrolls the panel by three rows, picked, not measured: down clamped
-    /// to the rows past the panel's text rows, up saturating at the top.
+    /// Scrolls the panel by three rows, picked, not measured: the stored
+    /// offset clamps to the rows past the panel's text rows first, so a
+    /// grown screen or shrunk cards move on the first wheel; down clamps
+    /// to that end, up saturates at the top.
     pub(super) fn scroll_panel(&mut self, up: bool) {
         let Some(panel) = self.chrome().layout().and_then(|layout| layout.panel) else {
             return;
@@ -432,10 +435,11 @@ impl App {
         let rows = crate::view::panel::rows(self, panel.width);
         let height = usize::from(panel.height.saturating_sub(1));
         let max = rows.len().saturating_sub(height);
+        let clamped = self.panel_state.scroll.min(max);
         if up {
-            self.panel_state.scroll = self.panel_state.scroll.saturating_sub(3);
+            self.panel_state.scroll = clamped.saturating_sub(3);
         } else {
-            self.panel_state.scroll = self.panel_state.scroll.saturating_add(3).min(max);
+            self.panel_state.scroll = clamped.saturating_add(3).min(max);
         }
     }
 

@@ -37,9 +37,7 @@ pub(crate) fn cards(list: &[String], widgets: &[(&str, &str)]) -> Vec<Card> {
     for name in list {
         // debt: the Delegates card draws nothing until it is built; upgrade trigger: its lane on #669.
         // debt: the Quota card draws nothing until a client can read quota; upgrade trigger: #1200 lands.
-        if name == "delegates" || name == "quota" {
-            continue;
-        }
+        // `delegates`, `quota` and unknown names fall through and place nothing.
         if name == "session" && !out.contains(&Card::Session) {
             out.push(Card::Session);
             continue;

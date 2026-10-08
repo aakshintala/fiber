@@ -384,7 +384,7 @@ fn jobs_count_started_without_completed() {
     ));
     assert_eq!(
         app.panel_state().jobs(),
-        &[("j_2".to_owned(), "test".to_owned())]
+        &[(contract::JobId("j_2".to_owned()), "test".to_owned())]
     );
 }
 
@@ -400,7 +400,11 @@ fn a_delegate_is_not_a_job() {
             "harness": "fiber", "model": "test/model", "workspace": "/w"}),
     ));
     assert_eq!(app.panel_state().jobs().len(), 1);
-    assert!(app.panel_state().delegate_jobs().contains("j_1"));
+    assert!(
+        app.panel_state()
+            .delegate_jobs()
+            .contains(&contract::JobId("j_1".to_owned()))
+    );
 }
 
 #[test]
@@ -1134,4 +1138,90 @@ fn scrolling_without_a_panel_rect_does_nothing() {
     app.on_wheel(&mouse(MouseKind::WheelDown, 10, 5));
     app.scroll_panel(false);
     assert_eq!(app.panel_state().scroll(), 0);
+}
+
+/// The panel's drawn text: the panel rect drawn alone.
+fn panel_text(app: &App) -> String {
+    let rect = app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.panel)
+        .unwrap_or_else(|| panic!("a panel rect"));
+    let area = ratatui::layout::Rect::new(0, 0, rect.width, rect.height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let mut targets = Vec::new();
+    crate::view::panel::draw(app, area, &mut buf, &mut targets);
+    crate::view::text(&buf)
+}
+
+#[test]
+fn wheel_up_after_growth_moves_on_the_first_wheel() {
+    use crate::keys::MouseKind;
+    let mut app = panel_app();
+    big_widget(&mut app);
+    let down = mouse(MouseKind::WheelDown, 140, 20);
+    for _ in 0..8 {
+        app.on_wheel(&down);
+    }
+    assert_eq!(app.panel_state().scroll(), 22);
+    app.set_size(160, 60);
+    // The stored 22 draws clamped to 2.
+    assert_eq!(
+        panel_text(&app).lines().nth(1).unwrap_or_default(),
+        "  line 01"
+    );
+    // Clamped 2 saturates to 0, so the display moves to the top, not
+    // stuck at 2 (22 - 3 = 19 would stick).
+    app.on_wheel(&mouse(MouseKind::WheelUp, 140, 20));
+    assert_eq!(app.panel_state().scroll(), 0);
+    assert_eq!(
+        panel_text(&app).lines().nth(1).unwrap_or_default(),
+        "  plan \u{b7} tasks"
+    );
+    // Down from the top clamps to the new end: 0 + 3 past 2 stays at 2.
+    app.on_wheel(&mouse(MouseKind::WheelDown, 140, 20));
+    assert_eq!(app.panel_state().scroll(), 2);
+    assert_eq!(
+        panel_text(&app).lines().nth(1).unwrap_or_default(),
+        "  line 01"
+    );
+}
+
+#[test]
+fn wheel_up_after_shrinkage_moves_on_the_first_wheel() {
+    use crate::keys::MouseKind;
+    let mut app = panel_app();
+    big_widget(&mut app);
+    let down = mouse(MouseKind::WheelDown, 140, 20);
+    for _ in 0..8 {
+        app.on_wheel(&down);
+    }
+    assert_eq!(app.panel_state().scroll(), 22);
+    let lines: Vec<String> = (0..50).map(|n| format!("line {n:02}")).collect();
+    app.on_line(session_line(
+        SESSION,
+        "extension_ui",
+        serde_json::json!({"extension": "plan", "widget": "tasks", "lines": lines}),
+    ));
+    // Fifty lines draw 51 rows against 39, so the stored 22 draws
+    // clamped to 12.
+    assert_eq!(
+        panel_text(&app).lines().nth(1).unwrap_or_default(),
+        "  line 11"
+    );
+    // Clamped 12 - 3 = 9, so the display moves, not stuck at 12
+    // (22 - 3 = 19 would stick).
+    app.on_wheel(&mouse(MouseKind::WheelUp, 140, 20));
+    assert_eq!(app.panel_state().scroll(), 9);
+    assert_eq!(
+        panel_text(&app).lines().nth(1).unwrap_or_default(),
+        "  line 08"
+    );
+    // Down returns to the shrunk end: 9 + 3 = 12.
+    app.on_wheel(&mouse(MouseKind::WheelDown, 140, 20));
+    assert_eq!(app.panel_state().scroll(), 12);
+    assert_eq!(
+        panel_text(&app).lines().nth(1).unwrap_or_default(),
+        "  line 11"
+    );
 }
