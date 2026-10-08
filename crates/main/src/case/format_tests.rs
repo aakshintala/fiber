@@ -246,6 +246,23 @@ fn a_call_case_accepts_null_returns_and_requires_one_outcome() {
 }
 
 #[test]
+fn a_call_return_at_zero_is_accepted_and_a_negative_return_is_refused() {
+    let value = json!({
+        "call": {"provider": "openrouter", "function": "cost", "arg": {}},
+        "returns": 0
+    });
+    let Case::Call(parsed) = parse(&value).expect("zero is an allowed return") else {
+        panic!("call case parsed as a session case");
+    };
+    assert!(matches!(parsed.outcome, CallOutcome::Returns(ref value) if *value == json!(0)));
+
+    let mut beyond = value;
+    beyond["returns"] = json!(-0.1);
+    let error = case_error(&beyond);
+    assert!(error.contains("at or above 0"), "{error}");
+}
+
+#[test]
 fn a_case_cannot_mix_a_prompt_and_a_call() {
     let mut value = session_case();
     value["call"] = json!({"provider": "p", "function": "cost", "arg": {}});

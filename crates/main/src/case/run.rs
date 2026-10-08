@@ -20,6 +20,19 @@ const ADVANCE_WAIT: Duration = Duration::from_secs(10);
 const UNTIL_WAIT: Duration = Duration::from_secs(30);
 const CLOSE_WAIT: Duration = Duration::from_secs(5);
 
+#[derive(Clone, Copy)]
+struct WaitBounds {
+    advance: Duration,
+    until: Duration,
+    close: Duration,
+}
+
+const RUNNER_WAITS: WaitBounds = WaitBounds {
+    advance: ADVANCE_WAIT,
+    until: UNTIL_WAIT,
+    close: CLOSE_WAIT,
+};
+
 /// Inputs and results for one runner-only session case.
 pub(crate) struct CaseRun {
     name: String,
@@ -29,6 +42,7 @@ pub(crate) struct CaseRun {
     advances: Vec<ClockAdvance>,
     until: Option<Selector>,
     process_clock: Arc<dyn Clock>,
+    waits: WaitBounds,
     verdict: Mutex<Option<Vec<String>>>,
 }
 
@@ -42,6 +56,26 @@ impl CaseRun {
         until: Option<Selector>,
         process_clock: Arc<dyn Clock>,
     ) -> Arc<Self> {
+        Self::with_waits(
+            name,
+            expected,
+            host,
+            advances,
+            until,
+            process_clock,
+            RUNNER_WAITS,
+        )
+    }
+
+    fn with_waits(
+        name: String,
+        expected: Vec<Value>,
+        host: Host,
+        advances: Vec<ClockAdvance>,
+        until: Option<Selector>,
+        process_clock: Arc<dyn Clock>,
+        waits: WaitBounds,
+    ) -> Arc<Self> {
         Arc::new(Self {
             name,
             expected,
@@ -50,6 +84,7 @@ impl CaseRun {
             advances,
             until,
             process_clock,
+            waits,
             verdict: Mutex::new(None),
         })
     }
@@ -100,7 +135,7 @@ impl CaseRun {
         let deadline = self
             .process_clock
             .now()
-            .checked_add(UNTIL_WAIT)
+            .checked_add(self.waits.until)
             .unwrap_or_else(|| self.process_clock.now());
         let mut watcher = match log.watch_all() {
             Ok(watcher) => watcher,
@@ -150,7 +185,7 @@ impl CaseRun {
             let exit_deadline = self
                 .process_clock
                 .now()
-                .checked_add(CLOSE_WAIT)
+                .checked_add(self.waits.close)
                 .unwrap_or_else(|| self.process_clock.now());
             while let Some(line) = self.next_event(&mut watcher, exit_deadline, &mut failures) {
                 if line.is_durable() {
@@ -197,8 +232,8 @@ impl CaseRun {
                     .map(|selector| format!("{} occurrence {}", selector.kind, selector.nth))
                     .unwrap_or_else(|| "turn_completed or turn_failed".to_owned());
                 failures.push(format!(
-                    "{}: wait for until event {until} expired after {UNTIL_WAIT:?}",
-                    self.name
+                    "{}: wait for until event {until} expired after {:?}",
+                    self.name, self.waits.until
                 ));
                 None
             }
@@ -224,7 +259,13 @@ impl CaseRun {
             }
             let index = next.saturating_add(1);
             let duration = Duration::from_millis(entry.advance_ms);
-            if let Err(reason) = self.clock.advance_when_parked(duration, ADVANCE_WAIT) {
+            let advanced = if entry.after.is_some() {
+                self.clock
+                    .advance_when_parked_after_event(duration, self.waits.advance)
+            } else {
+                self.clock.advance_when_parked(duration, self.waits.advance)
+            };
+            if let Err(reason) = advanced {
                 failures.push(format!("clock advance[{index}]: {reason}"));
                 return false;
             }
@@ -255,7 +296,7 @@ impl CaseRun {
                 drop(answer.send(result));
             })),
         );
-        match received.recv_timeout(CLOSE_WAIT) {
+        match received.recv_timeout(self.waits.close) {
             Ok(Ok(_)) => {}
             Ok(Err(rejection)) => failures.push(format!(
                 "closing the case session: {} ({:?})",

@@ -206,6 +206,27 @@ fn sleep_parks_until_its_deadline_is_advanced() {
 }
 
 #[test]
+fn an_event_advance_fast_fails_when_it_would_skip_a_parked_wait() {
+    let clock = CaseClock::new();
+    let before = clock.now();
+    let deadline = before + Duration::from_millis(200);
+    let mut refusal = None;
+    let mut wait = |_| {
+        refusal = Some(clock.advance_when_parked_after_event(Duration::from_millis(400), WAIT));
+    };
+    clock.wait_until(Some(deadline), &mut wait);
+
+    let error = refusal
+        .expect("the parked waiter was checked")
+        .expect_err("a 400 ms advance must not skip the 200 ms waiter");
+    assert!(
+        error.contains("would skip the only parked deadline"),
+        "{error}"
+    );
+    assert_eq!(clock.now(), before);
+}
+
+#[test]
 fn only_an_exactly_parked_deadline_authorises_an_advance() {
     let clock = CaseClock::new();
     let before = clock.now();

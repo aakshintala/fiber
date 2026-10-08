@@ -382,8 +382,17 @@ fn slow_script_fragments_need_one_advance_each() {
     ]);
     assert_success(&run_case(&setup, "two-advances", &value));
 
-    value["clock"] = json!([{"advance_ms": 400}]);
-    assert_failure(&run_case(&setup, "one-advance", &value), "no waiter parked");
+    value["clock"] = json!([
+        {"advance_ms": 200},
+        {"after": {"kind": "assistant_message_delta", "nth": 2}, "advance_ms": 400}
+    ]);
+    let output = run_case(&setup, "mismatched-advance", &value);
+    assert_failure(&output, "would skip the only parked deadline");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("clock advance[2] was not reached"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 }
 
 #[test]
@@ -401,6 +410,28 @@ fn provider_cost_call_cases_match_returns_errors_and_host_requests() {
   return json.decode(reply.body).data.total_cost
 end } })"#,
     );
+    let competitor = setup.root.path().join("case-extension-competitor");
+    fs::create_dir_all(&competitor).unwrap();
+    fs::write(
+        competitor.join("extension.json"),
+        json!({"name": "fiber.test/openrouter-competitor", "version": "0.1.0", "fiber": "0.0.0", "api": 1}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        competitor.join("init.lua"),
+        r#"fiber.provider("openrouter", { cost = { timeout = 5000, run = function() return 0.25 end } })"#,
+    )
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(competitor),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
     let mut good = json!({
         "call": {"provider": "openrouter", "function": "cost", "arg": {
             "generation_id": "gen-abc", "base_url": server.url(), "key": "secret"

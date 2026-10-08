@@ -57,14 +57,44 @@ impl CaseClock {
     /// The bounded wait is on the process clock (`docs/testing.md`,
     /// "Waits and timeouts").
     pub(crate) fn advance_when_parked(&self, d: Duration, within: Duration) -> Result<(), String> {
+        self.advance_when_parked_inner(d, within, false)
+    }
+
+    /// An event-anchored advance refuses an already parked, shorter wait
+    /// that it would skip rather than waiting for the case's whole bound.
+    pub(crate) fn advance_when_parked_after_event(
+        &self,
+        d: Duration,
+        within: Duration,
+    ) -> Result<(), String> {
+        self.advance_when_parked_inner(d, within, true)
+    }
+
+    fn advance_when_parked_inner(
+        &self,
+        d: Duration,
+        within: Duration,
+        refuse_skipped_wait: bool,
+    ) -> Result<(), String> {
         let state = lock(&self.state);
         let (mut state, _) = self
             .changed
             .wait_timeout_while(state, within, |state| {
                 matching_deadline(state, self.origin, d).is_none()
+                    && !(refuse_skipped_wait && has_single_shorter_deadline(state, self.origin, d))
             })
             .unwrap_or_else(PoisonError::into_inner);
         if matching_deadline(&state, self.origin, d).is_none() {
+            if refuse_skipped_wait && has_single_shorter_deadline(&state, self.origin, d) {
+                let parked = state
+                    .parked
+                    .iter()
+                    .filter_map(|parked| parked.until)
+                    .collect::<Vec<_>>();
+                return Err(format!(
+                    "clock advance {d:?} would skip the only parked deadline {parked:?}"
+                ));
+            }
             let parked = state
                 .parked
                 .iter()
@@ -146,6 +176,14 @@ impl Clock for CaseClock {
     fn subscribe(&self, waker: Weak<dyn Wake>) {
         lock(&self.state).wakers.push(waker);
     }
+}
+
+fn has_single_shorter_deadline(state: &State, origin: Instant, d: Duration) -> bool {
+    let Some(expected) = now_in(state, origin).checked_add(d) else {
+        return false;
+    };
+    let mut deadlines = state.parked.iter().filter_map(|parked| parked.until);
+    matches!((deadlines.next(), deadlines.next()), (Some(until), None) if until < expected)
 }
 
 fn matching_deadline(state: &State, origin: Instant, d: Duration) -> Option<Instant> {
