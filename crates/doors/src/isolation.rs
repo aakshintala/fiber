@@ -61,27 +61,17 @@ pub fn isolate(
 
 /// One fixed sentence for a `worktree::Error`, built from the path and the
 /// git subcommand name only: never git's stderr, which can carry
-/// configuration or credential text. It names the path the failure is
-/// about: the launch directory for `NotARepository`, the existing path or
-/// ref for `Exists`, and the worktree for the rest.
+/// configuration or credential text. `NotARepository`, `Exists` and
+/// `GitMissing` already carry their sentences, so they are used as they
+/// are; the rest name the worktree the failure is about.
 fn sentence(error: &worktree::Error, path: &Path) -> String {
     match error {
-        worktree::Error::NotARepository { path } => {
-            format!(
-                "{} is not in a git repository, so it cannot have a worktree.",
-                path.display()
-            )
-        }
-        worktree::Error::Exists { path } => {
-            format!(
-                "{} already exists, so Fiber did not make a worktree there.",
-                path.display()
-            )
-        }
+        worktree::Error::NotARepository { .. }
+        | worktree::Error::Exists { .. }
+        | worktree::Error::GitMissing => error.to_string(),
         worktree::Error::Git { command, .. } => {
             format!("git {command} failed for the worktree {}.", path.display())
         }
-        worktree::Error::GitMissing => "git is not installed.".to_owned(),
         worktree::Error::Io { source, .. } => {
             format!("{}: {}.", path.display(), source.kind())
         }

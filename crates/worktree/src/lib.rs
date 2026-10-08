@@ -11,7 +11,7 @@ use contract::ErrorCode;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// `git` is not installed.
-    #[error("git is not installed")]
+    #[error("git is not installed.")]
     GitMissing,
     /// `launch` is not inside a git work tree.
     #[error("{path} is not in a git repository, so it cannot have a worktree.")]
