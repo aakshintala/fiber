@@ -4,6 +4,7 @@
 
 mod roles;
 mod table;
+mod text;
 
 use std::cell::RefCell;
 use std::ops::Range;
@@ -17,7 +18,7 @@ pub(crate) use roles::Role;
 
 use crate::app::Target;
 use crate::highlight;
-use crate::rows::Rows;
+use crate::rows::{Join, RowText, Rows};
 
 /// A reply rendered at one width.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -26,6 +27,8 @@ pub(crate) struct Rendered {
     pub(crate) lines: Vec<Line<'static>>,
     /// Each code block's `copy` target.
     pub(crate) targets: Vec<CopyTarget>,
+    /// What each line adds to its logical line, one per line.
+    pub(crate) text: Vec<RowText>,
 }
 
 /// A code block's click-to-copy target.
@@ -97,7 +100,7 @@ impl Reply {
     }
 
     /// The rendered lines at `width`, each code block's header carrying
-    /// its copy target.
+    /// its copy target, and each with what it adds to its logical line.
     pub(crate) fn rows(&self, width: u16, out: &mut Rows) {
         let rendered = self.rendered(width);
         for (at, line) in rendered.lines.iter().cloned().enumerate() {
@@ -106,7 +109,12 @@ impl Reply {
                 reply: self.id,
                 block,
             });
-            out.push((line, target));
+            let text = rendered
+                .text
+                .get(at)
+                .cloned()
+                .unwrap_or_else(RowText::plain);
+            out.push_text((line, target), text);
         }
     }
 }
@@ -147,12 +155,15 @@ pub(crate) fn render(text: &str, width: u16) -> Rendered {
         code: None,
         table: None,
         separator: None,
+        track: text::Track::default(),
     };
     let options = Options::ENABLE_TABLES.union(Options::ENABLE_STRIKETHROUGH);
     for event in Parser::new_ext(text, options) {
         writer.event(event);
     }
-    writer.out
+    let mut out = writer.out;
+    out.text = writer.track.finish();
+    out
 }
 
 /// One open list: its next number, when ordered, and its item's marker
@@ -182,6 +193,8 @@ struct Writer {
     table: Option<table::Table>,
     /// The line count when a separator was last added.
     separator: Option<usize>,
+    /// What each line adds to its logical line.
+    track: text::Track,
 }
 
 impl Writer {
@@ -205,7 +218,7 @@ impl Writer {
                 self.flush();
                 self.block();
                 let rule = "─".repeat(usize::from(self.inner_width()));
-                self.put(Line::from(Span::styled(rule, style(Role::Dim))));
+                self.put(Line::from(Span::styled(rule, style(Role::Dim))), false);
             }
             Event::TaskListMarker(_) => {}
         }
@@ -313,7 +326,7 @@ impl Writer {
             TagEnd::Table => {
                 if let Some(table) = self.table.take() {
                     for line in table.layout(usize::from(self.inner_width())) {
-                        self.put(line);
+                        self.put(line, false);
                     }
                 }
             }
@@ -366,6 +379,7 @@ impl Writer {
     fn block(&mut self) {
         let len = self.out.lines.len();
         if len > 0 && self.lists.is_empty() && self.separator != Some(len) {
+            self.track.row(Join::Break, self.quote_width(), false);
             self.out.lines.push(Line::from(self.quote_prefix()));
             self.separator = Some(self.out.lines.len());
         }
@@ -389,8 +403,17 @@ impl Writer {
         self.width.saturating_sub(self.quote_width())
     }
 
-    /// Adds a block's row after the quote bars.
-    fn put(&mut self, line: Line<'static>) {
+    /// Adds a block's row after the quote bars, which are not text; with
+    /// `decoration` none of it is.
+    fn put(&mut self, line: Line<'static>, decoration: bool) {
+        self.put_row(line, Join::Break, 0, decoration);
+    }
+
+    /// Adds a row after the quote bars that joins the row before by `join`
+    /// and whose first `gutter` cells after the bars are not text.
+    fn put_row(&mut self, line: Line<'static>, join: Join, gutter: u16, decoration: bool) {
+        let skip = self.quote_width().saturating_add(gutter);
+        self.track.row(join, skip, decoration);
         let mut spans = self.quote_prefix();
         spans.extend(line.spans);
         self.out.lines.push(Line::from(spans));
@@ -417,18 +440,26 @@ impl Writer {
     }
 
     /// Wraps the gathered inline text into lines. An item's marker shows
-    /// even when its item has no text.
+    /// even when its item has no text. The first row's text starts after
+    /// the quote bars, so a list's indent and marker are text; the other
+    /// rows' start after their whole prefix, the hang indent included.
     fn flush(&mut self) {
         if self.inline.is_empty() && self.marker.is_none() {
             return;
         }
         let cells = std::mem::take(&mut self.inline);
         let (first, rest) = self.prefixes();
+        let bars = self.quote_width();
+        let hang = u16::try_from(rest.iter().map(Span::width).sum::<usize>()).unwrap_or(u16::MAX);
         let lines = wrap(&cells, usize::from(self.width), &first, &rest, true);
         if lines.is_empty() {
+            self.track.row(Join::Break, bars, false);
             self.out.lines.push(Line::from(first));
-        } else {
-            self.out.lines.extend(lines);
+        }
+        for (at, (line, join)) in lines.into_iter().enumerate() {
+            let skip = if at == 0 { bars } else { hang };
+            self.track.row(join, skip, false);
+            self.out.lines.push(line);
         }
     }
 
@@ -450,7 +481,7 @@ impl Writer {
                 code: code.to_owned(),
             });
         }
-        self.put(header(label, width));
+        self.put(header(label, width), true);
         let runs = highlight::spans(info, code).unwrap_or_else(|| {
             code.split('\n')
                 .map(|line| vec![(Role::CodeText, line.to_owned())])
@@ -475,15 +506,17 @@ impl Writer {
                 format!("{:digits$} │ ", ""),
                 tinted(Role::Dim),
             )];
+            let gutter =
+                u16::try_from(cells_width(&format!("{:digits$} │ ", ""))).unwrap_or(u16::MAX);
             let mut rows = wrap(&cells, width, &first, &rest, false);
             if rows.is_empty() {
-                rows.push(Line::from(first.to_vec()));
+                rows.push((Line::from(first.to_vec()), Join::Break));
             }
-            for mut row in rows {
+            for (mut row, join) in rows {
                 let pad = width.saturating_sub(row.width());
                 row.spans
                     .push(Span::styled(" ".repeat(pad), tinted(Role::CodeText)));
-                self.put(row);
+                self.put_row(row, join, gutter, false);
             }
         }
     }
@@ -547,30 +580,30 @@ fn cells_width(text: &str) -> usize {
 }
 
 /// Wraps `cells` into lines `width` wide, the first after `first` and the
-/// rest after `rest`. With `words` a line breaks between words where it
-/// can, and spaces at a break are dropped; without, it breaks at the
-/// width. A newline ends a line.
+/// rest after `rest`, each with how it joins the line before. With `words`
+/// a line breaks between words where it can, and spaces at a break are
+/// dropped; without, it breaks at the width. A newline ends a line.
 fn wrap(
     cells: &[Cell],
     width: usize,
     first: &[Span<'static>],
     rest: &[Span<'static>],
     words: bool,
-) -> Vec<Line<'static>> {
+) -> Vec<(Line<'static>, Join)> {
     let prefix = |spans: &[Span<'static>]| spans.iter().map(Span::width).sum::<usize>();
     let first_room = width.saturating_sub(prefix(first)).max(1);
     let rest_room = width.saturating_sub(prefix(rest)).max(1);
-    wrap_cells(cells, first_room, rest_room, words)
+    wrap_joined(cells, first_room, rest_room, words)
         .into_iter()
         .enumerate()
-        .map(|(at, row)| {
+        .map(|(at, (row, join))| {
             let mut spans = if at == 0 {
                 first.to_vec()
             } else {
                 rest.to_vec()
             };
             spans.extend(spans_of(&row));
-            Line::from(spans)
+            (Line::from(spans), join)
         })
         .collect()
 }
@@ -578,14 +611,26 @@ fn wrap(
 /// Wraps `cells` into rows: the first `first` cells wide, the others
 /// `rest`. See [`wrap`].
 fn wrap_cells(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<Vec<Cell>> {
-    let mut rows: Vec<Vec<Cell>> = Vec::new();
+    wrap_joined(cells, first, rest, words)
+        .into_iter()
+        .map(|(row, _)| row)
+        .collect()
+}
+
+/// [`wrap_cells`]' rows, each with how it joins the row before: the first
+/// and each after a newline break; one broken inside a word joins with
+/// nothing; one broken where spaces were dropped joins with one space.
+fn wrap_joined(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<(Vec<Cell>, Join)> {
+    let mut rows: Vec<(Vec<Cell>, Join)> = Vec::new();
     let mut row: Vec<Cell> = Vec::new();
+    let mut join = Join::Break;
     let mut used = 0usize;
     let mut at = 0usize;
     // Each pass takes at least the cell at `at`, so the loop ends.
     while let Some(&(ch, _)) = cells.get(at) {
         if ch == '\n' {
-            rows.push(std::mem::take(&mut row));
+            rows.push((std::mem::take(&mut row), join));
+            join = Join::Break;
             used = 0;
             at = at.saturating_add(1);
             continue;
@@ -606,21 +651,29 @@ fn wrap_cells(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<Vec
         let room = if rows.is_empty() { first } else { rest };
         // A word that overflows goes to the next row when it fits there.
         if words && !row.is_empty() && used.saturating_add(width) > room && width <= rest {
+            // Each pass pops one cell, so the loop ends.
             while row.last().is_some_and(|(ch, _)| *ch == ' ') {
                 row.pop();
             }
-            rows.push(std::mem::take(&mut row));
+            rows.push((std::mem::take(&mut row), join));
+            join = Join::WrapSpace;
             used = 0;
         }
-        // Spaces at the start of a wrapped row are dropped.
+        // Spaces at the start of a wrapped row are dropped; the row then
+        // joins the one before with a space.
         if words && ch == ' ' && row.is_empty() && !rows.is_empty() {
+            if join == Join::Wrap {
+                join = Join::WrapSpace;
+            }
             continue;
         }
+        // One pass per cell of the piece.
         for &cell in piece {
             let room = if rows.is_empty() { first } else { rest };
             let width = char_width(cell.0);
             if used.saturating_add(width) > room && !row.is_empty() {
-                rows.push(std::mem::take(&mut row));
+                rows.push((std::mem::take(&mut row), join));
+                join = Join::Wrap;
                 used = 0;
             }
             row.push(cell);
@@ -628,7 +681,7 @@ fn wrap_cells(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<Vec
         }
     }
     if !row.is_empty() {
-        rows.push(row);
+        rows.push((row, join));
     }
     rows
 }

@@ -215,3 +215,53 @@ fn cutting_keeps_what_fits_in_columns() {
     assert_eq!(cut("a界b", 2), "a");
     assert_eq!(cut("a界b", 3), "a界");
 }
+
+#[test]
+fn wrap_joined_marks_word_and_character_breaks() {
+    use crate::rows::Join::{Break, Wrap, WrapSpace};
+    let cases = [
+        (
+            "a word break",
+            "one two",
+            4,
+            vec![("one", Break), ("two", WrapSpace)],
+        ),
+        (
+            "a long word",
+            "abcdef",
+            4,
+            vec![("abcd", Break), ("ef", Wrap)],
+        ),
+        ("a newline", "a\nb", 10, vec![("a", Break), ("b", Break)]),
+        (
+            "an empty line",
+            "a\n\nb",
+            10,
+            vec![("a", Break), ("", Break), ("b", Break)],
+        ),
+    ];
+    for (name, text, max, expected) in cases {
+        let expected: Vec<(String, crate::rows::Join)> = expected
+            .into_iter()
+            .map(|(row, join)| (row.to_owned(), join))
+            .collect();
+        assert_eq!(super::wrap_joined(text, max), expected, "{name}");
+    }
+}
+
+#[test]
+fn bubble_rows_skip_the_pad_and_join_their_continuations() {
+    use crate::rows::Join::{Break, Wrap, WrapSpace};
+    use crate::rows::Rows;
+    // 70% of 14 is 9 columns, 7 inside the padding.
+    let mut out = Rows::default();
+    super::bubble("hello world abcdefghij", 14, &mut out);
+    let (rows, texts) = out.into_parts();
+    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert_eq!(shown, [" hello   ", " world   ", " abcdefg ", " hij     "]);
+    let joins: Vec<_> = texts.iter().map(|text| (text.join, text.skip)).collect();
+    assert_eq!(
+        joins,
+        [(Break, 1), (WrapSpace, 1), (WrapSpace, 1), (Wrap, 1)]
+    );
+}
