@@ -274,3 +274,24 @@ fn finishing_a_longer_title_copies_only_the_body() {
         working(&fetched)
     );
 }
+
+#[test]
+fn finishing_a_tiny_title_copies_only_the_title() {
+    let baseline = empty_working();
+    let title_len = 16;
+    let title = "t".repeat(title_len);
+    let body = "x".repeat(PAGE);
+    let html = format!("<title>{title}</title>{body}");
+    let fetched = fetch("text/html; charset=utf-8", html.into_bytes());
+    let expected = format!("# {title}\n\n{body}\n");
+    assert_markdown_eq(&expected, markdown(&fetched), "the titled page");
+    // The title is much shorter than the body: the body buffer becomes
+    // the result in place, so the working peak holds only the title.
+    // The wrong branch copies the whole body into the title's buffer
+    // and holds both at once, about a page over the bound.
+    assert!(
+        working(&fetched) <= baseline + title_len + WORKING,
+        "working {}",
+        working(&fetched)
+    );
+}
