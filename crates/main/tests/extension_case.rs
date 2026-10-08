@@ -365,11 +365,72 @@ fn slow_script_fragments_need_one_advance_each() {
     ];
     let mut value = session(script.clone(), "hi", expected(&kinds));
     value["expect"][8]["payload"] = json!({"text": "abc"});
-    value["clock"] = json!([{"advance_ms": 200}, {"advance_ms": 200}]);
+    value["clock"] = json!([
+        {"advance_ms": 200},
+        {"after": {"kind": "assistant_message_delta", "nth": 2}, "advance_ms": 200}
+    ]);
     assert_success(&run_case(&setup, "two-advances", &value));
 
     value["clock"] = json!([{"advance_ms": 400}]);
     assert_failure(&run_case(&setup, "one-advance", &value), "no waiter parked");
+}
+
+#[test]
+fn provider_cost_call_cases_match_returns_errors_and_host_requests() {
+    let server = ProviderServer::start([Response::status(
+        200,
+        r#"{"data":{"total_cost":0.5}}"#.as_bytes(),
+    )])
+    .unwrap();
+    let setup = setup_named(
+        "github.com/aakshintala/fiber/providers/openrouter",
+        r#"fiber.provider("openrouter", { cost = { timeout = 5000, run = function(call)
+  local reply = host.http({url = call.base_url .. "/generation?id=" .. call.generation_id,
+                           headers = {authorization = "Bearer " .. call.key}})
+  return json.decode(reply.body).data.total_cost
+end } })"#,
+    );
+    let mut good = json!({
+        "call": {"provider": "openrouter", "function": "cost", "arg": {
+            "generation_id": "gen-abc", "base_url": server.url(), "key": "secret"
+        }},
+        "host": {"http": [{
+            "request": {
+                "url": format!("{}/generation?id=gen-abc", server.url()),
+                "headers": {"authorization": "Bearer secret"}
+            },
+            "reply": {"status": 200, "body": "{\"data\":{\"total_cost\":0.5}}"}
+        }]},
+        "returns": 0.5
+    });
+    assert_success(&run_case(&setup, "cost-match", &good));
+    assert!(server.requests().is_empty(), "call case opened a socket");
+
+    good["returns"] = json!(0.4);
+    assert_failure(&run_case(&setup, "cost-mismatch", &good), "returns");
+    assert!(server.requests().is_empty(), "call case opened a socket");
+
+    let error_setup = setup_named(
+        "github.com/aakshintala/fiber/providers/openrouter",
+        r#"fiber.provider("openrouter", { cost = { timeout = 5000, run = function() error("lookup failed") end } })"#,
+    );
+    let error_case = json!({
+        "call": {"provider": "openrouter", "function": "cost", "arg": {
+            "generation_id": "gen-abc", "base_url": "https://example.test"
+        }},
+        "error": {"code": "extension_failed"}
+    });
+    assert_success(&run_case(&error_setup, "cost-error", &error_case));
+}
+
+#[test]
+fn unsupported_provider_call_is_a_malformed_case() {
+    let setup = setup("");
+    let value = json!({
+        "call": {"provider": "openrouter", "function": "models", "arg": {}},
+        "returns": []
+    });
+    assert_failure(&run_case(&setup, "unsupported", &value), "cost");
 }
 
 #[test]

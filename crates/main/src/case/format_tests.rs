@@ -43,8 +43,12 @@ fn every_session_field_and_each_host_reply_shape_is_read() {
                 {"request": {"url": "https://example.test/error"},
                  "reply": {"error": {"code": "connection_failed", "message": "offline"}}}
             ],
-            "exec": [{"request": {"program": "git", "args": ["status"]},
-                      "reply": {"code": 7, "stdout": "out", "stderr": "err"}}]
+            "exec": [
+                {"request": {"program": "git", "args": ["status"], "cwd": "/workspace"},
+                 "reply": {"code": 7, "stdout": "out", "stderr": "err"}},
+                {"request": {"program": "git", "args": [], "cwd": null},
+                 "reply": {"code": 0, "stdout": "", "stderr": ""}}
+            ]
         },
         "clock": [{"after": {"kind": "turn_completed", "nth": 2}, "advance_ms": 500}],
         "until": {"kind": "notice", "nth": 1},
@@ -78,8 +82,10 @@ fn every_session_field_and_each_host_reply_shape_is_read() {
         parsed.host.http[1].reply.as_ref().unwrap_err().0,
         contract::ErrorCode::ConnectionFailed
     );
-    assert_eq!(parsed.host.exec.len(), 1);
+    assert_eq!(parsed.host.exec.len(), 2);
     assert_eq!(parsed.host.exec[0].request["program"], "git");
+    assert_eq!(parsed.host.exec[0].request["cwd"], "/workspace");
+    assert_eq!(parsed.host.exec[1].request["cwd"], Value::Null);
     let reply = parsed.host.exec[0].reply.as_ref().unwrap();
     assert_eq!(
         (reply.code, reply.stdout.as_str(), reply.stderr.as_str()),
@@ -172,8 +178,27 @@ fn malformed_case_fields_name_the_field() {
     cases.push(("expect", value));
     let value = json!({"call": {"provider": "p", "function": "cost", "arg": {}}, "returns": "not a number"});
     cases.push(("returns", value));
+    let value = json!({"call": {"provider": "p", "function": "cost", "arg": {}}, "returns": -0.1});
+    cases.push(("returns", value));
     let value = json!({"call": {"provider": "p", "function": "cost", "arg": {}}, "error": "bad"});
     cases.push(("error", value));
+    let value = json!({"call": {"provider": "p", "function": "cost", "arg": {}}, "error": {"code": "extension_failed", "message": 7}});
+    cases.push(("error.message", value));
+    let mut value = session_case();
+    value["returns"] = json!(0.5);
+    cases.push(("returns and error", value));
+    let mut value = session_case();
+    value["error"] = json!({"code": "extension_failed"});
+    cases.push(("returns and error", value));
+    let mut value = session_case();
+    value["host"] = json!({"exec": [{"request": {"program": "git", "args": "status"}, "reply": {"code": 0, "stdout": "", "stderr": ""}}]});
+    cases.push(("args", value));
+    let mut value = session_case();
+    value["host"] = json!({"exec": [{"request": {"program": "git", "args": [1]}, "reply": {"code": 0, "stdout": "", "stderr": ""}}]});
+    cases.push(("args", value));
+    let mut value = session_case();
+    value["host"] = json!({"exec": [{"request": {"program": "git", "cwd": true}, "reply": {"code": 0, "stdout": "", "stderr": ""}}]});
+    cases.push(("cwd", value));
 
     for (field, value) in cases {
         let error = parse(&value)
@@ -194,6 +219,19 @@ fn a_call_case_names_the_supported_provider_functions() {
         error.contains("call.function") && error.contains("cost"),
         "{error}"
     );
+}
+
+#[test]
+fn a_call_case_accepts_null_returns_and_requires_one_outcome() {
+    let call = json!({"call": {"provider": "p", "function": "cost", "arg": {}}, "returns": null});
+    assert_eq!(parse(&call).unwrap().returns, Some(Value::Null));
+
+    for value in [
+        json!({"call": {"provider": "p", "function": "cost", "arg": {}}, "returns": 0.5, "error": {"code": "extension_failed"}}),
+        json!({"call": {"provider": "p", "function": "cost", "arg": {}}}),
+    ] {
+        assert!(case_error(&value).contains("exactly one"));
+    }
 }
 
 #[test]

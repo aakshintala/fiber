@@ -326,21 +326,8 @@ pub(crate) fn extension_case(
         Err(error) => return report(&fallback_name, &[error]),
     };
     let name = case.name.clone().unwrap_or(fallback_name);
-    if let Some(call) = &case.call {
-        let expected = if case.returns.is_some() {
-            "returns"
-        } else if case.error.is_some() {
-            "error"
-        } else {
-            "result"
-        };
-        return report(
-            &name,
-            &[format!(
-                "provider call {}.{} with argument {} needs the call-case runner; expected {expected}",
-                call.provider, call.function, call.arg
-            )],
-        );
+    if case.call.is_some() {
+        return super::call::run_case(case, name, process_clock);
     }
     let workspace = match std::env::current_dir() {
         Ok(workspace) => workspace,
