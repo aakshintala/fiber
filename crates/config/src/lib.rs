@@ -37,7 +37,10 @@ pub use extension::{
     Binary, Cost, Manifest, ModelData, Opening, Placeholder, Process, Protocol, ProviderData, Tier,
     read_manifest, read_package_text, read_providers,
 };
-pub use home::{ProjectKey, fiber_home, fiber_home_from_env};
+pub use home::{
+    ProjectKey, create_fiber_home, fiber_home, fiber_home_from_env, fiber_home_path,
+    fiber_home_path_from_env,
+};
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
 pub use rules::RulesFiles;
 pub use secret::{
@@ -107,6 +110,9 @@ pub struct Config {
     /// The bytes of every `config/<extension>.json` in each layer, by path.
     settings_files: BTreeMap<PathBuf, Vec<u8>>,
     notices: Vec<Notice>,
+    /// What each `command` credential source printed or why it failed, by
+    /// stored credential name and label; shared by every clone.
+    commands: credential::CommandRuns,
 }
 
 /// Shows where the configuration came from, never a value: a `-c` value or an
@@ -201,6 +207,7 @@ impl Config {
             run_settings,
             settings_files,
             notices,
+            commands: credential::CommandRuns::default(),
         })
     }
 

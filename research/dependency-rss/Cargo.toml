@@ -43,6 +43,7 @@ png = { version = "0.18", optional = true }
 gif = { version = "0.14", default-features = false, features = ["std"], optional = true }
 image-webp = { version = "0.2", optional = true }
 fast_image_resize = { version = "6", optional = true }
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"], optional = true }
 
 [features]
 # The shell completion scripts `fiber completion` prints, generated from a
@@ -66,6 +67,8 @@ html5ever = ["dep:html5ever"]
 arborium = ["dep:arborium"]
 # web_fetch: decoding pages by their declared character set.
 encoding_rs = ["dep:encoding_rs"]
+# The release install step: decompressing the docs and extensions archives.
+flate2 = ["dep:flate2"]
 
 [profile.release]
 lto = "thin"

@@ -1467,6 +1467,7 @@ fn resume_interleaving_holds_arrival_order() {
             parent: None,
             forked_from: None,
             rewind: None,
+            worktree: None,
         }),
         None,
         None,

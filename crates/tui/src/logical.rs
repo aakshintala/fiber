@@ -6,6 +6,7 @@
 
 use ratatui::text::Line;
 
+use crate::app::Target;
 use crate::rows::{Join, RowText};
 use crate::turn::Row;
 
@@ -13,11 +14,15 @@ use crate::turn::Row;
 /// from, by index in the page's rows, and its byte offset in that row's
 /// `line.to_string()`; `None` for the space a soft wrap dropped. `row` is
 /// the row it starts on, so a blank line, which has no char, has a place.
+/// `scopes` are the collapsible sections its first row is inside,
+/// outermost first (`docs/tui.md`, "Search": a match inside a collapsed
+/// section expands it when it becomes the current match).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Logical {
     pub(crate) text: String,
     pub(crate) from: Vec<Option<(usize, usize)>>,
     pub(crate) row: usize,
+    pub(crate) scopes: Vec<Target>,
 }
 
 /// The logical lines `rows` draw, each row's text joined to the line
@@ -40,6 +45,7 @@ pub(crate) fn logical(rows: &[Row], texts: &[RowText]) -> Vec<Logical> {
             (Join::Break, _) | (Join::Wrap | Join::WrapSpace, None) => {
                 out.push(Logical {
                     row: at,
+                    scopes: text.scopes.clone(),
                     ..Logical::default()
                 });
                 let Some(current) = out.last_mut() else {
@@ -73,6 +79,45 @@ pub(crate) fn line_text(line: &Line<'_>, text: &RowText) -> (usize, String) {
     }
     let body = whole.get(start..).unwrap_or_default().trim_end().to_owned();
     (start, body)
+}
+
+/// Every occurrence of `query` in `text`, left to right, as char ranges:
+/// plain-text search, case-insensitive per character, non-overlapping
+/// (`docs/tui.md`, "Search"). An empty query matches nothing.
+pub(crate) fn matches(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
+    let folded: Vec<char> = query.chars().map(fold).collect();
+    if folded.is_empty() {
+        return Vec::new();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    let len = folded.len();
+    // `get` ends the scan at the last window that fits the text.
+    while let Some(window) = chars.get(at..at.saturating_add(len)) {
+        let hit = window
+            .iter()
+            .zip(&folded)
+            .all(|(got, want)| fold(*got) == *want);
+        if hit {
+            out.push(at..at + len);
+            at = at.saturating_add(len);
+        } else {
+            at = at.saturating_add(1);
+        }
+    }
+    out
+}
+
+/// One character lowercased, or itself when lowercasing yields none or
+/// more than one (`docs/tui.md`, "Search": case-insensitive per
+/// character).
+fn fold(ch: char) -> char {
+    let mut lower = ch.to_lowercase();
+    match (lower.next(), lower.next()) {
+        (Some(one), None) => one,
+        _ => ch,
+    }
 }
 
 #[cfg(test)]

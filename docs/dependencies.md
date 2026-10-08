@@ -144,6 +144,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | html5ever | `web_fetch`'s tokenizer, without its tree builder | 808 | 960 | 480 | 19 | 1,058 |
 | encoding_rs | `web_fetch`'s decoding by the declared character set | 224 | 332 | 272 | 5 | 490 |
 | pulldown-cmark | the terminal's markdown in replies (`docs/tui.md`, "Look") | 428 | 384 | ~0 | 4 | 724 |
+| flate2 | decompressing the release's docs and extensions archives (`docs/releasing.md`, "Installing"), and the test fakes' release archives | 560 | 640 | 592 | 6 | 403 |
 | all of the above together | | 8,292 | 7,532 | 5,009 | 153 | 7,729 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 67,825 | 32 | 5,234 |
 
@@ -181,6 +182,14 @@ Notes:
   character set.
 - pulldown-cmark's figure is parsing a 2 KiB reply of headings, emphasis,
   lists and code blocks.
+- flate2 is already in the tree through `png`, with the same `rust_backend`
+  (`miniz_oxide`, pure Rust), so listing it directly adds no crate. No other
+  backend is enabled. Its figure is gzipping a 4 MiB ustar-like stream in
+  process, a block at a time, then streaming it from memory through the
+  decoder; the compressing side is the fixtures', not Fiber's. It was measured
+  on macOS on October 7, 2026, with rustc 1.99.0, where its stripped binary is
+  397 KiB against the empty program's 315 KiB. The together row was measured
+  before flate2 was listed.
 - clap_complete's figure is generating the bash, zsh and fish scripts for a
   command shaped like the clap row's. It includes clap: on macOS it is
   1,040 KiB over the clap row from the same run, and its binary 179 KiB
@@ -353,6 +362,7 @@ dependency.
 | cargo-deny | tool | licences, advisories and crate sources |
 | cargo-about | tool | the release's third-party notices file |
 | zsh, fish | tool | the completion tests load `fiber completion`'s scripts in each shell (`docs/testing.md`, "Running tests"); bash is on every runner already, and macOS ships zsh. CI installs zsh and fish on Linux and fish on macOS |
+| dash, shellcheck | tool | the install-script test runs `install.sh` under `/bin/dash` (macOS ships it; it is Ubuntu's `/bin/sh`); `scripts/check` runs shellcheck on Linux, and GitHub's `ubuntu-24.04` image ships it |
 | xtask | tool | the workspace's own CI helper, `cargo xtask`: selection, the `CI` verdict and the gate's checks (`docs/ci.md`). It uses serde_json, proc-macro2 and pulldown-cmark, `fakes` in its tests, and no Fiber crate depends on it |
 | proc-macro2 | xtask dependency | tokenising Rust source for the `unsafe` table check (`docs/code-quality.md`, "`unsafe`") |
 | pulldown-cmark | xtask dependency | reading Markdown for the docs check (`docs/ci.md`, "The docs check"); the terminal's use is in the runtime table |

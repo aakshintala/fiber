@@ -87,6 +87,9 @@ pub(crate) enum Input {
         /// The paths found, or the listing's error.
         result: Result<Vec<String>, String>,
     },
+    /// The search's pause after `generation`'s keystroke passed: a scan
+    /// for another generation is stale (`docs/tui.md`, "Search").
+    FindDue(u64),
 }
 
 /// Restores the terminal [`run`] set up: turns mouse reporting off, leaves

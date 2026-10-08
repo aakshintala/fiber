@@ -9,13 +9,24 @@
 # each after evicting every file of the corpus. One scan per process.
 # Each row is the median of its five runs.
 #
-# Cold runs need GNU dd (`iflag=nocache`, Linux). Eviction is confirmed with
-# `fincore` when it is installed. Elsewhere the cold rows are skipped.
+# Cold runs need Linux and python3; the helper residency.py evicts each corpus
+# file and checks that no page of it is resident; a sample whose eviction is
+# not confirmed is not scanned, and the script fails after 3 attempts.
+#
+# Each scan runs under `/usr/bin/time` so its peak RSS lands in the trailing
+# `peak_rss_bytes` column (median of the five runs' peaks, in bytes): GNU
+# `time -f %M` on Linux (KiB, times 1024), BSD `time -l`'s maximum resident
+# set size on macOS. The script needs `/usr/bin/time` and exits without it.
+# The wrapper reports on stderr, so the scan's own `ms` timing on stdout is
+# unchanged. The column is appended at the end, so earlier rows without it
+# are untouched. The script prints the core count (`getconf
+# _NPROCESSORS_ONLN`) once at the start for the log.
 #
 # CORPUS (default: $TMPDIR/fiber-session-search) holds the generated homes,
 # kept between runs; delete it when done. Needs about 9 GB of free disk.
 set -euo pipefail
 cd "$(dirname "$0")"
+RESIDENCY="$PWD/residency.py"
 
 cargo build --release
 BIN=$PWD/target/release/session-search
@@ -27,29 +38,43 @@ MANY="retry budget"
 NONE="zqxv no such text"
 
 cold=no
-if dd --version >/dev/null 2>&1; then
+if [ "$(uname -s)" = Linux ] && command -v python3 >/dev/null 2>&1; then
   cold=yes
 fi
 
+echo "nproc: $(getconf _NPROCESSORS_ONLN)"
+
+command -v /usr/bin/time >/dev/null || { echo "needs /usr/bin/time" >&2; exit 1; }
+case "$(uname -s)" in
+  Linux) rss_mode=gnu ;;
+  Darwin) rss_mode=bsd ;;
+  *) echo "needs Linux or Darwin" >&2; exit 1 ;;
+esac
+TIMEFILE=$(mktemp)
+trap 'rm -f "$TIMEFILE"' EXIT
+
 evict() {
-  find "$1" -type f -print0 |
-    xargs -0 -n 64 sh -c 'for f; do dd if="$f" iflag=nocache count=0 status=none; done' _
+  python3 -I "$RESIDENCY" evict "$1"
 }
 
-# Bytes of the corpus still in the page cache, or "unconfirmed".
 resident() {
-  if command -v fincore >/dev/null 2>&1; then
-    find "$1" -type f -print0 | xargs -0 fincore --bytes --noheadings --output RES |
-      awk '{ total += $1 } END { print total + 0 }'
-  else
-    echo unconfirmed
-  fi
+  python3 -I "$RESIDENCY" resident "$1"
+}
+
+evict_confirmed() {
+  for _ in 1 2 3; do
+    evict "$1"
+    if [ "$(resident "$1")" = 0 ]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 median() { sort -n | awk '{ v[NR] = $1 } END { print v[int((NR + 1) / 2)] }'; }
 
 if [ ! -f "$OUT" ]; then
-  printf 'date\tplatform\tcorpus_mib\tartifact_every\tlog_mib\tartifact_mib\tsessions\tquery\tcache\tresident_bytes\tmedian_ms\truns_ms\thits\n' > "$OUT"
+  printf 'date\tplatform\tcorpus_mib\tartifact_every\tlog_mib\tartifact_mib\tsessions\tquery\tcache\tresident_bytes\tmedian_ms\truns_ms\thits\tpeak_rss_bytes\n' > "$OUT"
 fi
 
 for corpus in 300:25 1300:25 4000:25 1300:0; do
@@ -67,21 +92,44 @@ for corpus in 300:25 1300:25 4000:25 1300:0; do
     if [ "$cold" = yes ]; then caches="warm cold"; fi
     for cache in $caches; do
       times=()
-      hits=
+      rss_values=()
       left=
       if [ "$cache" = warm ]; then "$BIN" scan "$home" "$query" >/dev/null; fi
       for _ in $(seq "$RUNS"); do
         if [ "$cache" = cold ]; then
-          evict "$home"
-          left=$(resident "$home")
+          evict_confirmed "$home" || { echo "eviction not confirmed: $home" >&2; exit 1; }
+          left=confirmed
         fi
-        read -r ms hits _ < <("$BIN" scan "$home" "$query")
+        case "$rss_mode" in
+          gnu)
+            out=$(/usr/bin/time -f '%M' "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
+            read -r ms hits _ <<<"$out"
+            raw=$(cat "$TIMEFILE")
+            case "$raw" in
+              ''|*[!0-9]*) echo "could not read peak RSS" >&2; exit 1 ;;
+            esac
+            rss=$(( raw * 1024 ))
+            ;;
+          bsd)
+            out=$(/usr/bin/time -l "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
+            read -r ms hits _ <<<"$out"
+            rss=$(awk '/maximum resident set size/ { print $1 }' "$TIMEFILE")
+            ;;
+        esac
+        case "$ms" in
+          ''|.|*[!0-9.]*|*.*.*) echo "could not read ms" >&2; exit 1 ;;
+        esac
+        case "$rss" in
+          ''|*[!0-9]*) echo "could not read peak RSS" >&2; exit 1 ;;
+        esac
         times+=("$ms")
+        rss_values+=("$rss")
       done
       med=$(printf '%s\n' "${times[@]}" | median)
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      rss_med=$(printf '%s\n' "${rss_values[@]}" | median)
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date +%F)" "$PLATFORM" "$mib" "$every" "$log_mib" "$artifact_mib" "$sessions" \
-        "$query" "$cache" "${left:-}" "$med" "$(IFS=,; echo "${times[*]}")" "$hits" |
+        "$query" "$cache" "${left:-}" "$med" "$(IFS=,; echo "${times[*]}")" "$hits" "$rss_med" |
         tee -a "$OUT"
     done
   done

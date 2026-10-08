@@ -29,11 +29,12 @@ records the median of 5 runs (`docs/performance.md`, "Measuring"):
 
 - Warm: one untimed scan first, then 5 timed scans.
 - Cold, on Linux only: before each run every file of the corpus is evicted
-  from the page cache with GNU `dd if=<file> iflag=nocache count=0`, which
-  needs no root and works in a container. When `fincore` is installed, the
-  bytes still resident after eviction are recorded in `resident_bytes`, so a
-  row shows whether eviction worked. macOS has no unprivileged way to drop one
-  file from the cache, so it has warm rows only.
+  with `posix_fadvise(DONTNEED)` after `sync`, which needs no root and works in
+  a container. `residency.py` then checks with `mincore` that no page of the
+  corpus is still in the page cache. A sample whose eviction is not confirmed
+  is not scanned; the script retries the eviction up to 3 times and then
+  stops. A confirmed cold row reads `confirmed` in `resident_bytes`. macOS has
+  no unprivileged way to drop one file from the cache, so it has warm rows only.
 
 Each row of `results.tsv` names its date and platform. The script appends;
 it never rewrites earlier rows.
@@ -140,6 +141,51 @@ The load spread the one-thread runs more than the parallel ones (the
 1,308 MiB many-hits runs range from 4.0 to 9.3 s). One scan of the 1,304 MiB
 corpus with no artifacts, `retry budget`, had a peak memory footprint
 (`/usr/bin/time -l`) of 4.7 MiB on one thread and 11.0 MiB in parallel.
+
+## Results: Linux x86_64, parallel scan
+
+GitHub's `ubuntu-24.04` runner (2026-10-08): x86_64, 4 vCPUs (`nproc`
+4), parallel scan, run 37742699357. Its 16 rows are the last 16 in
+`results.tsv` (platform `Linux x86_64`, date 2026-10-08). Medians of five
+runs, in seconds; peak RSS is the scan process's peak in MiB, measured with
+GNU time. Earlier rows have no RSS.
+
+| Logs | Artifacts | Query | Warm | Cold | Peak RSS |
+|---|---|---|---|---|---|
+| 304 MiB | 187 MiB | many hits | 0.58 | 1.20 | 8.2 |
+| 304 MiB | 187 MiB | no hits | 0.43 | 1.11 | 6.8 |
+| 1,308 MiB | 808 MiB | many hits | 2.44 | 5.16 | 9.1 |
+| 1,308 MiB | 808 MiB | no hits | 1.83 | 5.15 | 7.5 |
+| 4,011 MiB | 2,476 MiB | many hits | 7.50 | 16.2 | 10.5 |
+| 4,011 MiB | 2,476 MiB | no hits | 5.62 | 16.2 | 8.8 |
+| 1,304 MiB | none | many hits | 1.54 | 3.05 | 7.6 |
+| 1,304 MiB | none | no hits | 1.68 | 3.06 | 7.5 |
+
+Cold is unconfirmed: `fincore` is not on the runner, so nothing checks
+that eviction cleared the cache. The confirmed rerun, with `mincore`
+checking eviction, is in the next section.
+
+## Results: Linux, cold confirmed
+
+Probe run 37747174815 (2026-10-08, head `a20c051f`), `ubuntu-24.04` and
+`ubuntu-24.04-arm`: every cold sample was confirmed before it was scanned, so
+no cold median includes an unevicted sample. Its 32 Linux rows are in
+`results.tsv` (date 2026-10-08, platforms `Linux x86_64` and `Linux aarch64`).
+Medians of five runs, in seconds. The macOS leg of this run gave warm rows
+only; its 8 rows end the file.
+
+| Logs | Artifacts | Query | x86_64 warm | x86_64 cold | arm64 warm | arm64 cold |
+|---|---|---|---|---|---|---|
+| 304 MiB | 187 MiB | many hits | 0.34 | 1.07 | 0.36 | 1.10 |
+| 304 MiB | 187 MiB | no hits | 0.25 | 1.08 | 0.26 | 1.09 |
+| 1,308 MiB | 808 MiB | many hits | 1.45 | 5.14 | 1.52 | 5.13 |
+| 1,308 MiB | 808 MiB | no hits | 1.07 | 5.13 | 1.11 | 5.12 |
+| 4,011 MiB | 2,476 MiB | many hits | 4.54 | 16.2 | 4.58 | 16.2 |
+| 4,011 MiB | 2,476 MiB | no hits | 3.26 | 16.2 | 3.37 | 16.2 |
+| 1,304 MiB | none | many hits | 0.91 | 3.07 | 0.90 | 3.09 |
+| 1,304 MiB | none | no hits | 0.97 | 3.07 | 0.97 | 3.09 |
+
+Cold medians are 3.0 to 5.0 times the warm ones on both Linux runners.
 
 ## Reproducing
 

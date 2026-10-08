@@ -38,6 +38,9 @@ pub(crate) enum Key {
     CtrlG,
     /// Ctrl+R (`0x12`, `CSI 114;5u`): `search_prompts`.
     CtrlR,
+    /// Ctrl+F (`0x06`, `CSI 102;5u`) and Cmd+F (`CSI 102;9u`):
+    /// conversation search (`docs/tui.md`, "Search").
+    CtrlF,
     /// Alt+Up (`CSI 1;3A`, or `ESC` then `CSI A` in one read):
     /// `select_steering`.
     AltUp,
@@ -267,6 +270,7 @@ fn step(buf: &[u8]) -> Step {
     let key = |key: Key| Some((vec![Event::Key(key)], 1));
     match *buf.first()? {
         0x03 => key(Key::CtrlC),
+        0x06 => key(Key::CtrlF),
         0x0f => key(Key::CtrlO),
         0x07 => key(Key::CtrlG),
         0x12 => key(Key::CtrlR),
@@ -468,6 +472,7 @@ fn kitty_key(params: &[u8]) -> Option<Event> {
         (127, 0) => Event::Key(Key::Backspace),
         (127, ALT) => Event::Edit(Edit::DeleteWord),
         (99, CTRL) => Event::Key(Key::CtrlC),
+        (102, CTRL) | (102, SUPER) => Event::Key(Key::CtrlF),
         (111, CTRL) => Event::Key(Key::CtrlO),
         (103, CTRL) => Event::Key(Key::CtrlG),
         (114, CTRL) => Event::Key(Key::CtrlR),

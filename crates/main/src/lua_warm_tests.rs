@@ -193,6 +193,7 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
         deliveries,
         Vec::new(),
         permissions,
+        None,
     )
     .unwrap()
     .idle_exit(Some(Duration::from_secs(60)))

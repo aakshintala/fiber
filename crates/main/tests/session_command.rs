@@ -2327,3 +2327,167 @@ fn close_now_after_close_stops_the_job_it_was_waiting_for() {
         .concat()
     );
 }
+
+#[test]
+fn close_on_a_pending_review_escalation_denies_it_by_cancel() {
+    // A binary-level reproduction of a `close` taken while a review
+    // escalation waits: the reviewer's stage-1 failure raises a person ask,
+    // and the close denies it (`docs/testing.md`, "What a change ships
+    // with").
+    let setup = Setup::new();
+    // A `write` under the data directory is not fast-pathed, so it reaches
+    // the review step: a `shell` call only reads, and the loop fast-paths
+    // it past the reviewer (`docs/permissions.md`, "Fast paths").
+    let lua = setup.home().join("data/notes/x.lua").display().to_string();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "write_lua",
+            "write",
+            &json!({"path": lua, "content": "return {}\n"}),
+        )]),
+        Response::status(400, "{}"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    // The session's reviewer answers on the same fake server, as
+    // `crates/main/tests/tools.rs` `with_reviewer` wires it.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "reviewer": {"model": "fake/m"}}),
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"save the snippet"}]}}"#,
+    );
+    // Each receive below takes what remains of the test's `Deadline`,
+    // naming the wait (`docs/testing.md`, "Waits and timeouts").
+    let asked = until(&client, "the escalation's permission_requested", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let request = asked.last().expect("the escalation was requested");
+    assert_eq!(request["payload"]["step"], "review");
+    let request_id = request["payload"]["request_id"].as_str().unwrap();
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let denied = until(&client, "the close's permission_resolved", |line| {
+        line["kind"] == "permission_resolved"
+    });
+    let resolved = denied
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .expect("the close resolved the request");
+    assert_eq!(resolved["payload"]["request_id"], request_id);
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    // Nobody decided: the denial is the close's, with no reviewer object
+    // (`docs/events.md`, `permission_resolved`).
+    assert_eq!(resolved["payload"]["decided_by"], "cancel");
+    assert!(resolved["payload"].get("reviewer").is_none());
+    assert_eq!(
+        resolved["payload"]["reason"],
+        "The session closed while waiting for an answer."
+    );
+    let done = until(&client, "the denied turn's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let end = done.last().expect("the turn ended");
+    assert_eq!(end["payload"]["outcome"], "completed");
+    let completed = done
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the denied call completed");
+    assert_eq!(completed["payload"]["status"], "denied");
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    let exited = assert_exited_0(status, &out, &stderr);
+    // The denied request resolved in the turn: nothing stays pending.
+    assert_eq!(exited["payload"].get("suspended_on"), None);
+}
+
+/// Runs the system `git` in `dir`, in its own process group, to its exit
+/// under the test's [`Deadline`].
+fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
+    let mut command = Command::new("git");
+    command
+        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
+        .args(["-c", "init.defaultBranch=main"])
+        .args(args)
+        .current_dir(dir)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let out = support::run_to_exit(deadline, &format!("git {args:?}"), command);
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+#[test]
+fn a_session_in_a_worktree_it_made_keeps_the_worktree_when_dirty() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    git(setup.deadline, &setup.workspace(), &["init", "--quiet"]);
+    fs::write(setup.workspace().join("file.txt"), "x").unwrap();
+    git(setup.deadline, &setup.workspace(), &["add", "."]);
+    git(
+        setup.deadline,
+        &setup.workspace(),
+        &["commit", "--quiet", "-m", "first"],
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session_in(&id, &setup.workspace(), &["--worktree"]);
+
+    let client = running.connect(&setup.socket(&id));
+    // Behind the loop's startup: `extensions_loaded` is on stdout, so
+    // every startup line is in the log and the session parks for a
+    // client, so nothing else moves.
+    running.wait_for("extensions_loaded");
+    let events = fs::read_to_string(setup.session_dir(&id).join("events.jsonl")).unwrap();
+    let started: Value = serde_json::from_str(events.lines().next().unwrap()).unwrap();
+    assert_eq!(started["kind"], "session_started");
+    let workspace = started["payload"]["workspace"].as_str().unwrap();
+    let worktree = &started["payload"]["worktree"];
+    assert_eq!(worktree["path"].as_str().unwrap(), workspace);
+    let branch = worktree["branch"].as_str().unwrap();
+    assert!(workspace.ends_with(&format!("worktrees/{id}")));
+    assert_eq!(branch, format!("fiber/{id}"));
+    // The client dirties the worktree, then closes: the worktree holds
+    // something to lose, so it is kept.
+    fs::write(Path::new(workspace).join("dirty.txt"), "dirty").unwrap();
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let mut tail = until_close(&client);
+    tail.insert(0, sub);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert!(Path::new(workspace).join("dirty.txt").is_file());
+    assert!(
+        !git(
+            setup.deadline,
+            &setup.workspace(),
+            &["branch", "--list", branch]
+        )
+        .is_empty()
+    );
+}

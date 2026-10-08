@@ -199,6 +199,62 @@ fn a_failure_before_any_session_prints_one_line_with_no_session_and_one_sentence
 }
 
 #[test]
+fn project_ignores_a_hostile_git_environment() {
+    if std::env::var("FIBER_DOORS_PROJECT_ENV_CHILD").is_ok() {
+        fakes::within("the child's project checks", DEADLINE, || {
+            let repo = PathBuf::from(std::env::var("FIBER_DOORS_PROJECT_ENV_REPO").unwrap());
+            let common = fs::canonicalize(repo.join(".git")).unwrap();
+            assert_eq!(project(&repo), common);
+            assert_eq!(project(&repo.join("docs")), common);
+        });
+        return;
+    }
+    fakes::within(
+        "project_ignores_a_hostile_git_environment",
+        DEADLINE,
+        || {
+            let temp = Temp::new();
+            let repo = temp.0.join("repo");
+            fs::create_dir_all(repo.join("docs")).unwrap();
+            assert!(
+                Command::new("git")
+                    .arg("init")
+                    .arg("-q")
+                    .arg(&repo)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let other = temp.0.join("other");
+            fs::create_dir_all(&other).unwrap();
+            assert!(
+                Command::new("git")
+                    .arg("init")
+                    .arg("-q")
+                    .arg(&other)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let out = fakes::rerun(
+                "project_ignores_a_hostile_git_environment",
+                &[
+                    ("GIT_COMMON_DIR", "/nonexistent"),
+                    ("GIT_DIR", other.join(".git").to_str().unwrap()),
+                    ("FIBER_DOORS_PROJECT_ENV_CHILD", "1"),
+                    ("FIBER_DOORS_PROJECT_ENV_REPO", repo.to_str().unwrap()),
+                ],
+            );
+            assert!(
+                out.status.success(),
+                "project must see past the redirect:\n{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+        },
+    );
+}
+
+#[test]
 fn the_project_is_gits_shared_directory_or_the_launch_directory() {
     let temp = Temp::new();
     let plain = temp.0.join("plain");

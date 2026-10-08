@@ -12,6 +12,8 @@ publish.workspace = true
 contract = { path = "../contract" }
 ring = "0.17"
 rustix.workspace = true
+# gzip for the release fixtures `ustar` builds.
+flate2.workspace = true
 serde_json.workspace = true
 
 # The jig (docs/testing.md, "Jigs"). `test = true` runs its own tests with the

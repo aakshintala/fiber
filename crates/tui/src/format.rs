@@ -576,8 +576,22 @@ impl Group {
             self.key.as_deref().map(|key| Target::Group(target_id(key))),
         ));
         // An open approval shows its call whatever the group's own state.
-        if self.open || self.calls().any(|call| call.asking) {
-            self.ledger(out);
+        // A group with no key has no target, and draws as it is on a
+        // search draw too: a match there is one nothing could reveal
+        // (`docs/tui.md`, "Search").
+        let draws = self.open || self.calls().any(|call| call.asking);
+        match self.key.as_deref().map(|key| Target::Group(target_id(key))) {
+            Some(target) => {
+                if out.open_scope(target, draws) {
+                    self.ledger(out);
+                }
+                out.end_scope();
+            }
+            None => {
+                if draws {
+                    self.ledger(out);
+                }
+            }
         }
     }
 
@@ -626,9 +640,10 @@ impl Group {
                     Line::styled(row, Style::default().add_modifier(Modifier::BOLD))
                 };
                 out.push((line, Some(Target::Call(call.id))));
-                if call.open {
+                if out.open_scope(Target::Call(call.id), call.open) {
                     opened(&call.detail, GAP, out);
                 }
+                out.end_scope();
             }
         }
     }
@@ -644,9 +659,10 @@ fn thought_rows(thought: &Thought, gutter: &str, out: &mut Rows) {
         .map(|ended| ended.saturating_sub(thought.started));
     let line = self::thought(gutter, &thought.text, span);
     out.push((line, Some(Target::Thought(thought.id))));
-    if thought.open {
+    if out.open_scope(Target::Thought(thought.id), thought.open) {
         opened(&thought.text, &" ".repeat(gutter.len()), out);
     }
+    out.end_scope();
 }
 
 #[cfg(test)]

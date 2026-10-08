@@ -595,6 +595,7 @@ dependencies = [
  "log 0.0.0",
  "serde_json",
  "signal-hook",
+ "worktree",
 ]
 
 [[package]]
@@ -676,6 +677,7 @@ dependencies = [
  "config",
  "contract",
  "fakes",
+ "flate2",
  "mlua",
  "ring",
  "rustix",
@@ -690,6 +692,7 @@ name = "fakes"
 version = "0.0.0"
 dependencies = [
  "contract",
+ "flate2",
  "ring",
  "rustix",
  "serde_json",

@@ -332,6 +332,7 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             | Input::Connected(..)
             | Input::ConnectFailed(_)
             | Input::Disconnected
+            | Input::FindDue(_)
             | Input::Files { .. } => "other".to_owned(),
             Input::Resize => "resize".to_owned(),
         })
@@ -492,6 +493,27 @@ fn the_paging_report_counts_every_loaded_line() {
     // Every page loaded while paging up keeps its first line: dropping one
     // draws fewer rows.
     assert!(report.contains("rows: 313\n"), "{report}");
+}
+
+#[test]
+fn the_paging_report_counts_the_search_matches_across_the_log() {
+    let mut lines = session();
+    // "shell" in the first turn and the last: the first turn is dropped by
+    // the time the search runs, so its match comes from a `history` fetch.
+    for line in &mut lines {
+        let action = line.action_id.as_ref().map(|id| id.0.as_str());
+        let text = match action {
+            Some("a_r1_0") => Some("the shell here"),
+            Some("a_r6_0") => Some("shell and shell"),
+            _ => None,
+        };
+        if let (Some(text), "text_completed") = (text, line.kind.as_str()) {
+            line.payload.insert("text".to_owned(), json!(text));
+        }
+    }
+    let report = crate::measure_paging(&events(&lines), 60, 12, fakes::clock::FakeClock::new())
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(report.contains(", 3 matches\n"), "{report}");
 }
 
 /// A clock that ticks one millisecond per `now()`, so the paging jig's

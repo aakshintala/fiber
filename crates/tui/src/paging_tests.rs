@@ -11,7 +11,7 @@ use contract::clock::Clock;
 use contract::{ActionId, Envelope, Seq, SessionId};
 use serde_json::{Value, json};
 
-use super::{Folded, Pages, Part, fold};
+use super::{Draw, Folded, Pages, Part, fold};
 use crate::app::{App, Effect, Target};
 use crate::keys::Key;
 use crate::link::Line;
@@ -562,6 +562,7 @@ fn refolding_leaves_session_state_alone() {
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
+        | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
@@ -1564,6 +1565,7 @@ fn a_resumed_crash_leaves_the_session_idle() {
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
+        | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
@@ -1715,7 +1717,7 @@ fn draw_data_skips_a_turn_drawing_no_rows() {
     let pages = Pages::new(80);
     let mut empty = part();
     empty.turns.push(Turn::part(0));
-    let (rows, _, _, turns) = pages.draw_data(0, &empty);
+    let (rows, _, _, turns) = pages.draw_data(0, &empty, Draw::Shown);
     assert!(rows.is_empty());
     assert!(
         turns.is_empty(),
@@ -1755,4 +1757,292 @@ fn every_row_of_the_fixture_places_inside_the_rows_it_draws() {
             }
         }
     }
+}
+
+/// A page with one turn holding a closed group (a thought and a call with
+/// detail), a handoff note and an orphan list, all closed.
+fn closed_sections() -> Part {
+    let mut page = part();
+    for (kind, action, payload) in [
+        (
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "hi"}]}]}),
+        ),
+        ("reasoning_started", Some("a_r1"), json!({})),
+        (
+            "reasoning_completed",
+            Some("a_r1"),
+            json!({"text": "hidden thought"}),
+        ),
+        (
+            "tool_call_requested",
+            Some("a_t1"),
+            json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+        ),
+        (
+            "tool_call_completed",
+            Some("a_t1"),
+            json!({"status": "completed", "content": [{"type": "text", "text": "file words"}]}),
+        ),
+        ("text_completed", Some("a_m1"), json!({"text": "reply one"})),
+        ("handoff_started", None, json!({"trigger": "auto"})),
+        (
+            "text_completed",
+            Some("a_m2"),
+            json!({"text": "hook note words"}),
+        ),
+        (
+            "handoff_completed",
+            None,
+            json!({"outcome": "completed", "tokens_before": 10}),
+        ),
+        ("turn_completed", None, json!({"outcome": "completed"})),
+    ] {
+        fold(&mut page, &envelope(kind, action, payload));
+    }
+    page.fold.asides.push((
+        0,
+        crate::turn::crash::Aside::Orphans {
+            id: 9,
+            jobs: vec![("job".to_owned(), "lost".to_owned())],
+            open: false,
+        },
+    ));
+    page
+}
+
+/// The drawn rows' texts.
+fn drawn_texts(rows: &[Row]) -> Vec<String> {
+    rows.iter().map(|(line, _)| line.to_string()).collect()
+}
+
+#[test]
+fn all_open_draws_every_ledger_thought_call_note_and_orphan_list() {
+    let pages = Pages::new(80);
+    let page = closed_sections();
+    let (shown, shown_texts, _, _) = pages.draw_data(0, &page, Draw::Shown);
+    let (all, all_texts, _, _) = pages.draw_data(0, &page, Draw::AllOpen);
+    let shown_strings = drawn_texts(&shown);
+    let all_strings = drawn_texts(&all);
+    assert!(all.len() > shown.len(), "an all-open draw adds rows");
+    for needle in ["hidden thought", "hook note words", "lost"] {
+        assert!(
+            all_strings.iter().any(|line| line.contains(needle)),
+            "{needle:?} is not drawn all open: {all_strings:?}"
+        );
+        assert!(
+            shown_strings.iter().all(|line| !line.contains(needle)),
+            "{needle:?} shows while closed: {shown_strings:?}"
+        );
+    }
+    // One row per section kind names its scopes.
+    let scoped: Vec<Vec<Target>> = all_texts.iter().map(|text| text.scopes.clone()).collect();
+    for holds in [
+        |scopes: &Vec<Target>| scopes.iter().any(|scope| matches!(scope, Target::Group(_))),
+        |scopes: &Vec<Target>| {
+            scopes
+                .iter()
+                .any(|scope| matches!(scope, Target::Thought(_)))
+        },
+        |scopes: &Vec<Target>| scopes.iter().any(|scope| matches!(scope, Target::Call(_))),
+        |scopes: &Vec<Target>| scopes.iter().any(|scope| matches!(scope, Target::Note(_))),
+        |scopes: &Vec<Target>| {
+            scopes
+                .iter()
+                .any(|scope| matches!(scope, Target::Orphans(_)))
+        },
+    ] {
+        assert!(scoped.iter().any(holds), "no row in {scoped:?}");
+    }
+    // Nothing shown names a section: every body is closed.
+    assert!(
+        shown_texts.iter().all(|text| text.scopes.is_empty()),
+        "a shown row names a section: {shown_texts:?}"
+    );
+}
+
+#[test]
+fn scopes_name_every_section_a_row_is_inside() {
+    let pages = Pages::new(80);
+    let page = closed_sections();
+    let (_, texts, _, _) = pages.draw_data(0, &page, Draw::AllOpen);
+    let scopes: Vec<Vec<Target>> = texts.into_iter().map(|text| text.scopes).collect();
+    // A call's detail is inside its group, outermost first; a thought
+    // inside its group; the note and the orphan list stand alone.
+    let detail = scopes
+        .iter()
+        .find(|scopes| matches!(scopes.as_slice(), [Target::Group(_), Target::Call(_)]))
+        .expect("no call detail row");
+    assert!(matches!(detail[0], Target::Group(_)));
+    assert!(
+        scopes
+            .iter()
+            .any(|scopes| matches!(scopes.as_slice(), [Target::Group(_), Target::Thought(_)])),
+        "no thought row: {scopes:?}"
+    );
+    assert!(
+        scopes
+            .iter()
+            .any(|scopes| matches!(scopes.as_slice(), [Target::Note(_)])),
+        "no note row: {scopes:?}"
+    );
+    assert!(
+        scopes
+            .iter()
+            .any(|scopes| matches!(scopes.as_slice(), [Target::Orphans(_)])),
+        "no orphan row: {scopes:?}"
+    );
+}
+
+#[test]
+fn fold_text_keeps_no_page_resident() {
+    let lines = session(2, false);
+    let mut pages = Pages::new(80);
+    for line in &lines {
+        pages.apply(line);
+    }
+    assert!(pages.index().pages().len() > 1);
+    let range = pages
+        .index()
+        .pages()
+        .first()
+        .map(|page| page.first_seq..=page.last_seq)
+        .expect("a first page");
+    drop_all(&mut pages);
+    assert!(pages.part(0).is_none());
+    let (rows, texts) = pages
+        .fold_text(0, &history(&lines, &range))
+        .expect("the dropped page folds");
+    assert!(!rows.is_empty());
+    assert_eq!(rows.len(), texts.len());
+    // Kept nowhere: the page is still dropped.
+    assert!(pages.part(0).is_none());
+    // What it folds is what loading it keeps, drawn all open.
+    pages.load(&history(&lines, &range));
+    assert_eq!(
+        pages.page_text_open(0).map(|(rows, _)| drawn_texts(&rows)),
+        Some(drawn_texts(&rows))
+    );
+    // The open page and an unknown one fold nothing.
+    let open = pages.page_count().saturating_sub(1);
+    assert!(pages.fold_text(open, &[]).is_none());
+    assert!(pages.fold_text(open.saturating_add(1), &[]).is_none());
+}
+
+#[test]
+fn force_open_on_a_dropped_page_opens_it_when_it_loads() {
+    let lines = session(2, false);
+    let mut pages = Pages::new(80);
+    for line in &lines {
+        pages.apply(line);
+    }
+    let group = pages
+        .page_text(0)
+        .and_then(|(rows, _)| {
+            rows.into_iter().find_map(|(_, target)| match target {
+                Some(group @ Target::Group(_)) => Some(group),
+                _ => None,
+            })
+        })
+        .expect("no group on the first page");
+    let range = pages
+        .index()
+        .pages()
+        .first()
+        .map(|page| page.first_seq..=page.last_seq)
+        .expect("a first page");
+    drop_all(&mut pages);
+    // Nothing resident holds it, so nothing changes yet: the override
+    // loads it open.
+    assert!(!pages.force_open(&group));
+    pages.load(&history(&lines, &range));
+    let opened = pages.page_text(0).map(|(rows, _)| drawn_texts(&rows));
+    assert!(
+        opened.is_some_and(|texts| texts.iter().any(|line| line.contains("read"))),
+        "the ledger is not open after loading"
+    );
+}
+
+#[test]
+fn force_open_never_closes() {
+    let lines = session(2, false);
+    let mut pages = Pages::new(80);
+    for line in &lines {
+        pages.apply(line);
+    }
+    let group = pages
+        .page_text(0)
+        .and_then(|(rows, _)| {
+            rows.into_iter().find_map(|(_, target)| match target {
+                Some(group @ Target::Group(_)) => Some(group),
+                _ => None,
+            })
+        })
+        .expect("no group on the first page");
+    let before = pages.page_text(0).map(|(rows, _)| drawn_texts(&rows));
+    assert!(pages.open(&group));
+    let opened = pages.page_text(0).map(|(rows, _)| drawn_texts(&rows));
+    assert_ne!(before, opened, "opening changed nothing");
+    // Forcing an open section open changes nothing drawn.
+    assert!(pages.force_open(&group));
+    assert_eq!(
+        pages.page_text(0).map(|(rows, _)| drawn_texts(&rows)),
+        opened
+    );
+    // Nothing holds the login line here.
+    assert!(!pages.force_open(&Target::Login));
+}
+
+#[test]
+fn a_keyless_group_is_drawn_as_is_on_a_search_draw() {
+    // A group with no key has no target, cannot be opened by a click, and
+    // draws as it is on a search draw: a match there would be one nothing
+    // could reveal (`docs/tui.md`, "Search").
+    let mut page = part();
+    for (kind, action, payload) in [
+        (
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "hi"}]}]}),
+        ),
+        ("reasoning_started", Some("a_r"), json!({})),
+        (
+            "reasoning_completed",
+            Some("a_r"),
+            json!({"text": "hidden keyless words"}),
+        ),
+        (
+            "tool_call_requested",
+            Some("a_t"),
+            json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+        ),
+        (
+            "tool_call_completed",
+            Some("a_t"),
+            json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+        ),
+        ("text_completed", Some("a_m"), json!({"text": "reply"})),
+        ("turn_completed", None, json!({"outcome": "completed"})),
+    ] {
+        fold(&mut page, &envelope(kind, action, payload));
+    }
+    for card in &mut page.turns {
+        for group in card.groups_mut() {
+            group.key = None;
+            group.open = false;
+        }
+    }
+    let pages = Pages::new(80);
+    let (shown, _, _, _) = pages.draw_data(0, &page, Draw::Shown);
+    let (all, _, _, _) = pages.draw_data(0, &page, Draw::AllOpen);
+    assert_eq!(drawn_texts(&shown), drawn_texts(&all));
+    assert!(
+        drawn_texts(&all)
+            .iter()
+            .all(|line| !line.contains("hidden keyless")),
+        "a keyless ledger draws on a search draw"
+    );
 }

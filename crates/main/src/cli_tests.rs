@@ -369,7 +369,7 @@ fn the_menu_lists_sessions_prune_under_sessions() {
         .unwrap();
     assert!(
         sessions.lines().any(|l|
-            l == "  sessions prune [--older-than <duration>] [--dry-run]  Delete old sessions, worktrees and diagnostic logs"),
+            l == "  sessions prune [--older-than <duration>] [--dry-run]               Delete old sessions, worktrees and diagnostic logs"),
         "{sessions}"
     );
 }
@@ -383,7 +383,7 @@ fn the_menu_lists_sessions_delete_under_sessions() {
         .unwrap();
     assert!(
         sessions.lines().any(|l|
-            l == "  sessions delete [--cascade] [--yes] <id>              Delete a session, and with --cascade the sessions that continue it"),
+            l == "  sessions delete [--cascade] [--yes] <id>                           Delete a session, and with --cascade the sessions that continue it"),
         "{sessions}"
     );
 }
@@ -430,7 +430,7 @@ fn the_menu_lists_the_sessions_list_under_sessions() {
         .unwrap();
     assert!(
         sessions.lines().any(|l|
-            l == "  sessions [--all] [--json]                             List sessions: id, state, name, what it waits on, spend"),
+            l == "  sessions [--all] [--json]                                          List sessions: id, state, name, what it waits on, spend"),
         "{sessions}"
     );
 }
@@ -444,7 +444,7 @@ fn the_menu_lists_sessions_export_under_sessions() {
         .unwrap();
     assert!(
         sessions.lines().any(|l|
-            l == "  sessions export <id> [<path>]                         Write the session's log and its artifacts to <path>"),
+            l == "  sessions export <id> [<path>]                                      Write the session's log and its artifacts to <path>"),
         "{sessions}"
     );
 }
@@ -479,7 +479,7 @@ fn the_menu_lists_models_under_sessions() {
         .unwrap();
     assert!(
         sessions.lines().any(|l|
-            l == "  models [<search>] [--json]                            List the models the installed providers serve"),
+            l == "  models [<search>] [--json]                                         List the models the installed providers serve"),
         "{sessions}"
     );
     let help = super::render_help(&["models"]).unwrap();
@@ -865,6 +865,73 @@ fn ask_resume_without_an_id_is_a_usage_error() {
     assert_eq!(
         empty,
         "The argument '--resume <id>' requires a session id but none was given. Run `fiber --help` for usage."
+    );
+}
+
+#[test]
+fn ask_worktree_parses_and_defaults_off() {
+    let Invocation::Run(Some(Commands::Ask(args))) = parse_from(["fiber", "ask", "hi"]) else {
+        panic!("bare ask");
+    };
+    assert!(!args.worktree);
+    let Invocation::Run(Some(Commands::Ask(args))) =
+        parse_from(["fiber", "ask", "--worktree", "hi"])
+    else {
+        panic!("ask with --worktree");
+    };
+    assert!(args.worktree);
+}
+
+#[test]
+fn ask_worktree_with_resume_is_a_usage_error() {
+    let (ask, said) = usage(&["fiber", "ask", "--resume", "s_abc", "--worktree", "hi"]);
+    assert!(ask);
+    assert!(said.contains("--worktree"), "{said}");
+    assert!(said.contains("--resume"), "{said}");
+}
+
+#[test]
+fn session_worktree_parses_and_conflicts_with_resume() {
+    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/home/u/proj",
+        "--worktree",
+    ]) else {
+        panic!("session with --worktree");
+    };
+    assert!(args.worktree);
+    assert!(!args.resume);
+
+    let (ask, said) = usage(&[
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--resume",
+        "--worktree",
+    ]);
+    assert!(ask);
+    assert!(said.contains("--resume"), "{said}");
+    assert!(said.contains("--worktree"), "{said}");
+}
+
+#[test]
+fn the_menu_and_ask_help_show_worktree() {
+    assert!(
+        menu().contains("[--worktree]"),
+        "the menu shows --worktree:\n{}",
+        menu()
+    );
+    let rendered = super::render_help(&["ask"]).unwrap();
+    assert!(
+        rendered.contains("--worktree"),
+        "ask's help shows --worktree:\n{rendered}"
     );
 }
 
@@ -1394,6 +1461,40 @@ fn help_hub_install_prints_that_commands_help() {
             Invocation::Run(Some(Commands::Help { ref command })) if command == &["hub", "install"]
         ),
         "{parsed:?}"
+    );
+}
+
+#[test]
+fn the_hidden_release_install_takes_a_version_and_a_base_url() {
+    let Invocation::Run(Some(Commands::ReleaseInstall { version, base_url })) =
+        parse_from(["fiber", "release-install", "0.3.0"])
+    else {
+        panic!("release-install with a version");
+    };
+    assert_eq!(version, "0.3.0");
+    assert_eq!(base_url, None);
+    let Invocation::Run(Some(Commands::ReleaseInstall { version, base_url })) = parse_from([
+        "fiber",
+        "release-install",
+        "0.3.0",
+        "--base-url",
+        "file:///tmp/r",
+    ]) else {
+        panic!("release-install with a base URL");
+    };
+    assert_eq!(version, "0.3.0");
+    assert_eq!(base_url.as_deref(), Some("file:///tmp/r"));
+    assert!(
+        command()
+            .try_get_matches_from(["fiber", "release-install"])
+            .is_err(),
+        "the version is required"
+    );
+    assert!(
+        !command()
+            .get_subcommands()
+            .any(|sub| sub.get_name() == "release-install" && !sub.is_hide_set()),
+        "the release install step stays out of the menu"
     );
 }
 

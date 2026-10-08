@@ -1137,9 +1137,10 @@ flags").
   sessions in scope, and every thread finishes before the call returns.
 - One scan of 1.3 GB of logs with no artifacts took 0.35 to 0.38 s warm on
   macOS arm64 (11 cores); the same logs with a tool output in 25 saved as an
-  artifact took 1.0 to 1.1 s warm there. On a Linux x86_64 runner, measured
-  with the scan on one thread, the logs with no artifacts took 6.7 to 6.9 s
-  cold. Timings and method:
+  artifact took 1.0 to 1.1 s warm there. On a Linux x86_64 runner (ubuntu-24.04,
+  4 vCPUs), with the scan on parallel threads, the logs with no artifacts took
+  1.54 s warm and 3.05 s cold (cold eviction unconfirmed: no `fincore` on the
+  runner). Timings and method:
   [research/session-search](../research/session-search/README.md).
 
 ## Provider quota

@@ -4,6 +4,7 @@ use super::{Input, Loop, Screen};
 use crate::app::App;
 use crate::keys::{Event, Key};
 use crate::link::Line;
+use contract::clock::Clock;
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -1549,4 +1550,277 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
     assert_eq!(lp.step(Input::Bytes(b"\t".to_vec()), &idle), None);
     assert_eq!(lp.app.draft(), "sub/b.rs ");
     assert!(lp.search.is_none());
+}
+
+/// A session of three pages with `xyzzy` on its first page, seqs from 1.
+fn search_session() -> Vec<contract::Envelope> {
+    let session = contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    let mut lines = Vec::new();
+    let mut seq = 0u64;
+    let mut push = |kind: &str, action: Option<&str>, payload: serde_json::Value| {
+        seq += 1;
+        lines.push(contract::Envelope {
+            kind: kind.to_owned(),
+            session_id: session.clone(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: action.map(|id| contract::ActionId(id.to_owned())),
+            seq: Some(contract::Seq(seq)),
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        });
+    };
+    let prompt = || {
+        serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]})
+    };
+    let mut turn = |replies: &[&str]| {
+        push("turn_started", None, prompt());
+        for reply in replies {
+            push(
+                "text_completed",
+                Some("a_m"),
+                serde_json::json!({"text": reply}),
+            );
+        }
+        push(
+            "turn_completed",
+            None,
+            serde_json::json!({"outcome": "completed"}),
+        );
+    };
+    turn(&["xyzzy here"]);
+    let filler = ["f"; 8];
+    for _ in 0..8 {
+        turn(&filler);
+    }
+    turn(&["middle"]);
+    for _ in 0..8 {
+        turn(&filler);
+    }
+    turn(&["tail"]);
+    lines
+}
+
+#[test]
+fn the_pause_thread_sends_find_due_on_the_fake_clock() {
+    let clock = fakes::clock::FakeClock::new();
+    let origin = clock.origin();
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.clock = clock.clone();
+    assert!(lp.app.on_line(Line::Hub(hello())).is_empty());
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    for envelope in search_session() {
+        lp.app.on_line(Line::Session(envelope));
+    }
+    assert!(lp.app.pages().page_count() > 2);
+    assert!(lp.app.pages().part(0).is_none(), "the first page dropped");
+    let (hub, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    lp.hub = Some(hub);
+    let (found, due) = mpsc::channel();
+    lp.files_out = Some(found);
+    let (_, main) = mpsc::channel::<Input>();
+    // Ctrl+F and three keystrokes in one read: three pauses, one
+    // generation each.
+    assert_eq!(
+        lp.step(Input::Bytes(vec![0x06, b'x', b'y', b'z']), &main),
+        None
+    );
+    // Each pause sleeps on the injected clock, then sends its generation.
+    let mut generations = Vec::new();
+    for _ in 0..3 {
+        match due
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for FindDue: {err}"))
+        {
+            Input::FindDue(generation) => generations.push(generation),
+            Input::Bytes(_)
+            | Input::Hub(_)
+            | Input::Connected(..)
+            | Input::ConnectFailed(_)
+            | Input::Disconnected
+            | Input::Resize
+            | Input::Files { .. } => panic!("a pause sent something else"),
+        }
+    }
+    generations.sort();
+    assert_eq!(generations, [1, 2, 3]);
+    // The three sleeps moved the fake clock by three pauses. A mutant
+    // that skips the sleep leaves it still.
+    assert_eq!(
+        clock.now(),
+        origin
+            .checked_add(Duration::from_millis(750))
+            .expect("750ms after the origin")
+    );
+    // A mutant that drops the send fails above, within `DEADLINE`.
+    let (_, main) = mpsc::channel::<Input>();
+    for generation in generations {
+        assert_eq!(lp.step(Input::FindDue(generation), &main), None);
+    }
+    // Only the current generation scans: exactly one `history` command
+    // reaches the hub.
+    theirs
+        .set_read_timeout(Some(DEADLINE))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    let mut reader = BufReader::new(theirs);
+    let mut text = String::new();
+    reader
+        .read_line(&mut text)
+        .unwrap_or_else(|err| panic!("read: {err}"));
+    let command: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|err| panic!("{text:?}: {err}"));
+    assert_eq!(command["command"], "history");
+    assert_eq!(command["session_id"], "s_aaaaaaaaaaaaaaaa");
+    let range = lp
+        .app
+        .pages()
+        .index()
+        .pages()
+        .first()
+        .map(|page| (page.first_seq.0, page.last_seq.0))
+        .expect("a first page");
+    assert_eq!(
+        (
+            command["args"]["from_seq"].as_u64().unwrap_or(0),
+            command["args"]["to_seq"].as_u64().unwrap_or(0)
+        ),
+        range
+    );
+    // Nothing more goes out: the stale generations send nothing.
+    let mut stream = reader.into_inner();
+    stream
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("nonblocking: {err}"));
+    let mut byte = [0u8; 1];
+    match stream.read(&mut byte) {
+        Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+        read => panic!("more than one command reached the hub: {read:?}"),
+    }
+}
+
+#[test]
+fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    assert!(lp.app.on_line(Line::Hub(hello())).is_empty());
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let log = search_session();
+    for envelope in &log {
+        lp.app.on_line(Line::Session(envelope.clone()));
+    }
+    assert!(lp.app.pages().page_count() > 2);
+    assert!(lp.app.pages().part(0).is_none(), "the first page dropped");
+    // The bar searches for the first page's word, answered from the log:
+    // the current match sits on the dropped page and the reveal scrolled
+    // to it.
+    let now = lp.clock.now();
+    assert_eq!(
+        lp.app.on_key(crate::keys::Key::CtrlF, now),
+        crate::app::Effect::None
+    );
+    let mut generation = 0u64;
+    for ch in "xyz".chars() {
+        generation += 1;
+        assert!(matches!(
+            lp.app.on_key(crate::keys::Key::Char(ch), now),
+            crate::app::Effect::FindPause { .. }
+        ));
+    }
+    let mut outgoing = lp.app.find_due(generation);
+    while let Some(line) = outgoing.into_iter().next() {
+        let command: serde_json::Value = serde_json::from_str(&line).expect("a command line");
+        let id = command["id"].as_str().unwrap_or_default().to_owned();
+        let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
+        let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
+        let held: Vec<contract::Envelope> = log
+            .iter()
+            .filter(|line| line.seq.is_some_and(|seq| from <= seq.0 && seq.0 <= to))
+            .cloned()
+            .collect();
+        let answer = Line::Session(contract::Envelope {
+            kind: "command_accepted".to_owned(),
+            session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload: serde_json::json!({"command_id": id, "result": {"lines": held}})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        });
+        outgoing = lp.app.on_line(answer);
+    }
+    assert!(lp.app.pages().part(0).is_none());
+    // The reveal scrolled to the dropped page holding the match.
+    let start = lp.app.pages().index().start(0);
+    assert_eq!(lp.app.top(), Some(start));
+    // The loop runs on its own thread with the fake hub on a socket pair.
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    lp.hub = Some(ours);
+    let (tx, rx) = mpsc::channel();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-find-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done.send((code, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // Enter moves to the match again: the reveal loads its dropped page
+    // inside the frame, holding the keys typed meanwhile for after.
+    tx.send(Input::Bytes(b"\r".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    // The fake hub reads the reveal's request before anything else goes
+    // out, within `DEADLINE`.
+    theirs
+        .set_read_timeout(Some(DEADLINE))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    let mut reader = BufReader::new(theirs);
+    let mut text = String::new();
+    reader
+        .read_line(&mut text)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the reveal's request: {err}"));
+    let command: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|err| panic!("{text:?}: {err}"));
+    assert_eq!(command["command"], "history");
+    // Only then are two characters typed: the frame holds them for after
+    // the answer.
+    tx.send(Input::Bytes(b"ab".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
+    let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
+    let held: Vec<contract::Envelope> = log
+        .iter()
+        .filter(|line| line.seq.is_some_and(|seq| from <= seq.0 && seq.0 <= to))
+        .cloned()
+        .collect();
+    tx.send(Input::Hub(Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"command_id": command["id"], "result": {"lines": held}})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })))
+    .unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(Input::Bytes(vec![0x03, 0x03]))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    let (code, lp) = finished
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the loop to quit: {err}"));
+    assert_eq!(code, 0);
+    assert!(lp.app.pages().part(0).is_some(), "the revealed page loaded");
+    assert_eq!(
+        lp.app.find_bar().map(|bar| bar.query).unwrap_or_default(),
+        "xyzab"
+    );
 }

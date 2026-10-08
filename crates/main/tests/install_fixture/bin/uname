@@ -1,0 +1,8 @@
+#!/bin/sh
+# Stands in for uname in crates/main/tests/install_script.rs: the test picks
+# the operating system and CPU install.sh sees.
+case ${1-} in
+  -s) printf '%s\n' "$FIBER_TEST_UNAME_S" ;;
+  -m) printf '%s\n' "$FIBER_TEST_UNAME_M" ;;
+  *) exit 64 ;;
+esac

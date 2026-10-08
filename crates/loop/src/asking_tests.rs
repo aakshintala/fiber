@@ -459,6 +459,7 @@ fn suspendable_loop() -> (
             credential_files: Vec::new(),
             rules,
         },
+        None,
     )
     .unwrap()
     .idle_exit(Some(Duration::from_secs(60)))

@@ -356,6 +356,7 @@ pub(crate) fn extension_case(
         Some("scripted/script.json".to_owned()),
         Some(case.prompt),
         false,
+        false,
         case_run.session_clock(),
         &signals,
         fiber,

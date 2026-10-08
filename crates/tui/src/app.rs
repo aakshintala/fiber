@@ -37,6 +37,7 @@ mod chrome;
 mod commands;
 #[path = "copy.rs"]
 pub(crate) mod copy;
+mod find;
 #[path = "app_focus.rs"]
 mod focus;
 #[path = "history.rs"]
@@ -51,6 +52,8 @@ mod screen;
 mod select;
 
 use screen::Screen;
+
+pub(crate) use find::FindBar;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
@@ -116,6 +119,14 @@ pub(crate) enum Effect {
     },
     /// Copy this text to the clipboard.
     Copy(String),
+    /// The search's pause after `generation`'s keystroke passed: start its
+    /// scan (`docs/tui.md`, "History and paging").
+    FindPause {
+        /// The generation whose pause passed.
+        generation: u64,
+        /// How long the pause waited.
+        after: Duration,
+    },
     /// Open this URL with the link opener (`docs/tui.md`, "Links").
     OpenLink(String),
 }
@@ -217,6 +228,8 @@ pub(crate) struct App {
     /// The drag selecting conversation text, and a copy waiting on dropped
     /// pages (`docs/tui.md`, "Selection and copy").
     select: select::Selection,
+    /// Conversation search (`docs/tui.md`, "Search").
+    find: find::Find,
     /// Whether a link opener is on `PATH` (`docs/tui.md`, "Links").
     opener: bool,
 }
@@ -249,6 +262,7 @@ impl App {
             regions: crate::focus::Regions::default(),
             chrome: chrome::Chrome::default(),
             select: select::Selection::default(),
+            find: find::Find::default(),
             opener: false,
         }
     }
@@ -285,6 +299,9 @@ impl App {
             return effect;
         }
         if let Some(effect) = self.history_key(&key) {
+            return effect;
+        }
+        if let Some(effect) = self.find_key(&key) {
             return effect;
         }
         if let Some(effect) = self.select_key(&key) {
@@ -329,6 +346,7 @@ impl App {
             Key::AltP => self.toggle_panel(),
             Key::AltR | Key::AltDigit(_) => Effect::None,
             Key::CtrlR => self.open_search(),
+            Key::CtrlF => Effect::None,
             Key::CtrlG => self.open_in_editor(),
             Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),
         }
@@ -344,6 +362,7 @@ impl App {
             },
         };
         lines.extend(self.home_outgoing());
+        lines.extend(self.find_outgoing());
         self.settle();
         lines
     }
@@ -369,6 +388,7 @@ impl App {
             self.link = Link::Down;
             self.notices.push("Connection lost.".to_owned());
         }
+        self.find_lost();
         self.abandon_copy();
         self.settle();
     }
@@ -714,6 +734,11 @@ impl App {
         }
         if self.session() != Some(&envelope.session_id) {
             return Vec::new();
+        }
+        // The search's fetch answers here, never in the pages: its lines
+        // fold into the scan and go no further.
+        if let Some(send) = self.find_answered(envelope) {
+            return send;
         }
         let mut send = Vec::new();
         if envelope.kind == "turn_started"

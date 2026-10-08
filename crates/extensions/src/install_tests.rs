@@ -433,3 +433,61 @@ fn a_committed_journal_keeps_the_new_copy_and_drops_the_backup() {
     assert!(!fresh.exists());
     assert!(!dirs.root.join(".commit").exists());
 }
+
+/// A provider file with one model, `id`.
+fn provider_file(id: &str) -> String {
+    serde_json::json!({
+        "name": "x",
+        "credential": { "env": "FIBER_TEST_UNSET_KEY" },
+        "models": [{
+            "id": id,
+            "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1",
+            "context_window": 1000,
+        }],
+    })
+    .to_string()
+}
+
+#[test]
+fn staging_reads_providers_from_the_copy_not_the_source() {
+    use super::{Provenance, Record, check, stage};
+    let dirs = Dirs::new("staged-providers");
+    let source = dirs.path("src/acme");
+    fs::create_dir_all(source.join("providers")).unwrap();
+    fs::write(
+        source.join("extension.json"),
+        r#"{"name":"acme","version":"v1","fiber":"0.1.0","api":1}"#,
+    )
+    .unwrap();
+    // `providers/x.json -> ../../x.json` reads `src/x.json` at the source,
+    // and `extensions/x.json` in Fiber home once copied.
+    std::os::unix::fs::symlink("../../x.json", source.join("providers/x.json")).unwrap();
+    fs::write(dirs.path("src/x.json"), provider_file("from-source")).unwrap();
+    let record = Record {
+        name: "acme".into(),
+        provenance: Provenance::Path(source.clone()),
+        version: "v1".into(),
+        requested: true,
+    };
+    let home = dirs.path("home");
+    let (_, at_source) = check(&source, "0.1.0").unwrap();
+    assert_eq!(at_source[0].models[0].id, "from-source");
+
+    // The link dangles in the copy: staging refuses and removes its copy.
+    let Err(err) = stage(&home, 7, &source, "0.1.0", &record) else {
+        panic!("a dangling provider link was staged");
+    };
+    assert!(matches!(err, crate::Error::Config(_)), "{err}");
+    let left: Vec<String> = fs::read_dir(home.join("extensions"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+
+    // The link resolves in the copy to another file: that one is returned.
+    fs::write(home.join("extensions/x.json"), provider_file("from-copy")).unwrap();
+    let (_, providers, paths) = stage(&home, 8, &source, "0.1.0", &record).unwrap();
+    assert_eq!(providers[0].models[0].id, "from-copy");
+    assert!(paths.fresh.is_dir());
+}

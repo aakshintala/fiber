@@ -454,9 +454,10 @@ impl Loop {
                 // The idle delay passed. Nothing more is written; `run_calls`
                 // sees `idle_left` and the turn unwinds.
                 Asked::Idle => Ok(Err(self.cancelled_before_ran())),
-                Asked::Closed(request_id) => {
-                    Ok(Err(self.unanswerable(id, turn, Some(request_id))?))
-                }
+                // The close already denied the request by `cancel`: the call
+                // completes as one no person can answer (`docs/events.md`,
+                // `permission_resolved`).
+                Asked::Closed => Ok(Err(no_person())),
             },
             super::permission::Verdict::Allow(decided) => {
                 if let Some(by) = decided {
@@ -528,7 +529,7 @@ impl Loop {
                 None,
             ),
         )?;
-        Ok(denied("no_person", format!("{reason} It did not run.")))
+        Ok(no_person())
     }
 
     /// Checks `reply` against `offer`, the request's rule offer (`None` on a
@@ -736,8 +737,19 @@ impl Loop {
     }
 }
 
-/// What waiting for a person's answer came back with. The decision lines
-/// are written, except on `Closed`, which wrote nothing.
+/// The completion of a call whose request the close denied by `cancel`:
+/// no person can answer it (`docs/permissions.md`, "Headless"). What
+/// [`Loop::unanswerable`] completes a headless call with, without its
+/// decision line, which the close already wrote.
+pub(crate) fn no_person() -> Box<ToolCallCompleted> {
+    denied(
+        "no_person",
+        "No person can answer an approval in this session. It did not run.".to_owned(),
+    )
+}
+
+/// What waiting for a person's answer came back with. The decision line is
+/// written on every variant but `Idle`.
 pub(crate) enum Asked {
     /// The person allowed the call.
     Allow,
@@ -745,8 +757,8 @@ pub(crate) enum Asked {
     Deny(Box<ToolCallCompleted>),
     /// The inbox closed with no answer.
     Gone(Box<ToolCallCompleted>),
-    /// `close` was taken while waiting; the caller denies as its step does.
-    Closed(RequestId),
+    /// `close` was taken while waiting; the deny-by-cancel line is written.
+    Closed,
     /// A cancel woke the wait: the caller completes the call `cancelled`.
     /// The deny-by-cancel line is written.
     Cancelled,

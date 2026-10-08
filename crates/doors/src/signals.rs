@@ -171,6 +171,12 @@ impl Signals {
         }
     }
 
+    /// The code a signal left while armed, if one came: read under the
+    /// state lock (`docs/invocation.md`, "Shutdown").
+    pub fn recorded(&self) -> Option<i32> {
+        lock(&self.state).recorded
+    }
+
     /// Called just before the session's first line: the code of a signal
     /// that came while armed, for the door to exit with, writing nothing.
     /// Otherwise the session is started: a first signal from now calls
