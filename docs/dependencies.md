@@ -113,7 +113,8 @@ Dev-dependencies are compiled only into tests and jigs (`docs/testing.md`,
 ## Runtime dependencies
 
 Measured on September 25, 2026 with rustc 1.98.1. Linux is GitHub's
-`ubuntu-24.04` and `ubuntu-24.04-arm` runners, and macOS is an Apple M3 Pro.
+`ubuntu-24.04` and `ubuntu-24.04-arm` runners, and macOS is GitHub's macOS arm64 runner (`macos-26`), measured on
+October 8, 2026 with rustc 1.99.0.
 Memory is in KiB over a program that does nothing. Differences under 200 KiB
 are run-to-run noise and show as ~0. Crates is the number of crates in the
 crate's own tree. Binary is the stripped Linux x86_64 release binary with
@@ -139,8 +140,8 @@ only that crate, in KiB; the empty program is 323 KiB.
 | html5ever | `web_fetch`'s tokenizer, without its tree builder | 808 | 960 | 480 | 19 | 1,058 |
 | encoding_rs | `web_fetch`'s decoding by the declared character set | 224 | 332 | 272 | 5 | 490 |
 | pulldown-cmark | the terminal's markdown in replies (`docs/tui.md`, "Look") | 428 | 384 | ~0 | 4 | 724 |
-| all of the above together | | 8,292 | 7,532 | 5,376 | 153 | 7,729 |
-| image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 72,352 | 32 | 5,234 |
+| all of the above together | | 8,292 | 7,532 | 5,009 | 153 | 7,729 |
+| image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 67,825 | 32 | 5,234 |
 
 Notes:
 
