@@ -39,6 +39,26 @@ fn running<'a>(calls: &'a Calls<'a>) -> impl Iterator<Item = (&'a ActionId, &'a 
         .filter_map(|(id, stream)| stream.map(|stream| (*id, stream)))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A cancel the test runs after the take, before the decision read:
+    /// the order a cancel landing between the two would force
+    /// (`docs/testing.md`, "What a change ships with" allows the hook
+    /// where no outside seam reaches the race).
+    static AFTER_TAKE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Runs the hook [`AFTER_TAKE`] holds, if any, then clears it.
+#[cfg(test)]
+fn pause_after_take() {
+    AFTER_TAKE.with(|hook| {
+        if let Some(paused) = hook.borrow_mut().take() {
+            paused();
+        }
+    });
+}
+
 /// The request the step may suspend on: its only call without a written
 /// completion waits on a pending interaction raised with `suspends`. While
 /// another call has no result, its result would be written after this
@@ -105,6 +125,8 @@ impl Loop {
         for (id, stream) in running(calls) {
             let slot = stream.asking();
             if let Some(asking) = slot.take_raised() {
+                #[cfg(test)]
+                pause_after_take();
                 // A request raised again on resume is already written: the
                 // ask pends under it (`docs/events.md`, "Resume").
                 let again = slot.take_reraise();
@@ -339,3 +361,7 @@ impl Loop {
         self.append(&Event::InteractionResolved(resolved), turn, None)
     }
 }
+
+#[cfg(test)]
+#[path = "interactions_tests.rs"]
+mod tests;
