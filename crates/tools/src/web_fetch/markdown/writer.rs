@@ -1,19 +1,45 @@
 //! Owns markdown output state and writes text, breaks, fences and the title.
+//! A link's text is written straight into the output as it arrives: `[`
+//! goes before its first visible character, and a run of whitespace
+//! becomes one pending space, written only when another visible character
+//! follows. A link with no text writes nothing at all.
 
-use html5ever::tokenizer::Tag;
+use html5ever::tendril::StrTendril;
 
-use super::{MAX_LEVELS, attribute};
+use super::MAX_LEVELS;
 
-/// A link whose closing tag has not arrived.
+/// A link whose closing tag has not arrived: its `href`, held without a
+/// copy, and whether `[` is already written.
 struct Link {
-    href: String,
-    text: String,
+    href: StrTendril,
+    bracket: bool,
 }
 
+/// The markdown output, at most fourteen times the decoded page. Every
+/// output byte is one of five kinds: text, markers (`#`, `-`, `N. `,
+/// `**`, `_`, backticks, ` | `, `---`, fences, `[`, `](`, `)`, `![`),
+/// newlines, indentation (at most 14 bytes, written only by an `<li>`),
+/// and quote prefixes (at most 16 bytes, written only before the first
+/// byte of a line that is not a newline). Text is never longer than its
+/// source, apart from character references, whose output stays under
+/// twice their source. Each prefixed line is charged to two distinct
+/// pieces of input: the one that wrote the newline before it and the one
+/// that wrote its first byte, each charged at most one line in each role.
+/// Per tag, the most it writes over its shortest source is `<li>` with 53
+/// bytes for 4 (a newline, 16 prefix, 14 indent and a `N. ` marker of at
+/// most 22), 13.25 times; `<h6>` writes 25 for 4, `<hr>` 23 for 4,
+/// `</pre>` 22 for 6, `<b>` 18 for 3, and a `pre` text line 18 for 2. The
+/// trailing newline adds at most 1 byte on a page of at least 1. So 13.25
+/// is the worst a page reaches, and 14 leaves margin; ordinary pages stay
+/// below 2. Charset expansion is counted apart: decoding hands over at
+/// most 3 bytes per downloaded byte.
 pub(super) struct Writer {
     out: String,
     /// Whether the last thing written was whitespace, so another is dropped.
     last_space: bool,
+    /// A whitespace run inside a link, written as one space only when a
+    /// visible character follows it.
+    link_space: bool,
     /// Open `pre` elements; the text of one is verbatim.
     pre: usize,
     /// Where the content of the outermost `pre` starts in `out`.
@@ -27,6 +53,7 @@ impl Default for Writer {
         Self {
             out: String::new(),
             last_space: true,
+            link_space: false,
             pre: 0,
             pre_start: 0,
             link: None,
@@ -40,6 +67,13 @@ impl Writer {
         self.pre > 0
     }
 
+    /// The markdown written so far: a test seam for the output-multiple
+    /// argument, which checks the widest item marker.
+    #[cfg(test)]
+    pub(super) fn output(&self) -> &str {
+        &self.out
+    }
+
     pub(super) fn block_quote(&mut self, closing: bool) {
         self.block_break();
         self.quote = if closing {
@@ -49,35 +83,30 @@ impl Writer {
         };
     }
 
-    pub(super) fn start_link(&mut self, tag: &Tag) {
+    pub(super) fn start_link(&mut self, href: StrTendril) {
         // No `pre` check: `visible_tag` returns before every tag but `pre`
         // and `br` inside `pre`, so a link never opens there.
         if self.link.is_some() {
             return;
         }
-        if let Some(href) = attribute(tag, "href") {
-            self.link = Some(Link {
-                href,
-                text: String::new(),
-            });
-            self.last_space = true;
-        }
+        self.link = Some(Link {
+            href,
+            bracket: false,
+        });
+        self.link_space = false;
+        self.last_space = true;
     }
 
     pub(super) fn end_link(&mut self) {
         let Some(link) = self.link.take() else {
             return;
         };
-        let text = link
-            .text
-            .split_ascii_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        if text.is_empty() {
+        // A trailing whitespace run drops out with the pending space, so
+        // a link with no visible text writes nothing.
+        self.link_space = false;
+        if !link.bracket {
             return;
         }
-        self.push('[');
-        self.push_str(&text);
         self.push_str("](");
         self.push_str(&link.href);
         self.push(')');
@@ -123,11 +152,30 @@ impl Writer {
 
     pub(super) fn push(&mut self, c: char) {
         self.last_space = c.is_ascii_whitespace();
-        if self.pre == 0
-            && let Some(link) = &mut self.link
-        {
-            link.text.push(c);
-            return;
+        if self.pre == 0 && self.link.is_some() {
+            // Whitespace inside a link waits as one pending space; the
+            // link's text is already in the output, so nothing is held.
+            if c.is_ascii_whitespace() {
+                self.link_space = true;
+                return;
+            }
+            let bracketed = self.link.as_ref().is_some_and(|link| link.bracket);
+            if !bracketed {
+                if let Some(link) = &mut self.link {
+                    link.bracket = true;
+                }
+                // Leading whitespace drops out with the pending space.
+                self.link_space = false;
+                if self.out.is_empty() || self.out.ends_with('\n') {
+                    for _ in 0..self.quote.min(MAX_LEVELS) {
+                        self.out.push_str("> ");
+                    }
+                }
+                self.out.push('[');
+            } else if self.link_space {
+                self.link_space = false;
+                self.out.push(' ');
+            }
         }
         // Without a quote the loop below runs zero times, so no guard is
         // needed: one less comparison a mutant could flip for nothing.
@@ -224,17 +272,36 @@ impl Writer {
         }
         self.end_link();
         self.out.truncate(self.out.trim_end().len());
-        if let Some(title) = title.filter(|title| !title.is_empty()) {
-            let head = if self.out.is_empty() {
-                format!("# {title}")
-            } else {
-                format!("# {title}\n\n")
-            };
-            self.out.insert_str(0, &head);
+        let Some(title) = title.filter(|title| !title.is_empty()) else {
+            if !self.out.is_empty() {
+                self.out.push('\n');
+            }
+            return self.out;
+        };
+        if self.out.is_empty() {
+            // No markdown: the title string itself becomes the result.
+            let mut out = title;
+            out.insert_str(0, "# ");
+            out.push('\n');
+            return out;
         }
-        if !self.out.is_empty() {
-            self.out.push('\n');
+        // Both parts are non-empty: the result is built in the longer of
+        // the two buffers, copying the shorter once, so finishing holds
+        // no second copy of either. Each insert copies only what it adds.
+        // Equal lengths take this branch: either copy costs the same and
+        // the output is identical, so no measurement can tell them apart.
+        if title.len() <= self.out.len() {
+            self.out.insert_str(0, "\n\n");
+            self.out.insert_str(0, &title);
+            self.out.insert_str(0, "# ");
+        } else {
+            let mut out = title;
+            out.insert_str(0, "# ");
+            out.push_str("\n\n");
+            out.push_str(&self.out);
+            self.out = out;
         }
+        self.out.push('\n');
         self.out
     }
 }

@@ -185,8 +185,13 @@ is a real child session process, because it is Fiber. The fakes are:
   never draws it, so no concurrent listener can take it
 - a second client on a session's socket, including a slow watcher
 - a counting allocator, which counts the blocks of 1 MiB or more a thread
-  holds at once; `fakes` only exports it, and each test binary that
-  measures installs it as its own global allocator and holds nothing else
+  holds at once, and the bytes it allocated and has not freed, from the
+  scope's start and never below 0; each block of 64 KiB or more takes a
+  slot in a fixed table of 64, following the block through every `realloc`,
+  so a test can read the peak without its output buffer; a block made
+  before the scope and freed inside it lowers the total; `fakes` only
+  exports it, and each test binary that measures installs it as its own
+  global allocator and holds nothing else
 
 The fakes live in one crate, `fakes`, which depends only on `contract` and
 is a test-only dependency of the crates that use it (`docs/architecture.md`,

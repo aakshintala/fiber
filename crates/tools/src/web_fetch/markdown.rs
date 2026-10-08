@@ -8,6 +8,7 @@
 
 use std::cell::RefCell;
 
+use html5ever::tendril::StrTendril;
 use html5ever::tokenizer::states::RawKind;
 use html5ever::tokenizer::{
     BufferQueue, Tag, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
@@ -109,7 +110,7 @@ impl TokenSink for Sink {
     fn process_token(&self, token: Token, _line: u64) -> TokenSinkResult<Self::Handle> {
         let mut converter = self.cell.borrow_mut();
         match token {
-            Token::TagToken(tag) => converter.tag_token(&tag),
+            Token::TagToken(tag) => converter.tag_token(tag),
             Token::CharacterTokens(text) => {
                 converter.chars(&text);
                 TokenSinkResult::Continue
@@ -161,8 +162,9 @@ struct List {
 #[derive(Default)]
 struct Converter {
     title: Option<String>,
-    /// The text of the title being collected, when one is.
-    title_text: String,
+    /// A whitespace run in the title being collected, collapsed to one
+    /// space when another visible character follows it.
+    title_space: bool,
     /// Whether a title has been seen: only the first counts, as browsers
     /// render only the first.
     title_done: bool,
@@ -181,18 +183,21 @@ struct Converter {
 impl Converter {
     /// Handles one tokenized tag. A `script`, `style` or first `title`
     /// start tag switches the tokenizer to raw text; anything else is
-    /// handled and the tokenizer continues as usual.
-    fn tag_token(&mut self, tag: &Tag) -> TokenSinkResult<()> {
+    /// handled and the tokenizer continues as usual. The tag is owned, so
+    /// a link's `href` moves out of it without a copy.
+    fn tag_token(&mut self, tag: Tag) -> TokenSinkResult<()> {
         match tag.kind {
-            TagKind::StartTag => self.start_tag(&tag.name, tag),
+            TagKind::StartTag => self.start_tag(tag),
             TagKind::EndTag => {
-                self.end_tag(&tag.name, tag);
+                self.end_tag(tag);
                 TokenSinkResult::Continue
             }
         }
     }
 
-    fn start_tag(&mut self, name: &str, tag: &Tag) -> TokenSinkResult<()> {
+    fn start_tag(&mut self, mut tag: Tag) -> TokenSinkResult<()> {
+        let name = tag.name.clone();
+        let name = name.as_ref();
         // Raw-text switches apply everywhere but inside `svg`, whose
         // content is foreign content: tokenized as markup and dropped.
         // Inside `noscript` and `template` the switches apply.
@@ -208,41 +213,41 @@ impl Converter {
             if name == "title" {
                 if !self.title_done && !self.hidden.is_hidden() {
                     self.raw = Some(Raw::Title);
-                    self.title_text.clear();
+                    // The collected title is output storage: it always
+                    // becomes the heading unless empty.
+                    self.title = Some(String::new());
+                    self.title_space = false;
                 } else {
                     self.raw = Some(Raw::TitleDrop);
                 }
                 return TokenSinkResult::RawData(RawKind::Rcdata);
             }
         }
-        self.hidden.open(name, tag);
+        self.hidden.open(name, &tag);
         if !self.hidden.is_hidden() && !self.hidden.in_head() {
-            self.visible_tag(name, false, tag);
+            self.visible_tag(name, false, &mut tag);
         }
         TokenSinkResult::Continue
     }
 
-    fn end_tag(&mut self, name: &str, tag: &Tag) {
+    fn end_tag(&mut self, mut tag: Tag) {
+        let name = tag.name.clone();
+        let name = name.as_ref();
         if self.raw.is_some_and(|raw| name == raw.name()) {
             self.end_raw();
             return;
         }
         if !self.hidden.end(name) && !self.hidden.is_hidden() && !self.hidden.in_head() {
-            self.visible_tag(name, true, tag);
+            self.visible_tag(name, true, &mut tag);
         }
     }
 
     /// The end tag of the raw-text element: a collected title becomes the
-    /// pending heading, everything else was already dropped. A dropped
-    /// title leaves `title_done` alone, so a later title still counts.
+    /// pending heading, everything else was already dropped. The title
+    /// arrived collapsed, so nothing is copied here. A dropped title
+    /// leaves `title_done` alone, so a later title still counts.
     fn end_raw(&mut self) {
         if self.raw == Some(Raw::Title) {
-            let title = self
-                .title_text
-                .split_ascii_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            self.title = Some(title);
             self.title_done = true;
         }
         self.raw = None;
@@ -259,7 +264,7 @@ impl Converter {
         }
     }
 
-    fn visible_tag(&mut self, name: &str, closing: bool, tag: &Tag) {
+    fn visible_tag(&mut self, name: &str, closing: bool, tag: &mut Tag) {
         if self.writer.in_pre() && !matches!(name, "pre" | "br") {
             return;
         }
@@ -300,8 +305,8 @@ impl Converter {
             "a" => {
                 if closing {
                     self.writer.end_link();
-                } else {
-                    self.writer.start_link(tag);
+                } else if let Some(href) = take_href(tag) {
+                    self.writer.start_link(href);
                 }
             }
             "strong" | "b" => self.writer.push_str("**"),
@@ -376,24 +381,39 @@ impl Converter {
         match attribute(tag, "src") {
             Some(src) => {
                 self.writer.push_str("![");
-                self.writer.push_str(&alt);
+                self.writer.push_str(alt);
                 self.writer.push_str("](");
-                self.writer.push_str(&src);
+                self.writer.push_str(src);
                 self.writer.push(')');
             }
-            None => self.writer.plain(&alt),
+            None => self.writer.plain(alt),
         }
     }
 
     /// Character tokens: already entity-decoded per the HTML standard by
     /// the tokenizer. Raw `script` and `style` text is dropped, a counted
-    /// title's is collected, and anything hidden or in the head is dropped.
-    /// Text that is not all whitespace ends the head, as the HTML standard
-    /// ends it.
+    /// title's is collapsed as it arrives into the title string, and
+    /// anything hidden or in the head is dropped. Text that is not all
+    /// whitespace ends the head, as the HTML standard ends it.
     fn chars(&mut self, text: &str) {
         match self.raw {
             Some(Raw::Title) => {
-                self.title_text.push_str(text);
+                let Some(title) = self.title.as_mut() else {
+                    return;
+                };
+                for c in text.chars() {
+                    if c.is_ascii_whitespace() {
+                        self.title_space = true;
+                    } else {
+                        // Leading whitespace drops out with the pending
+                        // space, as in the writer's link text.
+                        if self.title_space && !title.is_empty() {
+                            title.push(' ');
+                        }
+                        self.title_space = false;
+                        title.push(c);
+                    }
+                }
                 return;
             }
             Some(_) => return,
@@ -409,14 +429,29 @@ impl Converter {
     }
 }
 
-/// The value of attribute `wanted` on a tokenized tag, or `None` when it is
-/// absent. Names are compared ASCII case-insensitively; values arrive
-/// entity-decoded per the HTML standard from the tokenizer.
-fn attribute(tag: &Tag, wanted: &str) -> Option<String> {
+/// The value of attribute `wanted` on a tokenized tag, borrowed from the
+/// token, or `None` when it is absent. Names are compared ASCII
+/// case-insensitively; values arrive entity-decoded per the HTML standard
+/// from the tokenizer.
+fn attribute<'a>(tag: &'a Tag, wanted: &str) -> Option<&'a str> {
     tag.attrs.iter().find_map(|attr| {
         let name: &str = &attr.name.local;
         if name == wanted {
-            Some(attr.value.to_string())
+            let value: &str = &attr.value;
+            Some(value)
+        } else {
+            None
+        }
+    })
+}
+
+/// Moves the `href` out of a tokenized open tag without a copy, for the
+/// open link to hold until its closing tag.
+fn take_href(tag: &mut Tag) -> Option<StrTendril> {
+    tag.attrs.iter_mut().find_map(|attr| {
+        let name: &str = &attr.name.local;
+        if name == "href" {
+            Some(std::mem::take(&mut attr.value))
         } else {
             None
         }
@@ -426,6 +461,10 @@ fn attribute(tag: &Tag, wanted: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "markdown_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "markdown_bounds_tests.rs"]
+mod bounds_tests;
 
 #[cfg(test)]
 #[path = "markdown_props_tests.rs"]
