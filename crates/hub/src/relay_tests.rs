@@ -414,15 +414,25 @@ fn a_reconnect_proceeds_without_a_thread_or_after_a_panic() {
         stripped.insert("id".to_owned(), Value::String("c_1".to_owned()));
         stripped.insert("command".to_owned(), Value::String("reply".to_owned()));
         stripped.insert("args".to_owned(), Value::Object(serde_json::Map::new()));
-        route(
-            &contract::CommandId("c_1".to_owned()),
-            SID,
-            stripped,
-            &hub,
-            &client_writer,
-            &relays,
-            false,
-        );
+        // The reconnect and the join block, so the route runs on a thread
+        // and its completion is received with the deadline.
+        let (done, finished) = std::sync::mpsc::channel();
+        let routed_relays = Arc::clone(&relays);
+        std::thread::spawn(move || {
+            route(
+                &contract::CommandId("c_1".to_owned()),
+                SID,
+                stripped,
+                &hub,
+                &client_writer,
+                &routed_relays,
+                false,
+            );
+            done.send(()).unwrap_or(());
+        });
+        finished
+            .recv_timeout(DEADLINE)
+            .expect("the route returns before its deadline");
         let mut read = BufReader::new(client_read);
         let mut text = String::new();
         read.read_line(&mut text)

@@ -64,7 +64,7 @@ pub(crate) struct Hub {
     pub(crate) before_accepted: ForwardHook,
     /// Tests only: a one-shot pause after a failed write, before the reconnect reads the kept subscription.
     #[cfg(test)]
-    pub(crate) before_join: JoinHook,
+    pub(crate) before_join: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 /// The open connections and the idle timer. `zero_since` is `Some` exactly
@@ -286,11 +286,6 @@ impl Hub {
 /// the line about to be written, and the relays, with no lock held.
 #[cfg(test)]
 type ForwardHook = Mutex<Option<Box<dyn FnOnce(&[u8], &Arc<Mutex<Relays>>) + Send>>>;
-
-/// Tests only: a one-shot pause after a failed write, before the reconnect
-/// reads the kept subscription, with no lock held.
-#[cfg(test)]
-type JoinHook = Mutex<Option<Box<dyn FnOnce() + Send>>>;
 
 /// What `poll_accept` decided for one accepted stream.
 pub(crate) enum Accept {
