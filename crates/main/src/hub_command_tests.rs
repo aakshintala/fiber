@@ -291,6 +291,7 @@ fn the_session_command_starts_with_a_model_and_never_a_prompt() {
         Path::new("/w"),
         Some("fake/m"),
         false,
+        None,
     );
     assert_eq!(command.get_program(), "/bin/fiber");
     assert_eq!(
@@ -310,7 +311,14 @@ fn the_session_command_starts_with_a_model_and_never_a_prompt() {
 #[test]
 fn the_session_command_resumes_with_the_recorded_workspace_and_no_model() {
     let id = SessionId("s_0123456789abcdef".to_owned());
-    let command = session_command(Path::new("/bin/fiber"), &id, Path::new("/w"), None, true);
+    let command = session_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        true,
+        None,
+    );
     assert_eq!(
         args_of(&command),
         [
@@ -387,4 +395,30 @@ fn resume_runs_the_recorded_path() {
 fn installed_is_the_login_services_mode_and_its_absence_the_client_started_one() {
     assert_eq!(mode(true), hub::Mode::Installed);
     assert_eq!(mode(false), hub::Mode::OnDemand);
+}
+
+#[test]
+fn the_session_command_rewinds_with_the_old_session_and_no_model() {
+    let id = SessionId("s_0123456789abcdef".to_owned());
+    let from = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    let command = session_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        false,
+        Some(&from),
+    );
+    assert_eq!(
+        args_of(&command),
+        [
+            "session",
+            "--id",
+            "s_0123456789abcdef",
+            "--workspace",
+            "/w",
+            "--rewound-from",
+            "s_aaaaaaaaaaaaaaaa"
+        ]
+    );
 }

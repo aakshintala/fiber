@@ -447,3 +447,73 @@ fn a_reconnect_proceeds_without_a_thread_or_after_a_panic() {
         );
     }
 }
+
+#[test]
+fn an_accepted_rewind_settles_to_the_session_it_names() {
+    let held = fakes::TempDir::new("rs");
+    let hub = hub(&held);
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let next = "s_bbbbbbbbbbbbbbbb";
+    let command = json!({"id": "c_rw1", "command": "rewind", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let kept: Kept =
+        std::sync::Arc::new(std::sync::Mutex::new(vec![("c_rw1".to_owned(), command)]));
+    let ack = serde_json::to_vec(&json!({
+        "kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_rw1", "result": {"new_session_id": next}},
+    }))
+    .unwrap();
+    match settle(&ack, &kept, &hub, sid, false) {
+        Some(Settled::Rewound(started)) => assert_eq!(started.0, next),
+        settled => panic!("an accepted rewind starts, got {}", settled.is_some()),
+    }
+    assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
+}
+
+#[test]
+fn a_rewind_without_a_minted_session_settles_to_nothing() {
+    let held = fakes::TempDir::new("rs");
+    let hub = hub(&held);
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let kept_for = |command: Value| {
+        std::sync::Arc::new(std::sync::Mutex::new(vec![(
+            "c_rw1".to_owned(),
+            command.as_object().unwrap().clone(),
+        )]))
+    };
+    let rewind = json!({"id": "c_rw1", "command": "rewind", "args": {}});
+    // A rejection starts nothing.
+    let rejected = serde_json::to_vec(&json!({
+        "kind": "command_rejected", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_rw1", "code": "busy", "message": "m"},
+    }))
+    .unwrap();
+    assert!(
+        settle(&rejected, &kept_for(rewind.clone()), &hub, sid, false).is_none(),
+        "a rejected rewind starts nothing"
+    );
+    // An acknowledgement naming no minted session starts nothing.
+    for next in [Value::Null, json!("nope"), json!({"id": "x"})] {
+        let ack = serde_json::to_vec(&json!({
+            "kind": "command_accepted", "ts": 1, "schema_version": 1,
+            "payload": {"command_id": "c_rw1", "result": {"new_session_id": next}},
+        }))
+        .unwrap();
+        assert!(
+            settle(&ack, &kept_for(rewind.clone()), &hub, sid, false).is_none(),
+            "an acknowledgement naming {next} starts nothing"
+        );
+    }
+    // An accepted rewind with no result starts nothing.
+    let bare = serde_json::to_vec(&json!({
+        "kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_rw1"},
+    }))
+    .unwrap();
+    assert!(
+        settle(&bare, &kept_for(rewind), &hub, sid, false).is_none(),
+        "an acknowledgement with no result starts nothing"
+    );
+}

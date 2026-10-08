@@ -1247,3 +1247,102 @@ fn a_feed_subscriber_alone_gets_no_attention() {
     assert_eq!(sub.raw("the waiting status"), waiting);
     stop_within(&feed);
 }
+
+/// A session directory holding a two-line log: `session_started`, then
+/// `last` as the final line.
+fn logged(temp: &Temp, n: u64, last: &Value) -> (String, PathBuf) {
+    let session = id(n);
+    let dir = recent::session_dir(&temp.dir, "-w", &session);
+    fs::create_dir_all(&dir).unwrap();
+    let first = json!({
+        "kind": "session_started", "session_id": session, "ts": 1, "schema_version": 1,
+        "payload": {"workspace": "/w"},
+    });
+    fs::write(
+        dir.join("events.jsonl"),
+        format!(
+            "{first}\n{last}\n",
+            first = serde_json::to_string(&first).unwrap(),
+            last = serde_json::to_string(last).unwrap(),
+        ),
+    )
+    .unwrap();
+    (session, dir)
+}
+
+fn rewound_last(old: &str, next: &str) -> Value {
+    json!({
+        "kind": "rewound", "session_id": old, "ts": 2, "schema_version": 1, "seq": 5,
+        "payload": {"new_session_id": next, "seq": 3, "jobs": []},
+    })
+}
+
+#[test]
+fn on_rewound_fires_once_for_a_rewound_last_line() {
+    let temp = Temp::new();
+    let (feed, _clock) = new_feed(&temp);
+    let seen: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    assert!(
+        feed.on_rewound
+            .set(Box::new({
+                let seen = Arc::clone(&seen);
+                move |from: SessionId, next: SessionId| {
+                    seen.lock().unwrap().push((from.0, next.0));
+                }
+            }))
+            .is_ok(),
+        "the callback sets"
+    );
+    let next = id(9);
+    let (old, dir) = logged(&temp, 1, &rewound_last(&id(1), &next));
+    feed.on_left(&old, Some(("-w".to_owned(), dir, 0)));
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        vec![(old, next)],
+        "the feed starts the named session once"
+    );
+}
+
+#[test]
+fn on_rewound_ignores_anything_but_a_rewound_last_line() {
+    let temp = Temp::new();
+    let (feed, _clock) = new_feed(&temp);
+    let seen: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    assert!(
+        feed.on_rewound
+            .set(Box::new({
+                let seen = Arc::clone(&seen);
+                move |from: SessionId, next: SessionId| {
+                    seen.lock().unwrap().push((from.0, next.0));
+                }
+            }))
+            .is_ok(),
+        "the callback sets"
+    );
+    // An exit starts nothing.
+    let (exited, exited_dir) = logged(
+        &temp,
+        1,
+        &json!({
+            "kind": "fiber_exited", "session_id": id(1),
+            "ts": 2, "schema_version": 1, "seq": 5, "payload": {},
+        }),
+    );
+    feed.on_left(&exited, Some(("-w".to_owned(), exited_dir, 0)));
+    // A crash starts nothing.
+    let (crashed, crashed_dir) = logged(
+        &temp,
+        2,
+        &json!({
+            "kind": "turn_completed", "session_id": id(2),
+            "ts": 2, "schema_version": 1, "seq": 5, "payload": {},
+        }),
+    );
+    feed.on_left(&crashed, Some(("-w".to_owned(), crashed_dir, 0)));
+    // A session with no directory starts nothing.
+    feed.on_left(&id(3), None);
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "only a rewound last line starts a session"
+    );
+}

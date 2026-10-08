@@ -25,6 +25,7 @@ mod lua_providers;
 mod mcp_servers;
 mod prompt_files;
 mod resume;
+mod rewind;
 mod scripted;
 mod session_command;
 mod session_extensions;

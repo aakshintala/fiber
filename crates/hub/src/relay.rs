@@ -108,7 +108,7 @@ impl Relays {
     }
 
     /// `session`'s kept subscription, if any.
-    fn subscription(&self, session: &str) -> Option<Map<String, Value>> {
+    pub(crate) fn subscription(&self, session: &str) -> Option<Map<String, Value>> {
         self.subscribed
             .iter()
             .find(|(kept, _)| kept == session)
@@ -234,32 +234,84 @@ fn route(
     };
     // The connection's subscription first, under an id of the hub's own,
     // so the client's command reaches a subscribed connection.
-    let replayed = match kept {
-        Some(mut line) => {
+    attach(
+        session,
+        stream,
+        hub,
+        writer,
+        relays,
+        kept,
+        Some((id.clone(), bytes, stripped)),
+    );
+}
+
+/// Sends the kept subscription again under a hub-minted id, then the
+/// client's command when one is relayed, and follows the session on a
+/// relay thread: shared by a new relay and the rewind redirect, which
+/// sends only the subscription. A write that fails answers the client's
+/// command `session_not_found` when there is one; without one the
+/// connection is gone, so nothing is answered.
+pub(crate) fn attach(
+    session: &str,
+    stream: UnixStream,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+    replay: Option<Map<String, Value>>,
+    command: Option<(CommandId, Vec<u8>, Map<String, Value>)>,
+) {
+    let mut replay = replay;
+    let replayed = match replay.as_mut() {
+        Some(line) => {
             let minted = crate::start::mint("c_");
             line.insert("id".to_owned(), Value::String(minted.clone()));
-            let sent = line_bytes(&line).is_some_and(|line| write_all(&stream, &line).is_ok());
+            let sent = line_bytes(line).is_some_and(|line| write_all(&stream, &line).is_ok());
             if !sent {
-                not_found(writer, hub, id, session);
+                if let Some((id, _, _)) = &command {
+                    not_found(writer, hub, id, session);
+                }
                 return;
             }
             Some(minted)
         }
         None => None,
     };
-    let kept: Kept = Arc::new(Mutex::new(vec![(id.0.clone(), stripped.clone())]));
-    if write_all(&stream, &bytes).is_err() {
+    let kept: Kept = Arc::new(Mutex::new(
+        command
+            .as_ref()
+            .map(|(id, _, stripped)| (id.0.clone(), stripped.clone()))
+            .into_iter()
+            .collect(),
+    ));
+    if let Some((id, bytes, _)) = &command
+        && write_all(&stream, bytes).is_err()
+    {
         not_found(writer, hub, id, session);
         return;
     }
     let reader = match stream.try_clone() {
         Ok(reader) => reader,
         Err(_) => {
-            not_found(writer, hub, id, session);
+            if let Some((id, _, _)) = &command {
+                not_found(writer, hub, id, session);
+            }
             return;
         }
     };
     let mut held = lock(relays);
+    // A redirect keeps the level for the new session, so the next rewind
+    // redirects the connection again: without it only the first rewind
+    // of a chain follows (`docs/invocation.md`, "`rewind` starts a new
+    // session process").
+    if command.is_none()
+        && let Some(line) = replay.as_ref()
+    {
+        if let Some((_, kept)) = held.subscribed.iter_mut().find(|(kept, _)| kept == session) {
+            *kept = line.clone();
+        } else {
+            held.subscribed.push((session.to_owned(), line.clone()));
+        }
+    }
     let epoch = held.mint();
     // The thread may run before its entry is pushed: on session EOF it
     // only removes an entry it finds.
@@ -328,10 +380,18 @@ fn relay(
     let mut read = BufReader::new(reader);
     let mut buf = Vec::new();
     let mut exiting = false;
+    // Set once the session closes its socket: only then does the
+    // connection follow a `rewound` to the next session. A client that
+    // disconnects first fails its forward, and its dead connection
+    // follows nothing.
+    let mut ended = false;
     loop {
         buf.clear();
         match read.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => break,
+            Ok(0) | Err(_) => {
+                ended = true;
+                break;
+            }
             Ok(_) => {
                 if replayed
                     .as_deref()
@@ -346,6 +406,13 @@ fn relay(
                         lock(relays).finish(session, epoch);
                         route(&CommandId(id), session, line, hub, writer, relays, true);
                         continue;
+                    }
+                    Some(Settled::Rewound(next)) => {
+                        // The new session starts before the client reads
+                        // the acknowledgement, so its next command finds
+                        // it running; a start that fails still forwards
+                        // the acknowledgement below.
+                        crate::rewind::start(hub, &SessionId(session.to_owned()), &next);
                     }
                     Some(Settled::Subscribed(line)) => {
                         #[cfg(test)]
@@ -363,6 +430,9 @@ fn relay(
                 }
             }
         }
+    }
+    if ended {
+        crate::rewind::follow(hub, writer, relays, session);
     }
     lock(relays).finish(session, epoch);
 }
@@ -392,9 +462,11 @@ fn forward(
 }
 
 /// What settling an acknowledged command decides: either the command is
-/// routed again, or an accepted `subscribe` becomes the kept subscription.
+/// routed again, an accepted `rewind` starts the session it names, or an
+/// accepted `subscribe` becomes the kept subscription.
 enum Settled {
     Reroute(String, Map<String, Value>),
+    Rewound(SessionId),
     Subscribed(Map<String, Value>),
 }
 
@@ -427,8 +499,30 @@ fn settle(line: &[u8], kept: &Kept, hub: &Hub, session: &str, exiting: bool) -> 
         {
             Some(Settled::Subscribed(command))
         }
+        Verdict::Accepted if command.get("command").and_then(Value::as_str) == Some("rewind") => {
+            rewind_next(line).map(Settled::Rewound)
+        }
         Verdict::Accepted | Verdict::Rejected | Verdict::Closing => None,
     }
+}
+
+/// The session an accepted `rewind` starts: `result.new_session_id` with
+/// the shape the hub mints. `None` for an acknowledgement that names none
+/// or names one of another shape, which starts nothing.
+fn rewind_next(line: &[u8]) -> Option<SessionId> {
+    let line = serde_json::from_slice::<Value>(line).ok()?;
+    if line.get("kind").and_then(Value::as_str)? != "command_accepted" {
+        return None;
+    }
+    let next = line
+        .get("payload")?
+        .get("result")?
+        .get("new_session_id")?
+        .as_str()?;
+    if !valid_session_id(next) {
+        return None;
+    }
+    Some(SessionId(next.to_owned()))
 }
 
 /// The `command_id` of a session's `command_accepted` or

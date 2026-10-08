@@ -24,6 +24,7 @@ mod prompt_history;
 mod recent;
 mod relay;
 mod resume;
+mod rewind;
 mod sessions;
 mod start;
 
@@ -83,6 +84,16 @@ pub trait Starter: Send + Sync {
     /// Starts the session command resuming `id` in `workspace`, the one
     /// its log recorded (`docs/invocation.md`, "Lifecycle").
     fn resume(&self, id: &SessionId, workspace: &Path) -> io::Result<Box<dyn Started>>;
+
+    /// Starts the session command for a rewind's new session `id` in
+    /// `workspace`, the old session's, for the rewind of `from`
+    /// (`docs/invocation.md`, "`rewind` starts a new session process").
+    fn rewind(
+        &self,
+        id: &SessionId,
+        workspace: &Path,
+        from: &SessionId,
+    ) -> io::Result<Box<dyn Started>>;
 }
 
 /// A session process [`Starter::start`] started.
@@ -151,6 +162,32 @@ pub fn serve(
     let held = Held::new(lock, bound);
     let diag = diag.with_level(settings.level);
     let hub = Arc::new(Hub::new(home, fiber_version, starter, clock, diag));
+    // The feed starts a rewound session even when no client relayed the
+    // rewind: the callback holds the hub weakly, so nothing runs after
+    // the hub drops, and the start runs on a thread of its own, never on
+    // the feed's scanner.
+    let feed_hub = Arc::downgrade(&hub);
+    match hub.feed.on_rewound.set(Box::new(move |from, next| {
+        let Some(hub) = feed_hub.upgrade() else {
+            return;
+        };
+        let failed = next.clone();
+        let spawned = {
+            let hub = Arc::clone(&hub);
+            thread::Builder::new()
+                .name("hub-rewind".to_owned())
+                .spawn(move || crate::rewind::start(&hub, &from, &next))
+        };
+        if spawned.is_err() {
+            hub.diag.warn_session(
+                &failed,
+                "io_failed",
+                &format!("Session {} could not start.", failed.0),
+            );
+        }
+    })) {
+        Ok(()) | Err(_) => {}
+    }
     hub.diag.info("hub_started", "The hub started.");
     let got = Arc::new(AtomicI32::new(0));
     arm(&got, hub.waker());

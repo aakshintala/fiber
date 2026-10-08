@@ -412,6 +412,19 @@ pub(crate) struct SessionArgs {
     /// "Isolation").
     #[arg(long, conflicts_with = "resume")]
     pub(crate) worktree: bool,
+
+    /// Continue the session this rewind names as the session its `rewound`
+    /// line points at: hidden and free to change, passed by the hub that
+    /// starts a rewind's new session (`docs/invocation.md`, "`rewind`
+    /// starts a new session process").
+    #[arg(
+        long = "rewound-from",
+        value_name = "session_id",
+        value_parser = parse_session_id,
+        hide = true,
+        conflicts_with_all = ["resume", "prompt", "model", "worktree"]
+    )]
+    pub(crate) rewound_from: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
