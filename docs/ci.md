@@ -126,7 +126,10 @@ On Linux x86_64 alone:
 - cargo-deny's licence, source and ban checks
 - the built-in tool definitions within their byte budget, with each
   definition's size printed
-- mutation testing: `cargo-mutants --in-diff`, split across 6 runners. Each
+- mutation testing: `cargo-mutants --in-diff`, split across 6 runners. It runs
+  on a ready pull request, on a push to `main`, and on a draft pull request
+  that carries the label `mutants`; an unlabelled draft skips it, and adding
+  the label starts a run. Each
   lists its own share of the diff's mutants and stops when it has none. The
   number was picked, not measured; it is reset from the first real runs.
   Mutants run under nextest's `mutants` profile (`.cargo/mutants.toml`),

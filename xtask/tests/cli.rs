@@ -264,6 +264,8 @@ fn plan_prints_the_jobs_and_shards() {
         "pull_request",
         "--bug",
         "true",
+        "--mutants",
+        "true",
     ];
     let (code, out) = xtask(&dir, &args, &[], "");
     assert_eq!(code, 0);
@@ -271,6 +273,23 @@ fn plan_prints_the_jobs_and_shards() {
         out,
         "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"test\":true}\nshards=[0,1,2,3,4,5]\nshard_total=6\n"
     );
+    let skipped = [
+        "plan",
+        "--mode",
+        "crates",
+        "--packages",
+        "a b",
+        "--event",
+        "pull_request",
+        "--bug",
+        "false",
+        "--mutants",
+        "false",
+    ];
+    let (code, out) = xtask(&dir, &skipped, &[], "");
+    assert_eq!(code, 0);
+    assert!(out.contains("\"mutants\":false"), "{out}");
+    assert!(out.contains("shards=[]\nshard_total=0\n"), "{out}");
     let bad = [
         "plan",
         "--mode",
