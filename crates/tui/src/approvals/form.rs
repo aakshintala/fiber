@@ -18,6 +18,8 @@ pub(crate) struct Form {
     answers: Vec<Field>,
     /// The note on the whole form.
     note: String,
+    /// The text cursor in the note: the characters before it.
+    note_caret: usize,
     /// Where the cursor is.
     at: Cursor,
 }
@@ -111,6 +113,7 @@ impl Form {
             fields,
             answers,
             note: String::new(),
+            note_caret: 0,
             at: Cursor::Submit(SubmitRow::Send),
         };
         form.open_tab(0);
@@ -150,8 +153,8 @@ impl Form {
 
     /// An editing key: a paste is typed on the words row, or into the note
     /// on the Submit tab, a control character as a space; ← and → move the
-    /// words row's text cursor there, and move between the tabs from every
-    /// other row. Every other edit does nothing.
+    /// text cursor on the words row and on the note row, and move between
+    /// the tabs from every other row. Every other edit does nothing.
     pub(crate) fn on_edit(&mut self, edit: &Edit) {
         match edit {
             Edit::Paste(text) => {
@@ -262,9 +265,9 @@ impl Form {
         panel
     }
 
-    /// ← or →: one character on the words row, stopping at either end;
-    /// from any other row, the previous or next tab, stopping at the first
-    /// question and at Submit.
+    /// ← or →: one character on the words row and on the note row,
+    /// stopping at either end; from any other row, the previous or next
+    /// tab, stopping at the first question and at Submit.
     fn arrow(&mut self, right: bool) {
         if let Cursor::Question {
             field,
@@ -281,6 +284,16 @@ impl Form {
                     answer.caret.saturating_sub(1)
                 };
             }
+            return;
+        }
+        if let Cursor::Submit(SubmitRow::Note) = self.at {
+            self.note_caret = if right {
+                self.note_caret
+                    .saturating_add(1)
+                    .min(self.note.chars().count())
+            } else {
+                self.note_caret.saturating_sub(1)
+            };
             return;
         }
         let tab = self.tab();
@@ -380,7 +393,8 @@ impl Form {
     }
 
     /// Types `ch`: on a question, onto its words row, moving the cursor
-    /// there; on the Submit tab, into the note.
+    /// there; on the Submit tab, into the note at the note cursor, moving
+    /// it after the typed character.
     fn type_char(&mut self, ch: char) {
         match self.at {
             Cursor::Question { field, .. } => {
@@ -395,15 +409,16 @@ impl Form {
                 };
             }
             Cursor::Submit(_) => {
-                self.note.push(ch);
+                let at = byte_at(&self.note, self.note_caret);
+                self.note.insert(at, ch);
+                self.note_caret = self.note_caret.saturating_add(1);
                 self.at = Cursor::Submit(SubmitRow::Note);
             }
         }
     }
 
     /// Backspace deletes the character before the text cursor on the words
-    /// row and the note's last character on the note row, and does nothing
-    /// elsewhere.
+    /// row and on the note row, and does nothing elsewhere.
     fn backspace(&mut self) {
         match self.at {
             Cursor::Question {
@@ -418,7 +433,10 @@ impl Form {
                 }
             }
             Cursor::Submit(SubmitRow::Note) => {
-                self.note.pop();
+                if let Some(before) = self.note_caret.checked_sub(1) {
+                    self.note.remove(byte_at(&self.note, before));
+                    self.note_caret = before;
+                }
             }
             Cursor::Question {
                 row: Row::Option(_) | Row::Next | Row::Chat,

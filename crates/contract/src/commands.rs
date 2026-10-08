@@ -109,6 +109,8 @@ pub enum Command {
     Tools,
     /// Answers with every `/name` the session runs.
     Commands,
+    /// Answers with every skill discovery found, switched-off and shadowed ones included.
+    Skills,
     /// Answers with durable log lines in a seq range.
     History(HistoryArgs),
     /// Switches model or thinking at the next turn boundary.

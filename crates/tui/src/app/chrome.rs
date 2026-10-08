@@ -152,9 +152,14 @@ impl App {
         )
     }
 
-    /// The terminal title (`docs/tui.md`, "State glyphs"): `fiber` on
-    /// home, the attached session's glyph and name otherwise.
+    /// The terminal title (`docs/tui.md`, "State glyphs", "Getting the
+    /// person's attention"): the attention's while a session needs the
+    /// person, else `fiber` on home, the attached session's glyph and name
+    /// otherwise.
     pub(crate) fn title(&self) -> String {
+        if let Some(title) = self.attention_title() {
+            return title;
+        }
         let row = self.attached_row();
         title(
             self.session().is_some(),

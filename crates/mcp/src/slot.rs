@@ -19,7 +19,7 @@ use contract::shapes::Failure;
 use contract::tool::ServerRecord;
 use serde_json::Value;
 
-use crate::cache;
+use crate::cache::{self, Cached};
 use crate::server::{ListedTool, Server};
 use crate::start::{ServerSpec, failed};
 
@@ -32,26 +32,29 @@ pub(crate) struct Slot {
     clock: Arc<dyn Clock>,
     version: String,
     state: Mutex<State>,
+    /// Test-only pause after `serve` returns and before `run` checks the live server.
+    #[cfg(test)]
+    run_after_serve: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
-/// What the slot holds. `listed` is always the last raw list this slot
+/// What the slot holds. `listed` is always the last raw lists this slot
 /// saw, for the cache rewrite check on the next start.
 enum State {
     /// Declared from the cache; no process runs.
     NotStarted {
-        /// The cached raw entries.
-        cached: Vec<Value>,
+        /// The cached raw lists.
+        cached: Cached,
     },
-    /// The server runs; `live` is every name it listed.
+    /// The server runs; `live` is every tool name it listed.
     Running {
         server: Arc<Server>,
         live: HashSet<String>,
-        listed: Vec<Value>,
+        listed: Cached,
         /// Whether this is the restart, so the next death is final.
         restarted: bool,
     },
     /// One death seen and its restart unused: the next call restarts.
-    Down { listed: Vec<Value> },
+    Down { listed: Cached },
     /// A second death, or a stop: every call fails `error`, no spawn again.
     Dead { error: Failure },
 }
@@ -75,6 +78,14 @@ pub(crate) struct RunFailed {
     pub records: Vec<ServerRecord>,
 }
 
+/// What [`Slot::serve`] found, with the server lines the call carries.
+pub(crate) enum Served {
+    /// The server runs: call it, or ask it for a prompt.
+    Up(Arc<Server>, Vec<ServerRecord>),
+    /// The server is dead or its start failed: fail `error`.
+    Failed(Box<RunFailed>),
+}
+
 impl Slot {
     /// One slot from its parts, in `state`.
     fn new(
@@ -92,18 +103,20 @@ impl Slot {
             clock: Arc::clone(clock),
             version: version.to_owned(),
             state: Mutex::new(state),
+            #[cfg(test)]
+            run_after_serve: Mutex::new(None),
         })
     }
 
     /// A slot declared from `cached`, starting nothing until the first
-    /// call to one of its tools.
+    /// call to one of its tools or the first run of one of its prompts.
     pub(crate) fn lazy(
         spec: ServerSpec,
         workspace: &Path,
         cache: &Path,
         clock: &Arc<dyn Clock>,
         version: &str,
-        cached: Vec<Value>,
+        cached: Cached,
     ) -> Arc<Self> {
         Self::new(
             spec,
@@ -116,7 +129,7 @@ impl Slot {
     }
 
     /// A slot for a server [`Server::start`] already runs, holding its raw
-    /// `listed` entries for the removed-tool and cache checks.
+    /// `listed` lists for the removed-tool and cache checks.
     pub(crate) fn running(
         spec: ServerSpec,
         workspace: &Path,
@@ -124,7 +137,7 @@ impl Slot {
         clock: &Arc<dyn Clock>,
         version: &str,
         server: Server,
-        listed: Vec<Value>,
+        listed: Cached,
     ) -> Arc<Self> {
         Self::new(
             spec,
@@ -134,34 +147,31 @@ impl Slot {
             version,
             State::Running {
                 server: Arc::new(server),
-                live: names(&listed),
+                live: names(&listed.tools),
                 listed,
                 restarted: false,
             },
         )
     }
 
-    /// The server to call `tool` on, starting it first when the slot is not
-    /// started, and restarting it when it died with its restart unused. The
-    /// lock is held across [`Server::start`], so a concurrent call waits for
-    /// that start (bounded by the startup deadline) and then sees the same
-    /// outcome, and only the call that ran it carries its lines.
-    pub(crate) fn run(&self, tool: &str) -> Run {
+    /// The running server, starting it first when the slot is not
+    /// started, and restarting it when it died with its restart unused.
+    /// The lock is held across [`Server::start`], so a concurrent call
+    /// waits for that start (bounded by the startup deadline) and then
+    /// sees the same outcome, and only the call that ran it carries its
+    /// lines.
+    pub(crate) fn serve(&self) -> Served {
         let mut state = lock(&self.state);
         let mut records = Vec::new();
         let (listed, restart) = match &*state {
             State::Running {
                 server,
-                live,
                 listed,
                 restarted,
+                ..
             } => {
                 if !server.is_gone() {
-                    return if live.contains(tool) {
-                        Run::Call(Arc::clone(server), records)
-                    } else {
-                        Run::Removed(records)
-                    };
+                    return Served::Up(Arc::clone(server), records);
                 }
                 // It died while idle: this call is the first to see it.
                 let record = died(&self.spec.name, !*restarted);
@@ -170,7 +180,7 @@ impl Slot {
                     *state = State::Dead {
                         error: record.error.clone(),
                     };
-                    return Run::Failed(Box::new(RunFailed {
+                    return Served::Failed(Box::new(RunFailed {
                         error: record.error,
                         records,
                     }));
@@ -179,7 +189,7 @@ impl Slot {
             }
             State::Down { listed } => (listed.clone(), true),
             State::Dead { error } => {
-                return Run::Failed(Box::new(RunFailed {
+                return Served::Failed(Box::new(RunFailed {
                     error: error.clone(),
                     records,
                 }));
@@ -201,31 +211,30 @@ impl Slot {
                 // The session keeps the tools it declared, because a tool
                 // set that changes mid-session misses the whole prompt
                 // cache; the cache is updated for the next session.
-                if open.tools != listed {
+                let live = Cached {
+                    tools: open.tools,
+                    prompts: open.prompts,
+                };
+                if live != listed {
                     cache::write(
                         &self.cache,
                         &name,
                         &cache::key(&self.spec.command, &self.spec.args, &self.spec.env),
-                        &open.tools,
+                        &live,
                     );
                 }
-                let live = names(&open.tools);
-                let present = live.contains(tool);
+                let tools = names(&live.tools);
                 let server = Arc::new(open.server);
                 *state = State::Running {
                     server: Arc::clone(&server),
-                    live,
-                    listed: open.tools,
+                    live: tools,
+                    listed: live,
                     restarted: restart,
                 };
                 if restart {
                     records.push(ServerRecord::Ready(McpServerReady { server: name }));
                 }
-                if present {
-                    Run::Call(server, records)
-                } else {
-                    Run::Removed(records)
-                }
+                Served::Up(server, records)
             }
             Err(error) => {
                 // A failed first start is the server's one death; a failed
@@ -241,10 +250,54 @@ impl Slot {
                 } else {
                     State::Down { listed }
                 };
-                Run::Failed(Box::new(RunFailed {
+                Served::Failed(Box::new(RunFailed {
                     error: failure,
                     records,
                 }))
+            }
+        }
+    }
+
+    /// The server to call `tool` on: [`Slot::serve`] plus the live-tool
+    /// check, read under a second lock. When the served server is no
+    /// longer the running one, its call would fail `Gone`, so the call
+    /// fails without calling, exactly as that path does.
+    pub(crate) fn run(&self, tool: &str) -> Run {
+        match self.serve() {
+            Served::Failed(failed) => Run::Failed(failed),
+            Served::Up(server, records) => {
+                #[cfg(test)]
+                if let Some(hook) = lock(&self.run_after_serve).take() {
+                    hook();
+                }
+                let present = match &*lock(&self.state) {
+                    State::Running {
+                        server: live,
+                        live: tools,
+                        ..
+                    } if Arc::ptr_eq(live, &server) => tools.contains(tool),
+                    // The served server stopped running between `serve`
+                    // and this check; its call would fail `Gone`.
+                    State::Running { .. }
+                    | State::NotStarted { .. }
+                    | State::Down { .. }
+                    | State::Dead { .. } => {
+                        return Run::Failed(Box::new(RunFailed {
+                            error: Failure {
+                                code: ErrorCode::McpServerUnavailable,
+                                message: unavailable(&self.spec.name),
+                                retry_after_ms: None,
+                                provider: None,
+                            },
+                            records,
+                        }));
+                    }
+                };
+                if present {
+                    Run::Call(server, records)
+                } else {
+                    Run::Removed(records)
+                }
             }
         }
     }

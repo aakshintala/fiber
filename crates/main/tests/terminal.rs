@@ -194,9 +194,9 @@ impl Run {
         Self::terminal_with(setup, &[])
     }
 
-    /// [`Run::terminal`], with `env`'s variables set on the child after
-    /// the standard ones, so a test can prepend to `PATH`.
-    fn terminal_with(setup: &Setup, env: &[(&str, &OsStr)]) -> Self {
+    /// Spawns `fiber` as [`terminal`] does, with `env` added to the
+    /// child's environment.
+    fn terminal_with(setup: &Setup, env: &[(&str, &str)]) -> Self {
         let terminal = Terminal::open();
         let sessions = Watchdog::matching(setup.workspace().to_str().unwrap());
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
@@ -207,8 +207,8 @@ impl Run {
             .env("HOME", setup.root.path())
             .env("FIBER_HOME", setup.home())
             .env("FIBER_TEST_FAKE_KEY", "sk-test");
-        for (name, value) in env {
-            command.env(name, value);
+        for (key, value) in env {
+            command.env(key, value);
         }
         command
             .stdin(terminal.stdin())
@@ -410,6 +410,24 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
     // the cursor shown, then one resume line per live session ("On exit").
     run.read_until("\x1b[?25h");
     run.read_until("fiber resume");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
+/// A finished turn sends an OSC 9 desktop notification where the
+/// terminal supports one.
+#[test]
+fn a_finished_turn_sends_an_osc_9_notification() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let mut run = Run::terminal_with(&setup, &[("TERM_PROGRAM", "ghostty")]);
+    run.read_until(">");
+    run.write(b"say hi\r");
+    run.read_until("Hello.");
+    run.read_until("\x1b]9;Fiber: ");
+    run.write(b"\x03\x03\r");
+    run.read_until("\x1b[?25h");
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
@@ -665,9 +683,9 @@ fn ctrl_v_pastes_an_image_that_the_session_stores() {
         &std::env::var_os("PATH").unwrap_or_default(),
     )))
     .unwrap();
-    let mut env: Vec<(&str, &OsStr)> = vec![("PATH", &path)];
+    let mut env: Vec<(&str, &str)> = vec![("PATH", path.to_str().unwrap())];
     if !cfg!(target_os = "macos") {
-        env.push(("WAYLAND_DISPLAY", OsStr::new("fiber-test")));
+        env.push(("WAYLAND_DISPLAY", "fiber-test"));
     }
     let mut run = Run::terminal_with(&setup, &env);
     run.read_until(">");

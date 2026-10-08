@@ -1474,6 +1474,24 @@ impl Session {
         self
     }
 
+    /// Runs the session's MCP prompts by `/name` through `prompts`.
+    pub(crate) fn server_prompts(mut self, prompts: r#loop::ServerPrompts) -> Self {
+        self.looped = self
+            .looped
+            .take()
+            .map(|looped| looped.server_prompts(prompts));
+        self
+    }
+
+    /// Switches off the skills and prompts these names name.
+    pub(crate) fn disabled_skills(mut self, names: Vec<String>) -> Self {
+        self.looped = self
+            .looped
+            .take()
+            .map(|looped| looped.skills_disabled(names));
+        self
+    }
+
     /// Runs one turn on its own thread, failing the test if it outlives
     /// [`DEADLINE`].
     pub(crate) fn turn(&mut self) -> Option<TurnOutcome> {

@@ -8,8 +8,7 @@ use std::time::{Duration, Instant};
 
 use contract::commands::Reply;
 use contract::events::{Event, ExtensionLog, QueuedMessage, SteeringQueue};
-use contract::inbox::{Ack, Delivery, Message, Rejection};
-use contract::shapes::ContentPart;
+use contract::inbox::{Ack, Delivery, Rejection};
 use contract::{CommandId, ErrorCode, RequestId, TurnId};
 
 use crate::cancel::SignalState;
@@ -483,10 +482,20 @@ impl Loop {
                 if self.closing {
                     reject(ack, ErrorCode::Closing, CLOSING);
                 } else {
-                    self.attended();
-                    input.prompt_at.push(input.pieces.len());
-                    input.pieces.push(Queued::Steer(expanded(self, message)));
-                    input.prompts.push(ack);
+                    match self.slash(message)? {
+                        Ok(expanded) => {
+                            self.attended();
+                            input.prompt_at.push(input.pieces.len());
+                            input.pieces.push(Queued::Steer(expanded));
+                            input.prompts.push(ack);
+                        }
+                        // A rejected prompt is not pushed and not attended:
+                        // it moves neither the turn nor the idle deadline
+                        // (`docs/invocation.md`, "Lifecycle").
+                        Err(rejection) => {
+                            (ack.0)(Err(rejection));
+                        }
+                    }
                 }
             }
             Delivery::Steer(message, ack) => {
@@ -686,31 +695,6 @@ pub(crate) fn reject(ack: Ack, code: ErrorCode, message: &str) {
         code,
         message: message.to_owned(),
     }));
-}
-
-/// A `prompt` whose first word is `/name` runs that skill with the rest
-/// as its arguments (`docs/invocation.md`, "Driver commands"). The
-/// expansion never fails the prompt: `None` sends it as written. Only a
-/// first word starting with `/` reads the skill directories, so any other
-/// prompt sends no filesystem read.
-fn expanded(looped: &Loop, message: Message) -> Message {
-    let slash = matches!(
-        message.content.first(),
-        Some(ContentPart::Text { text }) if crate::skills::split_command(text).is_some()
-    );
-    if !slash {
-        return message;
-    }
-    // The repository's top level, as the opening message reads it
-    // (`opening::collect`): a skill under a parent repository is found
-    // from a subdirectory workspace.
-    let (chain, _) = crate::opening::repo_chain(&looped.workspace);
-    let top = chain.first().unwrap_or(&looped.workspace);
-    let mut message = message;
-    if let Some(content) = crate::skills::expand(&looped.prompt, top, &message.content) {
-        message.content = content;
-    }
-    message
 }
 
 /// Whether `input` holds a message, not only job notices.

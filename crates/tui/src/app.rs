@@ -33,6 +33,7 @@ mod notices;
 #[path = "steering.rs"]
 mod steering;
 
+mod attention;
 mod chrome;
 #[path = "app_commands.rs"]
 mod commands;
@@ -244,6 +245,9 @@ pub(crate) struct App {
     keyboard: keyboard::Keyboard,
     /// Whether a link opener is on `PATH` (`docs/tui.md`, "Links").
     opener: bool,
+    /// What the hub's `attention` lines queued (`docs/tui.md`, "Getting
+    /// the person's attention").
+    attention: attention::State,
 }
 
 impl App {
@@ -278,6 +282,7 @@ impl App {
             find: find::Find::default(),
             keyboard: keyboard::Keyboard::default(),
             opener: false,
+            attention: attention::State::default(),
         }
     }
 
@@ -382,6 +387,7 @@ impl App {
         };
         lines.extend(self.home_outgoing());
         lines.extend(self.find_outgoing());
+        self.reconcile_attention();
         self.settle();
         lines
     }
@@ -661,6 +667,10 @@ impl App {
                         self.rejected(&id, message);
                     }
                 }
+                Vec::new()
+            }
+            "attention" => {
+                self.attention_line(&hub.payload);
                 Vec::new()
             }
             _ => Vec::new(),
