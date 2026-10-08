@@ -291,6 +291,7 @@ fn the_session_command_starts_with_a_model_and_never_a_prompt() {
         Path::new("/w"),
         Some("fake/m"),
         false,
+        false,
         None,
     );
     assert_eq!(command.get_program(), "/bin/fiber");
@@ -309,6 +310,31 @@ fn the_session_command_starts_with_a_model_and_never_a_prompt() {
 }
 
 #[test]
+fn the_session_command_passes_worktree_only_when_set() {
+    let id = SessionId("s_0123456789abcdef".to_owned());
+    let with = session_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        true,
+        false,
+        None,
+    );
+    assert!(args_of(&with).contains(&"--worktree".to_owned()));
+    let without = session_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        false,
+        false,
+        None,
+    );
+    assert!(!args_of(&without).contains(&"--worktree".to_owned()));
+}
+
+#[test]
 fn the_session_command_resumes_with_the_recorded_workspace_and_no_model() {
     let id = SessionId("s_0123456789abcdef".to_owned());
     let command = session_command(
@@ -316,6 +342,7 @@ fn the_session_command_resumes_with_the_recorded_workspace_and_no_model() {
         &id,
         Path::new("/w"),
         None,
+        false,
         true,
         None,
     );
@@ -376,7 +403,7 @@ fn start_runs_the_recorded_path() {
         exe: stub_binary(&root, "recorded start"),
     };
     let started =
-        hub::Starter::start(&starter, &SessionId("s1".to_owned()), &workspace, None).unwrap();
+        hub::Starter::start(&starter, &SessionId("s1".to_owned()), &workspace, None, false).unwrap();
     assert_eq!(exit_of(started).message, "recorded start");
 }
 
@@ -406,6 +433,7 @@ fn the_session_command_rewinds_with_the_old_session_and_no_model() {
         &id,
         Path::new("/w"),
         None,
+        false,
         false,
         Some(&from),
     );
