@@ -243,9 +243,10 @@ The terminal runs in a separate process (`docs/invocation.md`,
 "Processes") with two threads of its own: terminal input, which owns the
 keyboard, and terminal render, which owns the screen. Neither is in the
 session's process.
-Each terminal thread has a 1 MiB stack: a 2 MiB default stack can sit on a
-2 MiB-aligned span, and the kernel backs its first touch with a 2 MiB huge
-page, which showed as 2 MiB more in the idle terminal on Linux x86_64.
+Each thread the terminal spawns has a 1 MiB stack (rendering runs on the
+process's main thread, whose stack the OS sets): a 2 MiB default stack can
+sit on a 2 MiB-aligned span, and the kernel backs its first touch with a
+2 MiB huge page, which showed as 2 MiB more in the idle terminal on Linux x86_64.
 
 `log` is not a thread. It is a shared object behind a lock: whoever emits an
 event calls it, and it mints `seq`, writes, fsyncs and fans out.
