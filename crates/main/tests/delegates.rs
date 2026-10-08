@@ -283,13 +283,20 @@ impl Running {
         support::Socket::connect(setup.deadline, &setup.session_socket(id))
     }
 
-    /// Stdout lines until one completes `done`, each bounded by 5 s: the
-    /// drain thread signals every line over the channel, so a failing test
-    /// fails fast instead of sleeping.
+    /// Stdout lines until one completes `done`: the drain thread signals
+    /// every line over the channel. One deadline bounds the whole wait:
+    /// each receive takes what remains of the test's deadline, at most
+    /// 5 s, so endless unrelated output cannot postpone expiry, and a
+    /// quiet hang fails fast.
     fn wait_line(&mut self, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
         let mut got = Vec::new();
         loop {
-            match self.lines.recv_timeout(Duration::from_secs(5)) {
+            // Capped, never reset: the remainder shrinks as the test runs.
+            let left = self.deadline.left().min(Duration::from_secs(5));
+            if left.is_zero() {
+                panic!("waited until the deadline for {what}; got {got:?}")
+            }
+            match self.lines.recv_timeout(left) {
                 Ok(line) => {
                     let stop = done(&line);
                     got.push(line);
@@ -298,7 +305,7 @@ impl Running {
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    panic!("waited 5 s for {what}; got {got:?}")
+                    panic!("waited {left:?} with no line for {what}; got {got:?}")
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     panic!("stdout ended before {what}; got {got:?}")
@@ -734,16 +741,18 @@ fn killing_the_parent_shuts_the_stalled_child_down_with_129() {
         child.await_requests(1, Duration::from_secs(5)),
         "the child stalled its model call"
     );
+    // Subscribed before the kill: the child's exit is awaited on this
+    // socket, so a shutdown that beats a later subscription cannot hide
+    // the exit line.
+    let child_socket = support::Socket::connect(setup.deadline, &setup.session_socket(&child_id));
+    subscribe(&child_socket);
     // The parent is gone however it died: SIGKILL to its group, which the
     // child left when it became its own leader.
     support::kill_group(setup.deadline, running.group, "KILL").unwrap();
     let (status, _, _) = running.wait();
     assert_eq!(status.code(), None);
     // End of file on the lifeline is a hangup: the child shuts down with
-    // 129 within the bound. Its socket was bound before it stalled, so the
-    // client reads its exit as an event.
-    let child_socket = support::Socket::connect(setup.deadline, &setup.session_socket(&child_id));
-    subscribe(&child_socket);
+    // 129 within the bound.
     let lines = support::until(&child_socket, "the child's exit", |line| {
         line["kind"] == "fiber_exited"
     });
