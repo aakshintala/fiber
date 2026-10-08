@@ -105,6 +105,7 @@ fn request() -> ModelRequest {
             images: Vec::new(),
         }],
         previous_end: None,
+        sent_tools: None,
         max_output_tokens: None,
         session_dir: std::path::PathBuf::new(),
     }
@@ -1449,4 +1450,33 @@ fn a_reply_carries_the_size_of_the_body_it_sent() {
             media: false,
         }
     );
+}
+
+#[test]
+fn sent_tools_are_sent_verbatim_in_order() {
+    // A rewound session's first request carries its parent's logged build,
+    // not what its own tools would wire (`docs/events.md`, "Rewind").
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    let sent = vec![
+        json!({"type": "function", "name": "b_tool", "description": "Second.",
+               "parameters": {"type": "object"}, "strict": true}),
+        json!({"type": "function", "name": "a_tool", "description": "First.",
+               "parameters": {"type": "object"}, "strict": false}),
+    ];
+    let mut request = request();
+    request.sent_tools = Some(
+        sent.iter()
+            .map(|tool| tool.as_object().unwrap().clone())
+            .collect(),
+    );
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    assert_eq!(sent_body(&server, 0)["tools"], Value::Array(sent));
 }

@@ -98,6 +98,7 @@ fn request() -> ModelRequest {
         cache_lifetime: CacheLifetime::OneHour,
         cache_key: "session_1".into(),
         previous_end: None,
+        sent_tools: None,
         max_output_tokens: None,
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
@@ -1982,4 +1983,72 @@ fn a_reply_carries_the_size_of_the_body_it_sent() {
             media: false,
         }
     );
+}
+
+#[test]
+fn sent_tools_are_sent_verbatim_and_set_the_strictness() {
+    // A rewound session's first request carries its parent's logged build,
+    // not what its own tools would wire (`docs/events.md`, "Rewind"):
+    // the declarations go over verbatim, and the strictness the sent
+    // schemas imply decides the `toolConfig`.
+    let strict_schema = weather_tool().input_schema;
+    let loose_schema = json!({"type": "object", "properties": {"a": {"type": "string"}}});
+    let declaration = |name: &str, schema: &Value| json!({"name": name, "description": "Sent.", "parametersJsonSchema": schema});
+    let server =
+        ProviderServer::start([completed_reply(), completed_reply(), completed_reply()]).unwrap();
+    let gemini = Gemini::new(endpoint(&server));
+    // Strict sent schemas with loose wired tools: the sent `VALIDATED`.
+    let mut strict_sent = request();
+    strict_sent.tools = vec![ToolDefinition {
+        name: "loose".into(),
+        description: "Loose.".into(),
+        input_schema: loose_schema.clone(),
+        deferred: false,
+        hosted: None,
+    }];
+    strict_sent.sent_tools = Some(
+        [
+            declaration("b_tool", &strict_schema),
+            declaration("a_tool", &strict_schema),
+        ]
+        .iter()
+        .map(|tool| tool.as_object().unwrap().clone())
+        .collect(),
+    );
+    run(Box::new(gemini.request(&strict_sent))).0.unwrap();
+    // Loose sent schemas with strict wired tools: the sent `AUTO`.
+    let mut loose_sent = request();
+    loose_sent.sent_tools = Some(
+        [
+            declaration("b_tool", &loose_schema),
+            declaration("a_tool", &loose_schema),
+        ]
+        .iter()
+        .map(|tool| tool.as_object().unwrap().clone())
+        .collect(),
+    );
+    run(Box::new(gemini.request(&loose_sent))).0.unwrap();
+    // No sent tools with wired ones: neither `tools` nor `toolConfig`.
+    let mut empty_sent = request();
+    empty_sent.sent_tools = Some(Vec::new());
+    run(Box::new(gemini.request(&empty_sent))).0.unwrap();
+    let strict = sent_body(&server, 0);
+    assert_eq!(
+        strict["tools"][0]["functionDeclarations"],
+        json!([
+            declaration("b_tool", &strict_schema),
+            declaration("a_tool", &strict_schema)
+        ])
+    );
+    assert_eq!(
+        strict["toolConfig"],
+        json!({"functionCallingConfig": {"mode": "VALIDATED"}})
+    );
+    assert_eq!(
+        sent_body(&server, 1)["toolConfig"],
+        json!({"functionCallingConfig": {"mode": "AUTO"}})
+    );
+    let empty = sent_body(&server, 2);
+    assert_eq!(empty.get("tools"), None);
+    assert_eq!(empty.get("toolConfig"), None);
 }

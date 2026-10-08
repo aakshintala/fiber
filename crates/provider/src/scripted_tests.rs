@@ -119,6 +119,7 @@ fn request(text: &str) -> ModelRequest {
             images: Vec::new(),
         }],
         previous_end: None,
+        sent_tools: None,
         max_output_tokens: None,
         session_dir: PathBuf::new(),
     }

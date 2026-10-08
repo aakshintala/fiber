@@ -523,6 +523,7 @@ impl Loop {
             cache_key: self.reviewer_key.clone(),
             conversation,
             previous_end,
+            sent_tools: None,
             max_output_tokens,
             session_dir: self.log.dir().to_path_buf(),
         };

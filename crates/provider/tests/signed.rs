@@ -61,6 +61,7 @@ fn request() -> ModelRequest {
         cache_lifetime: CacheLifetime::OneHour,
         cache_key: "session_1".into(),
         previous_end: None,
+        sent_tools: None,
         max_output_tokens: None,
         conversation: vec![Input::User {
             text: "hi".into(),
