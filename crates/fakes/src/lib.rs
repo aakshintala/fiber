@@ -37,7 +37,7 @@ pub use process_group::{
     WATCHDOG_SCRIPT, group_empties, kill_group, kill_matching, kill_pid, matching, matching_exits,
     pids_exit,
 };
-pub use provider_server::{ProviderServer, Request, Response, fingerprint};
+pub use provider_server::{ProviderServer, Request, Responder, Response, fingerprint};
 pub use rerun::{rerun, rerun_within};
 pub use scripted_provider::{Scripted, ScriptedProvider, call_usage, reply, unnamed_usage};
 pub use temp_dir::TempDir;

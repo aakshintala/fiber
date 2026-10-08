@@ -150,11 +150,17 @@ impl Request {
 /// more.
 const DEFAULT_BODY_LIMIT: usize = 64;
 
+/// Answers one request from its content: the recorded request, so an answer
+/// can depend on the request's body or on an earlier request's.
+pub type Responder = std::sync::Arc<dyn Fn(&Request) -> Response + Send + Sync>;
+
 struct State {
     script: VecDeque<Response>,
     /// Responses claimed by request path: the first request to a path takes
     /// its route, ahead of the script.
     routes: Vec<(String, Response)>,
+    /// Answers every request from its content, ahead of the routes, when set.
+    responder: Option<Responder>,
     /// The response of every request past the script.
     fallback: Option<Response>,
     requests: Vec<Request>,
@@ -176,6 +182,7 @@ impl Default for State {
         Self {
             script: VecDeque::new(),
             routes: Vec::new(),
+            responder: None,
             fallback: None,
             requests: Vec::new(),
             body_limit: Some(DEFAULT_BODY_LIMIT),
@@ -264,6 +271,36 @@ impl ProviderServer {
             .map(|(path, response)| (path.to_owned(), response))
             .collect();
         Ok(server)
+    }
+
+    /// Like [`ProviderServer::start_routed`], but every request is answered
+    /// by `responder`, called with the recorded request: an answer can
+    /// depend on the request's body or on an earlier request's. `hold`,
+    /// `release` and `release_one` gate a responded answer as they do a
+    /// scripted one. The responder runs while the server holds its lock, so
+    /// it must not call back into the server; it reads all it needs from
+    /// the request.
+    pub fn start_responding(
+        responder: impl Fn(&Request) -> Response + Send + Sync + 'static,
+    ) -> io::Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let addr = listener.local_addr()?;
+        let state = Arc::new(Mutex::new(State {
+            responder: Some(Arc::new(responder)),
+            ..State::default()
+        }));
+        let arrived = Arc::new(Condvar::new());
+        let shared = Arc::clone(&state);
+        let wake = Arc::clone(&arrived);
+        let accept = thread::Builder::new()
+            .name("fake-provider".to_owned())
+            .spawn(move || accept_loop(&listener, &shared, &wake))?;
+        Ok(Self {
+            addr,
+            state,
+            arrived,
+            accept: Some(accept),
+        })
     }
 
     /// The base URL, such as `http://127.0.0.1:49152`, for a provider
@@ -434,6 +471,9 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
     let mut reader = BufReader::new(stream);
     let (request, malformed) = read_request(&mut reader)?;
     let request_path = request.path.clone();
+    // Cloned before the record moves it: the responder reads the request
+    // it answers, and every earlier one stays in the record.
+    let answered = request.clone();
     let response = {
         let mut state = lock(state);
         state.record(request);
@@ -446,13 +486,17 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
                 format!(r#"{{"error":"fakes: malformed chunked body: {why}"}}"#),
             ),
             None => {
-                let target = request_path.split('?').next().unwrap_or_default();
-                let route = state.routes.iter().position(|(path, _)| path == target);
-                route
-                    .map(|index| state.routes.remove(index).1)
-                    .or_else(|| state.script.pop_front())
-                    .or_else(|| state.fallback.clone())
-                    .unwrap_or_else(no_scripted_response)
+                if let Some(responder) = state.responder.clone() {
+                    responder(&answered)
+                } else {
+                    let target = request_path.split('?').next().unwrap_or_default();
+                    let route = state.routes.iter().position(|(path, _)| path == target);
+                    route
+                        .map(|index| state.routes.remove(index).1)
+                        .or_else(|| state.script.pop_front())
+                        .or_else(|| state.fallback.clone())
+                        .unwrap_or_else(no_scripted_response)
+                }
             }
         };
         if response.drop_connection {

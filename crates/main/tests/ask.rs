@@ -3064,6 +3064,7 @@ fn two_runs_send_byte_identical_preambles() {
         names,
         [
             "ask_user",
+            "delegate_spawn",
             "edit",
             "handoff",
             "jobs",

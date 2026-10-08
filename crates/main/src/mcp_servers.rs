@@ -80,6 +80,7 @@ pub(crate) fn session_tools(
     locks: &Arc<tools::PathLocks>,
     specs: Vec<mcp::ServerSpec>,
     web_search: Option<&str>,
+    delegates: &crate::delegates::Delegates,
 ) -> Result<
     (
         Vec<(String, Arc<dyn Tool>)>,
@@ -91,7 +92,7 @@ pub(crate) fn session_tools(
 > {
     let fiber = fiber.map_err(|message| crate::failed(ErrorCode::IoFailed, message))?;
     let (mut tools, mut infos, driver, forget, images) = crate::builtin::builtin(
-        fiber, home, workspace, artifacts, clock, jobs, locks, web_search,
+        fiber, home, workspace, artifacts, clock, jobs, locks, web_search, delegates,
     )?;
     // Every spec starts with the session, except a cached non-required
     // one, which is declared from its cache and starts on its first call;
