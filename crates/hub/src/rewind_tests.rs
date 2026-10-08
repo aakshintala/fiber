@@ -150,7 +150,7 @@ fn start_connects_when_the_next_session_runs() {
     let hub = temp.hub(starter.clone());
     let next = id(2);
     let bound = crate::fake::FakeSession::bind(&temp.dir, &next);
-    start(&hub, &SessionId(id(1)), &SessionId(next.clone()));
+    assert!(reach(&hub, &SessionId(id(1)), &SessionId(next.clone())).is_some());
     assert!(
         starter.rewound().is_empty(),
         "a running session is attached to"
@@ -176,7 +176,7 @@ fn start_resumes_a_next_session_with_a_log() {
     let next = id(2);
     temp.write_log(&from, &workspace, &exited_line(&from));
     temp.write_log(&next, &workspace, &exited_line(&next));
-    start(&hub, &SessionId(from), &SessionId(next.clone()));
+    assert!(reach(&hub, &SessionId(from), &SessionId(next.clone())).is_some());
     assert!(starter.rewound().is_empty(), "a logged session is resumed");
     assert_eq!(
         starter.resumed(),
@@ -194,7 +194,7 @@ fn start_starts_a_next_session_without_a_log() {
     let from = id(1);
     let next = id(2);
     temp.write_log(&from, &workspace, &exited_line(&from));
-    start(&hub, &SessionId(from.clone()), &SessionId(next.clone()));
+    assert!(reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).is_some());
     assert_eq!(
         starter.rewound(),
         vec![(
@@ -224,11 +224,11 @@ fn two_starts_of_one_session_start_once() {
         .spawn({
             let hub = Arc::clone(&hub);
             let (from, next) = (from.clone(), next.clone());
-            move || start(&hub, &SessionId(from), &SessionId(next))
+            move || reach(&hub, &SessionId(from), &SessionId(next))
         })
         .unwrap();
-    start(&hub, &SessionId(from), &SessionId(next));
-    other.join().unwrap();
+    assert!(reach(&hub, &SessionId(from), &SessionId(next)).is_some());
+    assert!(other.join().unwrap().is_some());
     assert_eq!(starter.rewound().len(), 1, "one starter call");
 }
 
@@ -268,7 +268,7 @@ impl Starter for GateStarter {
         if *id == self.held {
             self.entered.send(()).unwrap_or(());
             if let Some(release) = lock(&self.release).take() {
-                release.recv().unwrap_or(());
+                release.recv_timeout(DEADLINE).unwrap_or(());
             }
         }
         self.inner.rewind(id, workspace, from)
@@ -297,7 +297,7 @@ fn a_slow_start_of_one_session_does_not_block_another() {
         .spawn({
             let hub = Arc::clone(&hub);
             let from = from.clone();
-            move || start(&hub, &SessionId(from), &SessionId(held))
+            move || drop(reach(&hub, &SessionId(from), &SessionId(held)))
         })
         .unwrap();
     // The slow start is inside `rewind`, holding only its own session's
@@ -306,10 +306,28 @@ fn a_slow_start_of_one_session_does_not_block_another() {
         entered.recv_timeout(DEADLINE).is_ok(),
         "the slow start reached the starter"
     );
-    start(&hub, &SessionId(from), &SessionId(other.clone()));
+    // On a thread with a named deadline: a shared-lock regression would
+    // block it past the deadline instead of hanging the test.
+    let (done_tx, done) = mpsc::channel();
+    thread::Builder::new()
+        .name("rival-start".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            let (from, other) = (from.clone(), other.clone());
+            move || {
+                done_tx
+                    .send(reach(&hub, &SessionId(from), &SessionId(other)))
+                    .unwrap_or(());
+            }
+        })
+        .unwrap();
+    let stream = done
+        .recv_timeout(DEADLINE)
+        .expect("the other session starts while the slow one waits");
+    assert!(stream.is_some());
     assert!(
         UnixStream::connect(temp.dir.join("run").join(&other)).is_ok(),
-        "the other session starts while the slow one waits"
+        "the other session's socket accepts"
     );
     drop(release_tx);
     slow.join().unwrap();
@@ -358,7 +376,7 @@ fn a_failed_start_writes_a_diagnostic_without_the_detail() {
     });
     let from = id(1);
     temp.write_log(&from, &workspace, &exited_line(&from));
-    start(&hub, &SessionId(from), &SessionId(id(2)));
+    assert!(reach(&hub, &SessionId(from), &SessionId(id(2))).is_none());
     let log = temp.hub_log();
     assert!(log.contains("\"code\":\"io_failed\""), "{log}");
     assert!(log.contains("could not start."), "{log}");
@@ -405,12 +423,17 @@ impl Client {
 }
 
 /// Serves one old session: answers `subscribe`, then `rewind` naming
-/// `next`, then closes, as a session closing with `rewound` does.
-fn serve_old(socket: PathBuf, next: String) -> thread::JoinHandle<()> {
+/// `next`, then holds the socket open until `release` before closing, as
+/// a session closing with `rewound` does. The listener binds before the
+/// thread starts, so a client routing first always finds it.
+fn serve_old(
+    listener: UnixListener,
+    next: String,
+    release: mpsc::Receiver<()>,
+) -> thread::JoinHandle<()> {
     thread::Builder::new()
         .name("old-session".to_owned())
         .spawn(move || {
-            let listener = UnixListener::bind(&socket).unwrap();
             let (stream, _) = listener.accept().unwrap();
             let mut read = BufReader::new(stream.try_clone().unwrap());
             let mut write = stream;
@@ -430,6 +453,9 @@ fn serve_old(socket: PathBuf, next: String) -> thread::JoinHandle<()> {
             bytes.push(b'\n');
             write.write_all(&bytes).unwrap();
             write.flush().unwrap();
+            // Hold the socket open: the client commands the new session
+            // while this relay still waits for EOF.
+            release.recv_timeout(DEADLINE).unwrap_or(());
         })
         .unwrap()
 }
@@ -465,7 +491,9 @@ fn a_relayed_rewind_starts_and_redirects_before_the_next_command() {
     // once the old socket closes.
     temp.write_log(&old, &workspace, &rewound_line(&old, &next));
     fs::create_dir_all(temp.dir.join("run")).unwrap();
-    let old_session = serve_old(temp.dir.join("run").join(&old), next.clone());
+    let listener = UnixListener::bind(temp.dir.join("run").join(&old)).unwrap();
+    let (release_tx, release) = mpsc::channel::<()>();
+    let old_session = serve_old(listener, next.clone(), release);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
     client.send(&json!({
@@ -491,6 +519,7 @@ fn a_relayed_rewind_starts_and_redirects_before_the_next_command() {
         )],
         "started once, in the old workspace, for its rewind"
     );
+    drop(release_tx);
     old_session.join().unwrap();
     // The old socket closed: the connection is subscribed to the new
     // session at its kept level, under a hub-minted id it never sees.
@@ -504,7 +533,7 @@ fn a_relayed_rewind_starts_and_redirects_before_the_next_command() {
 }
 
 #[test]
-fn follow_leaves_a_connection_already_relaying_the_next_session() {
+fn a_command_for_the_new_session_first_still_gets_its_level() {
     let temp = Temp::new();
     let workspace = temp.workspace();
     let starter = FakeStarter::bind_and_hold(&temp.dir);
@@ -512,31 +541,120 @@ fn follow_leaves_a_connection_already_relaying_the_next_session() {
     let old = id(1);
     let next = id(2);
     temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    fs::create_dir_all(temp.dir.join("run")).unwrap();
+    let listener = UnixListener::bind(temp.dir.join("run").join(&old)).unwrap();
+    let (release_tx, release) = mpsc::channel::<()>();
+    let old_session = serve_old(listener, next.clone(), release);
+    let mut client = Client::connect(&hub);
+    assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
+    client.send(&json!({
+        "id": "c_sub1", "session_id": old, "command": "subscribe", "args": {"level": "full"},
+    }));
+    assert_eq!(
+        client.next("the subscribe acknowledgement")["kind"],
+        "command_accepted"
+    );
+    client.send(&json!({
+        "id": "c_rw1", "session_id": old, "command": "rewind", "args": {},
+    }));
+    let accepted = client.next("the rewind acknowledgement");
+    assert_eq!(accepted["payload"]["result"]["new_session_id"], next);
+    // The interleaving: the client commands the new session while the old
+    // relay still waits for EOF, so it relays unsubscribed. Any other
+    // command is accepted and held open, as a session that takes it does.
+    client.send(&json!({
+        "id": "c_t1", "session_id": next, "command": "tools", "args": {},
+    }));
+    let tools = client.next("the tools acknowledgement");
+    assert_eq!(tools["kind"], "command_accepted");
+    assert_eq!(tools["payload"]["command_id"], "c_t1");
+    // Only now does the old socket close: the redirect transfers the kept
+    // level onto that relay instead of starting a second one.
+    drop(release_tx);
+    old_session.join().unwrap();
+    // Both the tools command and the transfer's subscribe reached the new
+    // session before this returns.
+    assert!(
+        starter.await_received(2, DEADLINE),
+        "the tools command and the transfer arrive"
+    );
+    let sent: Vec<String> = starter
+        .received()
+        .into_iter()
+        .filter(|line| line.contains("\"subscribe\""))
+        .collect();
+    assert_eq!(sent.len(), 1, "the transfer subscribes once: {sent:?}");
+    let replay: Value = serde_json::from_str(&sent[0]).unwrap();
+    assert_eq!(replay["args"], json!({"level": "full"}));
+    assert_ne!(
+        replay["id"], "c_sub1",
+        "under a hub-minted id the client never sent"
+    );
+    // The transfer's acknowledgement never reaches the client: every
+    // acknowledgement it reads names a command it sent.
+    client.send(&json!({
+        "id": "c_t2", "session_id": next, "command": "tools", "args": {},
+    }));
+    let mut seen = Vec::new();
+    let acknowledged = loop {
+        let line = client.next("the second tools acknowledgement");
+        if line
+            .get("payload")
+            .and_then(|payload| payload.get("command_id"))
+            == Some(&Value::String("c_t2".to_owned()))
+        {
+            break line;
+        }
+        seen.push(line);
+    };
+    assert_eq!(acknowledged["kind"], "command_accepted");
+    assert!(
+        seen.iter().all(|line| line["kind"] != "command_accepted"),
+        "no other acknowledgement in between: {seen:?}"
+    );
+}
+
+#[test]
+fn follow_leaves_a_relay_already_holding_the_level_alone() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let old = id(1);
+    let next = id(2);
+    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
     let relays: Arc<Mutex<crate::relay::Relays>> =
         Arc::new(Mutex::new(crate::relay::Relays::default()));
     {
         let mut held = lock(&relays);
-        held.subscribed.push((
-            old.clone(),
-            json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
-                .as_object()
-                .unwrap()
-                .clone(),
-        ));
+        held.subscribed.push((old.clone(), level.clone()));
+        held.subscribed.push((next.clone(), level.clone()));
         let (writer, _) = UnixStream::pair().unwrap();
         let epoch = held.mint();
         held.entries.push(crate::relay::Relay {
-            session: next,
+            session: next.clone(),
             epoch,
             writer,
             kept: crate::relay::Kept::default(),
+            replayed: crate::relay::Replayed::default(),
             thread: None,
         });
     }
     let (write, _) = UnixStream::pair().unwrap();
     follow(&hub, &Arc::new(Mutex::new(write)), &relays, &old);
+    let held = lock(&relays);
     assert!(starter.rewound().is_empty(), "no second start");
     assert!(starter.resumed().is_empty(), "no resume either");
+    assert_eq!(held.entries.len(), 1, "no second relay");
+    assert!(
+        lock(&held.entries.first().unwrap().replayed).is_empty(),
+        "nothing written to the relay"
+    );
+    assert_eq!(held.subscription(&next), Some(level), "the level stands");
 }
 
 #[test]
@@ -577,4 +695,80 @@ fn follow_without_a_kept_level_starts_nothing() {
     follow(&hub, &Arc::new(Mutex::new(write)), &relays, &old);
     assert!(starter.rewound().is_empty(), "no level to keep");
     assert!(starter.resumed().is_empty(), "no level to keep");
+}
+
+#[test]
+fn follow_transfers_the_kept_level_onto_an_unsubscribed_relay() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let old = id(1);
+    let next = id(2);
+    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    // The new session's socket, bound before the test: the transfer
+    // writes to the relay's connection, never the starter.
+    fs::create_dir_all(temp.dir.join("run")).unwrap();
+    let listener = UnixListener::bind(temp.dir.join("run").join(&next)).unwrap();
+    let (heard_tx, heard) = mpsc::channel();
+    thread::Builder::new()
+        .name("next-session".to_owned())
+        .spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(DEADLINE)).unwrap();
+            let mut read = BufReader::new(stream);
+            let mut line = String::new();
+            let got = read.read_line(&mut line).unwrap_or(0);
+            heard_tx.send((got, line)).unwrap_or(());
+        })
+        .unwrap();
+    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let relays: Arc<Mutex<crate::relay::Relays>> =
+        Arc::new(Mutex::new(crate::relay::Relays::default()));
+    {
+        let mut held = lock(&relays);
+        held.subscribed.push((old.clone(), level.clone()));
+        // The interleaving: the client commanded the new session while the
+        // old relay still waited for EOF, so this relay is unsubscribed.
+        let writer = UnixStream::connect(temp.dir.join("run").join(&next)).unwrap();
+        let epoch = held.mint();
+        held.entries.push(crate::relay::Relay {
+            session: next.clone(),
+            epoch,
+            writer,
+            kept: crate::relay::Kept::default(),
+            replayed: crate::relay::Replayed::default(),
+            thread: None,
+        });
+    }
+    let (write, _) = UnixStream::pair().unwrap();
+    follow(&hub, &Arc::new(Mutex::new(write)), &relays, &old);
+    let held = lock(&relays);
+    assert_eq!(held.entries.len(), 1, "no second relay");
+    assert_eq!(
+        held.subscription(&next),
+        Some(level.clone()),
+        "the level is kept for the new session"
+    );
+    assert!(
+        starter.rewound().is_empty(),
+        "no start for a running session"
+    );
+    let (got, line) = heard
+        .recv_timeout(DEADLINE)
+        .expect("the transfer sends the level");
+    assert!(got > 0, "the relay's connection carries it");
+    let sent: Value = serde_json::from_str(line.trim_end()).unwrap();
+    assert_eq!(sent["command"], "subscribe");
+    assert_eq!(sent["args"], json!({"level": "full"}));
+    let minted = sent["id"].as_str().unwrap().to_owned();
+    assert_ne!(minted, "c_sub1", "under a hub-minted id");
+    assert_eq!(
+        lock(&held.entries.first().unwrap().replayed).clone(),
+        vec![minted],
+        "the relay thread drops its acknowledgement"
+    );
 }

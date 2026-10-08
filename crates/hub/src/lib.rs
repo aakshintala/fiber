@@ -167,27 +167,27 @@ pub fn serve(
     // the hub drops, and the start runs on a thread of its own, never on
     // the feed's scanner.
     let feed_hub = Arc::downgrade(&hub);
-    match hub.feed.on_rewound.set(Box::new(move |from, next| {
-        let Some(hub) = feed_hub.upgrade() else {
-            return;
-        };
-        let failed = next.clone();
-        let spawned = {
-            let hub = Arc::clone(&hub);
-            thread::Builder::new()
-                .name("hub-rewind".to_owned())
-                .spawn(move || crate::rewind::start(&hub, &from, &next))
-        };
-        if spawned.is_err() {
-            hub.diag.warn_session(
-                &failed,
-                "io_failed",
-                &format!("Session {} could not start.", failed.0),
-            );
-        }
-    })) {
-        Ok(()) | Err(_) => {}
-    }
+    hub.feed.on_rewound.get_or_init(|| {
+        Box::new(move |from, next| {
+            let Some(hub) = feed_hub.upgrade() else {
+                return;
+            };
+            let failed = next.clone();
+            let spawned = {
+                let hub = Arc::clone(&hub);
+                thread::Builder::new()
+                    .name("hub-rewind".to_owned())
+                    .spawn(move || drop(crate::rewind::reach(&hub, &from, &next)))
+            };
+            if spawned.is_err() {
+                hub.diag.warn_session(
+                    &failed,
+                    "io_failed",
+                    &format!("Session {} could not start.", failed.0),
+                );
+            }
+        })
+    });
     hub.diag.info("hub_started", "The hub started.");
     let got = Arc::new(AtomicI32::new(0));
     arm(&got, hub.waker());

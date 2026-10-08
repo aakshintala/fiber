@@ -38,6 +38,12 @@ use crate::connection::{Hub, lock, reject};
 /// relay entry and its thread.
 pub(crate) type Kept = Arc<Mutex<Vec<(String, Map<String, Value>)>>>;
 
+/// The hub-minted `subscribe` ids whose acknowledgements one relay thread
+/// drops: the replay it sent again, and any level transferred onto its
+/// session later. Shared by the entry and its thread, so a transfer lands
+/// even while the thread runs.
+pub(crate) type Replayed = Arc<Mutex<Vec<String>>>;
+
 /// One relay: the session connection, the writer the next command for it
 /// uses, and the commands it has not acknowledged. The relay thread owns
 /// the reader; both halves close together. The thread handle is what a
@@ -48,6 +54,7 @@ pub(crate) struct Relay {
     pub(crate) epoch: u64,
     pub(crate) writer: UnixStream,
     pub(crate) kept: Kept,
+    pub(crate) replayed: Replayed,
     pub(crate) thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -100,11 +107,44 @@ impl Relays {
         if line.get("command").and_then(Value::as_str) != Some("subscribe") {
             return;
         }
-        if let Some((_, kept)) = self.subscribed.iter_mut().find(|(kept, _)| kept == session) {
-            *kept = line;
-        } else {
-            self.subscribed.push((session.to_owned(), line));
+        keep_subscription(self, session, line);
+    }
+
+    /// Transfers the kept level `line` onto `session`'s existing relay:
+    /// sends it under a hub-minted id the relay thread drops, and keeps it
+    /// for the session. A relay already holding the level is left alone.
+    /// True when nothing more is needed: the level is kept, and either no
+    /// relay exists or the existing one carries it. False when no relay
+    /// exists and the level is only kept: the caller connects one.
+    pub(crate) fn transfer(&mut self, session: &str, line: &Map<String, Value>) -> bool {
+        if self.subscription(session).is_some() {
+            return true;
         }
+        keep_subscription(self, session, line.clone());
+        let epoch = {
+            let Some(entry) = self
+                .entries
+                .iter_mut()
+                .find(|entry| entry.session == session)
+            else {
+                return false;
+            };
+            let mut line = line.clone();
+            let minted = crate::start::mint("c_");
+            line.insert("id".to_owned(), Value::String(minted.clone()));
+            let Some(bytes) = line_bytes(&line) else {
+                return true;
+            };
+            if write_all(&entry.writer, &bytes).is_err() {
+                entry.epoch
+            } else {
+                lock(&entry.replayed).push(minted);
+                return true;
+            }
+        };
+        // The relay died with its socket: drop it and connect anew.
+        self.finish(session, epoch);
+        false
     }
 
     /// `session`'s kept subscription, if any.
@@ -113,6 +153,19 @@ impl Relays {
             .iter()
             .find(|(kept, _)| kept == session)
             .map(|(_, line)| line.clone())
+    }
+}
+
+/// Keeps `line` as `session`'s subscription, replacing the kept one.
+fn keep_subscription(relays: &mut Relays, session: &str, line: Map<String, Value>) {
+    if let Some((_, kept)) = relays
+        .subscribed
+        .iter_mut()
+        .find(|(kept, _)| kept == session)
+    {
+        *kept = line;
+    } else {
+        relays.subscribed.push((session.to_owned(), line));
     }
 }
 
@@ -245,12 +298,13 @@ fn route(
     );
 }
 
-/// Sends the kept subscription again under a hub-minted id, then the
-/// client's command when one is relayed, and follows the session on a
-/// relay thread: shared by a new relay and the rewind redirect, which
-/// sends only the subscription. A write that fails answers the client's
-/// command `session_not_found` when there is one; without one the
-/// connection is gone, so nothing is answered.
+/// Sends the kept subscription again under a hub-minted id the relay
+/// thread drops, then the client's command when one is relayed, and
+/// follows the session on a relay thread: shared by a new relay and the
+/// rewind redirect, which sends only the subscription (its caller keeps
+/// the level first). A write that fails answers the client's command
+/// `session_not_found` when there is one; without one the connection is
+/// gone, so nothing is answered.
 pub(crate) fn attach(
     session: &str,
     stream: UnixStream,
@@ -261,20 +315,18 @@ pub(crate) fn attach(
     command: Option<(CommandId, Vec<u8>, Map<String, Value>)>,
 ) {
     let mut replay = replay;
-    let replayed = match replay.as_mut() {
-        Some(line) => {
-            let minted = crate::start::mint("c_");
-            line.insert("id".to_owned(), Value::String(minted.clone()));
-            let sent = line_bytes(line).is_some_and(|line| write_all(&stream, &line).is_ok());
-            if !sent {
-                if let Some((id, _, _)) = &command {
-                    not_found(writer, hub, id, session);
-                }
-                return;
+    let replayed: Replayed = Arc::new(Mutex::new(Vec::new()));
+    if let Some(line) = replay.as_mut() {
+        let minted = crate::start::mint("c_");
+        line.insert("id".to_owned(), Value::String(minted.clone()));
+        let sent = line_bytes(line).is_some_and(|line| write_all(&stream, &line).is_ok());
+        if !sent {
+            if let Some((id, _, _)) = &command {
+                not_found(writer, hub, id, session);
             }
-            Some(minted)
+            return;
         }
-        None => None,
+        lock(&replayed).push(minted);
     };
     let kept: Kept = Arc::new(Mutex::new(
         command
@@ -299,19 +351,6 @@ pub(crate) fn attach(
         }
     };
     let mut held = lock(relays);
-    // A redirect keeps the level for the new session, so the next rewind
-    // redirects the connection again: without it only the first rewind
-    // of a chain follows (`docs/invocation.md`, "`rewind` starts a new
-    // session process").
-    if command.is_none()
-        && let Some(line) = replay.as_ref()
-    {
-        if let Some((_, kept)) = held.subscribed.iter_mut().find(|(kept, _)| kept == session) {
-            *kept = line.clone();
-        } else {
-            held.subscribed.push((session.to_owned(), line.clone()));
-        }
-    }
     let epoch = held.mint();
     // The thread may run before its entry is pushed: on session EOF it
     // only removes an entry it finds.
@@ -323,7 +362,7 @@ pub(crate) fn attach(
         let kept = Arc::clone(&kept);
         let owned = RelayThread {
             epoch,
-            replayed,
+            replayed: Arc::clone(&replayed),
             kept,
         };
         move || relay(owned, &session, reader, &hub, &writer, &relays)
@@ -336,17 +375,18 @@ pub(crate) fn attach(
             epoch,
             writer: stream,
             kept,
+            replayed,
             thread: Some(thread),
         });
     }
 }
 
-/// What one relay thread owns besides its streams: its epoch, the
-/// subscription it sent again, and its entry's unacknowledged commands,
-/// which outlive the entry.
+/// What one relay thread owns besides its streams: its epoch, the ids of
+/// the subscriptions it sent again, and its entry's unacknowledged
+/// commands, which outlive the entry.
 struct RelayThread {
     epoch: u64,
-    replayed: Option<String>,
+    replayed: Replayed,
     kept: Kept,
 }
 
@@ -374,7 +414,7 @@ fn relay(
 ) {
     let RelayThread {
         epoch,
-        mut replayed,
+        replayed,
         kept,
     } = owned;
     let mut read = BufReader::new(reader);
@@ -393,11 +433,7 @@ fn relay(
                 break;
             }
             Ok(_) => {
-                if replayed
-                    .as_deref()
-                    .is_some_and(|minted| acknowledges(&buf, minted))
-                {
-                    replayed = None;
+                if muted(&buf, &replayed) {
                     continue;
                 }
                 match settle(&buf, &kept, hub, session, exiting) {
@@ -412,7 +448,11 @@ fn relay(
                         // the acknowledgement, so its next command finds
                         // it running; a start that fails still forwards
                         // the acknowledgement below.
-                        crate::rewind::start(hub, &SessionId(session.to_owned()), &next);
+                        drop(crate::rewind::reach(
+                            hub,
+                            &SessionId(session.to_owned()),
+                            &next,
+                        ));
                     }
                     Some(Settled::Subscribed(line)) => {
                         #[cfg(test)]
@@ -553,9 +593,28 @@ fn acknowledgement(line: &[u8]) -> Option<(String, Verdict)> {
 }
 
 /// Whether `line` is a session's `command_accepted` or `command_rejected`
-/// for `command_id`.
+/// for `command_id`: tests only, since the relay thread drops replays
+/// through [`muted`].
+#[cfg(test)]
 pub(crate) fn acknowledges(line: &[u8], command_id: &str) -> bool {
     acknowledgement(line).is_some_and(|(id, _)| id == command_id)
+}
+
+/// Whether `buf` acknowledges a subscription the hub sent again on this
+/// relay: its id is dropped from the shared list once, so a transferred
+/// level never leaks its acknowledgement to the client, while a later
+/// transfer for the same relay still drops its own.
+fn muted(buf: &[u8], replayed: &Replayed) -> bool {
+    let Some((id, _)) = acknowledgement(buf) else {
+        return false;
+    };
+    let mut replayed = lock(replayed);
+    if let Some(at) = replayed.iter().position(|muted| *muted == id) {
+        replayed.remove(at);
+        true
+    } else {
+        false
+    }
 }
 
 /// The entry a finished relay thread drops: its own session and epoch, so

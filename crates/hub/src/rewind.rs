@@ -60,21 +60,15 @@ pub(crate) fn notify_left(
     }
 }
 
-/// Starts the session `from`'s `rewound` names: connects when its socket
-/// accepts, resumes it when it has a log, else starts it with
-/// [`crate::Starter::rewind`] in the workspace `from`'s log recorded and
-/// waits for its socket. A failure writes one diagnostic line and starts
-/// nothing; the relay forwards its acknowledgement either way.
-pub(crate) fn start(hub: &Arc<Hub>, from: &SessionId, next: &SessionId) {
-    reach(hub, from, next);
-}
-
-/// Connects to `next`'s socket: the running session's, a resumed one's
-/// when it has a log, or one [`crate::Starter::rewind`] starts. Under
-/// `next`'s own lock in [`Hub::starting`], released before
-/// [`crate::resume::resume`], which waits out an exiting process under the
-/// resume gate: no start ever holds the shared gate, and no resume ever
-/// holds a start lock.
+/// Connects to `next`'s socket, the session `from`'s `rewound` names:
+/// the running session's, a resumed one's when it has a log, or one
+/// [`crate::Starter::rewind`] starts in the workspace `from`'s log
+/// recorded, waiting for its socket. Under `next`'s own lock in
+/// [`Hub::starting`], released before [`crate::resume::resume`], which
+/// waits out an exiting process under the resume gate: no start ever
+/// holds the shared gate, and no resume ever holds a start lock. A
+/// failure writes one diagnostic line and starts nothing; the relay
+/// forwards its acknowledgement either way.
 pub(crate) fn reach(hub: &Arc<Hub>, from: &SessionId, next: &SessionId) -> Option<UnixStream> {
     let guard = guard_for(hub, next);
     let held = lock(&guard);
@@ -144,8 +138,11 @@ pub(crate) fn reach(hub: &Arc<Hub>, from: &SessionId, next: &SessionId) -> Optio
 /// the level it held on `old`: connects to the new session, starting or
 /// resuming it, and sends the kept subscription under a hub-minted id
 /// whose acknowledgement the relay thread drops, as a reconnect does. A
-/// connection with no kept level, one already relaying the new session,
-/// or a log that continues nowhere, changes nothing.
+/// connection with no kept level, one already holding the level on the
+/// new session, or a log that continues nowhere, changes nothing. When
+/// the client already relayed the new session, still unsubscribed -- its
+/// command for it landed while the old relay waited for EOF -- the level
+/// is transferred onto that relay instead of starting a second one.
 pub(crate) fn follow(
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
@@ -160,11 +157,11 @@ pub(crate) fn follow(
     let Some(next) = continued(&hub.home, &from) else {
         return;
     };
-    if lock(relays)
-        .entries
-        .iter()
-        .any(|entry| entry.session == next.0)
-    {
+    // Under one lock hold: the client may have relayed the new session,
+    // still unsubscribed, while the old relay waited for EOF. `transfer`
+    // keeps the level and carries it onto that relay, or reports that no
+    // relay exists and the level is only kept.
+    if lock(relays).transfer(&next.0, &replay) {
         return;
     }
     let Some(stream) = reach(hub, &from, &next) else {

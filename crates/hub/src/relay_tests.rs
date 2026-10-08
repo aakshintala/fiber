@@ -24,6 +24,7 @@ fn a_stale_relay_never_overwrites_a_reconnects_subscription() {
             epoch,
             writer,
             kept: Kept::default(),
+            replayed: Replayed::default(),
             thread: None,
         }
     }
@@ -66,6 +67,7 @@ fn a_stale_relay_never_drops_a_reconnect_to_the_same_session() {
             epoch,
             writer,
             kept: Kept::default(),
+            replayed: Replayed::default(),
             thread: None,
         }
     }
@@ -96,6 +98,7 @@ fn relay_slots_drop_only_their_own_entry() {
             epoch,
             writer,
             kept: Kept::default(),
+            replayed: Replayed::default(),
             thread: None,
         }
     }
@@ -120,6 +123,7 @@ fn an_accepted_subscribe_replaces_the_kept_one() {
             epoch,
             writer,
             kept: Kept::default(),
+            replayed: Replayed::default(),
             thread: None,
         }
     }
@@ -177,6 +181,7 @@ fn an_accepted_command_that_is_not_subscribe_changes_nothing() {
             epoch,
             writer,
             kept: Kept::default(),
+            replayed: Replayed::default(),
             thread: None,
         }
     });
@@ -405,6 +410,7 @@ fn a_reconnect_proceeds_without_a_thread_or_after_a_panic() {
             epoch,
             writer,
             kept: Kept::default(),
+            replayed: Replayed::default(),
             thread,
         });
         let (client_write, client_read) = UnixStream::pair().unwrap();
@@ -516,4 +522,25 @@ fn a_rewind_without_a_minted_session_settles_to_nothing() {
         settle(&bare, &kept_for(rewind), &hub, sid, false).is_none(),
         "an acknowledgement with no result starts nothing"
     );
+}
+
+#[test]
+fn muted_drops_each_replay_once() {
+    let ack = |id: &str| {
+        serde_json::to_vec(&json!({
+            "kind": "command_accepted", "ts": 1, "schema_version": 1,
+            "payload": {"command_id": id},
+        }))
+        .unwrap()
+    };
+    let replayed: Replayed = Replayed::default();
+    replayed.lock().unwrap().push("c_hub".to_owned());
+    assert!(muted(&ack("c_hub"), &replayed));
+    assert!(
+        replayed.lock().unwrap().is_empty(),
+        "a replayed acknowledgement is consumed"
+    );
+    assert!(!muted(&ack("c_hub"), &replayed), "only once");
+    assert!(!muted(&ack("c_1"), &replayed), "other ids pass through");
+    assert!(!muted(b"not json\n", &replayed), "not an acknowledgement");
 }
