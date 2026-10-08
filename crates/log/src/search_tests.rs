@@ -293,6 +293,27 @@ fn ranked_equality_matches_its_ordering_key() {
 }
 
 #[test]
+fn hits_tied_on_rank_order_by_log_then_snippet_then_artifact() {
+    let with = |log: &str, snippet: &str, artifact: Option<&str>| {
+        let mut hit = hit(Label::ToolOutput, 5, "s_a", 4);
+        hit.log = PathBuf::from(log);
+        snippet.clone_into(&mut hit.snippet);
+        hit.artifact = artifact.map(PathBuf::from);
+        Ranked(hit)
+    };
+    let base = with("/b", "b", Some("/b"));
+    for (smaller, larger) in [
+        (with("/a", "c", Some("/c")), base),
+        (with("/b", "a", Some("/c")), with("/b", "b", Some("/a"))),
+        (with("/b", "b", None), with("/b", "b", Some("/a"))),
+        (with("/b", "b", Some("/a")), with("/b", "b", Some("/b"))),
+    ] {
+        assert_eq!(smaller.cmp(&larger), Ordering::Less);
+        assert!(!smaller.eq(&larger));
+    }
+}
+
+#[test]
 fn the_limit_keeps_the_best_and_counts_every_hit() {
     let home = Home::new();
     home.session("-a", "s_1", "/a/one", &["needle 1", "needle 2", "needle 3"]);

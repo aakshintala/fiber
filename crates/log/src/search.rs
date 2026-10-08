@@ -354,12 +354,26 @@ impl Collect {
 
 /// A hit ordered by rank: the smaller is the better. Messages and tool
 /// inputs come before tool outputs, then newer before older; ties go to the
-/// smaller session id, then the larger `seq`, then the label's order.
+/// smaller session id, then the larger `seq`, then the label's order. Hits
+/// that still tie order by log path, snippet and artifact, so the kept hits
+/// depend only on which hits were found, never on the order they arrived.
 struct Ranked(Hit);
+
+/// [`Ranked`]'s key.
+type Key<'a> = (
+    bool,
+    Reverse<u64>,
+    &'a str,
+    Reverse<u64>,
+    Label,
+    &'a Path,
+    &'a str,
+    Option<&'a Path>,
+);
 
 impl Ranked {
     /// The rank's key.
-    fn key(&self) -> (bool, Reverse<u64>, &str, Reverse<u64>, Label) {
+    fn key(&self) -> Key<'_> {
         let hit = &self.0;
         (
             hit.label == Label::ToolOutput,
@@ -367,6 +381,9 @@ impl Ranked {
             hit.session_id.0.as_str(),
             Reverse(hit.seq.0),
             hit.label,
+            &hit.log,
+            &hit.snippet,
+            hit.artifact.as_deref(),
         )
     }
 }
