@@ -541,8 +541,10 @@ fn sgr_mouse(params: &[u8], release: bool) -> Option<Mouse> {
 
 /// `CSI` with an arrow, Home or End final byte (`A`, `B`, `C`, `D`, `H`,
 /// `F`): that key, plain or `CSI 1;<modifiers>` with the kitty modifier
-/// bits. A modifier the bindings do not name (hyper, meta) reads as
-/// nothing.
+/// bits. A bare `1` is no modifiers for `C` and `D` only, as the old
+/// `arrow` read it; a bare `1` with any other letter is nothing, as the
+/// old arms read it. A modifier the bindings do not name (hyper, meta)
+/// reads as nothing.
 fn csi_letter(final_byte: u8, params: &[u8]) -> Option<Event> {
     let mods = if params.is_empty() {
         Mods::NONE
@@ -555,10 +557,13 @@ fn csi_letter(final_byte: u8, params: &[u8]) -> Option<Event> {
                 }
                 modifiers(rest)?
             }
-            // A bare `1` is no modifiers, as the old `arrow` read it;
-            // any other bare parameter is nothing.
+            // A bare `1` is no modifiers for `C` and `D`, as the old
+            // `arrow` read it; any other bare parameter is nothing.
             None => {
                 if text.split(':').next() != Some("1") {
+                    return None;
+                }
+                if !matches!(final_byte, 0x43 | 0x44) {
                     return None;
                 }
                 Mods::NONE

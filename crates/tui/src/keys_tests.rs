@@ -875,11 +875,14 @@ fn csi_letters_name_strokes() {
         (b"\x1b[1;5C", Some(modified(Code::Right, ctrl))),
         (b"\x1b[1;9C", Some(modified(Code::Right, super_))),
         (b"\x1b[1;9D", Some(modified(Code::Left, super_))),
-        // A bare `1` is no modifiers, as the old `arrow` read it.
-        (b"\x1b[1A", Some(plain(Code::Up))),
-        (b"\x1b[1B", Some(plain(Code::Down))),
+        // A bare `1` is no modifiers for `C` and `D`, as the old `arrow`
+        // read it; a bare `1` with `A`, `B`, `H` or `F` is nothing.
+        (b"\x1b[1A", None),
+        (b"\x1b[1B", None),
         (b"\x1b[1C", Some(plain(Code::Right))),
         (b"\x1b[1D", Some(plain(Code::Left))),
+        (b"\x1b[1H", None),
+        (b"\x1b[1F", None),
         (b"\x1b[1;5H", Some(modified(Code::Home, ctrl))),
         (b"\x1b[1;3F", Some(modified(Code::End, alt))),
         // Not `1` before the semicolon, or no digits at all, is nothing.
