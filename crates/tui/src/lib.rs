@@ -34,6 +34,7 @@ mod offer;
 mod opener;
 mod osc;
 mod pages;
+mod paste_image;
 #[cfg(test)]
 mod results_support;
 mod rows;
