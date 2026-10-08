@@ -825,6 +825,26 @@ fn a_retry_after_header_wins_over_the_usage_reset() {
 }
 
 #[test]
+fn a_present_but_unparseable_retry_after_is_left_unset() {
+    // The header is present, so the body's wait must not replace it: an
+    // unparseable `Retry-After` leaves `retry_after` unset, as before.
+    for retry_after in ["abc", "Wed, 07 Oct 2026 16:00:00 GMT", "-1", "inf"] {
+        let server = fakes::ProviderServer::start([fakes::Response::status(429, USAGE_LIMIT_BODY)
+            .header("date", USAGE_DATE)
+            .header("retry-after", retry_after)])
+        .unwrap();
+        let crate::Error::Status {
+            retry_after: waited,
+            ..
+        } = failed_status(&server)
+        else {
+            panic!("not a status failure: retry-after: {retry_after}");
+        };
+        assert_eq!(waited, None, "retry-after: {retry_after}");
+    }
+}
+
+#[test]
 fn a_usage_limit_without_a_usable_date_sets_no_wait() {
     let bodies = [
         ("no date", USAGE_LIMIT_BODY, None),
