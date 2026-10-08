@@ -15,7 +15,7 @@ use html5ever::tokenizer::{
 pub(super) const PRESCAN: usize = 1024;
 
 /// The room the decoder writes into before it hands its text over.
-const OUT: usize = 64 * 1024;
+const OUT: usize = 65_536;
 
 /// The declared character set of a page whose first bytes are `head`: the
 /// `Content-Type` header's `charset`, then a `<meta>` in the first 1024

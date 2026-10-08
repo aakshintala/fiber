@@ -15,7 +15,7 @@ use super::markdown::Stream;
 pub(super) type Wrap = Arc<dyn Fn(File) -> Box<dyn Write + Send> + Send + Sync>;
 
 /// The size of the pieces a download is handled in.
-pub(super) const PIECE: usize = 64 * 1024;
+pub(super) const PIECE: usize = 65_536;
 
 /// An HTML page converting to markdown as its bytes arrive. Its character
 /// set is chosen from its first 1024 bytes, as a whole page's would be
