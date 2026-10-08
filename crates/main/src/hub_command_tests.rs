@@ -402,8 +402,14 @@ fn start_runs_the_recorded_path() {
     let starter = SpawnStarter {
         exe: stub_binary(&root, "recorded start"),
     };
-    let started =
-        hub::Starter::start(&starter, &SessionId("s1".to_owned()), &workspace, None, false).unwrap();
+    let started = hub::Starter::start(
+        &starter,
+        &SessionId("s1".to_owned()),
+        &workspace,
+        None,
+        false,
+    )
+    .unwrap();
     assert_eq!(exit_of(started).message, "recorded start");
 }
 

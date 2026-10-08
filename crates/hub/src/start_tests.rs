@@ -84,7 +84,13 @@ fn is_hex_id(id: &str) -> bool {
 
 /// Runs `start` on a thread: calling code that blocks is a wait, so the
 /// test receives its result with a wall-clock deadline.
-fn started(hub: Hub, workspace: String, model: Option<String>, worktree: bool, content: Option<Value>) -> Outcome {
+fn started(
+    hub: Hub,
+    workspace: String,
+    model: Option<String>,
+    worktree: bool,
+    content: Option<Value>,
+) -> Outcome {
     started_before(hub, workspace, model, worktree, content, DEADLINE)
 }
 

@@ -600,7 +600,14 @@ fn on_start(
         );
         return;
     };
-    let (session_id, held) = match start::run(hub, id, args.workspace, args.model, args.worktree, args.content) {
+    let (session_id, held) = match start::run(
+        hub,
+        id,
+        args.workspace,
+        args.model,
+        args.worktree,
+        args.content,
+    ) {
         Outcome::Accepted { session_id, first } => (session_id, first),
         Outcome::Rejected { code, message } => {
             reject(writer, hub, Some(id), &code, &message);
@@ -682,9 +689,10 @@ fn start_args(args: &Map<String, Value>) -> Option<StartArgs<'_>> {
     if contains_null(&Value::Object(args.clone())) {
         return None;
     }
-    if args.keys().any(|key| {
-        key != "workspace" && key != "model" && key != "worktree" && key != "content"
-    }) {
+    if args
+        .keys()
+        .any(|key| key != "workspace" && key != "model" && key != "worktree" && key != "content")
+    {
         return None;
     }
     let workspace = args.get("workspace")?.as_str()?;

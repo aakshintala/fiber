@@ -93,9 +93,7 @@ fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
     assert_ne!(path, workspace);
     assert!(Path::new(&path).exists(), "the worktree exists");
 
-    client.send(
-        &json!({"id": "c_close", "session_id": id, "command": "close"}).to_string(),
-    );
+    client.send(&json!({"id": "c_close", "session_id": id, "command": "close"}).to_string());
     until(&client, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
@@ -106,8 +104,12 @@ fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
     // Clean, so both are gone after exit.
     assert!(!Path::new(&path).exists());
     assert!(
-        git(setup.deadline, &setup.workspace(), &["branch", "--list", &format!("fiber/{id}")])
-            .is_empty(),
+        git(
+            setup.deadline,
+            &setup.workspace(),
+            &["branch", "--list", &format!("fiber/{id}")]
+        )
+        .is_empty(),
         "no fiber/ branch remains"
     );
     drop(client);
