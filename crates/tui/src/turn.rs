@@ -106,8 +106,12 @@ pub(crate) struct Turn {
     parts: HashMap<String, usize>,
     /// The turn's usage, delegates' copies included.
     pub(crate) spend: format::Spend,
-    /// A failed model call waiting to retry.
-    retry: Option<RetryScheduled>,
+    /// A failed model call waiting to retry, with the number of the attempt
+    /// about to be made.
+    retry: Option<(RetryScheduled, u32)>,
+    /// The `assistant_message_started` lines of the model request in flight:
+    /// a start after a failed call continues the count, any other restarts it.
+    attempts: u32,
 }
 
 /// How a turn ended.
@@ -513,17 +517,27 @@ impl Turn {
             })
     }
 
+    /// `assistant_message_started`: another attempt of the request that just
+    /// failed, or the first of a new one.
+    fn message_started(&mut self) {
+        self.attempts = if self.retry.is_some() {
+            self.attempts.saturating_add(1)
+        } else {
+            1
+        };
+    }
+
     /// `retry_scheduled`: the retry pends, and the open group counts the
     /// call that failed.
     fn retry(&mut self, retry: RetryScheduled, ts: u64, fold: &mut Fold) {
         let step = self.step;
         let code = format::code(&retry.code);
-        let attempt = retry.attempt.saturating_sub(1);
+        let failed = self.attempts;
         self.group(ts, fold)
             .section(step)
             .failed
-            .push((code, attempt));
-        self.retry = Some(retry);
+            .push((code, failed));
+        self.retry = Some((retry, failed.saturating_add(1)));
     }
 
     /// The card's lines at `width`.
@@ -561,8 +575,8 @@ impl Turn {
             let ms = ts.saturating_sub(self.started);
             let closing = format::closing(head, ms, self.calls, &self.spend.usage());
             out.push((format::dim(closing), None));
-        } else if let Some(retry) = &self.retry {
-            out.push((format::retry(retry), None));
+        } else if let Some((retry, attempt)) = &self.retry {
+            out.push((format::retry(retry, *attempt), None));
         }
     }
 }
@@ -630,6 +644,12 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
         "step_started" => {
             if let Some(turn) = open(turns) {
                 turn.step_started();
+            }
+            false
+        }
+        "assistant_message_started" => {
+            if let Some(turn) = open(turns) {
+                turn.message_started();
             }
             false
         }
