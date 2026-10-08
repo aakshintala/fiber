@@ -53,6 +53,9 @@ pub(crate) struct SessionServers {
     pub failed: Vec<McpServerFailed>,
     /// The running servers, stopped when the session ends.
     pub servers: mcp::Servers,
+    /// Every runnable prompt of every server that listed, tagged with its
+    /// server's name (`docs/mcp.md`, "Prompts and resources").
+    pub prompts: mcp::Prompts,
     /// Run on every completed handoff: clears what the file tools have seen.
     pub forget: Arc<dyn Fn() + Send + Sync>,
     /// The image child's driver, which pasted images are processed through.
@@ -120,6 +123,7 @@ pub(crate) fn session_tools(
     let servers = SessionServers {
         failed: started.failed,
         servers: started.servers,
+        prompts: started.prompts,
         forget,
         images,
     };
