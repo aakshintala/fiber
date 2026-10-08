@@ -299,10 +299,21 @@ impl Log {
         }
     }
 
-    /// Reads the log's first page into the watcher `armed` registered.
+    /// Reads the log's first page into the watcher `armed` registered. The
+    /// table's line count is taken first and bounds every backlog page, so
+    /// a line appended after it arrives through the watcher's queue, behind
+    /// the kept lines already in it, and is deduplicated by `seq` when a
+    /// page also holds it.
     fn finish(&self, armed: Armed) -> Result<Watcher, Error> {
-        let (first, more) = armed.offsets.page(0)?;
-        Ok(Watcher::starting(armed.queue, armed.offsets, first, more))
+        let end = armed.offsets.count();
+        let (first, more) = armed.offsets.page(0, end)?;
+        Ok(Watcher::starting(
+            armed.queue,
+            armed.offsets,
+            first,
+            more,
+            end,
+        ))
     }
 
     /// `full` cut to `bound`, with a notice of how many bytes were cut and

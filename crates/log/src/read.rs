@@ -107,8 +107,16 @@ pub(crate) fn complete_len(bytes: &[u8]) -> usize {
 // wait in it. The busy-session memory budget (`docs/performance.md`) and a
 // slow watcher's measured lag would set it.
 /// How many events a watcher's queue holds before it falls behind, and how
-/// many durable lines one catch-up page reads.
+/// many durable lines one page reads at most. A page is also bounded by
+/// [`PAGE_BYTES`], so it may hold fewer.
 pub(crate) const CAPACITY: usize = 1024;
+
+// debt: 1 MiB is picked, not measured. The resume rows of the benchmark
+// (`docs/performance.md`) would move it: a larger page reads a long log in
+// fewer reads, a smaller one holds less of it at once.
+/// How many bytes of log one page reads at most, so a watcher never holds a
+/// log's worth of lines. A line longer than this is a page of its own.
+pub(crate) const PAGE_BYTES: u64 = 1024 * 1024;
 
 /// One watcher's bounded queue, shared by the log that fills it and the
 /// watcher that drains it. The log holds it weakly, so a dropped watcher's
@@ -232,6 +240,12 @@ pub struct Watcher {
     offsets: Arc<Offsets>,
     /// The `seq` of the next durable line this watcher has not yet returned.
     next: u64,
+    /// Positions below this never come from a later page. A full
+    /// subscriber's backlog stops here, at the table's line count when its
+    /// first page was read, so a line appended later arrives through the
+    /// queue, behind the kept lines already in it. A catch-up lifts this
+    /// to `u64::MAX` to re-read to the table's current end.
+    end: u64,
     /// Lines re-read from the log, not yet returned.
     backlog: VecDeque<Envelope>,
     /// The log may hold durable lines from `next` on that the watcher has
@@ -265,25 +279,31 @@ impl Watcher {
             queue,
             offsets,
             next,
+            end: u64::MAX,
             backlog: VecDeque::new(),
             more: false,
         }
     }
 
     /// A watcher from `seq` 0 whose first lines are `first`, the log's first
-    /// page, then the pages after it when `more` says the log held lines
-    /// past it, then whatever arrives after it was registered. `next` starts
-    /// at 0 so a line already queued is skipped once a page has returned it.
+    /// page, then the pages after it while `more` says lines below `end`
+    /// remain, then whatever arrives after it was registered. `end` is the
+    /// table's line count when the first page was read: later pages never
+    /// go past it, so a line appended after it was registered arrives
+    /// through the queue. `next` starts at 0 so a line already queued is
+    /// skipped once a page has returned it.
     pub(crate) fn starting(
         queue: Arc<Queue>,
         offsets: Arc<Offsets>,
         first: Vec<Envelope>,
         more: bool,
+        end: u64,
     ) -> Self {
         Self {
             queue,
             offsets,
             next: 0,
+            end,
             more,
             backlog: VecDeque::from(first),
         }
@@ -340,6 +360,7 @@ impl Watcher {
                         None => return None,
                         Some(Taken::Line(line)) => line,
                         Some(Taken::CatchUp) => {
+                            self.end = u64::MAX;
                             self.more = true;
                             continue;
                         }
@@ -363,11 +384,11 @@ impl Watcher {
     }
 
     /// Reads the next page of durable lines the watcher has not returned,
-    /// from `next`. There may be more when the log held lines past the page.
-    /// An error leaves `more` set, so the next call reads the same page
-    /// again.
+    /// from `next` below `end`. There may be more while lines below `end`
+    /// remain past the page. An error leaves `more` set, so the next call
+    /// reads the same page again.
     fn page(&mut self) -> Result<(), Error> {
-        let (page, more) = self.offsets.page(self.next)?;
+        let (page, more) = self.offsets.page(self.next, self.end)?;
         self.more = more;
         self.backlog = page.into();
         Ok(())
