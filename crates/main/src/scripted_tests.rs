@@ -141,7 +141,15 @@ fn parts(
     }
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     crate::parts_in(
-        home, workspace, None, recorded, None, None, clock, None, None,
+        home,
+        workspace,
+        Vec::new(),
+        recorded,
+        None,
+        None,
+        clock,
+        None,
+        None,
     )
 }
 

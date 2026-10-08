@@ -1710,6 +1710,7 @@ fn session_rewound_from_parses_and_conflicts_with_a_fresh_start() {
         vec!["--resume"],
         vec!["--prompt", "hi"],
         vec!["--model", "fake/m"],
+        vec!["-c", "retry.attempts=2"],
         vec!["--worktree"],
         vec![
             "--prompt",

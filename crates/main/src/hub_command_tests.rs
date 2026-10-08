@@ -407,10 +407,53 @@ fn start_runs_the_recorded_path() {
         &SessionId("s1".to_owned()),
         &workspace,
         None,
+        &[],
         false,
     )
     .unwrap();
     assert_eq!(exit_of(started).message, "recorded start");
+}
+
+#[test]
+fn start_command_passes_each_override_as_its_own_dash_c_in_order() {
+    let id = SessionId("s_0123456789abcdef".to_owned());
+    let command = start_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        Some("fake/m"),
+        &["retry.attempts=2", "model=fake/m2"],
+        false,
+    );
+    assert_eq!(command.get_program(), "/bin/fiber");
+    assert_eq!(
+        args_of(&command),
+        [
+            "session",
+            "--id",
+            "s_0123456789abcdef",
+            "--workspace",
+            "/w",
+            "--model",
+            "fake/m",
+            "-c",
+            "retry.attempts=2",
+            "-c",
+            "model=fake/m2",
+        ]
+    );
+    let bare = start_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        &[],
+        false,
+    );
+    assert_eq!(
+        args_of(&bare),
+        ["session", "--id", "s_0123456789abcdef", "--workspace", "/w"]
+    );
 }
 
 #[test]

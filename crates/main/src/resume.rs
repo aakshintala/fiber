@@ -43,7 +43,7 @@ impl Resuming {
 
 pub(crate) fn ask_resume(
     resuming: Resuming,
-    model: Option<String>,
+    overrides: Vec<String>,
     prompt: String,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
@@ -99,7 +99,7 @@ pub(crate) fn ask_resume(
         log,
         &dir,
         id,
-        model,
+        overrides,
         resuming.credential,
         Some(prompt),
         true,
@@ -115,7 +115,7 @@ pub(crate) fn ask_resume(
 /// its socket, so a held lock fails instead of attaching.
 pub(crate) fn session_resume(
     id: SessionId,
-    model: Option<String>,
+    overrides: Vec<String>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
@@ -141,7 +141,7 @@ pub(crate) fn session_resume(
     };
     let dir = sessions.join(&id.0);
     resumed_session(
-        log, &dir, id, model, None, None, false, clock, signals, fiber,
+        log, &dir, id, overrides, None, None, false, clock, signals, fiber,
     )
 }
 
@@ -159,7 +159,7 @@ fn resumed_session(
     log: Arc<Log>,
     dir: &Path,
     id: SessionId,
-    model: Option<String>,
+    overrides: Vec<String>,
     credential: Option<String>,
     prompt: Option<String>,
     one_turn: bool,
@@ -182,7 +182,7 @@ fn resumed_session(
         .as_deref()
         .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
     let parts = match crate::parts_with(
-        model,
+        overrides,
         folded.model.as_deref(),
         credential.as_deref().or(folded.credential.as_deref()),
         recorded_thinking,
