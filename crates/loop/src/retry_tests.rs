@@ -6,6 +6,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+const TURN_WAIT_DEADLINE: Duration = Duration::from_secs(5);
+
 use crate::{Loop, Model};
 use contract::ErrorCode;
 use contract::inbox::{Ack, Delivery, Message};
@@ -320,9 +322,9 @@ struct RetryRun {
     origin: std::time::Instant,
     clock: Arc<FakeClock>,
     provider: Arc<ScriptedProvider>,
-    watcher: log::Watcher,
+    watcher: Option<log::Watcher>,
     starts: usize,
-    turn: thread::JoinHandle<Result<Option<contract::events::TurnOutcome>, crate::Error>>,
+    turn: mpsc::Receiver<Result<Option<contract::events::TurnOutcome>, crate::Error>>,
 }
 
 impl RetryRun {
@@ -398,54 +400,72 @@ impl RetryRun {
             ))
             .unwrap();
         let watcher = log.watch_all().unwrap();
-        let turn = thread::spawn(move || looped.turn());
+        let (turn_tx, turn) = mpsc::channel();
+        drop(thread::spawn(move || {
+            let _sent = turn_tx.send(looped.turn());
+        }));
         Self {
             _home: home,
             origin,
             clock,
             provider,
-            watcher,
+            watcher: Some(watcher),
             starts: 0,
             turn,
         }
     }
 
-    /// Reads log lines until `retry_scheduled` appears: the signal the
-    /// clock advance waits on. Each read carries the wall deadline.
-    fn wait_for_retry_scheduled(&mut self, within: Duration) {
-        loop {
-            match self.watcher.recv_timeout(within) {
-                Some(Ok(Some(line))) => {
-                    let scheduled = line.kind == "retry_scheduled";
-                    self.note(&line);
-                    if scheduled {
-                        return;
+    /// Reads a whole log wait on one worker, bounded by one named deadline
+    /// rather than resetting a timeout for every line.
+    fn wait_for_event(&mut self, kind: &'static str, deadline: Duration) {
+        let watcher = self.watcher.take().expect("the log watcher is available");
+        let (watcher, lines) = fakes::within(
+            &format!("log event {kind}"),
+            deadline,
+            move || {
+                let mut watcher = watcher;
+                let mut lines = Vec::new();
+                loop {
+                    match watcher.recv() {
+                        Ok(Some(line)) => {
+                            let reached = line.kind == kind;
+                            lines.push(line);
+                            if reached {
+                                return (watcher, lines);
+                            }
+                        }
+                        Ok(None) => panic!("the session log ended before {kind}"),
+                        Err(error) => panic!("reading the session log before {kind}: {error}"),
                     }
                 }
-                Some(Ok(None)) => panic!("the session log ended before retry_scheduled"),
-                Some(Err(error)) => panic!("reading the session log: {error}"),
-                None => panic!("retry_scheduled was not appended within {within:?}"),
-            }
+            },
+        );
+        self.watcher = Some(watcher);
+        for line in &lines {
+            self.note(line);
         }
     }
 
-    /// Reads log lines until the retry's `assistant_message_started`
-    /// appears: the advance released the wait.
-    fn wait_for_retry_started(&mut self, within: Duration) {
-        while self.starts < 2 {
-            match self.watcher.recv_timeout(within) {
-                Some(Ok(Some(line))) => self.note(&line),
-                Some(Ok(None)) => panic!("the session log ended before the retry started"),
-                Some(Err(error)) => panic!("reading the session log: {error}"),
-                None => panic!("the retry did not start within {within:?}"),
-            }
-        }
+    /// Reads until `retry_scheduled`, the signal used by the test clock's
+    /// advance-before-park wrapper.
+    fn wait_for_retry_scheduled(&mut self, deadline: Duration) {
+        self.wait_for_event("retry_scheduled", deadline);
     }
 
-    /// Joins the turn: it completed on the retry, which sent one request more.
+    /// Reads until the retry's `assistant_message_started` appears.
+    fn wait_for_retry_started(&mut self, deadline: Duration) {
+        self.wait_for_event("assistant_message_started", deadline);
+        assert_eq!(self.starts, 2, "the retry started after the first request");
+    }
+
+    /// Receives the turn result within one named deadline; it completed on
+    /// the retry, which served one request more.
     fn finish(self) {
         assert_eq!(
-            self.turn.join().unwrap().unwrap(),
+            self.turn
+                .recv_timeout(TURN_WAIT_DEADLINE)
+                .expect("the turn completed within TURN_WAIT_DEADLINE")
+                .unwrap(),
             Some(contract::events::TurnOutcome::Completed)
         );
         assert_eq!(self.provider.requests().len(), 2);
