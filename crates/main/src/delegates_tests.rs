@@ -203,13 +203,8 @@ fn the_watch_maps_the_socket_exit_to_the_runner_exit() {
     let root = fakes::TempDir::new("dw");
     let home = root.path().join("home");
     let _served = serve(&home, "s_exited", true);
-    let watch = watcher(&home);
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let watching = Arc::clone(&seen);
-    let mut on_line = |envelope: &contract::Envelope| {
-        watching.lock().unwrap().push(envelope.kind.clone());
-    };
-    let watched = watch(&SessionId("s_exited".into()), &mut on_line).unwrap();
+    let watched = watch_bounded(&watcher(&home), "s_exited", &seen).unwrap();
     assert!(matches!(watched, jobs::Watched::Exited));
     assert_eq!(*seen.lock().unwrap(), ["fiber_exited"]);
 }
@@ -219,8 +214,8 @@ fn the_watch_maps_a_close_before_the_exit_to_the_runner_close() {
     let root = fakes::TempDir::new("dw");
     let home = root.path().join("home");
     let _served = serve(&home, "s_closed", false);
-    let watch = watcher(&home);
-    let watched = watch(&SessionId("s_closed".into()), &mut |_| {}).unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let watched = watch_bounded(&watcher(&home), "s_closed", &seen).unwrap();
     assert!(matches!(watched, jobs::Watched::Closed));
 }
 
@@ -229,6 +224,30 @@ fn a_refused_watch_is_an_error() {
     let root = fakes::TempDir::new("dw");
     let home = root.path().join("home");
     std::fs::create_dir_all(home.join("run")).unwrap();
-    let watch = watcher(&home);
-    assert!(watch(&SessionId("s_missing".into()), &mut |_| {}).is_err());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    assert!(watch_bounded(&watcher(&home), "s_missing", &seen).is_err());
+}
+
+/// Runs the watch on a thread and receives its outcome within 5 s: every
+/// blocking socket read happens there, so a watch that never returns
+/// fails the test instead of hanging it. Seen envelope kinds arrive over
+/// the shared record.
+fn watch_bounded(
+    watch: &jobs::Watch,
+    id: &str,
+    seen: &Arc<Mutex<Vec<String>>>,
+) -> std::io::Result<jobs::Watched> {
+    let watch = Arc::clone(watch);
+    let id = SessionId(id.to_owned());
+    let seen = Arc::clone(seen);
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut on_line = |envelope: &contract::Envelope| {
+            seen.lock().unwrap().push(envelope.kind.clone());
+        };
+        done.send(watch(&id, &mut on_line)).unwrap_or(());
+    });
+    finished
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap_or_else(|_| panic!("the watch returned within 5 s"))
 }

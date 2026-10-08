@@ -3,7 +3,9 @@
 //! child's end wakes the parent. The built `fiber` runs in its own process
 //! group with its own `FIBER_HOME`. Parent and child use two fake models,
 //! `pa/m` and `pb/m`, on two provider servers, so each side's requests read
-//! back separately.
+//! back separately. The binary-level fixtures (`support::Setup`,
+//! `support::Socket`, the streams and `support::run_to_exit`) are shared;
+//! only the delegate shapes live here.
 
 #![allow(
     clippy::unwrap_used,
@@ -17,172 +19,102 @@
 mod support;
 
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpListener};
-use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::{Arc, Mutex, PoisonError, mpsc};
+use std::process::{Child, ExitStatus, Stdio};
+use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use fakes::{ProviderServer, Request, Response, Watchdog};
 use serde_json::{Value, json};
-use support::Deadline;
+use support::{Deadline, SessionGuard};
 
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-/// Its name is short: a session's socket path must fit in 103 bytes on
-/// macOS.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
+/// Installs provider `name` with model `m` on `protocol` at `url`.
+fn install_url(setup: &support::Setup, name: &str, url: &str, protocol: &str) {
+    let source = setup.root.path().join(format!("src-{name}"));
+    support::write_json(
+        &source.join("extension.json"),
+        &json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+    );
+    support::write_json(
+        &source.join(format!("providers/{name}.json")),
+        &json!({
+            "name": name,
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": [{"id": "m", "protocol": protocol,
+                "base_url": format!("{url}/v1"), "context_window": 100000}]
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
 }
 
-impl Setup {
-    fn new() -> Self {
-        let deadline = Deadline::start();
-        let root = fakes::TempDir::new("fe");
-        fs::create_dir_all(root.path().join("h")).unwrap();
-        fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { deadline, root }
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
-    }
-
-    /// Installs provider `name` with model `m` on `protocol` at `url`.
-    fn install_url(&self, name: &str, url: &str, protocol: &str) {
-        let source = self.root.path().join(format!("src-{name}"));
-        write(
-            &source.join("extension.json"),
-            &json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-        );
-        write(
-            &source.join(format!("providers/{name}.json")),
-            &json!({
-                "name": name,
-                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": protocol,
-                    "base_url": format!("{url}/v1"), "context_window": 100000}]
-            }),
-        );
-        extensions::plan(
-            &self.home(),
-            &extensions::Request::Path(source),
-            "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
-    }
-
-    /// Installs the parent's `pa/m` and the child's `pb/m`, both on
-    /// `openai-responses`, and configures the parent's model and reviewer.
-    fn providers(&self, parent: &ProviderServer, child: &ProviderServer) {
-        self.providers_url(&parent.url(), &child.url(), "openai-responses");
-    }
-
-    /// As [`Setup::providers`], for base URLs and a protocol: the dynamic
-    /// parent server is not a [`ProviderServer`].
-    fn providers_url(&self, parent: &str, child: &str, protocol: &str) {
-        self.install_url("pa", parent, protocol);
-        self.install_url("pb", child, protocol);
-        write(
-            &self.home().join("config.json"),
-            &json!({"model": "pa/m", "reviewer": {"model": "pa/m"}}),
-        );
-    }
-
-    /// A standing allow for `delegate_spawn`: `always_reviewed` skips it,
-    /// so the reviewer is still asked.
-    fn standing_allow(&self) {
-        fs::write(
-            self.home().join("rules"),
-            format!(
-                "{}\n",
-                json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""})
-            ),
-        )
-        .unwrap();
-    }
-
-    /// The session keeps serving instead of idling out: an exit proves the
-    /// run ended on its own.
-    fn slow_idle(&self) {
-        write(
-            &self.home().join("config.json"),
-            &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
-                "session": {"idle_exit_ms": 3600000}}),
-        );
-    }
-
-    /// The project's sessions directory for `fiber ask`: its workspace is
-    /// the launch directory, the test root.
-    fn sessions_dir(&self) -> PathBuf {
-        Self::sessions_in(&self.home(), self.root.path())
-    }
-
-    /// The sessions directory for a session in `workspace`.
-    fn sessions_in(home: &Path, workspace: &Path) -> PathBuf {
-        let workspace = fs::canonicalize(workspace).unwrap();
-        let key = workspace.to_string_lossy().replace('/', "-");
-        home.join("projects").join(key).join("sessions")
-    }
-
-    /// One `fiber` invocation with `args`: the environment every test runs
-    /// under. Stdout and stderr are piped; the caller lends the stdin and
-    /// decides how to wait. The group is the child's own, so killing it
-    /// kills only this process.
-    fn fiber(&self, args: &[&str], stdin: Stdio) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
-        command
-            .args(args)
-            .current_dir(self.root.path())
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", self.root.path())
-            .env("FIBER_HOME", self.home())
-            .env("FIBER_TEST_FAKE_KEY", "sk-test")
-            .stdin(stdin)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0);
-        command
-    }
+/// Installs the parent's `pa/m` and the child's `pb/m` on `protocol` at the
+/// two base URLs, and configures the parent's model and reviewer.
+fn providers_url(setup: &support::Setup, parent: &str, child: &str, protocol: &str) {
+    install_url(setup, "pa", parent, protocol);
+    install_url(setup, "pb", child, protocol);
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"}}),
+    );
 }
 
-/// Writes `value` as JSON to `file`, creating its parent directories.
-fn write(file: &Path, value: &Value) {
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(file, serde_json::to_string(value).unwrap()).unwrap();
+/// Installs the parent's `pa/m` and the child's `pb/m` on `openai-responses`.
+fn providers(setup: &support::Setup, parent: &ProviderServer, child: &ProviderServer) {
+    providers_url(setup, &parent.url(), &child.url(), "openai-responses");
 }
 
-/// An `openai-responses` stream of `events`, then a completed reply.
-fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body)
+/// A standing allow for `delegate_spawn`: `always_reviewed` skips it, so
+/// the reviewer is still asked.
+fn standing_allow(setup: &support::Setup) {
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""})
+        ),
+    )
+    .unwrap();
+}
+
+/// The session keeps serving instead of idling out: an exit proves the run
+/// ended on its own.
+fn slow_idle(setup: &support::Setup) {
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "session": {"idle_exit_ms": 3600000}}),
+    );
+}
+
+/// The sessions directory for a session in `workspace`.
+fn sessions_in(home: &Path, workspace: &Path) -> PathBuf {
+    let workspace = fs::canonicalize(workspace).unwrap();
+    let key = workspace.to_string_lossy().replace('/', "-");
+    home.join("projects").join(key).join("sessions")
+}
+
+/// The sessions directory for `fiber ask`: its workspace is the launch
+/// directory, the test root.
+fn ask_sessions(setup: &support::Setup) -> PathBuf {
+    sessions_in(&setup.home(), setup.root.path())
+}
+
+/// Arms the watchdog for `setup`: every child holds the test root on its
+/// command line, so a failing test leaves no child behind. First, before
+/// any fallible step.
+fn arm(setup: &support::Setup) -> SessionGuard {
+    SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy())
 }
 
 /// A finished `function_call` for `name` with `arguments`.
@@ -196,21 +128,10 @@ fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
     }})
 }
 
-/// An `openai-responses` stream answering `Hello.` in two fragments.
-fn hello() -> Response {
-    stream(&[
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ])
-}
-
 /// An `openai-responses` stream answering `text`: what a reviewer verdict
 /// and a delegate's final message read as.
 fn text_reply(text: &str) -> Response {
-    stream(&[json!({"type": "response.output_item.done", "item": {
+    support::stream(&[json!({"type": "response.output_item.done", "item": {
         "type": "message", "content": [{"type": "output_text", "text": text}]
     }})])
 }
@@ -224,8 +145,8 @@ fn spawn_call(model: &str) -> Value {
     )
 }
 
-/// Reads `path` as one JSON value per line, skipping blank lines. A log
-/// that does not exist yet reads as empty, so polls can wait for it.
+/// Reads `path` as one JSON value per line, skipping blank lines. A path
+/// that does not exist yet reads as empty.
 fn read_lines(path: &Path) -> Vec<Value> {
     fs::read_to_string(path)
         .unwrap_or_default()
@@ -233,41 +154,6 @@ fn read_lines(path: &Path) -> Vec<Value> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
-}
-
-/// Polls `read` until it returns `Some`, or panics after `within`: every
-/// wait in these tests carries its own wall-clock bound, so a failing test
-/// fails fast.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "polling a child process's log file on the wall clock; the bound is explicit"
-)]
-fn poll<T>(what: &str, within: Duration, mut read: impl FnMut() -> Option<T>) -> T {
-    let start = Instant::now();
-    loop {
-        if let Some(value) = read() {
-            return value;
-        }
-        if start.elapsed() >= within {
-            panic!("waited {within:?} for {what}");
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-}
-
-/// The log's lines once `kind` has been written.
-fn poll_log(dir: &Path, kind: &str) -> Vec<Value> {
-    poll(
-        &format!("{kind} in {}", dir.display()),
-        Duration::from_secs(5),
-        || {
-            let lines = read_lines(&dir.join("events.jsonl"));
-            lines
-                .iter()
-                .any(|line| line["kind"] == kind)
-                .then_some(lines)
-        },
-    )
 }
 
 /// The `tool_call_completed` line for the log's one call of `name`.
@@ -302,27 +188,6 @@ fn kinds(lines: &[Value]) -> Vec<String> {
         .collect()
 }
 
-/// Runs `fiber` once with `args`, waiting under the test's [`Deadline`].
-/// The wait runs on a thread and is received under the deadline, so a hang
-/// reports what it waited for. The watchdog kills the group if this process
-/// dies first.
-fn run_to_exit(setup: &Setup, args: &[&str]) -> (Option<i32>, Vec<Value>, String) {
-    let child = setup.fiber(args, Stdio::null()).spawn().unwrap();
-    let group = child.id();
-    let _guard = KillGroup(group);
-    let _watchdog = Watchdog::group(group);
-    let output = child.wait_with_output().unwrap();
-    (
-        output.status.code(),
-        String::from_utf8(output.stdout)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect(),
-        String::from_utf8(output.stderr).unwrap(),
-    )
-}
-
 /// Kills the process group on drop, waited out under cleanup time.
 struct KillGroup(u32);
 
@@ -332,8 +197,9 @@ impl Drop for KillGroup {
     }
 }
 
-/// A running `fiber session`: its drained stdout lines, its stderr, and its
-/// group, killed on drop.
+/// A running `fiber` process: its drained stdout lines, its stderr, and its
+/// group, killed on drop. The watchdog is armed before spawning, so a
+/// failing test leaves no child behind.
 struct Running {
     child: Child,
     group: u32,
@@ -346,9 +212,8 @@ struct Running {
 
 impl Running {
     /// Starts `fiber session --id <id>` with `extra` appended, draining
-    /// stdout on a thread and keeping stderr for a failure. The watchdog
-    /// is armed before spawning, so a failing test leaves no child behind.
-    fn start(setup: &Setup, id: &str, extra: &[&str]) -> Self {
+    /// stdout on a thread and keeping stderr for a failure.
+    fn start(setup: &support::Setup, id: &str, extra: &[&str]) -> Self {
         let workspace = setup.workspace();
         let mut args = vec!["session", "--id", id, "--workspace"];
         args.push(workspace.to_str().unwrap());
@@ -358,7 +223,7 @@ impl Running {
 
     /// Spawns `fiber` with `args`, draining stdout on a thread and keeping
     /// stderr for a failure.
-    fn spawn(setup: &Setup, args: &[&str]) -> Self {
+    fn spawn(setup: &support::Setup, args: &[&str]) -> Self {
         let (running, _) = Self::spawn_stdin(setup, args, Stdio::null());
         running
     }
@@ -366,11 +231,12 @@ impl Running {
     /// As [`Running::spawn`], with `stdin`: the caller holds the returned
     /// stdin open, which a delegate reads as its lifeline.
     fn spawn_stdin(
-        setup: &Setup,
+        setup: &support::Setup,
         args: &[&str],
         stdin: Stdio,
     ) -> (Self, Option<std::process::ChildStdin>) {
-        let mut command = setup.fiber(args, stdin);
+        let mut command = setup.fiber(args);
+        command.stdin(stdin);
         let mut child = command.spawn().unwrap();
         let stdin = child.stdin.take();
         let group = child.id();
@@ -380,7 +246,7 @@ impl Running {
         let stderr_pipe = child.stderr.take().unwrap();
         let (tx, lines) = mpsc::channel();
         thread::spawn(move || {
-            for line in std::io::BufReader::new(stdout).lines() {
+            for line in BufReader::new(stdout).lines() {
                 match tx.send(serde_json::from_str(&line.unwrap()).unwrap()) {
                     Ok(()) => {}
                     Err(mpsc::SendError(_)) => break,
@@ -390,10 +256,7 @@ impl Running {
         let (err_tx, stderr) = mpsc::channel();
         thread::spawn(move || {
             let mut text = String::new();
-            match std::io::Read::read_to_string(
-                &mut std::io::BufReader::new(stderr_pipe),
-                &mut text,
-            ) {
+            match std::io::Read::read_to_string(&mut BufReader::new(stderr_pipe), &mut text) {
                 Ok(_) | Err(_) => {}
             }
             match err_tx.send(text) {
@@ -414,15 +277,41 @@ impl Running {
         )
     }
 
-    /// Connects a client to the session's socket.
-    fn connect(&self, setup: &Setup, id: &str) -> Socket {
-        Socket::connect(setup.deadline, &setup.home().join("run").join(id))
+    /// Connects a client to the session's socket, on a thread bounded by
+    /// the deadline.
+    fn connect(&self, setup: &support::Setup, id: &str) -> support::Socket {
+        support::Socket::connect(setup.deadline, &setup.session_socket(id))
     }
 
-    /// Waits for the process to exit, bounded by the deadline. Stands
-    /// the watchdog down first: dropping it would kill the group. Every
-    /// stdout line is read: the drain ends at end of file once the process
-    /// is gone, so a disconnect means the output is whole.
+    /// Stdout lines until one completes `done`, each bounded by 5 s: the
+    /// drain thread signals every line over the channel, so a failing test
+    /// fails fast instead of sleeping.
+    fn wait_line(&mut self, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
+        let mut got = Vec::new();
+        loop {
+            match self.lines.recv_timeout(Duration::from_secs(5)) {
+                Ok(line) => {
+                    let stop = done(&line);
+                    got.push(line);
+                    if stop {
+                        return got;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("waited 5 s for {what}; got {got:?}")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("stdout ended before {what}; got {got:?}")
+                }
+            }
+        }
+    }
+
+    /// Waits for the process to exit: the wait runs on a thread under the
+    /// deadline, and expiry kills the group and reaps it. Stands the
+    /// watchdog down first: dropping it would kill the group. Every stdout
+    /// line is read: the drain ends at end of file once the process is
+    /// gone, so a disconnect means the output is whole.
     fn wait(self) -> (ExitStatus, Vec<Value>, String) {
         let watchdog = self._watchdog;
         watchdog.stand_down(self.deadline.cleanup());
@@ -432,21 +321,20 @@ impl Running {
         }
         let (done, finished) = mpsc::channel();
         let mut child = self.child;
+        let group = self.group;
+        let deadline = self.deadline;
         thread::spawn(move || done.send(child.wait()).unwrap());
-        let status = match finished.recv_timeout(self.deadline.left()) {
+        let status = match finished.recv_timeout(deadline.left()) {
             Ok(status) => status.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("waited for the session to exit: {out:?}")
+                support::expired(deadline, group, &finished, "the session to exit")
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!("the session wait thread ended without a result")
             }
         };
-        while let Ok(line) = self.lines.try_recv() {
-            out.push(line);
-        }
         loop {
-            match self.lines.recv_timeout(self.deadline.left()) {
+            match self.lines.recv_timeout(deadline.left()) {
                 Ok(line) => out.push(line),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -459,271 +347,31 @@ impl Running {
     }
 }
 
-/// A socket client of a session, reading with the test's deadline.
-struct Socket {
-    write: Mutex<UnixStream>,
-    read: Mutex<BufReader<UnixStream>>,
-    deadline: Deadline,
-}
-
-impl Socket {
-    fn connect(deadline: Deadline, path: &Path) -> Self {
-        let stream = poll("the session's socket", Duration::from_secs(5), || {
-            UnixStream::connect(path).ok()
-        });
-        let read = stream.try_clone().unwrap();
-        Self {
-            write: Mutex::new(stream),
-            read: Mutex::new(BufReader::new(read)),
-            deadline,
-        }
-    }
-
-    fn send(&self, line: &str) {
-        let mut write = self.write.lock().unwrap();
-        write.write_all(line.as_bytes()).unwrap();
-        write.write_all(b"\n").unwrap();
-        write.flush().unwrap();
-    }
-
-    /// The next line, once one arrives.
-    fn next(&self, what: &str) -> Value {
-        let mut read = self.read.lock().unwrap();
-        loop {
-            let mut line = String::new();
-            if let Some(text) = support::read_line(&mut read, self.deadline, what).unwrap() {
-                line.push_str(&text);
-            }
-            if line.is_empty() {
-                continue;
-            }
-            return serde_json::from_str(&line).unwrap();
-        }
-    }
-
-    /// Every line until the socket closes.
-    fn until_close(&self) -> Vec<Value> {
-        let mut got = Vec::new();
-        loop {
-            let mut read = self.read.lock().unwrap();
-            match support::read_line(&mut read, self.deadline, "the session to close") {
-                Ok(Some(text)) => got.push(serde_json::from_str(&text).unwrap()),
-                Ok(None) => return got,
-                Err(_) => return got,
-            }
+/// Subscribes `client` full, for the session's later lines. A late
+/// subscription replays the log first, so lines arrive until the accept.
+fn subscribe(client: &support::Socket) {
+    client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
+    loop {
+        let line = support::recv_reply(client, "the subscribe acknowledgement");
+        if line["kind"] == "command_accepted" {
+            assert_eq!(line["payload"]["command_id"], "c_sub", "{line}");
+            return;
         }
     }
 }
 
-/// Sends `close` with `now` and reads its accept.
-fn close_now(client: &Socket) {
+/// Sends `close` with `now` and reads its accept, past whatever the
+/// subscription is still replaying.
+fn close_now(client: &support::Socket) {
     client.send(r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#);
     loop {
-        let line = client.next("the close accept");
-        if line["kind"] == "command_accepted" {
+        let line = support::recv_reply(client, "the close accept");
+        if line["kind"] == "command_accepted"
+            && line["payload"].get("command_id") == Some(&json!("c_close_now"))
+        {
             return;
         }
     }
-}
-
-/// A fake model server that answers the parent's requests by their content:
-/// the first session request gets `first`, every reviewer request gets
-/// `reviewer`, the session request carrying the spawn receipt gets
-/// `after` built with the receipt's job id, and every later session request
-/// gets `rest`. Requests are recorded for the test's assertions.
-struct Dynamic {
-    addr: SocketAddr,
-    requests: Arc<Mutex<Vec<Request>>>,
-}
-
-impl Dynamic {
-    /// Serves on a free port: `first` answers the first session request,
-    /// `reviewer` every reviewer request, `after` the request carrying the
-    /// spawn receipt (built with its job id), and `rest` every later one.
-    /// The `after` answer waits, at most 5 s, for `ready`: the delegate is
-    /// only stopped once it is up.
-    fn start(
-        first: Response,
-        reviewer: Response,
-        after: impl Fn(&str) -> Response + Send + Sync + 'static,
-        rest: Response,
-        ready: Arc<dyn Fn() -> bool + Send + Sync>,
-    ) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let after: Arc<dyn Fn(&str) -> Response + Send + Sync> = Arc::new(after);
-        let first = Arc::new(first);
-        let reviewer = Arc::new(reviewer);
-        let rest = Arc::new(rest);
-        thread::spawn({
-            let requests = Arc::clone(&requests);
-            move || {
-                for stream in listener.incoming() {
-                    let Ok(stream) = stream else { continue };
-                    let requests = Arc::clone(&requests);
-                    let after = Arc::clone(&after);
-                    let first = Arc::clone(&first);
-                    let reviewer = Arc::clone(&reviewer);
-                    let rest = Arc::clone(&rest);
-                    let ready = Arc::clone(&ready);
-                    thread::spawn(move || {
-                        Self::serve(stream, &requests, &first, &reviewer, &after, &rest, &ready);
-                    });
-                }
-            }
-        });
-        let _ = addr;
-        Self { addr, requests }
-    }
-
-    /// The base URL, for a provider definition.
-    fn url(&self) -> String {
-        format!("http://{}", self.addr)
-    }
-
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "one scripted answer: what each request kind gets"
-    )]
-    fn serve(
-        stream: std::net::TcpStream,
-        requests: &Mutex<Vec<Request>>,
-        first: &Response,
-        reviewer: &Response,
-        after: &Arc<dyn Fn(&str) -> Response + Send + Sync>,
-        rest: &Response,
-        ready: &Arc<dyn Fn() -> bool + Send + Sync>,
-    ) {
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut writer = stream;
-        let mut line = String::new();
-        if reader.read_line(&mut line).is_err() {
-            return;
-        }
-        let mut parts = line.split_whitespace();
-        let (method, path) = (
-            parts.next().unwrap_or("").to_owned(),
-            parts.next().unwrap_or("").to_owned(),
-        );
-        let mut length = 0;
-        loop {
-            line.clear();
-            if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                return;
-            }
-            let header = line.trim_end_matches(['\r', '\n']);
-            if header.is_empty() {
-                break;
-            }
-            if let Some((name, value)) = header.split_once(':')
-                && name.trim().eq_ignore_ascii_case("content-length")
-                && let Ok(parsed) = value.trim().parse()
-            {
-                length = parsed;
-            }
-        }
-        let mut body = vec![0; length];
-        if reader.read_exact(&mut body).is_err() {
-            return;
-        }
-        let text = String::from_utf8_lossy(&body).into_owned();
-        let response = {
-            let mut requests = requests.lock().unwrap_or_else(PoisonError::into_inner);
-            let session = text.contains(r#""name":"delegate_spawn""#);
-            let answered = if !session {
-                reviewer.clone()
-            } else if requests
-                .iter()
-                .any(|request| String::from_utf8_lossy(&request.body).contains("Started delegate"))
-            {
-                rest.clone()
-            } else if text.contains("Started delegate") {
-                // Gated: the call that ends the delegate only goes out once
-                // it is up, so the stop meets a running child.
-                poll("the delegate to start", Duration::from_secs(5), || {
-                    ready().then_some(())
-                });
-                after(&job_id(&text))
-            } else {
-                first.clone()
-            };
-            requests.push(Request {
-                method,
-                path,
-                headers: Vec::new(),
-                body_len: body.len(),
-                body,
-            });
-            answered
-        };
-        let head = format!(
-            "HTTP/1.1 {} Fake\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-            response.status,
-            response.body.len()
-        );
-        writer.write_all(head.as_bytes()).unwrap_or(());
-        writer.write_all(&response.body).unwrap_or(());
-        writer.flush().unwrap_or(());
-    }
-
-    /// Every request received so far, in arrival order.
-    fn requests(&self) -> Vec<Request> {
-        self.requests
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    /// The session requests' bodies, in order: reviewer requests carry no
-    /// tools, so they never match.
-    fn session_bodies(&self) -> Vec<Vec<u8>> {
-        self.requests()
-            .into_iter()
-            .filter(|request| {
-                String::from_utf8_lossy(&request.body).contains(r#""name":"delegate_spawn""#)
-            })
-            .map(|request| request.body)
-            .collect()
-    }
-}
-
-/// True once two sessions stepped: the parent's and the child's. The
-/// child's first step starts its stalled model call, so the stop meets a
-/// running child. Only path data is captured, so it shares across threads.
-fn started(setup: &Setup) -> Arc<dyn Fn() -> bool + Send + Sync> {
-    started_in(setup.sessions_dir())
-}
-
-/// As [`started`], for a sessions directory: `fiber session` runs in its
-/// `--workspace`, not the test root.
-fn started_in(sessions: PathBuf) -> Arc<dyn Fn() -> bool + Send + Sync> {
-    Arc::new(move || {
-        let Ok(entries) = std::fs::read_dir(&sessions) else {
-            return false;
-        };
-        entries
-            .flatten()
-            .filter(|entry| {
-                read_lines(&entry.path().join("events.jsonl"))
-                    .iter()
-                    .any(|line| line["kind"] == "step_started")
-            })
-            .take(2)
-            .count()
-            == 2
-    })
-}
-
-/// The job id the spawn receipt names: `Started delegate <id>.`.
-fn job_id(text: &str) -> String {
-    let marker = "Started delegate ";
-    let start = text.find(marker).unwrap() + marker.len();
-    text[start..]
-        .split([' ', '.', '"', '\\'])
-        .next()
-        .unwrap()
-        .to_owned()
 }
 
 /// The parent's log lines once `fiber ask` exits.
@@ -739,20 +387,68 @@ impl Ask {
     }
 }
 
+/// The session requests' bodies, in order: reviewer requests carry no
+/// tools, so they never match.
+fn session_bodies(requests: &[Request]) -> Vec<Vec<u8>> {
+    requests
+        .iter()
+        .filter(|request| {
+            String::from_utf8_lossy(&request.body).contains(r#""name":"delegate_spawn""#)
+        })
+        .map(|request| request.body.clone())
+        .collect()
+}
+
+/// The job id the spawn receipt names: `Started delegate <id>.`.
+fn job_id(text: &str) -> String {
+    let marker = "Started delegate ";
+    let start = text.find(marker).unwrap() + marker.len();
+    text[start..]
+        .split([' ', '.', '"', '\\'])
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+/// Answers the parent's requests by their content: `first` answers the
+/// first session request, `reviewer` every reviewer request, `after` the
+/// request carrying the spawn receipt (built with its job id), and `rest`
+/// every later one. Reviewer requests carry no tools, so they never match
+/// the session check; a later session request replays the call the receipt
+/// answers, so the call's marker names it.
+fn answering(
+    first: Response,
+    reviewer: Response,
+    call: &'static str,
+    after: impl Fn(&str) -> Response + Send + Sync + 'static,
+    rest: Response,
+) -> impl Fn(&Request) -> Response + Send + Sync + 'static {
+    move |request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains(r#""name":"delegate_spawn""#) {
+            return reviewer.clone();
+        }
+        if !text.contains("Started delegate") {
+            return first.clone();
+        }
+        if text.contains(call) {
+            return rest.clone();
+        }
+        after(&job_id(&text))
+    }
+}
+
 #[test]
 fn a_delegate_runs_to_its_end_and_its_finish_wakes_the_parent() {
-    let setup = Setup::new();
-    // Every child holds the root on its command line: the watchdog kills
-    // what is left if the test or this process dies first. Armed before
-    // the first fallible step.
-    let _watchdog = Watchdog::matching(&setup.root.path().to_string_lossy());
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
     let full = "x".repeat(20 * 1024);
     let parent = ProviderServer::start([
-        stream(&[spawn_call("fiber:pb/m")]),
+        support::stream(&[spawn_call("fiber:pb/m")]),
         text_reply("allow"),
-        hello(),
-        hello(),
-        hello(),
+        support::hello(),
+        support::hello(),
+        support::hello(),
     ])
     .unwrap();
     let child = ProviderServer::start([text_reply(&full)]).unwrap();
@@ -760,15 +456,14 @@ fn a_delegate_runs_to_its_end_and_its_finish_wakes_the_parent() {
     // delegate then ends after it, so the wake turn carries the finish
     // alone, whatever the scheduling.
     child.hold();
-    setup.providers(&parent, &child);
-    setup.standing_allow();
-    setup.slow_idle();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
 
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
-    poll(
-        "the parent's ending-notice request",
-        Duration::from_secs(5),
-        || (parent.requests().len() >= 4).then_some(()),
+    assert!(
+        parent.await_requests(4, Duration::from_secs(5)),
+        "the parent's ending-notice turn was requested"
     );
     child.release();
     let (status, lines, stderr) = running.wait();
@@ -823,7 +518,7 @@ fn a_delegate_runs_to_its_end_and_its_finish_wakes_the_parent() {
         json!([{"type": "jobs", "job_ids": [job_id]}])
     );
     // The child's session names its parent.
-    let child_dir = setup.sessions_dir().join(child_id);
+    let child_dir = ask_sessions(&setup).join(child_id);
     let child_lines = read_lines(&child_dir.join("events.jsonl"));
     let child_started = one(&child_lines, "session_started");
     assert_eq!(
@@ -839,7 +534,7 @@ fn a_delegate_runs_to_its_end_and_its_finish_wakes_the_parent() {
     assert!(text.contains("4096 bytes cut"), "{text}");
     let artifact = finished["artifact"].as_str().unwrap();
     assert_eq!(
-        fs::read(setup.sessions_dir().join(ask.session_id()).join(artifact)).unwrap(),
+        fs::read(ask_sessions(&setup).join(ask.session_id()).join(artifact)).unwrap(),
         full.as_bytes()
     );
     let done = one(&ask.lines, "job_completed");
@@ -855,31 +550,29 @@ fn a_delegate_runs_to_its_end_and_its_finish_wakes_the_parent() {
 
 #[test]
 fn a_jobs_wait_returns_the_delegate_final_message_with_no_notice_after() {
-    let setup = Setup::new();
-    // Every child holds the root on its command line: the watchdog kills
-    // what is left if the test or this process dies first. Armed before
-    // the first fallible step.
-    let _watchdog = Watchdog::matching(&setup.root.path().to_string_lossy());
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
     let full = "the scan found three caches";
     let child = ProviderServer::start([text_reply(full)]).unwrap();
-    // The wait names the job the receipt minted, which the script cannot
-    // know: the server builds the wait call from the receipt it sees.
-    let dynamic = Dynamic::start(
-        stream(&[spawn_call("fiber:pb/m")]),
+    // The wait names the job the receipt minted, which no script can know:
+    // the server builds the wait call from the receipt it sees.
+    let parent = ProviderServer::start_responding(answering(
+        support::stream(&[spawn_call("fiber:pb/m")]),
         text_reply("allow"),
+        "call_wait",
         |job| {
-            stream(&[function_call(
+            support::stream(&[function_call(
                 "call_wait",
                 "jobs",
                 &json!({"action": "wait", "job_id": job, "timeout_ms": 30000}),
             )])
         },
-        hello(),
-        Arc::new(|| true),
-    );
-    setup.providers_url(&dynamic.url(), &child.url(), "openai-responses");
-    setup.standing_allow();
-    setup.slow_idle();
+        support::hello(),
+    ))
+    .unwrap();
+    providers_url(&setup, &parent.url(), &child.url(), "openai-responses");
+    standing_allow(&setup);
+    slow_idle(&setup);
 
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
     let (status, lines, stderr) = running.wait();
@@ -888,7 +581,7 @@ fn a_jobs_wait_returns_the_delegate_final_message_with_no_notice_after() {
     let started = one(&lines, "job_started");
     let job_id = started["job_id"].as_str().unwrap().to_owned();
     // The wait ran with the minted id, and returned the final message.
-    let bodies = dynamic.session_bodies();
+    let bodies = session_bodies(&parent.requests());
     assert_eq!(bodies.len(), 3);
     // The wait call goes out on the request after the receipt: its history
     // replays the spawn call first, so the jobs call is the last one.
@@ -919,35 +612,51 @@ fn a_jobs_wait_returns_the_delegate_final_message_with_no_notice_after() {
 
 #[test]
 fn a_jobs_stop_cancels_the_delegate_which_exits_143() {
-    let setup = Setup::new();
-    // Every child holds the root on its command line: the watchdog kills
-    // what is left if the test or this process dies first. Armed before
-    // the first fallible step.
-    let _watchdog = Watchdog::matching(&setup.root.path().to_string_lossy());
-    // The child stalls mid-reply, so it is still running when the stop
-    // runs: the stop, not the end, finishes it.
-    let prefix = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Working\"}\n\n";
-    let child = ProviderServer::start([Response::stall(200, prefix, prefix.len() + 100000)
-        .header("content-type", "text/event-stream")])
-    .unwrap();
-    let dynamic = Dynamic::start(
-        stream(&[spawn_call("fiber:pb/m")]),
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let child = ProviderServer::start([stall()]).unwrap();
+    // The stop names the job the receipt minted, which no script can know.
+    // Held until the child stalls: the stop then meets a running delegate,
+    // whatever the scheduling.
+    let parent = ProviderServer::start_responding(answering(
+        support::stream(&[spawn_call("fiber:pb/m")]),
         text_reply("allow"),
+        "call_stop",
         |job| {
-            stream(&[function_call(
+            support::stream(&[function_call(
                 "call_stop",
                 "jobs",
                 &json!({"action": "stop", "job_id": job}),
             )])
         },
-        hello(),
-        started(&setup),
-    );
-    setup.providers_url(&dynamic.url(), &child.url(), "openai-responses");
-    setup.standing_allow();
-    setup.slow_idle();
+        support::hello(),
+    ))
+    .unwrap();
+    parent.hold();
+    providers_url(&setup, &parent.url(), &child.url(), "openai-responses");
+    standing_allow(&setup);
+    slow_idle(&setup);
 
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    assert!(
+        parent.await_requests(1, Duration::from_secs(5)),
+        "the spawn call was requested"
+    );
+    parent.release_one();
+    assert!(
+        parent.await_requests(2, Duration::from_secs(5)),
+        "the verdict was requested"
+    );
+    parent.release_one();
+    assert!(
+        parent.await_requests(3, Duration::from_secs(5)),
+        "the stop was requested"
+    );
+    assert!(
+        child.await_requests(1, Duration::from_secs(5)),
+        "the child stalled its model call"
+    );
+    parent.release();
     let (status, lines, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
 
@@ -971,12 +680,14 @@ fn a_jobs_stop_cancels_the_delegate_which_exits_143() {
     }
     let done = one(&lines, "job_completed");
     assert_eq!(done["status"], "cancelled");
-    // The child shut down on SIGTERM.
+    // The child shut down on SIGTERM: its end is in the parent's log, so
+    // the exit line is already written when it is read.
     let delegate = one(&lines, "delegate_started");
     let child_id = delegate["delegate_session_id"].as_str().unwrap();
-    let child_dir = setup.sessions_dir().join(child_id);
-    let child_lines = poll_log(&child_dir, "fiber_exited");
-    let exited = child_lines.last().unwrap();
+    let exited = read_lines(&ask_sessions(&setup).join(child_id).join("events.jsonl"))
+        .last()
+        .unwrap()
+        .clone();
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["exit_code"], 143);
 }
@@ -988,110 +699,102 @@ fn stall() -> Response {
     Response::stall(200, prefix, prefix.len() + 100000).header("content-type", "text/event-stream")
 }
 
-/// Subscribes `client` full, for the session's later lines.
-fn subscribe(client: &Socket) {
-    client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
-    loop {
-        let line = client.next("the subscribe acknowledgement");
-        if line["kind"] == "command_accepted" {
-            assert_eq!(line["payload"]["command_id"], "c_sub");
-            return;
-        }
-    }
-}
-
 #[test]
 fn killing_the_parent_shuts_the_stalled_child_down_with_129() {
-    let setup = Setup::new();
-    // Every child holds the root on its command line: the watchdog kills
-    // what is left if the test or this process dies first. Armed before
-    // the first fallible step.
-    let _watchdog = Watchdog::matching(&setup.root.path().to_string_lossy());
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
     let parent = ProviderServer::start([
-        stream(&[spawn_call("fiber:pb/m")]),
+        support::stream(&[spawn_call("fiber:pb/m")]),
         text_reply("allow"),
-        hello(),
+        support::hello(),
     ])
     .unwrap();
     let child = ProviderServer::start([stall()]).unwrap();
-    setup.providers(&parent, &child);
-    setup.standing_allow();
-    setup.slow_idle();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
 
     let id = doors::mint("s_");
-    let running = Running::start(
+    let mut running = Running::start(
         &setup,
         &id,
         &["--model", "pa/m", "--prompt", "scan the tree"],
     );
-    // The delegate runs its turn: its log names the run, and the child
+    // The delegate runs its turn: the log names the run, and the child
     // stalled mid-reply.
-    let dir = Setup::sessions_in(&setup.home(), &setup.workspace()).join(&id);
-    let lines = poll_log(&dir, "delegate_started");
-    let delegate = one(&lines, "delegate_started");
-    let child_id = delegate["delegate_session_id"].as_str().unwrap();
-    let ready = started_in(Setup::sessions_in(&setup.home(), &setup.workspace()));
-    poll("the child to stall", Duration::from_secs(5), || {
-        ready().then_some(())
+    let started = running.wait_line("the delegate start", |line| {
+        line["kind"] == "delegate_started"
     });
+    let delegate = started.last().unwrap();
+    let child_id = delegate["payload"]["delegate_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        child.await_requests(1, Duration::from_secs(5)),
+        "the child stalled its model call"
+    );
     // The parent is gone however it died: SIGKILL to its group, which the
     // child left when it became its own leader.
     support::kill_group(setup.deadline, running.group, "KILL").unwrap();
     let (status, _, _) = running.wait();
     assert_eq!(status.code(), None);
     // End of file on the lifeline is a hangup: the child shuts down with
-    // 129 within the bound.
-    let child_lines = poll_log(
-        &Setup::sessions_in(&setup.home(), &setup.workspace()).join(child_id),
-        "fiber_exited",
-    );
-    let exited = child_lines.last().unwrap();
-    assert_eq!(exited["kind"], "fiber_exited");
+    // 129 within the bound. Its socket was bound before it stalled, so the
+    // client reads its exit as an event.
+    let child_socket = support::Socket::connect(setup.deadline, &setup.session_socket(&child_id));
+    subscribe(&child_socket);
+    let lines = support::until(&child_socket, "the child's exit", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    let exited = lines.last().unwrap();
     assert_eq!(exited["payload"]["exit_code"], 129);
 }
 
 #[test]
 fn a_close_with_now_stops_the_delegate_and_exits_0() {
-    let setup = Setup::new();
-    // Every child holds the root on its command line: the watchdog kills
-    // what is left if the test or this process dies first. Armed before
-    // the first fallible step.
-    let _watchdog = Watchdog::matching(&setup.root.path().to_string_lossy());
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
     let parent = ProviderServer::start([
-        stream(&[spawn_call("fiber:pb/m")]),
+        support::stream(&[spawn_call("fiber:pb/m")]),
         text_reply("allow"),
-        hello(),
+        support::hello(),
     ])
     .unwrap();
     let child = ProviderServer::start([stall()]).unwrap();
-    setup.providers(&parent, &child);
-    setup.standing_allow();
-    setup.slow_idle();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
 
     let id = doors::mint("s_");
-    let running = Running::start(
+    let mut running = Running::start(
         &setup,
         &id,
         &["--model", "pa/m", "--prompt", "scan the tree"],
     );
-    let dir = Setup::sessions_in(&setup.home(), &setup.workspace()).join(&id);
-    let lines = poll_log(&dir, "delegate_started");
-    let delegate = one(&lines, "delegate_started");
-    let job_id = delegate["job_id"].as_str().unwrap().to_owned();
-    let child_id = delegate["delegate_session_id"].as_str().unwrap().to_owned();
-    let ready = started_in(Setup::sessions_in(&setup.home(), &setup.workspace()));
-    poll("the child to stall", Duration::from_secs(5), || {
-        ready().then_some(())
+    let started = running.wait_line("the delegate start", |line| {
+        line["kind"] == "delegate_started"
     });
+    let delegate = started.last().unwrap();
+    let job_id = delegate["payload"]["job_id"].as_str().unwrap().to_owned();
+    let child_id = delegate["payload"]["delegate_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        child.await_requests(1, Duration::from_secs(5)),
+        "the child stalled its model call"
+    );
     let client = running.connect(&setup, &id);
     subscribe(&client);
     close_now(&client);
-    let _tail = client.until_close();
+    let _tail = support::until_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
     // The shutdown stops the delegate as a stop does: its finish, then its
-    // cancelled end, each once.
+    // cancelled end, each once. The end is in the log, so the child's exit
+    // line is already written when it is read.
     let kinds = kinds(&out);
     assert_eq!(
         kinds
@@ -1109,12 +812,14 @@ fn a_close_with_now_stops_the_delegate_and_exits_0() {
     let done = one(&out, "job_completed");
     assert_eq!(done["job_id"], job_id);
     assert_eq!(done["status"], "cancelled");
-    // The child shut down on SIGTERM.
-    let child_lines = poll_log(
-        &Setup::sessions_in(&setup.home(), &setup.workspace()).join(&child_id),
-        "fiber_exited",
-    );
-    let exited = child_lines.last().unwrap();
+    let exited = read_lines(
+        &sessions_in(&setup.home(), &setup.workspace())
+            .join(&child_id)
+            .join("events.jsonl"),
+    )
+    .last()
+    .unwrap()
+    .clone();
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["exit_code"], 143);
 }
@@ -1156,11 +861,8 @@ fn cstream(chunks: &[Value]) -> Response {
 
 #[test]
 fn a_turn_that_hits_the_budget_stops_its_running_delegate() {
-    let setup = Setup::new();
-    // Every child holds the root on its command line: the watchdog kills
-    // what is left if the test or this process dies first. Armed before
-    // the first fallible step.
-    let _watchdog = Watchdog::matching(&setup.root.path().to_string_lossy());
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
     // The first reply's own figure costs nothing, so the reviewer still
     // sends and allows; the read's reply costs past the budget, so the send
     // after its result ends the turn. The read is reads-only, so no second
@@ -1182,9 +884,9 @@ fn a_turn_that_hits_the_budget_stops_its_running_delegate() {
     ])
     .unwrap();
     let child = ProviderServer::start([stall()]).unwrap();
-    setup.providers_url(&parent.url(), &child.url(), "openai-completions");
-    setup.standing_allow();
-    write(
+    providers_url(&setup, &parent.url(), &child.url(), "openai-completions");
+    standing_allow(&setup);
+    support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
             "budget": {"usd": 1.0}, "session": {"idle_exit_ms": 3600000}}),
@@ -1194,7 +896,7 @@ fn a_turn_that_hits_the_budget_stops_its_running_delegate() {
     // running delegate, whatever the scheduling.
     parent.hold();
     let id = doors::mint("s_");
-    let running = Running::start(
+    let mut running = Running::start(
         &setup,
         &id,
         &["--model", "pa/m", "--prompt", "scan the tree"],
@@ -1218,38 +920,42 @@ fn a_turn_that_hits_the_budget_stops_its_running_delegate() {
         "the child stalled its model call"
     );
     parent.release();
-    let dir = Setup::sessions_in(&setup.home(), &setup.workspace()).join(&id);
     // The turn spent past the budget on its second reply, and ends failed.
-    let lines = poll_log(&dir, "turn_completed");
     // The first turn is the budget end; the delegate's end may wake one
     // more while the session serves, so later turns are not pinned.
-    let completed = lines
-        .iter()
-        .find(|line| line["kind"] == "turn_completed")
-        .unwrap();
+    let first = running.wait_line("the budget end", |line| line["kind"] == "turn_completed");
+    let completed = first.last().unwrap();
     assert_eq!(completed["payload"]["outcome"], "failed");
     assert_eq!(completed["payload"]["error"]["code"], "budget_exceeded");
     // The delegate was running when the turn ended: with the session still
     // serving and no close sent, its finish and cancelled end follow.
-    let lines = poll_log(&dir, "job_completed");
-    let delegate = one(&lines, "delegate_started");
+    let second = running.wait_line("the delegate end", |line| line["kind"] == "job_completed");
+    // The delegate started before the budget end, so it is in the first
+    // batch; its finish arrives with the end.
+    let delegate = one(&first, "delegate_started");
     let job_id = delegate["job_id"].as_str().unwrap();
     let child_id = delegate["delegate_session_id"].as_str().unwrap();
-    let finished = one(&lines, "delegate_finished");
+    let finished = one(&second, "delegate_finished");
     assert_eq!(finished["job_id"], job_id);
-    let done = one(&lines, "job_completed");
+    let done = one(&second, "job_completed");
     assert_eq!(done["job_id"], job_id);
     assert_eq!(done["status"], "cancelled");
-    // The budget end stops the delegate as a stop does.
-    let child_dir = Setup::sessions_in(&setup.home(), &setup.workspace()).join(child_id);
-    let child_lines = poll_log(&child_dir, "fiber_exited");
-    let exited = child_lines.last().unwrap();
+    // The budget end stops the delegate as a stop does: its end is in the
+    // log, so the child's exit line is already written when it is read.
+    let exited = read_lines(
+        &sessions_in(&setup.home(), &setup.workspace())
+            .join(child_id)
+            .join("events.jsonl"),
+    )
+    .last()
+    .unwrap()
+    .clone();
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["exit_code"], 143);
     let client = running.connect(&setup, &id);
     subscribe(&client);
     close_now(&client);
-    let _tail = client.until_close();
+    let _tail = support::until_close(&client);
     drop(client);
     let (status, _, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
@@ -1262,7 +968,7 @@ fn declare_db(workspace: &Path, extra: &Value) {
     for (key, value) in extra.as_object().unwrap() {
         entry[key] = value.clone();
     }
-    write(
+    support::write_json(
         &workspace.join(".fiber/config.json"),
         &json!({"mcp": {"servers": {"db": entry}}}),
     );
@@ -1270,33 +976,29 @@ fn declare_db(workspace: &Path, extra: &Value) {
 
 #[test]
 fn a_delegate_skips_repository_code_nobody_approved() {
-    let setup = Setup::new();
-    // Every child holds the root on its command line: the watchdog kills
-    // what is left if the test or this process dies first. Armed before
-    // the first fallible step.
-    let _watchdog = Watchdog::matching(&setup.root.path().to_string_lossy());
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
     let parent = ProviderServer::start([
-        stream(&[spawn_call("fiber:pb/m")]),
+        support::stream(&[spawn_call("fiber:pb/m")]),
         text_reply("allow"),
-        hello(),
-        hello(),
-        hello(),
+        support::hello(),
+        support::hello(),
+        support::hello(),
     ])
     .unwrap();
-    let child = ProviderServer::start([hello(), hello()]).unwrap();
+    let child = ProviderServer::start([support::hello(), support::hello()]).unwrap();
     child.hold();
-    setup.providers(&parent, &child);
-    setup.standing_allow();
-    setup.slow_idle();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
     // The workspace declares a server nobody approved: `fiber ask` runs
     // with the test root as its workspace.
     declare_db(setup.root.path(), &json!({}));
 
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
-    poll(
-        "the parent's ending-notice request",
-        Duration::from_secs(5),
-        || (parent.requests().len() >= 4).then_some(()),
+    assert!(
+        parent.await_requests(4, Duration::from_secs(5)),
+        "the parent's ending-notice turn was requested"
     );
     child.release();
     let (status, lines, stderr) = running.wait();
@@ -1308,7 +1010,7 @@ fn a_delegate_skips_repository_code_nobody_approved() {
     // preamble declares no tool of `db`.
     let delegate = one(&lines, "delegate_started");
     let child_id = delegate["delegate_session_id"].as_str().unwrap();
-    let child_lines = read_lines(&setup.sessions_dir().join(child_id).join("events.jsonl"));
+    let child_lines = read_lines(&ask_sessions(&setup).join(child_id).join("events.jsonl"));
     assert!(
         child_lines
             .iter()
@@ -1352,16 +1054,18 @@ fn a_delegate_skips_repository_code_nobody_approved() {
         ],
         Stdio::piped(),
     );
-    let direct_dir = setup.sessions_dir().join(&direct);
     // Its run ended on its own: one turn and out, with no idle wait. The
-    // exit line is written before the process goes, so the code is decided
-    // before stdin drops.
-    poll_log(&direct_dir, "fiber_exited");
+    // exit line is decided before stdin drops.
+    let mut direct_running = direct_running;
+    let direct_got = direct_running.wait_line("the direct run's exit", |line| {
+        line["kind"] == "fiber_exited"
+    });
     drop(direct_stdin);
     let (direct_status, direct_lines, direct_stderr) = direct_running.wait();
     // Its run ended on its own: one turn and out, with no idle wait.
     assert_eq!(direct_status.code(), Some(0), "stderr: {direct_stderr}");
-    let skipped = direct_lines
+    let direct_all: Vec<&Value> = direct_got.iter().chain(&direct_lines).collect();
+    let skipped = direct_all
         .iter()
         .find(|line| {
             line["kind"] == "notice" && line["payload"]["code"] == "repository_code_skipped"
@@ -1375,7 +1079,7 @@ fn a_delegate_skips_repository_code_nobody_approved() {
         "{skipped}"
     );
     assert!(
-        direct_lines
+        direct_all
             .iter()
             .all(|line| line["kind"] != "repository_code_offered"),
         "an offer was raised"
@@ -1384,26 +1088,23 @@ fn a_delegate_skips_repository_code_nobody_approved() {
 
 #[test]
 fn a_delegate_fails_on_a_required_server_nobody_approved() {
-    let setup = Setup::new();
-    // Every child holds the root on its command line: the watchdog kills
-    // what is left if the test or this process dies first. Armed before
-    // the first fallible step.
-    let _watchdog = Watchdog::matching(&setup.root.path().to_string_lossy());
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
     let parent = ProviderServer::start([
-        stream(&[spawn_call("fiber:pb/m")]),
+        support::stream(&[spawn_call("fiber:pb/m")]),
         text_reply("allow"),
-        hello(),
-        hello(),
-        hello(),
+        support::hello(),
+        support::hello(),
+        support::hello(),
     ])
     .unwrap();
-    let child = ProviderServer::start([hello()]).unwrap();
+    let child = ProviderServer::start([support::hello()]).unwrap();
     // Held while the repository file is written: the parent started
     // without it, and the child starts with it required.
     parent.hold();
-    setup.providers(&parent, &child);
-    setup.standing_allow();
-    setup.slow_idle();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
 
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
     assert!(
@@ -1431,24 +1132,35 @@ fn a_delegate_fails_on_a_required_server_nobody_approved() {
 
 #[test]
 fn a_delegate_spawn_with_an_unknown_model_fails_and_starts_nothing() {
-    let setup = Setup::new();
-    // Every child holds the root on its command line: the watchdog kills
-    // what is left if the test or this process dies first. Armed before
-    // the first fallible step.
-    let _watchdog = Watchdog::matching(&setup.root.path().to_string_lossy());
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
     let parent = ProviderServer::start([
-        stream(&[spawn_call("fiber:fake/none")]),
+        support::stream(&[spawn_call("fiber:fake/none")]),
         text_reply("allow"),
-        hello(),
+        support::hello(),
     ])
     .unwrap();
-    let child = ProviderServer::start([hello()]).unwrap();
-    setup.providers(&parent, &child);
-    setup.standing_allow();
-    setup.slow_idle();
+    let child = ProviderServer::start([support::hello()]).unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
 
-    let (code, lines, stderr) = run_to_exit(&setup, &["ask", "scan the tree"]);
-    assert_eq!(code, Some(0), "stderr: {stderr}");
+    let output = support::run_to_exit(
+        setup.deadline,
+        "fiber ask",
+        setup.fiber(&["ask", "scan the tree"]),
+    );
+    let lines: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8(output.stderr).unwrap()
+    );
 
     let failed = completed_for(&lines, "delegate_spawn");
     let error = failed["payload"]["error"].as_object().unwrap();
@@ -1462,7 +1174,7 @@ fn a_delegate_spawn_with_an_unknown_model_fails_and_starts_nothing() {
         lines.iter().all(|line| line["kind"] != "delegate_started"),
         "a delegate started"
     );
-    let entries: Vec<_> = std::fs::read_dir(setup.sessions_dir())
+    let entries: Vec<_> = std::fs::read_dir(ask_sessions(&setup))
         .unwrap()
         .flatten()
         .collect();
