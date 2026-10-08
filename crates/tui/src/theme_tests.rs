@@ -209,3 +209,67 @@ fn the_alert_tint_is_red_in_both_built_ins() {
         assert!(r > g && r > b, "{:?}", (r, g, b));
     }
 }
+
+/// Whether `line`, outside a `//` comment, names `Color` as a word.
+fn names_color(line: &str) -> bool {
+    let code = line.split("//").next().unwrap_or_default();
+    code.match_indices("Color").any(|(at, _)| {
+        let word =
+            |byte: Option<&u8>| byte.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
+        let before = at
+            .checked_sub(1)
+            .and_then(|before| code.as_bytes().get(before));
+        let after = code.as_bytes().get(at + "Color".len());
+        !word(before) && !word(after)
+    })
+}
+
+#[test]
+fn names_color_finds_the_type_and_skips_comments_and_longer_words() {
+    assert!(names_color("use ratatui::style::{Color, Style};"));
+    assert!(names_color("    Color,"));
+    assert!(names_color("let x = Color::Reset;"));
+    assert!(!names_color("// a Color in a comment"));
+    assert!(!names_color("let colour = ColorTerm;"));
+    assert!(!names_color("let x = MyColor;"));
+    assert!(!names_color("Role::Accent.color()"));
+}
+
+/// Every `.rs` file under `dir`, recursively.
+fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap_or_else(|err| panic!("{}: {err}", dir.display())) {
+        let path = entry.expect("an entry").path();
+        if path.is_dir() {
+            sources(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+#[test]
+fn no_colour_outside_the_theme() {
+    // Drawing code names roles, never colours (`docs/tui.md`, "Themes"):
+    // only the theme and the look hold a `Color`.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    sources(&root, &mut files);
+    assert!(files.len() > 50, "{}", files.len());
+    let mut found = Vec::new();
+    for path in files {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if ["theme.rs", "look.rs"].contains(&name) || name.ends_with("_tests.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("{err}"));
+        for (at, line) in text.lines().enumerate() {
+            if names_color(line) {
+                found.push(format!("{}:{}: {line}", path.display(), at + 1));
+            }
+        }
+    }
+    assert!(found.is_empty(), "{found:#?}");
+}

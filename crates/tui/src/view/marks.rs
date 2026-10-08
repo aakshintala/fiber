@@ -5,25 +5,23 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 
 use crate::app::{App, FindBar};
 use crate::mouse::{Target, TargetId};
+use crate::theme::Role;
 
 /// The selection's highlight.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-const SELECTION: Style = Style::new().bg(Color::Indexed(24));
+const SELECTION: Style = Style::new().bg(Role::Selection.color());
 
 /// A match's highlight.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-const MATCH: Style = Style::new().bg(Color::Indexed(58));
+const MATCH: Style = Style::new().bg(Role::Match.color());
 
-/// The current match's highlight.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-const CURRENT: Style = Style::new().bg(Color::Indexed(178)).fg(Color::Black);
+/// The current match's highlight: the brighter match tint, in the full
+/// text colour.
+const CURRENT: Style = Style::new()
+    .bg(Role::MatchCurrent.color())
+    .fg(Role::Text.color());
 
 /// A link's underline: markdown links already draw underlined, and bare
 /// URLs gain it here (`docs/tui.md`, "Links").

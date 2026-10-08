@@ -1126,7 +1126,7 @@ fn the_hovered_row_is_tinted_and_others_are_not() {
     };
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, Some((0, at("second"))));
-    assert_eq!(buf[(0, at("second"))].bg, Color::Indexed(238));
+    assert_eq!(buf[(0, at("second"))].bg, crate::theme::Role::Hover.color());
     assert_eq!(buf[(0, at("first"))].bg, Color::Reset);
 }
 

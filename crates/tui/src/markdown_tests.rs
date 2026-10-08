@@ -38,7 +38,7 @@ fn fg(role: Role) -> Option<ratatui::style::Color> {
     Some(role.color())
 }
 
-const TINT: Option<ratatui::style::Color> = Some(ratatui::style::Color::Rgb(33, 37, 43));
+const TINT: Option<ratatui::style::Color> = Some(Role::Code.color());
 
 #[test]
 fn empty_text_renders_nothing() {
@@ -140,14 +140,14 @@ fn a_block_quote_is_prefixed_with_a_dim_bar() {
         rendered.lines.iter().map(text).collect::<Vec<_>>(),
         vec!["│ quoted", "│ words here"]
     );
-    assert_eq!(style_at(&rendered.lines[1], 0).fg, fg(Role::Dim));
+    assert_eq!(style_at(&rendered.lines[1], 0).fg, fg(Role::Muted));
 }
 
 #[test]
 fn a_horizontal_rule_spans_the_width_dim() {
     let rendered = render("a\n\n---\n\nb", 5);
     assert_eq!(text(&rendered.lines[2]), "─────");
-    assert_eq!(style_at(&rendered.lines[2], 4).fg, fg(Role::Dim));
+    assert_eq!(style_at(&rendered.lines[2], 4).fg, fg(Role::Muted));
 }
 
 #[test]
@@ -168,9 +168,9 @@ fn a_code_block_has_a_header_numbered_lines_and_the_tint() {
             assert_eq!(style_at(line, col).bg, TINT, "{:?} col {col}", text(line));
         }
     }
-    assert_eq!(style_at(&rendered.lines[0], 0).fg, fg(Role::Dim));
+    assert_eq!(style_at(&rendered.lines[0], 0).fg, fg(Role::Muted));
     assert_eq!(style_at(&rendered.lines[0], 16).fg, fg(Role::Accent));
-    assert_eq!(style_at(&rendered.lines[1], 0).fg, fg(Role::Dim));
+    assert_eq!(style_at(&rendered.lines[1], 0).fg, fg(Role::Muted));
     assert_eq!(style_at(&rendered.lines[1], 4).fg, fg(Role::Keyword));
     assert_eq!(style_at(&rendered.lines[1], 7).fg, fg(Role::Function));
     assert_eq!(style_at(&rendered.lines[2], 12).fg, fg(Role::Number));
@@ -279,7 +279,7 @@ fn a_table_has_a_bold_header_a_rule_and_right_aligned_numbers() {
             .add_modifier
             .contains(Modifier::BOLD)
     );
-    assert_eq!(style_at(&rendered.lines[1], 0).fg, fg(Role::Dim));
+    assert_eq!(style_at(&rendered.lines[1], 0).fg, fg(Role::Muted));
 }
 
 #[test]
@@ -495,7 +495,7 @@ fn a_code_block_in_a_quote_keeps_the_bars_and_its_copy_cells() {
         let tail = 24usize.saturating_sub(bars.chars().count());
         assert_eq!(lines[0], format!("{bars}{:<w$}copy", "rust", w = tail - 4));
         assert!(lines[1].starts_with(&format!("{bars}1 │ let a = 1;")));
-        assert_eq!(style_at(&rendered.lines[0], 0).fg, fg(Role::Dim));
+        assert_eq!(style_at(&rendered.lines[0], 0).fg, fg(Role::Muted));
         let target = rendered.target(0).expect("a copy target");
         assert_eq!(target.line, 0);
         assert_eq!(target.cols, 20..24);

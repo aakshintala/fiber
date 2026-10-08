@@ -297,9 +297,9 @@ fn diff_line(line: &str) -> Vec<(Role, usize)> {
     } else if line.starts_with("@@") {
         Role::Type
     } else if line.starts_with('+') {
-        Role::String
+        Role::Added
     } else if line.starts_with('-') {
-        Role::Constant
+        Role::Removed
     } else {
         Role::CodeText
     };

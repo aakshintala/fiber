@@ -6,7 +6,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
@@ -31,28 +31,19 @@ const NEW_BELOW: &str = "↓ New messages below";
 const COPIED: &str = "Copied";
 
 /// The approval panel's tint when a standing rule or review asked.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Color::Indexed(17));
+pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Role::Approval.color());
 
 /// The approval panel's tint when the reviewer escalated.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-pub(crate) const ALERT_TINT: Style = Style::new().bg(Color::Indexed(52));
+pub(crate) const ALERT_TINT: Style = Style::new().bg(Role::Alert.color());
 
 /// A notice's tint.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-const NOTICE_TINT: Style = Style::new().bg(Color::Indexed(236));
+const NOTICE_TINT: Style = Style::new().bg(Role::Surface.color());
 
 /// The background of the click target under the pointer.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-pub(crate) const HOVER_TINT: Style = Style::new().bg(Color::Indexed(238));
+pub(crate) const HOVER_TINT: Style = Style::new().bg(Role::Hover.color());
 
-/// The focused click target's style in navigate mode.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
+/// The focused click target's style in navigate mode: reversed, so it
+/// shows on every theme and with no colour.
 pub(crate) const FOCUS_STYLE: Style = Style::new().add_modifier(Modifier::REVERSED);
 
 /// One line, wrapped the way it draws.

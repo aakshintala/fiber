@@ -176,7 +176,7 @@ impl Approval {
     /// choices.
     fn lines(&self, mut header: String) -> Vec<String> {
         if !self.reversible {
-            header.push_str(" · irreversible");
+            header.push_str(IRREVERSIBLE);
         }
         let mut lines = vec![header, self.why()];
         if let Some((tool, arguments)) = &self.call {
@@ -265,6 +265,10 @@ impl Approval {
         self.cursor = Choice::Deny;
     }
 }
+
+/// What an irreversible call's header ends with (`docs/tui.md`, "An
+/// approval").
+pub(crate) const IRREVERSIBLE: &str = " · irreversible";
 
 /// The request panel as it draws.
 #[derive(Debug, Clone, PartialEq, Eq)]

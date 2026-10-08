@@ -5,16 +5,14 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 
 use crate::app::App;
 use crate::layout::Layout;
 use crate::markdown::{Role, style};
 
 /// The rail's and the panel's background.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-const REGION_TINT: Style = Style::new().bg(Color::Indexed(235));
+const REGION_TINT: Style = Style::new().bg(Role::Surface.color());
 
 /// The draggable edge's grip, drawn on three rows at mid-height.
 const GRIP: &str = "⋮";
@@ -70,7 +68,7 @@ fn grip(buf: &mut Buffer, x: u16, region: Rect) {
     let mid = region.y.saturating_add(region.height / 2);
     for y in mid.saturating_sub(1)..=mid.saturating_add(1) {
         if y >= region.y && y < region.bottom() {
-            buf.set_string(x, y, GRIP, style(Role::Dim));
+            buf.set_string(x, y, GRIP, style(Role::Muted));
         }
     }
 }

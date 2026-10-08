@@ -6,23 +6,20 @@ use std::ops::Range;
 
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
 use super::to_u16;
 use crate::app::Snippet;
 use crate::app::results::ResultsView;
 use crate::mouse::{Target, TargetId};
+use crate::theme::Role;
 
 /// The selected entry's style.
-/// debt: a fixed style, not a theme role; upgrade when colour roles land
-/// (see #685).
 const SELECTED: Style = Style::new().add_modifier(Modifier::REVERSED);
 
 /// A match's highlight.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-const HIT: Style = Style::new().bg(Color::Indexed(58));
+const HIT: Style = Style::new().bg(Role::Match.color());
 
 /// Draws `view` into `area`: the header on its first row, then one row
 /// per entry from its top, the selected entry reversed and every match
