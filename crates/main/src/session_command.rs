@@ -321,6 +321,7 @@ pub(crate) fn run_new(
     extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
     extensions.drive_to(session.driver());
     extensions.answerable(!one_turn);
+    session.skills(r#loop::skills(&prompt_inputs, &workspace));
     // The session's MCP prompt rows, tagged with each server's name:
     // the `commands` answer lists them beside skills, and `/name` runs
     // them through the fetch below (`docs/mcp.md`, "Prompts and

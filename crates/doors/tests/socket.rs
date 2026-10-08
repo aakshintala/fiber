@@ -24,8 +24,8 @@ use contract::emit::Emit;
 use contract::events::{
     CacheLifetime, CommandInfo, CommandResult, Empty, Event, ExtensionsLoaded, FiberExited,
     InputItem, LoadedExtension, Notice, PreambleBuilt, PreambleReason, QueuedMessage, SentTool,
-    SessionState, SessionStatus, SteeringQueue, ToolInfo, ToolSource, ToolState, TurnStarted,
-    UsageRecorded,
+    SessionState, SessionStatus, SkillInfo, SkillSource, SteeringQueue, ToolInfo, ToolSource,
+    ToolState, TurnStarted, UsageRecorded,
 };
 use contract::inbox::{Delivery, Message, Rejection};
 use contract::jobs::{Foreground, Jobs, Opening, Stop};
@@ -2668,6 +2668,114 @@ fn commands_with_none_given_answers_an_empty_list() {
             assert_eq!(
                 answer["payload"]["result"],
                 serde_json::json!({"commands": []})
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn skills_answers_with_the_rows_it_was_given_while_the_inbox_is_unread() {
+    let opened = Opened::open(vec![]);
+    opened.session.skills(vec![
+        SkillInfo {
+            name: "review".into(),
+            description: "Repository review.".into(),
+            path: "/w/.agents/skills/review/SKILL.md".into(),
+            source: SkillSource::Repository,
+            extension: None,
+            model_invocable: true,
+            disabled: false,
+            shadows: vec!["/h/skills/review/SKILL.md".into()],
+            shadowed_by: None,
+        },
+        SkillInfo {
+            name: "review".into(),
+            description: "Personal review.".into(),
+            path: "/h/skills/review/SKILL.md".into(),
+            source: SkillSource::Personal,
+            extension: None,
+            model_invocable: true,
+            disabled: false,
+            shadows: vec![],
+            shadowed_by: Some("/w/.agents/skills/review/SKILL.md".into()),
+        },
+        SkillInfo {
+            name: "tidy".into(),
+            description: "Tidies.".into(),
+            path: "/h/extensions/acme/skills/tidy/SKILL.md".into(),
+            source: SkillSource::Extension,
+            extension: Some("acme".into()),
+            model_invocable: true,
+            disabled: true,
+            shadows: vec![],
+            shadowed_by: None,
+        },
+    ]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            send(&client, r#"{"id":"c_early","command":"skills"}"#);
+            assert_eq!(
+                rejection(&response(&client, "c_early")),
+                ("not_subscribed", NOT_SUBSCRIBED)
+            );
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"wait"}]}}"#,
+            );
+            send(&client, r#"{"id":"c_1","command":"skills"}"#);
+            let answer = response(&client, "c_1");
+            assert_eq!(kind(&answer), "command_accepted");
+            assert_eq!(
+                answer["payload"]["result"],
+                serde_json::json!({"skills": [
+                    {"name": "review", "description": "Repository review.",
+                     "path": "/w/.agents/skills/review/SKILL.md", "source": "repository",
+                     "model_invocable": true, "disabled": false,
+                     "shadows": ["/h/skills/review/SKILL.md"]},
+                    {"name": "review", "description": "Personal review.",
+                     "path": "/h/skills/review/SKILL.md", "source": "personal",
+                     "model_invocable": true, "disabled": false, "shadows": [],
+                     "shadowed_by": "/w/.agents/skills/review/SKILL.md"},
+                    {"name": "tidy", "description": "Tidies.",
+                     "path": "/h/extensions/acme/skills/tidy/SKILL.md",
+                     "source": "extension", "extension": "acme",
+                     "model_invocable": true, "disabled": true, "shadows": []}]})
+            );
+            send(
+                &client,
+                r#"{"id":"c_2","command":"skills","args":{"future":1}}"#,
+            );
+            assert_eq!(
+                rejection(&response(&client, "c_2")),
+                ("invalid_arguments", UNFIT)
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn skills_with_none_given_answers_an_empty_list() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, r#"{"id":"c_1","command":"skills","args":{}}"#);
+            let answer = response(&client, "c_1");
+            assert_eq!(kind(&answer), "command_accepted");
+            assert_eq!(
+                answer["payload"]["result"],
+                serde_json::json!({"skills": []})
             );
             Ok(())
         })

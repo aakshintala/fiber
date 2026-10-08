@@ -1553,6 +1553,31 @@ fn workspace_skill(setup: &Setup, name: &str, header: &str) {
     .unwrap();
 }
 
+/// Writes a skill under Fiber home's `skills/<name>/`.
+fn personal_skill(setup: &Setup, name: &str, header: &str) {
+    let dir = setup.home().join("skills").join(name);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: {name}\n{header}---\nBody.\n"),
+    )
+    .unwrap();
+}
+
+/// Subscribes `client`, sends `skills`, and returns the event stream and answer.
+fn skills_answer(client: &Socket) -> (Vec<Value>, Value) {
+    send(
+        client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(client, r#"{"id":"c_skills","command":"skills"}"#);
+    let lines = until(client, "the skills answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_skills"
+    });
+    let result = lines.last().unwrap()["payload"]["result"].clone();
+    (lines, result)
+}
+
 /// Subscribes `client`, sends `commands`, and returns the event stream and answer.
 fn commands_answer(client: &Socket) -> (Vec<Value>, Value) {
     send(
@@ -1622,6 +1647,104 @@ fn a_resumed_session_answers_commands_from_its_recorded_workspace() {
         result,
         json!({"commands": [
             {"name": "later", "description": "Added before the resume.", "tag": "skill"}]})
+    );
+    // Dropping `running` kills the session, still waiting on the approval.
+}
+
+#[test]
+fn skills_answers_from_two_sources_with_the_shadowed_and_switched_off_marked() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    workspace_skill(&setup, "review", "description: Repository review.\n");
+    personal_skill(&setup, "review", "description: Personal review.\n");
+    personal_skill(
+        &setup,
+        "old",
+        "description: Tidies.\ndisable-model-invocation: true\n",
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "skills": {"disabled": ["old"]}}),
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    let (_, result) = skills_answer(&client);
+    // Discovery logs canonical places, and the test root may sit behind a
+    // symlinked temporary directory.
+    let winner = setup
+        .workspace()
+        .canonicalize()
+        .unwrap()
+        .join(".agents/skills/review/SKILL.md")
+        .display()
+        .to_string();
+    let loser = setup
+        .home()
+        .canonicalize()
+        .unwrap()
+        .join("skills/review/SKILL.md")
+        .display()
+        .to_string();
+    let old = setup
+        .home()
+        .canonicalize()
+        .unwrap()
+        .join("skills/old/SKILL.md")
+        .display()
+        .to_string();
+    assert_eq!(
+        result,
+        json!({"skills": [
+            {"name": "review", "description": "Repository review.", "path": winner,
+             "source": "repository", "model_invocable": true, "disabled": false,
+             "shadows": [loser]},
+            {"name": "review", "description": "Personal review.", "path": loser,
+             "source": "personal", "model_invocable": true, "disabled": false,
+             "shadows": [], "shadowed_by": winner},
+            {"name": "old", "description": "Tidies.", "path": old,
+             "source": "personal", "model_invocable": false, "disabled": true,
+             "shadows": []}]})
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([stream(&[function_call(
+        "call_1",
+        "shell",
+        &json!({"command": "echo hi"}),
+    )])])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    suspend_on_an_approval(&setup, &id);
+    workspace_skill(&setup, "later", "description: Added before the resume.\n");
+
+    let mut running = setup.start_session(&id, &["--resume"]);
+    let client = running.connect(&setup.socket(&id));
+    let (_, result) = skills_answer(&client);
+    let path = setup
+        .workspace()
+        .canonicalize()
+        .unwrap()
+        .join(".agents/skills/later/SKILL.md")
+        .display()
+        .to_string();
+    assert_eq!(
+        result,
+        json!({"skills": [
+            {"name": "later", "description": "Added before the resume.",
+             "path": path, "source": "repository", "model_invocable": true,
+             "disabled": false, "shadows": []}]})
     );
     // Dropping `running` kills the session, still waiting on the approval.
 }
