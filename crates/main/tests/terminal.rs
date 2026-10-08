@@ -61,17 +61,32 @@ impl Setup {
     /// fake server, makes `fake/m` the configured model, and idles the hub
     /// out a second after its last client leaves, so no hub lingers.
     fn provider(&self, server: &ProviderServer) {
+        self.provider_with(&json!({}), server);
+    }
+
+    /// [`Setup::provider`], with the fake model declaring `input`
+    /// `["text", "image"]`, so a pasted image is sent as an image part.
+    fn provider_with_images(&self, server: &ProviderServer) {
+        self.provider_with(&json!({"input": ["text", "image"]}), server);
+    }
+
+    fn provider_with(&self, model_extra: &Value, server: &ProviderServer) {
         let source = self.root.path().join("src");
         write(
             &source.join("extension.json"),
             &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
         );
+        let mut model = json!({"id": "m", "protocol": "openai-responses",
+            "base_url": format!("{}/v1", server.url()), "context_window": 100000});
+        for (key, value) in model_extra.as_object().unwrap() {
+            model[key] = value.clone();
+        }
         write(
             &source.join("providers/fake.json"),
             &json!({
                 "name": "fake",
                 "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
+                "models": [model]
             }),
         );
         extensions::plan(
@@ -176,6 +191,12 @@ impl Run {
     /// Spawns `fiber` with no arguments on a pty: standard input, output
     /// and error all on the terminal side, as on a real terminal.
     fn terminal(setup: &Setup) -> Self {
+        Self::terminal_with(setup, &[])
+    }
+
+    /// [`Run::terminal`], with `env`'s variables set on the child after
+    /// the standard ones, so a test can prepend to `PATH`.
+    fn terminal_with(setup: &Setup, env: &[(&str, &OsStr)]) -> Self {
         let terminal = Terminal::open();
         let sessions = Watchdog::matching(setup.workspace().to_str().unwrap());
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
@@ -185,7 +206,11 @@ impl Run {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", setup.root.path())
             .env("FIBER_HOME", setup.home())
-            .env("FIBER_TEST_FAKE_KEY", "sk-test")
+            .env("FIBER_TEST_FAKE_KEY", "sk-test");
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        command
             .stdin(terminal.stdin())
             .stdout(terminal.stdin())
             .stderr(terminal.stdin());
@@ -576,4 +601,83 @@ fn assert_names_ask(deadline: Deadline, stdin: Stdio, missing: &str) {
 fn write(file: &Path, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();
+}
+
+/// A 1x1 PNG, 69 bytes: within every cap, as `session_command.rs` holds
+/// it. The fake clipboard program prints these bytes; the session stores
+/// them byte for byte.
+const PIXEL: [u8; 69] = [
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+    0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+    0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+/// Waits under the setup's deadline for exactly one `artifacts/i_*.png`
+/// under the session directory, equal byte for byte to [`PIXEL`].
+fn stored_pixel(setup: &Setup) {
+    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    loop {
+        let mut found = Vec::new();
+        if let Ok(entries) = fs::read_dir(&sessions) {
+            for entry in entries.flatten() {
+                if let Ok(files) = fs::read_dir(entry.path().join("artifacts")) {
+                    found.extend(files.flatten().map(|file| file.path()).filter(|path| {
+                        path.file_name()
+                            .and_then(OsStr::to_str)
+                            .is_some_and(|name| name.starts_with("i_") && name.ends_with(".png"))
+                    }));
+                }
+            }
+        }
+        if found.len() == 1 && fs::read(&found[0]).unwrap_or_default() == PIXEL {
+            return;
+        }
+        if setup.deadline.left().is_zero() {
+            panic!("waited until the deadline for one stored pixel; found: {found:?}");
+        }
+        thread::yield_now();
+    }
+}
+
+#[test]
+fn ctrl_v_pastes_an_image_that_the_session_stores() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_images(&server);
+    // A fake clipboard program first on the child's PATH, printing the
+    // pixel in its real program's form.
+    let bin = setup.root.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let (name, body) = if cfg!(target_os = "macos") {
+        let hex: String = PIXEL.iter().map(|byte| format!("{byte:02X}")).collect();
+        ("osascript", format!("printf '\\302\\253data PNGf{hex}\\302\\273\\n'"))
+    } else {
+        let octal: String = PIXEL.iter().map(|byte| format!("\\{byte:03o}")).collect();
+        ("wl-paste", format!("printf '{octal}'"))
+    };
+    fakes::script(&bin, name, &body);
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )),
+    )
+    .unwrap();
+    let mut env: Vec<(&str, &OsStr)> = vec![("PATH", &path)];
+    if !cfg!(target_os = "macos") {
+        env.push(("WAYLAND_DISPLAY", OsStr::new("fiber-test")));
+    }
+    let mut run = Run::terminal_with(&setup, &env);
+    run.read_until(">");
+    run.write(&[0x16]);
+    run.read_until("[Image #1]");
+    run.write(b"\r");
+    run.read_until("Hello.");
+    stored_pixel(&setup);
+    run.write(b"\x03\x03\r");
+    run.read_until("\x1b[?25h");
+    run.read_until("fiber resume");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
 }
