@@ -582,24 +582,6 @@ fn kinds_after_suspension(lines: &[Value]) -> Vec<&str> {
         .collect()
 }
 
-/// One writer at a time: one `session_started`, two `fiber_started` of
-/// which the second is resumed, and `seq` carrying on without a gap.
-fn assert_one_continued_log(lines: &[Value]) {
-    assert_eq!(of_kind(lines, "session_started").len(), 1);
-    let fibers = of_kind(lines, "fiber_started");
-    assert_eq!(fibers.len(), 2, "{lines:?}");
-    assert_eq!(fibers[0]["payload"]["resumed"], false);
-    assert_eq!(fibers[1]["payload"]["resumed"], true);
-    let seqs: Vec<u64> = lines
-        .iter()
-        .map(|line| line["seq"].as_u64().unwrap())
-        .collect();
-    assert!(
-        seqs.windows(2).all(|pair| pair[1] == pair[0] + 1),
-        "{seqs:?}"
-    );
-}
-
 #[test]
 fn a_session_idle_on_a_form_exits_suspended_and_a_reply_through_the_hub_resumes_it() {
     let setup = Setup::new();
@@ -699,7 +681,7 @@ fn a_session_idle_on_a_form_exits_suspended_and_a_reply_through_the_hub_resumes_
     guard.wait_gone();
     drop(a);
     let lines = log_of(&setup, &session);
-    assert_one_continued_log(&lines);
+    assert_one_continued_log(&lines, 2);
     assert_eq!(
         kinds_after_suspension(&lines),
         [
@@ -768,7 +750,7 @@ fn fiber_ask_resume_on_a_form_suspended_session_ends_the_turn_with_the_questions
         String::from_utf8_lossy(&resumed.stderr)
     );
     let lines = log_of(&setup, &id);
-    assert_one_continued_log(&lines);
+    assert_one_continued_log(&lines, 2);
     assert_eq!(
         kinds_after_suspension(&lines),
         [
