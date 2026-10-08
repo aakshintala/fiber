@@ -4,7 +4,7 @@
 
 use std::io::Write as _;
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
@@ -95,11 +95,10 @@ fn open_without_the_registry_arc_records_nothing() {
         emit: Arc::new(Recorder::default()),
         inner: Mutex::new(super::Inner {
             jobs: Vec::new(),
-            seq: 0,
             inbox: None,
             foreground: Vec::new(),
         }),
-        cv: Condvar::new(),
+        park: super::park::Parker::new(),
         me: Weak::new(),
     };
     let Err(error) = registry.open(opening("npm test")) else {

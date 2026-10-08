@@ -7,8 +7,8 @@ use std::hash::BuildHasher;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
@@ -22,7 +22,7 @@ use contract::{ErrorCode, JobId};
 #[path = "registry/park.rs"]
 mod park;
 
-use park::{Parked, bump};
+use park::{Parked, Parker};
 
 /// A job's end not yet reported, held by the closure in its [`End`] or
 /// [`Finish`]. Reporting consumes it; dropped unreported, it records the
@@ -119,7 +119,9 @@ pub struct Registry {
     /// Handed to each opened job for its `job_delta` lines.
     emit: Arc<dyn Emit>,
     inner: Mutex<Inner>,
-    cv: Condvar,
+    /// What `wait` and `stop` block on: a job's end, a cancel and a clock
+    /// move all bump it.
+    park: Parker,
     /// Upgrades to the `Arc` `new` returned, so `open` can hand that `Arc`
     /// to the job's [`End`] while taking `&self`.
     me: Weak<Self>,
@@ -127,9 +129,6 @@ pub struct Registry {
 
 struct Inner {
     jobs: Vec<Job>,
-    /// Bumped under this mutex on every end, cancel wake and clock wake, so
-    /// a wake that lands before the condvar wait is still visible.
-    seq: u64,
     /// The loop's inbox, which a job's end is sent to. `None` until
     /// [`contract::jobs::Jobs::deliver_to`].
     inbox: Option<Sender<Delivery>>,
@@ -202,11 +201,10 @@ impl Registry {
             emit,
             inner: Mutex::new(Inner {
                 jobs: Vec::new(),
-                seq: 0,
                 inbox: None,
                 foreground: Vec::new(),
             }),
-            cv: Condvar::new(),
+            park: Parker::new(),
             me: Weak::clone(me),
         });
         let wake: Arc<dyn Wake> = registry.clone();
@@ -559,7 +557,7 @@ impl Registry {
                 }
             }
         }
-        bump(inner, &self.cv);
+        self.park.bump();
     }
 
     /// Claims `id`'s final state for one caller: true the first time, false
@@ -571,6 +569,49 @@ impl Registry {
         };
         !std::mem::replace(&mut job.claimed, true)
     }
+
+    /// Parks until `id` ends, `until` passes, or `cancel` fires. `until`
+    /// of `None` waits without a deadline. The `Arc` stays alive for the
+    /// park: a cancel subscribed here upgrades it.
+    fn park_until(
+        self: &Arc<Self>,
+        id: &str,
+        until: Option<Instant>,
+        cancel: &dyn Cancel,
+    ) -> Parked {
+        let wake = Arc::clone(self) as Arc<dyn Wake>;
+        self.park
+            .park_until(self.clock.as_ref(), cancel, until, &wake, || {
+                let inner = lock(&self.inner);
+                if ended(&inner, id) {
+                    return Some(Parked::Ended);
+                }
+                if cancel.is_cancelled() {
+                    return Some(Parked::Cancelled);
+                }
+                if timed_out(self.clock.as_ref(), until) {
+                    return Some(Parked::Timeout);
+                }
+                None
+            })
+    }
+}
+
+impl Wake for Registry {
+    fn wake(&self) {
+        self.park.bump();
+    }
+}
+
+fn ended(inner: &Inner, id: &str) -> bool {
+    inner
+        .jobs
+        .iter()
+        .any(|job| job.started.job_id.0 == id && matches!(job.phase, Phase::Ended(_)))
+}
+
+fn timed_out(clock: &dyn Clock, until: Option<Instant>) -> bool {
+    until.is_some_and(|until| clock.now() >= until)
 }
 
 /// `j_` and 16 lowercase hex digits, drawn once. 64 bits, the same scheme
