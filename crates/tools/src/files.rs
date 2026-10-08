@@ -441,6 +441,7 @@ pub(crate) fn declare(effect: Effect, reversible: bool, resolved: &Path) -> Effe
         },
         subject: Some(path),
         prefix: Some(dir_prefix(resolved)),
+        always_reviewed: false,
     }
 }
 

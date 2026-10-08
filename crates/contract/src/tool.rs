@@ -143,6 +143,10 @@ pub struct Effects {
     pub subject: Option<String>,
     /// The widening a rule would offer, such as `npm test`.
     pub prefix: Option<String>,
+    /// When true the call skips the fast path, session grants and standing
+    /// allows, and still meets the credential deny and the standing deny
+    /// and ask rules.
+    pub always_reviewed: bool,
 }
 
 /// Why an effects function could not classify a call. Either way the call
