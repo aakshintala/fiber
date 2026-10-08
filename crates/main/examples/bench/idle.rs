@@ -3,6 +3,7 @@
 //! terminal (peak RSS, context switches), session start and the terminal's
 //! first frame (`docs/performance.md`, "Budgets").
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -11,7 +12,7 @@ use contract::clock::Clock;
 use serde_json::{Value, json};
 
 use crate::home::Home;
-use crate::linux;
+use crate::linux::{self, Counts};
 use crate::pty::Terminal;
 use crate::run::{self, Client, Session};
 
@@ -159,15 +160,51 @@ fn measure_session(
     ])
 }
 
-/// Reads every thread's switch counters, waits the idle window touching
-/// nothing, reads them again, then reads the peak RSS. Returns the
-/// per-thread deltas, the peak RSS and the thread count at the end.
+/// Reads every thread until two readings one [`run::PROBE`] apart find
+/// every thread asleep and no counter moved, and returns the second. Errs
+/// on a failed read, and once `within` has passed, naming the threads the
+/// last two readings found unsettled.
+pub(crate) fn settle(
+    clock: &dyn Clock,
+    within: Duration,
+    mut read: impl FnMut() -> Result<BTreeMap<u32, Counts>, String>,
+) -> Result<BTreeMap<u32, Counts>, String> {
+    let until = clock.now() + within;
+    let mut previous = read()?;
+    let mut unsettled = vec!["no second reading".to_owned()];
+    loop {
+        if clock.now() >= until {
+            return Err(format!(
+                "the threads did not settle within {} ms: {}",
+                within.as_millis(),
+                unsettled.join(", ")
+            ));
+        }
+        clock.sleep(run::PROBE);
+        let next = read()?;
+        unsettled = linux::unsettled(&previous, &next);
+        if unsettled.is_empty() {
+            // Both readings must find every thread asleep: compared with
+            // itself, a reading names only its awake threads.
+            unsettled = linux::unsettled(&previous, &previous);
+        }
+        if unsettled.is_empty() {
+            return Ok(next);
+        }
+        previous = next;
+    }
+}
+
+/// Reads every thread's switch counters once they settle ([`settle`]),
+/// waits the idle window touching nothing, reads them again, then reads the
+/// peak RSS. Returns the per-thread deltas, the peak RSS and the thread
+/// count at the end.
 fn idle_window(
     ctx: &Ctx<'_>,
     pid: u32,
     notes: &mut Vec<String>,
 ) -> Result<(Vec<Value>, u64, usize), String> {
-    let before = linux::threads(pid)?;
+    let before = settle(ctx.clock, READY, || linux::threads(pid))?;
     ctx.clock.sleep(ctx.idle);
     let after = linux::threads(pid)?;
     let rss = linux::peak_rss_kib(pid)?;
@@ -244,3 +281,7 @@ fn terminal_idle(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, Stri
         ("terminal_idle_switches", json!(switches)),
     ])
 }
+
+#[cfg(test)]
+#[path = "idle_tests.rs"]
+mod tests;
