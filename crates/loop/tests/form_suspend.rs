@@ -1141,6 +1141,43 @@ fn the_idle_delay_in_the_finishing_turn_suspends_on_the_same_request() {
 }
 
 #[test]
+fn a_shutdown_in_the_finishing_turn_suspends_on_the_same_request() {
+    let former = Arc::new(Former::new());
+    let (mut session, requested) = resumed_on_form(&former);
+    session.looped = session
+        .looped
+        .take()
+        .map(|looped| looped.idle_exit(Some(IDLE)));
+    let at = session.clock.now() + IDLE;
+    let tap = Tap::new(&session.log);
+    let finished = run_turn(&mut session);
+    tap.wait_for("interaction_requested");
+    // The raised-again line is written before the call's worker asks,
+    // so only the step waiting on the pending form proves the call
+    // asked and the loop pended it. The shutdown alone ends the step.
+    assert!(
+        session.clock.await_parked(at, DEADLINE),
+        "the finishing step waits on the pending form"
+    );
+    session.cancel.shutdown(143);
+    assert_eq!(finish(&mut session, &finished), None);
+    let lines = exit(&mut session, Some(143));
+    assert_kinds(&lines, &[RERAISED, &["fiber_exited"]]);
+    assert!(
+        of_kind(&lines, "interaction_resolved").is_empty(),
+        "the form stays pending"
+    );
+    assert!(
+        of_kind(&lines, "tool_call_completed").is_empty(),
+        "the call never completes"
+    );
+    let exited = of_kind(&lines, "fiber_exited")[0];
+    assert_eq!(exited.payload["suspended_on"], request_id(&requested));
+    assert_eq!(exited.payload["exit_code"], 143);
+    assert_eq!(former.runs().len(), 2);
+}
+
+#[test]
 fn a_close_held_before_the_resume_ends_the_finishing_turn_with_the_questions() {
     let former = Arc::new(Former::new());
     let (mut session, _) = resumed_on_form(&former);
