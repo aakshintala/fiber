@@ -211,6 +211,15 @@ impl Run {
             .map(|l| l["payload"]["code"].as_str().unwrap())
             .collect()
     }
+
+    /// The payload of every `retry_scheduled`, in order.
+    fn scheduled(&self) -> Vec<&Value> {
+        self.lines
+            .iter()
+            .filter(|l| l["kind"] == "retry_scheduled")
+            .map(|l| &l["payload"])
+            .collect()
+    }
 }
 
 /// An `openai-responses` stream answering `Hello.` in two fragments.
@@ -629,6 +638,33 @@ fn two_503s_with_one_attempt_fail_the_ask() {
     );
     assert_eq!(run.retried(), ["provider_unavailable"]);
     assert_eq!(server.requests().len(), 2);
+}
+
+#[test]
+fn retry_scheduled_carries_last_attempt_from_configured_attempts() {
+    // `last_attempt` is 1 + the config-file attempts: each run fails
+    // once with a 503, then answers.
+    for (attempts, last_attempt) in [(2, 3), (1, 2)] {
+        let setup = Setup::new();
+        let server =
+            ProviderServer::start([Response::status(503, "{}"), responses_hello()]).unwrap();
+        setup.provider(&server, "openai-responses", attempts);
+        let run = setup.ask();
+        assert_eq!(run.code, Some(0), "attempts {attempts}: {}", run.stderr);
+        assert_eq!(
+            run.retried(),
+            ["provider_unavailable"],
+            "attempts {attempts}"
+        );
+        assert_eq!(server.requests().len(), 2, "attempts {attempts}");
+        let scheduled = run.scheduled();
+        assert_eq!(scheduled.len(), 1, "attempts {attempts}");
+        assert_eq!(
+            scheduled[0]["last_attempt"],
+            json!(last_attempt),
+            "attempts {attempts}"
+        );
+    }
 }
 
 #[test]

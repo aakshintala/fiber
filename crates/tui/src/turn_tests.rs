@@ -1221,14 +1221,16 @@ fn message_done(app: &mut App, outcome: &str) {
 }
 
 /// A `retry_scheduled` for message `a_m`. The payload's `attempt` is never
-/// read: the card counts the starts.
-fn retry(app: &mut App, attempt: u32, delay_ms: u64) {
+/// read: the card counts the starts. Its `last_attempt` names the last
+/// attempt the policy allows, and the row reads it.
+fn retry(app: &mut App, attempt: u32, delay_ms: u64, last_attempt: u32) {
     feed(
         app,
         "retry_scheduled",
         Some("a_m"),
         0,
-        json!({"code": "rate_limited", "attempt": attempt, "delay_ms": delay_ms}),
+        json!({"code": "rate_limited", "attempt": attempt, "delay_ms": delay_ms,
+            "last_attempt": last_attempt}),
     );
 }
 
@@ -1316,14 +1318,38 @@ fn a_pending_retry_is_a_row_after_the_open_turn() {
     start(&mut app, "go", 0);
     step(&mut app, 0);
     started(&mut app);
-    retry(&mut app, 9, 3_001);
-    assert_eq!(last(&app), "↻ Retrying in 4s · rate_limited · attempt 2");
+    retry(&mut app, 9, 3_001, 4);
+    assert_eq!(
+        last(&app),
+        "↻ Retrying in 4s · rate_limited · attempt 2 of 4"
+    );
     started(&mut app);
-    retry(&mut app, 9, 4_000);
-    assert_eq!(last(&app), "↻ Retrying in 4s · rate_limited · attempt 3");
+    retry(&mut app, 9, 4_000, 4);
+    assert_eq!(
+        last(&app),
+        "↻ Retrying in 4s · rate_limited · attempt 3 of 4"
+    );
     started(&mut app);
-    retry(&mut app, 9, 0);
-    assert_eq!(last(&app), "↻ Retrying in 0s · rate_limited · attempt 4");
+    retry(&mut app, 9, 0, 4);
+    assert_eq!(
+        last(&app),
+        "↻ Retrying in 0s · rate_limited · attempt 4 of 4"
+    );
+}
+
+#[test]
+fn a_retried_request_shows_its_attempt_of_its_last_attempt() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    started(&mut app);
+    message_done(&mut app, "failed");
+    retry(&mut app, 9, 4_000, 4);
+    assert_eq!(
+        last(&app),
+        "↻ Retrying in 4s · rate_limited · attempt 2 of 4"
+    );
+    insta::assert_snapshot!("retried_request", texts(&app).join("\n"));
 }
 
 #[test]
@@ -1333,22 +1359,28 @@ fn a_new_request_counts_its_attempts_from_one() {
     step(&mut app, 0);
     started(&mut app);
     message_done(&mut app, "failed");
-    retry(&mut app, 9, 1_000);
+    retry(&mut app, 9, 1_000, 4);
     started(&mut app);
     message_done(&mut app, "completed");
     text(&mut app, "a_m", "Hi", 0);
     // A request after one that got through starts over.
     started(&mut app);
     message_done(&mut app, "failed");
-    retry(&mut app, 9, 1_000);
-    assert_eq!(last(&app), "↻ Retrying in 1s · rate_limited · attempt 2");
+    retry(&mut app, 9, 1_000, 4);
+    assert_eq!(
+        last(&app),
+        "↻ Retrying in 1s · rate_limited · attempt 2 of 4"
+    );
     // So does the next step's.
     started(&mut app);
     step(&mut app, 0);
     started(&mut app);
     message_done(&mut app, "failed");
-    retry(&mut app, 9, 1_000);
-    assert_eq!(last(&app), "↻ Retrying in 1s · rate_limited · attempt 2");
+    retry(&mut app, 9, 1_000, 4);
+    assert_eq!(
+        last(&app),
+        "↻ Retrying in 1s · rate_limited · attempt 2 of 4"
+    );
 }
 
 #[test]
@@ -1363,8 +1395,11 @@ fn attempts_are_counted_from_lines_a_late_attach_replays() {
     }
     started(&mut app);
     message_done(&mut app, "failed");
-    retry(&mut app, 9, 1_000);
-    assert_eq!(last(&app), "↻ Retrying in 1s · rate_limited · attempt 4");
+    retry(&mut app, 9, 1_000, 4);
+    assert_eq!(
+        last(&app),
+        "↻ Retrying in 1s · rate_limited · attempt 4 of 4"
+    );
 }
 
 #[test]
@@ -1374,7 +1409,7 @@ fn a_handoff_note_request_counts_its_own_attempts() {
     step(&mut app, 0);
     started(&mut app);
     message_done(&mut app, "failed");
-    retry(&mut app, 9, 1_000);
+    retry(&mut app, 9, 1_000, 4);
     started(&mut app);
     message_done(&mut app, "failed");
     feed(
@@ -1386,8 +1421,24 @@ fn a_handoff_note_request_counts_its_own_attempts() {
     );
     started(&mut app);
     message_done(&mut app, "failed");
-    retry(&mut app, 9, 1_000);
-    assert_eq!(last(&app), "↻ Retrying in 1s · rate_limited · attempt 2");
+    retry(&mut app, 9, 1_000, 4);
+    assert_eq!(
+        last(&app),
+        "↻ Retrying in 1s · rate_limited · attempt 2 of 4"
+    );
+}
+
+#[test]
+fn the_retry_row_reads_its_total_from_the_event() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    started(&mut app);
+    retry(&mut app, 9, 1_000, 2);
+    assert_eq!(
+        last(&app),
+        "↻ Retrying in 1s · rate_limited · attempt 2 of 2"
+    );
 }
 
 #[test]
@@ -1396,10 +1447,13 @@ fn a_cancelled_wait_keeps_the_failed_attempts() {
     start(&mut app, "go", 0);
     step(&mut app, 0);
     started(&mut app);
-    retry(&mut app, 9, 1_000);
+    retry(&mut app, 9, 1_000, 4);
     started(&mut app);
-    retry(&mut app, 9, 1_000);
-    assert_eq!(last(&app), "↻ Retrying in 1s · rate_limited · attempt 3");
+    retry(&mut app, 9, 1_000, 4);
+    assert_eq!(
+        last(&app),
+        "↻ Retrying in 1s · rate_limited · attempt 3 of 4"
+    );
     end(&mut app, "interrupted", 1);
     ctrl_o(&mut app);
     assert_eq!(
@@ -1444,7 +1498,7 @@ fn the_retry_row_clears_once_the_call_gets_through() {
         let mut app = app();
         start(&mut app, "go", 0);
         step(&mut app, 0);
-        retry(&mut app, 2, 1_000);
+        retry(&mut app, 2, 1_000, 4);
         feed(&mut app, kind, action, 0, payload);
         assert!(
             !texts(&app).iter().any(|line| line.starts_with('↻')),
@@ -1455,7 +1509,7 @@ fn the_retry_row_clears_once_the_call_gets_through() {
     let mut app = app();
     start(&mut app, "go", 0);
     started(&mut app);
-    retry(&mut app, 2, 1_000);
+    retry(&mut app, 2, 1_000, 4);
     step(&mut app, 0);
     assert!(last(&app).starts_with('↻'));
 }
@@ -1466,11 +1520,11 @@ fn a_failed_model_call_is_counted_on_the_summary_and_in_the_ledger() {
     start(&mut app, "go", 0);
     step(&mut app, 0);
     started(&mut app);
-    retry(&mut app, 2, 1_000);
+    retry(&mut app, 2, 1_000, 4);
     message_done(&mut app, "completed");
     call(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
     started(&mut app);
-    retry(&mut app, 3, 1_000);
+    retry(&mut app, 3, 1_000, 4);
     text(&mut app, "a_m", "Done.", 0);
     assert_eq!(texts(&app)[1], "• Read 1 file · 2 failed model calls");
     app.open(group(&app));
@@ -1490,7 +1544,7 @@ fn a_group_with_only_a_failed_call_still_draws_its_summary() {
     start(&mut app, "go", 0);
     step(&mut app, 0);
     started(&mut app);
-    retry(&mut app, 2, 1_000);
+    retry(&mut app, 2, 1_000, 4);
     text(&mut app, "a_m", "Done.", 0);
     assert_eq!(texts(&app), [" go ", "• 1 failed model call", "Done."]);
     // Ctrl+O counts it as a ledger.

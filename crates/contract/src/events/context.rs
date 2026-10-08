@@ -71,6 +71,8 @@ pub struct RetryScheduled {
     pub code: ErrorCode,
     /// The attempt about to be made.
     pub attempt: u32,
+    /// The last attempt the retry policy allows, 1 + `retry.attempts`.
+    pub last_attempt: u32,
     /// The wait before it.
     pub delay_ms: u64,
 }

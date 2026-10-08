@@ -463,14 +463,16 @@ pub(crate) fn failure(error: &Failure, out: &mut Rows) {
     }
 }
 
-/// "↻ Retrying in 4s · rate_limited · attempt 2": the wait rounded up to
-/// whole seconds. `attempt` is the one about to be made.
+/// "↻ Retrying in 4s · rate_limited · attempt 2 of 4": the wait rounded up
+/// to whole seconds. `attempt` is the one about to be made, of the
+/// `last_attempt` the retry policy allows.
 pub(crate) fn retry(retry: &RetryScheduled, attempt: u32) -> Line<'static> {
     let secs = retry.delay_ms.div_ceil(1000);
     Line::raw(format!(
-        "↻ Retrying in {secs}s · {} · attempt {}",
+        "↻ Retrying in {secs}s · {} · attempt {} of {}",
         code(&retry.code),
-        attempt
+        attempt,
+        retry.last_attempt
     ))
 }
 
