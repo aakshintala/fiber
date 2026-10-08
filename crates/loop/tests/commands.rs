@@ -1058,7 +1058,7 @@ fn close_mid_turn_lets_the_turn_finish_and_a_later_prompt_is_closing() {
 }
 
 #[test]
-fn close_during_an_approval_resolves_it_as_unanswerable() {
+fn close_during_an_approval_denies_it_by_cancel() {
     let tool = shell("npm publish");
     let mut session = Session::with_tools(
         vec![
@@ -1091,10 +1091,13 @@ fn close_during_an_approval_resolves_it_as_unanswerable() {
         .filter(|line| line.kind == "permission_resolved")
         .collect();
     assert_eq!(resolved[0].payload["decision"], "deny");
-    assert_eq!(resolved[0].payload["decided_by"], "standing_rule");
+    // The close denies the pending request itself, whatever its step: the
+    // standing rule decides nothing (`docs/events.md`,
+    // `permission_resolved`).
+    assert_eq!(resolved[0].payload["decided_by"], "cancel");
     assert_eq!(
         resolved[0].payload["reason"],
-        "No person can answer an approval in this session."
+        "The session closed while waiting for an answer."
     );
     assert!(resolved[0].payload.get("request_id").is_some());
     assert_eq!(resolved[1].payload["decision"], "deny");

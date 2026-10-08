@@ -1744,6 +1744,22 @@ fn denied_resolved(request_id: Option<&str>) -> Event {
     })
 }
 
+/// A denial by `close` of a request pending when the session closed: no
+/// decider, so no reviewer object and no rule (`docs/events.md`,
+/// `permission_resolved`).
+fn closed_resolved(request_id: &str) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        request_id: Some(contract::RequestId(request_id.into())),
+        decision: Decision::Deny,
+        decided_by: DecidedBy::Cancel,
+        reason: Some("The session closed while waiting for an answer.".into()),
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: None,
+    })
+}
+
 fn allowed_resolved() -> Event {
     Event::PermissionResolved(PermissionResolved {
         request_id: None,
@@ -4986,10 +5002,20 @@ fn the_idle_delay_while_waiting_leaves_the_request_pending_again() {
 }
 
 #[test]
-fn close_while_waiting_refuses_the_re_raised_request_as_headless() {
-    let mut history = suspended_batch(vec![Scripted::text("Done.")], &["act"], 1);
-    let act = reads("act");
-    let looped = history.resume(tools_of(&[&act]));
+fn close_while_waiting_denies_the_re_raised_review_request_by_cancel() {
+    // The suspended batch is `[a_1]` with a review request pending on it,
+    // as `a_review_request_re_raises_with_its_escalation_and_offer` writes
+    // it: the close denies the re-raised request itself, not by any rule.
+    let mut history = History::new(vec![Scripted::text("Done.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("exec"), Some("a_1"));
+    history.write(review_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+    let exec = reads("exec");
+    let looped = history.resume(tools_of(&[&exec]));
     let (ack, closed) = recording();
     let inbox = history.inbox_tx.clone();
     let replied = on_reraise(&history, move || inbox.send(Delivery::Close(ack)).unwrap());
@@ -5002,12 +5028,67 @@ fn close_while_waiting_refuses_the_re_raised_request_as_headless() {
     assert_eq!(resolved.len(), 1);
     assert_eq!(
         resolved[0].payload,
-        denied_resolved(Some("r_9")).payload().unwrap()
+        closed_resolved("r_9").payload().unwrap()
     );
-    assert!(act.ran().is_empty());
+    assert!(exec.ran().is_empty());
     let done = new_of(&history, "tool_call_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["status"], "denied");
+    assert_eq!(done[0].payload["reason"], "no_person");
+}
+
+/// A shutdown that closes the inbox while the re-raised request waits keeps
+/// it pending: no denial is written, so the next resume raises it again
+/// (`docs/invocation.md`, "Shutdown").
+#[test]
+fn a_shutdown_that_closes_the_inbox_while_waiting_keeps_the_re_raised_request() {
+    // The suspended batch is `[a_1]` with a review request pending on it,
+    // as `a_review_request_re_raises_with_its_escalation_and_offer` writes
+    // it.
+    let mut history = History::new(vec![Scripted::text("Done.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("exec"), Some("a_1"));
+    history.write(review_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+    let exec = reads("exec");
+    let cancel = Arc::new(r#loop::TurnCancel::default());
+    let looped = history
+        .resume(tools_of(&[&exec]))
+        .cancelled_by(Arc::clone(&cancel));
+    // The resume owns the inbox's only sender through `inbox_rx`: moving
+    // `inbox_tx` out leaves the drop below to disconnect the wait.
+    let inbox = std::mem::replace(&mut history.inbox_tx, mpsc::channel().0);
+    let watcher = history.log.watch();
+    let clock = Arc::clone(&history.clock);
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            support::read_until(watcher, "a re-raised permission_requested line", |line| {
+                line.kind == "permission_requested"
+            });
+            // The wait parks in `recv` with no deadline, so the drop below
+            // disconnects it: the shutdown's wake would end the wait
+            // without a disconnect instead. One [`support::DEADLINE`].
+            assert!(
+                clock.await_parked_unbounded(support::DEADLINE),
+                "the re-raised request's wait parked in recv"
+            );
+            cancel.shutdown(143);
+            drop(inbox);
+        });
+        // The wait ends as the idle delay ends it: no turn outcome, and
+        // nothing written past the re-raised request.
+        let (_looped, outcome) = history.step(looped);
+        assert_eq!(outcome, None);
+    });
+    assert!(exec.ran().is_empty());
+    let new = history.new_lines();
+    assert_eq!(new.last().unwrap().kind, "permission_requested");
+    assert!(new.iter().all(|line| line.kind != "permission_resolved"));
+    let exited = exited_on_signal(&history);
+    assert_eq!(exited.payload["suspended_on"], "r_9");
 }
 
 #[test]
