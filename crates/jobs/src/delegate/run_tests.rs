@@ -10,7 +10,8 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
-use std::process::Command;
+use std::os::unix::process::CommandExt as _;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -26,7 +27,7 @@ use contract::{ActionId, ErrorCode, JobId, Seq, SessionId};
 use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir, Watchdog, group_empties, kill_pid, pids_exit, within};
 
-use super::{Launch, Launched, Runner, Watched, note_seq, park_due};
+use super::{Launch, Launched, Runner, Watch, Watched, mint_session_id, note_seq, park_due};
 use crate::delegate::group::serial_shared;
 use crate::registry::Registry;
 
@@ -309,6 +310,32 @@ fn wait_ready(path: &std::path::Path) {
             thread::yield_now();
         }
     });
+}
+
+/// Waits, driving the fake clock, until `pgid` leaves the jobs list:
+/// retirement runs on wakes, and advances alone cost the runner no wall
+/// time, so each step also gives it some. Panics boundedly instead of
+/// asserting on a list the runner has not reached yet.
+fn wait_retired(clock: &FakeClock, pgid: u32) {
+    let (_tick, tock) = mpsc::channel::<()>();
+    for _ in 0..200 {
+        if !listed(pgid) {
+            return;
+        }
+        clock.advance(Duration::from_millis(50));
+        let _waited = tock.recv_timeout(Duration::from_millis(5));
+    }
+    panic!("pgid {pgid} was not retired");
+}
+
+/// How many SIGKILLs went to `pgid` so far.
+fn kills(pgid: u32) -> usize {
+    crate::delegate::group::sent_signals()
+        .iter()
+        .filter(|(signalled, signal)| {
+            *signalled == pgid && *signal == rustix::process::Signal::KILL
+        })
+        .count()
 }
 
 #[test]
@@ -848,8 +875,85 @@ fn a_member_outliving_a_stop_is_killed_and_the_job_still_cancels() {
         group_empties(pgid, DEADLINE),
         "the group retires once it is empty"
     );
-    // Retired, not just empty: without the retire loop the pgid would
-    // stay listed after its members are gone.
+    // Retired, not just empty, once the runner has run: without the
+    // retire loop the pgid would stay listed after its members are gone.
+    wait_retired(&rig.clock, pgid);
+    assert!(!listed(pgid));
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
+    let _serial = serial_shared();
+    let dir = TempDir::new("fiber-delegate-retire-timer");
+    let clock = FakeClock::new();
+    // A live group with no delegate attached: only `retire` supervises
+    // it, so every SIGKILL below is the retire timer's.
+    let mut member = Command::new("sleep");
+    member
+        .arg("60")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let mut member = crate::delegate::group::spawn(&mut member).unwrap();
+    let pgid = member.id();
+    let watchdog = Watchdog::group(pgid);
+    let (reaped_tx, reaped_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _status = member.wait();
+        let _sent = reaped_tx.send(());
+    });
+    let watch: Watch = Arc::new(|_: &SessionId, _: &mut dyn FnMut(&Envelope)| {
+        Err(std::io::Error::other("refused"))
+    });
+    let (runner, stop) = Runner::new(
+        crate::registry::mint_job_id(),
+        mint_session_id(),
+        dir.path().to_path_buf(),
+        Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+        BOUND,
+        1024,
+        watch,
+    );
+    // The stop sets the bound; the member ignores nothing and no other
+    // thread signals this group. The retire thread runs from here, so a
+    // timer that fires early sprays into the pre-bound window below.
+    stop.0();
+    let done = thread::spawn(move || runner.retire(pgid));
+    // Pre-bound wakes stay silent: only the reap-time signal, which never
+    // ran here, could have gone out. An inverted timer sprays here and
+    // fails this line.
+    let (_tick, tock) = mpsc::channel::<()>();
+    for _ in 0..20 {
+        clock.advance(Duration::from_millis(100));
+        let _waited = tock.recv_timeout(Duration::from_millis(20));
+    }
+    assert_eq!(kills(pgid), 0, "no SIGKILL before the bound");
+    // Past the bound the timer fires on every wake until the group is
+    // empty; the reaper thread below reaps the member for retirement. A
+    // timer that stays silent past the bound fails the wait below.
+    for _ in 0..100 {
+        clock.advance(Duration::from_millis(100));
+        let _waited = tock.recv_timeout(Duration::from_millis(20));
+        if kills(pgid) >= 1 {
+            break;
+        }
+    }
+    assert!(kills(pgid) >= 1, "SIGKILL went out once the bound passed");
+    reaped_rx
+        .recv_timeout(DEADLINE)
+        .expect("the timer killed the member");
+    for _ in 0..200 {
+        if done.is_finished() {
+            break;
+        }
+        clock.advance(Duration::from_millis(50));
+        let _waited = tock.recv_timeout(Duration::from_millis(5));
+    }
+    assert!(done.is_finished(), "retire returned once empty");
+    done.join().unwrap();
+    wait_retired(&clock, pgid);
     assert!(!listed(pgid));
     watchdog.stand_down(DEADLINE);
 }

@@ -445,15 +445,21 @@ impl Runner {
     }
 
     /// A surviving member was SIGKILLed at the reap and stays listed until
-    /// its group is empty; the report above never waits for this. No
-    /// second SIGKILL goes out here: the reap signalled every survivor
-    /// once, and nothing survives a SIGKILL it received except a process
-    /// no signal can reach.
+    /// its group is empty; the report above never waits for this. Past the
+    /// stop bound a member still holding the group gets SIGKILL again:
+    /// the reap's signal and this timer are what end every survivor
+    /// (`docs/delegates.md`, "Lifetime"), and the pgid stays listed
+    /// until the group is empty, re-checked on each clock wake.
     fn retire(&self, pgid: u32) {
         while group::listed(pgid) {
             let seen = self.park.generation();
             if group::retire_if_empty(pgid) {
                 return;
+            }
+            if let Some(kill_at) = self.shared.kill_at()
+                && self.clock.now() >= kill_at
+            {
+                group::signal(pgid, Signal::KILL);
             }
             self.park(Some(later(self.clock.as_ref(), POLL)), seen);
         }
