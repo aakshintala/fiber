@@ -482,7 +482,7 @@ fn settle(
                         stderr: reply.stderr.into_bytes(),
                         timed_out: false,
                     };
-                    hub_exec.send(contract::inbox::Delivery::ExtensionExec(meta.exec(&ran)));
+                    send_exec(&hub_exec, &meta, &ran);
                     ran
                 });
                 deliver(Reply::Exec(result));
@@ -496,13 +496,10 @@ fn settle(
                         .spawn(move || {
                             let outcome = exec::run(&request, clock.as_ref(), deadline, cancel_rx);
                             match &outcome {
-                                Ok(ran) => hub_exec
-                                    .send(contract::inbox::Delivery::ExtensionExec(meta.exec(ran))),
+                                Ok(ran) => send_exec(&hub_exec, &meta, ran),
                                 Err(failed) => {
                                     if let Some(ran) = &failed.ran {
-                                        hub_exec.send(contract::inbox::Delivery::ExtensionExec(
-                                            meta.exec(ran),
-                                        ));
+                                        send_exec(&hub_exec, &meta, ran);
                                     }
                                 }
                             }
@@ -595,6 +592,13 @@ fn take_parked(parked: &mut Vec<Parked>, id: u64) -> bool {
     };
     parked.swap_remove(pos);
     true
+}
+
+/// Sends a finished `host.exec` run to the session as its `extension_exec`
+/// line: a scripted result reaches the session exactly as a real run's
+/// (`docs/testing.md`, "Testing an extension").
+fn send_exec(hub: &Hub, meta: &ExecMeta, ran: &exec::Ran) {
+    hub.send(contract::inbox::Delivery::ExtensionExec(meta.exec(ran)));
 }
 
 /// What a finished `host.exec` run is logged as: the extension, the program
