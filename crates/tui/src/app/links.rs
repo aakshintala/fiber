@@ -235,6 +235,8 @@ impl App {
         }
         // Bare URLs: their bytes in the line's text, placed as drawn so a
         // URL wrapped by the terminal maps onto each sub-row it covers.
+        // Cells a markdown link already covers keep its destination: the
+        // markdown entry above carries it (`docs/tui.md`, "Links").
         let whole = line.to_string();
         let bare = urls(&whole);
         if bare.is_empty() {
@@ -242,10 +244,14 @@ impl App {
         }
         let placed = crate::cells::place(line, area_width);
         for range in bare {
-            // The placed cells the URL covers, by sub-row.
+            // The placed cells the URL covers, by sub-row, less the
+            // cells a markdown link covers.
             let mut per_row: BTreeMap<u16, (u16, u16)> = BTreeMap::new();
             for cell in &placed {
-                if cell.bytes.start < range.end && range.start < cell.bytes.end {
+                if cell.bytes.start < range.end
+                    && range.start < cell.bytes.end
+                    && !text.links.iter().any(|(link, _)| link.contains(&cell.col))
+                {
                     let (sub, col) = (cell.row, cell.col);
                     let end = cell.col.saturating_add(cell.width);
                     per_row
@@ -257,9 +263,7 @@ impl App {
                         .or_insert((col, end));
                 }
             }
-            // Skip a bare URL a markdown link already covers on the same
-            // cells: its destination is the same text, and the markdown
-            // entry above carries it.
+            // One entry per sub-row the URL's uncovered cells draw on.
             for (sub, (first, last_col)) in per_row {
                 let row = grow.saturating_add(usize::from(sub));
                 if row < from || row >= to {

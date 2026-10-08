@@ -95,7 +95,7 @@ use super::link_hash;
 use crate::app::{App, Effect};
 use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::link::Line;
-use crate::mouse::TargetId;
+use crate::mouse::{TargetId, hit};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -177,6 +177,29 @@ fn link_for(app: &App, url: &str) -> (TargetId, Rect) {
         .find(|link| link.url == url)
         .map(|link| (link.id, link.rects.into_iter().next().unwrap_or_default()))
         .unwrap_or_else(|| panic!("no link to {url}"))
+}
+
+#[test]
+fn a_bare_url_inside_a_markdown_label_keeps_the_markdown_destination() {
+    let mut app = replied(
+        60,
+        12,
+        "[https://label.example](https://destination.example)",
+    );
+    app.set_opener(true);
+    let area = app.conversation_area();
+    let found = app.visible_links(area);
+    // One target, not two: the label's cells keep the markdown
+    // destination, so the target under the pointer opens it.
+    assert_eq!(found.len(), 1, "{found:?}");
+    let rect = found[0].rects.first().expect("a link rect");
+    let (_, targets) = draw(&app);
+    let id = hit(&targets, rect.x, rect.y).expect("a link under the label");
+    assert_eq!(id, found[0].id);
+    assert_eq!(
+        app.on_click(id),
+        Effect::OpenLink("https://destination.example".to_owned())
+    );
 }
 
 #[test]
