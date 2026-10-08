@@ -219,11 +219,19 @@ impl LuaProvider {
         }
     }
 
-    fn discover(&self) -> Result<Vec<ModelData>, Error> {
+    /// Calls `models()` and parses what it returned, without writing the
+    /// cache or storing anything. A return that is not a model list is
+    /// `Error::BadReturn` with callback `<provider>.models`.
+    pub fn list_models(&self) -> Result<(Vec<ModelData>, Value), Error> {
         let returned = self.call("models", Value::Null)?;
         let models: Vec<ModelData> = serde_json::from_value(returned.clone()).map_err(|e| {
             self.bad_return("models", format!("something other than a model list: {e}"))
         })?;
+        Ok((models, returned))
+    }
+
+    fn discover(&self) -> Result<Vec<ModelData>, Error> {
+        let (models, returned) = self.list_models()?;
         config::write_model_cache(self.extension.home(), &self.name, &returned)?;
         *lock(&self.models) = Some(models.clone());
         Ok(models)
