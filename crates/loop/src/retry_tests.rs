@@ -1,8 +1,8 @@
 //! Unit tests of `Retry::decide`: retryable failures, backoff and attempt limit
 //! (`docs/model-routing.md`, "When a model call fails").
 
+use std::sync::Arc;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -283,115 +283,179 @@ fn a_saturated_asked_wait_fails_at_once_whatever_the_cap() {
 #[test]
 fn advancing_on_retry_scheduled_does_not_stretch_the_retry_deadline() {
     const DEADLINE: Duration = Duration::from_secs(5);
-    let home = fakes::TempDir::new("fiber-retry-deadline");
-    let workspace = home.path().join("workspace");
-    let credentials = home.path().join("credentials");
-    std::fs::create_dir_all(&workspace).unwrap();
-    std::fs::create_dir_all(&credentials).unwrap();
-    let clock = FakeClock::new();
-    let clock_for_loop: Arc<dyn contract::clock::Clock> = clock.clone();
-    let log = Arc::new(
-        Log::create(
-            home.path(),
-            SessionId("s_retry_deadline".into()),
-            clock_for_loop.clone(),
-        )
-        .unwrap(),
-    );
-    let (inbox, receiver) = mpsc::channel();
-    let provider = Arc::new(ScriptedProvider::new(vec![
-        Scripted::failed(Failure {
-            code: ErrorCode::RateLimited,
-            message: "try again".into(),
-            retry_after_ms: None,
-            provider: None,
-        }),
-        Scripted::text("Recovered."),
-    ]));
-    let rules: Arc<dyn Rules> = Arc::new(NoRules);
-    let mut looped = Loop::start(
-        Arc::clone(&log),
-        provider,
-        Model {
-            reference: "fake/model".into(),
-            cost: None,
-            subscription: false,
-        },
-        crate::prompt::PromptInputs::new(
-            home.path().to_path_buf(),
-            "/bin/sh".into(),
-            home.path()
-                .join("s_retry_deadline/events.jsonl")
-                .display()
-                .to_string(),
-            clock_for_loop,
-            fakes::CONTEXT_WINDOW,
-        ),
-        receiver,
-        Vec::new(),
-        crate::Permissions {
-            workspace: workspace.display().to_string(),
-            credentials,
-            credential_files: Vec::new(),
-            rules,
-        },
-    )
-    .unwrap();
-    inbox
-        .send(Delivery::Prompt(
-            Message {
-                content: vec![ContentPart::Text { text: "hi".into() }],
-                sender: Sender {
-                    origin: Origin::Driver,
-                    command_id: Some(CommandId("c_retry_deadline".into())),
-                },
-            },
-            Ack(Box::new(|_| {})),
-        ))
-        .unwrap();
+    const DELAY: Duration = Duration::from_secs(2);
+    // A full advance after the line releases the retry with no further
+    // advance: the deadline was fixed before the line was appended.
+    let mut full = RetryRun::start();
+    full.wait_for_retry_scheduled(DEADLINE);
+    full.clock.advance(DELAY);
+    full.wait_for_retry_started(DEADLINE);
+    full.finish();
 
-    let (at_schedule_tx, at_schedule_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    let release_rx = Mutex::new(release_rx);
-    super::set_retry_scheduled_hook(Some(Arc::new(move || {
-        at_schedule_tx.send(()).unwrap();
-        release_rx.lock().unwrap().recv_timeout(DEADLINE).unwrap();
-    })));
-    let _reset = ResetScheduleHook;
-    let mut watcher = log.watch_all().unwrap();
-    let (retry_started_tx, retry_started_rx) = mpsc::channel();
-    let watch = thread::spawn(move || {
-        let mut starts = 0;
-        while let Ok(Some(line)) = watcher.recv() {
-            if line.kind == "assistant_message_started" {
-                starts += 1;
-                if starts == 2 {
-                    retry_started_tx.send(()).unwrap();
-                    return;
+    // A smaller advance leaves the retry parked at its fixed deadline, and
+    // the rest releases it.
+    let mut partial = RetryRun::start();
+    partial.wait_for_retry_scheduled(DEADLINE);
+    partial.clock.advance(Duration::from_secs(1));
+    assert!(
+        partial.clock.await_parked(partial.origin + DELAY, DEADLINE),
+        "the retry stays parked at its fixed deadline"
+    );
+    assert_eq!(
+        partial.provider.requests().len(),
+        1,
+        "a smaller advance releases no retry"
+    );
+    partial.clock.advance(Duration::from_secs(1));
+    partial.wait_for_retry_started(DEADLINE);
+    partial.finish();
+}
+
+/// One failing-then-recovering turn on a fake clock: the loop runs on its
+/// own thread and the test watches its log. The `retry_scheduled` line the
+/// loop already emits is the signal each advance waits on (`docs/testing.md`,
+/// "Waits and timeouts").
+struct RetryRun {
+    _home: fakes::TempDir,
+    origin: std::time::Instant,
+    clock: Arc<FakeClock>,
+    provider: Arc<ScriptedProvider>,
+    watcher: log::Watcher,
+    starts: usize,
+    turn: thread::JoinHandle<Result<Option<contract::events::TurnOutcome>, crate::Error>>,
+}
+
+impl RetryRun {
+    /// Starts a turn whose first call fails retryably and whose retry
+    /// succeeds, and returns before the loop waits: the test advances the
+    /// clock only after `retry_scheduled` is on the log.
+    fn start() -> Self {
+        let home = fakes::TempDir::new("fiber-retry-deadline");
+        let workspace = home.path().join("workspace");
+        let credentials = home.path().join("credentials");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&credentials).unwrap();
+        let clock = FakeClock::new();
+        let origin = clock.origin();
+        let clock_for_loop: Arc<dyn contract::clock::Clock> = clock.clone();
+        let log = Arc::new(
+            Log::create(
+                home.path(),
+                SessionId("s_retry_deadline".into()),
+                clock_for_loop.clone(),
+            )
+            .unwrap(),
+        );
+        let (inbox, receiver) = mpsc::channel();
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            Scripted::failed(Failure {
+                code: ErrorCode::RateLimited,
+                message: "try again".into(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            Scripted::text("Recovered."),
+        ]));
+        let rules: Arc<dyn Rules> = Arc::new(NoRules);
+        let mut looped = Loop::start(
+            Arc::clone(&log),
+            Arc::clone(&provider) as Arc<dyn contract::provider::Provider>,
+            Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_retry_deadline/events.jsonl")
+                    .display()
+                    .to_string(),
+                clock_for_loop,
+                fakes::CONTEXT_WINDOW,
+            ),
+            receiver,
+            Vec::new(),
+            crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials,
+                credential_files: Vec::new(),
+                rules,
+            },
+        )
+        .unwrap();
+        inbox
+            .send(Delivery::Prompt(
+                Message {
+                    content: vec![ContentPart::Text { text: "hi".into() }],
+                    sender: Sender {
+                        origin: Origin::Driver,
+                        command_id: Some(CommandId("c_retry_deadline".into())),
+                    },
+                },
+                Ack(Box::new(|_| {})),
+            ))
+            .unwrap();
+        let watcher = log.watch_all().unwrap();
+        let turn = thread::spawn(move || looped.turn());
+        Self {
+            _home: home,
+            origin,
+            clock,
+            provider,
+            watcher,
+            starts: 0,
+            turn,
+        }
+    }
+
+    /// Reads log lines until `retry_scheduled` appears: the signal the
+    /// clock advance waits on. Each read carries the wall deadline.
+    fn wait_for_retry_scheduled(&mut self, within: Duration) {
+        loop {
+            match self.watcher.recv_timeout(within) {
+                Some(Ok(Some(line))) => {
+                    let scheduled = line.kind == "retry_scheduled";
+                    self.note(&line);
+                    if scheduled {
+                        return;
+                    }
                 }
+                Some(Ok(None)) => panic!("the session log ended before retry_scheduled"),
+                Some(Err(error)) => panic!("reading the session log: {error}"),
+                None => panic!("retry_scheduled was not appended within {within:?}"),
             }
         }
-    });
-    let turn = thread::spawn(move || looped.turn());
-
-    at_schedule_rx
-        .recv_timeout(DEADLINE)
-        .expect("retry_scheduled was appended before the retry wait");
-    clock.advance(Duration::from_secs(2));
-    release_tx.send(()).unwrap();
-    let retried_without_another_advance = retry_started_rx.recv_timeout(DEADLINE).is_ok();
-    if !retried_without_another_advance {
-        clock.advance(Duration::from_secs(2));
     }
-    assert_eq!(
-        turn.join().unwrap().unwrap(),
-        Some(contract::events::TurnOutcome::Completed)
-    );
-    watch.join().unwrap();
-    assert!(
-        retried_without_another_advance,
-        "the advance after retry_scheduled must release the deadline already fixed"
-    );
+
+    /// Reads log lines until the retry's `assistant_message_started`
+    /// appears: the advance released the wait.
+    fn wait_for_retry_started(&mut self, within: Duration) {
+        while self.starts < 2 {
+            match self.watcher.recv_timeout(within) {
+                Some(Ok(Some(line))) => self.note(&line),
+                Some(Ok(None)) => panic!("the session log ended before the retry started"),
+                Some(Err(error)) => panic!("reading the session log: {error}"),
+                None => panic!("the retry did not start within {within:?}"),
+            }
+        }
+    }
+
+    /// Joins the turn: it completed on the retry, which sent one request more.
+    fn finish(self) {
+        assert_eq!(
+            self.turn.join().unwrap().unwrap(),
+            Some(contract::events::TurnOutcome::Completed)
+        );
+        assert_eq!(self.provider.requests().len(), 2);
+    }
+
+    fn note(&mut self, line: &contract::Envelope) {
+        if line.kind == "assistant_message_started" {
+            self.starts += 1;
+        }
+    }
 }
 
 struct NoRules;
@@ -403,14 +467,6 @@ impl Rules for NoRules {
 
     fn remember(&self, _: &str, _: &str, _: &SessionId) -> Result<(), RulesError> {
         Ok(())
-    }
-}
-
-struct ResetScheduleHook;
-
-impl Drop for ResetScheduleHook {
-    fn drop(&mut self) {
-        super::set_retry_scheduled_hook(None);
     }
 }
 

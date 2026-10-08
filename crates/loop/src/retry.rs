@@ -214,6 +214,10 @@ impl crate::Loop {
                             if self.turn_cancelled() {
                                 return Ok(Attempted::Interrupted);
                             }
+                            // The deadline is fixed before the line is
+                            // appended, so an advance after `retry_scheduled`
+                            // cannot stretch this wait (`docs/testing.md`,
+                            // "Waits and timeouts").
                             let clock = self.log.clock();
                             let now = clock.now();
                             let until = now.checked_add(delay).unwrap_or(now);
@@ -226,11 +230,6 @@ impl crate::Loop {
                                 turn,
                                 Some(&message),
                             )?;
-                            #[cfg(test)]
-                            retry_scheduled_test_pause();
-                            // The deadline is fixed before the line: an advance
-                            // after `retry_scheduled` cannot stretch this wait
-                            // (`docs/testing.md`, "Waits and timeouts").
                             if self.wait_retry(until) {
                                 return Ok(Attempted::Interrupted);
                             }
@@ -276,35 +275,6 @@ impl crate::Loop {
 /// A delay as whole milliseconds for `retry_scheduled.delay_ms`, saturating.
 fn delay_ms(delay: Duration) -> u64 {
     u64::try_from(delay.as_millis()).unwrap_or(u64::MAX)
-}
-
-#[cfg(test)]
-type RetryScheduledHook = Arc<dyn Fn() + Send + Sync>;
-
-#[cfg(test)]
-static RETRY_SCHEDULED_HOOK: std::sync::OnceLock<std::sync::Mutex<Option<RetryScheduledHook>>> =
-    std::sync::OnceLock::new();
-
-#[cfg(test)]
-fn retry_scheduled_test_pause() {
-    // This pause forces the line-to-wait interleaving (`docs/testing.md`,
-    // "Waits and timeouts"): the test advances only after `retry_scheduled`.
-    let hook = RETRY_SCHEDULED_HOOK
-        .get_or_init(|| std::sync::Mutex::new(None))
-        .lock()
-        .unwrap()
-        .clone();
-    if let Some(hook) = hook {
-        hook();
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn set_retry_scheduled_hook(hook: Option<Arc<dyn Fn() + Send + Sync>>) {
-    *RETRY_SCHEDULED_HOOK
-        .get_or_init(|| std::sync::Mutex::new(None))
-        .lock()
-        .unwrap() = hook;
 }
 
 #[cfg(test)]
