@@ -516,7 +516,7 @@ impl App {
 
     /// The approval panel, while it is open.
     pub(crate) fn panel(&self) -> Option<Panel> {
-        self.queue.panel()
+        self.queue.panel(self.column_width())
     }
 
     /// The badge line while the panel is closed and requests wait.

@@ -275,6 +275,24 @@ pub(crate) struct Panel {
     /// Whether it takes the alert tint: the reviewer escalated. Never on a
     /// form.
     pub(crate) alert: bool,
+    /// The form's click targets; none on an approval.
+    pub(crate) spots: Vec<PanelSpot>,
+    /// The line holding the form's cursor; `None` on an approval, which
+    /// keeps its top when it does not fit.
+    pub(crate) cursor: Option<usize>,
+    /// The words row's line and the text cursor's column on it, while the
+    /// form's cursor is on that row.
+    pub(crate) caret: Option<(usize, u16)>,
+}
+
+/// A click target on the panel's line `line`: the columns `cols` in display
+/// cells, start inclusive and end exclusive, or every row the line wraps to
+/// when `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PanelSpot {
+    pub(crate) line: usize,
+    pub(crate) cols: Option<(u16, u16)>,
+    pub(crate) spot: form::Spot,
 }
 
 /// What a key did on the open panel.
@@ -308,8 +326,9 @@ pub(crate) struct Queue {
 
 impl Queue {
     /// The request panel, while it is open: `approval` or `question`, the
-    /// session asking, and its place among the requests waiting.
-    pub(crate) fn panel(&self) -> Option<Panel> {
+    /// session asking, and its place among the requests waiting. A form fits
+    /// its rows to `width` columns.
+    pub(crate) fn panel(&self, width: u16) -> Option<Panel> {
         let at = self.shown_index()?;
         let request = self.requests.get(at)?;
         let waiting: Vec<usize> = self.waiting_indices().collect();
@@ -329,11 +348,11 @@ impl Queue {
                         ..
                     }
                 ),
+                spots: Vec::new(),
+                cursor: None,
+                caret: None,
             },
-            Ask::Form(form) => Panel {
-                lines: form.lines(format!("question · {place}")),
-                alert: false,
-            },
+            Ask::Form(form) => form.panel(format!("question · {place}"), width),
         })
     }
 
@@ -388,6 +407,15 @@ impl Queue {
             Some(Ask::Approval(approval)) => approval.on_edit(edit),
             Some(Ask::Form(form)) => form.on_edit(edit),
             None => {}
+        }
+    }
+
+    /// A click on the shown form's `spot`; `None` when no form is shown.
+    pub(crate) fn click(&mut self, spot: form::Spot) -> Option<PanelKey> {
+        let at = self.shown_index()?;
+        match &mut self.requests.get_mut(at)?.ask {
+            Ask::Form(form) => Some(form.click(spot)),
+            Ask::Approval(_) => None,
         }
     }
 

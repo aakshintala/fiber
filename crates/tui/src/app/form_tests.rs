@@ -387,3 +387,78 @@ fn a_rejected_cancel_shows_no_notice() {
     assert!(fold(&mut app, rejected(S_A, &cancel)).is_empty());
     assert!(app.notices().is_empty());
 }
+
+/// Presses the stroke `name` through the app's bindings.
+fn stroke(app: &mut App, name: &str) -> Effect {
+    let stroke = crate::stroke::Stroke::parse(name).unwrap_or_else(|err| panic!("{name}: {err}"));
+    app.on_press(stroke, fakes::clock::FakeClock::new().now())
+}
+
+/// The terminal cursor's cell on a 60 by 12 screen.
+fn caret(app: &App) -> Option<(u16, u16)> {
+    let area = ratatui::layout::Rect::new(0, 0, 60, 12);
+    crate::view::cursor(app, area).map(|at| (at.x, at.y))
+}
+
+/// The panel's tab line.
+fn tab_line(app: &App) -> String {
+    panel(app).get(1).cloned().unwrap_or_default()
+}
+
+#[test]
+fn the_form_keys_go_through_the_keyset() {
+    let mut app = showing();
+    app.set_size(60, 12);
+    assert_eq!(caret(&app), None);
+    assert_eq!(stroke(&mut app, "space"), Effect::None);
+    assert!(panel(&app).contains(&"› (•) main (Recommended) · the default".to_owned()));
+    stroke(&mut app, "right");
+    assert_eq!(tab_line(&app), "Base ✓  [Name]  Submit");
+    // Six panel lines on the bottom rows: the words row is the fourth.
+    assert_eq!(caret(&app), Some((4, 9)));
+    for ch in "ab".chars() {
+        press(&mut app, Key::Char(ch));
+    }
+    assert_eq!(caret(&app), Some((6, 9)));
+    stroke(&mut app, "left");
+    assert_eq!(caret(&app), Some((5, 9)));
+    assert_eq!(tab_line(&app), "Base ✓  [Name ✓]  Submit");
+    stroke(&mut app, "shift+tab");
+    assert_eq!(tab_line(&app), "[Base ✓]  Name ✓  Submit");
+    assert_eq!(caret(&app), None);
+    stroke(&mut app, "tab");
+    assert_eq!(tab_line(&app), "Base ✓  [Name ✓]  Submit");
+}
+
+#[test]
+fn arrows_reach_a_form_over_an_open_prompt_search() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = attached();
+    app.on_key(Key::CtrlR, now);
+    feed(&mut app, asked());
+    app.on_edit(Edit::Right);
+    assert_eq!(tab_line(&app), "Base  [Name]  Submit");
+    press(&mut app, Key::Char('a'));
+    press(&mut app, Key::Char('c'));
+    app.on_edit(Edit::Left);
+    press(&mut app, Key::Char('b'));
+    assert!(
+        panel(&app).contains(&"› ✎ abc".to_owned()),
+        "{:?}",
+        panel(&app)
+    );
+    // Once the form is declined, the search shows with its query empty.
+    assert_eq!(sends(&mut app, Key::Esc)["args"]["declined"], true);
+    assert_eq!(search_query(&app).as_deref(), Some("search prompts: "));
+}
+
+#[test]
+fn a_global_binding_on_a_form_key_wins() {
+    let mut app = showing();
+    let mut user = serde_json::Map::new();
+    user.insert("key_map".to_owned(), json!(["f1", "right"]));
+    app.set_keys(crate::KeysSetup { user });
+    stroke(&mut app, "right");
+    assert!(app.keymap_top().is_some());
+    assert_eq!(tab_line(&app), "[Base]  Name  Submit");
+}

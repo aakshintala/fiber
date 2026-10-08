@@ -5,7 +5,8 @@ use contract::Envelope;
 use contract::events::{CommandAccepted, CommandRejected};
 
 use super::{App, Effect, Kind, Link, mint, read, session_command};
-use crate::approvals::Queue;
+use crate::approvals::form::Spot;
+use crate::approvals::{PanelKey, Queue};
 
 impl App {
     /// Sends the shown request's answer. With the link down nothing goes
@@ -19,6 +20,16 @@ impl App {
     /// stays.
     pub(super) fn decline(&mut self) -> Effect {
         self.reply(Queue::decline)
+    }
+
+    /// A click on the shown form's `spot` (`docs/tui.md`, "A question
+    /// form"): it answers or declines as the key it stands for does.
+    pub(super) fn form_click(&mut self, spot: Spot) -> Effect {
+        match self.queue.click(spot) {
+            Some(PanelKey::Answer) => self.answer(),
+            Some(PanelKey::Decline) => self.decline(),
+            Some(PanelKey::Handled) | None => Effect::None,
+        }
     }
 
     /// Sends the `reply` line `make` builds for the shown request under a

@@ -47,6 +47,8 @@ pub(crate) enum TargetId {
     Home(crate::home::Spot),
     /// A chip, the Send row or the ✕ of the repository offer.
     Offer(crate::offer::Spot),
+    /// A tab or row of the question form on the request panel.
+    Form(crate::approvals::form::Spot),
 }
 
 /// One click target as drawn: what it does and the cells it covers.

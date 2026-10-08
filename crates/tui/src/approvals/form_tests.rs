@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 
-use super::Form;
+use super::{Form, Spot};
 use crate::approvals::{PanelKey, Queue};
 use crate::keys::{Edit, Key};
 
@@ -54,7 +54,7 @@ fn answer(form: &Form) -> Value {
 
 /// The lines under the header `h`.
 fn lines(form: &Form) -> Vec<String> {
-    form.lines("h".to_owned())
+    form.panel("h".to_owned(), 80).lines
 }
 
 /// The line at `row`.
@@ -430,8 +430,6 @@ fn a_paste_is_typed_on_the_words_row_or_into_the_note() {
 #[test]
 fn every_other_edit_does_nothing() {
     let edits = [
-        Edit::Left,
-        Edit::Right,
         Edit::ShiftEnter,
         Edit::CtrlJ,
         Edit::WordLeft,
@@ -534,7 +532,7 @@ fn folded(lines: &[contract::Envelope]) -> Queue {
 
 /// The panel's lines, or none when it is closed.
 fn panel(queue: &Queue) -> Vec<String> {
-    queue.panel().map(|panel| panel.lines).unwrap_or_default()
+    queue.panel(80).map(|panel| panel.lines).unwrap_or_default()
 }
 
 /// The panel's header, or nothing when it is closed.
@@ -548,7 +546,7 @@ fn a_form_joins_the_queue_behind_an_approval() {
     assert_eq!(queue.on_key(&Key::Esc), Some(PanelKey::Handled));
     queue.fold(&asked("r_4f", json!({"action_ids": ["a_1"]})));
     // Behind a request put aside, the form waits under the badge.
-    assert!(queue.panel().is_none());
+    assert!(queue.panel(80).is_none());
     assert_eq!(
         queue.badge(0).as_deref(),
         Some("! 2 waiting · /approvals or ⌥A")
@@ -557,7 +555,7 @@ fn a_form_joins_the_queue_behind_an_approval() {
     assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 2"));
     assert_eq!(queue.on_key(&Key::Esc), Some(PanelKey::Handled));
     assert_eq!(header(&queue), format!("question · {S_A} · 2 of 2"));
-    assert_eq!(queue.panel().map(|panel| panel.alert), Some(false));
+    assert_eq!(queue.panel(80).map(|panel| panel.alert), Some(false));
     // ⌥A moves on from the form as from an approval.
     assert_eq!(queue.on_key(&Key::AltA), Some(PanelKey::Handled));
     assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 2"));
@@ -577,7 +575,7 @@ fn a_resolved_form_leaves_the_queue() {
         json!({"request_id": "r_4f", "by": "person",
             "answers": [{"labels": ["main"]}]}),
     ));
-    assert!(queue.panel().is_none());
+    assert!(queue.panel(80).is_none());
     assert!(queue.badge(0).is_none());
 }
 
@@ -588,7 +586,7 @@ fn a_form_resolved_by_fiber_leaves_the_queue() {
         "interaction_resolved",
         json!({"request_id": "r_4f", "by": "fiber", "declined": true}),
     ));
-    assert!(queue.panel().is_none());
+    assert!(queue.panel(80).is_none());
     assert!(queue.badge(0).is_none());
 }
 
@@ -603,7 +601,7 @@ fn a_confirm_interaction_is_not_queued() {
         json!({"request_id": "r_4", "kind": "text_input", "prompt": "What?"}),
     ] {
         let queue = folded(&[envelope("interaction_requested", payload.clone())]);
-        assert!(queue.panel().is_none(), "{payload}");
+        assert!(queue.panel(80).is_none(), "{payload}");
         assert!(queue.badge(0).is_none(), "{payload}");
     }
 }
@@ -642,7 +640,7 @@ fn enter_on_submit_answers_with_the_form() {
             "args": {"request_id": "r_4f", "answers": [{"labels": ["main"]}],
                 "note": "soon"}})
     );
-    assert!(queue.panel().is_none());
+    assert!(queue.panel(80).is_none());
 }
 
 #[test]
@@ -657,7 +655,7 @@ fn decline_names_only_a_form() {
         json!({"id": "c_1", "command": "reply", "session_id": S_A,
             "args": {"request_id": "r_4f", "declined": true}})
     );
-    assert!(queue.panel().is_none());
+    assert!(queue.panel(80).is_none());
     // A rejected decline puts the form back and cancels nothing.
     queue.restore("c_1");
     assert_eq!(header(&queue), format!("question · {S_A} · 1 of 1"));
@@ -679,4 +677,230 @@ fn a_shown_request_takes_every_edit() {
     queue.on_edit(&Edit::Paste("x".to_owned()));
     let lines = panel(&queue);
     assert!(lines.contains(&"› ✎ x".to_owned()), "{lines:?}");
+}
+
+#[test]
+fn a_click_on_a_row_the_shown_tab_lacks_does_nothing() {
+    let mut form = base_and_name(false);
+    let before = lines(&form);
+    for spot in [Spot::Option(2), Spot::Note, Spot::Send] {
+        assert_eq!(form.click(spot), PanelKey::Handled, "{spot:?}");
+        assert_eq!(lines(&form), before, "{spot:?}");
+    }
+    press(&mut form, &[Key::Tab, Key::Tab]);
+    let before = lines(&form);
+    for spot in [Spot::Option(0), Spot::Words, Spot::Next] {
+        assert_eq!(form.click(spot), PanelKey::Handled, "{spot:?}");
+        assert_eq!(lines(&form), before, "{spot:?}");
+    }
+}
+
+#[test]
+fn clicks_on_the_submit_tab_take_the_note_send_and_decline() {
+    let mut form = base_and_name(false);
+    assert_eq!(form.click(Spot::Tab(2)), PanelKey::Handled);
+    assert_eq!(cursor(&form), "› Submit");
+    assert_eq!(form.click(Spot::Note), PanelKey::Handled);
+    assert_eq!(cursor(&form), "› note · type to add a note");
+    assert_eq!(form.click(Spot::Send), PanelKey::Answer);
+    assert_eq!(form.click(Spot::Chat), PanelKey::Decline);
+    assert_eq!(cursor(&form), "› Chat about this");
+}
+
+#[test]
+fn the_panel_marks_the_cursor_line_and_each_rows_spot() {
+    let form = base_and_name(false);
+    let panel = form.panel("h".to_owned(), 80);
+    assert_eq!(panel.cursor, Some(3));
+    let spots: Vec<_> = panel
+        .spots
+        .iter()
+        .map(|spot| (spot.line, spot.cols, spot.spot))
+        .collect();
+    assert_eq!(
+        spots,
+        [
+            (1, Some((0, 6)), Spot::Tab(0)),
+            (1, Some((8, 12)), Spot::Tab(1)),
+            (1, Some((14, 20)), Spot::Tab(2)),
+            (3, None, Spot::Option(0)),
+            (4, None, Spot::Option(1)),
+            (5, None, Spot::Words),
+            (6, None, Spot::Next),
+            (7, None, Spot::Chat),
+        ]
+    );
+    let mut form = form;
+    press(&mut form, &[Key::BackTab, Key::Tab, Key::Tab, Key::Up]);
+    let panel = form.panel("h".to_owned(), 80);
+    assert_eq!(panel.cursor, Some(4));
+    let rows: Vec<(usize, Spot)> = panel
+        .spots
+        .iter()
+        .filter(|spot| spot.cols.is_none())
+        .map(|spot| (spot.line, spot.spot))
+        .collect();
+    assert_eq!(rows, [(4, Spot::Note), (5, Spot::Send), (6, Spot::Chat)]);
+}
+
+/// Two single-choice questions `A` and `B`, each with options `x` and `y`.
+fn two_choices() -> Form {
+    form(json!([
+        {"header": "A", "question": "A?", "options": [{"label": "x"}, {"label": "y"}]},
+        {"header": "B", "question": "B?", "options": [{"label": "x"}, {"label": "y"}]}
+    ]))
+}
+
+/// Presses ← (`false`) or → (`true`) for each entry.
+fn arrows(form: &mut Form, right: &[bool]) {
+    for right in right {
+        form.on_edit(if *right { &Edit::Right } else { &Edit::Left });
+    }
+}
+
+/// The words row's line and the text cursor's column at `cols` columns.
+fn words_at(form: &Form, cols: u16) -> (String, Option<u16>) {
+    let panel = form.panel("h".to_owned(), cols);
+    let line = panel
+        .spots
+        .iter()
+        .find(|spot| spot.spot == Spot::Words)
+        .and_then(|spot| panel.lines.get(spot.line).cloned())
+        .unwrap_or_default();
+    (line, panel.caret.map(|(_, col)| col))
+}
+
+#[test]
+fn left_and_right_on_an_option_row_move_between_tabs_and_stop_at_the_ends() {
+    let mut form = two_choices();
+    arrows(&mut form, &[true]);
+    assert_eq!(tabs(&form), "A  [B]  Submit");
+    assert_eq!(cursor(&form), "› ( ) x");
+    arrows(&mut form, &[true, true]);
+    assert_eq!(tabs(&form), "A  B  [Submit]");
+    arrows(&mut form, &[false]);
+    assert_eq!(tabs(&form), "A  [B]  Submit");
+    arrows(&mut form, &[false, false]);
+    assert_eq!(tabs(&form), "[A]  B  Submit");
+}
+
+#[test]
+fn left_and_right_on_next_and_chat_move_between_tabs() {
+    let mut form = two_choices();
+    press(&mut form, &[Key::Down, Key::Down, Key::Down]);
+    assert_eq!(cursor(&form), "› Next →");
+    arrows(&mut form, &[true]);
+    assert_eq!(tabs(&form), "A  [B]  Submit");
+    press(&mut form, &[Key::Down, Key::Down, Key::Down, Key::Down]);
+    assert_eq!(cursor(&form), "› Chat about this");
+    arrows(&mut form, &[false]);
+    assert_eq!(tabs(&form), "[A]  B  Submit");
+}
+
+#[test]
+fn left_and_right_on_every_submit_row_move_between_tabs() {
+    for ups in 0..3 {
+        let mut form = two_choices();
+        press(&mut form, &[Key::Tab, Key::Tab, Key::Down]);
+        for _ in 0..ups {
+            press(&mut form, &[Key::Up]);
+        }
+        arrows(&mut form, &[false]);
+        assert_eq!(tabs(&form), "A  [B]  Submit", "{ups}");
+    }
+}
+
+#[test]
+fn left_and_right_on_the_words_row_move_the_text_cursor_and_stop_at_the_ends() {
+    let mut form = base_and_name(false);
+    press(&mut form, &[Key::Tab]);
+    type_text(&mut form, "abc");
+    assert_eq!(words_at(&form, 60), ("› ✎ abc".to_owned(), Some(7)));
+    arrows(&mut form, &[true]);
+    assert_eq!(words_at(&form, 60).1, Some(7));
+    arrows(&mut form, &[false, false]);
+    assert_eq!(words_at(&form, 60).1, Some(5));
+    arrows(&mut form, &[false, false]);
+    assert_eq!(words_at(&form, 60).1, Some(4));
+    assert_eq!(tabs(&form), "Base  [Name ✓]  Submit");
+    arrows(&mut form, &[true]);
+    assert_eq!(words_at(&form, 60).1, Some(5));
+}
+
+#[test]
+fn typing_and_a_paste_insert_at_the_text_cursor() {
+    let mut form = base_and_name(false);
+    press(&mut form, &[Key::Tab]);
+    type_text(&mut form, "ad");
+    arrows(&mut form, &[false]);
+    type_text(&mut form, "b");
+    form.on_edit(&Edit::Paste("c\n".to_owned()));
+    assert_eq!(words_at(&form, 60), ("› ✎ abc d".to_owned(), Some(8)));
+    assert_eq!(
+        answer(&form)["answers"][1],
+        json!({"labels": [], "text": "abc d"})
+    );
+}
+
+#[test]
+fn backspace_removes_the_character_before_the_text_cursor() {
+    let mut form = base_and_name(false);
+    press(&mut form, &[Key::Tab]);
+    type_text(&mut form, "abc");
+    arrows(&mut form, &[false]);
+    press(&mut form, &[Key::Backspace]);
+    assert_eq!(words_at(&form, 60), ("› ✎ ac".to_owned(), Some(5)));
+    arrows(&mut form, &[false]);
+    press(&mut form, &[Key::Backspace]);
+    assert_eq!(words_at(&form, 60), ("› ✎ ac".to_owned(), Some(4)));
+}
+
+#[test]
+fn a_click_on_the_words_row_puts_the_text_cursor_at_the_end() {
+    let mut form = base_and_name(false);
+    press(&mut form, &[Key::Tab]);
+    type_text(&mut form, "abc");
+    arrows(&mut form, &[false, false]);
+    press(&mut form, &[Key::Down]);
+    assert_eq!(form.click(Spot::Words), PanelKey::Handled);
+    assert_eq!(words_at(&form, 60).1, Some(7));
+}
+
+#[test]
+fn the_words_row_scrolls_only_when_the_text_cursor_would_reach_the_width() {
+    let mut form = base_and_name(false);
+    press(&mut form, &[Key::Tab]);
+    type_text(&mut form, "abcdefgh");
+    // The text cursor after `h` is at column 12.
+    assert_eq!(words_at(&form, 14), ("› ✎ abcdefgh".to_owned(), Some(12)));
+    assert_eq!(words_at(&form, 13), ("› ✎ abcdefgh".to_owned(), Some(12)));
+    assert_eq!(words_at(&form, 12), ("› ✎ bcdefgh".to_owned(), Some(11)));
+    // Off the row, the words show from their start, clipped.
+    press(&mut form, &[Key::Down]);
+    assert_eq!(words_at(&form, 8), ("  ✎ abcd".to_owned(), None));
+}
+
+#[test]
+fn a_wide_character_counts_two_cells_on_the_words_row() {
+    let mut form = base_and_name(false);
+    press(&mut form, &[Key::Tab]);
+    type_text(&mut form, "名前");
+    assert_eq!(words_at(&form, 9), ("› ✎ 名前".to_owned(), Some(8)));
+    assert_eq!(words_at(&form, 8), ("› ✎ 前".to_owned(), Some(6)));
+}
+
+#[test]
+fn a_words_row_narrower_than_its_mark_shows_the_mark_only() {
+    let mut form = base_and_name(false);
+    press(&mut form, &[Key::Tab]);
+    type_text(&mut form, "ab");
+    assert_eq!(words_at(&form, 3), ("› ✎".to_owned(), Some(4)));
+}
+
+#[test]
+fn the_panel_places_the_caret_on_the_words_line() {
+    let mut form = base_and_name(false);
+    assert_eq!(form.panel("h".to_owned(), 60).caret, None);
+    press(&mut form, &[Key::Down, Key::Down]);
+    assert_eq!(form.panel("h".to_owned(), 60).caret, Some((5, 4)));
 }
