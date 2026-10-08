@@ -17,7 +17,7 @@ pub(crate) use roles::Role;
 
 use crate::app::Target;
 use crate::highlight;
-use crate::turn::Row;
+use crate::rows::Rows;
 
 /// A reply rendered at one width.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -98,7 +98,7 @@ impl Reply {
 
     /// The rendered lines at `width`, each code block's header carrying
     /// its copy target.
-    pub(crate) fn rows(&self, width: u16, out: &mut Vec<Row>) {
+    pub(crate) fn rows(&self, width: u16, out: &mut Rows) {
         let rendered = self.rendered(width);
         for (at, line) in rendered.lines.iter().cloned().enumerate() {
             let block = rendered.targets.iter().position(|target| target.line == at);

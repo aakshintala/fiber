@@ -378,6 +378,7 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         first,
         lines,
         turns,
+        ..
     } = app.shown(top, height);
     let mut start = first;
     let overlay = app.has_new() && area.height > 0;

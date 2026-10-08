@@ -15,7 +15,8 @@ use ratatui::text::{Line, Span};
 use serde_json::Value;
 
 use crate::app::Target;
-use crate::turn::{Group, Row, Thought, target_id};
+use crate::rows::Rows;
+use crate::turn::{Group, Thought, target_id};
 
 /// A span of milliseconds, truncated to whole seconds: `38s` under a
 /// minute, `4m 05s` under an hour, else `1h 02m`.
@@ -305,7 +306,7 @@ pub(crate) fn dim(text: String) -> Line<'static> {
 
 /// The prompt as a tinted block on the right, at most 70% of `width`, with
 /// a column of padding each side.
-pub(crate) fn bubble(text: &str, columns: u16, out: &mut Vec<Row>) {
+pub(crate) fn bubble(text: &str, columns: u16, out: &mut Rows) {
     if text.trim().is_empty() {
         return;
     }
@@ -421,7 +422,7 @@ pub(crate) fn code(code: &ErrorCode) -> String {
 /// A failed turn's lines before its ▣ line: "✗ <message> · <code>", then,
 /// when the provider said something, its words dim under it. A failed
 /// login offers "log in" on the ✗ line.
-pub(crate) fn failure(error: &Failure, out: &mut Vec<Row>) {
+pub(crate) fn failure(error: &Failure, out: &mut Rows) {
     // #678 builds the login view `Target::Login` opens.
     let login = (error.code == ErrorCode::AuthenticationFailed).then_some(Target::Login);
     let line = format!("✗ {} · {}", error.message, code(&error.code));
@@ -468,7 +469,7 @@ pub(crate) fn thought(gutter: &str, text: &str, span: Option<u64>) -> Line<'stat
 }
 
 /// An opened item's text under it, a dim line each.
-pub(crate) fn opened(text: &str, indent: &str, out: &mut Vec<Row>) {
+pub(crate) fn opened(text: &str, indent: &str, out: &mut Rows) {
     for line in text.split('\n') {
         out.push((dim(format!("{indent}{line}")), None));
     }
@@ -509,7 +510,7 @@ impl Group {
 
     /// Its lines. A finished group with no call is its thinking, one line
     /// a block; otherwise a summary line, and the ledger when open.
-    pub(crate) fn rows(&self, running: bool, out: &mut Vec<Row>) {
+    pub(crate) fn rows(&self, running: bool, out: &mut Rows) {
         if !running && !self.has_ledger() {
             for thought in self.thoughts() {
                 thought_rows(thought, "", out);
@@ -563,7 +564,7 @@ impl Group {
 
     /// One row per call, split by step: the step's number in the gutter on
     /// its first row, the model calls that failed first, then its thinking.
-    fn ledger(&self, out: &mut Vec<Row>) {
+    fn ledger(&self, out: &mut Rows) {
         for section in &self.sections {
             let mut gutter = format!("{:>3} ", section.step);
             for (code, attempt) in &section.failed {
@@ -618,7 +619,7 @@ impl Group {
 const GAP: &str = "    ";
 
 /// A thought's line after `gutter`, and its text when open.
-fn thought_rows(thought: &Thought, gutter: &str, out: &mut Vec<Row>) {
+fn thought_rows(thought: &Thought, gutter: &str, out: &mut Rows) {
     let span = thought
         .ended
         .map(|ended| ended.saturating_sub(thought.started));

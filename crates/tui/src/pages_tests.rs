@@ -615,3 +615,30 @@ fn a_call_shown_opens_a_group_for_later_thinking() {
     );
     assert_eq!(index.pages().len(), 1);
 }
+
+#[test]
+fn locate_finds_the_page_and_offset_of_a_row() {
+    let index = with_rows(&[3, 0, 5, 2]);
+    // (row, the page drawing it and the row's offset in it)
+    let cases = [
+        (0, Some((0, 0))),
+        (2, Some((0, 2))),
+        // Page 1 draws no row, so the row after page 0's last is page 2's.
+        (3, Some((2, 0))),
+        (7, Some((2, 4))),
+        (8, Some((3, 0))),
+        (9, Some((3, 1))),
+        (10, None),
+    ];
+    for (row, expected) in cases {
+        assert_eq!(index.locate(row), expected, "row {row}");
+    }
+}
+
+#[test]
+fn start_is_the_sum_of_the_rows_before() {
+    let index = with_rows(&[3, 0, 5, 2]);
+    let starts: Vec<usize> = (0..4).map(|at| index.start(at)).collect();
+    assert_eq!(starts, index.starts());
+    assert_eq!(index.start(4), 10, "past the last page is the total");
+}

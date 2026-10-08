@@ -29,6 +29,7 @@ mod mouse;
 mod offer;
 mod osc;
 mod pages;
+mod rows;
 mod screen;
 mod shell;
 mod slash;

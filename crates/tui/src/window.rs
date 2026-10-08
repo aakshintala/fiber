@@ -15,7 +15,10 @@ use crate::app::{Target, read};
 use crate::format::{self, Spend};
 use crate::mouse::TargetId;
 use crate::pages::{Cut, Index};
+use crate::rows::{RowText, Rows};
 use crate::turn::{Fold, Row, Turn};
+
+mod pins;
 
 /// Where folding a page begins: its turn and step, the live fold's scalar
 /// continuation state, and descriptions only of earlier pages' jobs that
@@ -171,16 +174,18 @@ pub(crate) struct Applied {
 }
 
 type TurnRanges = Vec<(usize, Range<usize>)>;
-type DrawData = (Vec<Row>, FocusItems, TurnRanges);
+type DrawData = (Vec<Row>, Vec<RowText>, FocusItems, TurnRanges);
 
 /// The lines shown from a row on: the first shown page's first row, each
 /// line with its rows and click target, and the turn ranges in those lines.
-/// A page not loaded is one blank line of its rows.
+/// A page not loaded is one blank line of its rows. `texts` holds one per
+/// line: what each adds to its logical line, plain for a blank one.
 #[derive(Debug)]
 pub(crate) struct Shown {
     pub(crate) first: usize,
     pub(crate) lines: Vec<(Line<'static>, usize, Option<Target>)>,
     pub(crate) turns: TurnRanges,
+    pub(crate) texts: Vec<RowText>,
 }
 
 /// A focus stop's row, height and stable id across paging.
@@ -211,8 +216,8 @@ pub(crate) struct Pages {
     stale: BTreeSet<usize>,
     /// Pages whose load failed since the width last changed.
     failed: BTreeSet<usize>,
-    /// Dropped pages a whole-turn copy asked for, kept until it runs.
-    wanted: BTreeSet<usize>,
+    /// Dropped pages a pending copy asked for, kept until it runs.
+    pins: pins::Pins,
     width: u16,
     /// The rows of the open page's lines too wide for one row, by text, so
     /// counting it again after each line wraps only what changed.
@@ -240,7 +245,7 @@ impl Pages {
             overrides: BTreeMap::new(),
             stale: BTreeSet::new(),
             failed: BTreeSet::new(),
-            wanted: BTreeSet::new(),
+            pins: pins::Pins::default(),
             width,
             wrapped: HashMap::new(),
             #[cfg(test)]
@@ -510,7 +515,7 @@ impl Pages {
 
     /// The seq ranges to load, in order: the window's pages not resident,
     /// then the pages whose row counts are stale, then the pages a
-    /// whole-turn copy asked for. A page may be listed twice; once loaded,
+    /// pending copy asked for. A page may be listed twice; once loaded,
     /// it is no longer needed.
     pub(crate) fn needs(&self, top: usize, height: usize) -> Vec<RangeInclusive<Seq>> {
         let wanted = |at: &usize| {
@@ -518,7 +523,7 @@ impl Pages {
         };
         let mut pages: Vec<usize> = self.index.window(top, height).filter(wanted).collect();
         pages.extend(self.stale.iter().copied().filter(wanted));
-        pages.extend(self.wanted.iter().copied().filter(wanted));
+        pages.extend(self.pins.pages().filter(wanted));
         pages
             .into_iter()
             .filter_map(|at| self.index.pages().get(at))
@@ -527,11 +532,11 @@ impl Pages {
     }
 
     /// Drops the cards of every closed page outside the window, keeping
-    /// the pages a whole-turn copy asked for until it runs.
+    /// the pages a pending copy asked for until it runs.
     pub(crate) fn trim(&mut self, top: usize, height: usize) {
         let window = self.index.window(top, height);
         for (at, part) in self.closed.iter_mut().enumerate() {
-            if !window.contains(&at) && !self.wanted.contains(&at) {
+            if !window.contains(&at) && !self.pins.contains(at) {
                 *part = None;
             }
         }
@@ -552,21 +557,40 @@ impl Pages {
         self.seeds.get(at).is_some_and(|seed| seed.cut)
     }
 
-    /// Keeps page `at` resident for a whole-turn copy.
+    /// Keeps page `at` resident for one more pending copy.
     pub(crate) fn want(&mut self, at: usize) {
-        self.wanted.insert(at);
+        self.pins.pin(at);
     }
 
-    /// Lets page `at` drop with the window again.
+    /// One pending copy lets page `at` go; it drops with the window once
+    /// no copy keeps it.
     pub(crate) fn unwant(&mut self, at: usize) {
-        self.wanted.remove(&at);
+        self.pins.unpin(at);
     }
 
-    /// How many dropped pages a whole-turn copy keeps resident (tests only:
-    /// what an abandoned copy must return to).
+    /// How many pins pending copies hold (tests only: what an abandoned
+    /// copy must return to).
     #[cfg(test)]
     pub(crate) fn pinned(&self) -> usize {
-        self.wanted.len()
+        self.pins.total()
+    }
+
+    /// The width rows wrap at.
+    pub(crate) fn wrap_width(&self) -> u16 {
+        self.width
+    }
+
+    /// Whether page `at`'s load failed since the width last changed.
+    pub(crate) fn page_failed(&self, at: usize) -> bool {
+        self.failed.contains(&at)
+    }
+
+    /// A resident page's rows and their texts as drawn now; `None` while
+    /// it is dropped.
+    pub(crate) fn page_text(&self, at: usize) -> Option<(Vec<Row>, Vec<RowText>)> {
+        let part = self.part(at)?;
+        let (rows, texts, _, _) = self.draw_data(at, part);
+        Some((rows, texts))
     }
 
     /// Re-counts every page at `width`: a resident page in place, a dropped
@@ -690,6 +714,7 @@ impl Pages {
         let mut first = None;
         let mut lines = Vec::new();
         let mut turns = Vec::new();
+        let mut texts = Vec::new();
         let mut start = 0usize;
         for (at, page) in self.index.pages().iter().enumerate() {
             if start >= end {
@@ -700,8 +725,9 @@ impl Pages {
                 first.get_or_insert(start);
                 match self.part(at) {
                     Some(part) => {
-                        let (rows, _, page_turns) = self.draw_data(at, part);
+                        let (rows, page_texts, _, page_turns) = self.draw_data(at, part);
                         let base = lines.len();
+                        texts.extend(page_texts);
                         lines.extend(rows.into_iter().map(|(line, target)| {
                             let count = crate::view::rows(line.clone(), self.width);
                             (line, count, target)
@@ -712,7 +738,10 @@ impl Pages {
                                 .map(|(turn, range)| (turn, base + range.start..base + range.end)),
                         );
                     }
-                    None => lines.push((Line::default(), page.rows, None)),
+                    None => {
+                        lines.push((Line::default(), page.rows, None));
+                        texts.push(RowText::plain());
+                    }
                 }
             }
             start = next;
@@ -721,6 +750,7 @@ impl Pages {
             first: first.unwrap_or(start),
             lines,
             turns,
+            texts,
         }
     }
 
@@ -751,7 +781,7 @@ impl Pages {
             .filter_map(|(at, part)| part.as_ref().map(|part| (at, part)))
             .chain(std::iter::once((self.closed.len(), &self.open)))
         {
-            let (rows, _, turns) = self.draw_data(at, part);
+            let (rows, _, _, turns) = self.draw_data(at, part);
             for (_, range) in turns.into_iter().filter(|(id, _)| *id == turn) {
                 if let Some(turn_rows) = rows.get(range) {
                     text.extend(turn_rows.iter().filter(|(_, target)| target.is_none()).map(
@@ -771,7 +801,7 @@ impl Pages {
 
     /// The resident pages' lines, in order.
     pub(crate) fn rows(&self) -> Vec<Row> {
-        let mut out = Vec::new();
+        let mut out = Rows::default();
         for (at, part) in self
             .closed
             .iter()
@@ -781,7 +811,7 @@ impl Pages {
         {
             self.draw(at, part, &mut out);
         }
-        out
+        out.into_parts().0
     }
 
     /// The page index.
@@ -828,13 +858,16 @@ impl Pages {
 
     /// A page's lines: each card's, and the ▣ line of each card that ends
     /// on it, drawn from its turn's totals.
-    fn draw(&self, page: usize, part: &Part, out: &mut Vec<Row>) {
-        out.extend(self.draw_data(page, part).0);
+    fn draw(&self, page: usize, part: &Part, out: &mut Rows) {
+        let (rows, texts, _, _) = self.draw_data(page, part);
+        for (row, text) in rows.into_iter().zip(texts) {
+            out.push_text(row, text);
+        }
     }
 
     /// A page's lines, their turn ranges, and stable focus stops.
     fn draw_data(&self, page: usize, part: &Part) -> DrawData {
-        let mut out = Vec::new();
+        let mut out = Rows::default();
         let mut turns = Vec::new();
         let mut asides = part
             .fold
@@ -877,7 +910,7 @@ impl Pages {
         }
         let mut starts = Vec::with_capacity(out.len());
         let mut row = 0usize;
-        for (line, _) in &out {
+        for (line, _) in out.iter() {
             starts.push(row);
             row = row.saturating_add(crate::view::rows(line.clone(), self.width));
         }
@@ -900,7 +933,8 @@ impl Pages {
                 TargetId::Line(target),
             ))
         }));
-        (out, focus, turns)
+        let (rows, texts) = out.into_parts();
+        (rows, texts, focus, turns)
     }
 
     /// Counts page `at`'s rows and focus stops from its cards, while it holds them.
@@ -908,7 +942,7 @@ impl Pages {
         let Some(part) = self.part(at) else {
             return;
         };
-        let (lines, focus, _) = self.draw_data(at, part);
+        let (lines, _, focus, _) = self.draw_data(at, part);
         let width = self.width;
         let open = at == self.closed.len();
         let mut wrapped = HashMap::new();

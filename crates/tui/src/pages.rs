@@ -234,6 +234,28 @@ impl Index {
             .fold(0usize, |sum, page| sum.saturating_add(page.rows))
     }
 
+    /// Page `at`'s first row: the rows of the pages before it.
+    pub(crate) fn start(&self, at: usize) -> usize {
+        self.pages
+            .iter()
+            .take(at)
+            .fold(0usize, |sum, page| sum.saturating_add(page.rows))
+    }
+
+    /// The page drawing conversation row `row`, and the row's offset in it;
+    /// `None` past the last row. A page drawing no row holds none.
+    pub(crate) fn locate(&self, row: usize) -> Option<(usize, usize)> {
+        let mut start = 0usize;
+        for (at, page) in self.pages.iter().enumerate() {
+            let end = start.saturating_add(page.rows);
+            if row < end {
+                return Some((at, row.saturating_sub(start)));
+            }
+            start = end;
+        }
+        None
+    }
+
     /// Each page's first row.
     #[cfg(test)]
     pub(crate) fn starts(&self) -> Vec<usize> {
