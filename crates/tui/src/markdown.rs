@@ -351,9 +351,7 @@ impl Writer {
                 if let Some(open) = self.link_stack.pop().flatten() {
                     let (start, dest) = open;
                     let end = self.inline.len();
-                    if start < end {
-                        self.inline_links.push((start..end, dest));
-                    }
+                    self.inline_links.push((start..end, dest));
                 }
                 self.link = self.link.saturating_sub(1);
             }
@@ -507,10 +505,10 @@ impl Writer {
         }
         for (at, (row, join, indices)) in rows.into_iter().enumerate() {
             let skip = if at == 0 { bars } else { hang };
-            let prefix = if at == 0 { first_width } else { rest_width };
+            let mut spans = if at == 0 { first.clone() } else { rest.clone() };
+            let prefix: usize = spans.iter().map(Span::width).sum();
             let row_links = link_cols(&row, &indices, prefix, &links);
             self.track.row(join, skip, false, row_links);
-            let mut spans = if at == 0 { first.clone() } else { rest.clone() };
             spans.extend(spans_of(&row));
             self.out.lines.push(Line::from(spans));
         }

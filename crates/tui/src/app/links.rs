@@ -40,7 +40,7 @@ pub(crate) fn link_hash(url: &str) -> u64 {
 pub(crate) fn urls(text: &str) -> Vec<Range<usize>> {
     let mut out = Vec::new();
     let mut at = 0usize;
-    while at < text.len() {
+    while let Some(ch) = text.get(at..).and_then(|rest| rest.chars().next()) {
         // A scheme starts here, in any case; anything else moves one
         // char forward, and a multibyte char is never a scheme start.
         let prefix = if text
@@ -54,11 +54,7 @@ pub(crate) fn urls(text: &str) -> Vec<Range<usize>> {
         {
             "http://".len()
         } else {
-            let next = text
-                .get(at..)
-                .and_then(|rest| rest.chars().next())
-                .map_or(1, |ch| ch.len_utf8());
-            at = at.saturating_add(next);
+            at = at.saturating_add(ch.len_utf8());
             continue;
         };
         let mut end = at.saturating_add(prefix);
@@ -113,7 +109,7 @@ impl App {
     /// each bare URL on a shown resident row, one entry per link with one
     /// rect per row it covers (`docs/tui.md`, "Links").
     pub(crate) fn visible_links(&self, area: Rect) -> Vec<VisibleLink> {
-        if area.is_empty() || area.width == 0 {
+        if area.width == 0 {
             return Vec::new();
         }
         let (top, y0, shown) = self.view_rows(area);
@@ -150,15 +146,13 @@ impl App {
                 let line_end = grow.saturating_add(count);
                 let from = grow.max(top);
                 let to = line_end.min(end);
-                if from < to {
-                    self.line_links(text, from, to, y0, top, last, area, area_width, &mut found);
-                }
+                self.line_links(text, from, to, y0, top, last, area, area_width, &mut found);
                 grow = line_end;
             }
             // Bare URLs come from the page's logical text, so a URL
             // markdown wrapped over rows stays one whole destination.
             self.bare_links(
-                rows, texts, start, top, end, y0, last, area, area_width, &mut found,
+                rows, texts, start, top, y0, last, area, area_width, &mut found,
             );
         }
         // Consecutive occurrences with the same destination are the one
@@ -252,7 +246,6 @@ impl App {
         texts: &[crate::rows::RowText],
         start: usize,
         top: usize,
-        end: usize,
         y0: u16,
         last: u16,
         area: Rect,
@@ -324,9 +317,6 @@ impl App {
                 }
                 // One entry per row the URL's uncovered cells draw on.
                 for (row, (first_col, last_col)) in per_row {
-                    if row < top || row >= end {
-                        continue;
-                    }
                     let Some(y) = row
                         .checked_sub(top)
                         .and_then(|at| u16::try_from(at).ok())
