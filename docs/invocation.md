@@ -550,7 +550,8 @@ is still shutting down. The hub does not pass on a `closing` answer from it: it
 resumes the session and delivers the command. If that resume fails
 `session_held`, the hub waits for the old process to release the lock, up to
 the 5-second shutdown bound, and the client gets `session_held` only once the
-bound has passed. A command after `close` and before `fiber_exited` still gets
+bound has passed. Commands keep their order across that resume ("What the hub
+speaks"). A command after `close` and before `fiber_exited` still gets
 `closing`, except a `close` with `now`, which is accepted and upgrades the close.
 
 **A session that never got a prompt leaves nothing behind.** A session that
@@ -885,6 +886,12 @@ websocket for everything it does.
   session first when it has exited, as "Lifecycle" describes. A session never
   knows whether a line came over a websocket. Events already name their
   session, so one connection carries several sessions' streams.
+- **Commands keep their order.** The hub passes one connection's commands to
+  a session in the order it read them, including commands it re-routes to a
+  resumed session after a `closing` answer, and the session's
+  acknowledgements come back in that order. A command the session answers
+  when it ends, such as `shell`, is acknowledged then, so the order holds
+  for acknowledgements as the session sends them.
 - **A command without one is for the hub.** These are the hub's commands:
 
 | Hub command | `args` | What it does |
