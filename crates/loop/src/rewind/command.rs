@@ -164,50 +164,48 @@ impl Loop {
         args: &RewindArgs,
         own: &SessionId,
     ) -> Result<Result<Target, Rejection>, Error> {
-        let Some(from) = &args.from_session_id else {
-            return Ok(Ok(Target {
+        // Absent, or this session's own id: the point is in this
+        // session's own log.
+        let from = args.from_session_id.as_ref().filter(|from| *from != own);
+        match from {
+            None => Ok(Ok(Target {
                 session: own.clone(),
                 dir: self.log.dir().to_path_buf(),
                 bound: None,
-            }));
-        };
-        if *from == *own {
-            return Ok(Ok(Target {
-                session: own.clone(),
-                dir: self.log.dir().to_path_buf(),
-                bound: None,
-            }));
-        }
-        if !valid_session_id(&from.0) {
-            return Ok(Err(Rejection {
-                code: ErrorCode::InvalidArguments,
-                message: format!(
-                    "{} is not a session id: one is `s_` followed by 16 lowercase hex digits.",
-                    from.0
-                ),
-            }));
-        }
-        let chain = log::history(self.log.dir())?;
-        // The own log is the last segment: only an ancestor names the
-        // point's log.
-        let found = chain
-            .iter()
-            .rev()
-            .skip(1)
-            .find(|segment| segment.session_id == *from);
-        match found {
-            Some(segment) => Ok(Ok(Target {
-                session: segment.session_id.clone(),
-                dir: segment.dir.clone(),
-                bound: segment.to.map(|to| to.0),
             })),
-            None => Ok(Err(Rejection {
-                code: ErrorCode::InvalidArguments,
-                message: format!(
-                    "Session {} is neither this session nor one it continues. To rewind it, send `rewind` for it through the hub.",
-                    from.0
-                ),
-            })),
+            Some(from) => {
+                if !valid_session_id(&from.0) {
+                    return Ok(Err(Rejection {
+                        code: ErrorCode::InvalidArguments,
+                        message: format!(
+                            "{} is not a session id: one is `s_` followed by 16 lowercase hex digits.",
+                            from.0
+                        ),
+                    }));
+                }
+                let chain = log::history(self.log.dir())?;
+                // The own log is the last segment: only an ancestor names
+                // the point's log.
+                let found = chain
+                    .iter()
+                    .rev()
+                    .skip(1)
+                    .find(|segment| segment.session_id == *from);
+                match found {
+                    Some(segment) => Ok(Ok(Target {
+                        session: segment.session_id.clone(),
+                        dir: segment.dir.clone(),
+                        bound: segment.to.map(|to| to.0),
+                    })),
+                    None => Ok(Err(Rejection {
+                        code: ErrorCode::InvalidArguments,
+                        message: format!(
+                            "Session {} is neither this session nor one it continues. To rewind it, send `rewind` for it through the hub.",
+                            from.0
+                        ),
+                    })),
+                }
+            }
         }
     }
 }
@@ -257,8 +255,8 @@ pub(crate) fn point_for(
                 })
                 .filter_map(|line| line.seq.map(|seq| seq.0))
                 .max();
-            match latest {
-                Some(start) => Ok(start - 1),
+            match latest.and_then(|start| start.checked_sub(1)) {
+                Some(point) => Ok(point),
                 None => Err(Rejection {
                     code: ErrorCode::InvalidArguments,
                     message: NO_TURN.to_owned(),
@@ -280,7 +278,9 @@ pub(crate) fn point_for(
     }
 }
 
-/// Whether `point` is a step boundary in `lines`.
+/// Whether `point` is a step boundary in `lines`: the log holds a
+/// `turn_started` or a `step_started` just after it. A point with no
+/// representable successor has no next line, so it is none.
 fn boundary(lines: &[Envelope], point: u64) -> Result<u64, Rejection> {
     let refused = || Rejection {
         code: ErrorCode::NotStepBoundary,
@@ -288,9 +288,11 @@ fn boundary(lines: &[Envelope], point: u64) -> Result<u64, Rejection> {
             "Line {point} is not a step boundary: the start of a turn, just after the person's input, or just after a batch of tool results."
         ),
     };
-    let next = lines
-        .iter()
-        .find(|line| line.seq.is_some_and(|seq| seq.0 == point + 1));
+    let next = point.checked_add(1).and_then(|after| {
+        lines
+            .iter()
+            .find(|line| line.seq.is_some_and(|seq| seq.0 == after))
+    });
     match next {
         Some(line) if line.kind == "turn_started" || line.kind == "step_started" => {}
         _ => return Err(refused()),

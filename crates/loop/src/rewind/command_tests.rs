@@ -221,3 +221,32 @@ fn the_default_point_with_no_turn_before_the_bound_is_invalid_arguments() {
     assert_eq!(refused.code, contract::ErrorCode::InvalidArguments);
     assert_eq!(refused.message, "This session has no turn to rewind to.");
 }
+
+#[test]
+fn a_point_without_a_representable_successor_is_not_a_step_boundary() {
+    // `u64::MAX` has no next line: the lookup for it must refuse, not
+    // wrap or panic.
+    let lines = two_turns();
+    let refused = point_for(&lines, &own_target(), Some(Seq(u64::MAX))).unwrap_err();
+    assert_eq!(refused.code, contract::ErrorCode::NotStepBoundary);
+    assert_eq!(
+        refused.message,
+        format!(
+            "Line {} is not a step boundary: the start of a turn, just after the person's input, or just after a batch of tool results.",
+            u64::MAX
+        )
+    );
+}
+
+#[test]
+fn a_completion_at_the_point_answers_a_call_before_it() {
+    // Only a completion after the point blocks it: one at the point is
+    // the answer, not a wait.
+    let lines = vec![
+        line("session_started", 0, None),
+        line("tool_call_requested", 1, Some("a_1")),
+        line("tool_call_completed", 4, Some("a_1")),
+        line("turn_started", 5, None),
+    ];
+    assert_eq!(point_for(&lines, &own_target(), Some(Seq(4))), Ok(4));
+}

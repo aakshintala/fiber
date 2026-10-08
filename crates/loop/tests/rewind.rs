@@ -1097,6 +1097,28 @@ fn a_seq_off_a_boundary_is_refused_and_writes_nothing() {
 }
 
 #[test]
+fn a_seq_without_a_successor_is_refused_and_writes_nothing() {
+    // `u64::MAX` has no next line: the refusal answers on the test's
+    // named deadline instead of panicking the session.
+    let mut session = Session::new(vec![Scripted::text("unused")], None);
+    let before = log_bytes(&session.dir);
+    let inbox = take_inbox(&mut session);
+    let (rw, answered) = rewind(args(None, Some(u64::MAX), false, vec![]));
+    let looped = session.looped.take().unwrap();
+    session.looped = Some(drive_closed(looped, inbox, vec![rw]));
+    let rejection = rejected(answer_of(answered));
+    assert_eq!(rejection.code, ErrorCode::NotStepBoundary);
+    assert_eq!(
+        rejection.message,
+        format!(
+            "Line {} is not a step boundary: the start of a turn, just after the person's input, or just after a batch of tool results.",
+            u64::MAX
+        )
+    );
+    assert_eq!(log_bytes(&session.dir), before);
+}
+
+#[test]
 fn a_rewind_with_no_turn_is_invalid_arguments() {
     let mut session = Session::new(vec![Scripted::text("unused")], None);
     let before = log_bytes(&session.dir);
@@ -1448,7 +1470,13 @@ fn a_rewind_naming_its_own_session_rewinds() {
 
 #[test]
 fn malformed_from_session_ids_are_invalid_arguments() {
-    for from in ["../x", "s_ABC", ""] {
+    for from in [
+        "../x",
+        "s_ABC",
+        "",
+        "s_0123456789abcde",
+        "s_0123456789abcdef0",
+    ] {
         // No turn is needed: the shape check runs before any point.
         let mut session = Session::new(vec![Scripted::text("unused")], None);
         let home = session.dir.parent().unwrap().to_path_buf();
