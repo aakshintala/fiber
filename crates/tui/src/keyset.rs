@@ -332,11 +332,11 @@ pub(crate) fn load(user: &Map<String, Value>) -> (Keyset, Vec<String>) {
             };
             let label = stroke.label();
             if near.person && far.person {
-                let (one, other) = if first.id < second.id {
-                    (first, second)
-                } else {
-                    (second, first)
-                };
+                // The two ids order the notice; they are distinct, so the
+                // sort's order is the table's.
+                let mut pair = [first, second];
+                pair.sort_by_key(|binding| binding.id);
+                let [one, other] = pair;
                 done.push((
                     lower,
                     higher,

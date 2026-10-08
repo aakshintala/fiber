@@ -154,6 +154,23 @@ fn a_default_key_in_another_variant_gives_the_canonical_event() {
 }
 
 #[test]
+fn a_default_key_in_a_later_group_gives_the_canonical_event_of_its_slot() {
+    // `alt+right` is move_word's default at place 1 (right). Here it sits at
+    // index 2 of the person's list, the left variant's slot in the second
+    // group, so its answer is the canonical left event, not its own right.
+    let entries = &[(
+        "move_word",
+        json!(["ctrl+b", "alt+g", "alt+right", "alt+j"]),
+    )];
+    let (keys, notices) = keyset(entries);
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        keys.resolve(&stroke("alt+right"), Context::Input),
+        super::Resolved::Edit(Edit::WordLeft)
+    );
+}
+
+#[test]
 fn a_moved_off_default_gives_nothing_in_its_contexts_and_its_event_outside() {
     let entries = &[("copy_focused", json!("c"))];
     assert_eq!(
