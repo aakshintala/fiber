@@ -8,14 +8,12 @@ use contract::clock::Clock;
 use serde_json::{Value, json};
 
 use super::clock::CaseClock;
-use super::format::Case;
+use super::format::{CallCase, CallOutcome};
 use super::run::report;
 
 /// Runs a provider call without creating a session.
-pub(crate) fn run_case(case: Case, name: String, process_clock: Arc<dyn Clock>) -> i32 {
-    let Some(call) = case.call else {
-        return report(&name, &["call: required for a call case".to_owned()]);
-    };
+pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Clock>) -> i32 {
+    let call = case.call;
     if let Err(error) = function(&call.function) {
         return report(&name, &[error]);
     }
@@ -65,7 +63,7 @@ pub(crate) fn run_case(case: Case, name: String, process_clock: Arc<dyn Clock>) 
             "message": error.to_string()
         })),
     };
-    let mut failures = compare_result(case.returns.as_ref(), case.error.as_ref(), actual);
+    let mut failures = compare_result(&case.outcome, actual);
     failures.extend(
         host.unmet()
             .iter()
@@ -117,29 +115,24 @@ fn cost_args(value: &Value) -> Result<CostArgs, String> {
     })
 }
 
-/// Compares a provider result against exactly one expected case outcome.
-fn compare_result(
-    returns: Option<&Value>,
-    error: Option<&Value>,
-    actual: Result<Value, Value>,
-) -> Vec<String> {
-    match (returns, error, actual) {
-        (Some(expected), None, Ok(actual)) => extensions::json_matches(expected, &actual)
+/// Compares a provider result against the call case's one expected outcome.
+fn compare_result(outcome: &CallOutcome, actual: Result<Value, Value>) -> Vec<String> {
+    match (outcome, actual) {
+        (CallOutcome::Returns(expected), Ok(actual)) => extensions::json_matches(expected, &actual)
             .err()
             .map(|reason| vec![format!("returns: {reason}")])
             .unwrap_or_default(),
-        (None, Some(expected), Err(actual)) => extensions::json_matches(expected, &actual)
+        (CallOutcome::Error(expected), Err(actual)) => extensions::json_matches(expected, &actual)
             .err()
             .map(|reason| vec![format!("error.{reason}")])
             .unwrap_or_default(),
-        (Some(_), None, Err(actual)) => vec![format!("returns: provider call failed: {actual}")],
-        (None, Some(_), Ok(actual)) => {
+        (CallOutcome::Returns(_), Err(actual)) => {
+            vec![format!("returns: provider call failed: {actual}")]
+        }
+        (CallOutcome::Error(_), Ok(actual)) => {
             vec![format!(
                 "error: expected a provider error, returned {actual}"
             )]
-        }
-        (Some(_), Some(_), _) | (None, None, _) => {
-            vec!["case must expect exactly one of returns or error".to_owned()]
         }
     }
 }

@@ -5,9 +5,9 @@
     reason = "the call dispatch assertion fails with its result"
 )]
 
-use serde_json::json;
+use serde_json::{Value, json};
 
-use super::{compare_result, function};
+use super::{CallOutcome, compare_result, function};
 
 #[test]
 fn only_cost_is_a_supported_provider_call() {
@@ -16,25 +16,31 @@ fn only_cost_is_a_supported_provider_call() {
     assert!(error.contains("cost"), "{error}");
 }
 
+fn returns(value: Value) -> CallOutcome {
+    CallOutcome::Returns(value)
+}
+
+fn error(value: Value) -> CallOutcome {
+    CallOutcome::Error(value)
+}
+
 #[test]
 fn returns_and_error_use_the_case_json_subset_matcher() {
-    assert!(compare_result(Some(&json!(0.5)), None, Ok(json!(0.5))).is_empty());
+    assert!(compare_result(&returns(json!(0.5)), Ok(json!(0.5))).is_empty());
 
-    let mismatch = compare_result(Some(&json!(0.4)), None, Ok(json!(0.5))).join("\n");
+    let mismatch = compare_result(&returns(json!(0.4)), Ok(json!(0.5))).join("\n");
     assert!(mismatch.contains("returns"), "{mismatch}");
 
     assert!(
         compare_result(
-            None,
-            Some(&json!({"code": "extension_failed"})),
+            &error(json!({"code": "extension_failed"})),
             Err(json!({"code": "extension_failed", "message": "lookup failed"}))
         )
         .is_empty()
     );
 
     let mismatch = compare_result(
-        None,
-        Some(&json!({"code": "io_failed"})),
+        &error(json!({"code": "io_failed"})),
         Err(json!({"code": "extension_failed", "message": "lookup failed"})),
     )
     .join("\n");
@@ -44,8 +50,7 @@ fn returns_and_error_use_the_case_json_subset_matcher() {
 #[test]
 fn an_error_when_a_return_was_expected_names_returns() {
     let error = compare_result(
-        Some(&json!(0.5)),
-        None,
+        &returns(json!(0.5)),
         Err(json!({"code": "extension_failed", "message": "lookup failed"})),
     )
     .join("\n");

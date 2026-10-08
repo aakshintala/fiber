@@ -14,7 +14,7 @@ use log::{Log, Watcher};
 use serde_json::{Map, Value};
 
 use super::clock::CaseClock;
-use super::format::{Case, ClockAdvance, Host, Selector};
+use super::format::{Case, ClockAdvance, Host, Selector, SessionCase};
 
 const ADVANCE_WAIT: Duration = Duration::from_secs(10);
 const UNTIL_WAIT: Duration = Duration::from_secs(30);
@@ -325,10 +325,13 @@ pub(crate) fn extension_case(
         Ok(case) => case,
         Err(error) => return report(&fallback_name, &[error]),
     };
-    let name = case.name.clone().unwrap_or(fallback_name);
-    if case.call.is_some() {
-        return super::call::run_case(case, name, process_clock);
-    }
+    let (name, case) = match case {
+        Case::Call(call) => {
+            let name = call.name.clone().unwrap_or(fallback_name);
+            return super::call::run_case(call, name, process_clock);
+        }
+        Case::Session(session) => (session.name.clone().unwrap_or(fallback_name), session),
+    };
     let workspace = match std::env::current_dir() {
         Ok(workspace) => workspace,
         Err(error) => return report(&name, &[format!("the case workspace: {error}")]),
@@ -351,7 +354,7 @@ pub(crate) fn extension_case(
     let result = crate::session_command::new_session(
         contract::SessionId(doors::mint("s_")),
         Some("scripted/script.json".to_owned()),
-        case.prompt,
+        Some(case.prompt),
         false,
         case_run.session_clock(),
         &signals,
@@ -364,14 +367,10 @@ pub(crate) fn extension_case(
     report(&name, &failures)
 }
 
-fn write_inputs(case: &Case, workspace: &Path) -> Result<(), String> {
-    let script = case
-        .script
-        .as_ref()
-        .ok_or_else(|| "script: required for a session case".to_owned())?;
+fn write_inputs(case: &SessionCase, workspace: &Path) -> Result<(), String> {
     let script_path = workspace.join("script.json");
-    let script_bytes =
-        serde_json::to_vec(script).map_err(|error| format!("script: cannot encode: {error}"))?;
+    let script_bytes = serde_json::to_vec(&case.script)
+        .map_err(|error| format!("script: cannot encode: {error}"))?;
     fs::write(&script_path, script_bytes)
         .map_err(|error| format!("{}: {error}", script_path.display()))?;
     if let Some(config) = &case.config {

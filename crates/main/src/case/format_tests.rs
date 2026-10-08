@@ -11,7 +11,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::Case;
+use super::{CallOutcome, Case};
 
 fn session_case() -> Value {
     json!({
@@ -54,14 +54,16 @@ fn every_session_field_and_each_host_reply_shape_is_read() {
         "until": {"kind": "notice", "nth": 1},
         "expect": [{"kind": "turn_completed", "payload": {"outcome": "completed"}}]
     });
-    let parsed = parse(&value).expect("valid session case");
+    let Case::Session(parsed) = parse(&value).expect("valid session case") else {
+        panic!("session case parsed as a call case");
+    };
     assert_eq!(parsed.name.as_deref(), Some("field coverage"));
-    assert_eq!(parsed.prompt.as_deref(), Some("hi"));
+    assert_eq!(parsed.prompt, "hi");
     assert_eq!(
         parsed.config,
         Some(json!({"permissions": {"mode": "auto"}}))
     );
-    assert_eq!(parsed.script, Some(json!({"steps": [{"text": "hello"}]})));
+    assert_eq!(parsed.script, json!({"steps": [{"text": "hello"}]}));
     assert_eq!(parsed.clock.len(), 1);
     assert_eq!(parsed.clock[0].advance_ms, 500);
     assert_eq!(
@@ -109,23 +111,29 @@ fn every_call_field_is_read() {
                             "reply": {"status": 200, "body": "{}"}}]},
         "returns": 0.5
     });
-    let parsed = parse(&value).expect("valid call case");
-    let call = parsed.call.as_ref().unwrap();
-    assert_eq!(call.provider, "openrouter");
-    assert_eq!(call.function, "cost");
-    assert_eq!(call.arg, json!({"generation_id": "gen-abc"}));
-    assert_eq!(parsed.returns, Some(json!(0.5)));
-    assert!(parsed.error.is_none());
+    let Case::Call(parsed) = parse(&value).expect("valid call case") else {
+        panic!("call case parsed as a session case");
+    };
+    assert_eq!(parsed.call.provider, "openrouter");
+    assert_eq!(parsed.call.function, "cost");
+    assert_eq!(parsed.call.arg, json!({"generation_id": "gen-abc"}));
+    assert!(matches!(
+        parsed.outcome,
+        CallOutcome::Returns(ref returns) if *returns == json!(0.5)
+    ));
 
     let error = json!({
         "call": {"provider": "openrouter", "function": "cost", "arg": {}},
         "error": {"code": "extension_failed", "message": "cost failed"}
     });
-    let parsed = parse(&error).expect("call case with expected error");
-    assert_eq!(
-        parsed.error,
-        Some(json!({"code": "extension_failed", "message": "cost failed"}))
-    );
+    let Case::Call(parsed) = parse(&error).expect("call case with expected error") else {
+        panic!("call case parsed as a session case");
+    };
+    assert!(matches!(
+        parsed.outcome,
+        CallOutcome::Error(ref error)
+            if *error == json!({"code": "extension_failed", "message": "cost failed"})
+    ));
 }
 
 #[test]
@@ -224,7 +232,10 @@ fn a_call_case_names_the_supported_provider_functions() {
 #[test]
 fn a_call_case_accepts_null_returns_and_requires_one_outcome() {
     let call = json!({"call": {"provider": "p", "function": "cost", "arg": {}}, "returns": null});
-    assert_eq!(parse(&call).unwrap().returns, Some(Value::Null));
+    let Case::Call(parsed) = parse(&call).unwrap() else {
+        panic!("call case parsed as a session case");
+    };
+    assert!(matches!(parsed.outcome, CallOutcome::Returns(Value::Null)));
 
     for value in [
         json!({"call": {"provider": "p", "function": "cost", "arg": {}}, "returns": 0.5, "error": {"code": "extension_failed"}}),

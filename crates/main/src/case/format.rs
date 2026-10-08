@@ -6,13 +6,22 @@ use contract::ErrorCode;
 use serde_json::{Map, Value};
 
 /// One parsed extension case: a session case or a provider call case.
-pub(crate) struct Case {
+/// The two kinds are variants, so a case cannot carry both a prompt and a
+/// call, and a call case cannot carry both a return and an error
+/// (`docs/code-quality.md`, "Types").
+pub(crate) enum Case {
+    Session(SessionCase),
+    Call(CallCase),
+}
+
+/// A session case: the script, the prompt and the expected event lines.
+pub(crate) struct SessionCase {
     /// The optional display name, defaulted by the caller from the file stem.
     pub(crate) name: Option<String>,
-    /// Inline model steps for a session case.
-    pub(crate) script: Option<Value>,
-    /// The first prompt for a session case.
-    pub(crate) prompt: Option<String>,
+    /// Inline model steps.
+    pub(crate) script: Value,
+    /// The first prompt.
+    pub(crate) prompt: String,
     /// Global configuration written into the case's temporary Fiber home.
     pub(crate) config: Option<Value>,
     /// Scripted extension host calls.
@@ -21,14 +30,28 @@ pub(crate) struct Case {
     pub(crate) clock: Vec<ClockAdvance>,
     /// The event after which the child closes the session.
     pub(crate) until: Option<Selector>,
-    /// Durable event lines expected from a session case.
+    /// Durable event lines expected from the session.
     pub(crate) expect: Vec<Value>,
-    /// Provider callback to invoke in a call case.
-    pub(crate) call: Option<Call>,
-    /// Expected return from a provider call.
-    pub(crate) returns: Option<Value>,
-    /// Expected provider-call error subset.
-    pub(crate) error: Option<Value>,
+}
+
+/// A provider call case: the call and its one expected outcome.
+pub(crate) struct CallCase {
+    /// The optional display name, defaulted by the caller from the file stem.
+    pub(crate) name: Option<String>,
+    /// Provider callback to invoke.
+    pub(crate) call: Call,
+    /// Scripted extension host calls.
+    pub(crate) host: Host,
+    /// The one expected outcome: the return or the error.
+    pub(crate) outcome: CallOutcome,
+}
+
+/// The expected outcome of a provider call: what it returns or the error
+/// it fails with. One variant, so a case cannot expect both
+/// (`docs/code-quality.md`, "Types").
+pub(crate) enum CallOutcome {
+    Returns(Value),
+    Error(Value),
 }
 
 /// Replies supplied to extension host calls.
@@ -94,7 +117,7 @@ impl Case {
         let returns = map.get("returns").cloned();
         let error = map.get("error").cloned();
 
-        if call.is_some() {
+        if let Some(call) = call {
             if prompt.is_some() {
                 return Err("call and prompt cannot be used in the same case".to_owned());
             }
@@ -104,10 +127,14 @@ impl Case {
             {
                 return Err("call cases take call, host and one of returns or error".to_owned());
             }
-            if returns.is_some() == error.is_some() {
-                return Err("a call case needs exactly one of returns or error".to_owned());
-            }
-            if let Some(value) = &returns
+            let outcome = match (returns, error) {
+                (Some(returns), None) => CallOutcome::Returns(returns),
+                (None, Some(error)) => CallOutcome::Error(error),
+                _ => {
+                    return Err("a call case needs exactly one of returns or error".to_owned());
+                }
+            };
+            if let CallOutcome::Returns(value) = &outcome
                 && !value.is_null()
                 && value
                     .as_f64()
@@ -115,9 +142,15 @@ impl Case {
             {
                 return Err("returns: expected null or a finite number at or above 0".to_owned());
             }
-            if let Some(value) = &error {
+            if let CallOutcome::Error(value) = &outcome {
                 validate_expected_error(value)?;
             }
+            Ok(Case::Call(CallCase {
+                name,
+                call,
+                host,
+                outcome,
+            }))
         } else {
             if !map.contains_key("expect") {
                 return Err("expect: required for a session case".to_owned());
@@ -132,24 +165,18 @@ impl Case {
                 .map_err(|error| format!("script: cannot encode: {error}"))?;
             provider::scripted::Script::parse(path, &script_bytes)
                 .map_err(|error| format!("script: {error}"))?;
-            if prompt.is_none() {
-                return Err("prompt: required for a session case".to_owned());
-            }
+            let prompt = prompt.ok_or_else(|| "prompt: required for a session case".to_owned())?;
+            Ok(Case::Session(SessionCase {
+                name,
+                script: script_value.clone(),
+                prompt,
+                config,
+                host,
+                clock,
+                until,
+                expect,
+            }))
         }
-
-        Ok(Self {
-            name,
-            script,
-            prompt,
-            config,
-            host,
-            clock,
-            until,
-            expect,
-            call,
-            returns,
-            error,
-        })
     }
 }
 
