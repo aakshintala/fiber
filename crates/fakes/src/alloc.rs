@@ -330,7 +330,7 @@ unsafe impl GlobalAlloc for Counting {
 /// After `f` returns, when more large blocks were alive at once than the
 /// table holds.
 #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
-pub fn large_blocks_during<T>(f: impl FnOnce() -> T) -> Counted<T> {
+pub fn large_blocks_during<T>(f: impl FnOnce() -> T) -> (T, usize) {
     let mut scope = Scope::open();
     let value = f();
     let (peak, overflowed) = scope.close();
@@ -340,12 +340,6 @@ pub fn large_blocks_during<T>(f: impl FnOnce() -> T) -> Counted<T> {
     );
     (value, peak)
 }
-
-/// A scope's value with the most large blocks alive at once while it ran.
-pub type Counted<T> = (T, usize);
-
-/// A scope's value with the byte peaks [`bytes_during`] measured.
-pub type Metered<T> = (T, Bytes);
 
 /// The byte peaks one [`bytes_during`] scope measured. It copies out the
 /// slot table when the scope ends, so [`Bytes::peak_without`] reads no
@@ -385,7 +379,7 @@ impl Bytes {
 /// After `f` returns, when more byte-tracked blocks were alive at once
 /// than the table holds.
 #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
-pub fn bytes_during<T>(f: impl FnOnce() -> T) -> Metered<T> {
+pub fn bytes_during<T>(f: impl FnOnce() -> T) -> (T, Bytes) {
     let mut scope = Scope::open();
     let value = f();
     let measured = scope.close_bytes();
