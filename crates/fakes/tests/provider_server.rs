@@ -352,3 +352,18 @@ fn only_the_newest_bodies_are_kept_and_older_requests_keep_their_size() {
     assert!(requests.iter().all(|r| r.body_len == 6), "{requests:?}");
     assert_eq!(requests[0].path, "/v1/messages");
 }
+
+#[test]
+fn keep_all_bodies_overrides_a_smaller_limit() {
+    let server = ProviderServer::start_with_fallback([], Response::stream("ok"))
+        .unwrap()
+        .keep_last_bodies(0)
+        .keep_all_bodies();
+
+    post(&server, "/v1/messages", &[], b"body-0");
+    post(&server, "/v1/messages", &[], b"body-1");
+
+    let requests = server.requests();
+    assert_eq!(requests[0].body, b"body-0");
+    assert_eq!(requests[1].body, b"body-1");
+}
