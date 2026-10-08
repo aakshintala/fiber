@@ -658,10 +658,17 @@ enum Target {
         /// Assigned in set order from 0.
         id: u64,
     },
+    /// The `run` of a tool `fiber.tool` registered, in the gaps of the
+    /// stream.
+    Tool(String),
+    /// The `effects` function of a tool `fiber.tool` registered, in the gaps
+    /// of the stream.
+    Effects(String),
 }
 
 /// The callback's name as an error names it: a command's name,
-/// `<provider>.<function>`, or a hook's point.
+/// `<provider>.<function>`, a hook's point, a tool's name, or
+/// `<tool>.effects`.
 impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -669,6 +676,8 @@ impl std::fmt::Display for Target {
             Self::Provider { name, function, .. } => write!(f, "{name}.{function}"),
             Self::Hook { point, .. } => f.write_str(point),
             Self::Timer { id } => write!(f, "timer {id}"),
+            Self::Tool(name) => f.write_str(name),
+            Self::Effects(name) => write!(f, "{name}.effects"),
         }
     }
 }
@@ -687,11 +696,13 @@ mod errors;
 mod hub;
 mod schedule;
 mod setup;
+mod tool;
 mod vm;
 
 pub(crate) use hub::Hub;
 use hub::{CallbackTimeouts, Gate, Next, Phase, Shared};
 pub(crate) use hub::{DeclaredHooks, HookPhase};
+pub(crate) use tool::{DeclaredTool, effects_from};
 use vm::{Step, Vm};
 
 pub(crate) use setup::Deadline;

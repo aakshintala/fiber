@@ -43,8 +43,11 @@ pub(super) struct Vm {
     /// What `fiber.hook` registered: each point's hooks in order, each with
     /// its `phase`, `on_failure`, `timeout` and `run`.
     hooks: Table,
-    /// Why each hook `fiber.hook` refused was not registered.
+    /// Why each hook, command or tool the entry script tried to register
+    /// was refused.
     problems: Table,
+    /// What `fiber.tool` registered.
+    tools: super::tool::Registry,
     /// The last raised failure, consumed only if its text escapes the callback.
     failures: crate::host::failure::FailureState,
     /// The timers `host.after` and `host.every` set, by id in set order:
@@ -113,6 +116,8 @@ impl Vm {
             .map(|session| session.config.workspace().to_path_buf())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         let entry = Rc::new(Cell::new(true));
+        let tools =
+            super::tool::install(&lua, problems.clone(), Rc::clone(&entry)).map_err(lua_error)?;
         let (http_tag, timer_funcs) = host::install(
             &lua,
             host::HostContext {
@@ -143,6 +148,7 @@ impl Vm {
             providers,
             hooks,
             problems,
+            tools,
             failures: failure_state,
             timer_funcs,
         };
@@ -200,6 +206,8 @@ impl Vm {
                             })
                     })
                 }),
+            Target::Tool(name) => self.tools.function(name, "run"),
+            Target::Effects(name) => self.tools.function(name, "effects"),
         }
         .map_err(fail)?;
         let Some(run) = run else {
@@ -212,9 +220,10 @@ impl Vm {
                 .transpose()
                 .map_err(fail)?
                 .map_or(mlua::Value::Nil, mlua::Value::String),
-            Target::Provider { .. } | Target::Hook { .. } => {
-                host::to_lua(&self.lua, arg).map_err(fail)?
-            }
+            Target::Provider { .. }
+            | Target::Hook { .. }
+            | Target::Tool(_)
+            | Target::Effects(_) => host::to_lua(&self.lua, arg).map_err(fail)?,
             // A firing takes no argument.
             Target::Timer { .. } => mlua::Value::Nil,
         };
@@ -275,6 +284,7 @@ impl Vm {
             timeouts.providers.insert(name, fns);
         }
         timeouts.hooks = DeclaredHooks::read(&self.hooks, &self.problems);
+        timeouts.tools = self.tools.declared();
         timeouts
     }
 
@@ -291,9 +301,11 @@ impl Vm {
                     .unwrap_or_default()
                     .unwrap_or_default(),
             )),
-            Target::Provider { .. } | Target::Hook { .. } | Target::Timer { .. } => {
-                host::to_json(&value).map_err(fail)
-            }
+            Target::Provider { .. }
+            | Target::Hook { .. }
+            | Target::Timer { .. }
+            | Target::Tool(_)
+            | Target::Effects(_) => host::to_json(&value).map_err(fail),
         }
     }
 

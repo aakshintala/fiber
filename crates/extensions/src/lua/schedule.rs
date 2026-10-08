@@ -521,7 +521,7 @@ fn settle(
             }
         }
         Request::Lock => {
-            // A command, hook or timer holds no provider credential: calling
+            // A command, hook, timer or tool holds no provider credential: calling
             // `refresh` there is an error in the calling code, raised as
             // a string.
             let no_credential = |what: &str| {
@@ -554,6 +554,10 @@ fn settle(
                 }
                 Target::Timer { .. } => {
                     deliver(Reply::Lock(Err(no_credential("timer"))));
+                    None
+                }
+                Target::Tool(_) | Target::Effects(_) => {
+                    deliver(Reply::Lock(Err(no_credential("tool"))));
                     None
                 }
             };
