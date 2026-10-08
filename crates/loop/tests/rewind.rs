@@ -1111,10 +1111,13 @@ fn a_rewind_with_no_turn_is_invalid_arguments() {
 }
 
 /// A tool that sends one `rewind` to the inbox when it runs: the drain
-/// after the call takes it while the turn still runs.
+/// after the call takes it while the turn still runs. With `close_first`
+/// it sends `close` ahead of it, as `fiber ask` does, so the rewind is
+/// taken on a closing turn.
 struct SendRewind {
     inbox: Mutex<Option<mpsc::Sender<Delivery>>>,
     seen: Mutex<Option<mpsc::Receiver<Answer>>>,
+    close_first: bool,
 }
 
 impl SendRewind {
@@ -1171,6 +1174,9 @@ impl contract::tool::Tool for SendRewind {
             .unwrap()
             .clone()
             .expect("the inbox sender is installed");
+        if self.close_first {
+            inbox.send(Delivery::Close(ignore())).unwrap();
+        }
         let (rw, answered) = rewind(args(None, None, false, vec![]));
         inbox.send(rw).unwrap();
         *self.seen.lock().unwrap() = Some(answered);
@@ -1192,6 +1198,7 @@ fn a_rewind_during_a_turn_is_busy() {
     let tool = Arc::new(SendRewind {
         inbox: Mutex::new(None),
         seen: Mutex::new(None),
+        close_first: false,
     });
     let mut session = Session::with_tools(
         vec![
@@ -1213,6 +1220,32 @@ fn a_rewind_during_a_turn_is_busy() {
             .iter()
             .all(|line| line.kind != "rewound"),
         "the refused rewind closes nothing"
+    );
+}
+
+#[test]
+fn a_rewind_during_a_closing_turn_is_closing() {
+    let tool = Arc::new(SendRewind {
+        inbox: Mutex::new(None),
+        seen: Mutex::new(None),
+        close_first: true,
+    });
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("send", json!({}))]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![Arc::clone(&tool) as Arc<dyn Tool>],
+    );
+    tool.install(session.inbox.clone());
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let rejection = rejected(tool.answer());
+    assert_eq!(rejection.code, ErrorCode::Closing);
+    assert_eq!(
+        rejection.message,
+        "The session is closing and takes no new turn."
     );
 }
 

@@ -16,6 +16,7 @@ mod isolation;
 mod pasted;
 mod prompt_history;
 mod reply;
+mod rewind;
 mod run_command;
 mod session;
 mod shell;

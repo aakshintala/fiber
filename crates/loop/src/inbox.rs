@@ -624,7 +624,11 @@ impl Loop {
             // While a turn runs the session cannot close first: rewind
             // once it ends.
             Delivery::Rewind(_, ack) => {
-                reject(ack, ErrorCode::Busy, crate::rewind::command::TURN_RUNNING);
+                if self.closing {
+                    reject(ack, ErrorCode::Closing, CLOSING);
+                } else {
+                    reject(ack, ErrorCode::Busy, crate::rewind::command::TURN_RUNNING);
+                }
             }
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => self.take_close(ack),

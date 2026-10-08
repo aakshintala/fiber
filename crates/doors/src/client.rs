@@ -210,6 +210,7 @@ pub(crate) fn built(command: &str) -> bool {
             | "job_stop"
             | "background"
             | "handoff"
+            | "rewind"
             | "command"
     )
 }
@@ -298,6 +299,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let ack = inbox_ack(conn, id.clone());
             conn.gate.deliver(Delivery::Handoff(id, args, ack));
         }
+        Command::Rewind(args) => crate::rewind::run(conn, id, args),
         Command::JobStop(args) => {
             let stopped = conn.gate.jobs().is_some_and(|jobs| jobs.stop(&args.job_id));
             answer(conn, id, stopped, NO_JOB);
@@ -307,11 +309,9 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             answer(conn, id, moving, NO_CALL);
         }
         Command::Command(args) => crate::run_command::run(conn, id, &args),
-        Command::Message(_)
-        | Command::Reload
-        | Command::Credential(_)
-        | Command::Name(_)
-        | Command::Rewind(_) => unknown(conn, id, name),
+        Command::Message(_) | Command::Reload | Command::Credential(_) | Command::Name(_) => {
+            unknown(conn, id, name)
+        }
     }
 }
 
