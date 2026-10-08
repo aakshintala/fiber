@@ -130,7 +130,8 @@ Each number is the median of 5 runs. Memory is peak RSS on Linux and peak
 footprint on macOS, by the method in `docs/dependencies.md`. Idle CPU is the
 voluntary and involuntary context switch counts in
 `/proc/<pid>/task/*/status`, read before and after the idle window: 10
-seconds on a pull request and 60 at release. A truly idle process switches
+seconds on a pull request, the "Release build and size" job included, and 60
+in the release workflow (`docs/releasing.md`). A truly idle process switches
 zero times in either. fsyncs are the session's `fdatasync` calls, counted
 with strace in one more run of the busy turn, which is never a timing or
 memory sample, and log bytes are the size of `events.jsonl`, so both are
