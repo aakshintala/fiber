@@ -1134,7 +1134,7 @@ fn a_rejected_summary_step_alone_does_not_fail_the_open() {
 }
 
 #[test]
-fn a_two_step_open_never_retries() {
+fn a_refused_two_step_open_fails_the_open() {
     let mut app = home();
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
@@ -1160,151 +1160,20 @@ fn a_two_step_open_never_retries() {
 }
 
 #[test]
-fn a_same_level_refusal_after_a_hub_replay_retries_once_with_summary_then_full() {
+fn a_refused_one_step_open_fails_without_a_retry() {
     let mut app = home();
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
     let first = open_first(&mut app);
+    assert_eq!(first.len(), 2);
     let full = first[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("full id"))
         .to_owned();
-    let out = app.on_line(session_refused(
-        "s_aaaaaaaaaaaaaaaa",
-        &full,
-        "invalid_arguments",
-        "the log cannot be read",
-    ));
-    assert_eq!(out.len(), 2);
-    let retry: Vec<Value> = out
-        .iter()
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
-        .collect();
-    assert_eq!(retry[0]["args"]["level"], "summary");
-    assert_eq!(retry[1]["args"]["level"], "full");
-    assert_ne!(retry[0]["id"], retry[1]["id"]);
-    assert_ne!(retry[0]["id"], full);
-    let summary = retry[0]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("summary id"))
-        .to_owned();
-    let raised = retry[1]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("raised id"))
-        .to_owned();
-    assert!(
-        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &summary))
-            .is_empty()
-    );
     assert!(
         app.on_line(session_refused(
             "s_aaaaaaaaaaaaaaaa",
-            &raised,
-            "invalid_arguments",
-            "the log cannot be read"
-        ))
-        .is_empty()
-    );
-    assert!(app.session().is_none());
-    assert_eq!(app.notice(), Some("the log cannot be read"));
-    assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
-    let second = open_first(&mut app);
-    assert_eq!(second.len(), 2);
-    assert_eq!(second[0]["args"]["level"], "full");
-    let again = second[0]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("again id"))
-        .to_owned();
-    let out = app.on_line(session_refused(
-        "s_aaaaaaaaaaaaaaaa",
-        &again,
-        "invalid_arguments",
-        "already at full",
-    ));
-    assert_eq!(out.len(), 2);
-    let retry: Vec<Value> = out
-        .iter()
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
-        .collect();
-    assert_eq!(retry[0]["args"]["level"], "summary");
-    assert_eq!(retry[1]["args"]["level"], "full");
-    assert_ne!(retry[0]["id"], retry[1]["id"]);
-    assert_ne!(retry[0]["id"], again);
-    let summary = retry[0]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("summary id"))
-        .to_owned();
-    let raised = retry[1]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("raised id"))
-        .to_owned();
-    assert!(
-        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &summary))
-            .is_empty()
-    );
-    assert!(
-        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &raised))
-            .is_empty()
-    );
-    app.on_line(live(
-        "s_aaaaaaaaaaaaaaaa",
-        "old work",
-        "/w",
-        "-w",
-        json!({"state": "idle"}),
-    ));
-    assert!(app.on_line(turn_started("s_aaaaaaaaaaaaaaaa")).is_empty());
-    assert!(
-        app.lines()
-            .iter()
-            .any(|line| line.to_string().contains("hi"))
-    );
-    // Held at full, leaving lowers it again.
-    let Effect::Send(lines) = enter_text(&mut app, "/home") else {
-        panic!("/home lowers");
-    };
-    assert_eq!(lines.len(), 1);
-    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
-    assert_eq!(line["args"]["level"], "summary");
-}
-
-#[test]
-fn a_second_same_level_refusal_fails_the_open() {
-    let mut app = home();
-    let (_, recent) = linked(&mut app);
-    answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
-    let first = open_first(&mut app);
-    let full = first[0]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("full id"))
-        .to_owned();
-    let out = app.on_line(session_refused(
-        "s_aaaaaaaaaaaaaaaa",
-        &full,
-        "invalid_arguments",
-        "already at full",
-    ));
-    assert_eq!(out.len(), 2);
-    let retry: Vec<Value> = out
-        .iter()
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
-        .collect();
-    let summary = retry[0]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("summary id"))
-        .to_owned();
-    let raised = retry[1]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("raised id"))
-        .to_owned();
-    assert!(
-        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &summary))
-            .is_empty()
-    );
-    assert!(
-        app.on_line(session_refused(
-            "s_aaaaaaaaaaaaaaaa",
-            &raised,
+            &full,
             "invalid_arguments",
             "already at full"
         ))
@@ -1314,6 +1183,67 @@ fn a_second_same_level_refusal_fails_the_open() {
     assert!(app.on_home());
     assert_eq!(listed(&app), ["○  old work  already at full"]);
     assert_eq!(app.notice(), Some("already at full"));
+}
+
+#[test]
+fn after_a_refused_open_the_next_open_sends_one_full_and_attaches() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
+    let first = open_first(&mut app);
+    let full = first[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("full id"))
+        .to_owned();
+    assert!(
+        app.on_line(session_refused(
+            "s_aaaaaaaaaaaaaaaa",
+            &full,
+            "invalid_arguments",
+            "the log cannot be read"
+        ))
+        .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
+    let second = open_first(&mut app);
+    assert_eq!(second.len(), 2);
+    assert_eq!(second[0]["command"], "subscribe");
+    assert_eq!(second[0]["args"]["level"], "full");
+    assert_eq!(second[1]["command"], "commands");
+    let again = second[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("again id"))
+        .to_owned();
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &again))
+            .is_empty()
+    );
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+    assert!(app.on_line(turn_started("s_aaaaaaaaaaaaaaaa")).is_empty());
+    assert!(
+        app.lines()
+            .iter()
+            .any(|line| line.to_string().contains("hi"))
+    );
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "old work",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    // Held at full, leaving lowers it.
+    let Effect::Send(lines) = enter_text(&mut app, "/home") else {
+        panic!("/home lowers");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "subscribe");
+    assert_eq!(line["args"]["level"], "summary");
 }
 
 #[test]
@@ -3121,7 +3051,7 @@ fn a_crashed_left_marks_the_known_row_crashed() {
 }
 
 #[test]
-fn an_accepted_hub_acknowledgement_does_not_retry_the_open() {
+fn an_accepted_hub_acknowledgement_ends_the_open() {
     let mut app = home();
     linked(&mut app);
     app.on_line(live(
