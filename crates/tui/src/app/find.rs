@@ -354,11 +354,6 @@ impl Find {
         self.reveal = true;
     }
 
-    /// The results view's selected entry's line, for a focused entry.
-    pub(super) fn result_line(&self, at: usize) -> Option<String> {
-        self.match_at(at).map(|kept| kept.snippet.line)
-    }
-
     /// Pulls pages cut since the query started into the scan order
     /// behind the pages already in it: a page never scanned scans too
     /// (`docs/tui.md`, "Search": search covers the whole session
