@@ -1373,3 +1373,62 @@ fn a_reply_carrying_an_inline_cost_records_it_instead_of_the_declared_price() {
     assert_eq!(usages.len(), 1);
     assert_eq!(usages[0].payload["cost"], json!(0.000123));
 }
+
+/// A turn that ends `budget_exceeded` stops the session's running delegates
+/// once, through the one budget-end function; a turn under the budget, or
+/// with no jobs, stops nothing.
+fn budgeted_with_jobs(
+    script: Vec<Scripted>,
+    during: Option<contract::inbox::Message>,
+    model: r#loop::Model,
+    usd: Option<f64>,
+) -> (Session, std::sync::Arc<fakes::jobs::FakeJobs>) {
+    let mut session = budgeted(script, during, model, usd);
+    let jobs = fakes::jobs::FakeJobs::new(&session.workspace);
+    let looped = session.looped.take().unwrap();
+    session.looped =
+        Some(looped.jobs(std::sync::Arc::clone(&jobs) as std::sync::Arc<dyn contract::jobs::Jobs>));
+    (session, jobs)
+}
+
+#[test]
+fn a_turn_that_ends_over_budget_stops_delegates_once() {
+    let (mut session, jobs) = budgeted_with_jobs(
+        vec![tool_of("gen_1", 1_000_000), reply_of("Done.", "gen_2", 1)],
+        Some(message("later")),
+        per_token(false),
+        Some(1.0),
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    let completed = session.lines().last().unwrap().clone();
+    assert_eq!(completed.payload["error"]["code"], "budget_exceeded");
+    assert_eq!(jobs.stop_delegates_calls(), 1);
+}
+
+#[test]
+fn a_turn_under_the_budget_stops_nothing() {
+    let (mut session, jobs) = budgeted_with_jobs(
+        vec![tool_of("gen_1", 500_000), reply_of("Done.", "gen_2", 100)],
+        None,
+        per_token(false),
+        Some(1.0),
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(jobs.stop_delegates_calls(), 0);
+}
+
+#[test]
+fn a_budget_end_without_jobs_ends_the_same_way() {
+    let mut session = budgeted(
+        vec![tool_of("gen_1", 1_000_000), reply_of("Done.", "gen_2", 1)],
+        Some(message("later")),
+        per_token(false),
+        Some(1.0),
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    let completed = session.lines().last().unwrap().clone();
+    assert_eq!(completed.payload["error"]["code"], "budget_exceeded");
+}

@@ -730,6 +730,41 @@ fn an_exhausted_budget_fails_the_handoff_and_then_the_turn() {
 }
 
 #[test]
+fn a_budget_refused_note_stops_nothing_and_the_turn_end_stops_once() {
+    // As `an_exhausted_budget_fails_the_handoff_and_then_the_turn`, with
+    // the session's jobs attached: the refused note must not stop
+    // anything, and the turn's next `send` stops the delegates exactly
+    // once through the one budget-end function.
+    let model = r#loop::Model {
+        reference: MODEL.into(),
+        cost: Some(contract::provider::Cost {
+            input: 1.0,
+            output: 0.0,
+            cache_read: None,
+            cache_write: None,
+            tiers: Vec::new(),
+        }),
+        subscription: false,
+    };
+    let mut session = Session::open(
+        vec![called(TRIGGER - 1), Scripted::text("never sent")],
+        Vec::new(),
+        vec![weather()],
+        model,
+    )
+    .handoff(settings())
+    .budget(Some(0.0005));
+    let jobs = fakes::jobs::FakeJobs::new(&session.workspace);
+    let looped = session.looped.take().unwrap();
+    session.looped = Some(looped.jobs(Arc::clone(&jobs) as Arc<dyn contract::jobs::Jobs>));
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Failed));
+    let ended = of_kind(&lines, "turn_completed");
+    assert_eq!(ended[0].payload["error"]["code"], "budget_exceeded");
+    assert_eq!(jobs.stop_delegates_calls(), 1);
+}
+
+#[test]
 fn automatic_handoff_off_never_hands_off() {
     let mut session = session(
         vec![called(TRIGGER * 5), said("Done.", TRIGGER * 5)],

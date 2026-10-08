@@ -71,6 +71,19 @@ impl Loop {
         ))
     }
 
+    /// Stops the session's running delegates when the turn ends
+    /// `budget_exceeded`, as `job_stop` stops one (`docs/loop.md`,
+    /// "Spending budget"). Every budget end passes through here, and no
+    /// other path stops them: `over_budget` stays pure, because the
+    /// handoff note request also reads it and a failed note does not end
+    /// the turn.
+    pub(crate) fn budget_end(&self, completed: TurnCompleted) -> TurnCompleted {
+        if let Some(jobs) = &self.ending.jobs {
+            jobs.stop_delegates();
+        }
+        completed
+    }
+
     /// Sends `request` and streams the reply, emitting each fragment as an
     /// ephemeral event as it arrives: text and tool-call arguments under
     /// `message`, reasoning under its own action, opened with

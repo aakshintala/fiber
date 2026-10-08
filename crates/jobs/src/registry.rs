@@ -523,30 +523,6 @@ impl Registry {
         Some(Answer { text, records })
     }
 
-    /// Sends each running delegate its stop, once, and returns how many
-    /// were sent one. Ordinary jobs keep running; ended delegates send
-    /// nothing.
-    #[allow(dead_code, reason = "the budget end stops them in task 3.5")]
-    pub(crate) fn stop_delegates(&self) -> usize {
-        let stops: Vec<Arc<dyn Fn() + Send + Sync>> = {
-            let mut inner = lock(&self.inner);
-            inner
-                .jobs
-                .iter_mut()
-                .filter(|job| job.delegate && !job.stop_sent)
-                .filter(|job| matches!(job.phase, Phase::Running))
-                .map(|job| {
-                    job.stop_sent = true;
-                    Arc::clone(&job.stop)
-                })
-                .collect()
-        };
-        for stop in &stops {
-            stop();
-        }
-        stops.len()
-    }
-
     fn finish(&self, completed: JobCompleted, delegate: Option<DelegateFinished>) {
         let mut guard = lock(&self.inner);
         let inner = &mut *guard;
@@ -718,6 +694,29 @@ impl contract::jobs::Jobs for Registry {
             Ok(None) => true,
             Err(StopError::Unknown | StopError::Ended(_)) => false,
         }
+    }
+
+    /// Sends each running delegate its stop, once, and returns how many
+    /// were sent one. Ordinary jobs keep running; ended delegates send
+    /// nothing.
+    fn stop_delegates(&self) -> usize {
+        let stops: Vec<Arc<dyn Fn() + Send + Sync>> = {
+            let mut inner = lock(&self.inner);
+            inner
+                .jobs
+                .iter_mut()
+                .filter(|job| job.delegate && !job.stop_sent)
+                .filter(|job| matches!(job.phase, Phase::Running))
+                .map(|job| {
+                    job.stop_sent = true;
+                    Arc::clone(&job.stop)
+                })
+                .collect()
+        };
+        for stop in &stops {
+            stop();
+        }
+        stops.len()
     }
 
     fn background(&self) -> usize {
