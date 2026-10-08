@@ -283,7 +283,9 @@ global or per-project file, with one of:
 { "command": ["op", "read", "op://Private/OpenRouter/key"] }
 ```
 
-A command runs once per process, and is named by its program alone in every
+A command that succeeds runs once per process, and its key is kept. A command
+that fails runs again the next time the key is read, so a fixed command works
+without restarting Fiber. A command is named by its program alone in every
 message, because its arguments may hold a key. A repository can never set this, because a
 command runs a program and a changed source sends the key elsewhere. A
 credential stored under the same label comes first. A key from an `env`
