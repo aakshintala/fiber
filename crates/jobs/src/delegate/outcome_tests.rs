@@ -281,3 +281,45 @@ fn no_line_means_empty_text_and_zero_usage() {
     assert_eq!(finished.usage.cost, Some(0.0));
     assert_eq!(finished.questions, None);
 }
+
+#[test]
+fn every_signal_reports_its_own_name() {
+    // One row per arm of `signal_name`, plus a number with no arm: each
+    // must name itself, or the fallback names it. Deleting any arm reads
+    // `SIG{number}` instead.
+    for (number, name) in [
+        (1, "SIGHUP"),
+        (2, "SIGINT"),
+        (3, "SIGQUIT"),
+        (4, "SIGILL"),
+        (6, "SIGABRT"),
+        (8, "SIGFPE"),
+        (9, "SIGKILL"),
+        (11, "SIGSEGV"),
+        (13, "SIGPIPE"),
+        (14, "SIGALRM"),
+        (15, "SIGTERM"),
+        (5, "SIG5"),
+    ] {
+        let (completed, _) = outcome(None, None, None, killed(number), &job_id());
+        assert_eq!(completed.status, Outcome::Failed);
+        assert_eq!(
+            completed.error.as_ref().map(|error| error.code.clone()),
+            Some(ErrorCode::Signal),
+            "signal {number}"
+        );
+        assert_eq!(
+            completed.error.as_ref().map(|error| error.message.clone()),
+            Some(format!("Killed by {name}.")),
+            "signal {number}"
+        );
+        assert_eq!(
+            completed
+                .process
+                .as_ref()
+                .and_then(|process| process.signal.clone()),
+            Some(name.to_owned()),
+            "signal {number}"
+        );
+    }
+}
