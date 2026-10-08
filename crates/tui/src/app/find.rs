@@ -307,14 +307,17 @@ impl Find {
 
     /// The results view's selected entry's match, if any.
     fn selected_match(&self) -> Option<Match> {
-        let selected = self.results.as_ref()?.selected();
+        let selected = self.results.as_ref()?.selected;
         self.match_at(selected)
     }
 
     /// Shows the results view, selecting the current match's entry or
     /// the first one (`docs/tui.md`, "Search").
     pub(super) fn show_results(&mut self, selected: usize) {
-        self.results = Some(super::results::Results::open(selected));
+        self.results = Some(super::results::Results {
+            selected,
+            top: selected,
+        });
     }
 
     /// Closes the results view; the bar stays open.
@@ -341,7 +344,7 @@ impl Find {
     pub(super) fn results_at(&self) -> Option<(usize, usize)> {
         self.results
             .as_ref()
-            .map(|results| (results.selected(), results.top()))
+            .map(|results| (results.selected, results.top))
     }
 
     /// Makes `next` current and shows it: its sections open and the view

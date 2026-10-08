@@ -3,14 +3,8 @@
 //! selected entry and its top row; the file's `impl App` block routes keys
 //! and hands the kept matches to the view.
 
-use std::ops::Range;
-
-use super::{App, Effect};
+use super::{App, Effect, Snippet};
 use crate::keys::Key;
-
-/// One results entry as drawn: the match's line with one logical line
-/// each side, and the match's char range in the cut line.
-pub(crate) type Entry = (String, String, Range<usize>, String);
 
 /// The results view as drawn: its header, one entry per kept match in
 /// page order, then render order, and the selected entry with its top
@@ -18,8 +12,9 @@ pub(crate) type Entry = (String, String, Range<usize>, String);
 pub(crate) struct ResultsView {
     /// The header: `41 matches for “foo”` (`docs/tui.md`, "Search").
     pub(crate) header: String,
-    /// One entry per kept match.
-    pub(crate) entries: Vec<Entry>,
+    /// One entry per kept match: its display lines, cloned from the
+    /// kept match so the view needs no page (`docs/tui.md`, "Search").
+    pub(crate) entries: Vec<Snippet>,
     /// The selected entry.
     pub(crate) selected: usize,
     /// The first entry drawn.
@@ -30,30 +25,12 @@ pub(crate) struct ResultsView {
 #[derive(Debug, Default)]
 pub(in crate::app) struct Results {
     /// The selected entry.
-    selected: usize,
+    pub(super) selected: usize,
     /// The first entry drawn.
-    top: usize,
+    pub(super) top: usize,
 }
 
 impl Results {
-    /// Opens the view selecting `at`.
-    pub(super) fn open(at: usize) -> Self {
-        Self {
-            selected: at,
-            top: at,
-        }
-    }
-
-    /// The selected entry.
-    pub(super) fn selected(&self) -> usize {
-        self.selected
-    }
-
-    /// The first entry drawn.
-    pub(super) fn top(&self) -> usize {
-        self.top
-    }
-
     /// Selects `at`, keeping it drawn: with nothing kept the selection is
     /// the top, past the end it is the last entry, and the top moves only
     /// far enough to show it (`docs/tui.md`, "Search").
@@ -101,18 +78,11 @@ impl App {
     pub(crate) fn find_results(&self) -> Option<ResultsView> {
         let (selected, top) = self.find.results_at()?;
         let query = self.find.query();
-        let entries: Vec<Entry> = self
+        let entries: Vec<Snippet> = self
             .find
             .flat()
             .iter()
-            .map(|kept| {
-                (
-                    kept.snippet.before.clone(),
-                    kept.snippet.line.clone(),
-                    kept.snippet.at.clone(),
-                    kept.snippet.after.clone(),
-                )
-            })
+            .map(|kept| kept.snippet.clone())
             .collect();
         Some(ResultsView {
             header: format!("{} matches for “{query}”", entries.len()),

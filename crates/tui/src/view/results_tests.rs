@@ -1,76 +1,14 @@
 //! Drawing the search results (`docs/tui.md`, "Search"): the header and
 //! one row per entry, each a jump target.
 
-use std::path::PathBuf;
-
-use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
-use serde_json::{Value, json};
 
+use crate::app::Snippet;
 use crate::app::{App, Effect};
 use crate::keys::Key;
-use crate::link::Line;
-
-const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
-
-/// The injected clock's now.
-fn now() -> std::time::Instant {
-    fakes::clock::FakeClock::new().now()
-}
-
-/// An app connected to the hub and attached at `width` by `height`.
-fn attached(width: u16, height: u16) -> App {
-    let session = |kind: &str, payload: Value, action: Option<&str>| {
-        Line::Session(contract::Envelope {
-            kind: kind.to_owned(),
-            session_id: contract::SessionId(SESSION.to_owned()),
-            ts: 0,
-            schema_version: contract::SCHEMA_VERSION,
-            turn_id: None,
-            action_id: action.map(|id| contract::ActionId(id.to_owned())),
-            seq: None,
-            payload: payload.as_object().cloned().unwrap_or_default(),
-        })
-    };
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_size(width, height);
-    assert!(
-        app.on_line(Line::Hub(contract::HubLine {
-            kind: "hub_hello".to_owned(),
-            ts: 0,
-            schema_version: contract::SCHEMA_VERSION,
-            payload: serde_json::Map::new(),
-        }))
-        .is_empty()
-    );
-    app.attach(contract::SessionId(SESSION.to_owned()));
-    app.on_line(session(
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
-            "content": [{"type": "text", "text": " "}]}]}),
-        None,
-    ));
-    app
-}
-
-/// A reply `text`, the turn still running.
-fn reply(app: &mut App, text: &str) {
-    app.on_line(Line::Session(contract::Envelope {
-        kind: "text_completed".to_owned(),
-        session_id: contract::SessionId(SESSION.to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: Some(contract::ActionId("a_m".to_owned())),
-        seq: None,
-        payload: json!({ "text": text })
-            .as_object()
-            .cloned()
-            .unwrap_or_default(),
-    }));
-}
+use crate::results_support::{attached, now, reply};
 
 /// Types `query` and starts its scan, then opens the results.
 fn searched(app: &mut App, query: &str) {
@@ -119,12 +57,13 @@ fn screen(app: &App, width: u16, height: u16) -> String {
 #[test]
 fn results_80x24() {
     let mut app = attached(80, 24);
-    reply(&mut app, "the first needle here");
+    reply(&mut app, "a_m", "the first needle here");
     reply(
         &mut app,
+        "a_m",
         &format!("a long line with a needle in it {}", "x".repeat(200)),
     );
-    reply(&mut app, "a last needle");
+    reply(&mut app, "a_m", "a last needle");
     searched(&mut app, "needle");
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     insta::assert_snapshot!("results_80x24", screen(&app, 80, 24));
@@ -134,7 +73,7 @@ fn results_80x24() {
 fn results_with_the_selected_entry_scrolled() {
     let mut app = attached(80, 24);
     for n in 0..40 {
-        reply(&mut app, &format!("match number {n}"));
+        reply(&mut app, "a_m", &format!("match number {n}"));
     }
     searched(&mut app, "match");
     for _ in 0..50 {
@@ -149,12 +88,12 @@ fn results_with_the_selected_entry_scrolled() {
 
 #[test]
 fn a_long_row_windows_around_its_match() {
-    let entry = (
-        "before".to_owned(),
-        format!("a needle {}", "x".repeat(400)),
-        2..8,
-        "after".to_owned(),
-    );
+    let entry = Snippet {
+        before: "before".to_owned(),
+        line: format!("a needle {}", "x".repeat(400)),
+        at: 2..8,
+        after: "after".to_owned(),
+    };
     // The row is wider than the view: it shows 80 cells around the
     // match instead of the context hiding it.
     let (text, hit) = super::entry_row(&entry, 80);
@@ -170,12 +109,12 @@ fn a_long_row_windows_around_its_match() {
 fn a_long_preceding_line_never_hides_the_match() {
     // A 400-character line before the match at width 80: the match
     // text appears in the row.
-    let entry = (
-        "x".repeat(400),
-        "needle here".to_owned(),
-        0..6,
-        String::new(),
-    );
+    let entry = Snippet {
+        before: "x".repeat(400),
+        line: "needle here".to_owned(),
+        at: 0..6,
+        after: String::new(),
+    };
     let (text, hit) = super::entry_row(&entry, 80);
     assert_eq!(crate::format::width(&text), 80);
     assert!(text.contains("needle"), "the match stays visible: {text:?}");
@@ -184,7 +123,12 @@ fn a_long_preceding_line_never_hides_the_match() {
 
 #[test]
 fn a_match_at_the_rows_end_clamps_the_window_to_the_row() {
-    let entry = ("x".repeat(400), "needle".to_owned(), 0..6, String::new());
+    let entry = Snippet {
+        before: "x".repeat(400),
+        line: "needle".to_owned(),
+        at: 0..6,
+        after: String::new(),
+    };
     let (text, hit) = super::entry_row(&entry, 10);
     assert_eq!(crate::format::width(&text), 10);
     assert_eq!(&text[hit.start as usize..hit.end as usize], "needle");
@@ -196,12 +140,12 @@ fn a_match_at_the_rows_end_clamps_the_window_to_the_row() {
 
 #[test]
 fn a_match_at_the_rows_start_opens_the_window_at_the_row() {
-    let entry = (
-        String::new(),
-        format!("needle {}", "x".repeat(400)),
-        0..6,
-        String::new(),
-    );
+    let entry = Snippet {
+        before: String::new(),
+        line: format!("needle {}", "x".repeat(400)),
+        at: 0..6,
+        after: String::new(),
+    };
     let (text, hit) = super::entry_row(&entry, 10);
     assert!(
         text.starts_with("needle"),
@@ -212,7 +156,12 @@ fn a_match_at_the_rows_start_opens_the_window_at_the_row() {
 
 #[test]
 fn a_row_exactly_the_views_width_shows_whole() {
-    let entry = ("ab".to_owned(), "needle".to_owned(), 0..6, "cd".to_owned());
+    let entry = Snippet {
+        before: "ab".to_owned(),
+        line: "needle".to_owned(),
+        at: 0..6,
+        after: "cd".to_owned(),
+    };
     // `ab needle cd` is 12 cells: exactly the width shows it whole.
     let (text, hit) = super::entry_row(&entry, 12);
     assert_eq!(text, "ab needle cd");
@@ -225,7 +174,12 @@ fn a_row_exactly_the_views_width_shows_whole() {
 
 #[test]
 fn a_match_wider_than_the_view_clips_at_its_edge() {
-    let entry = (String::new(), "needle".to_owned(), 0..6, String::new());
+    let entry = Snippet {
+        before: String::new(),
+        line: "needle".to_owned(),
+        at: 0..6,
+        after: String::new(),
+    };
     let (text, hit) = super::entry_row(&entry, 4);
     assert_eq!(text, "need");
     assert_eq!(hit, 0..4);
@@ -233,12 +187,12 @@ fn a_match_wider_than_the_view_clips_at_its_edge() {
 
 #[test]
 fn a_row_for_no_cells_is_empty() {
-    let entry = (
-        "before".to_owned(),
-        "needle".to_owned(),
-        0..6,
-        "after".to_owned(),
-    );
+    let entry = Snippet {
+        before: "before".to_owned(),
+        line: "needle".to_owned(),
+        at: 0..6,
+        after: "after".to_owned(),
+    };
     assert_eq!(super::entry_row(&entry, 0), (String::new(), 0..0));
 }
 
@@ -246,12 +200,12 @@ fn a_row_for_no_cells_is_empty() {
 fn a_wide_char_straddling_the_window_edge_is_dropped() {
     // `\u{3042}` is two cells: ending the window mid-char drops it,
     // so the row never runs past the view.
-    let entry = (
-        String::new(),
-        "\u{3042}needle".to_owned(),
-        1..7,
-        String::new(),
-    );
+    let entry = Snippet {
+        before: String::new(),
+        line: "\u{3042}needle".to_owned(),
+        at: 1..7,
+        after: String::new(),
+    };
     let (text, hit) = super::entry_row(&entry, 7);
     assert!(crate::format::width(&text) <= 7);
     assert_eq!(&text[hit.start as usize..hit.end as usize], "needle");
@@ -259,7 +213,12 @@ fn a_wide_char_straddling_the_window_edge_is_dropped() {
 
 #[test]
 fn an_entry_at_a_page_edge_shows_only_what_the_scan_kept() {
-    let entry = ("".to_owned(), "needle".to_owned(), 0..6, "".to_owned());
+    let entry = Snippet {
+        before: String::new(),
+        line: "needle".to_owned(),
+        at: 0..6,
+        after: String::new(),
+    };
     let (text, hit) = super::entry_row(&entry, 80);
     assert_eq!(text, "needle");
     assert_eq!(hit, 0..6);
@@ -268,7 +227,7 @@ fn an_entry_at_a_page_edge_shows_only_what_the_scan_kept() {
 #[test]
 fn results_on_an_empty_area_draw_nothing() {
     let mut app = attached(80, 24);
-    reply(&mut app, "a needle here");
+    reply(&mut app, "a_m", "a needle here");
     searched(&mut app, "needle");
     let view = app.find_results().expect("open");
     let area = Rect::new(0, 0, 0, 0);

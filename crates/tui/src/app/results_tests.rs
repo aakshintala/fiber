@@ -2,26 +2,17 @@
 //! "Search"): opening from the bar and the count, moving, jumping and
 //! closing, against the app and the view it draws.
 
-use std::path::PathBuf;
-use std::time::Instant;
-
-use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
 use super::super::find::FIND_PAUSE;
+use crate::app::Snippet;
 use crate::app::{App, Effect};
 use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::TargetId;
-
-const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
-
-/// The injected clock's now.
-fn now() -> Instant {
-    fakes::clock::FakeClock::new().now()
-}
+use crate::results_support::{SESSION, attached, now, reply};
 
 /// A line of the session.
 fn line(kind: &str, payload: Value, action: Option<&str>) -> Line {
@@ -37,26 +28,6 @@ fn line(kind: &str, payload: Value, action: Option<&str>) -> Line {
     })
 }
 
-/// The hub's `hub_hello`.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
-}
-
-/// An app connected to the hub and attached to [`SESSION`] at `width` by
-/// `height`, with no home: the conversation is the whole screen.
-fn attached(width: u16, height: u16) -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_size(width, height);
-    assert!(app.on_line(hello()).is_empty());
-    app.attach(contract::SessionId(SESSION.to_owned()));
-    app
-}
-
 /// A turn started by `prompt`; it runs until done.
 fn prompt(app: &mut App, text: &str) {
     app.on_line(line(
@@ -64,15 +35,6 @@ fn prompt(app: &mut App, text: &str) {
         json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": text}]}]}),
         None,
-    ));
-}
-
-/// A reply `text` from message `action`.
-fn reply(app: &mut App, action: &str, text: &str) {
-    app.on_line(line(
-        "text_completed",
-        json!({ "text": text }),
-        Some(action),
     ));
 }
 
@@ -88,7 +50,6 @@ fn done(app: &mut App) {
 /// An app showing one turn of `replies`, done.
 fn turned(width: u16, height: u16, replies: &[&str]) -> App {
     let mut app = attached(width, height);
-    prompt(&mut app, " ");
     for text in replies {
         reply(&mut app, "a_m", text);
     }
@@ -167,7 +128,7 @@ fn ctrl_f_twice_opens_the_results() {
     let view = app.find_results().expect("open");
     assert_eq!(view.header, "1 matches for “needle”");
     assert_eq!(view.entries.len(), 1);
-    assert_eq!(view.entries[0].1, "a needle here");
+    assert_eq!(view.entries[0].line, "a needle here");
     assert_eq!((view.selected, view.top), (0, 0));
     assert!(app.find_bar().is_some(), "the bar stays open");
 }
@@ -195,12 +156,12 @@ fn each_entry_is_its_line_with_one_line_either_side() {
     assert_eq!(view.header, "1 matches for “needle”");
     assert_eq!(
         view.entries,
-        vec![(
-            "before".to_owned(),
-            "needle".to_owned(),
-            0..6,
-            "after".to_owned()
-        )]
+        vec![Snippet {
+            before: "before".to_owned(),
+            line: "needle".to_owned(),
+            at: 0..6,
+            after: "after".to_owned(),
+        }]
     );
 }
 
@@ -413,7 +374,6 @@ fn no_selection_starts_over_the_view() {
 #[test]
 fn the_selected_entry_stays_on_its_occurrence_when_matches_appear_before_it() {
     let mut app = attached(40, 10);
-    prompt(&mut app, " ");
     // The pads stream first, so completing them later replaces their
     // lines instead of appending.
     app.on_line(line(
@@ -440,13 +400,12 @@ fn the_selected_entry_stays_on_its_occurrence_when_matches_appear_before_it() {
     let view = app.find_results().expect("open");
     assert_eq!(view.entries.len(), 4);
     assert_eq!((view.selected, view.top), (2, 0));
-    assert_eq!(view.entries[2].1, "echo needle");
+    assert_eq!(view.entries[2].line, "echo needle");
 }
 
 #[test]
 fn an_equal_match_either_side_of_the_old_ordinal_selects_the_first() {
     let mut app = attached(40, 10);
-    prompt(&mut app, " ");
     app.on_line(line(
         "assistant_message_delta",
         json!({"text": "alpha needle"}),
@@ -475,7 +434,7 @@ fn an_equal_match_either_side_of_the_old_ordinal_selects_the_first() {
     assert_eq!(count(&app), "2 of 3");
     let view = app.find_results().expect("open");
     assert_eq!((view.selected, view.top), (0, 0));
-    assert_eq!(view.entries[0].1, "echo needle");
+    assert_eq!(view.entries[0].line, "echo needle");
 }
 
 #[test]
@@ -496,7 +455,7 @@ fn the_selected_entry_survives_new_output() {
     let view = app.find_results().expect("open");
     assert_eq!(view.entries.len(), 3);
     assert_eq!((view.selected, view.top), (1, 0));
-    assert_eq!(view.entries[1].1, "needle two");
+    assert_eq!(view.entries[1].line, "needle two");
 }
 
 /// One durable session envelope with `seq`, recorded in `log` for the
@@ -625,6 +584,6 @@ fn entries_grow_while_the_scan_runs() {
     assert!(app.results_open());
     let view = app.find_results().expect("open");
     assert_eq!(view.entries.len(), 1);
-    assert_eq!(view.entries[0].1, "a needle here");
+    assert_eq!(view.entries[0].line, "a needle here");
     assert_eq!((view.selected, view.top), (0, 0));
 }

@@ -54,7 +54,7 @@ mod select;
 
 use screen::Screen;
 
-pub(crate) use find::FindBar;
+pub(crate) use find::{FindBar, Snippet};
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.

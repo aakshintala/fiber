@@ -9,7 +9,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
 use super::to_u16;
-use crate::app::results::{Entry, ResultsView};
+use crate::app::Snippet;
+use crate::app::results::ResultsView;
 use crate::mouse::{Target, TargetId};
 
 /// The selected entry's style.
@@ -74,8 +75,13 @@ pub(super) fn render(view: &ResultsView, area: Rect, buf: &mut Buffer, targets: 
 /// scan kept. A row wider than the view shows the cells around the match,
 /// so the match is always visible however long the lines around it are
 /// (`docs/tui.md`, "Search").
-fn entry_row(entry: &Entry, width: u16) -> (String, Range<u16>) {
-    let (before, line, at, after) = entry;
+fn entry_row(entry: &Snippet, width: u16) -> (String, Range<u16>) {
+    let Snippet {
+        before,
+        line,
+        at,
+        after,
+    } = entry;
     let mut text = String::new();
     if !before.is_empty() {
         text.push_str(before);
