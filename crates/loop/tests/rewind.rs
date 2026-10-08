@@ -1181,6 +1181,7 @@ impl contract::tool::Tool for SendRewind {
             },
             subject: Some(String::new()),
             prefix: None,
+            always_reviewed: false,
         })
     }
 
