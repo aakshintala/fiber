@@ -10,10 +10,14 @@ figure.
 Lightpanda (https://github.com/lightpanda-io/browser) is a headless browser
 for agents and automation, written in Zig, with V8 for JavaScript and
 html5ever for parsing. It is not built on Chromium, Blink or WebKit. Its
-licence is AGPL-3.0. Builds are nightly. The version probed was
-`1.1.0-nightly.10207+92184a50d`, installed with
-`brew install lightpanda-io/browser/lightpanda` (91.3 MB on disk). Builds
-exist for Linux and macOS, x86_64 and aarch64, but not natively for Windows.
+licence is AGPL-3.0. It publishes stable versioned GitHub releases (1.0.0 on
+2026-10-02, and earlier ones back to at least 0.3.3 on 2026-06-23) as well as a
+rolling `nightly` release. Each versioned release has plain binaries
+`lightpanda-{x86_64,aarch64}-{linux,macos}` and `.deb` packages at
+`github.com/lightpanda-io/browser/releases/download/<version>/`, and no
+checksum files. There is no native Windows build. The version probed was a
+nightly, `1.1.0-nightly.10207+92184a50d`, installed with
+`brew install lightpanda-io/browser/lightpanda` (91.3 MB on disk).
 
 It runs in four ways: `fetch` (dump one page as HTML, Markdown, PNG, PDF or a
 semantic tree), `serve` (a Chrome DevTools Protocol or WebDriver BiDi server),
