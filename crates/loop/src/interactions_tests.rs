@@ -9,9 +9,9 @@
     reason = "test code"
 )]
 
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Weak, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use contract::clock::Clock as _;
 use contract::clock::Wake;
@@ -46,6 +46,44 @@ struct Awake;
 
 impl Wake for Awake {
     fn wake(&self) {}
+}
+
+/// The process clock for the raise park: `FakeClock::wait_until` hands
+/// `SharedWake::park` no wall-clock bound for a future deadline, so a park
+/// on it waits unbounded in real time. This hands the real bound.
+struct WallClock;
+
+impl contract::clock::Clock for WallClock {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test's wall-clock bound for SharedWake::park"
+    )]
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test's wall-clock bound for SharedWake::park"
+    )]
+    fn wall(&self) -> SystemTime {
+        SystemTime::now()
+    }
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test's wall-clock bound for SharedWake::park"
+    )]
+    fn sleep(&self, d: Duration) {
+        thread::sleep(d);
+    }
+
+    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        let bound = until.map(|until| until.saturating_duration_since(self.now()));
+        wait(bound);
+    }
+
+    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
 }
 
 fn confirm() -> Interaction {
@@ -145,9 +183,9 @@ fn a_cancel_landing_before_the_take_declines_the_ask() {
     });
     // The raise is the only bump, and the wake retains it, so one bounded
     // park sees it whenever it lands.
-    let clock = fakes::clock::FakeClock::new();
+    let clock = WallClock;
     let deadline = clock.now() + DEADLINE;
-    wake.park(clock.as_ref(), Some(deadline));
+    wake.park(&clock, Some(deadline));
     assert!(
         format!("{:?}", stream.asking()).contains("\"raised\""),
         "the call raised its ask"
