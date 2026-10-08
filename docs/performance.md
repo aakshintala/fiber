@@ -113,7 +113,7 @@ streams into its artifact and its converter in 64 KiB pieces, so only its
 markdown (5.4 MiB) is held whole, and a text page is held once, as the
 result, when it is valid UTF-8. The fetch alone peaks at a 21,664 KiB
 footprint on macOS arm64, and the session's peak RSS on Linux x86_64 is
-estimated at about 19 MiB until the benchmark measures it.
+17,428 KiB (35,376 KiB before the page was streamed).
 
 429 tool calls is the p99 of tool calls per user turn, measured on real
 sessions in the archived Zig tree. That tree's session peaked at 2.1 GiB on
