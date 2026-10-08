@@ -310,7 +310,7 @@ Otherwise it is the reviewer model the session's provider names in its data
 (`docs/model-routing.md`, "What a provider extension declares"). When neither
 names one, every reviewed call escalates as `reviewer_failed` with the error
 `no_model`, and a `notice` with code `no_model` says to set `reviewer.model`.
-Fiber never reviews with the session's own model.
+When neither names one, Fiber does not fall back to the session's own model.
 
 ### Its verdict
 

@@ -283,8 +283,11 @@ Most of a provider is data. For the provider:
 - `reviewer_model`, optional: one of its models that reviews calls when
   `reviewer.model` is unset (`docs/permissions.md`, "How it runs"). A
   first-party package names the model its vendor's own agent reviews with,
-  at the current generation: `claude-sonnet-5-5`, `gpt-6-luna`; Google ships no reviewer, so `gemini` names its middle tier,
-  `gemini-3.8-flash`.
+  at the current generation: `claude-sonnet-5-5`, `gpt-6-luna`; Google
+  ships no reviewer, so `gemini` names its middle tier,
+  `gemini-3.8-flash`. A first-party package never names a contributor
+  model as `reviewer_model`, and a package whose models are all
+  contributor models names none.
 
 For each model:
 
