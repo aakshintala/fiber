@@ -1078,6 +1078,7 @@ fn default_event_matches_the_parity_table() {
         (plain(Code::Char('\u{e9}')), key(Key::Char('\u{e9}'))),
         (plain(Code::Char('?')), key(Key::Char('?'))),
         (plain(Code::Char('0')), key(Key::Char('0'))),
+        (plain(Code::Char('5')), key(Key::Char('5'))),
         (plain(Code::Char('\u{df}')), key(Key::Char('\u{df}'))),
         (plain(Code::Char('\u{1e9e}')), key(Key::Char('\u{1e9e}'))),
         (modified(Code::Char('a'), shift), key(Key::Char('A'))),

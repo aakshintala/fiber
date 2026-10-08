@@ -646,9 +646,9 @@ fn parse_ss3(buf: &[u8]) -> Step {
 }
 
 /// A decimal field: digits only, as `u32`'s parser would also take a
-/// leading `+`.
+/// leading `+`. An empty field is none through the parse below.
 fn number(field: &str) -> Option<u32> {
-    if field.is_empty() || !field.bytes().all(|byte| byte.is_ascii_digit()) {
+    if !field.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
     field.parse().ok()
