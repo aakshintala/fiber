@@ -550,17 +550,21 @@ fn raw_bytes_pass_through_and_apple_script_is_decoded() {
 fn a_command_that_closes_stdout_and_keeps_running_hits_the_limit() {
     let test = ChildTest::new();
     let clock = FakeClock::new();
-    // R8: end-of-file alone never ends the read: the child keeps running
-    // with stdout closed, so a bounded wait times out while it lives.
+    let start = clock.now();
+    let end = start + LIMIT;
+    // R8: end-of-file alone never ends the read: the worker parks at the
+    // deadline while the child runs with stdout closed, so a bounded wait
+    // times out while it lives.
     let reader = test.reader("exec >&-; sleep 3600", Decode::Raw);
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 1024);
     let (watchdog, pgid) = watch(&test);
+    waiting(&rx, &clock, end, "the closed-stdout command");
     assert!(matches!(
         rx.recv_timeout(Duration::from_millis(200)),
         Err(mpsc::RecvTimeoutError::Timeout)
     ));
     assert!(kill_pid(pgid, "0").unwrap());
-    clock.advance(LIMIT);
+    clock.advance(Duration::from_millis(1));
     assert_eq!(
         answered(&rx, "the closed-stdout command"),
         Err(Failed::TimedOut)
@@ -572,8 +576,11 @@ fn a_command_that_closes_stdout_and_keeps_running_hits_the_limit() {
 fn a_descendant_that_escapes_the_group_cannot_hold_the_read() {
     let test = ChildTest::new();
     let clock = FakeClock::new();
-    // R9: a process that leaves the group holds stdout open past the
-    // limit, out of the group signal's reach by design.
+    let start = clock.now();
+    let end = start + LIMIT;
+    // R9: a process that leaves the group holds stdout open, so the worker
+    // parks at the deadline; it has not answered just before the limit,
+    // and times out at it, out of the group signal's reach by design.
     let body = children::escapes_group(test.ready_path());
     let reader = Reader {
         argv: vec!["sh".to_owned(), "-c".to_owned(), body],
@@ -587,7 +594,8 @@ fn a_descendant_that_escapes_the_group_cannot_hold_the_read() {
         .copied()
         .unwrap_or_else(|| panic!("no escaped pid"));
     let marker = Watchdog::matching(&test.dir.path().display().to_string());
-    clock.advance(LIMIT);
+    waiting(&rx, &clock, end, "the escaped descendant");
+    clock.advance(Duration::from_millis(1));
     assert_eq!(
         answered(&rx, "the escaped descendant"),
         Err(Failed::TimedOut)

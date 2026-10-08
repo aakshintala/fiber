@@ -75,20 +75,15 @@ pub(crate) struct Completions {
 }
 
 /// The draft's content as a prompt's `content` argument: text runs and
-/// image parts in order, each run one text part.
+/// image parts in order, each run one text part. `SentPart` serializes as
+/// the wire part — `type` with the part's fields, through the same sorted
+/// map the hand-built form used — so the content converts directly, and
+/// E1-E5 pin the bytes for text-only and image lines alike. Every part
+/// serializes, so the fallback never runs.
 pub(super) fn content_arg(draft: &Draft) -> serde_json::Value {
-    use contract::commands::SentPart;
-    let parts = draft
-        .content()
-        .into_iter()
-        .map(|part| match part {
-            SentPart::Text { text } => json!({"type": "text", "text": text}),
-            SentPart::Image { data, mime_type } => {
-                json!({"type": "image", "data": data, "mime_type": mime_type})
-            }
-        })
-        .collect::<Vec<_>>();
-    json!({ "content": parts })
+    let content =
+        serde_json::to_value(draft.content()).unwrap_or(serde_json::Value::Array(Vec::new()));
+    json!({ "content": content })
 }
 
 impl App {

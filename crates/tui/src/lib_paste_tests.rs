@@ -57,19 +57,24 @@ fn octal(bytes: &[u8]) -> String {
         .join("")
 }
 
-#[test]
-fn ctrl_v_then_enter_sends_the_image_to_the_hub() {
-    // L2: the worker posts the read, stepping it draws "[Image #1]", and
-    // Enter sends a prompt with the image part.
-    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
-    lp.paste_reader = Some(Reader {
+/// A reader printing [`PIXEL`] raw: what a clipboard read would return.
+fn pixel_reader() -> Reader {
+    Reader {
         argv: vec![
             "/bin/sh".to_owned(),
             "-c".to_owned(),
             format!("printf '{}'", octal(PIXEL)),
         ],
         decode: Decode::Raw,
-    });
+    }
+}
+
+#[test]
+fn ctrl_v_then_enter_sends_the_image_to_the_hub() {
+    // L2: the worker posts the read, stepping it draws "[Image #1]", and
+    // Enter sends a prompt with the image part.
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.paste_reader = Some(pixel_reader());
     let (out, worker) = mpsc::channel();
     lp.files_out = Some(out);
     let (ours, theirs) = UnixStream::pair().unwrap();
@@ -98,10 +103,11 @@ fn ctrl_v_then_enter_sends_the_image_to_the_hub() {
     assert_eq!(lp.app.input().expand(), "[Image #1]");
     assert!(screen(&lp).contains("[Image #1]"));
     assert_eq!(lp.step(Input::Bytes(b"\r".to_vec()), &step_rx), None);
+    theirs.set_read_timeout(Some(DEADLINE)).unwrap();
     let mut read = String::new();
     std::io::BufReader::new(theirs)
         .read_line(&mut read)
-        .unwrap();
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the hub line: {err}"));
     let line: serde_json::Value = serde_json::from_str(&read).unwrap();
     assert_eq!(line["command"], "prompt");
     let args: contract::commands::ContentArgs =
@@ -113,4 +119,38 @@ fn ctrl_v_then_enter_sends_the_image_to_the_hub() {
             mime_type: "image/png".to_owned(),
         }]
     );
+}
+
+#[test]
+fn a_second_press_after_a_synchronous_failure_starts_a_read() {
+    // P1: a read that never starts lands its failure, so the gate clears:
+    // the notice shows and the next press reads.
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    assert!(lp.paste_reader.is_none());
+    let (_, step_rx) = mpsc::channel();
+    assert_eq!(lp.step(Input::Bytes(vec![0x16]), &step_rx), None);
+    assert!(screen(&lp).contains("No clipboard to read"));
+    assert_eq!(lp.app.input().expand(), "");
+    // With a reader, the next press starts a read instead of dying quiet.
+    lp.paste_reader = Some(pixel_reader());
+    let (out, worker) = mpsc::channel();
+    lp.files_out = Some(out);
+    assert_eq!(lp.step(Input::Bytes(vec![0x16]), &step_rx), None);
+    let landed = worker.recv_timeout(DEADLINE).unwrap();
+    let Input::Image { ticket, result } = landed else {
+        panic!("the worker posted something else");
+    };
+    assert_eq!(ticket, 1);
+    assert_eq!(result.unwrap(), PIXEL_BASE64);
+    assert_eq!(
+        lp.step(
+            Input::Image {
+                ticket,
+                result: Ok(PIXEL_BASE64.to_owned())
+            },
+            &step_rx
+        ),
+        None
+    );
+    assert_eq!(lp.app.input().expand(), "[Image #1]");
 }

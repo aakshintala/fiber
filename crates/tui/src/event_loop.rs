@@ -272,7 +272,11 @@ impl<B: Backend> Loop<B> {
                                 self.files_out.as_ref(),
                                 ticket,
                             ) {
-                                self.app.push_notice(notice);
+                                // Nothing started, so the running ticket's
+                                // result can never arrive: landing the
+                                // failure shows the notice and clears the
+                                // gate for the next press.
+                                self.app.on_image(ticket, Err(notice));
                             }
                         }
                         Effect::FindPause { generation, after } => {
