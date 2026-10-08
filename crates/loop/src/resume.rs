@@ -328,6 +328,7 @@ impl Loop {
             cache_key: root,
             queued: VecDeque::new(),
             closing: false,
+            rewound: false,
             suspended: halted,
             deferred: VecDeque::new(),
             held,

@@ -43,6 +43,7 @@ fn received(rx: &std::sync::mpsc::Receiver<Delivery>) -> Option<String> {
         | Delivery::Handoff(..)
         | Delivery::Model(..)
         | Delivery::Reply(..)
+        | Delivery::Rewind(..)
         | Delivery::Close(_)
         | Delivery::Job(_)
         | Delivery::JobLine(_)

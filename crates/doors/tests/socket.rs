@@ -380,6 +380,10 @@ fn take(inbox: &Receiver<Delivery>) -> String {
             ack.0(Ok(None));
             "close".to_owned()
         }
+        Delivery::Rewind(args, ack) => {
+            ack.0(Ok(None));
+            format!("rewind {:?}", args.seq)
+        }
         Delivery::Cancelled => panic!("a wake arrives as a delivery"),
         Delivery::Job(_)
         | Delivery::JobLine(_)
@@ -1205,6 +1209,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::SteerDrop(..)
                 | Delivery::Handoff(..)
                 | Delivery::Reply(..)
+                | Delivery::Rewind(..)
                 | Delivery::Close(_)
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)
@@ -1237,6 +1242,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::SteerDrop(..)
                 | Delivery::Handoff(..)
                 | Delivery::Reply(..)
+                | Delivery::Rewind(..)
                 | Delivery::Close(_)
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)

@@ -188,6 +188,10 @@ impl Loop {
     /// passed on an empty inbox, or every sender is gone (`docs/loop.md`,
     /// "Starting a turn").
     pub(crate) fn wait_for_turn(&mut self) -> Result<Option<TurnInput>, Error> {
+        // `rewound` is the last line: the process ends, starting no turn.
+        if self.rewound {
+            return Ok(None);
+        }
         if self.closing {
             return self.ending();
         }
@@ -290,6 +294,11 @@ impl Loop {
                     self.admit_idle(delivery, &mut input)?;
                 }
                 return Ok(Some(input));
+            }
+            // `rewound` was written in the drain above: its deliveries
+            // are refused, and no turn starts.
+            if self.rewound {
+                return Ok(None);
             }
             if self.closing {
                 return self.ending();
@@ -442,6 +451,7 @@ impl Loop {
             | Delivery::Handoff(..)
             | Delivery::Model(..)
             | Delivery::Reply(..)
+            | Delivery::Rewind(..)
             | Delivery::Interaction(_)
             | Delivery::Resolved(..)
             | Delivery::Job(_)
@@ -461,6 +471,12 @@ impl Loop {
         delivery: Delivery,
         input: &mut TurnInput,
     ) -> Result<(), Error> {
+        // Once `rewound` is set every later delivery is refused, and
+        // nothing is written (`docs/events.md`, "Rewind").
+        if self.rewound {
+            crate::rewind::command::refuse_after_rewound(delivery);
+            return Ok(());
+        }
         match delivery {
             Delivery::Prompt(message, ack) => {
                 if self.closing {
@@ -504,6 +520,12 @@ impl Loop {
             // next `turn_started`.
             Delivery::Model(args, ack) => {
                 self.take_switch(args, ack, true)?;
+            }
+            // Starts a new session that continues this one from an
+            // earlier point, once, while idle (`docs/events.md`,
+            // "Rewind").
+            Delivery::Rewind(args, ack) => {
+                self.take_rewind(args, ack, input)?;
             }
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => self.take_close(ack),
@@ -598,6 +620,11 @@ impl Loop {
                 } else {
                     self.take_switch(args, ack, false)?;
                 }
+            }
+            // While a turn runs the session cannot close first: rewind
+            // once it ends.
+            Delivery::Rewind(_, ack) => {
+                reject(ack, ErrorCode::Busy, crate::rewind::command::TURN_RUNNING);
             }
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => self.take_close(ack),

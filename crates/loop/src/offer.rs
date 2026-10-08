@@ -266,6 +266,7 @@ impl Loop {
                 | Delivery::SteerDrop(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
+                | Delivery::Rewind(..)
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)) => self.deferred.push_back(held),
                 now @ (Delivery::Reply(..)
@@ -290,6 +291,7 @@ impl Loop {
             | Delivery::SteerDrop(..)
             | Delivery::Handoff(..)
             | Delivery::Model(..)
+            | Delivery::Rewind(..)
             | Delivery::Interaction(_)
             | Delivery::Resolved(..)
             | Delivery::Job(_)

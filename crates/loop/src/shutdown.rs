@@ -29,10 +29,15 @@ impl Loop {
     /// that moved to the background after the first is stopped too. The
     /// wait has no deadline: the shutdown's bound limits it.
     fn settle(&mut self) -> Result<(), Error> {
-        for piece in std::mem::take(&mut self.queued) {
-            if let Queued::Job(completed) = piece {
-                self.log
-                    .append(&Event::JobCompleted(completed), None, None)?;
+        // After `rewound` the queued ends are dropped unwritten, with the
+        // rest refused in `settle_one`.
+        let queued = std::mem::take(&mut self.queued);
+        if !self.rewound {
+            for piece in queued {
+                if let Queued::Job(completed) = piece {
+                    self.log
+                        .append(&Event::JobCompleted(completed), None, None)?;
+                }
             }
         }
         for delivery in std::mem::take(&mut self.deferred) {
@@ -67,6 +72,13 @@ impl Loop {
 
     /// One delivery taken while the jobs settle.
     fn settle_one(&mut self, delivery: Delivery) -> Result<(), Error> {
+        // After `rewound` nothing is written: every acknowledgement still
+        // waiting is refused `closing`, the rest is dropped
+        // (`docs/events.md`, "Rewind").
+        if self.rewound {
+            crate::rewind::command::refuse_after_rewound(delivery);
+            return Ok(());
+        }
         match delivery {
             Delivery::Job(notice) => {
                 if let Some(completed) = claimed(notice) {
@@ -83,6 +95,9 @@ impl Loop {
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
             Delivery::Prompt(_, ack) | Delivery::Steer(_, ack) | Delivery::Handoff(_, _, ack) => {
+                reject(ack, ErrorCode::Closing, CLOSING);
+            }
+            Delivery::Rewind(_, ack) => {
                 reject(ack, ErrorCode::Closing, CLOSING);
             }
             Delivery::Model(_, ack) => {

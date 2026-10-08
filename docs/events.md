@@ -336,6 +336,7 @@ Durable. The last line of a session that was rewound ("Rewind" below).
 |---|---|---|---|
 | `new_session_id` | string | yes | the session that continues this one |
 | `seq` | integer | yes | the point |
+| `from_session_id` | string | no | the session whose log `seq` counts in, when it is not this one: a session on this session's `forked_from` chain |
 | `jobs` | array of strings | yes | the `job_id`s handed to the new session; empty when none |
 
 #### `turn_started`
@@ -1377,9 +1378,7 @@ earlier point. A person starts one from the terminal, a driver with the
   its history. The pointer is the record: nothing else stores the link, and
   whatever needs it reads B's first line, as deleting a session does to find
   its dependents (`docs/invocation.md`, "Deleting and pruning").
-- **The point is a step boundary:** the start of a turn, just after the
-  person's input, or just after a batch of tool results. Every tool call before
-  it has its result.
+- **The point is a step boundary:** a point the next line of which starts a turn or a step, with every tool call before it answered, such as the start of a turn, just after the person's input, or just after a batch of tool results.
 - **It rewinds the conversation only.** It never restores or touches files.
   Fiber lists, for the person and in a note to the model, the files its own
   tools wrote after the point and the shell calls after it that may have
