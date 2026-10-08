@@ -77,7 +77,8 @@ or prompt template, as typing it in the terminal does: Fiber sends the skill's
 text, then the rest of the prompt as its arguments, as the person's message
 (`docs/system-prompt.md`, "Skills"). `fiber ask "/review-pr 42"` runs the
 `review-pr` skill on 42. The `prompt` driver command does the same. When the
-first word names no skill, the prompt is sent as written.
+first word names no skill and no MCP server's prompt, the prompt is sent as
+written.
 
 A large prompt goes on stdin. Linux caps a single argument at
 `MAX_ARG_STRLEN`, 131072 bytes, so a long brief passed as an argument can
@@ -365,7 +366,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | Command | What it does |
 |---|---|
 | `subscribe` | The first command on every connection to a session, and on a connection to the hub the first command for each session. `full` receives the session's whole stream, folded from the log first; `summary` receives only the latest `session_status` and `extensions_loaded` (`docs/events.md`) and reads no log. Only a `full` connection counts in `clients`. Any other command for that session before it is rejected `not_subscribed`. A later `subscribe` at the other level changes the connection's level: raising it to `full` folds the stream from the log as a first `full` subscribe does; lowering it to `summary` ends the connection's count in `clients`, sends every durable line written before the change, then stops the stream and sends the latest `session_status` and `extensions_loaded`. Its acknowledgement is the first line at the new level. A rejected change leaves the level as it was. A `subscribe` at the level the connection already holds is rejected `invalid_arguments`. Through the hub, a session that resumes is subscribed at the level the connection last held. When the session cannot read its log to serve a connection, a line that does not parse or a failed read, it closes that connection: the client receives every line before the one that failed, then end of file. The session keeps running. |
-| `prompt` | Starts a turn. Rejected `busy` if a turn is running. |
+| `prompt` | Starts a turn. Rejected `busy` if a turn is running. Rejected `invalid_arguments` or `mcp_prompt_failed` when its `/name` runs an MCP server's prompt Fiber cannot get (`docs/mcp.md`, "Prompts and resources"). |
 | `steer` | Sends a steering message, which joins the running turn at its next step boundary. |
 | `steer_drop` | Removes a queued steering message, so nothing is applied. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
 | `message` | Delivers a session message from another session (`docs/tools.md`, "Messaging other sessions"). During a turn it is a steering message; between turns it starts a turn. Rejected `closing` after `close`. |
@@ -376,7 +377,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `reload` | Re-reads configuration, restarts changed MCP servers and extensions, and declares the tool set again (`docs/mcp.md`, "Reload"). Rejected `busy` if a turn is running. |
 | `history` | Answers, in its `command_accepted`, with the session's durable lines from `from_seq` to `to_seq` inclusive, or to the latest when `to_seq` is absent, at most 256 lines; a client pages for more. This is how every client pages history, the local terminal included: no client reads a session's log from disk (`docs/tui.md`, "History and paging"). Rejected `invalid_arguments` when `from_seq` is past the latest line. |
 | `tools` | Answers with every declared tool: its source, whether it is full, deferred or loaded, and its approximate size (`docs/tools.md`, "Seeing the tools"). |
-| `commands` | Answers with every `/name` the session runs: each skill and prompt template that discovery keeps and `skills.disabled` does not switch off (`docs/system-prompt.md`, "Skills"), and each extension's command (`docs/extensions.md`, "Commands and screens"). Each entry is a name, a one-line description, the skill's `argument-hint` when it has one, and a tag: `skill`, `template`, or the extension's name. The list is fixed when the session starts, and again when it reloads. A client's `/` list reads it (`docs/tui.md`, "Slash commands"). |
+| `commands` | Answers with every `/name` the session runs: each skill and prompt template that discovery keeps and `skills.disabled` does not switch off (`docs/system-prompt.md`, "Skills"), each MCP server's prompt (`docs/mcp.md`, "Prompts and resources"), and each extension's command (`docs/extensions.md`, "Commands and screens"). Each entry is a name, a one-line description, the skill's `argument-hint`, or an MCP prompt's arguments as `<name>` when required and `[name]` when not, and a tag: `skill`, `template`, the extension's name, or the MCP server's name. The list is fixed when the session starts, and again when it reloads. A client's `/` list reads it (`docs/tui.md`, "Slash commands"). |
 | `model` | Switches model or thinking level at the next turn boundary. Takes a model reference and an optional thinking level. The switch rebuilds the prompt cache, and the terminal says so with the rebuild's size first (`docs/prompt-cache.md`, "Switching model"). Rejected `invalid_arguments` for an unknown model, and with the credential's own code, such as `credential_missing`, when the new model's credential cannot be read (`docs/model-routing.md`, "When a credential is missing or fails"). |
 | `credential` | Switches the session's credential label at the next turn boundary (`docs/model-routing.md`, "Which credential a session uses"). The switch rebuilds the prompt cache, as a model switch does. It changes this session only; the terminal's `/credential` also saves the label. Rejected `credential_missing` for a label the provider does not have, naming its labels, and with the credential's own code when the label's source cannot be read. |
 | `name` | Sets the session's name, which pins it against the model's `name_session`. Takes the text; empty text clears the person's name and unpins it. Written as `session_named`. |
@@ -390,12 +391,12 @@ Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`,
 `duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`,
-`io_failed`.
+`io_failed`, `mcp_prompt_failed`.
 
 A prompt or steer that a hook refuses is rejected `message_refused`, with the
 hook's reason and extension in the message. One whose blocking hook failed is
-rejected `hook_failed`. A `fiber ask` whose first
-prompt is rejected either way exits 1.
+rejected `hook_failed`. A `fiber ask` whose first prompt is rejected exits 1,
+with the rejection as `fiber_exited`'s `error`.
 
 **`reply` answers every interaction that asks something, not just approvals.**
 `docs/architecture.md` fixes the set: "Fiber ships one closed, versioned set

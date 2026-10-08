@@ -561,6 +561,14 @@ fn kinds(lines: &[Value]) -> Vec<&str> {
         .map(|line| line["kind"].as_str().unwrap())
         .collect()
 }
+
+/// The ordered event kinds, omitting `clients`, which can race with loop writes.
+fn kinds_except_clients(lines: &[Value]) -> Vec<&str> {
+    kinds(lines)
+        .into_iter()
+        .filter(|kind| *kind != "clients")
+        .collect()
+}
 /// The socket's event kinds for one prompt and `close`: the subscribe, the
 /// prompt's turn, and the close. The prompt-over-the-socket, skill and
 /// same-id tests run exactly this shape, so they share it.
@@ -1545,8 +1553,8 @@ fn workspace_skill(setup: &Setup, name: &str, header: &str) {
     .unwrap();
 }
 
-/// Subscribes `client`, sends `commands`, and returns its answer's `result`.
-fn commands_answer(client: &Socket) -> Value {
+/// Subscribes `client`, sends `commands`, and returns the event stream and answer.
+fn commands_answer(client: &Socket) -> (Vec<Value>, Value) {
     send(
         client,
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
@@ -1555,7 +1563,8 @@ fn commands_answer(client: &Socket) -> Value {
     let lines = until(client, "the commands answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
     });
-    lines.last().unwrap()["payload"]["result"].clone()
+    let result = lines.last().unwrap()["payload"]["result"].clone();
+    (lines, result)
 }
 
 #[test]
@@ -1577,8 +1586,9 @@ fn commands_answers_with_the_workspaces_skills_and_templates() {
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect(&setup.socket(&id));
     running.wait_for("extensions_loaded");
+    let (_, result) = commands_answer(&client);
     assert_eq!(
-        commands_answer(&client),
+        result,
         json!({"commands": [
             {"name": "review-pr", "description": "Reviews a pull request.", "tag": "skill"},
             {"name": "ship", "description": "Ships it.", "argument_hint": "<tag>",
@@ -1607,8 +1617,9 @@ fn a_resumed_session_answers_commands_from_its_recorded_workspace() {
 
     let mut running = setup.start_session(&id, &["--resume"]);
     let client = running.connect(&setup.socket(&id));
+    let (_, result) = commands_answer(&client);
     assert_eq!(
-        commands_answer(&client),
+        result,
         json!({"commands": [
             {"name": "later", "description": "Added before the resume.", "tag": "skill"}]})
     );
@@ -2820,4 +2831,261 @@ fn a_parent_without_a_prompt_is_a_usage_error_and_starts_nothing() {
     assert!(stderr.contains("--prompt"), "{stderr}");
     assert!(!setup.home().join("projects").exists());
     assert!(!setup.home().join("run").exists());
+}
+
+/// Writes the fixture server's directory with an `echo` tool and a `greet`
+/// prompt, and configures it as the `fx` server beside the `fake/m` model.
+fn prompt_fixture(setup: &Setup) -> PathBuf {
+    let dir = setup.root.path().join("fx");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("tools.json"), r#"[{"name":"echo"}]"#).unwrap();
+    fs::write(
+        dir.join("prompts.json"),
+        r#"[{"name":"greet","description":"Greets someone.","arguments":[{"name":"who","required":true},{"name":"tone"}]}]"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("prompt-greet.json"),
+        r#"{"messages":[{"role":"user","content":{"type":"text","text":"Say hello to Ada, warmly."}}]}"#,
+    )
+    .unwrap();
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "mcp": {"servers": {"fx": {
+            "command": "/bin/bash",
+            "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
+        }}}}),
+    );
+    dir
+}
+
+#[test]
+fn the_prompt_command_runs_a_servers_prompt() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let dir = prompt_fixture(&setup);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+
+    let client = running.connect(&setup.socket(&id));
+    // Behind the loop's startup: `extensions_loaded` is on stdout, so
+    // every startup line is in the log and `clients` lands after them.
+    // The loop parks waiting for a prompt, so nothing else moves.
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"/greet Ada warm"}]}}"#,
+    );
+    let rest = until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let expanded = "Say hello to Ada, warmly.";
+    let turn_started = rest
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the prompt started a turn");
+    assert_eq!(
+        turn_started["payload"]["input"][0]["content"][0]["text"],
+        expanded
+    );
+    // The server saw the `prompts/get` with the named arguments, and the
+    // fake provider's received user message carries the prompt's text.
+    let log = fs::read_to_string(dir.join("requests.log")).unwrap();
+    assert!(log.contains(r#""method":"prompts/get""#), "log:\n{log}");
+    assert!(
+        log.contains(r#""arguments":{"tone":"warm","who":"Ada"}"#),
+        "the get sends the named arguments: {log}",
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        String::from_utf8_lossy(&requests[0].body)
+            .contains(&serde_json::to_string(expanded).unwrap())
+    );
+    assert!(
+        rest.iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the fake model's text arrived: {rest:?}"
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert!(!setup.socket(&id).exists());
+    // The session was prompted, so its directory remains.
+    assert!(setup.session_dir(&id).join("events.jsonl").is_file());
+    let mut stream = vec![sub];
+    stream.extend(rest);
+    stream.extend(tail);
+    assert_eq!(kinds(&stream), SOCKET_KINDS_ONE_TURN_AND_CLOSE);
+    assert_eq!(kinds(&out), STDOUT_KINDS_ONE_TURN_AND_CLOSE);
+}
+
+#[test]
+fn commands_answers_with_a_servers_prompts_tagged_with_its_name() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    prompt_fixture(&setup);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    let (mut events, result) = commands_answer(&client);
+    assert_eq!(
+        result,
+        json!({"commands": [
+            {"name": "greet", "description": "Greets someone.",
+             "argument_hint": "<who> [tone]", "tag": "fx"}]})
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    events.extend(until_close(&client));
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(
+        kinds(&events),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "command_accepted",
+            "command_accepted",
+            "fiber_exited",
+        ],
+    );
+    assert_eq!(
+        kinds(&out),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "fiber_exited",
+        ],
+    );
+}
+
+#[test]
+fn a_resumed_session_answers_commands_with_its_servers_prompts() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([stream(&[function_call(
+        "call_1",
+        "shell",
+        &json!({"command": "echo hi"}),
+    )])])
+    .unwrap();
+    setup.provider(&server);
+    prompt_fixture(&setup);
+    let id = doors::mint("s_");
+    let pending = suspend_on_an_approval(&setup, &id);
+    // The suspend rewrote `config.json` to the model alone: the resume
+    // needs the servers back.
+    prompt_fixture(&setup);
+
+    let mut running = setup.start_session(&id, &["--resume"]);
+    let client = running.connect(&setup.socket(&id));
+    // Capture the replayed request before asking for commands: it can arrive
+    // before that command's answer and be consumed with it.
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let mut resumed = false;
+    let mut events = until(&client, "the re-raised permission request", |line| {
+        if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
+            resumed = true;
+        }
+        resumed
+            && line["kind"] == "permission_requested"
+            && line["payload"]["request_id"] == pending.as_str()
+    });
+    assert_eq!(
+        events.last().unwrap()["payload"]["request_id"],
+        pending.as_str()
+    );
+
+    send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
+    let commands = until(&client, "the commands answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
+    });
+    let result = commands.last().unwrap()["payload"]["result"].clone();
+    assert_eq!(
+        result,
+        json!({"commands": [
+            {"name": "greet", "description": "Greets someone.",
+             "argument_hint": "<who> [tone]", "tag": "fx"}]})
+    );
+    events.extend(commands);
+    send(
+        &client,
+        r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
+    );
+    events.extend(until(&client, "the close answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_close_now"
+    }));
+    events.extend(until_close(&client));
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    for stream in [&events, &out] {
+        assert_eq!(
+            kinds(stream)
+                .iter()
+                .filter(|kind| **kind == "clients")
+                .count(),
+            1,
+            "the resumed client was counted once"
+        );
+    }
+    assert_eq!(
+        kinds_except_clients(&events),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "fiber_exited",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "permission_requested",
+            "command_accepted",
+            "command_accepted",
+            "fiber_exited",
+        ],
+    );
+    assert_eq!(
+        kinds_except_clients(&out),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "permission_requested",
+            "fiber_exited",
+        ],
+    );
 }

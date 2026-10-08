@@ -181,21 +181,42 @@ impl Session {
 
     /// Runs `fiber ask`'s one turn: sends `prompt` then `close`, so the
     /// loop finishes that turn and exits. A client attached to the socket
-    /// neither keeps the session alive nor starts a second turn.
+    /// neither keeps the session alive nor starts a second turn. When the
+    /// loop rejects the first prompt, that rejection is the run's failure
+    /// (`docs/invocation.md`, "What each command does"); `run`'s own
+    /// failure wins.
     pub fn ask(
         &self,
         prompt: String,
         cancel: Arc<dyn Fn() -> bool + Send + Sync>,
         run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
-        self.run(
+        let (done, rejection) = mpsc::channel();
+        let ack = Ack(Box::new(move |answer| {
+            if let Err(rejection) = answer {
+                done.send(rejection).unwrap_or(());
+            }
+        }));
+        let outcome = self.run(
             vec![
-                Delivery::Prompt(prompt_message(prompt), ignore()),
+                Delivery::Prompt(prompt_message(prompt), ack),
                 Delivery::Close(ignore()),
             ],
             cancel,
             run,
-        )
+        );
+        match outcome {
+            Err(failure) => Err(failure),
+            Ok(()) => match rejection.try_recv() {
+                Ok(rejection) => Err(Failure {
+                    code: rejection.code,
+                    message: rejection.message,
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+                Err(_) => Ok(()),
+            },
+        }
     }
 
     /// Runs the internal session command: queues `prompt` when one was
