@@ -199,6 +199,25 @@ impl std::io::Read for Broken {
     }
 }
 
+/// A lifeline reader that blocks until the test releases it with EOF.
+struct Held {
+    /// Sent on entering `read`, so the test knows the lifeline thread is
+    /// blocked inside it.
+    entered: mpsc::Sender<()>,
+    /// The test sends once to release the read as EOF.
+    release: mpsc::Receiver<()>,
+}
+
+impl std::io::Read for Held {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        let _sent = self.entered.send(());
+        match self.release.recv_timeout(DEADLINE) {
+            Ok(()) => Ok(0),
+            Err(_) => Err(std::io::Error::other("the test ended before releasing")),
+        }
+    }
+}
+
 #[test]
 fn a_lifeline_eof_after_start_takes_the_sighup_path() {
     let clock = FakeClock::new();
@@ -213,6 +232,46 @@ fn a_lifeline_eof_after_start_takes_the_sighup_path() {
         calls.recv_timeout(DEADLINE).unwrap(),
         Did::Signal(129),
         "EOF after start shuts down with the hangup code"
+    );
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the bound waits on the clock"
+    );
+    clock.advance(SHUTDOWN_BOUND);
+    assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
+    assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(129));
+}
+
+#[test]
+fn a_blocked_lifeline_triggers_nothing_until_released() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start(&signals, &tx), None);
+    let until = clock.now() + SHUTDOWN_BOUND;
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    signals.lifeline(Box::new(Held {
+        entered: entered_tx,
+        release: release_rx,
+    }));
+    entered_rx
+        .recv_timeout(DEADLINE)
+        .expect("the lifeline blocks reading stdin: a skipped drain never reads");
+    assert!(
+        calls.try_recv().is_err(),
+        "no shutdown while the lifeline is blocked"
+    );
+    assert!(
+        did.try_recv().is_err(),
+        "no exit while the lifeline is blocked"
+    );
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        calls.recv_timeout(DEADLINE).unwrap(),
+        Did::Signal(129),
+        "EOF after the block shuts down with the hangup code"
     );
     assert!(
         clock.await_parked(until, DEADLINE),
