@@ -953,9 +953,16 @@ fn two_calls_ask_at_once_and_each_gets_its_own_answer() {
         Some(TurnOutcome::Completed)
     );
     let lines = session.lines();
-    assert_kinds(
-        &lines,
-        &[
+    // The two calls race to raise their asks, while completions are
+    // written in request order: when the call raised second answers
+    // first, its completion lands before the other call's resolution.
+    // Either interleaving is correct, so the one kinds assertion sorts
+    // that window before comparing.
+    let mut ordered = kinds(&lines);
+    ordered[OPENING_TWO.len() + 4..OPENING_TWO.len() + 8].sort_unstable();
+    assert_eq!(
+        ordered,
+        [
             OPENING_TWO,
             &[
                 "tool_call_started",
@@ -968,8 +975,32 @@ fn two_calls_ask_at_once_and_each_gets_its_own_answer() {
                 "tool_call_completed",
             ],
             DONE,
-        ],
+        ]
+        .concat()
     );
+    // Each call's own resolution still precedes its own completion.
+    for asked in of_kind(&lines, "interaction_requested") {
+        let request = asked.payload["request_id"].as_str().unwrap();
+        let action = asked.payload["action_ids"][0].as_str().unwrap();
+        let resolved = lines
+            .iter()
+            .position(|line| {
+                line.kind == "interaction_resolved"
+                    && line.payload.get("request_id").and_then(Value::as_str) == Some(request)
+            })
+            .unwrap();
+        let completed = lines
+            .iter()
+            .position(|line| {
+                line.kind == "tool_call_completed"
+                    && line.action_id.as_ref().is_some_and(|id| id.0 == action)
+            })
+            .unwrap();
+        assert!(
+            resolved < completed,
+            "{request} resolves before {action} completes"
+        );
+    }
     let said = |line: &Envelope| -> String {
         let asker = line.payload["action_ids"][0].as_str().unwrap().to_owned();
         let completed = of_kind(&lines, "tool_call_completed")
