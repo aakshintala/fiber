@@ -1170,6 +1170,27 @@ fn ask_request(request_id: &str) -> Event {
     })
 }
 
+/// A review approval carrying `request_id`, an escalation and a rule offer.
+fn review_request(request_id: &str) -> Event {
+    Event::PermissionRequested(contract::events::PermissionRequested {
+        request_id: contract::RequestId(request_id.into()),
+        declared: DeclaredEffects {
+            effects: vec![contract::shapes::Effect::Executes],
+            reversible: true,
+            paths: None,
+        },
+        step: contract::events::AskStep::Review {
+            escalation: Some(contract::events::Escalation::ConsecutiveBlocks {
+                reason: "it writes".into(),
+            }),
+            rule: Some(contract::events::RuleOffer {
+                subject: "run tests".into(),
+                prefix: "run tests".into(),
+            }),
+        },
+    })
+}
+
 fn msg_started() -> Event {
     Event::AssistantMessageStarted(contract::events::Empty {})
 }
@@ -1259,6 +1280,88 @@ fn a_suspended_approval_is_refused_then_the_prompt_runs_next() {
     );
 
     // The re-raised `request_id` matches the original, on both lines.
+    let raised = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "permission_requested")
+        .unwrap();
+    assert_eq!(raised["payload"]["request_id"], "r_9");
+    let resolved = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(resolved["payload"]["request_id"], "r_9");
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    assert_eq!(resolved["payload"]["decided_by"], "cancel");
+    assert_eq!(
+        resolved["payload"]["reason"],
+        "The session was resumed with nobody to answer."
+    );
+    assert!(resolved["payload"].get("reviewer").is_none());
+
+    // Stdout's durable lines are the log's tail, byte for byte.
+    let log = fs::read_to_string(&events).unwrap();
+    assert_eq!(&log[before..], &run.durable());
+}
+
+#[test]
+fn a_suspended_review_request_is_denied_by_cancel_on_resume() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    hand_built(
+        &setup,
+        "s_susp2",
+        vec![
+            (turn_started("one"), Some(t()), None),
+            (msg_started(), Some(t()), Some(a("a_0"))),
+            (requested("exec"), Some(t()), Some(a("a_1"))),
+            (review_request("r_9"), Some(t()), Some(a("a_1"))),
+            (fiber_start(), None, None),
+            (fiber_exit(Some("r_9")), None, None),
+        ],
+    );
+    let events = setup.sessions().join("s_susp2").join("events.jsonl");
+    let before = fs::read(&events).unwrap().len();
+
+    let run = setup.fiber(&["ask", "--resume", "s_susp2", "next"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.session_id(), "s_susp2");
+    assert_eq!(run.lines[0]["payload"]["resumed"], true);
+    // No `turn_started` for the finishing turn: it completes the
+    // suspended one, then the prompt starts its own.
+    assert_eq!(
+        run.kinds(),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+
     let raised = run
         .lines
         .iter()

@@ -5068,6 +5068,22 @@ fn a_headless_resume_denies_the_re_raised_review_request_by_cancel() {
     );
     assert!(resolved[0].payload.get("reviewer").is_none());
     assert!(exec.ran().is_empty());
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 /// A shutdown that closes the inbox while the re-raised request waits keeps
