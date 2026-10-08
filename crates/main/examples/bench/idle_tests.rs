@@ -5,7 +5,7 @@ use std::time::Duration;
 use contract::clock::Clock;
 use fakes::clock::FakeClock;
 
-use super::settle;
+use super::{row_needle, settle};
 use crate::linux::Counts;
 use crate::run::PROBE;
 
@@ -126,4 +126,68 @@ fn a_failed_read_ends_the_wait_with_its_error() {
     let (got, reads, _) = run(3 * PROBE, from(script));
     assert_eq!(got, Err("reading /proc/1/task: gone".to_owned()));
     assert_eq!(reads, 2);
+}
+
+const ID: &str = "s_00112233445566aa";
+
+fn row(id: &str, name: &str) -> String {
+    format!(
+        "{}\n",
+        serde_json::json!({"session_id": id, "name": name, "how": "exited"})
+    )
+}
+
+fn hub_only() -> Vec<String> {
+    vec!["hub".to_owned()]
+}
+
+#[test]
+fn the_needle_is_the_rows_name() {
+    assert_eq!(
+        row_needle(&row(ID, "turn 0"), &hub_only(), ID),
+        Ok("turn 0".to_owned())
+    );
+}
+
+#[test]
+fn a_row_with_no_name_shows_its_id() {
+    assert_eq!(row_needle(&row(ID, ""), &[], ID), Ok(ID.to_owned()));
+}
+
+#[test]
+fn control_characters_in_the_name_become_spaces() {
+    assert_eq!(
+        row_needle(&row(ID, "a\tb\nc"), &[], ID),
+        Ok("a b c".to_owned())
+    );
+}
+
+#[test]
+fn the_last_row_for_the_id_wins() {
+    let recent = format!(
+        "{}{}{}",
+        row(ID, "first"),
+        row("s_ffeeddccbbaa9988", "other"),
+        row(ID, "last")
+    );
+    assert_eq!(row_needle(&recent, &[], ID), Ok("last".to_owned()));
+}
+
+#[test]
+fn no_row_for_the_id_errs_naming_it() {
+    let want = Err(format!("the seeded session {ID} left no recent.jsonl row"));
+    assert_eq!(
+        row_needle(&row("s_ffeeddccbbaa9988", "other"), &[], ID),
+        want
+    );
+    assert_eq!(row_needle("", &[], ID), want);
+}
+
+#[test]
+fn a_session_socket_in_run_errs_naming_it() {
+    let entries = vec!["hub".to_owned(), "s_0123456789abcdef".to_owned()];
+    assert_eq!(
+        row_needle(&row(ID, "turn 0"), &entries, ID),
+        Err("run/ still holds session s_0123456789abcdef".to_owned())
+    );
 }

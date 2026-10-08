@@ -5,15 +5,18 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
 use serde_json::{Value, json};
 
+use crate::busy::{self, expect};
 use crate::home::Home;
 use crate::linux::{self, Counts};
 use crate::pty::Terminal;
+use crate::resume::{self, Fixture};
 use crate::run::{self, Client, Session};
 
 /// How long `fiber` may take to reach a readiness signal: a stdout line,
@@ -264,22 +267,100 @@ fn terminal_first_frame(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Sample
     Ok(vec![("terminal_first_frame_ms", took)])
 }
 
-/// The window starts once the first frame is drawn and the terminal holds
-/// its hub connection.
+/// The session `terminal_idle` closes before it starts the terminal: one
+/// short turn, so the session is prompted and its close appends its
+/// `recent.jsonl` row.
+const SEED: Fixture = Fixture {
+    metric: "terminal_idle_seed",
+    turns: 1,
+    reply_bytes: 64,
+    handoffs: 0,
+};
+
+/// The label the home draws for session `id`'s row: the last `recent`
+/// line naming `id`, its `name` with control characters as spaces, or the
+/// id when the name is empty (`crates/tui/src/home.rs`, `title`). Errs
+/// when `run_entries` holds a session socket, which the hub's feed would
+/// report after the terminal's startup, or when no line names `id`.
+pub(crate) fn row_needle(recent: &str, run_entries: &[String], id: &str) -> Result<String, String> {
+    if let Some(session) = run_entries.iter().find(|entry| entry.starts_with("s_")) {
+        return Err(format!("run/ still holds session {session}"));
+    }
+    let row = recent
+        .lines()
+        .rev()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|row| row.get("session_id") == Some(&json!(id)))
+        .ok_or_else(|| format!("the seeded session {id} left no recent.jsonl row"))?;
+    let name = row.get("name").and_then(Value::as_str).unwrap_or_default();
+    if name.is_empty() {
+        return Ok(id.to_owned());
+    }
+    Ok(name
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect())
+}
+
+/// Runs and closes one prompted session in `home`, then returns the label
+/// the home draws for its row ([`row_needle`]).
+fn seed(ctx: &Ctx<'_>, home: &Home, notes: &mut Vec<String>) -> Result<String, String> {
+    let id = doors::mint("s_");
+    resume::generate(ctx, home, &SEED, &id, notes)?;
+    // The script ends with the reply to a resumed run's prompt, which the
+    // seed never sends.
+    expect(
+        notes,
+        "seed model requests",
+        home.server().requests().len(),
+        SEED.script().len() - 1,
+    );
+    let path = home.home().join("recent.jsonl");
+    let recent =
+        fs::read_to_string(&path).map_err(|err| format!("reading {}: {err}", path.display()))?;
+    let run = home.home().join("run");
+    let entries = match fs::read_dir(&run) {
+        Ok(entries) => entries
+            .map(|entry| {
+                entry
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .map_err(|err| format!("reading {}: {err}", run.display()))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(err) => return Err(format!("reading {}: {err}", run.display())),
+    };
+    row_needle(&recent, &entries, &id)
+}
+
+/// The window starts once the terminal has drawn the home row of a
+/// prompted session this run closed just before it, which only the answer
+/// to its last startup command draws, and two readings in a row find every
+/// thread asleep with no counter moved.
 fn terminal_idle(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
-    let terminal = Terminal::spawn(ctx.home, ctx.path.as_deref(), ctx.clock)?;
-    let pid = terminal.proc.pid();
-    let measured = terminal
-        .wait_for(ctx.clock, ctx.clock.now() + READY, ">")
-        .and_then(|()| hub_connected(ctx))
-        .and_then(|()| idle_window(ctx, pid, notes));
-    let quit = quit(ctx, terminal, notes);
-    let (switches, rss, _) = measured?;
-    quit?;
-    Ok(vec![
-        ("terminal_idle_rss_kib", json!(rss)),
-        ("terminal_idle_switches", json!(switches)),
-    ])
+    let home = Home::scripted(ctx.home.fiber(), SEED.script())?;
+    busy::in_home(home, |home| {
+        let ctx = Ctx {
+            home,
+            clock: ctx.clock,
+            idle: ctx.idle,
+            path: ctx.path.clone(),
+            paging: ctx.paging,
+        };
+        let needle = seed(&ctx, home, notes)?;
+        let terminal = Terminal::spawn(home, ctx.path.as_deref(), ctx.clock)?;
+        let pid = terminal.proc.pid();
+        let measured = terminal
+            .wait_for(ctx.clock, ctx.clock.now() + READY, &needle)
+            .and_then(|()| idle_window(&ctx, pid, notes));
+        let quit = quit(&ctx, terminal, notes);
+        let (switches, rss, _) = measured?;
+        quit?;
+        Ok(vec![
+            ("terminal_idle_rss_kib", json!(rss)),
+            ("terminal_idle_switches", json!(switches)),
+        ])
+    })
 }
 
 #[cfg(test)]
