@@ -461,3 +461,76 @@ fn a_tab_in_the_indentation_is_an_error() {
     );
     assert!(check(&workflow, &small_doc()).is_err());
 }
+
+#[test]
+fn a_workflow_without_a_ci_job_is_named_as_such() {
+    let workflow =
+        String::from("name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n");
+    assert_eq!(
+        check(&workflow, &small_doc()),
+        Err(format!("{WORKFLOW}: no ci job"))
+    );
+}
+
+#[test]
+fn a_workflow_whose_only_job_is_ci_is_read() {
+    let workflow = String::from(
+        "name: CI\non: push\njobs:\n  ci:\n    needs: select\n    runs-on: ubuntu-24.04\n",
+    );
+    let failures = check(&workflow, &small_doc()).unwrap();
+    assert_eq!(failures.len(), 2, "{failures:?}");
+}
+
+#[test]
+fn a_nested_ci_key_is_not_the_ci_job() {
+    let workflow = String::from(
+        "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n    ci:\n      runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: select\n    runs-on: ubuntu-24.04\n",
+    );
+    assert_eq!(check(&workflow, &small_doc()), Ok(vec![]));
+}
+
+#[test]
+fn ci_without_needs_does_not_borrow_the_next_jobs_needs() {
+    let workflow = String::from(
+        "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  ci:\n    runs-on: ubuntu-24.04\n  zeta:\n    needs: select\n    runs-on: ubuntu-24.04\n",
+    );
+    let err = check(&workflow, &small_doc()).unwrap_err();
+    assert!(err.contains("ci has no `needs:`"), "{err}");
+}
+
+#[test]
+fn a_list_item_above_the_needs_line_is_not_a_needs_item() {
+    let body =
+        "    runs-on: ubuntu-24.04\n      - run: echo\n    needs:\n      - select\n      - lint\n";
+    assert_eq!(check(&workflow(&["lint"], body), &small_doc()), Ok(vec![]));
+}
+
+#[test]
+fn a_hash_after_a_word_is_not_a_comment() {
+    assert_eq!(strip_comment("a#b"), "a#b");
+    assert_eq!(strip_comment("a\t#b"), "a\t");
+    assert_eq!(strip_comment("a #b"), "a ");
+}
+
+#[test]
+fn a_heading_with_extra_text_is_not_the_section() {
+    let doc = String::from(
+        "# CI\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`.\n\n## The merge gate!\n\nJobs run and gate the merge.\n",
+    );
+    let err = check(&scalar(&[], "select"), &doc).unwrap_err();
+    assert!(err.contains("no `## The merge gate` heading"), "{err}");
+}
+
+#[test]
+fn a_declaration_above_the_heading_is_not_in_the_section() {
+    let doc = String::from(
+        "# CI\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`.\n\n## The merge gate\n\nJobs run and gate the merge.\n",
+    );
+    let failures = check(&scalar(&[], "select"), &doc).unwrap();
+    assert_eq!(failures.len(), 1);
+    assert!(
+        failures[0].contains("has no declaration"),
+        "{}",
+        failures[0]
+    );
+}
