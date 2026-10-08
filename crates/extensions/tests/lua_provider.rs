@@ -888,12 +888,7 @@ fn a_rejected_refresh_at_send_time_keeps_authentication_failed() {
 #[test]
 fn an_unreachable_refresh_at_send_time_keeps_connection_failed() {
     let setup = Setup::new();
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let provider = refresh_provider(&setup, &format!("http://127.0.0.1:{port}"));
+    let provider = refresh_provider(&setup, &fakes::refused::url());
     let contract::signing::Error::Credential { code, message, .. } = &sign_error(&provider) else {
         panic!("expected a credential error")
     };

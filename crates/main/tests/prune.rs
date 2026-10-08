@@ -312,12 +312,16 @@ fn git(deadline: Deadline, dir: &Path, args: &[&str]) {
 }
 
 /// Makes the workspace a git repository with one commit: `file.txt` and a
-/// `.gitignore` matching `local.secret`.
+/// `.gitignore` matching `target/`, `.env` and `local.secret`.
 fn repo(setup: &Setup) {
     let workspace = setup.workspace();
     git(setup.deadline, &workspace, &["init", "--quiet"]);
     fs::write(workspace.join("file.txt"), "x").unwrap();
-    fs::write(workspace.join(".gitignore"), "local.secret\n").unwrap();
+    fs::write(
+        workspace.join(".gitignore"),
+        "target/\n.env\nlocal.secret\n",
+    )
+    .unwrap();
     git(setup.deadline, &workspace, &["add", "."]);
     git(
         setup.deadline,
@@ -396,9 +400,10 @@ fn a_dirty_worktree_is_skipped_naming_uncommitted_files() {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     let out = text(&output.stdout);
     assert!(
-        out.contains("skipped: removing it would lose uncommitted or ignored files"),
+        out.contains("skipped: removing it would lose uncommitted files"),
         "{out}"
     );
+    assert!(!out.contains("uncommitted or ignored"), "{out}");
     assert!(wt.is_dir(), "the worktree stays");
     assert!(
         branch_exists(&setup, "s_00000000000000e2"),
@@ -407,19 +412,31 @@ fn a_dirty_worktree_is_skipped_naming_uncommitted_files() {
 }
 
 #[test]
-fn an_ignored_only_worktree_is_skipped() {
+fn an_ignored_only_worktree_is_removed() {
     let setup = setup();
     repo(&setup);
     let wt = kept(&setup, "s_00000000000000e3");
-    fs::write(wt.join("local.secret"), "secret").unwrap();
+    fs::create_dir_all(wt.join("target")).unwrap();
+    fs::write(wt.join("target/out.bin"), "1234567890").unwrap();
+    fs::write(wt.join(".env"), "123456").unwrap();
+    let output = prune(&setup, &["--dry-run"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = text(&output.stdout);
+    assert!(out.contains("ignored 16 B: target/, .env"), "{out}");
+    assert!(wt.is_dir(), "a dry run removes nothing");
+    assert!(
+        branch_exists(&setup, "s_00000000000000e3"),
+        "the branch stays"
+    );
     let output = prune(&setup, &["--yes"]);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     let out = text(&output.stdout);
+    assert!(out.contains("ignored 16 B: target/, .env"), "{out}");
+    assert!(!wt.exists(), "the worktree is gone");
     assert!(
-        out.contains("skipped: removing it would lose uncommitted or ignored files"),
-        "{out}"
+        !branch_exists(&setup, "s_00000000000000e3"),
+        "the branch is gone"
     );
-    assert!(wt.is_dir(), "the worktree stays");
 }
 
 #[test]
@@ -453,10 +470,8 @@ fn force_removes_the_dirty_worktree() {
     let output = prune(&setup, &["--yes", "--force"]);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     let out = text(&output.stdout);
-    assert!(
-        out.contains("forced: loses uncommitted or ignored files"),
-        "{out}"
-    );
+    assert!(out.contains("forced: loses uncommitted files"), "{out}");
+    assert!(!out.contains("uncommitted or ignored"), "{out}");
     assert!(!wt.exists(), "the worktree is gone");
     assert!(
         !branch_exists(&setup, "s_00000000000000e2"),

@@ -32,6 +32,48 @@ fn err(what: &str) -> impl Fn(rustix::io::Errno) -> String + '_ {
     move |errno| format!("{what}: {errno}")
 }
 
+/// The length of the cursor-position sequence `ESC [ <row> ; <col> H` at
+/// the start of `bytes`, if one is there.
+fn cursor_position(bytes: &[u8]) -> Option<usize> {
+    let rest = bytes.strip_prefix(b"\x1b[")?;
+    let digits = |from: &[u8]| from.iter().take_while(|b| b.is_ascii_digit()).count();
+    let row = digits(rest);
+    let rest = rest.get(row..)?.strip_prefix(b";").filter(|_| row > 0)?;
+    let col = digits(rest);
+    rest.get(col..)?.strip_prefix(b"H").filter(|_| col > 0)?;
+    Some(2 + row + 1 + col + 1)
+}
+
+/// Whether `needle` matches `output` from its start. Each space in
+/// `needle` matches a space or one cursor-position sequence: a frame
+/// skips the cells it leaves unchanged, a blank cell between two words
+/// included, and moves the cursor past them.
+fn matches_at(mut output: &[u8], needle: &[u8]) -> bool {
+    for &byte in needle {
+        let skip = if byte == b' ' && output.first() != Some(&b' ') {
+            cursor_position(output)
+        } else {
+            (output.first() == Some(&byte)).then_some(1)
+        };
+        match skip.and_then(|skip| output.get(skip..)) {
+            Some(rest) => output = rest,
+            None => return false,
+        }
+    }
+    true
+}
+
+/// Whether `output` holds `needle` anywhere ([`matches_at`]). An empty
+/// needle matches nothing.
+fn holds(output: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && (0..output.len()).any(|start| {
+            output
+                .get(start..)
+                .is_some_and(|rest| matches_at(rest, needle))
+        })
+}
+
 impl Terminal {
     /// Starts the copy of `fiber` in `home`'s workspace on a new pty.
     pub(crate) fn spawn(
@@ -110,7 +152,7 @@ impl Terminal {
     fn holds(&self, needle: &[u8]) -> bool {
         self.output
             .lock()
-            .map(|output| output.windows(needle.len()).any(|window| window == needle))
+            .map(|output| holds(&output, needle))
             .unwrap_or(false)
     }
 
@@ -140,3 +182,7 @@ impl Terminal {
             .map_err(|e| format!("typing into the terminal: {e}"))
     }
 }
+
+#[cfg(test)]
+#[path = "pty_tests.rs"]
+mod tests;

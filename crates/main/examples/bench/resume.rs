@@ -123,7 +123,7 @@ fn subscribe(ctx: &Ctx<'_>, home: &Home, id: &str) -> Result<Client, String> {
 
 /// Writes the fixture's turns and handoffs through a session of its own,
 /// closes it, and checks every handoff completed and none was automatic.
-fn generate(
+pub(crate) fn generate(
     ctx: &Ctx<'_>,
     home: &Home,
     fixture: &Fixture,

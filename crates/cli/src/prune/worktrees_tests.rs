@@ -204,7 +204,7 @@ fn every_skip_reason_has_its_exact_text() {
     let size = |dir: &Path| super::super::format_size(log::session_bytes(dir));
     assert!(lines.contains(
         &format!(
-            "worktree  s_00000000000000e2  fiber/s_00000000000000e2  uncommitted  0d  {}  skipped: removing it would lose uncommitted or ignored files",
+            "worktree  s_00000000000000e2  fiber/s_00000000000000e2  uncommitted  0d  {}  skipped: removing it would lose uncommitted files",
             size(&dirty),
         )
     ), "{lines:?}");
@@ -216,7 +216,7 @@ fn every_skip_reason_has_its_exact_text() {
     ), "{lines:?}");
     assert!(lines.contains(
         &format!(
-            "worktree  s_00000000000000e4  fiber/s_00000000000000e4  uncommitted  0d  {}  skipped: removing it would lose uncommitted or ignored files and commits found nowhere else",
+            "worktree  s_00000000000000e4  fiber/s_00000000000000e4  uncommitted  0d  {}  skipped: removing it would lose uncommitted files and commits found nowhere else",
             size(&both),
         )
     ), "{lines:?}");
@@ -244,9 +244,9 @@ fn force_lists_losing_worktrees_as_forced() {
     assert_eq!(planned.removals.len(), 1);
     let (name, forced) = removable(&planned.rows[0]);
     assert_eq!(name, "s_00000000000000e2");
-    assert_eq!(forced, Some("uncommitted or ignored files"));
+    assert_eq!(forced, Some("uncommitted files"));
     assert!(
-        line(&planned.rows[0]).ends_with("  forced: loses uncommitted or ignored files"),
+        line(&planned.rows[0]).ends_with("  forced: loses uncommitted files"),
         "{}",
         line(&planned.rows[0])
     );
@@ -296,7 +296,7 @@ fn revalidation_covers_each_cleanliness_and_force_case_with_exact_totals() {
             assert_eq!(removed.failures.len(), 1, "{case}: failures");
             assert_eq!(
                 removed.failures[0].2,
-                "it changed since it was listed: removing it would now lose uncommitted or ignored files",
+                "it changed since it was listed: removing it would now lose uncommitted files",
                 "{case}: guard reason"
             );
             assert!(dir.is_dir(), "{case}: worktree was removed");
@@ -687,10 +687,7 @@ fn force_through_prune_run_prints_forced_removes_and_frees() {
     );
     got.unwrap();
     let out = String::from_utf8(out).unwrap();
-    assert!(
-        out.contains("forced: loses uncommitted or ignored files"),
-        "{out}"
-    );
+    assert!(out.contains("forced: loses uncommitted files"), "{out}");
     assert!(
         out.contains(&format!("freed {}", super::super::format_size(listed))),
         "{out}"
@@ -700,4 +697,129 @@ fn force_through_prune_run_prints_forced_removes_and_frees() {
         !setup.branch_exists("s_00000000000000e2"),
         "the branch is gone"
     );
+}
+
+/// Commits `target/` and `.env` to `.gitignore` on `main`, so worktrees
+/// made after hold ignored files without any unique commit.
+fn ignore_target_and_env(setup: &Setup) {
+    fs::write(setup.repo().join(".gitignore"), "target/\n.env\n").unwrap();
+    git(&setup.repo(), &["add", ".gitignore"]);
+    git(&setup.repo(), &["commit", "--quiet", "-m", "ignore"]);
+}
+
+#[test]
+fn an_ignored_only_worktree_is_removable_and_names_its_ignored_files() {
+    let setup = Setup::new("cli-prune-wt-ignored-only");
+    ignore_target_and_env(&setup);
+    let dir = setup.worktree("s_00000000000000e3");
+    fs::create_dir_all(dir.join("target")).unwrap();
+    fs::write(dir.join("target/out.bin"), "1234567890").unwrap();
+    fs::write(dir.join(".env"), "123456").unwrap();
+    let planned = select(&setup, false);
+    assert_eq!(planned.rows.len(), 1);
+    assert_eq!(planned.removals.len(), 1);
+    let (name, forced) = removable(&planned.rows[0]);
+    assert_eq!((name, forced), ("s_00000000000000e3", None));
+    assert_eq!(
+        line(&planned.rows[0]),
+        format!(
+            "worktree  s_00000000000000e3  fiber/s_00000000000000e3  clean  0d  {}  ignored 16 B: target/, .env",
+            super::super::format_size(log::session_bytes(&dir)),
+        )
+    );
+    let mut planned = select(&setup, false);
+    let removed = remove_planned(&setup.home(), &mut planned, false, &mut |_| {});
+    assert!(removed.failures.is_empty(), "{:?}", removed.failures);
+    assert_eq!(removed.total, 1);
+    assert!(!dir.exists(), "the worktree is gone");
+    assert!(
+        !setup.branch_exists("s_00000000000000e3"),
+        "the branch is gone"
+    );
+}
+
+#[test]
+fn an_untracked_file_alongside_ignored_files_is_skipped_without_an_ignored_segment() {
+    let setup = Setup::new("cli-prune-wt-ignored-dirty");
+    ignore_target_and_env(&setup);
+    let dir = setup.worktree("s_00000000000000e2");
+    fs::write(dir.join("notes.txt"), "scratch").unwrap();
+    fs::write(dir.join(".env"), "123456").unwrap();
+    let planned = select(&setup, false);
+    assert!(planned.removals.is_empty());
+    let lines: Vec<String> = planned.rows.iter().map(line).collect();
+    assert_eq!(lines.len(), 1);
+    assert!(
+        lines[0].ends_with("skipped: removing it would lose uncommitted files"),
+        "{}",
+        lines[0]
+    );
+    assert!(!lines[0].contains("ignored"), "{}", lines[0]);
+    assert!(dir.is_dir(), "the worktree stays");
+}
+
+#[test]
+fn force_names_ignored_files_before_the_forced_losses() {
+    let setup = Setup::new("cli-prune-wt-ignored-force");
+    ignore_target_and_env(&setup);
+    let dir = setup.worktree("s_00000000000000e2");
+    fs::write(dir.join("notes.txt"), "scratch").unwrap();
+    fs::write(dir.join(".env"), "123456").unwrap();
+    let planned = select(&setup, true);
+    assert_eq!(planned.removals.len(), 1);
+    assert!(
+        line(&planned.rows[0]).ends_with("  ignored 6 B: .env  forced: loses uncommitted files"),
+        "{}",
+        line(&planned.rows[0])
+    );
+}
+
+#[test]
+fn the_confirmation_names_ignored_files_and_removes_nothing_on_no() {
+    let setup = Setup::new("cli-prune-wt-ignored-confirm");
+    ignore_target_and_env(&setup);
+    let dir = setup.worktree("s_00000000000000e3");
+    fs::create_dir_all(dir.join("target")).unwrap();
+    fs::write(dir.join("target/out.bin"), "1234567890").unwrap();
+    fs::write(dir.join(".env"), "123456").unwrap();
+    let args = PruneArgs {
+        older_than: None,
+        cascade: false,
+        dry_run: false,
+        yes: false,
+        force: false,
+    };
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut input: &[u8] = b"n\n";
+    let ask = crate::sessions::Ask {
+        yes: false,
+        terminal: true,
+        input: &mut input,
+        err: &mut err,
+    };
+    let got = prune_run(
+        &setup.home(),
+        &setup.workspace(),
+        &args,
+        wall(),
+        ask,
+        &mut out,
+        &mut || -> io::Result<doors::hub::Hub> { panic!("nothing connects") },
+    );
+    got.unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.contains("ignored 16 B: target/, .env"), "{out}");
+    assert!(dir.is_dir(), "the worktree stays");
+    assert!(
+        setup.branch_exists("s_00000000000000e3"),
+        "the branch stays"
+    );
+}
+
+#[test]
+fn a_failed_ignored_listing_is_uncertain() {
+    let home = fakes::TempDir::new("cli-prune-wt-ignored-outside");
+    let err = super::listed_ignored(home.path()).unwrap_err();
+    assert!(err.starts_with("git cannot read it: "), "{err}");
 }

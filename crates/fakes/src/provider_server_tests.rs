@@ -407,10 +407,7 @@ fn stop_gives_up_on_an_accept_thread_that_never_finishes() {
 
 #[test]
 fn stop_gives_up_when_the_wake_cannot_connect() {
-    let addr = TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
+    let addr = crate::refused::ADDR.into();
     let accept = thread::spawn(|| {});
     let joined = crate::within(
         "stop to give up on a refused wake",

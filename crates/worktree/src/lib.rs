@@ -51,7 +51,8 @@ pub struct Inspected {
     pub branch: String,
     /// The repository's common directory, to run removals from.
     pub common_dir: PathBuf,
-    /// Whether `git status` reports anything, ignored files included.
+    /// Whether `git status` reports anything. Ignored files are not
+    /// counted: they are not uncommitted.
     pub uncommitted: bool,
     /// How many commits on the branch are on no other branch or remote.
     pub unique_commits: u64,
@@ -135,10 +136,11 @@ fn inspect_with(program: &str, path: &Path) -> Result<Inspection, Error> {
     } else {
         return Err(git_failed(path, "symbolic-ref", &out));
     };
-    // `git worktree remove` deletes ignored files too, so any output,
-    // ignored files included, counts as uncommitted. `--untracked-files=all`
-    // pins `status.showUntrackedFiles`: `no` in the config would otherwise
-    // suppress ignored files too, hiding an ignored-only worktree.
+    // Ignored files are not changes, so `status` runs without
+    // `--ignored`: an ignored-only worktree reports clean.
+    // `--untracked-files=all` pins `status.showUntrackedFiles`: `no` in
+    // the config would otherwise hide an untracked file that is not
+    // ignored.
     // `--ignore-submodules=none` pins `submodule.*.ignore`: `all` would
     // otherwise hide a modified submodule. The Git command builder turns
     // `core.fsmonitor` off: a hook that reports nothing changed would
@@ -150,7 +152,6 @@ fn inspect_with(program: &str, path: &Path) -> Result<Inspection, Error> {
         &[
             "status",
             "--porcelain",
-            "--ignored",
             "--untracked-files=all",
             "--ignore-submodules=none",
         ],
@@ -192,6 +193,58 @@ fn inspect_with(program: &str, path: &Path) -> Result<Inspection, Error> {
         uncommitted,
         unique_commits: count,
     }))
+}
+
+/// One path `git ls-files --others --ignored --exclude-standard
+/// --directory` lists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IgnoredEntry {
+    /// Relative to the worktree's top, without a trailing slash.
+    pub path: PathBuf,
+    /// Whether git listed it as a directory (a trailing `/`).
+    pub is_dir: bool,
+}
+
+/// The ignored files and directories in the worktree at `path`, which
+/// `inspect` found to be a linked worktree. Never follows a link; reads no
+/// file contents.
+pub fn ignored(path: &Path) -> Result<Vec<IgnoredEntry>, Error> {
+    let out = run(
+        "git",
+        path,
+        path,
+        &[
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "--full-name",
+        ],
+    )?;
+    if !out.status.success() {
+        return Err(git_failed(path, "ls-files", &out));
+    }
+    let mut entries = Vec::new();
+    for record in out.stdout.split(|byte| *byte == 0) {
+        if record.is_empty() {
+            continue;
+        }
+        let (record, is_dir) = match record.strip_suffix(b"/") {
+            Some(stripped) => (stripped, true),
+            None => (record, false),
+        };
+        #[cfg(unix)]
+        let path = {
+            use std::os::unix::ffi::OsStrExt;
+            PathBuf::from(std::ffi::OsStr::from_bytes(record))
+        };
+        #[cfg(not(unix))]
+        let path = PathBuf::from(String::from_utf8_lossy(record).into_owned());
+        entries.push(IgnoredEntry { path, is_dir });
+    }
+    Ok(entries)
 }
 
 /// How `remove` ended.

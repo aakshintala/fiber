@@ -581,6 +581,58 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
 }
 
 #[test]
+fn a_refused_subscribe_is_not_replayed_when_the_session_resumes() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let (code, lines) = setup.run(&["ask", "one"]);
+    assert_eq!(code, Some(0));
+    let id = lines[0]["session_id"].as_str().unwrap().to_owned();
+
+    let hub = Arc::new(Mutex::new(None));
+    let first = connect_hub(&setup, &hub);
+    first.send(&subscribe("c_sub", &id));
+    until(&first, "the first subscribe", |line| {
+        acknowledges(line, "c_sub")
+    });
+
+    // The session refuses a second connection's subscribe under an id it
+    // already took, so this connection holds no level on it.
+    let second = connect_hub(&setup, &hub);
+    second.send(&subscribe("c_sub", &id));
+    let refused = until(&second, "the refusal", |line| {
+        line["kind"] == "command_rejected"
+    });
+    let refused = refused.last().unwrap();
+    assert_eq!(refused["payload"]["command_id"], "c_sub", "{refused}");
+    assert_eq!(refused["payload"]["code"], "duplicate_command", "{refused}");
+
+    first.send(&close(&id));
+    until_exited(&first, &setup);
+
+    // The resumed session sees only this subscribe from the second
+    // connection, so it is accepted.
+    second.send(&subscribe("c_sub2", &id));
+    let answered = until(&second, "the second subscribe's answer", |line| {
+        (line["kind"] == "command_accepted" || line["kind"] == "command_rejected")
+            && line["payload"]["command_id"] == "c_sub2"
+    });
+    let answered = answered.last().unwrap();
+    assert!(acknowledges(answered, "c_sub2"), "{answered}");
+
+    second.send(&close(&id));
+    until_exited(&second, &setup);
+    drop((first, second));
+    let log = setup.hub_log();
+    assert_eq!(
+        log.matches("\"code\":\"session_resumed\"").count(),
+        2,
+        "{log}"
+    );
+    hub.lock().unwrap().take().expect("the hub ran").finish();
+}
+
+#[test]
 fn a_reply_after_the_session_exited_resumes_it_on_the_same_connection() {
     let setup = Setup::new();
     let server = ProviderServer::start([echo_call(), hello()]).unwrap();

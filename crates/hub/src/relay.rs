@@ -5,10 +5,11 @@
 //! no connection is resumed first.
 //!
 //! A subscription belongs to the hub connection, not to one session
-//! socket: the connection's first `subscribe` for a session is kept, and a
-//! later accepted `subscribe` replaces the kept one, so a reconnect to
-//! that session sends it again under a hub-minted id before the client's
-//! command, dropping the session's acknowledgement of it.
+//! socket: a `subscribe` is kept once the session accepts it, and a later
+//! accepted `subscribe` replaces the kept one, so a reconnect to that
+//! session sends it again under a hub-minted id before the client's
+//! command, dropping the session's acknowledgement of it. A `subscribe`
+//! the session rejects, or never answers, is not kept.
 //!
 //! A `closing` answer from a session whose log ends in `fiber_exited` is
 //! not passed on: the command is routed again to the resumed session.
@@ -40,15 +41,15 @@ pub(crate) struct Relay {
     pub(crate) kept: Kept,
 }
 
-/// A connection's relays, the last epoch minted on it, and the first
-/// `subscribe` it relayed to each session. Epochs are never reused for the
+/// A connection's relays, the last epoch minted on it, and the last
+/// `subscribe` each session accepted from it. Epochs are never reused for the
 /// connection's lifetime, so a stale relay thread never drops the entry of
 /// a reconnect to the same session.
 #[derive(Default)]
 pub(crate) struct Relays {
     pub(crate) entries: Vec<Relay>,
     pub(crate) minted: u64,
-    /// Per session, the first `subscribe` relayed to it, without its
+    /// Per session, the last `subscribe` it accepted, without its
     /// `session_id`: what a reconnect sends again.
     pub(crate) subscribed: Vec<(String, Map<String, Value>)>,
 }
@@ -74,15 +75,6 @@ impl Relays {
             match entry.writer.shutdown(Shutdown::Both) {
                 Ok(()) | Err(_) => {}
             }
-        }
-    }
-
-    /// Keeps `line` as `session`'s subscription when it is a `subscribe`
-    /// and none is kept yet.
-    fn keep(&mut self, session: &str, line: &Map<String, Value>) {
-        let subscribes = line.get("command").and_then(Value::as_str) == Some("subscribe");
-        if subscribes && !self.subscribed.iter().any(|(kept, _)| kept == session) {
-            self.subscribed.push((session.to_owned(), line.clone()));
         }
     }
 
@@ -182,7 +174,6 @@ fn route(
                 write_all(&entry.writer, &bytes).is_ok()
             });
             if sent {
-                held.keep(session, &stripped);
                 return;
             }
             held.entries.remove(at);
@@ -231,7 +222,6 @@ fn route(
         }
     };
     let mut held = lock(relays);
-    held.keep(session, &stripped);
     let epoch = held.mint();
     // The thread may run before its entry is pushed: on session EOF it
     // only removes an entry it finds.
@@ -279,9 +269,9 @@ fn not_found(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, session
 /// again, which the client never sent, and a `closing` answer from a
 /// session whose log ends in `fiber_exited`: that drops this thread's map
 /// entry, without shutting the stream, and routes the command again. An
-/// accepted `subscribe` replaces the connection's kept subscription before
+/// accepted `subscribe` becomes the connection's kept subscription before
 /// its acknowledgement is forwarded, so a client that has read it and
-/// triggers a reconnect gets the new level replayed. The session closing
+/// triggers a reconnect gets that level replayed. The session closing
 /// its socket drops the map entry; the next command for it reconnects.
 fn relay(
     owned: RelayThread,
@@ -356,18 +346,18 @@ fn forward(
     out.write_all(buf).and_then(|()| out.flush())
 }
 
-/// Settles a kept command `line` acknowledges: it is no longer kept. A
-/// `closing` rejection of it returns it, to be routed again, once this
-/// thread has seen the exited window, whether in this answer
-/// (`crate::resume::exited`) or an earlier one (`exiting`). An accepted
-/// `subscribe` returns its line, to replace the kept subscription.
 /// What settling an acknowledged command decides: either the command is
-/// routed again, or an accepted `subscribe` replaces the kept subscription.
+/// routed again, or an accepted `subscribe` becomes the kept subscription.
 enum Settled {
     Reroute(String, Map<String, Value>),
     Subscribed(Map<String, Value>),
 }
 
+/// Settles a kept command `line` acknowledges: it is no longer kept. A
+/// `closing` rejection of it returns it, to be routed again, once this
+/// thread has seen the exited window, whether in this answer
+/// (`crate::resume::exited`) or an earlier one (`exiting`). An accepted
+/// `subscribe` returns its line, to become the kept subscription.
 fn settle(line: &[u8], kept: &Kept, hub: &Hub, session: &str, exiting: bool) -> Option<Settled> {
     let ((id, command), verdict) = {
         let mut kept = lock(kept);

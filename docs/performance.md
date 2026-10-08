@@ -18,7 +18,7 @@ process and holds the same budgets as any session. The hub's own budgets,
 idle memory, idle CPU, threads and time to first response with N sessions,
 are not set yet ([Control center](https://github.com/aakshintala/fiber/issues/256)). The image child's memory is its
 own process's, not the session's. Peak over an empty program is 68,076 KiB
-on Linux x86_64, 67,604 KiB on Linux arm64 and 72,352 KiB on macOS arm64;
+on Linux x86_64, 67,604 KiB on Linux arm64 and 67,825 KiB on macOS arm64;
 an 81-megapixel PNG, which the 50-megapixel cap refuses, peaks at 308,372 KiB
 (`research/image-limits/README.md`).
 

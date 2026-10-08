@@ -131,7 +131,7 @@ fn artifacts(
     // A name that is not UTF-8 cannot be named by a line, so it never
     // gives a hit. An entry that cannot be read is a problem.
     let mut names: Vec<String> = entries
-        .filter_map(|next| super::entry(&path, next, out))
+        .filter_map(|next| super::entry(&path, next, &mut |problem| out.problem(problem)))
         .filter_map(|entry| entry.file_name().into_string().ok())
         .collect();
     names.sort();

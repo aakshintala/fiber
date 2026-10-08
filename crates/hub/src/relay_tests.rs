@@ -1,5 +1,6 @@
 //! Tests for a connection's relay map: epochs, the entry a finished relay
-//! drops, the kept subscription, and the acknowledgement a replay drops.
+//! drops, the subscription kept once the session accepts it, and the
+//! acknowledgement a replay drops.
 
 #![allow(
     clippy::unwrap_used,
@@ -37,7 +38,7 @@ fn a_stale_relay_never_overwrites_a_reconnects_subscription() {
     // a reconnect mints the next epoch.
     let stale = relays.mint();
     relays.entries.push(entry(sid, stale));
-    relays.keep(sid, &line("c_1", "full"));
+    relays.accepted(sid, stale, line("c_1", "full"));
     relays.entries.remove(0);
     let fresh = relays.mint();
     assert_ne!(fresh, stale);
@@ -108,31 +109,6 @@ fn relay_slots_drop_only_their_own_entry() {
 }
 
 #[test]
-fn only_the_first_subscribe_for_a_session_is_kept() {
-    let line = |id: &str, command: &str| {
-        json!({"id": id, "command": command, "args": {"level": "full"}})
-            .as_object()
-            .unwrap()
-            .clone()
-    };
-    let mut relays = Relays::default();
-    relays.keep("s_aaaaaaaaaaaaaaaa", &line("c_1", "prompt"));
-    assert_eq!(relays.subscription("s_aaaaaaaaaaaaaaaa"), None);
-    relays.keep("s_aaaaaaaaaaaaaaaa", &line("c_2", "subscribe"));
-    relays.keep("s_aaaaaaaaaaaaaaaa", &line("c_3", "subscribe"));
-    relays.keep("s_bbbbbbbbbbbbbbbb", &line("c_4", "subscribe"));
-    assert_eq!(
-        relays.subscription("s_aaaaaaaaaaaaaaaa"),
-        Some(line("c_2", "subscribe"))
-    );
-    assert_eq!(
-        relays.subscription("s_bbbbbbbbbbbbbbbb"),
-        Some(line("c_4", "subscribe"))
-    );
-    assert_eq!(relays.subscription("s_cccccccccccccccc"), None);
-}
-
-#[test]
 fn an_accepted_subscribe_replaces_the_kept_one() {
     fn entry(session: &str, epoch: u64) -> Relay {
         let (writer, _) = UnixStream::pair().unwrap();
@@ -152,7 +128,7 @@ fn an_accepted_subscribe_replaces_the_kept_one() {
     let mut relays = Relays::default();
     let first = relays.mint();
     relays.entries.push(entry("s_aaaaaaaaaaaaaaaa", first));
-    relays.keep("s_aaaaaaaaaaaaaaaa", &line("c_1", "subscribe"));
+    relays.accepted("s_aaaaaaaaaaaaaaaa", first, line("c_1", "subscribe"));
     relays.accepted("s_aaaaaaaaaaaaaaaa", first, line("c_2", "subscribe"));
     assert_eq!(
         relays.subscription("s_aaaaaaaaaaaaaaaa"),
@@ -201,7 +177,7 @@ fn an_accepted_command_that_is_not_subscribe_changes_nothing() {
     });
     relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, line("c_1", "prompt"));
     assert_eq!(relays.subscription("s_aaaaaaaaaaaaaaaa"), None);
-    relays.keep("s_aaaaaaaaaaaaaaaa", &line("c_2", "subscribe"));
+    relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, line("c_2", "subscribe"));
     relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, line("c_3", "prompt"));
     assert_eq!(
         relays.subscription("s_aaaaaaaaaaaaaaaa"),
@@ -270,20 +246,25 @@ fn an_acknowledgement_names_its_command_and_whether_it_is_closing() {
     );
 }
 
-#[test]
-fn an_accepted_prompt_ack_settles_to_nothing() {
-    let held = fakes::TempDir::new("rs");
+/// A hub at `h` under `held`, whose sessions never start.
+fn hub(held: &fakes::TempDir) -> crate::connection::Hub {
     let dir = held.path().join("h");
     std::fs::create_dir_all(&dir).unwrap();
     let clock = fakes::clock::FakeClock::new();
     let timed: std::sync::Arc<dyn contract::clock::Clock> = clock;
-    let hub = crate::connection::Hub::new(
+    crate::connection::Hub::new(
         &dir,
         "0.0.0",
         std::sync::Arc::new(crate::fake::FakeStarter::hang(&dir)),
         std::sync::Arc::clone(&timed),
         crate::diag::Diag::open(&dir, timed),
-    );
+    )
+}
+
+#[test]
+fn an_accepted_prompt_ack_settles_to_nothing() {
+    let held = fakes::TempDir::new("rs");
+    let hub = hub(&held);
     let sid = "s_aaaaaaaaaaaaaaaa";
     let command = |id: &str, command: &str| {
         json!({"id": id, "command": command, "args": {}})
@@ -298,11 +279,11 @@ fn an_accepted_prompt_ack_settles_to_nothing() {
         }))
         .unwrap()
     };
-    // The kept subscription stays what the connection first sent: an
+    // The kept subscription stays the one the session accepted: an
     // accepted prompt is not a level, so settling it changes nothing.
     let mut relays = Relays::default();
     let subscribed = command("c_0", "subscribe");
-    relays.keep(sid, &subscribed);
+    relays.subscribed.push((sid.to_owned(), subscribed.clone()));
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_1".to_owned(),
         command("c_1", "prompt"),
@@ -323,4 +304,47 @@ fn an_accepted_prompt_ack_settles_to_nothing() {
         Some(Settled::Subscribed(line)) => assert_eq!(line, command("c_2", "subscribe")),
         settled => panic!("an accepted subscribe replaces, got {}", settled.is_some()),
     }
+}
+
+#[test]
+fn a_rejected_subscribe_settles_to_nothing() {
+    let held = fakes::TempDir::new("rs");
+    let hub = hub(&held);
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let subscribe = |id: &str| {
+        json!({"id": id, "command": "subscribe", "args": {"level": "full"}})
+            .as_object()
+            .unwrap()
+            .clone()
+    };
+    let rejected = |id: &str, code: &str| {
+        serde_json::to_vec(&json!({
+            "kind": "command_rejected",
+            "payload": {"command_id": id, "code": code, "message": "m"},
+        }))
+        .unwrap()
+    };
+    let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "c_1".to_owned(),
+        subscribe("c_1"),
+    )]));
+    assert!(
+        settle(
+            &rejected("c_1", "invalid_arguments"),
+            &kept,
+            &hub,
+            sid,
+            false
+        )
+        .is_none()
+    );
+    assert!(kept.lock().unwrap().is_empty(), "the rejection is consumed");
+    // `closing` from a session whose log does not end in `fiber_exited` is
+    // passed on, not kept and not routed again.
+    let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "c_2".to_owned(),
+        subscribe("c_2"),
+    )]));
+    assert!(settle(&rejected("c_2", "closing"), &kept, &hub, sid, false).is_none());
+    assert!(kept.lock().unwrap().is_empty(), "the rejection is consumed");
 }
