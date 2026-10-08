@@ -145,7 +145,8 @@ only that crate, in KiB; the empty program is 323 KiB.
 | encoding_rs | `web_fetch`'s decoding by the declared character set | 224 | 332 | 272 | 5 | 490 |
 | pulldown-cmark | the terminal's markdown in replies (`docs/tui.md`, "Look") | 428 | 384 | ~0 | 4 | 724 |
 | flate2 | decompressing the release's docs and extensions archives (`docs/releasing.md`, "Installing"), and the test fakes' release archives | 560 | 640 | 592 | 6 | 403 |
-| all of the above together | | 8,292 | 7,532 | 5,009 | 153 | 7,729 |
+| jiff | the terminal's local time of day under a prompt bubble and on steering (`docs/tui.md`, "Turns"), with daylight saving and `TZ`, which `std` lacks | 536 | 640 | 384 | 2 | 692 |
+| all of the above together | | 8,896 | 8,184 | 5,201 | 155 | 8,165 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 67,825 | 32 | 5,234 |
 
 Notes:
@@ -199,6 +200,7 @@ Notes:
   clap_complete peaked within noise of the one without it (peak footprints
   of 6,048 and 6,064 KiB against 5,760 and 6,128 KiB in two rounds),
   because its peak is the busiest other workload.
+- jiff is built with default features off and only `std`, `tz-system` and `tzdb-zoneinfo`: it reads `/etc/localtime`, `TZ` and the system's zoneinfo database, and bundles no database. `time`, already in the tree through ratatui-widgets, is not used: its local-offset lookup does not work in a multithreaded process. jiff's figure is reading the system zone and formatting 1,000 times of day. The jiff and together rows were measured on October 8, 2026, on the runners above (run 37809842530); the together row was measured again with jiff linked, so its other crates' figures moved with the run.
 - `web_fetch` converts a page with html5ever's tokenizer feeding Fiber's own
   single-pass writer (`crates/tools/src/web_fetch/markdown.rs`), not with a
   parser that builds the page's document tree. The smallest maintained crate

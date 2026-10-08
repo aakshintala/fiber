@@ -9,6 +9,7 @@ use std::ops::{Range, RangeInclusive};
 
 use contract::events::{TurnCompleted, TurnOutcome, UsageRecorded};
 use contract::{Envelope, Seq};
+use jiff::tz::TimeZone;
 use ratatui::text::Line;
 
 use crate::app::{Target, read};
@@ -227,6 +228,9 @@ pub(crate) struct Pages {
     /// Dropped pages a pending copy asked for, kept until it runs.
     pins: pins::Pins,
     width: u16,
+    /// The zone the time of day under a prompt bubble shows
+    /// (`docs/tui.md`, "Turns").
+    pub(crate) zone: TimeZone,
     /// The rows of the open page's lines too wide for one row, by text, so
     /// counting it again after each line wraps only what changed.
     wrapped: HashMap<String, usize>,
@@ -255,18 +259,21 @@ impl Pages {
             failed: BTreeSet::new(),
             pins: pins::Pins::default(),
             width,
+            zone: TimeZone::UTC,
             wrapped: HashMap::new(),
             #[cfg(test)]
             recounts: 0,
         }
     }
 
-    /// Empties the conversation; the ledger default stays.
+    /// Empties the conversation; the ledger default and the zone stay.
     pub(crate) fn clear(&mut self) {
         let ledgers = self.fold.ledgers;
+        let zone = self.zone.clone();
         *self = Self::new(self.width);
         self.fold.ledgers = ledgers;
         self.open.fold.ledgers = ledgers;
+        self.zone = zone;
     }
 
     /// Folds one live line into the open page and the turn's totals,
@@ -992,7 +999,7 @@ impl Pages {
                 );
             }
             let first = out.len();
-            card.rows(self.width, &mut out);
+            card.rows(self.width, &self.zone, &mut out);
             if first < out.len() {
                 turns.push((after, first..out.len()));
             }

@@ -5,6 +5,7 @@ use super::{App, Effect};
 use crate::home::{Launch, Spot};
 use crate::keys::Key;
 use crate::link::Line;
+use crate::local_time::{new_york, turn_started_at};
 use contract::clock::Clock;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -74,6 +75,19 @@ fn an_attached_app_draws_the_conversation_screen() {
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     assert!(!app.on_home());
     assert!(app.home_screen().is_none());
+}
+
+#[test]
+fn the_zone_survives_a_session_switch() {
+    let mut app = home();
+    app.set_zone(new_york());
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.go_home();
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    // 2026-10-08T14:15Z, 10:15 in New York.
+    app.on_line(turn_started_at("s_bbbbbbbbbbbbbbbb", "go", 1791468900000));
+    let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
+    assert_eq!(texts, vec![" go ".to_owned(), "10:15".to_owned()]);
 }
 
 #[test]

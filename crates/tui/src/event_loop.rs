@@ -57,6 +57,7 @@ pub fn run(
         return 1;
     };
     let mut app = App::new(launch.workspace.clone());
+    app.set_zone(jiff::tz::TimeZone::system());
     app.set_home(launch);
     app.set_size(width, height);
     let mut terminal = Loop {

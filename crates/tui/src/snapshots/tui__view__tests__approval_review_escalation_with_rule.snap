@@ -3,8 +3,8 @@ source: crates/tui/src/view_tests.rs
 expression: shown
 ---
 
-
                                                                          run it
+                                                                           00:00
 • Ran 1 command · shell npm test --watch
   0 shell npm test --watch · running
 approval · s_aaaaaaaaaaaaaaaa · 1 of 1

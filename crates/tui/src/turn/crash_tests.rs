@@ -114,9 +114,9 @@ fn open(app: &mut App, text: &str) {
 fn a_resumed_process_closes_the_cut_short_turn() {
     let mut app = crashed();
     // While the turn runs, a started call is running.
-    let summary = texts(&app)[1].clone();
+    let summary = texts(&app)[2].clone();
     open(&mut app, &summary);
-    assert_eq!(texts(&app)[2], "  1 read a.rs · running");
+    assert_eq!(texts(&app)[3], "  1 read a.rs · running");
     open(&mut app, &summary);
     resumed(&mut app, true, 60_000);
     let lines = texts(&app);
@@ -124,9 +124,9 @@ fn a_resumed_process_closes_the_cut_short_turn() {
         lines[lines.len() - 2..],
         ["▣ cut short: Fiber stopped · 5s · 3 calls", "↺ resumed"]
     );
-    open(&mut app, &lines[1]);
+    open(&mut app, &lines[2]);
     assert_eq!(
-        texts(&app)[2..5],
+        texts(&app)[3..6],
         [
             "  1 read a.rs · ? may have run; not run again",
             "    read b.rs · running",
@@ -143,9 +143,10 @@ fn a_resumed_process_closes_the_cut_short_turn() {
             .count(),
         2
     );
-    // A new turn after it is open again.
+    // A new turn after it is open again, with its start time under it.
     start(&mut app, 80_000);
-    assert_eq!(texts(&app).last().map(String::as_str), Some(" go "));
+    let lines = texts(&app);
+    assert_eq!(lines[lines.len() - 2..], [" go ", "00:01"]);
 }
 
 #[test]
@@ -233,15 +234,21 @@ fn orphaned_jobs_are_one_line_naming_them_all() {
     let line = "Orphaned jobs: build the docs, j_3";
     assert_eq!(
         texts(&app),
-        [" go ", "▣ cut short: Fiber stopped", "↺ resumed", line]
+        [
+            " go ",
+            "00:00",
+            "▣ cut short: Fiber stopped",
+            "↺ resumed",
+            line
+        ]
     );
     open(&mut app, line);
     assert_eq!(
-        texts(&app)[4..],
+        texts(&app)[5..],
         ["  build the docs: j_1 orphaned.", "  j_3: j_3 orphaned."]
     );
     open(&mut app, line);
-    assert_eq!(texts(&app).len(), 4);
+    assert_eq!(texts(&app).len(), 5);
     // The next resume starts a line of its own.
     resumed(&mut app, true, 20_000);
     job_completed(&mut app, "j_5", Some("orphaned"));
@@ -259,7 +266,7 @@ fn orphans_found_while_a_turn_resumes_join_its_card() {
     resumed(&mut app, true, 9_000);
     job_completed(&mut app, "j_1", Some("orphaned"));
     job_completed(&mut app, "j_2", Some("orphaned"));
-    assert_eq!(texts(&app), [" go ", "Orphaned jobs: j_1, j_2"]);
+    assert_eq!(texts(&app), [" go ", "00:00", "Orphaned jobs: j_1, j_2"]);
     feed(
         &mut app,
         "turn_completed",
@@ -267,7 +274,7 @@ fn orphans_found_while_a_turn_resumes_join_its_card() {
         10_000,
         json!({"outcome": "completed"}),
     );
-    assert_eq!(texts(&app)[1], "Orphaned jobs: j_1, j_2");
+    assert_eq!(texts(&app)[2], "Orphaned jobs: j_1, j_2");
 }
 
 #[test]
@@ -284,6 +291,7 @@ fn each_orphaned_jobs_line_takes_and_opens_only_its_own_jobs() {
         texts(&app),
         [
             " go ",
+            "00:00",
             "▣ cut short: Fiber stopped",
             "↺ resumed",
             "Orphaned jobs: j_1",
@@ -293,7 +301,7 @@ fn each_orphaned_jobs_line_takes_and_opens_only_its_own_jobs() {
     // Opening the second line opens it alone.
     open(&mut app, "Orphaned jobs: j_2, j_3");
     assert_eq!(
-        texts(&app)[3..],
+        texts(&app)[4..],
         [
             "Orphaned jobs: j_1",
             "Orphaned jobs: j_2, j_3",

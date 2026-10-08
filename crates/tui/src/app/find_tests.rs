@@ -685,13 +685,13 @@ fn the_first_match_at_or_after_the_top_row_is_current() {
     assert_eq!(app.pages().page_count(), 1);
     // The top row between the two matches: only the one below can become
     // current, and nothing scrolls back.
-    app.jump(2);
-    assert_eq!(app.top(), Some(2));
+    app.jump(3);
+    assert_eq!(app.top(), Some(3));
     let ranges = search_all(&mut app, &log, "needle");
     assert!(ranges.is_empty());
     assert_eq!(count(&app), "2 of 2");
     assert_eq!(current_text(&app).as_deref(), Some("needle below"));
-    assert_eq!(app.top(), Some(2));
+    assert_eq!(app.top(), Some(3));
 }
 
 #[test]
@@ -1305,8 +1305,8 @@ fn rescanning_keeps_the_current_match_when_an_earlier_one_appears() {
     replies.push("needle two");
     let refs: Vec<&str> = replies.clone();
     text_turn(&mut log, &mut seq, &mut app, &refs);
-    app.jump(2);
-    assert_eq!(app.top(), Some(2));
+    app.jump(3);
+    assert_eq!(app.top(), Some(3));
     search_all(&mut app, &log, "needle");
     assert_eq!(current_text(&app).as_deref(), Some("needle two"));
     let current = app.find.current().cloned().expect("a current match");
