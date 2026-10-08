@@ -1,5 +1,8 @@
-//! The byte parser: terminal bytes to keys, mouse reports and detection
-//! replies (`docs/tui.md`, "Keys", "Mouse and hover").
+//! The byte parser: terminal bytes to strokes, mouse reports and detection
+//! replies (`docs/tui.md`, "Keys", "Mouse and hover"). [`default_event`]
+//! maps a stroke to the key or edit the app's handlers match.
+
+use crate::stroke::{Code, Mods, Stroke, fold_shift};
 
 /// One key this slice handles.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,7 +137,11 @@ pub(crate) struct Mouse {
 /// One parsed event: a key, a mouse report or a detection reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Event {
-    /// A key.
+    /// A key the terminal delivered. The parser emits only this, a pasted
+    /// [`Edit::Paste`], [`Mouse`] and [`Reply`]; [`default_event`] maps one
+    /// to the key or edit the app matches.
+    Stroke(Stroke),
+    /// A key from [`default_event`].
     Key(Key),
     /// A key that edits the draft.
     Edit(Edit),
@@ -142,6 +149,69 @@ pub(crate) enum Event {
     Mouse(Mouse),
     /// A detection reply.
     Reply(Reply),
+}
+
+/// The key or edit a stroke meant before rebinding: the parser's old mapping
+/// from a delivered key to the [`Key`] or [`Edit`] the app's handlers match
+/// (`docs/tui.md`, "Keys"). `None` for a stroke no binding uses.
+pub(crate) fn default_event(stroke: &Stroke) -> Option<Event> {
+    // Typing: a character alone is itself, and a shifted letter is its
+    // uppercase form.
+    if let Code::Char(ch) = stroke.code {
+        if stroke.mods == Mods::NONE {
+            return Some(Event::Key(Key::Char(ch)));
+        }
+        if stroke.mods == Mods::SHIFT {
+            let mut upper = ch.to_uppercase();
+            if let (Some(one), None) = (upper.next(), upper.next()) {
+                return Some(Event::Key(Key::Char(one)));
+            }
+        }
+        if stroke.mods == Mods::ALT
+            && ('1'..='9').contains(&ch)
+            && let Ok(n) = u8::try_from(ch)
+        {
+            return Some(Event::Key(Key::AltDigit(n.saturating_sub(b'0'))));
+        }
+    }
+    let key = |key: Key| Some(Event::Key(key));
+    let edit = |edit: Edit| Some(Event::Edit(edit));
+    match stroke.name().as_str() {
+        "enter" => key(Key::Enter),
+        "shift+enter" => edit(Edit::ShiftEnter),
+        "esc" => key(Key::Esc),
+        "backspace" => key(Key::Backspace),
+        "alt+backspace" => edit(Edit::DeleteWord),
+        "tab" => key(Key::Tab),
+        "shift+tab" => key(Key::BackTab),
+        "space" => key(Key::Char(' ')),
+        "pageup" => key(Key::PageUp),
+        "pagedown" => key(Key::PageDown),
+        "end" => key(Key::End),
+        "up" => key(Key::Up),
+        "alt+up" => key(Key::AltUp),
+        "down" => key(Key::Down),
+        "alt+down" => key(Key::AltDown),
+        "left" => edit(Edit::Left),
+        "right" => edit(Edit::Right),
+        "alt+left" | "ctrl+left" | "alt+b" => edit(Edit::WordLeft),
+        "alt+right" | "ctrl+right" | "alt+f" => edit(Edit::WordRight),
+        "super+left" => edit(Edit::LineStart),
+        "super+right" => edit(Edit::LineEnd),
+        "delete" => edit(Edit::Delete),
+        "f1" => key(Key::F1),
+        "ctrl+c" => key(Key::CtrlC),
+        "ctrl+o" => key(Key::CtrlO),
+        "ctrl+g" => key(Key::CtrlG),
+        "ctrl+r" => key(Key::CtrlR),
+        "ctrl+f" | "super+f" => key(Key::CtrlF),
+        "ctrl+j" => edit(Edit::CtrlJ),
+        "alt+a" => key(Key::AltA),
+        "alt+x" => key(Key::AltX),
+        "alt+p" => key(Key::AltP),
+        "alt+r" => key(Key::AltR),
+        _ => None,
+    }
 }
 
 /// Starts a bracketed paste.
@@ -158,6 +228,10 @@ const ALT: u32 = 2;
 const CTRL: u32 = 4;
 /// Super, or ⌘.
 const SUPER: u32 = 8;
+/// Every modifier bit this file reads: shift 1, alt 2, ctrl 4, super 8.
+/// A literal, not `SHIFT | ALT | CTRL | SUPER`, so no operator is left for
+/// a mutation to swap; keep it in step with the four constants above.
+const KNOWN_MODS: u32 = 0b1111;
 /// Caps Lock (64) and Num Lock (128), which change no binding.
 const LOCKS: u32 = 0b1100_0000;
 
@@ -267,49 +341,97 @@ type Step = Option<(Vec<Event>, usize)>;
 
 /// Parses the bytes at the start of `buf`.
 fn step(buf: &[u8]) -> Step {
-    let key = |key: Key| Some((vec![Event::Key(key)], 1));
-    match *buf.first()? {
-        0x03 => key(Key::CtrlC),
-        0x06 => key(Key::CtrlF),
-        0x0f => key(Key::CtrlO),
-        0x07 => key(Key::CtrlG),
-        0x12 => key(Key::CtrlR),
-        0x08 | 0x7f => key(Key::Backspace),
-        0x0a => Some((vec![Event::Edit(Edit::CtrlJ)], 1)),
-        0x09 => key(Key::Tab),
-        0x0d => key(Key::Enter),
+    let stroke = |code: Code, mods: Mods| Some((vec![Event::Stroke(Stroke { code, mods })], 1));
+    let byte = *buf.first()?;
+    if let Some((code, mods)) = control_stroke(byte) {
+        return stroke(code, mods);
+    }
+    match byte {
         // A lone ESC ending the read is Esc; ESC followed by bytes in the
         // same read starts a sequence.
         0x1b => match buf.get(1) {
-            None => key(Key::Esc),
+            None => stroke(Code::Esc, Mods::NONE),
             Some(b'[') => parse_csi(buf),
             Some(b'O') => parse_ss3(buf),
-            Some(b'a') => Some((vec![Event::Key(Key::AltA)], 2)),
-            Some(b'x') => Some((vec![Event::Key(Key::AltX)], 2)),
-            Some(b'p') => Some((vec![Event::Key(Key::AltP)], 2)),
-            Some(b'r') => Some((vec![Event::Key(Key::AltR)], 2)),
-            Some(digit @ b'1'..=b'9') => Some((vec![Event::Key(Key::AltDigit(digit - b'0'))], 2)),
             // ESC before an arrow's CSI is the legacy Alt arrow.
             Some(0x1b) if buf.get(2) == Some(&b'[') => {
                 let (events, used) = parse_csi(buf.get(1..)?)?;
                 let alt = events
                     .into_iter()
-                    .filter_map(|event| match event {
-                        Event::Key(Key::Up) => Some(Event::Key(Key::AltUp)),
-                        Event::Key(Key::Down) => Some(Event::Key(Key::AltDown)),
-                        Event::Key(_) | Event::Edit(_) | Event::Mouse(_) | Event::Reply(_) => None,
+                    .filter_map(|event| {
+                        if let Event::Stroke(pressed) = event
+                            && pressed.mods == Mods::NONE
+                            && (pressed.code == Code::Up || pressed.code == Code::Down)
+                        {
+                            Some(Event::Stroke(Stroke {
+                                code: pressed.code,
+                                mods: Mods::ALT,
+                            }))
+                        } else {
+                            None
+                        }
                     })
                     .collect();
                 Some((alt, used.saturating_add(1)))
             }
-            Some(b'b') => Some((vec![Event::Edit(Edit::WordLeft)], 2)),
-            Some(b'f') => Some((vec![Event::Edit(Edit::WordRight)], 2)),
-            Some(0x7f) => Some((vec![Event::Edit(Edit::DeleteWord)], 2)),
-            // Unknown escape sequence: drop ESC and the byte after it.
-            Some(_) => Some((Vec::new(), 2)),
+            Some(_) => alt_stroke(buf),
         },
         _ => decode_char(buf),
     }
+}
+
+/// The stroke a lone control byte names: `0x00` is Ctrl+Space, `0x01` to
+/// `0x1a` Ctrl with A to Z (Backspace, Tab, Ctrl+J and Enter keep their own
+/// strokes), `0x1c` to `0x1f` Ctrl with `\`, `]`, `^` and `_`, and `0x7f`
+/// Backspace. `None` for any other byte.
+fn control_stroke(byte: u8) -> Option<(Code, Mods)> {
+    let ctrl = Mods::CTRL;
+    match byte {
+        0x00 => Some((Code::Space, ctrl)),
+        0x01..=0x07 | 0x0b..=0x0c | 0x0e..=0x1a => {
+            Some((Code::Char((byte - 1 + b'a') as char), ctrl))
+        }
+        0x08 | 0x7f => Some((Code::Backspace, Mods::NONE)),
+        0x09 => Some((Code::Tab, Mods::NONE)),
+        0x0a => Some((Code::Char('j'), ctrl)),
+        0x0d => Some((Code::Enter, Mods::NONE)),
+        0x1c => Some((Code::Char('\\'), ctrl)),
+        0x1d => Some((Code::Char(']'), ctrl)),
+        0x1e => Some((Code::Char('^'), ctrl)),
+        0x1f => Some((Code::Char('_'), ctrl)),
+        _ => None,
+    }
+}
+
+/// `ESC` with the byte after it in the same read: Alt with that key's
+/// stroke (`ESC 0x7f` is Alt+Backspace, `ESC` with a control byte Ctrl+Alt
+/// with that letter). `0x08` is Ctrl+H, so `ESC 0x08` is Ctrl+Alt+H, which
+/// no binding uses; the old parser dropped it.
+fn alt_stroke(buf: &[u8]) -> Step {
+    let tail = buf.get(1..)?;
+    if tail.first() == Some(&0x08) {
+        let unbound = Event::Stroke(Stroke {
+            code: Code::Char('h'),
+            mods: Mods::CTRL | Mods::ALT,
+        });
+        return Some((vec![unbound], 2));
+    }
+    if let Some(byte) = tail.first()
+        && let Some((code, mods)) = control_stroke(*byte)
+    {
+        let alt = Event::Stroke(Stroke {
+            code,
+            mods: mods | Mods::ALT,
+        });
+        return Some((vec![alt], 2));
+    }
+    let (mut events, used) = decode_char(tail)?;
+    for event in &mut events {
+        if let Event::Stroke(pressed) = event {
+            pressed.mods = pressed.mods | Mods::ALT;
+        }
+    }
+    Some((events, used.saturating_add(1)))
 }
 
 /// Parses `ESC [` at the start of `buf`.
@@ -349,27 +471,23 @@ fn parse_csi(buf: &[u8]) -> Step {
             vec![Event::Reply(Reply::DeviceAttributes)]
         }
         0x75 => kitty_key(params).into_iter().collect(),
-        0x7e => match params {
-            [b'5'] => vec![Event::Key(Key::PageUp)],
-            [b'6'] => vec![Event::Key(Key::PageDown)],
-            [b'4'] => vec![Event::Key(Key::End)],
-            [b'3'] => vec![Event::Edit(Edit::Delete)],
-            [b'1', b'1'] => vec![Event::Key(Key::F1)],
-            _ => Vec::new(),
-        },
+        0x7e => tilde_key(params).into_iter().collect(),
         b'M' | b'm' if params.first() == Some(&b'<') => {
             let params = params.get(1..).unwrap_or_default();
             sgr_mouse(params, final_byte == b'm')
                 .map_or_else(Vec::new, |mouse| vec![Event::Mouse(mouse)])
         }
-        0x46 if params.is_empty() => vec![Event::Key(Key::End)],
-        0x41 if params.is_empty() => vec![Event::Key(Key::Up)],
-        0x42 if params.is_empty() => vec![Event::Key(Key::Down)],
-        0x43 | 0x44 => arrow(final_byte == 0x43, params).into_iter().collect(),
-        0x5a if params.is_empty() => vec![Event::Key(Key::BackTab)],
-        0x50 if params.is_empty() => vec![Event::Key(Key::F1)],
-        0x41 if params == b"1;3" => vec![Event::Key(Key::AltUp)],
-        0x42 if params == b"1;3" => vec![Event::Key(Key::AltDown)],
+        0x41 | 0x42 | 0x43 | 0x44 | 0x48 | 0x46 => {
+            csi_letter(final_byte, params).into_iter().collect()
+        }
+        0x5a if params.is_empty() => vec![Event::Stroke(Stroke {
+            code: Code::Tab,
+            mods: Mods::SHIFT,
+        })],
+        0x50 if params.is_empty() => vec![Event::Stroke(Stroke {
+            code: Code::F(1),
+            mods: Mods::NONE,
+        })],
         _ => Vec::new(),
     };
     Some((events, end.saturating_add(1)))
@@ -425,98 +543,212 @@ fn sgr_mouse(params: &[u8], release: bool) -> Option<Mouse> {
     Some(Mouse { kind, col, row })
 }
 
+/// `CSI` with an arrow, Home or End final byte (`A`, `B`, `C`, `D`, `H`,
+/// `F`): that key, plain or `CSI 1;<modifiers>` with the kitty modifier
+/// bits. A bare `1` is no modifiers for `C` and `D` only, as the old
+/// `arrow` read it; a bare `1` with any other letter is nothing, as the
+/// old arms read it. A modifier the bindings do not name (hyper, meta)
+/// reads as nothing.
+fn csi_letter(final_byte: u8, params: &[u8]) -> Option<Event> {
+    let mods = if params.is_empty() {
+        Mods::NONE
+    } else {
+        let text = std::str::from_utf8(params).ok()?;
+        match text.split_once(';') {
+            Some((one, rest)) => {
+                if one.split(':').next() != Some("1") {
+                    return None;
+                }
+                modifiers(rest)?
+            }
+            // A bare `1` is no modifiers for `C` and `D`, as the old
+            // `arrow` read it; any other bare parameter is nothing.
+            None => {
+                if text.split(':').next() != Some("1") {
+                    return None;
+                }
+                if !matches!(final_byte, 0x43 | 0x44) {
+                    return None;
+                }
+                Mods::NONE
+            }
+        }
+    };
+    let code = match final_byte {
+        0x41 => Code::Up,
+        0x42 => Code::Down,
+        0x43 => Code::Right,
+        0x44 => Code::Left,
+        0x48 => Code::Home,
+        0x46 => Code::End,
+        _ => return None,
+    };
+    Some(Event::Stroke(Stroke { code, mods }))
+}
+
+/// `CSI n[;<modifiers>] ~`: Insert, Delete, Home, End, PageUp, PageDown and
+/// F1 to F12, plain or with the kitty modifier bits.
+fn tilde_key(params: &[u8]) -> Option<Event> {
+    let text = std::str::from_utf8(params).ok()?;
+    let (num, mods) = match text.split_once(';') {
+        Some((num, rest)) => (num, modifiers(rest)?),
+        None => (text, Mods::NONE),
+    };
+    let code = match num {
+        "2" => Code::Insert,
+        "3" => Code::Delete,
+        "5" => Code::PageUp,
+        "6" => Code::PageDown,
+        "1" | "7" => Code::Home,
+        "4" | "8" => Code::End,
+        "11" => Code::F(1),
+        "12" => Code::F(2),
+        "13" => Code::F(3),
+        "14" => Code::F(4),
+        "15" => Code::F(5),
+        "17" => Code::F(6),
+        "18" => Code::F(7),
+        "19" => Code::F(8),
+        "20" => Code::F(9),
+        "21" => Code::F(10),
+        "23" => Code::F(11),
+        "24" => Code::F(12),
+        _ => return None,
+    };
+    Some(Event::Stroke(Stroke { code, mods }))
+}
+
+/// The kitty modifier bits in a `;<modifiers>` field. Locks change no
+/// binding; hyper and meta have no stroke, so a field naming one reads as
+/// nothing.
+fn modifiers(field: &str) -> Option<Mods> {
+    let bits = number(field.split(':').next()?)?.saturating_sub(1) & !LOCKS;
+    if bits & !KNOWN_MODS != 0 {
+        return None;
+    }
+    Some(mods_from(bits))
+}
+
+/// The modifiers the kitty bits name.
+fn mods_from(bits: u32) -> Mods {
+    let mut mods = Mods::NONE;
+    if bits & SHIFT != 0 {
+        mods = mods | Mods::SHIFT;
+    }
+    if bits & ALT != 0 {
+        mods = mods | Mods::ALT;
+    }
+    if bits & CTRL != 0 {
+        mods = mods | Mods::CTRL;
+    }
+    if bits & SUPER != 0 {
+        mods = mods | Mods::SUPER;
+    }
+    mods
+}
+
 /// Parses `ESC O` at the start of `buf`.
 fn parse_ss3(buf: &[u8]) -> Step {
-    let events = match *buf.get(2)? {
-        b'F' => vec![Event::Key(Key::End)],
-        b'A' => vec![Event::Key(Key::Up)],
-        b'B' => vec![Event::Key(Key::Down)],
-        b'C' => vec![Event::Edit(Edit::Right)],
-        b'D' => vec![Event::Edit(Edit::Left)],
-        b'P' => vec![Event::Key(Key::F1)],
-        _ => Vec::new(),
+    let stroke = |code: Code| {
+        Some((
+            vec![Event::Stroke(Stroke {
+                code,
+                mods: Mods::NONE,
+            })],
+            3,
+        ))
     };
-    Some((events, 3))
+    match *buf.get(2)? {
+        b'F' => stroke(Code::End),
+        b'A' => stroke(Code::Up),
+        b'B' => stroke(Code::Down),
+        b'C' => stroke(Code::Right),
+        b'D' => stroke(Code::Left),
+        b'H' => stroke(Code::Home),
+        b'P' => stroke(Code::F(1)),
+        b'Q' => stroke(Code::F(2)),
+        b'R' => stroke(Code::F(3)),
+        b'S' => stroke(Code::F(4)),
+        _ => Some((Vec::new(), 3)),
+    }
 }
 
 /// A decimal field: digits only, as `u32`'s parser would also take a
-/// leading `+`.
+/// leading `+`. An empty field is none through the parse below.
 fn number(field: &str) -> Option<u32> {
-    if field.is_empty() || !field.bytes().all(|byte| byte.is_ascii_digit()) {
+    if !field.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
     field.parse().ok()
 }
 
-/// A `CSI` key's parameters, `<code>[:...][;<modifiers>[:...]]`: the code
-/// and the modifier bits without the lock keys. `None` when they do not
-/// parse.
-fn code_and_mods(params: &[u8]) -> Option<(u32, u32)> {
+/// A kitty key, `CSI <code>[;<modifiers>] u`: Enter, Esc, Tab, Backspace,
+/// the space bar and any other character, with the kitty modifier bits.
+/// Locks change no binding, and a sub-field after a colon changes nothing;
+/// hyper and meta have no stroke, and private-use codes read as nothing.
+fn kitty_key(params: &[u8]) -> Option<Event> {
     let text = std::str::from_utf8(params).ok()?;
     let mut fields = text.split(';');
-    let code = number(fields.next()?.split(':').next()?)?;
-    let mods = match fields.next() {
+    let code: u32 = number(fields.next()?.split(':').next()?)?;
+    let mut bits = match fields.next() {
         None => 1,
         Some(field) => number(field.split(':').next()?)?,
-    };
-    Some((code, mods.saturating_sub(1) & !LOCKS))
-}
-
-/// A kitty key, `CSI <code>[;<modifiers>] u`: the bound ones only.
-fn kitty_key(params: &[u8]) -> Option<Event> {
-    let (code, mods) = code_and_mods(params)?;
-    let event = match (code, mods) {
-        (13, 0) => Event::Key(Key::Enter),
-        (13, SHIFT) => Event::Edit(Edit::ShiftEnter),
-        (27, 0) => Event::Key(Key::Esc),
-        (127, 0) => Event::Key(Key::Backspace),
-        (127, ALT) => Event::Edit(Edit::DeleteWord),
-        (99, CTRL) => Event::Key(Key::CtrlC),
-        (102, CTRL) | (102, SUPER) => Event::Key(Key::CtrlF),
-        (111, CTRL) => Event::Key(Key::CtrlO),
-        (103, CTRL) => Event::Key(Key::CtrlG),
-        (114, CTRL) => Event::Key(Key::CtrlR),
-        (106, CTRL) => Event::Edit(Edit::CtrlJ),
-        (9, 0) => Event::Key(Key::Tab),
-        (9, SHIFT) => Event::Key(Key::BackTab),
-        (97, ALT) => Event::Key(Key::AltA),
-        (120, ALT) => Event::Key(Key::AltX),
-        (112, ALT) => Event::Key(Key::AltP),
-        (114, ALT) => Event::Key(Key::AltR),
-        (digit @ 49..=57, ALT) => Event::Key(Key::AltDigit(u8::try_from(digit - 48).ok()?)),
-        (98, ALT) => Event::Edit(Edit::WordLeft),
-        (102, ALT) => Event::Edit(Edit::WordRight),
-        _ => return None,
-    };
-    Some(event)
-}
-
-/// `CSI C` or `CSI D`, plain or `CSI 1;<modifiers>`: by character, word
-/// (⌥ or Ctrl) or line (⌘).
-fn arrow(right: bool, params: &[u8]) -> Option<Event> {
-    let mods = if params.is_empty() {
-        0
-    } else {
-        match code_and_mods(params)? {
-            (1, mods) => mods,
-            _ => return None,
+    }
+    .saturating_sub(1)
+        & !LOCKS;
+    if code >= 57344 {
+        return None;
+    }
+    if bits & !KNOWN_MODS != 0 {
+        return None;
+    }
+    let key = match code {
+        13 => Code::Enter,
+        27 => Code::Esc,
+        9 => Code::Tab,
+        127 => Code::Backspace,
+        _ => {
+            let ch = char::from_u32(code)?;
+            if ch.is_control() {
+                return None;
+            }
+            // Shift on a character that is not a letter is dropped.
+            if ch != ' ' && !ch.is_alphabetic() {
+                bits &= !SHIFT;
+            }
+            let (code, mods) = char_stroke(ch, mods_from(bits));
+            return Some(Event::Stroke(Stroke { code, mods }));
         }
     };
-    let edit = match (mods, right) {
-        (0, true) => Edit::Right,
-        (0, false) => Edit::Left,
-        (ALT | CTRL, true) => Edit::WordRight,
-        (ALT | CTRL, false) => Edit::WordLeft,
-        (SUPER, true) => Edit::LineEnd,
-        (SUPER, false) => Edit::LineStart,
-        _ => return None,
-    };
-    Some(Event::Edit(edit))
+    Some(Event::Stroke(Stroke {
+        code: key,
+        mods: mods_from(bits),
+    }))
 }
 
-/// Decodes one character at the start of `buf`. A control character is
+/// The stroke for character `ch` delivered with `mods`: the space bar is
+/// `Space`, and an uppercase letter arrives with shift held, but only when
+/// shift round-trips back to the letter (`ß` stays `ß`, `ẞ` stays `ẞ`).
+/// Shift on a character that is not a letter is the caller's to drop.
+fn char_stroke(ch: char, mods: Mods) -> (Code, Mods) {
+    if ch == ' ' {
+        return (Code::Space, mods);
+    }
+    let (base, shifted) = fold_shift(ch);
+    if shifted {
+        (Code::Char(base), mods | Mods::SHIFT)
+    } else {
+        (Code::Char(base), mods)
+    }
+}
+
+/// Decodes one character at the start of `buf`: an uppercase letter arrives
+/// with shift held, and the space bar is `Space`. A control character is
 /// dropped whole; a byte that starts no character is dropped alone.
 fn decode_char(buf: &[u8]) -> Step {
+    let stroke = |code: Code, mods: Mods, len: usize| {
+        Some((vec![Event::Stroke(Stroke { code, mods })], len))
+    };
     let len = match *buf.first()? {
         0x00..=0x7f => 1,
         0xc0..=0xdf => 2,
@@ -539,7 +771,10 @@ fn decode_char(buf: &[u8]) -> Step {
         .and_then(|text| text.chars().next())
     {
         Some(ch) if ch.is_control() => Some((Vec::new(), len)),
-        Some(ch) => Some((vec![Event::Key(Key::Char(ch))], len)),
+        Some(ch) => {
+            let (code, mods) = char_stroke(ch, Mods::NONE);
+            stroke(code, mods, len)
+        }
         None => Some((Vec::new(), 1)),
     }
 }
