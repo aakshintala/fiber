@@ -598,3 +598,33 @@ fn card_with_you_answered() {
 fn card_with_you_answered_at_30() {
     insta::assert_snapshot!("card_with_you_answered_at_30", answered_screen(30));
 }
+
+#[test]
+fn the_group_line_counts_the_questions_asked() {
+    let mut app = app();
+    let ask = |action: &str, questions: Value| {
+        envelope(
+            "tool_call_requested",
+            Some(action),
+            0,
+            json!({"name": "ask_user", "arguments": {"questions": questions}}),
+        )
+    };
+    feed(
+        &mut app,
+        [
+            started(0),
+            ask("a_1", json!([{}, {}, {}])),
+            completed("a_1", "completed", 0),
+            ask("a_2", json!([{}])),
+            completed("a_2", "completed", 0),
+            ask("a_3", json!([])),
+            completed("a_3", "completed", 0),
+        ],
+    );
+    let texts = texts(&app);
+    assert!(
+        texts.contains(&"• Asked 4 questions, 1 other call".to_owned()),
+        "{texts:#?}"
+    );
+}

@@ -81,6 +81,8 @@ pub(crate) struct Kinds {
     pub(crate) removed: u64,
     /// Other shell calls.
     pub(crate) ran: u64,
+    /// Questions `ask_user` asked.
+    pub(crate) asked: u64,
     /// Calls to any other tool.
     pub(crate) other: u64,
     /// Thinking blocks.
@@ -88,7 +90,8 @@ pub(crate) struct Kinds {
 }
 
 impl Kinds {
-    /// "Read 2 files, edited 1 file +3 −1, ran 1 command, thought once":
+    /// "Read 2 files, edited 1 file +3 −1, ran 1 command, asked 2
+    /// questions, thought once":
     /// kinds with no calls left out, the first letter capitalised. Empty
     /// when nothing was done.
     pub(crate) fn summary(&self) -> String {
@@ -111,6 +114,12 @@ impl Kinds {
         }
         if self.ran > 0 {
             parts.push(format!("ran {}", count(self.ran, "command", "commands")));
+        }
+        if self.asked > 0 {
+            parts.push(format!(
+                "asked {}",
+                count(self.asked, "question", "questions")
+            ));
         }
         if self.other > 0 {
             parts.push(count(self.other, "other call", "other calls"));
@@ -231,6 +240,8 @@ pub(crate) enum Kind {
     Search,
     /// Any other shell command.
     Ran,
+    /// `ask_user`, with how many questions it asked.
+    Ask(u64),
     /// Any other tool.
     Other,
 }
@@ -245,6 +256,13 @@ pub(crate) fn kind(name: &str, arguments: &Value) -> Kind {
             Some("grep" | "rg" | "find") => Kind::Search,
             Some(_) | None => Kind::Ran,
         },
+        // A call whose `questions` is not a list of at least one is no
+        // question asked.
+        "ask_user" => arguments
+            .get("questions")
+            .and_then(Value::as_array)
+            .filter(|questions| !questions.is_empty())
+            .map_or(Kind::Other, |questions| Kind::Ask(questions.len() as u64)),
         _ => Kind::Other,
     }
 }
@@ -507,6 +525,7 @@ impl Group {
                 Kind::Read => kinds.read = kinds.read.saturating_add(1),
                 Kind::Search => kinds.searched = kinds.searched.saturating_add(1),
                 Kind::Ran => kinds.ran = kinds.ran.saturating_add(1),
+                Kind::Ask(questions) => kinds.asked = kinds.asked.saturating_add(questions),
                 Kind::Other => kinds.other = kinds.other.saturating_add(1),
                 Kind::Edit => {
                     edits = edits.saturating_add(1);

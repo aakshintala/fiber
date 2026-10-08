@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/turn/answers_tests.rs
-expression: "crate::view::text(&buf)"
+expression: answered_screen(60)
 ---
 
 
@@ -11,7 +11,7 @@ expression: "crate::view::text(&buf)"
 
                                                        pick
                                                        00:00
-• 1 other call · 4s
+• Asked 2 questions · 4s
 you answered
 Base: main (Recommended), dev, "and tags"
 Name: skipped
