@@ -128,6 +128,13 @@ pub trait Jobs: Send + Sync {
     /// its notice is already waiting there.
     fn running(&self) -> Vec<crate::JobId>;
 
+    /// Sends each running Fiber delegate its stop, once, and returns how
+    /// many were sent one. Ordinary jobs keep running. The loop calls it
+    /// once when a turn ends `budget_exceeded`, through its one
+    /// budget-end function, and nothing else calls it
+    /// (`docs/loop.md`, "Spending budget"). Returns at once.
+    fn stop_delegates(&self) -> usize;
+
     /// Sends each later job end to `inbox` as a
     /// [`crate::inbox::Delivery::Job`], and each later monitor batch as a
     /// [`crate::inbox::Delivery::JobLine`], so the loop can wake the model

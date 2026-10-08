@@ -448,3 +448,14 @@ fn a_monitors_lines_are_recorded_in_order_and_reach_the_inbox_before_its_end() {
         contract::inbox::Delivery::Job(_)
     ));
 }
+
+#[test]
+fn stop_delegates_counts_every_call() {
+    let dir = fakes_temp();
+    let jobs = FakeJobs::new(dir.path());
+    assert_eq!(jobs.stop_delegates_calls(), 0);
+    assert_eq!(jobs.stop_delegates(), 1);
+    assert_eq!(jobs.stop_delegates_calls(), 1);
+    assert_eq!(jobs.stop_delegates(), 2);
+    assert_eq!(jobs.stop_delegates_calls(), 2);
+}

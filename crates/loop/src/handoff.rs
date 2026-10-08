@@ -359,7 +359,7 @@ impl Loop {
             )));
         };
         if let Some(completed) = self.over_budget() {
-            return Ok(Step::Ended(completed));
+            return Ok(Step::Ended(self.budget_end(completed)));
         }
         let window = self.prompt.context_window;
         if self.handoff.settings.enabled && self.context_estimate() > window {

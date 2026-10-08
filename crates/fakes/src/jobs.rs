@@ -62,6 +62,8 @@ struct Inner {
     ended: Vec<JobId>,
     /// Jobs whose stop was sent.
     stopped: Vec<JobId>,
+    /// How many times the loop's budget end stopped the delegates.
+    stop_delegates: usize,
     foreground: Vec<Weak<dyn Fn() -> bool + Send + Sync>>,
     /// Where each later end is sent, once [`Jobs::deliver_to`] set it.
     inbox: Option<Sender<Delivery>>,
@@ -173,6 +175,7 @@ impl FakeJobs {
                 inputs: Vec::new(),
                 ended: Vec::new(),
                 stopped: Vec::new(),
+                stop_delegates: 0,
                 foreground: Vec::new(),
                 inbox: None,
             })),
@@ -219,6 +222,12 @@ impl FakeJobs {
     /// The next completion, or `None` when none arrives within `within`.
     pub fn ended(&self, within: Duration) -> Option<JobCompleted> {
         lock(&self.completed_rx).recv_timeout(within).ok()
+    }
+
+    /// How many times `stop_delegates` ran: the loop calls it once per
+    /// turn that ends `budget_exceeded`.
+    pub fn stop_delegates_calls(&self) -> usize {
+        lock(&self.inner).stop_delegates
     }
 }
 
@@ -365,6 +374,12 @@ impl Jobs for FakeJobs {
             .map(|started| started.job_id.clone())
             .filter(|id| !inner.ended.contains(id))
             .collect()
+    }
+
+    fn stop_delegates(&self) -> usize {
+        let mut inner = lock(&self.inner);
+        inner.stop_delegates += 1;
+        inner.stop_delegates
     }
 
     /// Each later end is also sent to `inbox` as a [`Delivery::Job`], whose

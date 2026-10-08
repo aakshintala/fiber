@@ -129,6 +129,10 @@ impl Jobs for Listed {
         true
     }
 
+    fn stop_delegates(&self) -> usize {
+        0
+    }
+
     fn background(&self) -> usize {
         0
     }

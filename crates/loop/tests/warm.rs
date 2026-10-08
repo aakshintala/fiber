@@ -462,6 +462,10 @@ impl Jobs for Toggle {
         false
     }
 
+    fn stop_delegates(&self) -> usize {
+        0
+    }
+
     fn background(&self) -> usize {
         0
     }
