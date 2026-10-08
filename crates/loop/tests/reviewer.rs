@@ -208,7 +208,7 @@ fn a_stage_1_allow_runs_the_call_with_one_token() {
     let requests = reviewer.requests();
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
-    assert_eq!(request.max_output_tokens, Some(1));
+    assert_eq!(request.max_output_tokens, Some(128));
     assert_eq!(request.previous_end, None);
     // The session's own provider never receives a reviewer request.
     assert_eq!(session.requests().len(), 2);
@@ -331,7 +331,7 @@ fn a_check_then_an_allow_sends_two_requests_identical_up_to_the_stage() {
 
     let requests = reviewer.requests();
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].max_output_tokens, Some(1));
+    assert_eq!(requests[0].max_output_tokens, Some(128));
     assert_eq!(requests[1].max_output_tokens, None);
     assert_eq!(requests[0].previous_end, None);
     assert_eq!(requests[1].previous_end, Some(2));
