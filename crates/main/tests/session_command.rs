@@ -2414,15 +2414,21 @@ fn close_on_a_pending_review_escalation_denies_it_by_cancel() {
     assert_eq!(exited["payload"].get("suspended_on"), None);
 }
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+/// Runs the system `git` in `dir`, in its own process group, to its exit
+/// under the test's [`Deadline`].
+fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
+    let mut command = Command::new("git");
+    command
         .args(["-c", "user.name=t", "-c", "user.email=t@t"])
         .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
         .args(["-c", "init.defaultBranch=main"])
         .args(args)
         .current_dir(dir)
-        .output()
-        .unwrap();
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let out = support::run_to_exit(deadline, &format!("git {args:?}"), command);
     assert!(out.status.success(), "git {args:?}: {out:?}");
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
@@ -2432,10 +2438,14 @@ fn a_session_in_a_worktree_it_made_keeps_the_worktree_when_dirty() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
-    git(&setup.workspace(), &["init", "--quiet"]);
+    git(setup.deadline, &setup.workspace(), &["init", "--quiet"]);
     fs::write(setup.workspace().join("file.txt"), "x").unwrap();
-    git(&setup.workspace(), &["add", "."]);
-    git(&setup.workspace(), &["commit", "--quiet", "-m", "first"]);
+    git(setup.deadline, &setup.workspace(), &["add", "."]);
+    git(
+        setup.deadline,
+        &setup.workspace(),
+        &["commit", "--quiet", "-m", "first"],
+    );
     let id = doors::mint("s_");
     let mut running = setup.start_session_in(&id, &setup.workspace(), &["--worktree"]);
 
@@ -2472,5 +2482,12 @@ fn a_session_in_a_worktree_it_made_keeps_the_worktree_when_dirty() {
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["exit_code"], 0);
     assert!(Path::new(workspace).join("dirty.txt").is_file());
-    assert!(!git(&setup.workspace(), &["branch", "--list", branch]).is_empty());
+    assert!(
+        !git(
+            setup.deadline,
+            &setup.workspace(),
+            &["branch", "--list", branch]
+        )
+        .is_empty()
+    );
 }

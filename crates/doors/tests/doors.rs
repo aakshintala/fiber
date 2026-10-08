@@ -210,26 +210,36 @@ fn project_ignores_a_hostile_git_environment() {
     let temp = Temp::new();
     let repo = temp.0.join("repo");
     fs::create_dir_all(repo.join("docs")).unwrap();
-    assert!(
-        Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(&repo)
-            .status()
-            .unwrap()
-            .success()
-    );
+    fakes::within("git init the repo", DEADLINE, {
+        let repo = repo.clone();
+        move || {
+            assert!(
+                Command::new("git")
+                    .arg("init")
+                    .arg("-q")
+                    .arg(&repo)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+    });
     let other = temp.0.join("other");
     fs::create_dir_all(&other).unwrap();
-    assert!(
-        Command::new("git")
-            .arg("init")
-            .arg("-q")
-            .arg(&other)
-            .status()
-            .unwrap()
-            .success()
-    );
+    fakes::within("git init the other repository", DEADLINE, {
+        let other = other.clone();
+        move || {
+            assert!(
+                Command::new("git")
+                    .arg("init")
+                    .arg("-q")
+                    .arg(&other)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+    });
     let out = fakes::rerun(
         "project_ignores_a_hostile_git_environment",
         &[

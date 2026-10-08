@@ -20,26 +20,33 @@ use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{Setup, group_alive, run_to_exit};
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+use support::{Deadline, Setup, group_alive, run_to_exit};
+
+/// Runs the system `git` in `dir`, in its own process group, to its exit
+/// under the test's [`Deadline`].
+fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
+    let mut command = Command::new("git");
+    command
         .args(["-c", "user.name=t", "-c", "user.email=t@t"])
         .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
         .args(["-c", "init.defaultBranch=main"])
         .args(args)
         .current_dir(dir)
-        .output()
-        .unwrap();
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let out = run_to_exit(deadline, &format!("git {args:?}"), command);
     assert!(out.status.success(), "git {args:?}: {out:?}");
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 
 /// A repository with one commit on `main` at `dir`.
-fn init_repo(dir: &Path) {
-    git(dir, &["init", "--quiet"]);
+fn init_repo(deadline: Deadline, dir: &Path) {
+    git(deadline, dir, &["init", "--quiet"]);
     fs::write(dir.join("file.txt"), "x").unwrap();
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "--quiet", "-m", "first"]);
+    git(deadline, dir, &["add", "."]);
+    git(deadline, dir, &["commit", "--quiet", "-m", "first"]);
 }
 
 /// An `openai-responses` stream answering `Hello.` in two fragments.
@@ -113,8 +120,8 @@ fn started(lines: &[Value]) -> &Value {
 }
 
 /// Whether `refs/heads/<branch>` still exists in the repository.
-fn branch_exists(repo: &Path, branch: &str) -> bool {
-    !git(repo, &["branch", "--list", branch]).is_empty()
+fn branch_exists(deadline: Deadline, repo: &Path, branch: &str) -> bool {
+    !git(deadline, repo, &["branch", "--list", branch]).is_empty()
 }
 
 #[test]
@@ -122,7 +129,7 @@ fn ask_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
-    init_repo(&setup.workspace());
+    init_repo(setup.deadline, &setup.workspace());
 
     let out = run_to_exit(
         setup.deadline,
@@ -167,7 +174,7 @@ fn ask_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
     );
     // Clean, so both are gone after exit.
     assert!(!Path::new(workspace).exists());
-    assert!(!branch_exists(&setup.workspace(), branch));
+    assert!(!branch_exists(setup.deadline, &setup.workspace(), branch));
 }
 
 #[test]
@@ -175,7 +182,7 @@ fn ask_worktree_from_a_subdirectory_records_the_worktree_root() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
-    init_repo(&setup.workspace());
+    init_repo(setup.deadline, &setup.workspace());
     let sub = setup.workspace().join("sub");
     fs::create_dir(&sub).unwrap();
 
@@ -271,20 +278,23 @@ fn ask_worktree_with_resume_is_usage_and_creates_nothing() {
 #[test]
 fn a_signal_while_the_post_checkout_hook_runs_stops_it_and_leaves_nothing() {
     let setup = Setup::new();
-    init_repo(&setup.workspace());
+    init_repo(setup.deadline, &setup.workspace());
     let hooks = Path::new(env!("CARGO_MANIFEST_DIR")).join("../worktree/fixtures/holding-hook");
     git(
+        setup.deadline,
         &setup.workspace(),
         &["config", "core.hooksPath", hooks.to_str().unwrap()],
     );
     let fifo = setup.root.path().join("hook.fifo");
-    assert!(
-        Command::new("mkfifo")
-            .arg(&fifo)
-            .status()
-            .unwrap()
-            .success()
-    );
+    let mut mkfifo = Command::new("mkfifo");
+    mkfifo
+        .arg(&fifo)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let made = run_to_exit(setup.deadline, "mkfifo", mkfifo);
+    assert!(made.status.success(), "mkfifo: {made:?}");
     let child = ask_command(
         &setup,
         &setup.workspace(),
@@ -327,7 +337,12 @@ fn a_signal_while_the_post_checkout_hook_runs_stops_it_and_leaves_nothing() {
     let empty = !worktrees.exists() || fs::read_dir(&worktrees).unwrap().count() == 0;
     assert!(empty, "no worktree entry remains");
     assert!(
-        git(&setup.workspace(), &["branch", "--list", "fiber/*"]).is_empty(),
+        git(
+            setup.deadline,
+            &setup.workspace(),
+            &["branch", "--list", "fiber/*"]
+        )
+        .is_empty(),
         "no fiber/ branch remains"
     );
     assert!(
@@ -346,9 +361,10 @@ fn a_signal_while_the_post_checkout_hook_runs_stops_it_and_leaves_nothing() {
 #[test]
 fn hook_output_never_reaches_fiber_s_streams() {
     let setup = Setup::new();
-    init_repo(&setup.workspace());
+    init_repo(setup.deadline, &setup.workspace());
     let hooks = Path::new(env!("CARGO_MANIFEST_DIR")).join("../worktree/fixtures/failing-hook");
     git(
+        setup.deadline,
         &setup.workspace(),
         &["config", "core.hooksPath", hooks.to_str().unwrap()],
     );
@@ -383,7 +399,12 @@ fn hook_output_never_reaches_fiber_s_streams() {
     let empty = !worktrees.exists() || fs::read_dir(&worktrees).unwrap().count() == 0;
     assert!(empty, "no worktree remains");
     assert!(
-        git(&setup.workspace(), &["branch", "--list", "fiber/*"]).is_empty(),
+        git(
+            setup.deadline,
+            &setup.workspace(),
+            &["branch", "--list", "fiber/*"]
+        )
+        .is_empty(),
         "no fiber/ branch remains"
     );
 }
@@ -391,7 +412,7 @@ fn hook_output_never_reaches_fiber_s_streams() {
 #[test]
 fn a_startup_failure_after_creating_the_worktree_removes_it() {
     let setup = Setup::new();
-    init_repo(&setup.workspace());
+    init_repo(setup.deadline, &setup.workspace());
 
     // No provider installed: the model cannot resolve, after the
     // worktree was created.
@@ -415,7 +436,12 @@ fn a_startup_failure_after_creating_the_worktree_removes_it() {
     let empty = !worktrees.exists() || fs::read_dir(&worktrees).unwrap().count() == 0;
     assert!(empty, "the clean worktree was removed");
     assert!(
-        git(&setup.workspace(), &["branch", "--list", "fiber/*"]).is_empty(),
+        git(
+            setup.deadline,
+            &setup.workspace(),
+            &["branch", "--list", "fiber/*"]
+        )
+        .is_empty(),
         "no fiber/ branch remains"
     );
 }
