@@ -382,3 +382,9 @@ fn resume_runs_the_recorded_path() {
     let started = hub::Starter::resume(&starter, &SessionId("s1".to_owned()), &workspace).unwrap();
     assert_eq!(exit_of(started).message, "recorded resume");
 }
+
+#[test]
+fn installed_is_the_login_services_mode_and_its_absence_the_client_started_one() {
+    assert_eq!(mode(true), hub::Mode::Installed);
+    assert_eq!(mode(false), hub::Mode::OnDemand);
+}

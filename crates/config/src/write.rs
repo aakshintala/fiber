@@ -110,8 +110,9 @@ fn refused_why(segments: &[String], source: &Source) -> &'static str {
 
 /// Parses `key` and checks one key's value against "Keys" for `source`,
 /// returning the segments and the notices the check pushed. Shared by
-/// [`set_global`], [`set_global_if_unset`] and [`set`]: only `set` turns a
-/// notice into a refusal, so an unknown key is still written elsewhere.
+/// [`set_global`], [`set_global_if_unset`], [`replace_global`] and [`set`]:
+/// only `set` turns a notice into a refusal, so an unknown key is still
+/// written elsewhere.
 fn checked(
     key: &str,
     value: Value,
@@ -145,6 +146,47 @@ pub fn set_global_if_unset(home: &Path, key: &str, value: Value) -> Result<bool,
     let file = home.join("config.json");
     let (segments, _) = checked(key, value.clone(), &Source::Global(file.clone()))?;
     update(&file, &segments, value, true)
+}
+
+/// Sets one key in the global `config.json` to `value`, or removes it for
+/// `None`, under one lock and one atomic write, returning the value it
+/// replaced (`fiber hub install` writing `hub.port`). A value is type-checked
+/// as [`set_global`] checks it. Removing a key the file does not hold
+/// writes nothing. A failure before the rename leaves the file unchanged; a
+/// failure after it, syncing the directory, returns `Err` with the new
+/// content already in place.
+pub fn replace_global(
+    home: &Path,
+    key: &str,
+    value: Option<Value>,
+) -> Result<Option<Value>, ConfigError> {
+    let file = home.join("config.json");
+    let segments = match &value {
+        Some(value) => checked(key, value.clone(), &Source::Global(file.clone()))?.0,
+        None => path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?,
+    };
+    let _lock = locked(&file)?;
+    let mut root = read(&file)?.unwrap_or_else(|| Value::Object(Map::new()));
+    let previous = match value {
+        Some(value) => {
+            let previous = path::get(&root, &segments).cloned();
+            path::set(&mut root, &segments, value);
+            previous
+        }
+        None => match path::remove(&mut root, &segments) {
+            Some(previous) => Some(previous),
+            None => return Ok(None),
+        },
+    };
+    write_root(&file, &root)?;
+    Ok(previous)
+}
+
+/// The value at `key` in Fiber home's `config.json` alone: no other layer
+/// and no default is consulted. `None` when the file or the key is absent.
+pub fn get_global(home: &Path, key: &str) -> Result<Option<Value>, ConfigError> {
+    let segments = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
+    Ok(read(&home.join("config.json"))?.and_then(|root| path::get(&root, &segments).cloned()))
 }
 
 /// Deletes an extension's settings in the global and every per-project layer
@@ -219,20 +261,25 @@ pub(crate) fn update(
     value: Value,
     only_if_unset: bool,
 ) -> Result<bool, ConfigError> {
-    let io = |source| ConfigError::Io {
-        file: file.to_path_buf(),
-        source,
-    };
     let _lock = locked(file)?;
     let mut root = read(file)?.unwrap_or_else(|| Value::Object(Map::new()));
     if only_if_unset && path::get(&root, key).is_some() {
         return Ok(false);
     }
     path::set(&mut root, key, value);
-    let mut text = serde_json::to_string_pretty(&root).map_err(|e| io(e.into()))?;
-    text.push('\n');
-    write_atomic(file, text.as_bytes(), 0o666)?;
+    write_root(file, &root)?;
     Ok(true)
+}
+
+/// Writes `root` over `file`, keys sorted with a 2-space indent, for a
+/// caller holding the file's lock.
+fn write_root(file: &Path, root: &Value) -> Result<(), ConfigError> {
+    let mut text = serde_json::to_string_pretty(root).map_err(|e| ConfigError::Io {
+        file: file.to_path_buf(),
+        source: e.into(),
+    })?;
+    text.push('\n');
+    write_atomic(file, text.as_bytes(), 0o666)
 }
 
 /// Callers blocked in [`locked`], raised before they wait, so a test can
@@ -324,7 +371,7 @@ pub(crate) fn before_rename(hook: impl Fn() + 'static) {
 /// Writes `bytes` to a temporary file created with `mode` beside `file`,
 /// syncs it, and renames it over `file`, so a reader sees the old file or the
 /// new one, never half.
-pub(crate) fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> Result<(), ConfigError> {
+pub fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> Result<(), ConfigError> {
     let io = |source| ConfigError::Io {
         file: file.to_path_buf(),
         source,
@@ -448,5 +495,29 @@ mod tests {
         worker.join().unwrap();
         let written: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(written, json!({"a": 1, "b": 2, "c": 3}));
+    }
+
+    #[test]
+    fn a_replace_that_fails_before_the_rename_leaves_the_file_unchanged() {
+        let dir = TempDir::new("fiber-replace-fail");
+        let home = dir.path().to_path_buf();
+        let file = home.join("config.json");
+        let text = "{\"hub\": {\"port\": 4040}}";
+        fs::write(&file, text).unwrap();
+        let result = within("the failing replace", move || {
+            // Removing the temporary file makes the rename fail.
+            let watched = home.clone();
+            before_rename(move || {
+                for entry in fs::read_dir(&watched).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.extension().is_some_and(|e| e == "tmp") {
+                        fs::remove_file(path).unwrap();
+                    }
+                }
+            });
+            replace_global(&home, "hub.port", None).map_err(|e| e.to_string())
+        });
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(fs::read_to_string(&file).unwrap(), text);
     }
 }

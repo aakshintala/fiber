@@ -79,6 +79,17 @@ fn serve_at(
     clock: Arc<fakes::clock::FakeClock>,
     level: Level,
 ) -> mpsc::Receiver<i32> {
+    serve_mode(temp, idle, clock, level, crate::Mode::OnDemand)
+}
+
+/// [`serve_at`] in `mode`.
+fn serve_mode(
+    temp: &Temp,
+    idle: Duration,
+    clock: Arc<fakes::clock::FakeClock>,
+    level: Level,
+    mode: crate::Mode,
+) -> mpsc::Receiver<i32> {
     let home = temp.dir.clone();
     let timed: Arc<dyn contract::clock::Clock> = clock;
     let (done_tx, done_rx) = mpsc::channel();
@@ -87,6 +98,7 @@ fn serve_at(
         .spawn(move || {
             let code = crate::serve(
                 &home,
+                mode,
                 move || {
                     Ok(crate::Settings {
                         idle_exit: idle,
@@ -574,4 +586,84 @@ fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
     assert!(at > 0, "a line comes before the stop");
     assert_eq!(lines[at - 1]["code"], "peak_memory");
     assert_eq!(lines[at - 1]["data"]["peak_kib"], 9);
+}
+
+/// One idle millisecond: an on-demand hub would exit almost at once.
+const BRIEF: Duration = Duration::from_millis(1);
+
+/// How long the test watches a wait that must not finish.
+const STILL: Duration = Duration::from_millis(200);
+
+/// Ends the hub serving in this process the way the service manager does.
+fn raise_sigterm() {
+    signal_hook::low_level::raise(signal_hook::consts::SIGTERM).unwrap();
+}
+
+#[test]
+fn an_installed_hub_never_exits_for_idleness_and_stops_on_sigterm() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let done = serve_mode(
+        &temp,
+        BRIEF,
+        Arc::clone(&clock),
+        Level::Info,
+        crate::Mode::Installed,
+    );
+    // An installed hub parks with no deadline even with no client.
+    assert!(
+        clock.await_parked_unbounded(WITHIN),
+        "the installed hub waits with no idle deadline"
+    );
+    clock.advance(Duration::from_secs(3600));
+    let client = connect(&temp);
+    drop(client);
+    assert!(
+        done.recv_timeout(STILL).is_err(),
+        "the installed hub exited for idleness"
+    );
+    raise_sigterm();
+    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
+    assert!(!temp.socket().exists());
+    assert!(temp.log().contains("The hub stopped: signal."));
+}
+
+#[test]
+fn an_installed_hub_waits_for_the_lock_then_binds() {
+    let temp = Temp::new();
+    let other = crate::listen::lock(&temp.dir)
+        .unwrap()
+        .expect("the other hub's lock");
+    let clock = fakes::clock::FakeClock::new();
+    let done = serve_mode(
+        &temp,
+        BRIEF,
+        Arc::clone(&clock),
+        Level::Info,
+        crate::Mode::Installed,
+    );
+    assert!(
+        done.recv_timeout(STILL).is_err(),
+        "the installed hub returned while another held the lock"
+    );
+    assert!(!temp.socket().exists(), "a waiting hub binds nothing");
+    assert!(
+        !temp.dir.join("logs").exists(),
+        "a waiting hub writes no log"
+    );
+    drop(other);
+    assert!(
+        clock.await_parked_unbounded(WITHIN),
+        "the installed hub serves once the lock is released"
+    );
+    drop(connect(&temp));
+    raise_sigterm();
+    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
+}
+
+#[test]
+fn each_exit_has_its_code() {
+    assert_eq!(Exit::Idle.code(), 0);
+    assert_eq!(Exit::Failed.code(), 1);
+    assert_eq!(Exit::Signal(signal_hook::consts::SIGTERM).code(), 143);
 }

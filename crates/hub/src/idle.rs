@@ -10,7 +10,9 @@
 //! first SIGTERM, SIGINT or SIGHUP it shuts down every client connection and
 //! relay stream, writes `peak_memory` at the debug level, then
 //! `hub_stopped`, removes `run/hub`, and returns 128 plus the signal.
-//! Sessions are untouched either way.
+//! Sessions are untouched either way. A hub that cannot start accepting
+//! writes an `error` line and returns 1: it never served, so it did not
+//! exit for idleness.
 
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
@@ -27,14 +29,18 @@ pub(crate) enum Exit {
     Idle,
     /// A signal arrived: its number.
     Signal(i32),
+    /// The hub could not accept connections at all.
+    Failed,
 }
 
 impl Exit {
-    /// The process exit code: 0 for idleness, 128 plus the signal.
+    /// The process exit code: 0 for idleness, 128 plus the signal, 1 for
+    /// a hub that could not accept.
     pub(crate) fn code(self) -> i32 {
         match self {
             Self::Idle => 0,
             Self::Signal(signal) => 128 + signal,
+            Self::Failed => 1,
         }
     }
 }
@@ -43,12 +49,13 @@ impl Exit {
 /// number once one arrives, then [`Hub::waker`] wakes the wait; tests do the
 /// same to simulate one.
 pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &AtomicI32) -> Exit {
-    let Ok(accept) = held.listener.try_clone() else {
-        return Exit::Idle;
+    let accept = match held.listener.try_clone() {
+        Ok(accept) => accept,
+        Err(error) => return failed(hub, &format!("cloning run/hub's listener: {error}")),
     };
     let socket = held.socket.clone();
     let stop = Arc::new(AtomicBool::new(false));
-    let Ok(acceptor) = thread::Builder::new().name("hub-accept".to_owned()).spawn({
+    let acceptor = thread::Builder::new().name("hub-accept".to_owned()).spawn({
         let hub = Arc::clone(hub);
         let stop = Arc::clone(&stop);
         move || {
@@ -86,8 +93,10 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
                 }
             }
         }
-    }) else {
-        return Exit::Idle;
+    });
+    let acceptor = match acceptor {
+        Ok(acceptor) => acceptor,
+        Err(error) => return failed(hub, &format!("starting the accept thread: {error}")),
     };
     loop {
         match hub.idle_wait(idle_exit, &stop, got) {
@@ -106,6 +115,15 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
             Idle::Woken => {}
         }
     }
+}
+
+/// Writes an `error` line naming what kept the hub from accepting.
+fn failed(hub: &Hub, what: &str) -> Exit {
+    hub.diag.error(
+        "io_failed",
+        &format!("The hub cannot accept connections: {what}"),
+    );
+    Exit::Failed
 }
 
 /// Wakes the acceptor's blocking `accept`, which sees `stop` and returns,

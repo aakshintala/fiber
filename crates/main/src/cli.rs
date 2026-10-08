@@ -40,6 +40,11 @@ Configuration:
   config get <key>                              Print the effective value and the layer it came from
   config set [--project | --repo] <key> <value>  Write one key in one layer's file
 
+The hub:
+  hub install [--port <port>]  Register the hub as a login service
+  hub uninstall                Remove the hub's login service; running sessions carry on
+  hub status [--json]          Print the hub's state: running, version, port, clients, devices, installed
+
 Flags:
   -h, --help     Print this menu
   -v, --version  Print the version
@@ -165,16 +170,38 @@ pub(crate) enum Commands {
         #[arg(value_name = "provider")]
         providers: Vec<String>,
     },
-    /// The internal hub command: hidden and free to change.
-    #[command(hide = true, subcommand)]
+    /// Manage the hub's login service, or print the hub's state
+    #[command(subcommand, arg_required_else_help = false)]
     Hub(HubCommands),
 }
 
 #[derive(Debug, Subcommand)]
 #[command(disable_help_subcommand = true)]
 pub(crate) enum HubCommands {
-    /// Run the hub on its local socket.
-    Serve,
+    /// Register the hub as a login service
+    Install {
+        /// Also listen on this port of `127.0.0.1`, where every connection
+        /// presents a device token. Without it the hub listens on its local
+        /// socket only.
+        #[arg(long, value_name = "port", value_parser = clap::value_parser!(u16).range(1..))]
+        port: Option<u16>,
+    },
+    /// Remove the hub's login service; running sessions carry on
+    Uninstall,
+    /// Print the hub's state: running, version, port, clients, devices, installed
+    Status {
+        /// Print one JSON object.
+        #[arg(long)]
+        json: bool,
+    },
+    /// The internal hub command: hidden and free to change.
+    #[command(hide = true)]
+    Serve {
+        /// Run as the login service: wait for the `run/` lock and never
+        /// exit for being idle.
+        #[arg(long, hide = true)]
+        installed: bool,
+    },
 }
 
 /// `fiber sessions`: the list, or one of its subcommands. A flag with a

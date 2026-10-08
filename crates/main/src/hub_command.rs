@@ -1,7 +1,8 @@
-//! The internal hub command (`docs/invocation.md`, "Commands and flags"):
-//! hidden, free to change, and named nowhere in the docs. It builds the
-//! session starter and runs the hub, which reads configuration once it holds
-//! the `run/` lock; a start failure prints one line on stderr.
+//! `fiber hub` (`docs/invocation.md`, "Commands and flags"). `install`,
+//! `uninstall` and `status` run in the `cli` crate. The internal
+//! `hub serve` is hidden, free to change, and named nowhere in the docs: it
+//! builds the session starter and runs the hub, which reads configuration
+//! once it holds the `run/` lock; a start failure prints one line on stderr.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
@@ -16,14 +17,27 @@ use serde_json::Value;
 
 use crate::{cli, settings};
 
-/// Runs the internal hub command.
+/// Runs a `fiber hub` command.
 pub(crate) fn run(command: cli::HubCommands, exe: Result<PathBuf, String>) -> i32 {
     match command {
-        cli::HubCommands::Serve => serve(exe),
+        cli::HubCommands::Install { port } => ::cli::hub_install(port, &crate::clock::System),
+        cli::HubCommands::Uninstall => ::cli::hub_uninstall(),
+        cli::HubCommands::Status { json } => ::cli::hub_status(json, &crate::clock::System),
+        cli::HubCommands::Serve { installed } => serve(exe, mode(installed)),
     }
 }
 
-fn serve(exe: Result<PathBuf, String>) -> i32 {
+/// `--installed` is the login service's hub; without it a client started
+/// the hub.
+fn mode(installed: bool) -> hub::Mode {
+    if installed {
+        hub::Mode::Installed
+    } else {
+        hub::Mode::OnDemand
+    }
+}
+
+fn serve(exe: Result<PathBuf, String>, mode: hub::Mode) -> i32 {
     let home = match config::fiber_home_from_env() {
         Ok(home) => home,
         Err(error) => return fail(failure(error.code(), error.to_string())),
@@ -39,6 +53,7 @@ fn serve(exe: Result<PathBuf, String>) -> i32 {
     };
     finish(hub::serve(
         &home,
+        mode,
         configure,
         env!("CARGO_PKG_VERSION"),
         Arc::new(SpawnStarter { exe }),

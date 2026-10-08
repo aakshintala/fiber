@@ -190,3 +190,64 @@ fn run_is_created_0700_when_missing() {
     assert_eq!(mode(&temp.socket()), 0o600);
     held.stop();
 }
+
+/// Runs [`lock_wait`] in `home` on a thread; the receiver gets its result.
+fn lock_wait_in(home: &Path) -> std::sync::mpsc::Receiver<Result<Lock, StartError>> {
+    let home = home.to_path_buf();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("hub-test-lock-wait".to_owned())
+        .spawn(move || done_tx.send(lock_wait(&home)).unwrap_or(()))
+        .unwrap();
+    done_rx
+}
+
+/// How long a wait that must succeed may take, in wall time.
+const WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How long the test watches a wait that must not finish.
+const STILL: std::time::Duration = std::time::Duration::from_millis(200);
+
+#[test]
+fn lock_wait_on_a_free_run_returns_the_lock_at_once() {
+    let temp = Temp::new();
+    let held = lock_wait_in(&temp.dir)
+        .recv_timeout(WITHIN)
+        .expect("a free lock is taken before the deadline")
+        .unwrap();
+    assert!(lock(&temp.dir).unwrap().is_none(), "lock_wait holds run/");
+    drop(held);
+    assert_eq!(mode(&temp.dir.join("run")), 0o700);
+}
+
+#[test]
+fn lock_wait_blocks_while_another_holds_the_lock_and_takes_it_on_release() {
+    let temp = Temp::new();
+    let first = lock(&temp.dir).unwrap().expect("the first lock is won");
+    let waiting = lock_wait_in(&temp.dir);
+    assert!(
+        waiting.recv_timeout(STILL).is_err(),
+        "lock_wait returned while another held the lock"
+    );
+    drop(first);
+    let held = waiting
+        .recv_timeout(WITHIN)
+        .expect("lock_wait takes the lock once it is released")
+        .unwrap();
+    assert!(lock(&temp.dir).unwrap().is_none(), "lock_wait holds run/");
+    drop(held);
+}
+
+#[test]
+fn lock_wait_on_a_run_that_is_a_regular_file_is_io_failed_naming_it() {
+    let temp = Temp::new();
+    fs::write(temp.dir.join("run"), b"not a directory").unwrap();
+    let Err(error) = lock_wait(&temp.dir) else {
+        panic!("a file at run/ is refused");
+    };
+    assert_eq!(error.code(), contract::ErrorCode::IoFailed);
+    assert!(
+        matches!(&error, StartError::Io { path, .. } if *path == temp.dir.join("run")),
+        "{error:?}"
+    );
+}
