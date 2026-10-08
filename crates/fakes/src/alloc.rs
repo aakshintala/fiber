@@ -132,10 +132,13 @@ impl Tracked {
         if size >= CHAIN {
             match self.byte_slots.iter_mut().find(|slot| slot.addr == 0) {
                 Some(slot) => {
+                    // The peak before the slot existed is a peak without
+                    // that slot.
+                    let without = self.byte_peak;
                     *slot = ByteSlot {
                         addr: address,
                         size,
-                        peak_without: 0,
+                        peak_without: without,
                     };
                 }
                 None => self.byte_overflowed = true,
@@ -183,10 +186,13 @@ impl Tracked {
         } else if new_size >= CHAIN {
             match self.byte_slots.iter_mut().find(|slot| slot.addr == 0) {
                 Some(slot) => {
+                    // The peak before the slot existed is a peak without
+                    // that slot.
+                    let without = self.byte_peak;
                     *slot = ByteSlot {
                         addr: new,
                         size: new_size,
-                        peak_without: 0,
+                        peak_without: without,
                     };
                 }
                 None => self.byte_overflowed = true,

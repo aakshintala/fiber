@@ -306,6 +306,32 @@ fn peak_without_keeps_an_early_scratch_peak() {
 }
 
 #[test]
+fn peak_without_keeps_a_scratch_peak_from_before_the_slot() {
+    let scratch_len = 300 * KIB;
+    let (text, measured) = bytes_during(|| {
+        let scratch = black_box(vec![0u8; scratch_len]);
+        assert_eq!(scratch.len(), scratch_len);
+        drop(scratch);
+        // The text takes its slot only past `CHAIN`, after the scratch
+        // is gone: the peak before the slot existed is a peak without it.
+        let mut text = black_box(String::new());
+        while text.len() < 4 << 20 {
+            text.push('y');
+        }
+        text
+    });
+    assert!(text.len() == 4 << 20);
+    let excluded = measured.peak_without(text.as_ptr());
+    assert!(
+        excluded >= scratch_len,
+        "peak {} without {}",
+        measured.peak(),
+        excluded
+    );
+    drop(text);
+}
+
+#[test]
 fn peak_without_a_scratch_kept_to_the_end_stays_near_the_scratch() {
     let scratch_len = 300 * KIB;
     let (kept, measured) = bytes_during(|| {
