@@ -10,13 +10,14 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-/// One thread's context switch counters, and its name when it could be
-/// read.
+/// One thread's context switch counters, its name when it could be read,
+/// and its state: `S` while it sleeps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Counts {
     pub(crate) voluntary: u64,
     pub(crate) involuntary: u64,
     pub(crate) name: Option<String>,
+    pub(crate) state: char,
 }
 
 /// The number at the start of `name`'s value in a status text. A missing
@@ -37,13 +38,55 @@ pub(crate) fn vm_hwm_kib(status: &str) -> Result<u64, String> {
     field(status, "VmHWM")
 }
 
-/// A thread's voluntary and involuntary context switch counts.
+/// The first character of the `State:` value, `S` in `S (sleeping)`. A
+/// missing or empty value is an error, never a default.
+fn state(status: &str) -> Result<char, String> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("State:"))
+        .and_then(|value| value.trim_start().chars().next())
+        .ok_or_else(|| "the status has no State value".to_owned())
+}
+
+/// A thread's voluntary and involuntary context switch counts and state.
 pub(crate) fn switches(status: &str) -> Result<Counts, String> {
     Ok(Counts {
         voluntary: field(status, "voluntary_ctxt_switches")?,
         involuntary: field(status, "nonvoluntary_ctxt_switches")?,
         name: None,
+        state: state(status)?,
     })
+}
+
+/// Every thread that has not settled between two readings, in tid order:
+/// one awake in `second`, one whose counters moved, and one present in only
+/// one reading. Empty when every thread sleeps and none switched between
+/// them.
+pub(crate) fn unsettled(
+    first: &BTreeMap<u32, Counts>,
+    second: &BTreeMap<u32, Counts>,
+) -> Vec<String> {
+    let tids: std::collections::BTreeSet<&u32> = first.keys().chain(second.keys()).collect();
+    tids.into_iter()
+        .filter_map(|tid| match (first.get(tid), second.get(tid)) {
+            (Some(_), None) => Some(format!("{tid} exited")),
+            (None, Some(_)) => Some(format!("{tid} started")),
+            (Some(start), Some(end)) => {
+                let who = match end.name.as_ref().or(start.name.as_ref()) {
+                    Some(name) => format!("{tid} ({name})"),
+                    None => tid.to_string(),
+                };
+                if end.state != 'S' {
+                    Some(format!("{who} is {}", end.state))
+                } else if (start.voluntary, start.involuntary) != (end.voluntary, end.involuntary) {
+                    Some(format!("{who} switched"))
+                } else {
+                    None
+                }
+            }
+            (None, None) => None,
+        })
+        .collect()
 }
 
 /// A thread's name from its `comm` text: the one line, without its newline.

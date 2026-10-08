@@ -22,7 +22,7 @@ use serde_json::Value;
 pub(crate) const STOP: Duration = Duration::from_secs(5);
 
 /// The pause between two probes of a condition the harness polls.
-const PROBE: Duration = Duration::from_millis(5);
+pub(crate) const PROBE: Duration = Duration::from_millis(5);
 
 /// The operating system's clock: the one place the harness reads or waits
 /// on real time.

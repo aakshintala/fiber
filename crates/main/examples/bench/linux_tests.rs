@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde_json::json;
 
-use super::{Counts, comm, hub_connected, idle_switches, switches, vm_hwm_kib};
+use super::{Counts, comm, hub_connected, idle_switches, switches, unsettled, vm_hwm_kib};
 
 const STATUS: &str = "Name:\tfiber\nState:\tS (sleeping)\nVmHWM:\t   10840 kB\nVmRSS:\t   10812 kB\nThreads:\t5\nvoluntary_ctxt_switches:\t12\nnonvoluntary_ctxt_switches:\t3\n";
 
@@ -19,8 +19,25 @@ fn switches_are_the_voluntary_and_involuntary_counts() {
             voluntary: 12,
             involuntary: 3,
             name: None,
+            state: 'S',
         })
     );
+}
+
+#[test]
+fn the_state_is_the_first_character_of_its_value() {
+    for (value, state) in [("R (running)", 'R'), ("D (disk sleep)", 'D')] {
+        let status = STATUS.replace("S (sleeping)", value);
+        assert_eq!(switches(&status).map(|counts| counts.state), Ok(state));
+    }
+}
+
+#[test]
+fn a_missing_or_empty_state_is_an_error() {
+    let without = STATUS.replace("State:\tS (sleeping)\n", "");
+    assert!(switches(&without).unwrap_err().contains("State"));
+    let empty = STATUS.replace("State:\tS (sleeping)\n", "State:\t\n");
+    assert!(switches(&empty).unwrap_err().contains("State"));
 }
 
 #[test]
@@ -59,6 +76,7 @@ fn counts(voluntary: u64, involuntary: u64) -> Counts {
         voluntary,
         involuntary,
         name: None,
+        state: 'S',
     }
 }
 
@@ -163,4 +181,72 @@ fn the_hub_is_connected_once_a_connected_socket_carries_its_path() {
         "{NET_UNIX}0000000000000000: 00000003 00000000 00000000 0001 03 2004 /tmp/fb-1/h/run/hub\n"
     );
     assert!(hub_connected(&accepted, path));
+}
+
+fn in_state(state: char, counts: Counts) -> Counts {
+    Counts { state, ..counts }
+}
+
+#[test]
+fn equal_sleeping_readings_are_settled() {
+    let reading = BTreeMap::from([(4101, named(3, 1, "fiber")), (4102, counts(0, 0))]);
+    assert!(unsettled(&reading, &reading.clone()).is_empty());
+}
+
+#[test]
+fn each_unsettled_thread_gets_one_entry() {
+    let first = BTreeMap::from([(4101, named(3, 1, "fiber"))]);
+    let cases = [
+        (
+            BTreeMap::from([(4101, in_state('R', named(3, 1, "fiber")))]),
+            "4101 (fiber) is R",
+        ),
+        (
+            BTreeMap::from([(4101, named(4, 1, "fiber"))]),
+            "4101 (fiber) switched",
+        ),
+        (
+            BTreeMap::from([(4101, named(3, 2, "fiber"))]),
+            "4101 (fiber) switched",
+        ),
+    ];
+    for (second, entry) in cases {
+        assert_eq!(unsettled(&first, &second), vec![entry.to_owned()]);
+    }
+    let unnamed = BTreeMap::from([(4102, counts(0, 0))]);
+    let disk = BTreeMap::from([(4102, in_state('D', counts(0, 0)))]);
+    assert_eq!(unsettled(&unnamed, &disk), vec!["4102 is D".to_owned()]);
+    assert_eq!(
+        unsettled(&first, &BTreeMap::new()),
+        vec!["4101 exited".to_owned()]
+    );
+    assert_eq!(
+        unsettled(&BTreeMap::new(), &first),
+        vec!["4101 started".to_owned()]
+    );
+}
+
+#[test]
+fn unsettled_entries_come_in_tid_order() {
+    let first = BTreeMap::from([
+        (4101, named(1, 0, "fiber")),
+        (4102, counts(0, 0)),
+        (4104, named(5, 5, "tui-hub")),
+        (4105, named(2, 0, "tui-input")),
+    ]);
+    let second = BTreeMap::from([
+        (4101, in_state('R', named(1, 0, "fiber"))),
+        (4103, counts(0, 0)),
+        (4104, named(5, 6, "tui-hub")),
+        (4105, named(2, 0, "tui-input")),
+    ]);
+    assert_eq!(
+        unsettled(&first, &second),
+        vec![
+            "4101 (fiber) is R".to_owned(),
+            "4102 exited".to_owned(),
+            "4103 started".to_owned(),
+            "4104 (tui-hub) switched".to_owned(),
+        ]
+    );
 }
