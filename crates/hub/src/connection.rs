@@ -614,9 +614,7 @@ fn on_start(
                 .awaiting
                 .push((session_id.0.clone(), Arc::clone(&first)));
             if crate::first::later(hub, relays, *held, Arc::clone(&first)).is_err() {
-                lock(relays)
-                    .awaiting
-                    .retain(|(_, entry)| !Arc::ptr_eq(entry, &first));
+                crate::first::forget(relays, &first);
                 let failed =
                     start::io_failed(hub, &session_id, "its first prompt could not be sent.");
                 if let Outcome::Rejected { code, message } = failed {

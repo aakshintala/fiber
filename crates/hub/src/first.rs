@@ -100,6 +100,15 @@ impl First {
     }
 }
 
+/// Removes `first`'s entry from `relays.awaiting`: the one removal for a
+/// first prompt's awaiting entry, shared by the prompt thread and the
+/// spawn-failure path so the predicate exists once.
+pub(crate) fn forget(relays: &Mutex<Relays>, first: &Arc<First>) {
+    lock(relays)
+        .awaiting
+        .retain(|(_, entry)| !Arc::ptr_eq(entry, first));
+}
+
 /// Starts `hub-first-prompt`: it waits for `first`, removes `first`'s
 /// entry from `relays.awaiting` if a release has not already, then sends
 /// `held`'s prompt once. A rejection is already logged by
@@ -117,9 +126,7 @@ pub(crate) fn later(
         .name("hub-first-prompt".to_owned())
         .spawn(move || {
             first.wait(hub.clock.as_ref());
-            lock(&relays)
-                .awaiting
-                .retain(|(_, entry)| !Arc::ptr_eq(entry, &first));
+            forget(&relays, &first);
             match start::prompt(held, &hub) {
                 Ok(()) | Err(_) => {}
             }
