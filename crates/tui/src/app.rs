@@ -384,6 +384,11 @@ impl App {
         lines
     }
 
+    /// Shows `text` as a notice.
+    pub(crate) fn push_notice(&mut self, text: String) {
+        self.notices.push(text);
+    }
+
     /// The hub could not be reached, or runs a schema this terminal cannot
     /// read: the notice, and a held `start` fails as if rejected.
     pub(crate) fn connect_failed(&mut self, notice: String) {

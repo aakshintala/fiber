@@ -31,7 +31,7 @@ fn home_with_glyph(width: u16, height: u16, glyph: &str) -> App {
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),
-        attention: crate::Attention::default(),
+        ..Default::default()
     });
     app.set_size(width, height);
     app
@@ -54,7 +54,7 @@ fn git_home(width: u16, height: u16) -> App {
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),
-        attention: crate::Attention::default(),
+        ..Default::default()
     });
     app.set_size(width, height);
     app
@@ -411,7 +411,7 @@ fn home_chips() {
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),
-        attention: crate::Attention::default(),
+        ..Default::default()
     });
     app.set_size(80, 24);
     insta::assert_snapshot!("home_chips", screen(&app, 80, 24));
@@ -1126,7 +1126,7 @@ fn the_hovered_row_is_tinted_and_others_are_not() {
     };
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, Some((0, at("second"))));
-    assert_eq!(buf[(0, at("second"))].bg, Color::Indexed(238));
+    assert_eq!(buf[(0, at("second"))].bg, crate::theme::Role::Hover.color());
     assert_eq!(buf[(0, at("first"))].bg, Color::Reset);
 }
 

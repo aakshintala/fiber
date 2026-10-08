@@ -29,6 +29,7 @@ mod layout;
 mod link;
 mod local_time;
 mod logical;
+mod look;
 mod markdown;
 mod mouse;
 mod offer;
@@ -44,6 +45,7 @@ mod slash;
 mod sources;
 mod stroke;
 mod term;
+mod theme;
 mod turn;
 mod turn_text;
 mod view;
@@ -59,6 +61,8 @@ use crate::link::Line;
 pub use attention::Attention;
 
 pub use home::Launch;
+
+pub use look::ThemeSetting;
 
 pub use keyset::KeysSetup;
 

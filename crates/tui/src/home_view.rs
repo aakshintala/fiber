@@ -4,7 +4,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 
 use super::{FOCUS_STYLE, HOVER_TINT};
 use crate::app::App;
@@ -17,19 +17,13 @@ use crate::mouse::{self, Target, TargetId};
 mod logo;
 
 /// The home input box's tint.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-const BOX_TINT: Style = Style::new().bg(Color::Indexed(235));
+const BOX_TINT: Style = Style::new().bg(Role::Surface.color());
 
 /// The home input box's half-block edges, in the box tint's colour.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-const BOX_EDGE: Style = Style::new().fg(Color::Indexed(235));
+const BOX_EDGE: Style = Style::new().fg(Role::Surface.color());
 
 /// The workspace picker's tint.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-const PICKER_TINT: Style = Style::new().bg(Color::Indexed(236));
+const PICKER_TINT: Style = Style::new().bg(Role::SurfaceRaised.color());
 
 /// The input box's placeholder, after `> `, while the draft is empty and
 /// no `start` went out in this run.

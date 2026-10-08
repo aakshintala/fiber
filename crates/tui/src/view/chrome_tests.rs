@@ -29,7 +29,7 @@ fn app(width: u16, height: u16, on_home: bool) -> App {
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),
-        attention: crate::Attention::default(),
+        ..Default::default()
     });
     if !on_home {
         app.attach(contract::SessionId(SESSION.to_owned()));

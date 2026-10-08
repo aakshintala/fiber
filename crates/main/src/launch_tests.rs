@@ -26,7 +26,12 @@ fn an_identity_equal_to_the_workspace_is_not_git() {
         .canonicalize()
         .unwrap_or_else(|err| panic!("canonical: {err}"));
     let config = config(dir.path(), &workspace, Vec::new());
-    let launch = launch(workspace.clone(), &identity, &config);
+    let launch = launch(
+        workspace.clone(),
+        &identity,
+        &config,
+        tui::ThemeSetting::Follow,
+    );
     assert_eq!(launch.workspace, workspace);
     assert_eq!(launch.project, log::project_key(&identity));
     assert!(!launch.git);
@@ -41,7 +46,12 @@ fn an_identity_elsewhere_is_git_and_names_the_project() {
     std::fs::create_dir_all(workspace.join(".git")).unwrap_or_else(|err| panic!("mkdir: {err}"));
     let identity = workspace.join(".git");
     let config = config(dir.path(), &workspace, Vec::new());
-    let launch = launch(workspace.clone(), &identity, &config);
+    let launch = launch(
+        workspace.clone(),
+        &identity,
+        &config,
+        tui::ThemeSetting::Follow,
+    );
     assert_eq!(launch.workspace, workspace);
     assert_eq!(launch.project, log::project_key(&identity));
     assert!(launch.git);
@@ -63,13 +73,23 @@ fn model_thinking_and_logo_glyph_come_from_config() {
             "tui.logo_glyph=≈".to_owned(),
         ],
     );
-    let set = launch(workspace.clone(), &identity, &set_config);
+    let set = launch(
+        workspace.clone(),
+        &identity,
+        &set_config,
+        tui::ThemeSetting::Follow,
+    );
     assert_eq!(set.model.as_deref(), Some("openai/gpt-5"));
     assert_eq!(set.thinking.as_deref(), Some("low"));
     assert_eq!(set.logo_glyph, "≈");
     // Unset, the chips show their defaults and the logo its wave.
     let plain_config = config(dir.path(), &workspace, Vec::new());
-    let unset = launch(workspace, &identity, &plain_config);
+    let unset = launch(
+        workspace,
+        &identity,
+        &plain_config,
+        tui::ThemeSetting::Follow,
+    );
     assert_eq!(unset.model, None);
     assert_eq!(unset.thinking, None);
     assert_eq!(unset.logo_glyph, "⌇");
@@ -80,9 +100,25 @@ fn tui_hover_defaults_to_on_and_reads_off() {
     let dir = fakes::TempDir::new("fiber-launch-hover");
     let workspace = dir.path().to_path_buf();
     let on = config(dir.path(), &workspace, Vec::new());
-    assert!(launch(workspace.clone(), &workspace, &on).hover);
+    assert!(
+        launch(
+            workspace.clone(),
+            &workspace,
+            &on,
+            tui::ThemeSetting::Follow
+        )
+        .hover
+    );
     let off = config(dir.path(), &workspace, vec!["tui.hover=false".to_owned()]);
-    assert!(!launch(workspace.clone(), &workspace, &off).hover);
+    assert!(
+        !launch(
+            workspace.clone(),
+            &workspace,
+            &off,
+            tui::ThemeSetting::Follow
+        )
+        .hover
+    );
 }
 
 #[test]
@@ -90,7 +126,12 @@ fn shares_and_cards_come_from_config_with_defaults() {
     let dir = fakes::TempDir::new("fiber-launch-shares");
     let workspace = dir.path().to_path_buf();
     let plain = config(dir.path(), &workspace, Vec::new());
-    let unset = launch(workspace.clone(), &workspace, &plain);
+    let unset = launch(
+        workspace.clone(),
+        &workspace,
+        &plain,
+        tui::ThemeSetting::Follow,
+    );
     assert_eq!((unset.rail_share, unset.panel_share), (15.0, 21.0));
     assert_eq!(
         unset.panel_cards,
@@ -105,7 +146,12 @@ fn shares_and_cards_come_from_config_with_defaults() {
             r#"tui.panel.cards=["jobs", "session"]"#.to_owned(),
         ],
     );
-    let set = launch(workspace.clone(), &workspace, &set_config);
+    let set = launch(
+        workspace.clone(),
+        &workspace,
+        &set_config,
+        tui::ThemeSetting::Follow,
+    );
     assert_eq!((set.rail_share, set.panel_share), (18.5, 30.0));
     assert_eq!(set.panel_cards, ["jobs", "session"]);
 }
@@ -127,7 +173,12 @@ fn an_out_of_range_share_reads_as_the_default() {
                 format!("tui.panel.width={panel}"),
             ],
         );
-        let set = launch(workspace.clone(), &workspace, &set_config);
+        let set = launch(
+            workspace.clone(),
+            &workspace,
+            &set_config,
+            tui::ThemeSetting::Follow,
+        );
         assert_eq!(
             (set.rail_share, set.panel_share),
             expected,
@@ -142,10 +193,15 @@ fn without_keys_anywhere_launch_keys_user_is_empty() {
     let workspace = dir.path().to_path_buf();
     let plain = config(dir.path(), &workspace, Vec::new());
     assert!(
-        launch(workspace.clone(), &workspace, &plain)
-            .keys
-            .user
-            .is_empty()
+        launch(
+            workspace.clone(),
+            &workspace,
+            &plain,
+            tui::ThemeSetting::Follow
+        )
+        .keys
+        .user
+        .is_empty()
     );
 }
 
@@ -166,7 +222,14 @@ fn global_and_project_keys_merge_as_written() {
     )
     .unwrap_or_else(|err| panic!("project keys: {err}"));
     let config = config(dir.path(), &workspace, Vec::new());
-    let user = launch(workspace.clone(), &workspace, &config).keys.user;
+    let user = launch(
+        workspace.clone(),
+        &workspace,
+        &config,
+        tui::ThemeSetting::Follow,
+    )
+    .keys
+    .user;
     assert_eq!(
         user,
         serde_json::json!({"send": "ctrl+s", "copy_focused": ["c"]})
@@ -177,11 +240,41 @@ fn global_and_project_keys_merge_as_written() {
 }
 
 #[test]
+fn the_theme_setting_is_passed_through() {
+    let dir = fakes::TempDir::new("fiber-launch-theme");
+    let workspace = dir.path().to_path_buf();
+    let plain = config(dir.path(), &workspace, Vec::new());
+    let setting = tui::ThemeSetting::File {
+        name: "solar".to_owned(),
+        text: Ok("{}".to_owned()),
+    };
+    let tui::ThemeSetting::File { name, text } =
+        launch(workspace.clone(), &workspace, &plain, setting).theme
+    else {
+        panic!("not a theme file");
+    };
+    assert_eq!(name, "solar");
+    assert_eq!(text, Ok("{}".to_owned()));
+    let light = launch(
+        workspace.clone(),
+        &workspace,
+        &plain,
+        tui::ThemeSetting::Light,
+    );
+    assert!(matches!(light.theme, tui::ThemeSetting::Light));
+}
+
+#[test]
 fn attention_switches_come_from_config_with_defaults() {
     let dir = fakes::TempDir::new("fiber-launch-attention");
     let workspace = dir.path().to_path_buf();
     let plain = config(dir.path(), &workspace, Vec::new());
-    let unset = launch(workspace.clone(), &workspace, &plain);
+    let unset = launch(
+        workspace.clone(),
+        &workspace,
+        &plain,
+        tui::ThemeSetting::default(),
+    );
     assert!(unset.attention.notification);
     assert!(unset.attention.bell);
     assert!(unset.attention.title);
@@ -191,7 +284,12 @@ fn attention_switches_come_from_config_with_defaults() {
         ("tui.attention.title=false", (true, true, false)),
     ] {
         let set_config = config(dir.path(), &workspace, vec![key.to_owned()]);
-        let set = launch(workspace.clone(), &workspace, &set_config);
+        let set = launch(
+            workspace.clone(),
+            &workspace,
+            &set_config,
+            tui::ThemeSetting::default(),
+        );
         assert_eq!(
             (
                 set.attention.notification,
