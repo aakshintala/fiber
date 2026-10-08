@@ -656,38 +656,16 @@ impl History {
     }
 
     fn resume(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> Loop {
-        self.resume_with_files(tools, Vec::new())
-    }
-
-    /// As [`History::resume`], with `files` as the configured `file`
-    /// credential sources (`docs/permissions.md`, "Credentials").
-    fn resume_with_files(
-        &mut self,
-        tools: Vec<(String, Arc<dyn Tool>)>,
-        files: Vec<std::path::PathBuf>,
-    ) -> Loop {
-        let mut prompt = self.prompt();
         // As `parts_with` does without `--credential`: the session keeps
         // the recorded label, so a resume that switches nothing writes no
         // `model_changed` (`docs/model-routing.md`, "Which credential a
         // session uses").
-        prompt.credential = r#loop::resumed(&self.dir).unwrap().credential;
-        Loop::resume(
-            Arc::clone(&self.log),
-            r#loop::resumed(&self.dir).unwrap(),
-            Arc::clone(&self.provider) as Arc<dyn contract::provider::Provider>,
-            Self::model(),
-            prompt,
-            self.inbox_rx.take().unwrap(),
+        let recorded = r#loop::resumed(&self.dir).unwrap().credential;
+        self.resume_on(
             tools,
-            r#loop::Permissions {
-                workspace: self.workspace.clone(),
-                credentials: self.credentials.clone(),
-                credential_files: files,
-                rules: self.rules.clone(),
-            },
+            recorded.as_deref(),
+            contract::events::CacheLifetime::OneHour,
         )
-        .unwrap()
     }
 
     /// As [`History::resume`], with the session on `credential` with
@@ -5452,8 +5430,19 @@ fn a_resume_switching_the_label_records_model_changed_before_the_build() {
     assert_eq!(new[1].payload["reason"], "resume");
     assert_eq!(new[1].payload["credential"], "home");
     assert_eq!(
-        history.new_kinds()[2..4],
-        ["opening_message".to_owned(), "turn_started".to_owned()]
+        history.new_kinds(),
+        [
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
 }
 
@@ -5473,6 +5462,21 @@ fn a_resume_after_a_switch_records_the_switch_after_as_before() {
     assert_eq!(new[0].payload["before"]["model"], "fake/second");
     assert_eq!(new[0].payload["before"]["credential"], "personal");
     assert_eq!(new[0].payload["after"]["credential"], "home");
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
@@ -5490,7 +5494,20 @@ fn a_resume_with_the_recorded_label_records_nothing() {
 
     let new = history.new_lines();
     assert_eq!(new[0].kind, "preamble_built");
-    assert!(new.iter().all(|line| line.kind != "model_changed"));
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
@@ -5510,7 +5527,20 @@ fn a_resume_with_a_label_but_no_recorded_one_records_nothing() {
 
     let new = history.new_lines();
     assert_eq!(new[0].kind, "preamble_built");
-    assert!(new.iter().all(|line| line.kind != "model_changed"));
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
@@ -5525,8 +5555,20 @@ fn a_resume_with_a_label_but_no_recorded_settings_records_nothing() {
     );
     history.run(looped, "hi");
 
-    let new = history.new_lines();
-    assert!(new.iter().all(|line| line.kind != "model_changed"));
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
@@ -5547,4 +5589,20 @@ fn a_resume_switching_the_label_marks_orphans_first() {
     assert_eq!(new[0].kind, "job_completed");
     assert_orphaned(&new[0], "j_a");
     assert_eq!(new[1].kind, "model_changed");
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "job_completed",
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }

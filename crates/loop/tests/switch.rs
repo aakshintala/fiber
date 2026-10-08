@@ -2097,6 +2097,21 @@ fn mixed_model_and_credential_switches_apply_in_arrival_order() {
 
     let (outcome, lines) = run(&mut session, "again");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            &[
+                "model_changed",
+                "model_changed",
+                "model_changed",
+                "preamble_built",
+                "turn_started",
+            ] as &[&str],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
 
     let changed = of_kind(&lines, "model_changed");
     assert_eq!(changed.len(), 3);
@@ -2108,7 +2123,6 @@ fn mixed_model_and_credential_switches_apply_in_arrival_order() {
     assert_eq!(changed[2].payload["before"]["credential"], "home");
     assert_eq!(changed[2].payload["after"]["model"], "fake/n");
     assert_eq!(changed[2].payload["after"]["credential"], "work");
-    assert_eq!(of_kind(&lines, "preamble_built").len(), 1);
     assert_eq!(next.requests().len(), 1);
 }
 
@@ -2129,7 +2143,6 @@ fn credential_without_a_switcher_is_invalid_arguments() {
     let rejection = answer.unwrap_err();
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
     assert_eq!(rejection.message, NO_SWITCH);
-    assert!(of_kind(&lines, "model_changed").is_empty());
 }
 
 #[test]
@@ -2236,7 +2249,33 @@ fn credential_during_an_approval_wait_is_accepted_and_applied_after_the_turn() {
     answered.join().unwrap();
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let lines = session.lines();
-    assert!(of_kind(&lines, "model_changed").is_empty());
+    assert_kinds(
+        &lines,
+        &[
+            &[
+                "session_started",
+                "preamble_built",
+                "opening_message",
+                "turn_started",
+            ] as &[&str],
+            &["step_started"],
+            &[
+                "assistant_message_started",
+                "assistant_message_delta",
+                "tool_call_arguments_delta",
+                "tool_call_requested",
+                "usage_recorded",
+                "assistant_message_completed",
+                "permission_requested",
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ],
+            &["step_started"],
+            REPLY,
+            ENDED,
+        ],
+    );
     let answer = ack_rx
         .recv_timeout(DEADLINE)
         .expect("the credential is answered");
@@ -2449,7 +2488,7 @@ fn run_deferred_switch_case(
     inbox_tx.send(held).unwrap();
     // The watcher exists before the turn thread starts: it only sees events
     // appended after it is created, and the thread re-raises the request.
-    let mut watcher = log.watch();
+    let watcher = log.watch();
     // The finishing turn runs on its own thread; a live switch arrives
     // during its approval wait and holds behind the held one.
     let (done, finished) = mpsc::channel();
@@ -2457,17 +2496,11 @@ fn run_deferred_switch_case(
         let outcome = looped.turn().unwrap();
         done.send((looped, outcome)).unwrap();
     });
-    // Wait for the re-raised request, then send the live switch and the reply.
-    loop {
-        let line = watcher
-            .recv_timeout(DEADLINE)
-            .expect("a line in time")
-            .expect("log")
-            .expect("line");
-        if line.kind == "permission_requested" {
-            break;
-        }
-    }
+    // Wait for the re-raised request, then send the live switch and the reply:
+    // one `DEADLINE` for the whole wait, never one per line.
+    support::read_until(watcher, "a re-raised permission_requested line", |line| {
+        line.kind == "permission_requested"
+    });
     inbox_tx.send(live).unwrap();
     inbox_tx
         .send(Delivery::Reply(
@@ -2483,11 +2516,49 @@ fn run_deferred_switch_case(
         .expect("the finishing turn ended");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
 
-    // The next turn admits both in arrival order.
+    // The next turn admits both in arrival order, bounded so a hang
+    // reports the wait instead of hanging the test.
     inbox_tx.send(support::delivery("next")).unwrap();
-    let outcome = looped.turn().unwrap();
+    let (_looped, outcome) = fakes::within("the next turn", DEADLINE, move || {
+        let outcome = looped.turn().unwrap();
+        (looped, outcome)
+    });
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let lines = log::read(&dir).unwrap();
+    assert_kinds(
+        &lines,
+        &[&[
+            "session_started",
+            "turn_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "permission_requested",
+            "fiber_started",
+            "fiber_exited",
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "model_changed",
+            "model_changed",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ] as &[&str]],
+    );
     let changed: Vec<contract::Envelope> = lines
         .iter()
         .filter(|line| line.kind == "model_changed")

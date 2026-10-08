@@ -140,10 +140,7 @@ impl Config {
             .then(|| provider.credential.clone())
             .flatten();
         let Some(source) = from_config.or(own) else {
-            let listed = match self.labels(provider).as_slice() {
-                [] => "none".to_owned(),
-                labels => labels.join(", "),
-            };
+            let listed = Self::listed(&self.labels(provider));
             return Err(missing(format!(
                 "nothing is stored in credentials/{stored}/{label}, and no source is configured for it. The labels for `{name}` are: {listed}"
             )));
@@ -190,9 +187,6 @@ impl Config {
                 ))
             })
     }
-}
-
-impl Config {
     /// Every credential label `provider` has: each stored under
     /// `credentials/<stored>/`, each configured at
     /// `providers."<name>".credentials`, and `default` when the provider's
@@ -216,6 +210,16 @@ impl Config {
             labels.insert(DEFAULT_LABEL.into());
         }
         labels.into_iter().collect()
+    }
+
+    /// The labels listed in a missing-label error: `none` when there are
+    /// none, else joined with `, `.
+    pub fn listed(labels: &[String]) -> String {
+        if labels.is_empty() {
+            "none".to_owned()
+        } else {
+            labels.join(", ")
+        }
     }
 }
 

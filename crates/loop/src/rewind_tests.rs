@@ -528,5 +528,5 @@ fn a_rewound_loop_writes_no_model_changed_for_a_later_label_switch() {
         .collect();
     // The fold ends on the switch's `after`, but the session continues
     // the build at the point, whose label is unchanged: no `model_changed`.
-    assert!(!kinds.contains(&"model_changed".to_owned()), "{kinds:?}");
+    assert_eq!(kinds, ["session_started"]);
 }

@@ -1845,19 +1845,26 @@ fn a_live_resume_with_a_new_label_switches_before_the_prompt() {
                 .to_owned()
         })
         .collect();
-    let changed = kinds
-        .iter()
-        .position(|kind| kind == "model_changed")
-        .unwrap();
-    let built = kinds
-        .iter()
-        .position(|kind| kind == "preamble_built")
-        .unwrap();
-    let started = kinds
-        .iter()
-        .position(|kind| kind == "turn_started")
-        .unwrap();
-    assert!(changed < built && built < started, "{kinds:?}");
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+    );
 
     socket.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
     socket.send(r#"{"id":"c_close","command":"close"}"#);
@@ -1912,7 +1919,12 @@ fn a_live_resume_with_an_absent_label_is_rejected() {
                 .to_owned()
         })
         .collect();
-    assert!(!kinds.contains(&"turn_started".to_owned()), "{kinds:?}");
+    assert_eq!(
+        kinds,
+        ["session_started", "fiber_started", "extensions_loaded"]
+            .map(str::to_owned)
+            .to_vec(),
+    );
 
     socket.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
     socket.send(r#"{"id":"c_close","command":"close"}"#);

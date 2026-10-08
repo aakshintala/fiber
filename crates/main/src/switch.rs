@@ -153,20 +153,23 @@ impl Switching {
     /// What the read for provider `name` starts from: its label, its key
     /// when this process already read one, and its Lua provider when it is
     /// loaded. `label` is the `credential` command's label, else the
-    /// provider's selected label, else the configured one.
+    /// provider's selected label, else the configured one. `current` is the
+    /// provider's selected label before the switch, for the missing-label
+    /// check the read runs.
     fn want(&self, name: &str, label: Option<&str>) -> Want {
         let remembered = self
             .remembered
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        let current = remembered.selected.get(name).cloned().unwrap_or_else(|| {
+            match self.registry.get(name) {
+                Some(data) => self.config.credential_label(data),
+                None => String::new(),
+            }
+        });
         let selected = match label {
             Some(label) => label.to_owned(),
-            None => remembered.selected.get(name).cloned().unwrap_or_else(|| {
-                match self.registry.get(name) {
-                    Some(data) => self.config.credential_label(data),
-                    None => String::new(),
-                }
-            }),
+            None => current.clone(),
         };
         let known = remembered
             .keys
@@ -181,6 +184,7 @@ impl Switching {
         Want {
             name: name.to_owned(),
             label: selected,
+            current,
             known,
             lua,
         }
@@ -232,21 +236,9 @@ impl Switching {
                     // A Lua `credential()` provider never reaches this
                     // callback, and a scripted provider never reads, so both
                     // accept any label.
-                    let current = self
-                        .remembered
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .selected
-                        .get(&want.name)
-                        .cloned()
-                        .unwrap_or_else(|| self.config.credential_label(data));
                     let labels = self.config.labels(data);
-                    if want.label != current && !labels.contains(&want.label) {
-                        let listed = if labels.is_empty() {
-                            "none".to_owned()
-                        } else {
-                            labels.join(", ")
-                        };
+                    if want.label != want.current && !labels.contains(&want.label) {
+                        let listed = config::Config::listed(&labels);
                         return Err(doors::failure(
                             ErrorCode::CredentialMissing,
                             format!(
@@ -280,6 +272,8 @@ impl Switching {
 struct Want {
     name: String,
     label: String,
+    /// The provider's selected label before the switch.
+    current: String,
     /// The key read before, if any.
     known: Option<Option<Secret>>,
     /// Its Lua provider, when loaded.
