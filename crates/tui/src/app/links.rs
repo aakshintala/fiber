@@ -151,9 +151,7 @@ impl App {
                 let from = grow.max(top);
                 let to = line_end.min(end);
                 if from < to {
-                    self.line_links(
-                        text, from, to, y0, top, last, area, area_width, &mut found,
-                    );
+                    self.line_links(text, from, to, y0, top, last, area, area_width, &mut found);
                 }
                 grow = line_end;
             }
@@ -286,9 +284,7 @@ impl App {
                     if *byte < range.start || char_end > range.end {
                         continue;
                     }
-                    let Some((row_at, offset)) =
-                        logical.from.get(at).copied().flatten()
-                    else {
+                    let Some((row_at, offset)) = logical.from.get(at).copied().flatten() else {
                         continue;
                     };
                     if !placed.get(row_at).is_some_and(|slot| slot.is_some())
@@ -349,7 +345,11 @@ impl App {
                     if w == 0 {
                         continue;
                     }
-                    let url = logical.text.get(range.clone()).unwrap_or_default().to_owned();
+                    let url = logical
+                        .text
+                        .get(range.clone())
+                        .unwrap_or_default()
+                        .to_owned();
                     if url.is_empty() {
                         continue;
                     }
