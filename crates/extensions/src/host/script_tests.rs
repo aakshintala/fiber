@@ -88,6 +88,20 @@ fn json_matches_the_expected_subset_and_reports_the_first_path() {
         ),
         ("integer matches float", json!(1), json!(1.0), true),
         ("float matches integer", json!(1.0), json!(1), true),
+        ("equal integers match", json!(2), json!(2), true),
+        ("different integers do not match", json!(2), json!(3), false),
+        (
+            "equal large integers match",
+            json!(9007199254740993u64),
+            json!(9007199254740993u64),
+            true,
+        ),
+        (
+            "different large integers do not match",
+            json!(9007199254740993u64),
+            json!(9007199254740992u64),
+            false,
+        ),
         ("string does not match number", json!("1"), json!(1), false),
     ];
 
