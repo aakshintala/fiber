@@ -301,6 +301,9 @@ pub(crate) struct Queue {
     /// the terminal exits, bounded by the sessions' calls; upgrade when tool
     /// groups (see #670) fold calls for display.
     calls: HashMap<(String, String), (String, String)>,
+    /// Declines sent and not yet answered, by `reply` command id: the
+    /// session whose turn a `cancel` ends once the decline is accepted.
+    declines: HashMap<String, SessionId>,
 }
 
 impl Queue {
@@ -403,10 +406,21 @@ impl Queue {
     /// line, and moves the panel on. `None` when no form is shown.
     pub(crate) fn decline(&mut self, id: &str) -> Option<String> {
         let at = self.shown_index()?;
-        match self.requests.get(at)?.ask {
-            Ask::Form(_) => self.reply(at, id, ReplyAnswer::Declined { declined: True }),
-            Ask::Approval(_) => None,
-        }
+        let request = self.requests.get(at)?;
+        let session = match request.ask {
+            Ask::Form(_) => request.session.clone(),
+            Ask::Approval(_) => return None,
+        };
+        let line = self.reply(at, id, ReplyAnswer::Declined { declined: True })?;
+        self.declines.insert(id.to_owned(), session);
+        Some(line)
+    }
+
+    /// The session whose turn a `cancel` ends now that the decline `id` was
+    /// accepted (`docs/tui.md`, "A question form"); `None` when `id` is no
+    /// decline. It is answered once.
+    pub(crate) fn declined(&mut self, id: &str) -> Option<SessionId> {
+        self.declines.remove(id)
     }
 
     /// Sends `answer` for the request at `at` as `reply` command `id`: it
@@ -425,8 +439,10 @@ impl Queue {
     }
 
     /// The `reply` command `id` failed: its request, if it is still
-    /// pending, is back where it was, unanswered.
+    /// pending, is back where it was, unanswered, and a failed decline
+    /// cancels nothing.
     pub(crate) fn restore(&mut self, id: &str) {
+        self.declines.remove(id);
         let Some(at) = self
             .requests
             .iter()

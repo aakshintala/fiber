@@ -735,15 +735,16 @@ impl App {
         if approvals::KINDS.contains(&envelope.kind.as_str()) {
             self.queue.fold(envelope);
         }
+        let mut send = self.reply_ack(envelope);
         if self.session() != Some(&envelope.session_id) {
-            return Vec::new();
+            return send;
         }
         // The search's fetch answers here, never in the pages: its lines
         // fold into the scan and go no further.
-        if let Some(send) = self.find_answered(envelope) {
+        if let Some(lines) = self.find_answered(envelope) {
+            send.extend(lines);
             return send;
         }
-        let mut send = Vec::new();
         if envelope.kind == "turn_started"
             && let Some(started) = read!(envelope, TurnStarted)
         {

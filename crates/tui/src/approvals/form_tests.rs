@@ -658,9 +658,17 @@ fn decline_names_only_a_form() {
             "args": {"request_id": "r_4f", "declined": true}})
     );
     assert!(queue.panel().is_none());
-    // A rejected decline puts the form back.
+    // A rejected decline puts the form back and cancels nothing.
     queue.restore("c_1");
     assert_eq!(header(&queue), format!("question · {S_A} · 1 of 1"));
+    assert_eq!(queue.declined("c_1"), None);
+    // An accepted decline names its session once.
+    assert!(queue.decline("c_2").is_some());
+    assert_eq!(
+        queue.declined("c_2"),
+        Some(contract::SessionId(S_A.to_owned()))
+    );
+    assert_eq!(queue.declined("c_2"), None);
 }
 
 #[test]
