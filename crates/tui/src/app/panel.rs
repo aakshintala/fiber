@@ -8,18 +8,32 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use contract::Envelope;
 use contract::events::{
-    DelegateStarted, ExtensionUi, FileChange, JobCompleted, JobStarted, McpServerFailed,
-    McpServerReady, ModelChanged, PreambleBuilt, SessionStatus, ToolCallCompleted, Ui,
-    UsageRecorded,
+    CommandAccepted, CommandRejected, CommandResult, DelegateStarted, ExtensionUi, FileChange,
+    JobCompleted, JobStarted, McpServerFailed, McpServerReady, ModelChanged, PreambleBuilt,
+    SessionState, SessionStatus, ToolCallCompleted, Ui, UsageRecorded,
 };
 
-use super::{App, Effect};
+use super::{App, Effect, Kind, Link, mint};
+use crate::shell;
 
 /// A panel item that does something when clicked (`docs/tui.md`, "The panel", "Git").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Spot {
     /// The Jobs line: lists the running jobs.
     Jobs,
+    /// The Session card's branch row: runs `git status`.
+    Branch,
+}
+
+/// What the branch query last answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Branch {
+    /// On a branch.
+    Named(String),
+    /// `HEAD`: detached.
+    Detached,
+    /// No branch to show.
+    Absent,
 }
 
 /// An extension's widget: its latest lines, in arrival order.
@@ -50,6 +64,11 @@ pub(crate) struct PanelState {
     jobs: Vec<(String, String)>,
     delegate_jobs: BTreeSet<String>,
     jobs_open: bool,
+    due: bool,
+    asked: Option<String>,
+    again: bool,
+    baseline: Option<bool>,
+    branch: Option<Branch>,
 }
 
 impl PanelState {
@@ -243,6 +262,56 @@ impl PanelState {
     pub(crate) fn jobs_open(&self) -> bool {
         self.jobs_open
     }
+
+    /// A branch query is due on the next attached-session line.
+    pub(crate) fn attached(&mut self) {
+        self.due = true;
+    }
+
+    /// The branch the last query answered, if any.
+    pub(crate) fn branch(&self) -> Option<&Branch> {
+        self.branch.as_ref()
+    }
+
+    /// Folds the branch query's answer: the first line trimmed is the
+    /// branch, `HEAD` reads detached, and anything else leaves the row
+    /// out. Clears the query; a turn end held while it was in flight
+    /// sends one more. Returns whether another query goes out now.
+    fn answer_branch(&mut self, result: Option<&CommandResult>) -> bool {
+        let branch = match result {
+            Some(CommandResult::Shell {
+                output, process, ..
+            }) if process.signal.is_none() && process.exit_code == Some(0) => {
+                match output.lines().next().map(str::trim) {
+                    Some("HEAD") => Branch::Detached,
+                    Some(name) if !name.is_empty() => Branch::Named(name.to_owned()),
+                    _ => Branch::Absent,
+                }
+            }
+            _ => Branch::Absent,
+        };
+        self.branch = Some(branch);
+        self.asked = None;
+        std::mem::replace(&mut self.again, false)
+    }
+
+    /// A rejection of the branch query leaves the row out, with no notice:
+    /// it behaves as a typed command's rejection does, minus the notice a
+    /// person typed for. Returns whether another query goes out now.
+    fn refuse_branch(&mut self) -> bool {
+        self.branch = Some(Branch::Absent);
+        self.asked = None;
+        std::mem::replace(&mut self.again, false)
+    }
+
+    /// Folds a `session_status` into the turn baseline: the first status
+    /// after attach only sets it; a later settled status after a busy one
+    /// ends a turn. Returns whether this status ends a turn.
+    fn turn_end(&mut self, busy: bool) -> bool {
+        let end = self.baseline == Some(true) && !busy;
+        self.baseline = Some(busy);
+        end
+    }
 }
 
 impl App {
@@ -263,6 +332,88 @@ impl App {
     /// Folds one attached-session envelope into the panel's data.
     pub(super) fn panel_line(&mut self, envelope: &Envelope) -> Vec<String> {
         self.panel_state.fold(envelope);
+        self.panel_branch(envelope)
+    }
+
+    /// The branch query's answers and triggers (`docs/tui.md`, "Git"): a
+    /// `shell` running `git rev-parse --abbrev-ref HEAD` on attach and
+    /// after each turn. Nothing polls.
+    fn panel_branch(&mut self, envelope: &Envelope) -> Vec<String> {
+        let mut send = Vec::new();
+        match envelope.kind.as_str() {
+            "command_accepted" => {
+                if let Some(accepted) = super::read!(envelope, CommandAccepted)
+                    && self.panel_state.asked.as_deref() == Some(accepted.command_id.0.as_str())
+                    && self.panel_state.answer_branch(accepted.result.as_ref())
+                {
+                    send.extend(self.branch_query());
+                }
+            }
+            "command_rejected" => {
+                if let Some(rejected) = super::read!(envelope, CommandRejected)
+                    && rejected
+                        .command_id
+                        .as_ref()
+                        .is_some_and(|id| self.panel_state.asked.as_deref() == Some(id.0.as_str()))
+                    && self.panel_state.refuse_branch()
+                {
+                    send.extend(self.branch_query());
+                }
+            }
+            "session_status" => {
+                if let Some(status) = super::read!(envelope, SessionStatus) {
+                    let busy = !matches!(status.state, SessionState::Idle | SessionState::Jobs);
+                    if self.panel_state.turn_end(busy) {
+                        if self.panel_state.asked.is_some() {
+                            self.panel_state.again = true;
+                        } else {
+                            send.extend(self.branch_query());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        if self.panel_state.due {
+            send.extend(self.branch_query());
+        }
+        send
+    }
+
+    /// The branch query, when one goes out: due or a turn end, only the
+    /// Session card shows a branch, the link is up, and the attached row
+    /// has not left. Sending clears `due` and records the query; when a
+    /// condition fails `due` stays set and the next line tries again. The
+    /// query never enters `pending`, so its answer adds no conversation
+    /// item and a rejection adds no notice.
+    fn branch_query(&mut self) -> Option<String> {
+        if !self.panel_cards().iter().any(|card| card == "session") {
+            return None;
+        }
+        if self.link != Link::Up {
+            return None;
+        }
+        if self.attached_row().is_some_and(|row| row.left.is_some()) {
+            return None;
+        }
+        if self.panel_state.asked.is_some() {
+            return None;
+        }
+        let session = self.session()?.clone();
+        let id = mint();
+        let line =
+            shell::command(&id, &session, "git rev-parse --abbrev-ref HEAD", false).to_string();
+        self.panel_state.due = false;
+        self.panel_state.asked = Some(id);
+        Some(line)
+    }
+
+    /// A hub `command_rejected` for the branch query leaves the row out,
+    /// with no notice, and clears the query so the next turn end sends.
+    pub(super) fn panel_refused(&mut self, id: &str) -> Vec<String> {
+        if self.panel_state.asked.as_deref() == Some(id) && self.panel_state.refuse_branch() {
+            return self.branch_query().into_iter().collect();
+        }
         Vec::new()
     }
 
@@ -272,6 +423,19 @@ impl App {
             Spot::Jobs => {
                 self.panel_state.jobs_open = !self.panel_state.jobs_open;
                 Effect::None
+            }
+            Spot::Branch => {
+                let Some((session, _)) = self.command_session() else {
+                    return Effect::None;
+                };
+                let id = mint();
+                let line = shell::command(&id, &session, "git --no-optional-locks status", false)
+                    .to_string();
+                self.pending.insert(
+                    id,
+                    (Kind::Shell, "!!git --no-optional-locks status".to_owned()),
+                );
+                Effect::Send(vec![line])
             }
         }
     }

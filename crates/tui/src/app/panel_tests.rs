@@ -1,11 +1,14 @@
 //! Tests for the panel's folded state: widgets and going home.
 
-use super::super::App;
+use super::super::{App, Effect};
+use crate::home::{Launch, Spot as HomeSpot};
 use crate::link::Line;
+use serde_json::{Value, json};
 use std::path::PathBuf;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
+const CARDS: [&str; 5] = ["session", "changed_files", "delegates", "jobs", "quota"];
 
 /// An app attached to `SESSION`.
 fn attached() -> App {
@@ -410,4 +413,631 @@ fn clicking_jobs_expands_and_collapses() {
     assert!(app.panel_state().jobs_open());
     app.on_click(TargetId::Panel(Spot::Jobs));
     assert!(!app.panel_state().jobs_open());
+}
+
+/// An app on home, drawing the default card list.
+fn home() -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: CARDS.map(str::to_owned).to_vec(),
+        ..Default::default()
+    });
+    app.set_size(80, 24);
+    app
+}
+
+/// A `hub_hello` this terminal reads.
+fn hello() -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    })
+}
+
+/// Parses command lines going out.
+fn commands(lines: Vec<String>) -> Vec<Value> {
+    lines
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect()
+}
+
+/// Links the app: the feed and recent ids.
+fn linked(app: &mut App) -> (String, String) {
+    let lines = commands(app.on_line(hello()));
+    assert_eq!(lines.len(), 2);
+    (
+        lines[0]["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("feed id"))
+            .to_owned(),
+        lines[1]["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("recent id"))
+            .to_owned(),
+    )
+}
+
+/// A live `session_status` for `session`, in `state`.
+fn live(session: &str, state: Value) -> Line {
+    let mut payload = json!({
+        "name": "fix the parser", "workspace": "/w", "project": "-w",
+        "since": 0,
+        "spend": {"tokens": {"input": 1, "cache_read": 0,
+            "cache_write": {}, "output": 2},
+            "cost": 0.0, "subscription_cost": 0.0},
+        "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+    });
+    for (key, value) in state.as_object().cloned().unwrap_or_default() {
+        payload[key] = value;
+    }
+    Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+/// The home rows' keys.
+fn keys(app: &App) -> Vec<u64> {
+    app.home_screen()
+        .map(|screen| screen.rows.into_iter().map(|(key, _, _)| key).collect())
+        .unwrap_or_default()
+}
+
+/// Opens the row with `key`, with the parsed lines going out.
+fn open(app: &mut App, key: u64) -> Vec<Value> {
+    match app.home_click(HomeSpot::Entry(key)) {
+        Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_) => panic!("opening sends"),
+    }
+}
+
+/// Opens the first home row.
+fn open_first(app: &mut App) -> Vec<Value> {
+    let key = keys(app)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a row"));
+    open(app, key)
+}
+
+/// A session `command_accepted` for `id` from `session`.
+fn session_accepted(session: &str, id: &str) -> Line {
+    session_accepted_with(session, id, serde_json::json!({}))
+}
+
+/// A session `command_accepted` for `id` with `result`.
+fn session_accepted_with(session: &str, id: &str, result: Value) -> Line {
+    let mut payload = serde_json::Map::new();
+    payload.insert("command_id".to_owned(), Value::String(id.to_owned()));
+    if !result.is_null() {
+        payload.insert("result".to_owned(), result);
+    }
+    Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload,
+    })
+}
+
+/// A hub `command_rejected` for `id`.
+fn refused(id: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [
+            ("command_id".to_owned(), Value::String(id.to_owned())),
+            (
+                "code".to_owned(),
+                Value::String("invalid_arguments".to_owned()),
+            ),
+            ("message".to_owned(), Value::String("no".to_owned())),
+        ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// A session `command_rejected` for `id` from `session`.
+fn session_refused(session: &str, id: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "command_rejected".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [
+            ("command_id".to_owned(), Value::String(id.to_owned())),
+            (
+                "code".to_owned(),
+                Value::String("invalid_arguments".to_owned()),
+            ),
+            ("message".to_owned(), Value::String("no".to_owned())),
+        ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// A hub `session_left` for `session`.
+fn left_line(session: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "session_left".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [
+            ("session_id".to_owned(), Value::String(session.to_owned())),
+            ("how".to_owned(), Value::String("exited".to_owned())),
+        ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// Opens `SESSION` through home: links, feeds its row, opens it.
+fn opened(app: &mut App) -> Vec<Value> {
+    linked(app);
+    app.on_line(live(SESSION, json!({"state": "streaming"})));
+    open_first(app)
+}
+
+/// The acknowledgement of the last subscribe in `out`.
+fn ack(app: &mut App, out: &[Value]) -> Vec<String> {
+    let id = out
+        .iter()
+        .rfind(|line| line["command"] == "subscribe")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a subscribe"))
+        .to_owned();
+    app.on_line(session_accepted(SESSION, &id))
+}
+
+/// Asserts `lines` hold one branch query, returning its id.
+fn branch_query(lines: &[String]) -> String {
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "shell");
+    assert_eq!(line["session_id"], SESSION);
+    assert_eq!(line["args"]["command"], "git rev-parse --abbrev-ref HEAD");
+    assert_eq!(line["args"]["send"], false);
+    line["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("an id"))
+        .to_owned()
+}
+
+/// Answers the branch query `id` with `output`.
+fn answer(app: &mut App, id: &str, output: &str) -> Vec<String> {
+    answer_with(
+        app,
+        id,
+        json!({"output": output, "process": shell_end(Some(0), None)}),
+    )
+}
+
+/// A shell end: `exit_code` or `signal`.
+fn shell_end(exit_code: Option<i32>, signal: Option<&str>) -> Value {
+    let mut process = serde_json::Map::new();
+    match exit_code {
+        Some(code) => {
+            process.insert("exit_code".to_owned(), code.into());
+        }
+        None => {
+            process.insert("exit_code".to_owned(), Value::Null);
+        }
+    }
+    match signal {
+        Some(signal) => {
+            process.insert("signal".to_owned(), signal.into());
+        }
+        None => {
+            process.insert("signal".to_owned(), Value::Null);
+        }
+    }
+    process.insert("timed_out".to_owned(), false.into());
+    Value::Object(process)
+}
+
+/// Answers the branch query `id` with `result`.
+fn answer_with(app: &mut App, id: &str, result: Value) -> Vec<String> {
+    app.on_line(session_accepted_with(SESSION, id, result))
+}
+
+#[test]
+fn the_acknowledgement_sends_the_branch_query_once() {
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    assert!(id.starts_with("c_"));
+    assert!(
+        app.on_line(session_line(SESSION, "turn_started", json!({"input": []})))
+            .is_empty()
+    );
+}
+
+#[test]
+fn no_query_before_the_acknowledgement() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(SESSION, json!({"state": "streaming"})));
+    open_first(&mut app);
+    assert!(
+        app.on_line(live(SESSION, json!({"state": "idle"})))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(session_line(SESSION, "turn_started", json!({"input": []})))
+            .is_empty()
+    );
+}
+
+#[test]
+fn no_query_without_the_session_card() {
+    let mut app = home();
+    app.home
+        .as_mut()
+        .unwrap_or_else(|| panic!("home"))
+        .launch
+        .panel_cards = Vec::new();
+    let out = opened(&mut app);
+    assert!(ack(&mut app, &out).is_empty());
+}
+
+#[test]
+fn no_query_without_home() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    assert!(
+        app.on_line(session_line(
+            SESSION,
+            "session_status",
+            json!({
+                "name": "work", "workspace": "/w", "project": "-w",
+                "state": "idle", "since": 0,
+                "spend": {"tokens": {"input": 1, "cache_read": 0,
+                    "cache_write": {}, "output": 2},
+                    "cost": 0.0, "subscription_cost": 0.0},
+                "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+            })
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
+fn no_query_with_the_link_down() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(SESSION, json!({"state": "streaming"})));
+    app.disconnected();
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    assert!(
+        app.on_line(live(SESSION, json!({"state": "idle"})))
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_query_waits_while_the_row_has_left_and_goes_with_the_next_line() {
+    let mut app = home();
+    let out = opened(&mut app);
+    app.on_line(left_line(SESSION));
+    assert!(ack(&mut app, &out).is_empty());
+    let lines = app.on_line(live(SESSION, json!({"state": "idle"})));
+    branch_query(&lines);
+}
+
+#[test]
+fn the_first_status_after_attach_sends_none() {
+    let mut app = home();
+    let out = opened(&mut app);
+    branch_query(&ack(&mut app, &out));
+    assert!(
+        app.on_line(live(SESSION, json!({"state": "idle"})))
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_turn_end_seen_in_status_sends_another() {
+    for (busy, settled) in [
+        (json!({"state": "streaming"}), json!({"state": "idle"})),
+        (
+            json!({"state": "tool", "tool": "read"}),
+            json!({"state": "idle"}),
+        ),
+        (json!({"state": "retrying"}), json!({"state": "idle"})),
+        (
+            json!({"state": "waiting", "waiting": {"request_id": "r_1",
+                "kind": "approval", "summary": "run?"}}),
+            json!({"state": "idle"}),
+        ),
+        (json!({"state": "streaming"}), json!({"state": "jobs"})),
+    ] {
+        let mut app = home();
+        let out = opened(&mut app);
+        let first = branch_query(&ack(&mut app, &out));
+        assert!(app.on_line(live(SESSION, busy)).is_empty());
+        assert!(app.on_line(live(SESSION, settled)).is_empty());
+        let second = branch_query(&answer(&mut app, &first, "main\n"));
+        assert_ne!(first, second);
+    }
+}
+
+#[test]
+fn settled_after_settled_sends_none() {
+    let mut app = home();
+    let out = opened(&mut app);
+    branch_query(&ack(&mut app, &out));
+    assert!(
+        app.on_line(live(SESSION, json!({"state": "idle"})))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(live(SESSION, json!({"state": "jobs"})))
+            .is_empty()
+    );
+}
+
+#[test]
+fn busy_after_busy_sends_none() {
+    let mut app = home();
+    let out = opened(&mut app);
+    branch_query(&ack(&mut app, &out));
+    assert!(
+        app.on_line(live(SESSION, json!({"state": "streaming"})))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(live(SESSION, json!({"state": "tool", "tool": "read"})))
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_replayed_turn_completed_sends_none() {
+    let mut app = home();
+    let out = opened(&mut app);
+    branch_query(&ack(&mut app, &out));
+    for ts in [0, 1, 999_999_999] {
+        assert!(
+            app.on_line(ts_line(
+                SESSION,
+                "turn_completed",
+                ts,
+                json!({"outcome": "completed"}),
+            ))
+            .is_empty()
+        );
+    }
+}
+
+#[test]
+fn a_turn_end_while_one_is_in_flight_sends_one_after_the_answer() {
+    let mut app = home();
+    let out = opened(&mut app);
+    let first = branch_query(&ack(&mut app, &out));
+    assert!(
+        app.on_line(live(SESSION, json!({"state": "streaming"})))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(live(SESSION, json!({"state": "idle"})))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(live(SESSION, json!({"state": "streaming"})))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(live(SESSION, json!({"state": "idle"})))
+            .is_empty()
+    );
+    branch_query(&answer(&mut app, &first, "main\n"));
+}
+
+#[test]
+fn the_answer_sets_the_branch() {
+    use crate::app::panel::Branch;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    assert!(app.panel_state().branch().is_none());
+    assert!(
+        answer_with(
+            &mut app,
+            "c_other",
+            json!({"output": "other\n",
+            "process": shell_end(Some(0), None)})
+        )
+        .is_empty()
+    );
+    assert!(app.panel_state().branch().is_none());
+    assert!(answer(&mut app, &id, "  main  \nsecond\n").is_empty());
+    assert_eq!(
+        app.panel_state().branch(),
+        Some(&Branch::Named("main".to_owned()))
+    );
+}
+
+#[test]
+fn head_reads_detached() {
+    use crate::app::panel::Branch;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    answer(&mut app, &id, "HEAD\n");
+    assert_eq!(app.panel_state().branch(), Some(&Branch::Detached));
+}
+
+#[test]
+fn an_empty_answer_leaves_the_row_out() {
+    use crate::app::panel::Branch;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    answer(&mut app, &id, "");
+    assert_eq!(app.panel_state().branch(), Some(&Branch::Absent));
+}
+
+#[test]
+fn a_non_zero_exit_leaves_the_row_out() {
+    use crate::app::panel::Branch;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    answer_with(
+        &mut app,
+        &id,
+        json!({"output": "main\n", "process": shell_end(Some(128), None)}),
+    );
+    assert_eq!(app.panel_state().branch(), Some(&Branch::Absent));
+}
+
+#[test]
+fn a_signal_leaves_the_row_out() {
+    use crate::app::panel::Branch;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    answer_with(
+        &mut app,
+        &id,
+        json!({"output": "main\n", "process": shell_end(None, Some("SIGKILL"))}),
+    );
+    assert_eq!(app.panel_state().branch(), Some(&Branch::Absent));
+}
+
+#[test]
+fn a_session_rejection_leaves_the_row_out_and_adds_no_notice() {
+    use crate::app::panel::Branch;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    assert!(app.on_line(session_refused(SESSION, &id)).is_empty());
+    assert_eq!(app.panel_state().branch(), Some(&Branch::Absent));
+    assert!(app.notices().is_empty());
+    assert!(app.input().is_empty());
+}
+
+#[test]
+fn a_hub_rejection_clears_the_query_so_the_next_turn_end_sends() {
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    assert!(app.on_line(refused(&id)).is_empty());
+    assert!(app.panel_state().branch().is_some());
+    assert!(
+        app.on_line(live(SESSION, json!({"state": "streaming"})))
+            .is_empty()
+    );
+    let lines = app.on_line(live(SESSION, json!({"state": "idle"})));
+    branch_query(&lines);
+}
+
+#[test]
+fn the_answer_adds_no_conversation_item() {
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    let before: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
+    assert!(answer(&mut app, &id, "main\n").is_empty());
+    let after: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn before_any_answer_the_branch_comes_from_the_status() {
+    use crate::app::panel::Spot;
+    for (git, branch) in [
+        (json!({"branch": "feat"}), Some("branch  feat")),
+        (json!({"branch": Value::Null}), Some("branch  detached")),
+        (json!({}), None),
+    ] {
+        let mut app = home();
+        linked(&mut app);
+        app.attach(contract::SessionId(SESSION.to_owned()));
+        let mut state = json!({"state": "idle"});
+        state["git"] = git;
+        app.on_line(live(SESSION, state));
+        let drawn = crate::view::panel::rows(&app, 40);
+        let found = drawn.iter().find(|row| row.spot == Some(Spot::Branch));
+        assert_eq!(found.map(|row| row.line.to_string()).as_deref(), branch);
+    }
+}
+
+#[test]
+fn clicking_the_branch_runs_git_status_as_bang_bang_does() {
+    use crate::app::panel::Spot;
+    use crate::mouse::TargetId;
+    let mut app = home();
+    let out = opened(&mut app);
+    branch_query(&ack(&mut app, &out));
+    let Effect::Send(lines) = app.on_click(TargetId::Panel(Spot::Branch)) else {
+        panic!("a click sends");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "shell");
+    assert_eq!(line["args"]["command"], "git --no-optional-locks status");
+    assert_eq!(line["args"]["send"], false);
+    let id = line["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("an id"))
+        .to_owned();
+    assert!(
+        answer_with(
+            &mut app,
+            &id,
+            json!({"output": "M changed\n",
+            "process": shell_end(Some(0), None)})
+        )
+        .is_empty()
+    );
+    assert!(app.lines().iter().any(|line| {
+        line.to_string()
+            .contains("! git --no-optional-locks status")
+    }));
+}
+
+#[test]
+fn clicking_the_branch_with_the_link_down_sends_nothing() {
+    use crate::app::panel::Spot;
+    use crate::mouse::TargetId;
+    let mut app = home();
+    linked(&mut app);
+    app.disconnected();
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    assert_eq!(app.on_click(TargetId::Panel(Spot::Branch)), Effect::None);
 }

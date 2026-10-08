@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 
 use crate::app::App;
-use crate::app::panel::Spot;
+use crate::app::panel::{Branch, Spot};
 use crate::format;
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
@@ -144,6 +144,9 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             cut_left(&status.workspace, text.saturating_sub("directory  ".len()))
         )));
     }
+    if let Some(row) = branch_row(app, text) {
+        out.push(row);
+    }
     let model = panel
         .model()
         .or_else(|| panel.status().map(|status| status.model.as_str()));
@@ -264,6 +267,25 @@ fn context_bar(tokens: u64, window: u64, trigger: Option<u64>, text: usize) -> L
         }
     }
     Line::from(spans)
+}
+
+/// The Session card's branch row: the last query's answer, else the
+/// status's git. A click runs `git status` (`docs/tui.md`, "Git").
+fn branch_row(app: &App, text: usize) -> Option<Row> {
+    let panel = app.panel_state();
+    let branch = match panel.branch() {
+        Some(Branch::Named(name)) => name.clone(),
+        Some(Branch::Detached) => "detached".to_owned(),
+        Some(Branch::Absent) => return None,
+        None => {
+            let git = panel.status().and_then(|status| status.git.as_ref())?;
+            git.branch.as_deref().unwrap_or("detached").to_owned()
+        }
+    };
+    Some(Row {
+        line: Line::raw(format::cut(&format!("branch  {branch}"), text)),
+        spot: Some(Spot::Branch),
+    })
 }
 
 /// A plain row with no target.

@@ -297,6 +297,7 @@ impl App {
             session,
             busy: false,
         };
+        self.panel_state.attached();
     }
 
     /// Hands one key to what is on top: the key map, the approval panel, a
@@ -675,8 +676,10 @@ impl App {
                     if !self.history_rejected(&id, &message) {
                         self.rejected(&id, message);
                     }
+                    self.panel_refused(&id)
+                } else {
+                    Vec::new()
                 }
-                Vec::new()
             }
             "attention" => {
                 self.attention_line(&hub.payload);

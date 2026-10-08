@@ -462,7 +462,7 @@ impl App {
     /// The attached session, when the command can go out: with none
     /// attached, a notice and the draft cleared; with the link not up, the
     /// draft stays.
-    fn command_session(&mut self) -> Option<(contract::SessionId, bool)> {
+    pub(super) fn command_session(&mut self) -> Option<(contract::SessionId, bool)> {
         let Phase::Attached { session, busy } = &self.phase else {
             self.notices.push(NO_SESSION.to_owned());
             self.draft.clear();
