@@ -93,7 +93,6 @@ for corpus in 300:25 1300:25 4000:25 1300:0; do
     for cache in $caches; do
       times=()
       rss_values=()
-      hits=
       left=
       if [ "$cache" = warm ]; then "$BIN" scan "$home" "$query" >/dev/null; fi
       for _ in $(seq "$RUNS"); do
@@ -105,13 +104,20 @@ for corpus in 300:25 1300:25 4000:25 1300:0; do
           gnu)
             out=$(/usr/bin/time -f '%M' "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
             read -r ms hits _ <<<"$out"
-            rss=$(( $(cat "$TIMEFILE") * 1024 ))
+            raw=$(cat "$TIMEFILE")
+            case "$raw" in
+              ''|*[!0-9]*) echo "could not read peak RSS" >&2; exit 1 ;;
+            esac
+            rss=$(( raw * 1024 ))
             ;;
           bsd)
             out=$(/usr/bin/time -l "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
             read -r ms hits _ <<<"$out"
             rss=$(awk '/maximum resident set size/ { print $1 }' "$TIMEFILE")
             ;;
+        esac
+        case "$ms" in
+          ''|.|*[!0-9.]*|*.*.*) echo "could not read ms" >&2; exit 1 ;;
         esac
         case "$rss" in
           ''|*[!0-9]*) echo "could not read peak RSS" >&2; exit 1 ;;
