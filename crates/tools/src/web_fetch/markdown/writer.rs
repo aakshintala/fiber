@@ -254,17 +254,34 @@ impl Writer {
         }
         self.end_link();
         self.out.truncate(self.out.trim_end().len());
-        if let Some(title) = title.filter(|title| !title.is_empty()) {
-            let head = if self.out.is_empty() {
-                format!("# {title}")
-            } else {
-                format!("# {title}\n\n")
-            };
-            self.out.insert_str(0, &head);
+        let Some(title) = title.filter(|title| !title.is_empty()) else {
+            if !self.out.is_empty() {
+                self.out.push('\n');
+            }
+            return self.out;
+        };
+        if self.out.is_empty() {
+            // No markdown: the title string itself becomes the result.
+            let mut out = title;
+            out.insert_str(0, "# ");
+            out.push('\n');
+            return out;
         }
-        if !self.out.is_empty() {
-            self.out.push('\n');
+        // Both parts are non-empty: the result is built in the longer of
+        // the two buffers, copying the shorter once, so finishing holds
+        // no second copy of either. Each insert copies only what it adds.
+        if title.len() < self.out.len() {
+            self.out.insert_str(0, "\n\n");
+            self.out.insert_str(0, &title);
+            self.out.insert_str(0, "# ");
+        } else {
+            let mut out = title;
+            out.insert_str(0, "# ");
+            out.push_str("\n\n");
+            out.push_str(&self.out);
+            self.out = out;
         }
+        self.out.push('\n');
         self.out
     }
 }
