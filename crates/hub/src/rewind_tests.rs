@@ -561,3 +561,20 @@ fn follow_ignores_a_log_that_continues_nowhere() {
     assert!(starter.rewound().is_empty(), "an exit starts nothing");
     assert!(starter.resumed().is_empty(), "an exit resumes nothing");
 }
+
+#[test]
+fn follow_without_a_kept_level_starts_nothing() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let old = id(1);
+    let next = id(2);
+    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    let relays: Arc<Mutex<crate::relay::Relays>> =
+        Arc::new(Mutex::new(crate::relay::Relays::default()));
+    let (write, _) = UnixStream::pair().unwrap();
+    follow(&hub, &Arc::new(Mutex::new(write)), &relays, &old);
+    assert!(starter.rewound().is_empty(), "no level to keep");
+    assert!(starter.resumed().is_empty(), "no level to keep");
+}

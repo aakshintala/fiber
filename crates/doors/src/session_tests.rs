@@ -2474,6 +2474,18 @@ fn close_keeps_a_started_rewound_session_with_no_prompt() {
         !kept_after_close(vec![started()]),
         "a rewind that never started leaves nothing behind"
     );
+    let plain = || {
+        let Event::SessionStarted(mut first) = started() else {
+            panic!("a session_started");
+        };
+        first.forked_from = None;
+        first.rewind = None;
+        Event::SessionStarted(first)
+    };
+    assert!(
+        !kept_after_close(vec![plain(), fiber()]),
+        "a started session with no point to continue from is deleted"
+    );
 }
 
 #[test]
