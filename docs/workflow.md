@@ -24,6 +24,13 @@ No harness is assumed. Any agent harness can fill any role below.
 The owner reads no code. A pull request merges on a green `CI` check and a
 resolved review, and the orchestrator merges it without asking.
 
+A pull request waits for the owner when it changes a ruleset or branch
+protection; uses `secrets.*`, `permissions:` or `pull_request_target`; changes
+a release or publish workflow; adds a third-party action, or pins one to a
+branch rather than a tag or sha; or makes `CI` pass where `docs/ci.md` says it
+fails (for example, a gating job missing from the `ci` job's `needs`, a renamed
+`CI` check, or `continue-on-error`).
+
 The orchestrator judges an implementer's work from the diff and the gate's
 output, never from the implementer's account of it.
 
