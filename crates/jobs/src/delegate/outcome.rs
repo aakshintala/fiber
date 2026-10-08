@@ -78,17 +78,19 @@ pub(crate) fn outcome(
     (completed, finished)
 }
 
-/// The fold once termination and the error line are out of the way: a
-/// missing `fiber_exited` fails the job, whatever the status was.
+/// The fold once termination and the error line are out of the way.
+/// A signal ends the job `signal`, whether or not a `fiber_exited` was
+/// seen; without one there is no run to blame any other status on.
 fn without_error(
     job_id: &JobId,
     exited: Option<&FiberExited>,
     status: ExitStatus,
     process: Process,
 ) -> JobCompleted {
-    // No `fiber_exited` was seen and the process was killed by a signal.
-    if exited.is_none() && status.signal().is_some() {
-        let name = signal_name(status.signal().unwrap_or(0));
+    // Killed by a signal: with no `fiber_exited`, or after writing one,
+    // for example by an outside SIGTERM.
+    if let Some(number) = status.signal() {
+        let name = signal_name(number);
         return failed(
             job_id,
             ErrorCode::Signal,
@@ -103,17 +105,6 @@ fn without_error(
             job_id,
             ErrorCode::Indeterminate,
             "The delegate ended without a result.",
-            process,
-        );
-    }
-    if status.signal().is_some() {
-        // Killed by a signal after writing `fiber_exited`, for example by
-        // an outside SIGTERM.
-        let name = signal_name(status.signal().unwrap_or(0));
-        return failed(
-            job_id,
-            ErrorCode::Signal,
-            &format!("Killed by {name}."),
             process,
         );
     }

@@ -40,15 +40,14 @@ pub type Watch =
     Arc<dyn Fn(&SessionId, &mut dyn FnMut(&Envelope)) -> io::Result<Watched> + Send + Sync>;
 
 /// What a watch returned: the jobs-local mirror of `doors::Watched`.
+/// `Closed` carries no `last_seq`: the runner dedupes by `seq` itself,
+/// so nothing reads it.
 #[derive(Debug)]
 pub enum Watched {
     /// A `fiber_exited` line arrived: the session wrote its last line.
     Exited,
     /// The connection closed first.
-    Closed {
-        /// The last `seq` seen, when any line arrived.
-        last_seq: Option<u64>,
-    },
+    Closed,
 }
 
 /// What the launcher receives: everything the child's argv needs.
@@ -370,7 +369,7 @@ impl Runner {
                     Ok(Watched::Exited) => {
                         exited_seen = true;
                     }
-                    Ok(Watched::Closed { .. }) | Err(_) => {
+                    Ok(Watched::Closed) | Err(_) => {
                         next_retry = later(self.clock.as_ref(), backoff);
                         backoff = (backoff * 2).min(MAX_BACKOFF);
                     }

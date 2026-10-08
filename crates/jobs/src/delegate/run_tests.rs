@@ -69,7 +69,7 @@ impl Script {
                 for line in &lines {
                     on_line(line);
                 }
-                Ok(Watched::Closed { last_seq: None })
+                Ok(Watched::Closed)
             }
             Some(WatchReply::Exited(lines)) => {
                 for line in &lines {
