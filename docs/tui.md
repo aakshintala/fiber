@@ -799,10 +799,77 @@ The key map, `/?` or `/help`, is an overlay over the conversation listing every
 binding by area with its other paths. Esc closes it. Ctrl+L opens the model picker,
 so it does not redraw the screen as it does in some terminal programs.
 
+Every action acts in some of five contexts, and the terminal is in exactly one
+of them when a key arrives:
+
+- Overlay: something on top has the keyboard. That is the quit question, the
+  home screen's delete question or workspace picker, the key map, an approval or
+  question, an offer, or the Ctrl+R panel; or the `/` or `@` completion
+  panel while focus is not in the conversation. An overlay's own keys, such as
+  an approval's ↑ and ↓, are not bindings.
+- Search: conversation search is open.
+- Conversation: focus is in the conversation.
+- Steering: a queued steering message is selected.
+- Input: the input box has the keyboard, home with nothing open included.
+
+A global action acts in all five. The rest act only where they are listed:
+
+- Global: `close_or_interrupt`, `clear_then_quit`, `rail_row_n`,
+  `toggle_ledgers`, `toggle_panel`, `toggle_rail`, `jump_to_end`,
+  `next_request`, `key_map`.
+- Input, Steering and Conversation: `go_home`, `new_session`,
+  `open_in_editor`, `navigate`, `search`, `select_steering`, `drop_steering`,
+  `model_picker`.
+- Input and Steering: `line_break`, `search_prompts`, `move_word`,
+  `delete_word`, `line_start_end`, `paste_image`.
+- Input: `send`, `recall_prompt`.
+- Steering: `amend_steering`.
+- Conversation: `delete_session`, `focus_next_prev`, `open_focused`,
+  `copy_focused`, `focus_area`.
+- Search: `search_results`, `search_next_prev`.
+
 Every action has a stable id, and `keys."<id>"` in the global configuration
-binds it to a key or a list of keys; `[]` leaves it unbound
-(`docs/configuration.md`). A hand-edited binding that clashes with another
-gives a `notice` at startup naming both, and the default stays.
+binds it to a key or a list of keys (`docs/configuration.md`). The value
+replaces all of the action's default keys, and `[]` leaves it unbound. An
+entry equal to the defaults counts as unset.
+
+A key name is any modifiers, then a key, joined by `+`, in any case:
+`ctrl+t`, `alt+up`, `shift+enter`, `super+left`. The modifiers are `ctrl` (or
+`control`), `shift`, `alt` (or `opt`, `option`, `meta`) and `super` (or `cmd`,
+`command`). The key is one of `enter` (or `return`), `esc` (or `escape`),
+`tab`, `space`, `backspace`, `delete`, `insert`, `home`, `end`, `pageup`,
+`pagedown`, `up`, `down`, `left`, `right` and `f1` to `f12`, or a single
+character. An uppercase letter means Shift and that letter, and Shift on a
+character that is not a letter is dropped. `+` alone, or after a modifier as in `ctrl++`,
+is the plus key.
+
+Six actions have ordered variants: `move_word` (left, right),
+`line_start_end` (start, end), `focus_next_prev` (next, prev),
+`search_next_prev` (next, prev), `select_steering` (up, down) and
+`rail_row_n` (1 to 9). Their list holds keys in groups of one key per variant,
+in that order, so `["ctrl+b", "ctrl+f", "alt+b", "alt+f"]` gives `move_word`
+two keys each way. A list whose length is not a multiple of the number of
+variants is invalid, and `[]` unbinds the action. A group identical to an
+earlier one is dropped, and a key repeated in a one-variant action counts
+once.
+
+Two actions clash when they share a key, at any variant slot, and act in a
+context in common. Actions whose contexts do not overlap may share a key, as
+`send`, `open_focused`, `amend_steering` and `search_next_prev` share Enter.
+At startup each clash gives one `notice` naming both actions. When an entry
+the person set clashes with a default, that entry reverts to its defaults;
+when two entries the person set clash, both revert. A revert can bring back a
+default that clashes with another entry, so the check runs again until a pass
+finds no clash.
+
+An invalid entry gives one `notice` at startup, and the action keeps its
+defaults. An entry is invalid when its id names no action, its value is not a
+string or a list of strings, a string is not a key name, a variant action's
+list has the wrong length, or one key sits in two variants of the same action.
+
+No action can be bound to Ctrl+C, and `clear_then_quit` cannot be rebound,
+because the second Ctrl+C always quits ("Input and focus"). Either entry gives
+a `notice` and keeps the defaults.
 
 `/keys` opens the rebinding screen: every action with its id, description and
 current keys, the unbound ones included. Selecting an action and pressing a
