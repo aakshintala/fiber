@@ -323,11 +323,8 @@ fn doc_failure(ci_doc: &str) -> Result<Option<String>, String> {
         return Err(format!("{CI_DOC}: no `## The merge gate` heading"));
     };
     let mut section = String::new();
-    for (index, line) in lines.iter().enumerate() {
-        if index < from {
-            continue;
-        }
-        if index > from && line.starts_with("## ") {
+    for line in lines.iter().skip(from + 1) {
+        if line.starts_with("## ") {
             break;
         }
         section.push_str(line);
