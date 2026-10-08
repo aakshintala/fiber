@@ -77,8 +77,11 @@ pub fn run(
         var: Box::new(|name| std::env::var(name).ok()),
         copy_command: clipboard::command(|name| std::env::var_os(name), clipboard::on_path)
             .map(|argv| argv.into_iter().map(str::to_owned).collect()),
+        open_command: crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
+            .map(|argv| argv.into_iter().map(str::to_owned).collect()),
         title: osc::Title::default(),
     };
+    terminal.app.set_opener(terminal.open_command.is_some());
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
     if terminal.screen.draw(&mut terminal.app, None).is_err() {
@@ -159,6 +162,9 @@ struct Loop<B: Backend> {
     var: Var,
     /// The system clipboard command a copy is piped to, beside OSC 52.
     copy_command: Option<Vec<String>>,
+    /// The program a link click runs with the URL appended, or none over
+    /// SSH or with no opener on `PATH` (`docs/tui.md`, "Links").
+    open_command: Option<Vec<String>>,
     /// The window title last written.
     title: osc::Title,
 }
@@ -229,6 +235,13 @@ impl<B: Backend> Loop<B> {
                         Effect::None => {}
                         Effect::Copy(text) => {
                             clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+                        }
+                        Effect::OpenLink(url) => {
+                            if let Some(argv) = self.open_command.clone() {
+                                let mut argv = argv;
+                                argv.push(url);
+                                drop(clipboard::pipe(argv, String::new()));
+                            }
                         }
                         Effect::Send(lines) => self.send(&lines),
                         Effect::Quit => return Some(0),

@@ -402,7 +402,8 @@ impl Writer {
     fn block(&mut self) {
         let len = self.out.lines.len();
         if len > 0 && self.lists.is_empty() && self.separator != Some(len) {
-            self.track.row(Join::Break, self.quote_width(), false, Vec::new());
+            self.track
+                .row(Join::Break, self.quote_width(), false, Vec::new());
             self.out.lines.push(Line::from(self.quote_prefix()));
             self.separator = Some(self.out.lines.len());
         }
@@ -448,7 +449,10 @@ impl Writer {
         let links = links
             .into_iter()
             .map(|(range, url)| {
-                (range.start.saturating_add(bars)..range.end.saturating_add(bars), url)
+                (
+                    range.start.saturating_add(bars)..range.end.saturating_add(bars),
+                    url,
+                )
             })
             .collect();
         self.track.row(join, skip, decoration, links);

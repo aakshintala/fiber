@@ -160,7 +160,7 @@ impl Table {
                             && let Some(cells) = piece.get(first..=last)
                         {
                             let mut start = piece_start;
-                                for (ch, _) in piece.get(..first).unwrap_or_default() {
+                            for (ch, _) in piece.get(..first).unwrap_or_default() {
                                 start = start.saturating_add(char_width(*ch));
                             }
                             let mut end = start;

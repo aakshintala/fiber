@@ -1340,7 +1340,8 @@ fn whole_turn_zero(lines: &[Line], envelopes: &[contract::Envelope]) -> String {
         | Effect::Exit(_)
         | Effect::ListFiles
         | Effect::Search { .. }
-        | Effect::Editor { .. } => panic!("the whole turn copies"),
+        | Effect::Editor { .. }
+        | Effect::OpenLink(_) => panic!("the whole turn copies"),
     }
 }
 

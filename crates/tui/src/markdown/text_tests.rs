@@ -119,8 +119,11 @@ fn wrapping_spaces_and_a_zero_width_character_ends() {
     }
 }
 
+/// One row's link columns and destinations.
+type RowLinks = Vec<(std::ops::Range<u16>, String)>;
+
 /// Each rendered row's link columns and destinations.
-fn links(markdown: &str, width: u16) -> Vec<(String, Vec<(std::ops::Range<u16>, String)>)> {
+fn links(markdown: &str, width: u16) -> Vec<(String, RowLinks)> {
     let rendered = super::super::render(markdown, width);
     assert_eq!(
         rendered.text.len(),
@@ -139,8 +142,7 @@ fn links(markdown: &str, width: u16) -> Vec<(String, Vec<(std::ops::Range<u16>, 
 fn a_link_records_its_columns_on_each_row_it_wraps_onto() {
     let rows = links("[a long docs link here](http://example.com/a) and more", 16);
     assert!(rows.len() >= 2, "{rows:?}");
-    let flat: Vec<(std::ops::Range<u16>, String)> =
-        rows.iter().flat_map(|(_, links)| links.clone()).collect();
+    let flat: RowLinks = rows.iter().flat_map(|(_, links)| links.clone()).collect();
     assert!(!flat.is_empty(), "{rows:?}");
     for (_, url) in &flat {
         assert_eq!(url, "http://example.com/a");
@@ -148,13 +150,20 @@ fn a_link_records_its_columns_on_each_row_it_wraps_onto() {
     // The first row holds the link's start, the next its continuation.
     let (first_text, first_links) = rows.first().cloned().unwrap_or_default();
     let (_, next_links) = rows.get(1).cloned().unwrap_or_default();
-    assert!(!first_links.is_empty() && !next_links.is_empty(), "{rows:?}");
+    assert!(
+        !first_links.is_empty() && !next_links.is_empty(),
+        "{rows:?}"
+    );
     assert!(first_text.starts_with("a long"), "{first_text:?}");
 }
 
 #[test]
 fn a_relative_link_is_no_link() {
-    for markdown in ["[docs](/relative/path)", "[docs](relative)", "[docs](#anchor)"] {
+    for markdown in [
+        "[docs](/relative/path)",
+        "[docs](relative)",
+        "[docs](#anchor)",
+    ] {
         let rows = links(markdown, 40);
         for (text, links) in rows {
             assert!(links.is_empty(), "{markdown:?} in {text:?}");

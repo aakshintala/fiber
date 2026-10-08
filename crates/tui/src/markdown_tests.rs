@@ -31,6 +31,9 @@ fn style_at(line: &Line<'_>, col: usize) -> Style {
     panic!("no cell {col} on {:?}", text(line));
 }
 
+/// One row's link columns and destinations.
+type RowLinks = Vec<(std::ops::Range<u16>, String)>;
+
 fn fg(role: Role) -> Option<ratatui::style::Color> {
     Some(role.color())
 }
@@ -524,7 +527,7 @@ fn a_rule_in_a_quote_fills_the_width_inside_the_bars() {
 fn a_link_in_a_table_cell_is_a_link() {
     let rendered = render("| a | b |\n|---|---|\n| [x](http://x.example) | y |", 40);
     assert_eq!(rendered.text.len(), rendered.lines.len());
-    let links: Vec<(std::ops::Range<u16>, String)> = rendered
+    let links: RowLinks = rendered
         .text
         .iter()
         .flat_map(|text| text.links.clone())
@@ -538,7 +541,7 @@ fn a_link_in_a_wrapped_table_cell_covers_both_rows() {
     let markdown = "| key | description |\n|---|---|\n| k | [a very long link text that wraps](http://example.com/long) |";
     let rendered = render(markdown, 24);
     assert_eq!(rendered.text.len(), rendered.lines.len());
-    let rows: Vec<(String, Vec<(std::ops::Range<u16>, String)>)> = rendered
+    let rows: Vec<(String, RowLinks)> = rendered
         .lines
         .iter()
         .map(|line| {
@@ -549,9 +552,13 @@ fn a_link_in_a_wrapped_table_cell_covers_both_rows() {
         })
         .zip(rendered.text.iter().map(|text| text.links.clone()))
         .collect();
-    let hits: Vec<&(String, Vec<(std::ops::Range<u16>, String)>)> = rows
+    let hits: Vec<&(String, RowLinks)> = rows
         .iter()
-        .filter(|(_, links)| links.iter().any(|(_, url)| url == "http://example.com/long"))
+        .filter(|(_, links)| {
+            links
+                .iter()
+                .any(|(_, url)| url == "http://example.com/long")
+        })
         .collect();
     assert!(hits.len() >= 2, "{rows:?}");
 }
