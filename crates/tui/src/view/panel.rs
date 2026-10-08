@@ -7,9 +7,10 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 
 use crate::app::App;
+use crate::app::panel::Spot;
 use crate::format;
 use crate::markdown::{Role, style};
-use crate::mouse::Target;
+use crate::mouse::{Target, TargetId};
 
 /// One card the panel draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +18,11 @@ pub(crate) enum Card {
     /// The attached session: its directory, model, context, spend, speed,
     /// turns and MCP servers down (`docs/tui.md`, "The panel").
     Session,
+    /// The files with the most lines changed, and totals (`docs/tui.md`,
+    /// "The panel").
+    ChangedFiles,
+    /// How many jobs run, listed while open (`docs/tui.md`, "The panel").
+    Jobs,
     /// An extension's widget, by its index among the widgets in arrival
     /// order.
     Widget(usize),
@@ -38,6 +44,14 @@ pub(crate) fn cards(list: &[String], widgets: &[(&str, &str)]) -> Vec<Card> {
             out.push(Card::Session);
             continue;
         }
+        if name == "changed_files" && !out.contains(&Card::ChangedFiles) {
+            out.push(Card::ChangedFiles);
+            continue;
+        }
+        if name == "jobs" && !out.contains(&Card::Jobs) {
+            out.push(Card::Jobs);
+            continue;
+        }
         if let Some(at) = widgets
             .iter()
             .position(|(extension, widget)| format!("{extension}/{widget}") == *name)
@@ -54,9 +68,10 @@ pub(crate) fn cards(list: &[String], widgets: &[(&str, &str)]) -> Vec<Card> {
     out
 }
 
-/// One drawn row: its line.
+/// One drawn row: its line and the target it is, if any.
 pub(crate) struct Row {
     pub(crate) line: Line<'static>,
+    pub(crate) spot: Option<Spot>,
 }
 
 /// Every card's rows, top to bottom, with one blank row between cards;
@@ -77,6 +92,7 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<Row> {
         if !out.is_empty() {
             out.push(Row {
                 line: Line::raw(""),
+                spot: None,
             });
         }
         out.append(&mut drawn);
@@ -87,15 +103,23 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<Row> {
 /// Draws every card's rows into the panel rect: card text at `area.x + 2`,
 /// `area.width - 3` columns wide, the first card on `area.y + 1`. Styles
 /// set the foreground only, so the region's tint stays.
-pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, _targets: &mut Vec<Target>) {
+pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     let text = text_width(area.width);
     let width = u16::try_from(text).unwrap_or(u16::MAX);
+    let x = area.x.saturating_add(2);
     let mut y = area.y.saturating_add(1);
     for row in rows(app, area.width) {
         if y >= area.bottom() {
             break;
         }
-        buf.set_line(area.x.saturating_add(2), y, &row.line, width);
+        buf.set_line(x, y, &row.line, width);
+        if let Some(spot) = row.spot {
+            let wide = u16::try_from(row.line.width().min(text)).unwrap_or(u16::MAX);
+            targets.push(Target {
+                id: TargetId::Panel(spot),
+                rect: Rect::new(x, y, wide, 1),
+            });
+        }
         y = y.saturating_add(1);
     }
 }
@@ -104,6 +128,8 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, _targets: &mut Vec<T
 fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
     match card {
         Card::Session => session_rows(app, text),
+        Card::ChangedFiles => changed_files_rows(app, text),
+        Card::Jobs => jobs_rows(app, text),
         Card::Widget(at) => widget_rows(app, *at, text),
     }
 }
@@ -143,6 +169,7 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
         )));
         out.push(Row {
             line: context_bar(context.tokens, window, panel.trigger_at(), text),
+            spot: None,
         });
         if let Some(trigger) = panel.trigger_at() {
             let handoff = format!(
@@ -151,6 +178,7 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             );
             out.extend(format::wrap(&handoff, text).into_iter().map(|row| Row {
                 line: Line::styled(row, style(Role::Muted)),
+                spot: None,
             }));
         }
     }
@@ -238,10 +266,11 @@ fn context_bar(tokens: u64, window: u64, trigger: Option<u64>, text: usize) -> L
     Line::from(spans)
 }
 
-/// A plain row.
+/// A plain row with no target.
 fn plain(text: String) -> Row {
     Row {
         line: Line::raw(text),
+        spot: None,
     }
 }
 
@@ -284,10 +313,102 @@ fn widget_rows(app: &App, at: usize, text: usize) -> Vec<Row> {
             format::cut(&format!("{} · {}", widget.extension, widget.widget), text),
             style(Role::Muted),
         ),
+        spot: None,
     }];
     out.extend(widget.lines.iter().map(|line| Row {
         line: Line::raw(format::cut(line, text)),
+        spot: None,
     }));
+    out
+}
+
+/// The Changed files card's rows at `text` columns: the five paths with
+/// the most lines changed, ties by path ascending, with the counts at the
+/// row's right edge, then the totals over every path. Per-file counts come
+/// from `tool_call_completed`'s `changes` (`docs/tui.md`, "The panel").
+fn changed_files_rows(app: &App, text: usize) -> Vec<Row> {
+    let changes = app.panel_state().changes();
+    if changes.is_empty() {
+        return Vec::new();
+    }
+    let mut paths: Vec<(&str, u64, u64)> = changes
+        .iter()
+        .map(|(path, (added, removed))| (path.as_str(), *added, *removed))
+        .collect();
+    paths.sort_by(|a, b| {
+        b.1.saturating_add(b.2)
+            .cmp(&a.1.saturating_add(a.2))
+            .then_with(|| a.0.cmp(b.0))
+    });
+    let mut out = Vec::new();
+    for (path, added, removed) in paths.iter().take(5) {
+        let counts = format!("+{added} \u{2212}{removed}");
+        let room = text.saturating_sub(format::width(&counts).saturating_add(1));
+        let shown = cut_left(path, room);
+        let pad = " ".repeat(text.saturating_sub(format::width(&shown) + format::width(&counts)));
+        out.push(Row {
+            line: Line::from(vec![
+                Span::raw(format!("{shown}{pad}")),
+                Span::styled(format!("+{added}"), style(Role::Added)),
+                Span::raw(" ".to_owned()),
+                Span::styled(format!("\u{2212}{removed}"), style(Role::Removed)),
+            ]),
+            spot: None,
+        });
+    }
+    let (files, added, removed) = changes.iter().fold(
+        (0u64, 0u64, 0u64),
+        |(files, added, removed), (_, (a, r))| {
+            (
+                files.saturating_add(1),
+                added.saturating_add(*a),
+                removed.saturating_add(*r),
+            )
+        },
+    );
+    out.push(plain(format!(
+        "{} changed  +{added} \u{2212}{removed}",
+        format::count(files, "file", "files")
+    )));
+    out
+}
+
+/// The Jobs card's rows at `text` columns: one line saying how many run,
+/// shown only while a job runs, then one row per job while open. A
+/// delegate is a job with a `delegate_started`, and its own card shows it
+/// (`docs/tui.md`, "The panel").
+fn jobs_rows(app: &App, text: usize) -> Vec<Row> {
+    let panel = app.panel_state();
+    let running: Vec<&str> = panel
+        .jobs()
+        .iter()
+        .filter(|(id, _)| !panel.delegate_jobs().contains(id))
+        .map(|(_, description)| description.as_str())
+        .collect();
+    if running.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![Row {
+        line: Line::raw(format::cut(
+            &format!(
+                "{} running",
+                format::count(
+                    u64::try_from(running.len()).unwrap_or(u64::MAX),
+                    "job",
+                    "jobs"
+                )
+            ),
+            text,
+        )),
+        spot: Some(Spot::Jobs),
+    }];
+    if panel.jobs_open() {
+        out.extend(
+            running
+                .into_iter()
+                .map(|description| plain(format::cut(&format!("  {description}"), text))),
+        )
+    }
     out
 }
 

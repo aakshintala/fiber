@@ -327,3 +327,87 @@ fn the_latest_status_wins() {
         Some("two/model")
     );
 }
+
+/// A `tool_call_completed` with `changes`.
+fn changed_call(changes: serde_json::Value) -> Line {
+    session_line(
+        SESSION,
+        "tool_call_completed",
+        serde_json::json!({"status": "completed", "content": [], "changes": changes}),
+    )
+}
+
+/// A `job_started` of `description`.
+fn started_line(id: &str, description: &str) -> Line {
+    session_line(
+        SESSION,
+        "job_started",
+        serde_json::json!({"job_id": id, "description": description,
+            "output_path": "/tmp/out"}),
+    )
+}
+
+#[test]
+fn changes_sum_per_path_and_details_are_ignored() {
+    let mut app = attached();
+    app.on_line(changed_call(serde_json::json!([
+        {"path": "src/a.rs", "added": 10, "removed": 2},
+        {"path": "src/b.rs", "added": 3, "removed": 3},
+    ])));
+    app.on_line(changed_call(serde_json::json!([
+        {"path": "src/a.rs", "added": 1, "removed": 1},
+    ])));
+    app.on_line(session_line(
+        SESSION,
+        "tool_call_completed",
+        serde_json::json!({"status": "completed", "content": [],
+            "details": {"diff": "whatever"}}),
+    ));
+    assert_eq!(app.panel_state().changes().get("src/a.rs"), Some(&(11, 3)));
+    assert_eq!(app.panel_state().changes().get("src/b.rs"), Some(&(3, 3)));
+    assert_eq!(app.panel_state().changes().len(), 2);
+}
+
+#[test]
+fn jobs_count_started_without_completed() {
+    let mut app = attached();
+    app.on_line(started_line("j_1", "build"));
+    app.on_line(started_line("j_2", "test"));
+    assert_eq!(app.panel_state().jobs().len(), 2);
+    app.on_line(session_line(
+        SESSION,
+        "job_completed",
+        serde_json::json!({"job_id": "j_1", "status": "completed"}),
+    ));
+    assert_eq!(
+        app.panel_state().jobs(),
+        &[("j_2".to_owned(), "test".to_owned())]
+    );
+}
+
+#[test]
+fn a_delegate_is_not_a_job() {
+    let mut app = attached();
+    app.on_line(started_line("j_1", "build"));
+    app.on_line(session_line(
+        SESSION,
+        "delegate_started",
+        serde_json::json!({"job_id": "j_1",
+            "delegate_session_id": "s_cccccccccccccccc",
+            "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+    ));
+    assert_eq!(app.panel_state().jobs().len(), 1);
+    assert!(app.panel_state().delegate_jobs().contains("j_1"));
+}
+
+#[test]
+fn clicking_jobs_expands_and_collapses() {
+    use crate::app::panel::Spot;
+    use crate::mouse::TargetId;
+    let mut app = attached();
+    assert!(!app.panel_state().jobs_open());
+    app.on_click(TargetId::Panel(Spot::Jobs));
+    assert!(app.panel_state().jobs_open());
+    app.on_click(TargetId::Panel(Spot::Jobs));
+    assert!(!app.panel_state().jobs_open());
+}

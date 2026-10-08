@@ -4,15 +4,23 @@
 //! fold through [`PanelState`]'s accessors; drawing lives in
 //! `crate::view::panel`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use contract::Envelope;
 use contract::events::{
-    ExtensionUi, McpServerFailed, McpServerReady, ModelChanged, PreambleBuilt, SessionStatus, Ui,
+    DelegateStarted, ExtensionUi, FileChange, JobCompleted, JobStarted, McpServerFailed,
+    McpServerReady, ModelChanged, PreambleBuilt, SessionStatus, ToolCallCompleted, Ui,
     UsageRecorded,
 };
 
-use super::App;
+use super::{App, Effect};
+
+/// A panel item that does something when clicked (`docs/tui.md`, "The panel", "Git").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Spot {
+    /// The Jobs line: lists the running jobs.
+    Jobs,
+}
 
 /// An extension's widget: its latest lines, in arrival order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +46,10 @@ pub(crate) struct PanelState {
     started_at: Option<u64>,
     speed: Option<u64>,
     down: BTreeSet<String>,
+    changes: BTreeMap<String, (u64, u64)>,
+    jobs: Vec<(String, String)>,
+    delegate_jobs: BTreeSet<String>,
+    jobs_open: bool,
 }
 
 impl PanelState {
@@ -97,6 +109,35 @@ impl PanelState {
             "mcp_server_ready" => {
                 if let Some(ready) = super::read!(envelope, McpServerReady) {
                     self.down.remove(&ready.server);
+                }
+            }
+            "tool_call_completed" => {
+                if let Some(done) = super::read!(envelope, ToolCallCompleted) {
+                    for change in done.changes.unwrap_or_default() {
+                        let FileChange {
+                            path,
+                            added,
+                            removed,
+                        } = change;
+                        let entry = self.changes.entry(path).or_default();
+                        entry.0 = entry.0.saturating_add(added);
+                        entry.1 = entry.1.saturating_add(removed);
+                    }
+                }
+            }
+            "job_started" => {
+                if let Some(started) = super::read!(envelope, JobStarted) {
+                    self.jobs.push((started.job_id.0, started.description));
+                }
+            }
+            "delegate_started" => {
+                if let Some(started) = super::read!(envelope, DelegateStarted) {
+                    self.delegate_jobs.insert(started.job_id.0);
+                }
+            }
+            "job_completed" => {
+                if let Some(done) = super::read!(envelope, JobCompleted) {
+                    self.jobs.retain(|(id, _)| *id != done.job_id.0);
                 }
             }
             _ => {}
@@ -181,6 +222,27 @@ impl PanelState {
     pub(crate) fn down(&self) -> &BTreeSet<String> {
         &self.down
     }
+
+    /// The lines changed per path: added and removed.
+    pub(crate) fn changes(&self) -> &BTreeMap<String, (u64, u64)> {
+        &self.changes
+    }
+
+    /// The jobs started in start order: their ids and descriptions.
+    pub(crate) fn jobs(&self) -> &[(String, String)] {
+        &self.jobs
+    }
+
+    /// The delegates' jobs: a delegate is a job with a `delegate_started`
+    /// (`docs/events.md`, "`delegate_started`").
+    pub(crate) fn delegate_jobs(&self) -> &BTreeSet<String> {
+        &self.delegate_jobs
+    }
+
+    /// Whether the Jobs card lists its jobs.
+    pub(crate) fn jobs_open(&self) -> bool {
+        self.jobs_open
+    }
 }
 
 impl App {
@@ -202,6 +264,16 @@ impl App {
     pub(super) fn panel_line(&mut self, envelope: &Envelope) -> Vec<String> {
         self.panel_state.fold(envelope);
         Vec::new()
+    }
+
+    /// A click on a panel item.
+    pub(super) fn panel_click(&mut self, spot: Spot) -> Effect {
+        match spot {
+            Spot::Jobs => {
+                self.panel_state.jobs_open = !self.panel_state.jobs_open;
+                Effect::None
+            }
+        }
     }
 }
 

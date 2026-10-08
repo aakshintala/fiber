@@ -49,6 +49,8 @@ pub(crate) enum TargetId {
     Offer(crate::offer::Spot),
     /// A tab or row of the question form on the request panel.
     Form(crate::approvals::form::Spot),
+    /// A panel item: what a click there does.
+    Panel(crate::app::panel::Spot),
 }
 
 /// One click target as drawn: what it does and the cells it covers.

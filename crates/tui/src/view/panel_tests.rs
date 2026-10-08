@@ -337,11 +337,11 @@ fn session_card_at_the_panel_floor() {
 fn cards_in_configured_order() {
     let mut app = attached(160, 40);
     full_session(&mut app);
+    fold_changes(&mut app, &[("src/a.rs", 10, 2)]);
+    fold_job(&mut app, "j_1", "build");
     fold_widget(&mut app, "plan", "tasks", &["one"]);
-    insta::assert_snapshot!(
-        "cards_in_configured_order",
-        super::super::text(&draw_panel(&app))
-    );
+    let (buf, _) = draw_targets(&app);
+    insta::assert_snapshot!("cards_in_configured_order", super::super::text(&buf));
 }
 
 #[test]
@@ -367,6 +367,25 @@ fn cards_follow_the_list() {
         cards(&list(&["session", "session"]), &widgets),
         vec![
             super::Card::Session,
+            super::Card::Widget(0),
+            super::Card::Widget(1)
+        ]
+    );
+    assert_eq!(
+        cards(&list(&["jobs", "session", "changed_files"]), &widgets),
+        vec![
+            super::Card::Jobs,
+            super::Card::Session,
+            super::Card::ChangedFiles,
+            super::Card::Widget(0),
+            super::Card::Widget(1)
+        ]
+    );
+    assert_eq!(
+        cards(&list(&["jobs", "jobs", "changed_files"]), &widgets),
+        vec![
+            super::Card::Jobs,
+            super::Card::ChangedFiles,
             super::Card::Widget(0),
             super::Card::Widget(1)
         ]
@@ -433,21 +452,23 @@ fn a_name_listed_twice_places_one_card() {
 
 /// Draws only the panel rect of `app`.
 fn draw_panel(app: &App) -> Buffer {
+    let (buf, targets) = draw_targets(app);
+    assert!(targets.is_empty());
+    buf
+}
+
+/// Draws only the panel rect of `app`, with its click targets.
+fn draw_targets(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
     let rect = app
         .chrome()
         .layout()
         .and_then(|layout| layout.panel)
         .unwrap_or_else(|| panic!("a panel rect"));
-    let mut buf = Buffer::empty(Rect::new(0, 0, rect.width, rect.height));
+    let area = Rect::new(0, 0, rect.width, rect.height);
+    let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
-    super::draw(
-        app,
-        Rect::new(0, 0, rect.width, rect.height),
-        &mut buf,
-        &mut targets,
-    );
-    assert!(targets.is_empty());
-    buf
+    super::draw(app, area, &mut buf, &mut targets);
+    (buf, targets)
 }
 
 #[test]
@@ -474,4 +495,158 @@ fn widget_rows_are_cut_at_the_text_width() {
         .collect();
     assert_eq!(drawn.len(), 2);
     assert!(drawn.iter().all(|row| crate::format::width(row) <= text));
+}
+
+/// Folds `paths` of `(path, added, removed)` as one completed call.
+fn fold_changes(app: &mut App, paths: &[(&str, u64, u64)]) {
+    let changes: Vec<serde_json::Value> = paths
+        .iter()
+        .map(|(path, added, removed)| {
+            serde_json::json!({"path": path, "added": added, "removed": removed})
+        })
+        .collect();
+    app.on_line(session_line(
+        "tool_call_completed",
+        serde_json::json!({"status": "completed", "content": [], "changes": changes}),
+    ));
+}
+
+/// Folds a started job of `description`.
+fn fold_job(app: &mut App, id: &str, description: &str) {
+    app.on_line(session_line(
+        "job_started",
+        serde_json::json!({"job_id": id, "description": description,
+            "output_path": "/tmp/out"}),
+    ));
+}
+
+#[test]
+fn the_top_five_by_lines_changed_ties_by_path() {
+    let mut app = attached(160, 40);
+    fold_changes(
+        &mut app,
+        &[
+            ("src/f.rs", 3, 3),
+            ("src/e.rs", 4, 2),
+            ("src/d.rs", 5, 2),
+            ("src/c.rs", 6, 2),
+            ("src/b.rs", 7, 2),
+            ("src/a.rs", 8, 2),
+        ],
+    );
+    let drawn = texts(&app, 40);
+    let files: Vec<&String> = drawn.iter().take(5).collect();
+    assert_eq!(files.len(), 5);
+    for (row, path) in files
+        .iter()
+        .zip(["src/a.rs", "src/b.rs", "src/c.rs", "src/d.rs", "src/e.rs"])
+    {
+        assert!(row.starts_with(path), "{row}");
+    }
+    assert!(drawn[0].ends_with("+8 \u{2212}2"));
+    assert!(drawn[4].ends_with("+4 \u{2212}2"));
+    assert!(
+        drawn
+            .iter()
+            .any(|row| row == "6 files changed  +33 \u{2212}13")
+    );
+}
+
+#[test]
+fn exactly_five_paths_all_show() {
+    let mut app = attached(160, 40);
+    fold_changes(
+        &mut app,
+        &[
+            ("src/a.rs", 1, 0),
+            ("src/b.rs", 1, 0),
+            ("src/c.rs", 1, 0),
+            ("src/d.rs", 1, 0),
+            ("src/e.rs", 1, 0),
+        ],
+    );
+    let drawn = texts(&app, 40);
+    assert_eq!(drawn.len(), 6);
+    assert!(
+        drawn
+            .iter()
+            .any(|row| row == "5 files changed  +5 \u{2212}0")
+    );
+}
+
+#[test]
+fn no_changes_no_card() {
+    let app = attached(160, 40);
+    assert!(rows(&app, 40).is_empty());
+}
+
+#[test]
+fn no_jobs_no_card() {
+    let mut app = attached(160, 40);
+    fold_job(&mut app, "j_1", "build");
+    app.on_line(session_line(
+        "job_completed",
+        serde_json::json!({"job_id": "j_1", "status": "completed"}),
+    ));
+    assert!(rows(&app, 40).is_empty());
+}
+
+#[test]
+fn one_job_shows_the_card() {
+    let mut app = attached(160, 40);
+    fold_job(&mut app, "j_1", "build");
+    fold_job(&mut app, "j_2", "test");
+    assert_eq!(texts(&app, 40), vec!["2 jobs running".to_owned()]);
+}
+
+#[test]
+fn the_jobs_line_is_a_target_and_its_rows_are_not() {
+    use crate::app::panel::Spot;
+    let mut app = attached(160, 40);
+    fold_job(&mut app, "j_1", "build");
+    fold_job(&mut app, "j_2", "test");
+    let (_, targets) = draw_targets(&app);
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].id, crate::mouse::TargetId::Panel(Spot::Jobs));
+    assert_eq!(targets[0].rect.x, 2);
+    assert_eq!(targets[0].rect.y, 1);
+    assert_eq!(
+        targets[0].rect.width,
+        u16::try_from("2 jobs running".len()).unwrap_or(u16::MAX)
+    );
+    app.on_click(crate::mouse::TargetId::Panel(Spot::Jobs));
+    let drawn = texts(&app, 40);
+    assert_eq!(
+        drawn,
+        vec![
+            "2 jobs running".to_owned(),
+            "  build".to_owned(),
+            "  test".to_owned()
+        ]
+    );
+    let (_, targets) = draw_targets(&app);
+    assert_eq!(targets.len(), 1);
+}
+
+#[test]
+fn changed_files_card() {
+    let mut app = attached(160, 40);
+    fold_changes(
+        &mut app,
+        &[
+            ("src/long/path/to/the/parser.rs", 120, 15),
+            ("src/a.rs", 3, 3),
+        ],
+    );
+    insta::assert_snapshot!("changed_files_card", super::super::text(&draw_panel(&app)));
+}
+
+#[test]
+fn jobs_card_collapsed_and_expanded() {
+    let mut app = attached(160, 40);
+    fold_job(&mut app, "j_1", "build the workspace");
+    fold_job(&mut app, "j_2", "test the workspace");
+    app.on_click(crate::mouse::TargetId::Panel(crate::app::panel::Spot::Jobs));
+    let (buf, _) = draw_targets(&app);
+    insta::assert_snapshot!("jobs_card_collapsed_and_expanded", super::super::text(&buf));
 }
