@@ -154,9 +154,97 @@ fn a_command_past_its_deadline_errs_and_leaves_nothing_in_its_group() {
         )
     })
     .unwrap_err();
-    assert_eq!(err, "timed out waiting for the sleeper");
+    // A slow group cleanup under load adds its own sentence after this one.
+    assert!(
+        err.starts_with("timed out waiting for the sleeper"),
+        "{err}"
+    );
     assert_eq!(fakes::matching(&marker).unwrap(), Vec::<u32>::new());
     watchdog.stand_down(READY);
+}
+
+/// A clock whose first sleep, the poll for the deadline, waits for the
+/// child's two ready lines: the deadline cannot fire before the child has
+/// set up.
+struct AfterReady {
+    ready: std::sync::Mutex<Option<Ready>>,
+    inner: std::sync::Arc<fakes::clock::FakeClock>,
+}
+
+impl Clock for AfterReady {
+    fn now(&self) -> std::time::Instant {
+        self.inner.now()
+    }
+    fn wall(&self) -> std::time::SystemTime {
+        self.inner.wall()
+    }
+    fn sleep(&self, d: Duration) {
+        let ready = self
+            .ready
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(ready) = ready {
+            // One deadline for both lines: a scoped thread reads them.
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::scope(|scope| {
+                scope.spawn(move || {
+                    ready.wait(READY);
+                    ready.wait(READY);
+                    match tx.send(()) {
+                        Ok(()) | Err(_) => {}
+                    }
+                });
+                assert!(
+                    rx.recv_timeout(READY).is_ok(),
+                    "the child's two ready lines"
+                );
+            });
+        }
+        self.inner.sleep(d);
+    }
+    fn wait_until(
+        &self,
+        until: Option<std::time::Instant>,
+        wait: &mut dyn FnMut(Option<Duration>),
+    ) {
+        self.inner.wait_until(until, wait);
+    }
+    fn subscribe(&self, waker: std::sync::Weak<dyn contract::clock::Wake>) {
+        self.inner.subscribe(waker);
+    }
+}
+
+#[test]
+fn a_deadline_error_wins_over_a_group_cleanup_error() {
+    let dir = TempDir::new("fiber-bench-deadline-cleanup");
+    let ready = Ready::new(dir.path());
+    // The leader outlives the deadline; its child ignores SIGTERM, so the
+    // group needs SIGKILL and the stop reports a cleanup error too.
+    let script = leaves_descendants(ready.path());
+    let clock = AfterReady {
+        ready: std::sync::Mutex::new(Some(ready)),
+        inner: fakes::clock::FakeClock::new(),
+    };
+    let err = fakes::within("a deadline with a stubborn child", WALL, move || {
+        let mut command = Command::new("/bin/bash");
+        command.args(["-c", &script]);
+        run_to_end(
+            &mut command,
+            &clock,
+            Duration::from_secs(120),
+            "the sleeper",
+        )
+    })
+    .unwrap_err();
+    assert!(
+        err.starts_with("timed out waiting for the sleeper"),
+        "{err}"
+    );
+    assert!(
+        err.contains("left a process in its group behind"),
+        "the cleanup failure is still reported: {err}"
+    );
 }
 
 #[test]
