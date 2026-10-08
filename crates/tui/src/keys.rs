@@ -228,6 +228,10 @@ const ALT: u32 = 2;
 const CTRL: u32 = 4;
 /// Super, or ⌘.
 const SUPER: u32 = 8;
+/// Every modifier bit this file reads: shift 1, alt 2, ctrl 4, super 8.
+/// A literal, not `SHIFT | ALT | CTRL | SUPER`, so no operator is left for
+/// a mutation to swap; keep it in step with the four constants above.
+const KNOWN_MODS: u32 = 0b1111;
 /// Caps Lock (64) and Num Lock (128), which change no binding.
 const LOCKS: u32 = 0b1100_0000;
 
@@ -619,7 +623,7 @@ fn tilde_key(params: &[u8]) -> Option<Event> {
 /// nothing.
 fn modifiers(field: &str) -> Option<Mods> {
     let bits = number(field.split(':').next()?)?.saturating_sub(1) & !LOCKS;
-    if bits & !(SHIFT | ALT | CTRL | SUPER) != 0 {
+    if bits & !KNOWN_MODS != 0 {
         return None;
     }
     Some(mods_from(bits))
@@ -695,7 +699,7 @@ fn kitty_key(params: &[u8]) -> Option<Event> {
     if code >= 57344 {
         return None;
     }
-    if bits & !(SHIFT | ALT | CTRL | SUPER) != 0 {
+    if bits & !KNOWN_MODS != 0 {
         return None;
     }
     let key = match code {
@@ -703,7 +707,6 @@ fn kitty_key(params: &[u8]) -> Option<Event> {
         27 => Code::Esc,
         9 => Code::Tab,
         127 => Code::Backspace,
-        32 => Code::Space,
         _ => {
             let ch = char::from_u32(code)?;
             if ch.is_control() {
