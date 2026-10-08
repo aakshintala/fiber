@@ -1,0 +1,19 @@
+#!/bin/sh
+# Stands in for the released binary in crates/main/tests/install_script.rs.
+# `--version` prints the version in $FIBER_HOME/version. `release-install`
+# appends its arguments to $FIBER_HOME/calls and exits with the number in
+# $FIBER_HOME/exit, or 0 when that file is missing.
+case ${1-} in
+  --version)
+    printf 'fiber %s (abc1234)\n' "$(cat "$FIBER_HOME/version")"
+    ;;
+  release-install)
+    printf '%s\n' "$*" >>"$FIBER_HOME/calls"
+    if [ -f "$FIBER_HOME/exit" ]; then
+      exit "$(cat "$FIBER_HOME/exit")"
+    fi
+    ;;
+  *)
+    exit 64
+    ;;
+esac
