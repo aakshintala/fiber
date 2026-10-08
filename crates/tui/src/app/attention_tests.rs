@@ -357,3 +357,91 @@ fn an_attention_for_a_row_already_past_waiting_shows_no_title() {
     app.on_line(waiting_row(SESSION, "approval"));
     assert_eq!(app.title(), "fiber");
 }
+
+/// The row change folds in without a hub line: no `on_line` after it,
+/// so the sync hook cannot clear `latest` first and the read pins
+/// `waiting_title`'s own answer.
+fn seen_waiting() -> App {
+    let mut app = home(Attention::default());
+    app.on_line(waiting_row(SESSION, "approval"));
+    app.on_line(attention(SESSION, "waiting"));
+    assert_eq!(app.attention_title(), Some("! fiber · approval".to_owned()));
+    app
+}
+
+fn session_id() -> contract::SessionId {
+    contract::SessionId(SESSION.to_owned())
+}
+
+#[test]
+fn a_seen_session_removed_titles_nothing() {
+    let mut app = seen_waiting();
+    app.home
+        .as_mut()
+        .unwrap_or_else(|| panic!("home"))
+        .sessions
+        .remove(&session_id());
+    assert_eq!(app.attention_title(), None);
+}
+
+#[test]
+fn a_waiting_row_with_no_left_titles_its_kind() {
+    let app = seen_waiting();
+    assert_eq!(app.attention_title(), Some("! fiber · approval".to_owned()));
+}
+
+#[test]
+fn a_left_row_that_still_waits_titles_nothing() {
+    let mut app = seen_waiting();
+    app.home
+        .as_mut()
+        .unwrap_or_else(|| panic!("home"))
+        .sessions
+        .left(&session_id(), crate::home::Left::Exited);
+    assert_eq!(app.attention_title(), None);
+}
+
+#[test]
+fn a_live_row_that_stopped_waiting_titles_nothing() {
+    let mut app = seen_waiting();
+    let mut row = app
+        .home
+        .as_ref()
+        .unwrap_or_else(|| panic!("home"))
+        .sessions
+        .row(&session_id())
+        .cloned()
+        .unwrap_or_else(|| panic!("row"));
+    row.state = crate::home::State::Idle;
+    app.home
+        .as_mut()
+        .unwrap_or_else(|| panic!("home"))
+        .sessions
+        .status(row);
+    assert_eq!(app.attention_title(), None);
+}
+
+#[test]
+fn a_left_row_past_waiting_titles_nothing() {
+    let mut app = seen_waiting();
+    let mut row = app
+        .home
+        .as_ref()
+        .unwrap_or_else(|| panic!("home"))
+        .sessions
+        .row(&session_id())
+        .cloned()
+        .unwrap_or_else(|| panic!("row"));
+    row.state = crate::home::State::Idle;
+    app.home
+        .as_mut()
+        .unwrap_or_else(|| panic!("home"))
+        .sessions
+        .status(row);
+    app.home
+        .as_mut()
+        .unwrap_or_else(|| panic!("home"))
+        .sessions
+        .left(&session_id(), crate::home::Left::Exited);
+    assert_eq!(app.attention_title(), None);
+}
