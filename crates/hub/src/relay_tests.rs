@@ -544,3 +544,32 @@ fn muted_drops_each_replay_once() {
     assert!(!muted(&ack("c_1"), &replayed), "other ids pass through");
     assert!(!muted(b"not json\n", &replayed), "not an acknowledgement");
 }
+
+#[test]
+fn transfer_drops_a_dead_relay_and_reports_it() {
+    let mut relays = Relays::default();
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let line = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let epoch = relays.mint();
+    let (writer, peer) = UnixStream::pair().unwrap();
+    writer.shutdown(std::net::Shutdown::Both).unwrap_or(());
+    drop(peer);
+    relays.entries.push(Relay {
+        session: sid.to_owned(),
+        epoch,
+        writer,
+        kept: Kept::default(),
+        replayed: Replayed::default(),
+        thread: None,
+    });
+    assert!(!relays.transfer(sid, &line));
+    assert!(relays.entries.is_empty(), "the dead relay is dropped");
+    assert_eq!(
+        relays.subscription(sid),
+        Some(line),
+        "the level is kept anyway"
+    );
+}
