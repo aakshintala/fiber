@@ -63,7 +63,9 @@ fn prepare_to(
 ) -> Prepare {
     let reference = reference.to_owned();
     Arc::new(
-        move |args: &contract::commands::ModelArgs, chosen: Option<ThinkingLevel>| {
+        move |args: &contract::commands::ModelArgs,
+              _label: Option<&str>,
+              chosen: Option<ThinkingLevel>| {
             recorded.lock().unwrap().push(chosen);
             let thinking = match &args.thinking {
                 Some(level) => Some(level.parse::<ThinkingLevel>().map_err(|_| Rejection {
@@ -264,7 +266,7 @@ fn rejected_by_prepare_changes_nothing() {
         vec![Scripted::text("Old."), Scripted::text("Old again.")],
         None,
     );
-    let prepare: Prepare = Arc::new(|_, _| {
+    let prepare: Prepare = Arc::new(|_, _, _| {
         Err(Rejection {
             code: ErrorCode::InvalidArguments,
             message: "no such model".into(),
@@ -315,7 +317,7 @@ fn after_close_prepare_is_not_called() {
     let next = new_provider(vec![Scripted::text("New.")]);
     let called = Arc::new(Mutex::new(false));
     let flag = Arc::clone(&called);
-    let prepare: Prepare = Arc::new(move |_, _| {
+    let prepare: Prepare = Arc::new(move |_, _, _| {
         *flag.lock().unwrap() = true;
         Ok(Prepared {
             provider: Arc::clone(&next) as Arc<dyn Provider>,
@@ -839,7 +841,9 @@ fn chosen_persists_to_a_model_only_switch_and_queued_switches_see_each_other() {
 fn a_new_model_lacking_the_chosen_level_is_invalid_arguments() {
     let next = new_provider(vec![]);
     let prepare: Prepare = Arc::new(
-        move |args: &contract::commands::ModelArgs, chosen: Option<ThinkingLevel>| {
+        move |args: &contract::commands::ModelArgs,
+              _label: Option<&str>,
+              chosen: Option<ThinkingLevel>| {
             let _ = chosen;
             let thinking = match &args.thinking {
                 Some(level) => Some(level.parse::<ThinkingLevel>().map_err(|_| Rejection {
@@ -898,7 +902,7 @@ fn a_new_model_lacking_the_chosen_level_is_invalid_arguments() {
 fn reviewer_collision_is_invalid_arguments_and_changes_nothing() {
     let provider = new_provider(vec![]);
     let review_provider = new_provider(vec![]);
-    let prepare: Prepare = Arc::new(move |_, _| {
+    let prepare: Prepare = Arc::new(move |_, _, _| {
         Ok(Prepared {
             provider: Arc::clone(&provider) as Arc<dyn Provider>,
             model: model_of(NEW_MODEL),
@@ -993,7 +997,7 @@ fn prepare_hosted(
     hosted: impl Fn() -> Hosted + Send + Sync + 'static,
     applied: Arc<AtomicUsize>,
 ) -> Prepare {
-    Arc::new(move |_, chosen| {
+    Arc::new(move |_, _, chosen| {
         let count = Arc::clone(&applied);
         Ok(Prepared {
             provider: Arc::clone(&provider) as Arc<dyn Provider>,
@@ -1151,7 +1155,7 @@ fn applied_never_runs_for_a_rejected_or_noop_switch() {
     let applied = Arc::new(AtomicUsize::new(0));
     let provider = new_provider(vec![]);
     let count = Arc::clone(&applied);
-    let prepare: Prepare = Arc::new(move |_, _| {
+    let prepare: Prepare = Arc::new(move |_, _, _| {
         let count = Arc::clone(&count);
         Ok(Prepared {
             provider: Arc::clone(&provider) as Arc<dyn Provider>,
@@ -1198,7 +1202,7 @@ fn applied_never_runs_for_a_rejected_or_noop_switch() {
     let applied = Arc::new(AtomicUsize::new(0));
     let same = new_provider(vec![]);
     let count = Arc::clone(&applied);
-    let noop: Prepare = Arc::new(move |_, chosen| {
+    let noop: Prepare = Arc::new(move |_, _, chosen| {
         let count = Arc::clone(&count);
         Ok(Prepared {
             provider: Arc::clone(&same) as Arc<dyn Provider>,
@@ -1243,7 +1247,9 @@ fn two_switches_apply_in_order_with_one_rebuild() {
     let mid = Arc::clone(&first_provider);
     let fin = Arc::clone(&second);
     let prepare: Prepare = Arc::new(
-        move |args: &contract::commands::ModelArgs, chosen: Option<ThinkingLevel>| {
+        move |args: &contract::commands::ModelArgs,
+              _label: Option<&str>,
+              chosen: Option<ThinkingLevel>| {
             recorded.lock().unwrap().push(chosen);
             let (provider, reference) = if args.model == "fake/mid" {
                 (Arc::clone(&mid), "fake/mid")
@@ -1331,7 +1337,7 @@ fn a_noop_switch_writes_nothing_but_keeps_the_choice() {
 #[test]
 fn a_notice_is_written_after_model_changed() {
     let provider = new_provider(vec![Scripted::text("New.")]);
-    let prepare: Prepare = Arc::new(move |_, _| {
+    let prepare: Prepare = Arc::new(move |_, _, _| {
         Ok(Prepared {
             provider: Arc::clone(&provider) as Arc<dyn Provider>,
             model: model_of(NEW_MODEL),
@@ -1388,7 +1394,7 @@ fn a_switch_replaces_the_reviewer() {
     let provider = new_provider(vec![Scripted::text("New.")]);
     let new_review = new_provider(vec![Scripted::text("allow")]);
     let review_handle = Arc::clone(&new_review);
-    let prepare: Prepare = Arc::new(move |_, _| {
+    let prepare: Prepare = Arc::new(move |_, _, _| {
         Ok(Prepared {
             provider: Arc::clone(&provider) as Arc<dyn Provider>,
             model: model_of(NEW_MODEL),
@@ -1557,7 +1563,9 @@ fn resume_interleaving_holds_arrival_order() {
     let pn = Arc::clone(&provider_n);
     let pp = Arc::clone(&provider_p);
     let prepare: Prepare = Arc::new(
-        move |args: &contract::commands::ModelArgs, chosen: Option<ThinkingLevel>| {
+        move |args: &contract::commands::ModelArgs,
+              _label: Option<&str>,
+              chosen: Option<ThinkingLevel>| {
             let (provider, reference) = if args.model == "fake/n" {
                 (Arc::clone(&pn), "fake/n")
             } else {
@@ -1709,7 +1717,7 @@ fn resume_interleaving_holds_arrival_order() {
 /// A `Prepare` that switches to `NEW_MODEL` on `provider`, having read the
 /// `file` credential source `read`.
 fn prepare_reading(provider: Arc<ScriptedProvider>, read: std::path::PathBuf) -> Prepare {
-    Arc::new(move |_, chosen| {
+    Arc::new(move |_, _, chosen| {
         Ok(Prepared {
             provider: Arc::clone(&provider) as Arc<dyn Provider>,
             model: model_of(NEW_MODEL),
@@ -1850,4 +1858,696 @@ fn a_file_an_idle_switch_read_is_denied_in_the_next_turn() {
         vec![("deny".to_owned(), "credential_deny".to_owned())]
     );
     assert!(read.ran().is_empty(), "a denied call never runs");
+}
+
+/// Every `(model, label)` a recording credential `Prepare` saw, in order.
+type Seen = Arc<Mutex<Vec<(String, Option<String>)>>>;
+
+/// A `Prepare` that keeps the model and answers `Some(label)` with
+/// `credential: Some(label)`: a `model` switch keeps `work`. Records every
+/// `(model, label)` it was given, in order.
+fn prepare_keeping_model(provider: Arc<ScriptedProvider>, seen: Seen) -> Prepare {
+    Arc::new(
+        move |args: &contract::commands::ModelArgs,
+              label: Option<&str>,
+              _chosen: Option<ThinkingLevel>| {
+            seen.lock()
+                .unwrap()
+                .push((args.model.clone(), label.map(str::to_owned)));
+            Ok(Prepared {
+                provider: Arc::clone(&provider) as Arc<dyn Provider>,
+                model: model_of(&args.model),
+                thinking: None,
+                chosen: None,
+                credential: Some(label.unwrap_or("work").to_owned()),
+                cache_lifetime: CacheLifetime::OneHour,
+                context_window: fakes::CONTEXT_WINDOW,
+                addendum: None,
+                handoff: HandoffSettings::default(),
+                reviewer: no_reviewer(),
+                web_search: Hosted::Keep,
+                notice: None,
+                applied: None,
+                credential_files: Vec::new(),
+            })
+        },
+    )
+}
+
+#[test]
+fn credential_between_turns_switches_before_the_next_turn_started() {
+    let next = new_provider(vec![Scripted::text("New.")]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut session = Session::new(vec![Scripted::text("Old.")], None);
+    with_switch(
+        &mut session,
+        prepare_keeping_model(Arc::clone(&next), Arc::clone(&seen)),
+        switchable(),
+    );
+
+    let (outcome, first) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
+
+    let (tx, rx) = mpsc::channel();
+    session
+        .inbox
+        .send(support::credential_reported("home", tx))
+        .unwrap();
+    let (outcome, lines) = run(&mut session, "again");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert!(
+        rx.recv_timeout(DEADLINE)
+            .expect("the credential is answered")
+            .is_ok()
+    );
+    assert_kinds(&lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
+
+    let changed = of_kind(&lines, "model_changed");
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0].payload["before"]["model"], MODEL);
+    assert_eq!(changed[0].payload["after"]["model"], MODEL);
+    assert_eq!(changed[0].payload["before"]["credential"], "work");
+    assert_eq!(changed[0].payload["after"]["credential"], "home");
+    assert_eq!(changed[0].payload["source"], "driver");
+
+    let built = of_kind(&lines, "preamble_built");
+    assert_eq!(built.len(), 1);
+    assert_eq!(built[0].payload["reason"], "switch");
+    assert_eq!(built[0].payload["model"], MODEL);
+    assert_eq!(built[0].payload["credential"], "home");
+
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        [(MODEL.to_owned(), Some("home".to_owned()))]
+    );
+    assert_eq!(
+        session.requests().len(),
+        1,
+        "the old provider keeps one call"
+    );
+    assert_eq!(
+        next.requests().len(),
+        1,
+        "the next turn goes to the prepared provider"
+    );
+}
+
+#[test]
+fn credential_during_a_turn_applies_after_turn_completed() {
+    let next = new_provider(vec![Scripted::text("New.")]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut session = Session::with_tools_injecting(
+        vec![Scripted::text("Old."), Scripted::text("Spare.")],
+        vec![support::credential("home")],
+        Vec::new(),
+    );
+    with_switch(
+        &mut session,
+        prepare_keeping_model(Arc::clone(&next), Arc::clone(&seen)),
+        switchable(),
+    );
+    // The first turn runs on the old label; the switch it took waits in
+    // `pending`.
+    session.inbox.send(delivery("hi")).unwrap();
+    let outcome = session.turn();
+    let first = session.lines();
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
+    assert_eq!(session.requests().len(), 1);
+    assert!(next.requests().is_empty());
+
+    let (outcome, lines) = run(&mut session, "again");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
+    let changed = of_kind(&lines, "model_changed");
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0].payload["before"]["credential"], "work");
+    assert_eq!(changed[0].payload["after"]["credential"], "home");
+    assert_eq!(next.requests().len(), 1);
+}
+
+#[test]
+fn credential_with_the_current_label_changes_nothing() {
+    let next = new_provider(vec![Scripted::text("New.")]);
+    let mut session = Session::new(
+        vec![Scripted::text("Old."), Scripted::text("Old again.")],
+        None,
+    );
+    with_switch(
+        &mut session,
+        prepare_keeping_model(Arc::clone(&next), Arc::new(Mutex::new(Vec::new()))),
+        switchable(),
+    );
+
+    let (outcome, first) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
+
+    // The command is still accepted.
+    let (tx, rx) = mpsc::channel();
+    session
+        .inbox
+        .send(support::credential_reported("work", tx))
+        .unwrap();
+    let (outcome, lines) = run(&mut session, "again");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert!(
+        rx.recv_timeout(DEADLINE)
+            .expect("the credential is answered")
+            .is_ok()
+    );
+    assert_kinds(&lines, &[&["turn_started"] as &[&str], STEP, REPLY, ENDED]);
+    assert!(of_kind(&lines, "model_changed").is_empty());
+    assert!(of_kind(&lines, "preamble_built").is_empty());
+    assert!(next.requests().is_empty());
+}
+
+#[test]
+fn credential_rejected_by_prepare_changes_nothing() {
+    let next = new_provider(vec![Scripted::text("New.")]);
+    let mut session = Session::new(
+        vec![Scripted::text("Old."), Scripted::text("Old again.")],
+        None,
+    );
+    let prepare: Prepare = Arc::new(|_, _, _| {
+        Err(Rejection {
+            code: ErrorCode::CredentialMissing,
+            message: "`fake` has no credential label `nope`. The labels for `fake` are: work"
+                .into(),
+        })
+    });
+    with_switch(&mut session, prepare, switchable());
+
+    let (tx, rx) = mpsc::channel();
+    session
+        .inbox
+        .send(support::credential_reported("nope", tx))
+        .unwrap();
+    let (outcome, first) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
+    let answer = rx
+        .recv_timeout(DEADLINE)
+        .expect("the credential is answered");
+    let rejection = answer.unwrap_err();
+    assert_eq!(rejection.code, ErrorCode::CredentialMissing);
+
+    let (outcome, lines) = run(&mut session, "again");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&lines, &[&["turn_started"] as &[&str], STEP, REPLY, ENDED]);
+    assert!(of_kind(&lines, "model_changed").is_empty());
+    assert_eq!(session.requests().len(), 2);
+    assert!(next.requests().is_empty());
+}
+
+#[test]
+fn mixed_model_and_credential_switches_apply_in_arrival_order() {
+    let next = new_provider(vec![Scripted::text("New.")]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut session = Session::with_tools_injecting(
+        vec![Scripted::text("Old."), Scripted::text("Spare.")],
+        vec![
+            model("fake/mid", None),
+            support::credential("home"),
+            model("fake/n", None),
+        ],
+        Vec::new(),
+    );
+    with_switch(
+        &mut session,
+        prepare_keeping_model(Arc::clone(&next), Arc::clone(&seen)),
+        switchable(),
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    let outcome = session.turn();
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&session.lines(), &[OPENING, STEP, REPLY, ENDED]);
+
+    // Each resolves against the settings queued before it: the credential
+    // takes the queued switch's model.
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        [
+            ("fake/mid".to_owned(), None),
+            ("fake/mid".to_owned(), Some("home".to_owned())),
+            ("fake/n".to_owned(), None),
+        ]
+    );
+
+    let (outcome, lines) = run(&mut session, "again");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+
+    let changed = of_kind(&lines, "model_changed");
+    assert_eq!(changed.len(), 3);
+    assert_eq!(changed[0].payload["after"]["model"], "fake/mid");
+    assert_eq!(changed[0].payload["after"]["credential"], "work");
+    assert_eq!(changed[1].payload["before"]["model"], "fake/mid");
+    assert_eq!(changed[1].payload["after"]["model"], "fake/mid");
+    assert_eq!(changed[1].payload["after"]["credential"], "home");
+    assert_eq!(changed[2].payload["before"]["credential"], "home");
+    assert_eq!(changed[2].payload["after"]["model"], "fake/n");
+    assert_eq!(changed[2].payload["after"]["credential"], "work");
+    assert_eq!(of_kind(&lines, "preamble_built").len(), 1);
+    assert_eq!(next.requests().len(), 1);
+}
+
+#[test]
+fn credential_without_a_switcher_is_invalid_arguments() {
+    let mut session = Session::new(vec![Scripted::text("Old.")], None);
+    let (tx, rx) = mpsc::channel();
+    session
+        .inbox
+        .send(support::credential_reported("home", tx))
+        .unwrap();
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&lines, &[OPENING, STEP, REPLY, ENDED]);
+    let answer = rx
+        .recv_timeout(DEADLINE)
+        .expect("the credential is answered");
+    let rejection = answer.unwrap_err();
+    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+    assert_eq!(rejection.message, NO_SWITCH);
+    assert!(of_kind(&lines, "model_changed").is_empty());
+}
+
+#[test]
+fn credential_after_close_is_closing_and_prepare_is_not_called() {
+    let next = new_provider(vec![Scripted::text("New.")]);
+    let called = Arc::new(Mutex::new(false));
+    let flag = Arc::clone(&called);
+    let prepare: Prepare = Arc::new(move |_, _, _| {
+        *flag.lock().unwrap() = true;
+        Ok(Prepared {
+            provider: Arc::clone(&next) as Arc<dyn Provider>,
+            model: model_of(NEW_MODEL),
+            thinking: None,
+            chosen: None,
+            credential: Some("home".into()),
+            cache_lifetime: CacheLifetime::OneHour,
+            context_window: fakes::CONTEXT_WINDOW,
+            addendum: None,
+            handoff: HandoffSettings::default(),
+            reviewer: no_reviewer(),
+            web_search: Hosted::Keep,
+            notice: None,
+            applied: None,
+            credential_files: Vec::new(),
+        })
+    });
+    let mut session = Session::new(vec![Scripted::text("Old.")], None);
+    with_switch(&mut session, prepare, switchable());
+    let (outcome, first) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
+
+    let (close_tx, close_rx) = mpsc::channel::<Answer>();
+    let (cred_tx, cred_rx) = mpsc::channel::<Answer>();
+    session
+        .inbox
+        .send(Delivery::Close(Ack(Box::new(move |answer| {
+            let _sent = close_tx.send(answer);
+        }))))
+        .unwrap();
+    session
+        .inbox
+        .send(support::credential_reported("home", cred_tx))
+        .unwrap();
+    let outcome = session.turn();
+    assert_eq!(outcome, None);
+    assert!(
+        close_rx
+            .recv_timeout(DEADLINE)
+            .expect("close answered")
+            .is_ok()
+    );
+    let rejected = cred_rx
+        .recv_timeout(DEADLINE)
+        .expect("credential answered")
+        .unwrap_err();
+    assert_eq!(rejected.code, ErrorCode::Closing);
+    assert!(
+        !*called.lock().unwrap(),
+        "prepare runs only before `closing`"
+    );
+}
+
+#[test]
+fn credential_during_an_approval_wait_is_accepted_and_applied_after_the_turn() {
+    let next = new_provider(vec![Scripted::text("New.")]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let tool = executes_tool();
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", serde_json::json!({"city": "Paris"}))]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool as Arc<dyn contract::tool::Tool>],
+    );
+    session.rules.set(ask_rule());
+    with_switch(
+        &mut session,
+        prepare_keeping_model(Arc::clone(&next), Arc::clone(&seen)),
+        switchable(),
+    );
+    let (ack_tx, ack_rx) = mpsc::channel::<Answer>();
+    let answered = on_request(&session, {
+        let inbox = session.inbox.clone();
+        move |id| {
+            inbox
+                .send(support::credential_reported("home", ack_tx.clone()))
+                .unwrap();
+            // The switch is accepted while the approval waits.
+            inbox
+                .send(Delivery::Reply(
+                    contract::commands::Reply {
+                        request_id: id,
+                        answer: allow_answer(),
+                    },
+                    support::ignore(),
+                ))
+                .unwrap();
+        }
+    });
+    session.inbox.send(delivery("go")).unwrap();
+    let outcome = session.turn();
+    answered.join().unwrap();
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert!(of_kind(&lines, "model_changed").is_empty());
+    let answer = ack_rx
+        .recv_timeout(DEADLINE)
+        .expect("the credential is answered");
+    assert!(answer.is_ok(), "accepted before `turn_completed`");
+
+    let (outcome, lines) = run(&mut session, "again");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
+    let changed = of_kind(&lines, "model_changed");
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0].payload["before"]["model"], MODEL);
+    assert_eq!(changed[0].payload["after"]["model"], MODEL);
+    assert_eq!(changed[0].payload["before"]["credential"], "work");
+    assert_eq!(changed[0].payload["after"]["credential"], "home");
+    assert_eq!(next.requests().len(), 1);
+}
+
+/// Runs a resumed finishing turn holding `held`, with `live` arriving
+/// during its approval wait, then one more turn: the prepare calls in
+/// arrival order and the log's `model_changed` lines.
+fn run_deferred_switch_case(
+    held: Delivery,
+    live: Delivery,
+) -> (Vec<(String, Option<String>)>, Vec<contract::Envelope>) {
+    use contract::events::RuleScope;
+    use contract::events::{
+        AskStep, Empty, PermissionRequested, SessionStarted, StandingRule, TurnStarted as TurnBegin,
+    };
+    use contract::shapes::{ContentPart as Part, DeclaredEffects, Origin, Sender as From};
+    use contract::{ActionId as Aid, CommandId as Cid, SessionId as Sid, TurnId as Tid};
+
+    let root = fakes::TempDir::new("fiber-switch-deferred-credential");
+    let workspace_dir = root.path().join("w");
+    std::fs::create_dir_all(&workspace_dir).unwrap();
+    let credentials = root.path().join("credentials");
+    std::fs::create_dir_all(&credentials).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let log = Arc::new(
+        log::Log::create(
+            root.path(),
+            Sid("s_1".into()),
+            Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+        )
+        .unwrap(),
+    );
+    let dir = root.path().join("s_1");
+    let tid = Tid("t_1".into());
+    let append = |event: contract::events::Event, turn: Option<Tid>, action: Option<Aid>| {
+        log.append(&event, turn, action).unwrap();
+    };
+    append(
+        contract::events::Event::SessionStarted(SessionStarted {
+            workspace: workspace_dir.display().to_string(),
+            variables: contract::events::Variables {
+                path: String::new(),
+                names: Vec::new(),
+                source: contract::events::VariablesSource::Inherited,
+            },
+            parent: None,
+            forked_from: None,
+            rewind: None,
+            worktree: None,
+        }),
+        None,
+        None,
+    );
+    append(
+        contract::events::Event::TurnStarted(TurnBegin {
+            input: vec![contract::events::InputItem::Message {
+                content: vec![Part::Text { text: "one".into() }],
+                sender: From {
+                    origin: Origin::Driver,
+                    command_id: Some(Cid("c_1".into())),
+                },
+                changed_by: None,
+            }],
+        }),
+        Some(tid.clone()),
+        None,
+    );
+    append(
+        contract::events::Event::AssistantMessageStarted(Empty {}),
+        Some(tid.clone()),
+        Some(Aid("a_0".into())),
+    );
+    append(
+        contract::events::Event::ToolCallRequested(contract::events::ToolCallRequested {
+            name: "read".into(),
+            arguments: serde_json::json!({"city": "Paris"}),
+            provider_id: None,
+            repair: None,
+            ran_by: None,
+            provider_item: None,
+        }),
+        Some(tid.clone()),
+        Some(Aid("a_1".into())),
+    );
+    append(
+        contract::events::Event::PermissionRequested(PermissionRequested {
+            request_id: RequestId("r_9".into()),
+            declared: DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Executes],
+                reversible: true,
+                paths: None,
+            },
+            step: AskStep::StandingAsk {
+                standing_rule: StandingRule {
+                    scope: RuleScope::Project,
+                    prefix: "x".into(),
+                },
+            },
+        }),
+        Some(tid.clone()),
+        Some(Aid("a_1".into())),
+    );
+    append(
+        contract::events::Event::FiberStarted(contract::events::FiberStarted {
+            version: "test".into(),
+            resumed: false,
+        }),
+        None,
+        None,
+    );
+    append(
+        contract::events::Event::FiberExited(contract::events::FiberExited {
+            exit_code: 0,
+            usage: contract::shapes::Usage {
+                tokens: contract::shapes::Tokens {
+                    input: 0,
+                    cache_read: 0,
+                    cache_write: std::collections::BTreeMap::new(),
+                    output: 0,
+                },
+                cost: Some(0.0),
+                subscription_cost: 0.0,
+            },
+            final_message: None,
+            error: None,
+            suspended_on: Some(RequestId("r_9".into())),
+            questions: None,
+        }),
+        None,
+        None,
+    );
+
+    let next = new_provider(vec![Scripted::text("Next.")]);
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&seen);
+    let finishing = Arc::new(ScriptedProvider::new(vec![Scripted::text("Fin.")]));
+    let prepare: Prepare = Arc::new(
+        move |args: &contract::commands::ModelArgs,
+              label: Option<&str>,
+              chosen: Option<ThinkingLevel>| {
+            recorded
+                .lock()
+                .unwrap()
+                .push((args.model.clone(), label.map(str::to_owned)));
+            Ok(Prepared {
+                provider: Arc::clone(&next) as Arc<dyn Provider>,
+                model: model_of(&args.model),
+                thinking: None,
+                chosen,
+                credential: Some(label.unwrap_or("work").to_owned()),
+                cache_lifetime: CacheLifetime::OneHour,
+                context_window: fakes::CONTEXT_WINDOW,
+                addendum: None,
+                handoff: HandoffSettings::default(),
+                reviewer: no_reviewer(),
+                web_search: Hosted::Keep,
+                notice: None,
+                applied: None,
+                credential_files: Vec::new(),
+            })
+        },
+    );
+
+    let (inbox_tx, inbox_rx) = mpsc::channel::<Delivery>();
+    let home = root.path().to_path_buf();
+    let session_log = dir.join("events.jsonl").display().to_string();
+    let prompt_clock = Arc::clone(&clock) as Arc<dyn contract::clock::Clock>;
+    let mut prompt = r#loop::PromptInputs::new(
+        home.clone(),
+        "/bin/sh".into(),
+        session_log,
+        prompt_clock,
+        fakes::CONTEXT_WINDOW,
+    );
+    prompt.credential = Some("work".into());
+    let rules = Arc::new(support::FakeRules::empty());
+    let tool = Arc::new(support::TestTool::reads("read", "ok"));
+    let mut looped = r#loop::Loop::resume(
+        Arc::clone(&log),
+        r#loop::resumed(&dir).unwrap(),
+        Arc::clone(&finishing) as Arc<dyn Provider>,
+        model_of(MODEL),
+        prompt,
+        inbox_rx,
+        vec![("builtin".into(), tool as Arc<dyn contract::tool::Tool>)],
+        r#loop::Permissions {
+            workspace: workspace_dir.display().to_string(),
+            credentials,
+            credential_files: Vec::new(),
+            rules,
+        },
+    )
+    .unwrap()
+    .switcher(prepare, switchable());
+
+    // A switch held aside before the finishing turn starts.
+    inbox_tx.send(held).unwrap();
+    // The watcher exists before the turn thread starts: it only sees events
+    // appended after it is created, and the thread re-raises the request.
+    let mut watcher = log.watch();
+    // The finishing turn runs on its own thread; a live switch arrives
+    // during its approval wait and holds behind the held one.
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || {
+        let outcome = looped.turn().unwrap();
+        done.send((looped, outcome)).unwrap();
+    });
+    // Wait for the re-raised request, then send the live switch and the reply.
+    loop {
+        let line = watcher
+            .recv_timeout(DEADLINE)
+            .expect("a line in time")
+            .expect("log")
+            .expect("line");
+        if line.kind == "permission_requested" {
+            break;
+        }
+    }
+    inbox_tx.send(live).unwrap();
+    inbox_tx
+        .send(Delivery::Reply(
+            contract::commands::Reply {
+                request_id: RequestId("r_9".into()),
+                answer: allow_answer(),
+            },
+            support::ignore(),
+        ))
+        .unwrap();
+    let (mut looped, outcome) = finished
+        .recv_timeout(DEADLINE)
+        .expect("the finishing turn ended");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+
+    // The next turn admits both in arrival order.
+    inbox_tx.send(support::delivery("next")).unwrap();
+    let outcome = looped.turn().unwrap();
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let lines = log::read(&dir).unwrap();
+    let changed: Vec<contract::Envelope> = lines
+        .iter()
+        .filter(|line| line.kind == "model_changed")
+        .cloned()
+        .collect();
+    assert_eq!(changed.len(), 2);
+    let seen = seen.lock().unwrap().clone();
+    (seen, changed)
+}
+
+#[test]
+fn deferred_model_then_live_credential_keeps_arrival_order() {
+    let (seen, changed) =
+        run_deferred_switch_case(model("fake/n", None), support::credential("home"));
+    assert_eq!(
+        seen.as_slice(),
+        [
+            ("fake/n".to_owned(), None),
+            ("fake/n".to_owned(), Some("home".to_owned())),
+        ]
+    );
+    assert_eq!(changed[0].payload["after"]["model"], "fake/n");
+    assert_eq!(changed[0].payload["after"]["credential"], "work");
+    assert_eq!(changed[1].payload["before"]["model"], "fake/n");
+    assert_eq!(changed[1].payload["after"]["model"], "fake/n");
+    assert_eq!(changed[1].payload["after"]["credential"], "home");
+}
+
+#[test]
+fn deferred_credential_then_live_model_keeps_arrival_order() {
+    let (seen, changed) =
+        run_deferred_switch_case(support::credential("home"), model("fake/p", None));
+    assert_eq!(
+        seen.as_slice(),
+        [
+            (MODEL.to_owned(), Some("home".to_owned())),
+            ("fake/p".to_owned(), None),
+        ]
+    );
+    assert_eq!(changed[0].payload["after"]["model"], MODEL);
+    assert_eq!(changed[0].payload["after"]["credential"], "home");
+    assert_eq!(changed[1].payload["before"]["credential"], "home");
+    assert_eq!(changed[1].payload["after"]["model"], "fake/p");
+    assert_eq!(changed[1].payload["after"]["credential"], "work");
+}
+
+#[test]
+fn deferred_credential_then_live_credential_keeps_arrival_order() {
+    let (seen, changed) =
+        run_deferred_switch_case(support::credential("home"), support::credential("office"));
+    assert_eq!(
+        seen.as_slice(),
+        [
+            (MODEL.to_owned(), Some("home".to_owned())),
+            (MODEL.to_owned(), Some("office".to_owned())),
+        ]
+    );
+    assert_eq!(changed[0].payload["after"]["model"], MODEL);
+    assert_eq!(changed[0].payload["after"]["credential"], "home");
+    assert_eq!(changed[1].payload["before"]["credential"], "home");
+    assert_eq!(changed[1].payload["after"]["model"], MODEL);
+    assert_eq!(changed[1].payload["after"]["credential"], "office");
 }

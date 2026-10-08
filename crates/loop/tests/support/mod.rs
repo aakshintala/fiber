@@ -573,6 +573,31 @@ pub(crate) fn model_reported(
     )
 }
 
+/// A driver's `credential` command on the loop's inbox.
+pub(crate) fn credential(label: &str) -> Delivery {
+    Delivery::Credential(
+        contract::commands::CredentialArgs {
+            label: label.into(),
+        },
+        ignore(),
+    )
+}
+
+/// A driver's `credential` command reporting its answer on `answered`.
+pub(crate) fn credential_reported(
+    label: &str,
+    answered: std::sync::mpsc::Sender<contract::inbox::Answer>,
+) -> Delivery {
+    Delivery::Credential(
+        contract::commands::CredentialArgs {
+            label: label.into(),
+        },
+        Ack(Box::new(move |answer| {
+            answered.send(answer).unwrap();
+        })),
+    )
+}
+
 /// A person's `handoff` on the loop's inbox, with `instructions`.
 pub(crate) fn handoff(id: &str, instructions: Option<&str>) -> Delivery {
     Delivery::Handoff(

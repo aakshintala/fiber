@@ -205,6 +205,7 @@ pub(crate) fn built(command: &str) -> bool {
             | "commands"
             | "history"
             | "model"
+            | "credential"
             | "close"
             | "shell"
             | "job_stop"
@@ -295,6 +296,10 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Model(args, ack));
         }
+        Command::Credential(args) => {
+            let ack = inbox_ack(conn, id);
+            conn.gate.deliver(Delivery::Credential(args, ack));
+        }
         Command::Handoff(args) => {
             let ack = inbox_ack(conn, id.clone());
             conn.gate.deliver(Delivery::Handoff(id, args, ack));
@@ -309,9 +314,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             answer(conn, id, moving, NO_CALL);
         }
         Command::Command(args) => crate::run_command::run(conn, id, &args),
-        Command::Message(_) | Command::Reload | Command::Credential(_) | Command::Name(_) => {
-            unknown(conn, id, name)
-        }
+        Command::Message(_) | Command::Reload | Command::Name(_) => unknown(conn, id, name),
     }
 }
 

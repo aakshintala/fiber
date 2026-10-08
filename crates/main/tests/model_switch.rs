@@ -1732,3 +1732,266 @@ fn the_file_a_switch_read_is_denied_after_its_link_moves() {
         Some(fakes::fingerprint("Bearer sk-file-a"))
     );
 }
+
+/// Installs a provider `fake` with `m` on `openai-responses` at the fake
+/// server and no declared credential source, stores the `work` and `home`
+/// labels, and makes `fake/m` on `work` the configured model.
+fn install_labeled_provider(setup: &Setup, server: &ProviderServer) {
+    let source = setup.root.path().join("src");
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+    );
+    write_json(
+        &source.join("providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "models": [{"id": "m", "protocol": "openai-responses",
+                        "base_url": format!("{}/v1", server.url()), "context_window": 100000}],
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    for label in ["work", "home"] {
+        config::store_credential(
+            &setup.home(),
+            "fake",
+            label,
+            &config::Secret::new(format!("{label}-key\n")),
+        )
+        .unwrap();
+    }
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "providers": {"fake": {"credential": "work"}}}),
+    );
+}
+
+fn credential(client: &Socket, id: &str, label: &str) {
+    client.send(&format!(
+        r#"{{"id":"{id}","command":"credential","args":{{"label":"{label}"}}}}"#
+    ));
+}
+
+/// The global `config.json` and every per-project one: their bytes, so a
+/// test proves a command wrote no configuration.
+fn config_snapshot(setup: &Setup) -> (Vec<u8>, Vec<(PathBuf, Vec<u8>)>) {
+    let global = fs::read(setup.home().join("config.json")).unwrap();
+    let mut projects = Vec::new();
+    let dir = setup.home().join("projects");
+    if dir.is_dir() {
+        let mut keys: Vec<PathBuf> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        keys.sort();
+        for key in keys {
+            let file = key.join("config.json");
+            projects.push((file.clone(), fs::read(&file).unwrap_or_default()));
+        }
+    }
+    (global, projects)
+}
+
+fn assert_config_unchanged(setup: &Setup, before: &(Vec<u8>, Vec<(PathBuf, Vec<u8>)>)) {
+    assert_eq!(&config_snapshot(setup), before);
+}
+
+#[test]
+fn a_credential_sent_between_turns_switches_the_label() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    install_labeled_provider(&setup, &server);
+    let id = doors::mint("s_");
+    let running = start_session(&setup, &id, &[]);
+
+    let client = running.connect(&setup.session_socket(&id));
+    running.wait_for("extensions_loaded");
+    let mut stream = vec![subscribe(&client)];
+    prompt(&client, "c_prompt", "hi");
+    stream.extend(until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+    // After the session started: the command writes no configuration.
+    let configs = config_snapshot(&setup);
+
+    credential(&client, "c_cred", "home");
+    stream.extend(until(&client, "model_changed", |line| {
+        line["kind"] == "model_changed"
+    }));
+    let accepted = stream
+        .iter()
+        .find(|line| {
+            line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cred"
+        })
+        .unwrap();
+    assert_eq!(accepted["payload"]["command_id"], "c_cred");
+    let changed = stream.last().unwrap();
+    assert_eq!(changed["payload"]["before"]["model"], "fake/m");
+    assert_eq!(changed["payload"]["after"]["model"], "fake/m");
+    assert_eq!(changed["payload"]["before"]["credential"], "work");
+    assert_eq!(changed["payload"]["after"]["credential"], "home");
+    assert_eq!(changed["payload"]["source"], "driver");
+
+    prompt(&client, "c_again", "again");
+    stream.extend(until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+    let built = stream
+        .iter()
+        .rev()
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["reason"], "switch");
+    assert_eq!(built["payload"]["credential"], "home");
+
+    close(&client);
+    stream.extend(until_close(&client));
+    drop(client);
+    let (status, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    // The next request carries the new label's key.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(
+        requests[1].header("authorization"),
+        Some(fakes::fingerprint("Bearer home-key").as_str())
+    );
+    // The command writes no configuration.
+    assert_config_unchanged(&setup, &configs);
+    let kinds = log_kinds(&setup, &id);
+    let at = kinds
+        .iter()
+        .position(|kind| kind == "model_changed")
+        .unwrap();
+    assert_eq!(kinds[at + 1], "preamble_built");
+}
+
+#[test]
+fn a_credential_naming_no_label_is_rejected_and_changes_nothing() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    install_labeled_provider(&setup, &server);
+    let id = doors::mint("s_");
+    let running = start_session(&setup, &id, &[]);
+
+    let client = running.connect(&setup.session_socket(&id));
+    running.wait_for("extensions_loaded");
+    let mut stream = vec![subscribe(&client)];
+    prompt(&client, "c_prompt", "hi");
+    stream.extend(until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+    // After the session started: the command writes no configuration.
+    let configs = config_snapshot(&setup);
+
+    credential(&client, "c_cred", "nope");
+    stream.extend(until(&client, "command_rejected", |line| {
+        line["kind"] == "command_rejected" && line["payload"]["command_id"] == "c_cred"
+    }));
+    let rejected = stream.last().unwrap();
+    assert_eq!(rejected["payload"]["code"], "credential_missing");
+    let message = rejected["payload"]["message"].as_str().unwrap();
+    assert!(message.contains("home"), "{message}");
+    assert!(message.contains("work"), "{message}");
+
+    prompt(&client, "c_again", "again");
+    stream.extend(until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+    assert!(
+        stream.iter().all(|line| line["kind"] != "model_changed"),
+        "nothing changed: {stream:?}"
+    );
+
+    close(&client);
+    stream.extend(until_close(&client));
+    drop(client);
+    let (status, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    // The next request still uses the old label's key.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(
+        requests[1].header("authorization"),
+        Some(fakes::fingerprint("Bearer work-key").as_str())
+    );
+    assert_config_unchanged(&setup, &configs);
+    assert!(
+        !log_kinds(&setup, &id).contains(&"model_changed".to_owned()),
+        "no model_changed in the log"
+    );
+}
+
+#[test]
+fn a_credential_switch_changes_no_other_running_session() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello(), hello(), hello()]).unwrap();
+    install_labeled_provider(&setup, &server);
+    let first = doors::mint("s_");
+    let second = doors::mint("s_");
+    let running = start_session(&setup, &first, &[]);
+    let other = start_session(&setup, &second, &[]);
+
+    let client = running.connect(&setup.session_socket(&first));
+    running.wait_for("extensions_loaded");
+    let mut stream = vec![subscribe(&client)];
+    let peer = other.connect(&setup.session_socket(&second));
+    other.wait_for("extensions_loaded");
+    let mut peer_stream = vec![subscribe(&peer)];
+
+    prompt(&client, "a_prompt", "hi");
+    stream.extend(until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+    prompt(&peer, "b_prompt", "hi");
+    peer_stream.extend(until(&peer, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+
+    credential(&client, "a_cred", "home");
+    stream.extend(until(&client, "model_changed", |line| {
+        line["kind"] == "model_changed"
+    }));
+
+    prompt(&client, "a_again", "again");
+    stream.extend(until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+    prompt(&peer, "b_again", "again");
+    peer_stream.extend(until(&peer, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    }));
+
+    close(&client);
+    stream.extend(until_close(&client));
+    drop(client);
+    let (status, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    close(&peer);
+    peer_stream.extend(until_close(&peer));
+    drop(peer);
+    let (status, stderr) = other.wait();
+    assert!(status.success(), "stderr: {stderr}");
+
+    // The other session still runs on the old label's key, with no
+    // `model_changed` in its log.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 4, "{requests:?}");
+    assert_eq!(
+        requests[3].header("authorization"),
+        Some(fakes::fingerprint("Bearer work-key").as_str())
+    );
+    assert!(
+        !log_kinds(&setup, &second).contains(&"model_changed".to_owned()),
+        "the other session's label never changed"
+    );
+}

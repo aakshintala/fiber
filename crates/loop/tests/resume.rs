@@ -5274,7 +5274,9 @@ fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
     let seen = Arc::clone(&recorded);
     let next = Arc::new(ScriptedProvider::new(vec![Scripted::text("New.")]));
     let prepare: r#loop::Prepare = Arc::new(
-        move |args: &contract::commands::ModelArgs, chosen: Option<contract::ThinkingLevel>| {
+        move |args: &contract::commands::ModelArgs,
+              _label: Option<&str>,
+              chosen: Option<contract::ThinkingLevel>| {
             seen.lock().unwrap().push(chosen);
             let thinking = match &args.thinking {
                 Some(level) => Some(level.parse().map_err(|_| contract::inbox::Rejection {

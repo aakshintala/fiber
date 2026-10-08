@@ -316,7 +316,26 @@ fn over(
 
 /// The provider names `switching` holds a key for.
 fn keys(switching: &Switching) -> Vec<String> {
-    switching.keys.lock().unwrap().keys().cloned().collect()
+    let remembered = switching.remembered.lock().unwrap();
+    let mut names: Vec<String> = remembered
+        .keys
+        .keys()
+        .map(|(name, _)| name.clone())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// The label `switching` holds `provider` on, if any.
+fn selected(switching: &Switching, provider: &str) -> Option<String> {
+    switching
+        .remembered
+        .lock()
+        .unwrap()
+        .selected
+        .get(provider)
+        .cloned()
 }
 
 /// The provider names `switching` holds loaded.
@@ -368,7 +387,8 @@ fn declared_type(hosted: &r#loop::Hosted) -> Option<Option<String>> {
     }
 }
 
-/// `prepare` on its own thread under [`DEADLINE`].
+/// `prepare` on its own thread under [`DEADLINE`], keeping the provider's
+/// selected label.
 fn bounded(
     switching: &Arc<Switching>,
     args: &ModelArgs,
@@ -376,7 +396,24 @@ fn bounded(
 ) -> Result<r#loop::Prepared, contract::inbox::Rejection> {
     let (switching, args) = (Arc::clone(switching), args.clone());
     fakes::within("the preparation", DEADLINE, move || {
-        prepare(&switching, &quiet(), &args, chosen)
+        prepare(&switching, &quiet(), &args, None, chosen)
+    })
+}
+
+/// `prepare` on its own thread under [`DEADLINE`], switching to `label`.
+fn bounded_with(
+    switching: &Arc<Switching>,
+    args: &ModelArgs,
+    label: Option<&str>,
+    chosen: Option<ThinkingLevel>,
+) -> Result<r#loop::Prepared, contract::inbox::Rejection> {
+    let (switching, args, label) = (
+        Arc::clone(switching),
+        args.clone(),
+        label.map(str::to_owned),
+    );
+    fakes::within("the preparation", DEADLINE, move || {
+        prepare(&switching, &quiet(), &args, label.as_deref(), chosen)
     })
 }
 
@@ -393,6 +430,20 @@ fn prepared(
     }
 }
 
+/// A prepared switch to `label`: `prepare` succeeds, and `Prepared` is no
+/// `Debug`, so no `unwrap`.
+fn prepared_with(
+    switching: &Arc<Switching>,
+    args: &ModelArgs,
+    label: Option<&str>,
+    chosen: Option<ThinkingLevel>,
+) -> r#loop::Prepared {
+    match bounded_with(switching, args, label, chosen) {
+        Ok(prepared) => prepared,
+        Err(rejection) => panic!("the switch rejected: {}", rejection.message),
+    }
+}
+
 /// A rejected switch: `prepare` fails, and `Prepared` is no `Debug`, so no
 /// `unwrap_err`.
 fn rejected(
@@ -401,6 +452,20 @@ fn rejected(
     chosen: Option<ThinkingLevel>,
 ) -> contract::inbox::Rejection {
     match bounded(switching, args, chosen) {
+        Ok(_) => panic!("the switch prepared"),
+        Err(rejection) => rejection,
+    }
+}
+
+/// A rejected switch to `label`: `prepare` fails, and `Prepared` is no
+/// `Debug`, so no `unwrap_err`.
+fn rejected_with(
+    switching: &Arc<Switching>,
+    args: &ModelArgs,
+    label: Option<&str>,
+    chosen: Option<ThinkingLevel>,
+) -> contract::inbox::Rejection {
+    match bounded_with(switching, args, label, chosen) {
         Ok(_) => panic!("the switch prepared"),
         Err(rejection) => rejection,
     }
@@ -1355,7 +1420,7 @@ fn a_model_with_hosted_search_declares_it_and_applying_publishes_it() {
     let fixture = fixture("fiber-switch-hosted-declare");
     let switching = switching(&fixture, &["tools.web_search.max_result_bytes=100"]);
     let (door, declared) = recording(false);
-    let Ok(made) = prepare(&switching, &door, &args("claude/w"), None) else {
+    let Ok(made) = prepare(&switching, &door, &args("claude/w"), None, None) else {
         panic!("the switch rejected");
     };
     assert_eq!(
@@ -1378,7 +1443,7 @@ fn a_model_without_hosted_search_withdraws_it_and_applying_removes_it() {
     let fixture = fixture("fiber-switch-hosted-withdraw");
     let switching = switching(&fixture, &[]);
     let (door, declared) = recording(false);
-    let Ok(made) = prepare(&switching, &door, &args("fake/m"), None) else {
+    let Ok(made) = prepare(&switching, &door, &args("fake/m"), None, None) else {
         panic!("the switch rejected");
     };
     assert!(matches!(&made.web_search, r#loop::Hosted::Withdraw(name) if name == "web_search"));
@@ -1395,7 +1460,7 @@ fn a_standing_web_search_is_kept_and_nothing_is_published() {
     let switching = switching(&fixture, &[]);
     for model in ["claude/w", "fake/m"] {
         let (door, declared) = recording(true);
-        let Ok(made) = prepare(&switching, &door, &args(model), None) else {
+        let Ok(made) = prepare(&switching, &door, &args(model), None, None) else {
             panic!("the switch rejected");
         };
         assert!(matches!(made.web_search, r#loop::Hosted::Keep), "{model}");
@@ -1495,14 +1560,16 @@ fn an_unloaded_lua_provider_is_started_for_the_switch_once() {
     assert!(loaded(&switching).is_empty(), "loaded only when it applies");
     assert_eq!(
         switching
-            .keys
+            .remembered
             .lock()
             .unwrap()
-            .get("lp")
-            .map(|(_, key)| key.is_none()),
+            .keys
+            .get(&("lp".to_owned(), "default".to_owned()))
+            .map(Option::is_none),
         Some(true),
         "`credential()` supplies the token, so no key is kept"
     );
+    assert_eq!(selected(&switching, "lp").as_deref(), Some("default"));
     (made.applied.expect("applying keeps it"))();
     assert_eq!(loaded(&switching), vec!["lp".to_owned()]);
     prepared(&switching, &args("lp/lm"), None);
@@ -1676,4 +1743,271 @@ fn a_scripted_reviewer_stands_across_a_switch() {
     let made = prepared(&switching, &args("fake/m"), None);
     let reviewer = made.reviewer.expect("the reviewer resolved");
     assert_eq!(reviewer.model.reference, "scripted/r.json");
+}
+
+/// A `credential` switch to a stored label prepares under it: the label and
+/// the key read under it (`docs/model-routing.md`, "Which credential a
+/// session uses").
+#[test]
+fn a_credential_switch_to_a_stored_label_reads_under_it() {
+    let fixture = fixture("fiber-switch-credential-stored");
+    config::store_credential(
+        &fixture.home,
+        "fake",
+        "other",
+        &config::Secret::new("k-other".into()),
+    )
+    .unwrap();
+    let switching = switching(&fixture, &[]);
+    let made = prepared_with(&switching, &args("fake/n"), Some("other"), None);
+    assert_eq!(made.model.reference, "fake/n");
+    assert_eq!(made.credential, Some("other".to_owned()));
+    assert_eq!(selected(&switching, "fake").as_deref(), Some("other"));
+}
+
+/// A label the provider does not have is `credential_missing`, naming its
+/// labels, before any configured source is read or any command runs: no
+/// read, nothing cached (`docs/model-routing.md`, "Which credential a
+/// session uses").
+#[test]
+fn a_credential_switch_to_an_absent_label_reads_nothing() {
+    let fixture = fixture("fiber-switch-credential-absent");
+    let switching = switching(&fixture, &[]);
+    let rejection = rejected_with(&switching, &args("other/m"), Some("nope"), None);
+    assert_eq!(rejection.code, ErrorCode::CredentialMissing);
+    assert_eq!(
+        rejection.message,
+        "`other` has no credential label `nope`. The labels for `other` are: default"
+    );
+    assert_eq!(runs(&fixture.marker), 0, "no command ran");
+    assert!(!keys(&switching).contains(&"other".to_owned()));
+    assert_eq!(selected(&switching, "other"), None);
+}
+
+/// A configured `command` label whose source cannot be read rejects with
+/// the read's own code and caches nothing, so the next switch reads again.
+#[test]
+fn a_failing_configured_command_label_reads_again() {
+    let fixture = fixture("fiber-switch-credential-command-fails");
+    let script = format!("echo x >> '{}'; exit 1", fixture.bad_marker.display());
+    std::fs::write(
+        fixture.home.join("config.json"),
+        json!({"providers": {"bad": {"credentials": {"retry": {"command": sh(&script)}}}}})
+            .to_string(),
+    )
+    .unwrap();
+    let switching = switching(&fixture, &[]);
+    let rejection = rejected_with(&switching, &args("bad/bm"), Some("retry"), None);
+    assert_eq!(rejection.code, ErrorCode::CredentialMissing);
+    assert!(rejection.message.contains("`sh`"), "{}", rejection.message);
+    assert!(!keys(&switching).contains(&"bad".to_owned()));
+    assert_eq!(selected(&switching, "bad"), None);
+    rejected_with(&switching, &args("bad/bm"), Some("retry"), None);
+    assert_eq!(runs(&fixture.bad_marker), 2, "a failed read is read again");
+}
+
+/// A return to a label already read reuses its key without a read: after A
+/// and B are read, A's file rewritten (or removed) changes nothing, and no
+/// read of A's file happens.
+#[test]
+fn a_label_read_before_is_reused_without_a_read() {
+    for (name, remove) in [
+        ("fiber-switch-credential-reuse-rewritten", false),
+        ("fiber-switch-credential-reuse-removed", true),
+    ] {
+        let fixture = fixture(name);
+        let dir = fixture.root.path().join("keys");
+        std::fs::create_dir_all(&dir).unwrap();
+        let fa = dir.join("a");
+        let fb = dir.join("b");
+        std::fs::write(&fa, "key-a\n").unwrap();
+        std::fs::write(&fb, "key-b\n").unwrap();
+        std::fs::write(
+            fixture.home.join("config.json"),
+            json!({"providers": {"fake": {"credentials": {
+                "a": {"file": fa},
+                "b": {"file": fb},
+            }}}})
+            .to_string(),
+        )
+        .unwrap();
+        let switching = switching(&fixture, &[]);
+        let first = prepared_with(&switching, &args("fake/m"), Some("a"), None);
+        assert_eq!(first.credential, Some("a".to_owned()));
+        assert_eq!(
+            first.credential_files,
+            vec![fa.canonicalize().unwrap()],
+            "{name}"
+        );
+        let second = prepared_with(&switching, &args("fake/m"), Some("b"), None);
+        assert_eq!(second.credential, Some("b".to_owned()));
+        if remove {
+            std::fs::remove_file(&fa).unwrap();
+        } else {
+            std::fs::write(&fa, "key-a2\n").unwrap();
+        }
+        let again = prepared_with(&switching, &args("fake/m"), Some("a"), None);
+        assert_eq!(again.credential, Some("a".to_owned()));
+        assert!(
+            again.credential_files.is_empty(),
+            "{name}: the `(provider, label)` key is reused"
+        );
+    }
+}
+
+/// After a credential switch, a model switch with no label prepares under
+/// the selected one.
+#[test]
+fn a_model_switch_after_a_credential_switch_keeps_its_label() {
+    let fixture = fixture("fiber-switch-credential-kept");
+    config::store_credential(
+        &fixture.home,
+        "fake",
+        "other",
+        &config::Secret::new("k-other".into()),
+    )
+    .unwrap();
+    let switching = switching(&fixture, &[]);
+    let made = prepared_with(&switching, &args("fake/n"), Some("other"), None);
+    assert_eq!(made.credential, Some("other".to_owned()));
+    let again = prepared(&switching, &args("fake/m"), None);
+    assert_eq!(again.credential, Some("other".to_owned()));
+}
+
+/// A read cancelled while in progress rejects `closing` and publishes
+/// nothing: no `(provider, label)` entry, the provider's selected label
+/// still the old one.
+#[test]
+fn a_read_cancelled_in_progress_publishes_nothing() {
+    let fixture = fixture("fiber-switch-credential-cancel");
+    let gate = fixture.root.path().join("gate");
+    let started = fixture.root.path().join("started");
+    let script = format!(
+        "echo started >> '{}'; while [ ! -e '{}' ]; do sleep 0.05; done; echo x >> '{}'; echo other-key",
+        started.display(),
+        gate.display(),
+        fixture.marker.display(),
+    );
+    std::fs::write(
+        fixture.home.join("config.json"),
+        json!({"providers": {"other": {"credentials": {"waiting": {"command": sh(&script)}}}}})
+            .to_string(),
+    )
+    .unwrap();
+    let switching = switching(&fixture, &[]);
+    // The watchdog kills the gate-waiting command if the test dies: its
+    // command line holds the fixture's directory.
+    let watchdog = fakes::Watchdog::matching("fiber-switch-credential-cancel");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn({
+        let switching = Arc::clone(&switching);
+        move || {
+            tx.send(bounded_with(
+                &switching,
+                &args("other/m"),
+                Some("waiting"),
+                None,
+            ))
+            .unwrap_or(());
+        }
+    });
+    // The command signals it runs by writing `started`: the test cancels
+    // only then, so the read is in progress.
+    let (_tick, tock) = std::sync::mpsc::channel::<()>();
+    for _ in 0..200 {
+        if started.exists() {
+            break;
+        }
+        let _waited = tock.recv_timeout(Duration::from_millis(50));
+    }
+    assert!(started.exists(), "the credential command started");
+    switching.reads().cancel();
+    let answered = rx.recv_timeout(DEADLINE).expect("the preparation answered");
+    let rejection = match answered {
+        Ok(_) => panic!("the cancelled read prepared"),
+        Err(rejection) => rejection,
+    };
+    assert_eq!(rejection.code, ErrorCode::Closing);
+    assert!(!keys(&switching).contains(&"other".to_owned()));
+    assert_eq!(selected(&switching, "other"), None);
+    assert_eq!(
+        runs(&fixture.marker),
+        0,
+        "the killed command printed no key"
+    );
+    // Releases a survivor, if the cancel missed it.
+    std::fs::write(&gate, "").unwrap();
+    watchdog.stand_down(Duration::from_secs(5));
+}
+
+/// A scripted session's switch to a label fails at `connect` when the
+/// script cannot be read, publishing neither key nor selected label; with
+/// the script restored the same switch prepares under the old label.
+#[test]
+fn a_scripted_credential_switch_publishes_only_after_connect() {
+    let fixture = fixture("fiber-switch-credential-scripted-connect");
+    let switching = scripted_switching(&fixture, &["model=scripted/s.json"]);
+    std::fs::remove_file(fixture.workspace.join("s.json")).unwrap();
+    let rejection = rejected_with(&switching, &args("scripted/s.json"), Some("x"), None);
+    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+    assert!(!keys(&switching).contains(&"scripted".to_owned()));
+    assert_eq!(selected(&switching, "scripted"), None);
+    std::fs::write(
+        fixture.workspace.join("s.json"),
+        r#"{"steps": [{"text": "Hi."}]}"#,
+    )
+    .unwrap();
+    let made = prepared(&switching, &args("scripted/s.json"), None);
+    assert_eq!(made.credential, Some("default".to_owned()));
+}
+
+/// A scripted provider takes no credential, so it accepts any label and
+/// reads nothing (`docs/model-routing.md`, "The scripted provider").
+#[test]
+fn a_scripted_provider_accepts_any_label() {
+    let fixture = fixture("fiber-switch-credential-scripted-any");
+    let switching = scripted_switching(&fixture, &["model=scripted/s.json"]);
+    let made = prepared_with(&switching, &args("scripted/s.json"), Some("anything"), None);
+    assert_eq!(made.credential, Some("anything".to_owned()));
+    assert!(made.credential_files.is_empty());
+}
+
+/// On a Lua `credential()` provider the label reaches `credential()`: the
+/// current label prepares, and so does one no source names.
+#[test]
+fn a_lua_credential_provider_takes_any_label_to_credential() {
+    let (fixture, _, _) = lua_fixture("fiber-switch-credential-lua");
+    let switching = switching(&fixture, &[]);
+    let current = prepared_with(&switching, &args("lp/lm"), Some("default"), None);
+    assert_eq!(current.credential, Some("default".to_owned()));
+    let other = prepared_with(&switching, &args("lp/lm"), Some("other"), None);
+    assert_eq!(other.credential, Some("other".to_owned()));
+}
+
+/// On a provider with no `credential()`, the current label is accepted even
+/// when no source names it, such as a startup map label.
+#[test]
+fn the_current_label_needs_no_source() {
+    let fixture = fixture("fiber-switch-credential-current");
+    let credentials: Credentials = [("fake".to_owned(), keyed("recorded"))]
+        .into_iter()
+        .collect();
+    let switching = assembled(&fixture.home, config(&fixture, &[]), credentials, &[]);
+    assert!(config(&fixture, &[]).labels(&fake_data()).is_empty());
+    let made = prepared_with(&switching, &args("fake/n"), Some("recorded"), None);
+    assert_eq!(made.credential, Some("recorded".to_owned()));
+    let rejection = rejected_with(&switching, &args("fake/n"), Some("nope"), None);
+    assert_eq!(rejection.code, ErrorCode::CredentialMissing);
+}
+
+fn fake_data() -> config::ProviderData {
+    config::ProviderData {
+        name: "fake".into(),
+        credential: None,
+        credential_name: None,
+        headers: Default::default(),
+        placeholders: Default::default(),
+        models: Vec::new(),
+        reviewer_model: None,
+    }
 }

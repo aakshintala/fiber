@@ -743,7 +743,7 @@ cannot be used, or a `credential()` call that errors, fails with
 `credential_failed`, except a failed OAuth refresh ("Keys, tokens and OAuth").
 Neither is retried.
 
-A `model` switch reads the new provider's credential when the switch is
+A `model` or `credential` switch reads the credential it switches to when the switch is
 prepared, if this process has not read it yet. A failure rejects the switch
 with the same codes and keeps nothing, so the next switch reads it again.
 

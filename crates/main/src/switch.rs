@@ -29,11 +29,22 @@ use crate::lua_providers::{Access, KeyAndSigner};
 /// key and signer.
 pub(crate) type Credentials = BTreeMap<String, (String, KeyAndSigner)>;
 
-/// Each credential this process has read, by provider name: the label and
-/// the key, `None` when a Lua `credential()` supplies the token. A key here
-/// is never read again, so a `command` source runs once per process. No
-/// signer is kept: it holds its Lua provider, which would stay loaded.
-type Keys = BTreeMap<String, (String, Option<Secret>)>;
+/// Each key this process has read, by provider and label; `None` when a Lua
+/// `credential()` supplies the token.
+type Keys = BTreeMap<(String, String), Option<Secret>>;
+
+/// What this process remembers of each provider's credential: the keys it
+/// has read and the label each provider is on, under one lock so the two
+/// change together, only once the whole preparation has succeeded. A key
+/// here is never read again, so a `command` source runs once per process.
+/// No signer is kept: it holds its Lua provider, which would stay loaded.
+#[derive(Default)]
+struct Remembered {
+    /// Each key read, by provider and label.
+    keys: Keys,
+    /// The label each provider is on.
+    selected: BTreeMap<String, String>,
+}
 
 /// What starts a Lua provider a switch needs and the session does not hold
 /// loaded.
@@ -50,8 +61,9 @@ pub(crate) struct Loader {
 
 /// What preparing a switch reads: the whole startup registry, holding no
 /// Lua provider, every model every provider names before placeholders are
-/// filled, the configuration, each key read so far and the Lua providers
-/// loaded now: the session's and its reviewer's.
+/// filled, the configuration, each key read so far with the label each
+/// provider is on, and the Lua providers loaded now: the session's and its
+/// reviewer's.
 pub(crate) struct Switching {
     registry: Providers,
     naming: Vec<(String, String)>,
@@ -59,7 +71,7 @@ pub(crate) struct Switching {
     /// Each configured `tools."<name>".max_result_bytes`, for a hosted
     /// search the switch declares.
     caps: r#loop::ResultCaps,
-    keys: Mutex<Keys>,
+    remembered: Mutex<Remembered>,
     loaded: Mutex<BTreeMap<String, Arc<LuaProvider>>>,
     loader: Loader,
     reads: Arc<Reads>,
@@ -97,16 +109,17 @@ impl Switching {
         loader: Loader,
     ) -> Self {
         registry.forget_lua();
-        let keys = credentials
-            .into_iter()
-            .map(|(name, (label, (key, _)))| (name, (label, key)))
-            .collect();
+        let mut remembered = Remembered::default();
+        for (name, (label, (key, _))) in credentials {
+            remembered.keys.insert((name.clone(), label.clone()), key);
+            remembered.selected.insert(name, label);
+        }
         Self {
             registry,
             naming,
             caps: crate::settings::result_caps(&config),
             config,
-            keys: Mutex::new(keys),
+            remembered: Mutex::new(remembered),
             loaded: Mutex::new(loaded.into_iter().collect()),
             loader,
             reads: Arc::default(),
@@ -122,7 +135,7 @@ impl Switching {
     /// publishing to `door` when a switch applies.
     pub(crate) fn closure(self, door: Door) -> r#loop::Prepare {
         let shared = Arc::new(self);
-        Arc::new(move |args, chosen| prepare(&shared, &door, args, chosen))
+        Arc::new(move |args, label, chosen| prepare(&shared, &door, args, label, chosen))
     }
 
     /// Holds exactly `keep` loaded: the Lua providers of the session and the
@@ -139,13 +152,25 @@ impl Switching {
 
     /// What the read for provider `name` starts from: its label, its key
     /// when this process already read one, and its Lua provider when it is
-    /// loaded.
-    fn want(&self, name: &str) -> Want {
-        let known = self
-            .keys
+    /// loaded. `label` is the `credential` command's label, else the
+    /// provider's selected label, else the configured one.
+    fn want(&self, name: &str, label: Option<&str>) -> Want {
+        let remembered = self
+            .remembered
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(name)
+            .unwrap_or_else(PoisonError::into_inner);
+        let selected = match label {
+            Some(label) => label.to_owned(),
+            None => remembered.selected.get(name).cloned().unwrap_or_else(|| {
+                match self.registry.get(name) {
+                    Some(data) => self.config.credential_label(data),
+                    None => String::new(),
+                }
+            }),
+        };
+        let known = remembered
+            .keys
+            .get(&(name.to_owned(), selected.clone()))
             .cloned();
         let lua = self
             .loaded
@@ -153,15 +178,10 @@ impl Switching {
             .unwrap_or_else(PoisonError::into_inner)
             .get(name)
             .cloned();
-        let label = match (&known, self.registry.get(name)) {
-            (Some((label, _)), _) => label.clone(),
-            (None, Some(data)) => self.config.credential_label(data),
-            (None, None) => String::new(),
-        };
         Want {
             name: name.to_owned(),
-            label,
-            known: known.map(|(_, key)| key),
+            label: selected,
+            known,
             lua,
         }
     }
@@ -196,10 +216,44 @@ impl Switching {
                 ),
                 (None, None) => None,
             };
-            let read =
-                crate::lua_providers::session_credential(lua.as_ref(), data, &want.label, || {
-                    if let Some(Some(key)) = want.known {
+            let read = crate::lua_providers::session_credential(
+                lua.as_ref(),
+                data,
+                &want.label,
+                || {
+                    if let Some(key) = want.known.clone().flatten() {
                         return Ok(key);
+                    }
+                    // A label that names no credential is `credential_missing`,
+                    // naming the labels there are, before any configured
+                    // source is read or any command runs; the label the
+                    // provider is on now answers without a read
+                    // (`docs/model-routing.md`, "Which credential a session uses").
+                    // A Lua `credential()` provider never reaches this
+                    // callback, and a scripted provider never reads, so both
+                    // accept any label.
+                    let current = self
+                        .remembered
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .selected
+                        .get(&want.name)
+                        .cloned()
+                        .unwrap_or_else(|| self.config.credential_label(data));
+                    let labels = self.config.labels(data);
+                    if want.label != current && !labels.contains(&want.label) {
+                        let listed = if labels.is_empty() {
+                            "none".to_owned()
+                        } else {
+                            labels.join(", ")
+                        };
+                        return Err(doors::failure(
+                            ErrorCode::CredentialMissing,
+                            format!(
+                                "`{}` has no credential label `{}`. The labels for `{}` are: {listed}",
+                                want.name, want.label, want.name
+                            ),
+                        ));
                     }
                     let run = |command: &mut std::process::Command| self.reads.command(command);
                     let read = crate::credential::switch_credential(
@@ -210,7 +264,8 @@ impl Switching {
                     )?;
                     file = read.file;
                     Ok(read.secret)
-                })?;
+                },
+            )?;
             Ok(Access::new(lua.as_ref(), read))
         })?;
         Ok(Got {
@@ -247,13 +302,18 @@ type Read = Result<(Got, Option<Result<Got, Failure>>), Failure>;
 /// Lua provider, connecting, the cache lifetime, the handoff settings, the
 /// addendum and the hosted search. Every check that can reject runs before
 /// the read, so a read's key is cached only for an admitted switch; a
-/// failed read rejects with its own code and caches nothing. The
-/// reviewer's failure is not a rejection: the loop gets it, and every
+/// failed read rejects with its own code and caches nothing. The keys and
+/// the selected labels publish together, under one lock, only after the
+/// whole preparation (read, `connect`, the reviewer choice) has succeeded.
+/// The reviewer's failure is not a rejection: the loop gets it, and every
 /// reviewed call escalates it (`docs/permissions.md`, "How it runs").
+/// `label` is the `credential` command's label; `None` keeps the
+/// provider's selected label.
 pub(crate) fn prepare(
     switching: &Arc<Switching>,
     door: &Door,
     args: &ModelArgs,
+    label: Option<&str>,
     chosen: Option<ThinkingLevel>,
 ) -> Result<r#loop::Prepared, Rejection> {
     // An unparseable thinking level rejects before any lookup.
@@ -299,12 +359,12 @@ pub(crate) fn prepare(
     }
     let (web_search, publish) = hosted(switching, door, resolved.model.web_search.as_deref())?;
     let session = resolved.provider.name.clone();
-    let session_want = switching.want(&session);
+    let session_want = switching.want(&session, label);
     let judge_want = judge
         .as_ref()
         .ok()
         .filter(|(_, name)| *name != session)
-        .map(|(_, name)| switching.want(name));
+        .map(|(_, name)| switching.want(name, None));
     let shared = Arc::clone(switching);
     let read: Read = switching
         .reads
@@ -314,20 +374,6 @@ pub(crate) fn prepare(
         })
         .map_err(rejection)?;
     let (got, judge_got) = read.map_err(rejection)?;
-    {
-        let mut keys = switching
-            .keys
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        keys.entry(session.clone())
-            .or_insert_with(|| (got.label.clone(), got.access.key.clone()));
-        if let Some(Ok(judged)) = &judge_got
-            && let Ok((_, name)) = &judge
-        {
-            keys.entry(name.clone())
-                .or_insert_with(|| (judged.label.clone(), judged.access.key.clone()));
-        }
-    }
     let here = crate::Here {
         workspace: switching.loader.workspace.clone(),
         clock: Arc::clone(&switching.loader.clock),
@@ -358,6 +404,34 @@ pub(crate) fn prepare(
         &here,
         &mut lookup,
     );
+    // The keys and the selected labels publish together, under one lock,
+    // only once the whole preparation has succeeded: a `connect` failure
+    // or a cancelled read publishes nothing (`docs/model-routing.md`,
+    // "When a credential is missing or fails").
+    {
+        let mut remembered = switching
+            .remembered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        remembered
+            .keys
+            .entry((session.clone(), got.label.clone()))
+            .or_insert_with(|| got.access.key.clone());
+        remembered
+            .selected
+            .insert(session.clone(), got.label.clone());
+        if let Some(Ok(judged)) = &judge_got
+            && let Ok((_, name)) = &judge
+        {
+            remembered
+                .keys
+                .entry((name.clone(), judged.label.clone()))
+                .or_insert_with(|| judged.access.key.clone());
+            remembered
+                .selected
+                .insert(name.clone(), judged.label.clone());
+        }
+    }
     // Loaded after the switch applies: the session's Lua provider, and the
     // reviewer's when the reviewer stands.
     let judged = judge_got.and_then(Result::ok);
