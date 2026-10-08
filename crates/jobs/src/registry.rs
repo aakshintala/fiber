@@ -148,7 +148,6 @@ struct Job {
     claimed: bool,
     /// Whether this is a Fiber delegate: only `delegate_spawn` opens one.
     /// The runner marks it; `stop_delegates` reads it.
-    #[allow(dead_code, reason = "the delegate tool opens one in task 3.4")]
     delegate: bool,
     /// A delegate's finish, kept past the end for a later `wait`.
     finished: Option<DelegateFinished>,
@@ -281,7 +280,6 @@ impl Registry {
     /// an output file: the child writes its own log at `output_path`.
     /// Only `delegate_spawn` opens one. The id is minted up front with
     /// [`mint_job_id`], so the spawn and the record name the same job.
-    #[allow(dead_code, reason = "the delegate tool opens one in task 3.4")]
     pub(crate) fn open_started(
         self: &Arc<Self>,
         job_id: JobId,
@@ -607,7 +605,6 @@ fn mint_id() -> String {
 
 /// Mints the id before spawning, so the launch and the record name the
 /// same delegate job.
-#[allow(dead_code, reason = "the delegate tool mints one in task 3.4")]
 pub(crate) fn mint_job_id() -> JobId {
     JobId(mint_id())
 }

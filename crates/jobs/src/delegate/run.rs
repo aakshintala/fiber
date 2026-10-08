@@ -27,21 +27,21 @@ use crate::registry::Finish;
 
 /// Resolves a `fiber:` model reference to the `provider/model[:level]` the
 /// child is started with, or lists the valid references for the refusal.
-pub(crate) type Resolve = Arc<dyn Fn(&str) -> Result<String, Vec<String>> + Send + Sync>;
+pub type Resolve = Arc<dyn Fn(&str) -> Result<String, Vec<String>> + Send + Sync>;
 
 /// Builds the child's command from its launch. The runner sets the stdio,
 /// the process group and the lifeline around it.
-pub(crate) type Launch = Arc<dyn Fn(&Launched) -> Command + Send + Sync>;
+pub type Launch = Arc<dyn Fn(&Launched) -> Command + Send + Sync>;
 
 /// Watches the delegate's socket, calling `on_line` for each envelope
 /// until `fiber_exited` or EOF: the jobs-local mirror of `doors::watch`,
 /// which `main` wires up in part 4.
-pub(crate) type Watch =
+pub type Watch =
     Arc<dyn Fn(&SessionId, &mut dyn FnMut(&Envelope)) -> io::Result<Watched> + Send + Sync>;
 
 /// What a watch returned: the jobs-local mirror of `doors::Watched`.
 #[derive(Debug)]
-pub(crate) enum Watched {
+pub enum Watched {
     /// A `fiber_exited` line arrived: the session wrote its last line.
     Exited,
     /// The connection closed first.
@@ -52,19 +52,19 @@ pub(crate) enum Watched {
 }
 
 /// What the launcher receives: everything the child's argv needs.
-pub(crate) struct Launched {
+pub struct Launched {
     /// The delegate's session.
-    pub(crate) session_id: SessionId,
+    pub session_id: SessionId,
     /// The delegate's job in its parent: its id for life.
-    pub(crate) job_id: JobId,
+    pub job_id: JobId,
     /// The parent session.
-    pub(crate) parent: SessionId,
+    pub parent: SessionId,
     /// `provider/model[:level]`, resolved.
-    pub(crate) model: String,
+    pub model: String,
     /// The prompt, on argv.
-    pub(crate) prompt: String,
+    pub prompt: String,
     /// The parent's workspace, which the delegate shares.
-    pub(crate) workspace: PathBuf,
+    pub workspace: PathBuf,
 }
 
 /// The first retry waits this long after a refused or dropped watch.

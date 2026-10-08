@@ -379,17 +379,21 @@ fn a_child_that_exits_before_any_connect_uses_stdout() {
 fn a_delayed_drain_still_feeds_the_fold() {
     let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-delayed");
-    let fifo = fifo(dir.path(), "release");
+    let release = fifo(dir.path(), "release");
+    let ready_fifo = fifo(dir.path(), "ready");
     // The member leaves the leader's group before it blocks: the reap's
     // SIGKILL cannot reach it, and the pipe stays open until it prints.
-    // Its command line carries the fifo path, which the watchdog below
-    // matches as a backstop.
+    // The leader leaves only after the member is set up, so the pipe is
+    // never unheld. Its command line carries the fifo path, which the
+    // watchdog below matches as a backstop.
     let line = json_line(7, "Late.");
     let shell = format!(
-        "perl -MPOSIX -e 'POSIX::setsid(); open(my $F, \"<\", $ARGV[0]) or die $!; my $x = <$F>; print STDOUT \"$ARGV[1]\\n\";' '{}' '{line}' & exit 0",
-        fifo.display()
+        "perl -MPOSIX -e 'POSIX::setsid(); open(my $W, \">\", $ARGV[2]) or die $!; print $W \"ok\\n\"; close $W; open(my $F, \"<\", $ARGV[0]) or die $!; my $x = <$F>; print STDOUT \"$ARGV[1]\\n\";' '{}' '{line}' '{}' & read _ < '{}'; exit 0",
+        release.display(),
+        ready_fifo.display(),
+        ready_fifo.display()
     );
-    let watchdog = Watchdog::matching(&fifo.to_string_lossy());
+    let watchdog = Watchdog::matching(&release.to_string_lossy());
     // The watch never connects: only the drain can carry the line.
     let rig = rig(vec![]);
     rig.start(&shell, Duration::from_secs(30), 1024);
@@ -401,7 +405,7 @@ fn a_delayed_drain_still_feeds_the_fold() {
             .recv_timeout(Duration::from_millis(20))
             .expect_err("the fold waits for the drain");
     }
-    std::fs::write(&fifo, "go\n").unwrap();
+    std::fs::write(&release, "go\n").unwrap();
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Completed);
     assert_eq!(

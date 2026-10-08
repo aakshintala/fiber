@@ -6,6 +6,6 @@ mod delegate;
 mod registry;
 mod tool;
 
-pub use delegate::group::kill_every_group;
+pub use delegate::{DelegateSpawn, Launch, Launched, Resolve, Watch, Watched, kill_every_group};
 pub use registry::Registry;
 pub use tool::JobsTool;
