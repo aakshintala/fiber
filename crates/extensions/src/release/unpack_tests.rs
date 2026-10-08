@@ -4,6 +4,8 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use fakes::ustar::{archive, checksum, gzip, header};
 
@@ -58,9 +60,26 @@ fn link(name: &str, target: &str) -> [u8; 512] {
     header(name, b'2', 0, 0o777, target)
 }
 
+/// `unpack` on its own thread, failing the test after ten seconds: a loop
+/// that stops making progress fails the test rather than hanging it.
+fn timed(gz: &[u8], into: &Path, name: &str, limits: &Limits) -> Result<(), Error> {
+    let (gz, into, name) = (gz.to_vec(), into.to_path_buf(), name.to_owned());
+    let limits = Limits {
+        bytes: limits.bytes,
+        members: limits.members,
+    };
+    let (send, receive) = mpsc::channel();
+    std::thread::spawn(move || {
+        send.send(unpack(&gz, &into, &name, &limits)).unwrap_or(());
+    });
+    receive
+        .recv_timeout(Duration::from_secs(10))
+        .expect("unpack returns within ten seconds")
+}
+
 fn run(tar: &[u8], limits: &Limits) -> (Out, Result<(), Error>) {
     let out = Out::new();
-    let result = unpack(&gzip(tar), &out.target(), "fixture.tar.gz", limits);
+    let result = timed(&gzip(tar), &out.target(), "fixture.tar.gz", limits);
     (out, result)
 }
 
@@ -249,6 +268,28 @@ fn a_stream_that_ends_early_is_refused() {
 }
 
 #[test]
+fn a_stream_that_ends_inside_a_file_of_whole_blocks_is_refused_there() {
+    // No padding follows a 512-byte file, so only the data read sees it end.
+    let full = archive(&[(file("a", &[b'x'; 512]), &[b'x'; 512])]);
+    refused_tar(&full[..512 + 100], &LIMITS, "ends inside `a`");
+    refused_tar(&full[..512 + 511], &LIMITS, "ends inside `a`");
+}
+
+#[test]
+fn a_stream_that_ends_inside_a_files_padding_is_refused_there() {
+    // The data is whole and the padding is not.
+    let full = archive(&[(file("a", b"hello"), b"hello")]);
+    refused_tar(&full[..512 + 5], &LIMITS, "ends inside `a`");
+    refused_tar(&full[..1023], &LIMITS, "ends inside `a`");
+}
+
+#[test]
+fn the_release_limits_are_256_mib_and_100_000_members() {
+    assert_eq!(LIMITS.bytes, 268_435_456);
+    assert_eq!(LIMITS.members, 100_000);
+}
+
+#[test]
 fn data_after_one_zero_block_is_refused() {
     let mut tar = archive(&[(file("a", b"1"), b"1")]);
     tar.truncate(1024 + 512);
@@ -417,6 +458,17 @@ fn the_uncompressed_size_is_capped() {
     let (out, result) = run(&tar, &limits);
     result.unwrap();
     assert_eq!(fs::read(out.at("a")).unwrap(), data);
+    // One byte under the archive is over the cap; one byte over is not.
+    let under = Limits {
+        bytes: 4095,
+        members: 10,
+    };
+    refused_tar(&tar, &under, "holds more than 4095 bytes uncompressed");
+    let over = Limits {
+        bytes: 4097,
+        members: 10,
+    };
+    run(&tar, &over).1.unwrap();
 }
 
 #[test]
@@ -440,7 +492,7 @@ fn the_member_count_is_capped() {
 #[test]
 fn input_that_is_not_gzip_is_refused() {
     let out = Out::new();
-    let err = unpack(b"not gzip at all", &out.target(), "x.tar.gz", &LIMITS).unwrap_err();
+    let err = timed(b"not gzip at all", &out.target(), "x.tar.gz", &LIMITS).unwrap_err();
     assert!(matches!(err, Error::BadArchive { .. }), "{err:?}");
     assert!(
         err.to_string().contains("is not a valid gzip stream"),
@@ -453,7 +505,7 @@ fn a_failed_write_is_an_io_error() {
     let out = Out::new();
     let gone = out.held.path().join("gone");
     let tar = gzip(&archive(&[(file("a", b"1"), b"1")]));
-    let err = unpack(&tar, &gone, "x.tar.gz", &LIMITS).unwrap_err();
+    let err = timed(&tar, &gone, "x.tar.gz", &LIMITS).unwrap_err();
     assert!(matches!(err, Error::Io { .. }), "{err:?}");
 }
 
@@ -511,7 +563,7 @@ fn the_gzip_trailer_and_what_follows_it_are_checked() {
     for (label, change, why) in cases {
         let out = Out::new();
         let gz = gz_changed(&tar, change);
-        let err = unpack(&gz, &out.target(), "x.tar.gz", &LIMITS).unwrap_err();
+        let err = timed(&gz, &out.target(), "x.tar.gz", &LIMITS).unwrap_err();
         assert!(matches!(err, Error::BadArchive { .. }), "{label}: {err:?}");
         assert!(err.to_string().contains(why), "{label}: {err}");
         out.outside_untouched();
@@ -544,6 +596,19 @@ fn a_tar_record_of_zero_padding_is_accepted() {
     let (out, result) = run(&tar, &LIMITS);
     result.unwrap();
     assert_eq!(fs::read(out.at("a")).unwrap(), b"1");
+}
+
+#[test]
+fn padding_of_exactly_one_read_is_accepted_and_checked_to_its_end() {
+    // 4,096 bytes of padding fill one read exactly; the read after it finds
+    // the end. Non-zero data in a second read is still seen.
+    let tar = archive(&[(file("a", b"1"), b"1")]);
+    let mut exact = tar.clone();
+    exact.resize(tar.len() + 4096, 0);
+    run(&exact, &LIMITS).1.unwrap();
+    let mut after = exact;
+    after.push(1);
+    refused_tar(&after, &LIMITS, "data follows the end blocks");
 }
 
 #[test]

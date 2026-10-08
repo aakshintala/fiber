@@ -45,6 +45,19 @@ fn a_long_name_is_split_into_prefix_and_name() {
 }
 
 #[test]
+fn a_long_name_splits_at_the_last_slash_that_fits_both_fields() {
+    // Split at the last `/`, the prefix would be 161 bytes; at the one
+    // before it, the prefix is 100 and the name 71.
+    let name = format!("{}/{}", "q".repeat(60), "n".repeat(10));
+    let long = format!("{}/{name}", "p".repeat(100));
+    let block = header(&long, b'0', 0, 0o644, "");
+    assert_eq!(&block[0..71], name.as_bytes());
+    assert_eq!(block[71], 0);
+    assert_eq!(&block[345..445], "p".repeat(100).as_bytes());
+    assert_eq!(block[445], 0);
+}
+
+#[test]
 fn a_symlink_header_holds_its_target() {
     let block = header("link", b'2', 0, 0o777, "sub/target");
     assert_eq!(&block[157..167], b"sub/target");

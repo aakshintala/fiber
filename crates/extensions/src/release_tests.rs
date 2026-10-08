@@ -141,6 +141,31 @@ fn a_failed_move_aside_leaves_the_docs() {
     assert_eq!(fs::read_to_string(docs.at("docs/v")).unwrap(), "old");
 }
 
+#[test]
+fn docs_that_cannot_be_looked_at_are_an_error_before_any_rename() {
+    // `file/docs` cannot be looked at, since `file` is not a directory: the
+    // error is that, not a first install's rename.
+    let docs = Docs::new(false);
+    fs::write(docs.at("file"), "x").unwrap();
+    let calls = Cell::new(0);
+    let err = swap_docs(
+        &docs.at(".docs.new"),
+        &docs.at("file/docs"),
+        &docs.at(".docs.old"),
+        &|_: &Path, _: &Path| {
+            calls.set(calls.get() + 1);
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    let Error::Io { path, source } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(path, &docs.at("file/docs"));
+    assert_eq!(source.kind(), io::ErrorKind::NotADirectory, "{err}");
+    assert_eq!(calls.get(), 0);
+}
+
 /// A release with `docs/v` holding `docs`, and `anthropic` and `memory`.
 fn serve(docs: &str) -> fakes::ProviderServer {
     let manifest = |short: &str, kind: &str| {
@@ -263,6 +288,24 @@ fn a_taken_scratch_name_is_skipped_not_reused() {
     assert_ne!(got.path, taken);
     assert_eq!(fs::read_dir(&got.path).unwrap().count(), 0);
     assert!(taken.join("mine").exists());
+}
+
+#[test]
+fn a_scratch_directory_that_cannot_be_made_is_that_error_not_a_retry() {
+    let held = fakes::TempDir::new("fiber-scratch-missing");
+    let missing = held.path().join("missing");
+    let before = super::NEXT.load(std::sync::atomic::Ordering::Relaxed);
+    let Err(err) = scratch(&missing) else {
+        panic!("a scratch directory was made under a missing directory");
+    };
+    let Error::Io { path, source } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(path.parent(), Some(missing.as_path()), "{err}");
+    assert_eq!(source.kind(), io::ErrorKind::NotFound, "{err}");
+    // Other tests may take names meanwhile, but never all the tries.
+    let after = super::NEXT.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(after - before < super::SCRATCH_TRIES, "{before}..{after}");
 }
 
 /// This process's scratch directories left in the system temporary

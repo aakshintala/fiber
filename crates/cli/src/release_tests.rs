@@ -8,7 +8,7 @@ use contract::ErrorCode;
 use fakes::ustar::{archive, gzip, header, sha256};
 use serde_json::json;
 
-use super::run;
+use super::{release_install, run};
 
 /// A release of `anthropic` and `memory`, served at
 /// `/download/v0.0.0/`. `extensions_sum` replaces the extensions archive's
@@ -140,4 +140,19 @@ fn a_checksum_mismatch_is_io_failed_and_creates_no_home() {
     );
     assert!(err.is_empty());
     assert!(!home.exists());
+}
+
+#[test]
+fn release_install_exits_2_for_another_version() {
+    // Another version is refused before any request, and Fiber home is
+    // only resolved, never created; a refusal is a usage error, exit 2.
+    let clock = fakes::clock::FakeClock::new();
+    let code = release_install(
+        "9.9.9",
+        Some("http://127.0.0.1:9"),
+        "0.0.0",
+        Some("abc"),
+        &*clock,
+    );
+    assert_eq!(code, 2);
 }

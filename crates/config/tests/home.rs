@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::fs;
 
 use common::{Setup, mode};
-use config::{create_fiber_home, fiber_home, fiber_home_path};
+use config::{create_fiber_home, fiber_home, fiber_home_path, fiber_home_path_from_env};
 use contract::ErrorCode;
 
 #[test]
@@ -80,6 +80,17 @@ fn fiber_home_path_names_the_directory_without_creating_it() {
     let dot = fiber_home_path(None, Some(setup.root().join("bob").into())).unwrap();
     assert_eq!(dot, setup.root().join("bob/.fiber"));
     assert!(!setup.root().join("bob").exists());
+}
+
+#[test]
+fn fiber_home_path_from_env_reads_fiber_home_and_home_and_creates_nothing() {
+    let fiber_home = std::env::var_os("FIBER_HOME");
+    let home = std::env::var_os("HOME");
+    let want = fiber_home_path(fiber_home, home).map_err(|e| e.to_string());
+    let existed = want.as_ref().map(|dir| dir.exists());
+    let got = fiber_home_path_from_env().map_err(|e| e.to_string());
+    assert_eq!(got, want);
+    assert_eq!(want.as_ref().map(|dir| dir.exists()), existed);
 }
 
 #[test]

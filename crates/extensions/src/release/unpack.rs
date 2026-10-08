@@ -31,6 +31,9 @@ pub(crate) const LIMITS: Limits = Limits {
 
 const BLOCK: usize = 512;
 
+/// How many decoded bytes one read asks for.
+const CHUNK: usize = 4096;
+
 /// Why an unpack stopped: a refusal of the archive, or a failed write.
 enum Fail {
     Bad(String),
@@ -139,7 +142,7 @@ fn members(decoder: &mut GzDecoder<&[u8]>, into: &Path, limits: &Limits) -> Resu
 /// Reads on to the decoder's end, so the gzip trailer's CRC32 and length
 /// are checked. Only zero padding may follow the end blocks.
 fn drain(stream: &mut Stream<impl Read>) -> Result<(), Fail> {
-    let mut buf = [0u8; 8 * BLOCK];
+    let mut buf = [0u8; CHUNK];
     loop {
         let n = stream.fill(&mut buf)?;
         if !zero(buf.get(..n).unwrap_or_default()) {
@@ -318,8 +321,8 @@ fn parent(into: &Path, member: &Header) -> Result<PathBuf, Fail> {
                     at.strip_prefix(into).unwrap_or(&at).display()
                 )));
             }
-            Err(e) if e.kind() == ErrorKind::NotFound => make_dir(&at)?,
-            Err(e) => return Err(Fail::Io(at, e)),
+            // A path that cannot be read is made, and making it says why not.
+            Err(_) => make_dir(&at)?,
         }
     }
     at.push(last);
@@ -348,8 +351,7 @@ fn write(stream: &mut Stream<impl Read>, into: &Path, member: &Header) -> Result
         Kind::Dir => match fs::symlink_metadata(&path) {
             Ok(meta) if meta.is_dir() => Ok(()),
             Ok(_) => Err(twice()),
-            Err(e) if e.kind() == ErrorKind::NotFound => make_dir(&path),
-            Err(e) => Err(Fail::Io(path, e)),
+            Err(_) => make_dir(&path),
         },
         Kind::Symlink => symlink(&member.link, &path).map_err(failed),
         Kind::File => {
@@ -378,7 +380,7 @@ fn copy(
     path: &Path,
 ) -> Result<(), Fail> {
     let short = || Fail::Bad(format!("the archive ends inside `{}`", member.shown));
-    let mut buf = [0u8; 8 * BLOCK];
+    let mut buf = [0u8; CHUNK];
     let mut left = member.size;
     while left > 0 {
         let want = usize::try_from(left).map_or(buf.len(), |l| l.min(buf.len()));
