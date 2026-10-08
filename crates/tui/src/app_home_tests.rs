@@ -76,6 +76,44 @@ fn an_attached_app_draws_the_conversation_screen() {
     assert!(app.home_screen().is_none());
 }
 
+/// `America/New_York`, looked up by name: the same lookup the system zone
+/// needs.
+fn new_york() -> jiff::tz::TimeZone {
+    jiff::tz::TimeZone::get("America/New_York").unwrap_or(jiff::tz::TimeZone::UTC)
+}
+
+/// A `turn_started` for `session` saying `text` at `ts` milliseconds.
+fn turn_started_at(session: &str, text: &str, ts: u64) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"input": [{"type": "message",
+            "source": "driver",
+            "content": [{"type": "text", "text": text}]}]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+#[test]
+fn the_zone_survives_a_session_switch() {
+    let mut app = home();
+    app.set_zone(new_york());
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.go_home();
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    // 2026-10-08T14:15Z, 10:15 in New York.
+    app.on_line(turn_started_at("s_bbbbbbbbbbbbbbbb", "go", 1791468900000));
+    let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
+    assert_eq!(texts, vec![" go ".to_owned(), "10:15".to_owned()]);
+}
+
 #[test]
 fn the_key_map_draws_over_home() {
     let mut app = home();

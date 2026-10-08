@@ -25,6 +25,7 @@ mod keymap;
 mod keys;
 mod layout;
 mod link;
+mod local_time;
 mod logical;
 mod markdown;
 mod mouse;

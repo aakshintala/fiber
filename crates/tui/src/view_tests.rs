@@ -6,7 +6,7 @@ use crate::keys::{Edit, Key};
 use crate::link::Line;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::{Alignment, Position, Rect};
 use ratatui::style::Modifier;
 use std::path::PathBuf;
 
@@ -64,6 +64,34 @@ fn turn_started(session: &str, text: &str) -> Line {
         }]}),
         None,
     )
+}
+
+/// A `turn_started` envelope with one message at `ts` milliseconds.
+fn turn_started_at(session: &str, text: &str, ts: u64) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"input": [{
+            "type": "message",
+            "source": "driver",
+            "content": [{"type": "text", "text": text}],
+        }]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+/// A row of `buf` as text, trailing spaces kept.
+fn row_text(buf: &Buffer, y: u16) -> String {
+    (0..buf.area.width)
+        .map(|x| buf[(x, y)].symbol().to_owned())
+        .collect()
 }
 
 /// A `turn_completed` envelope.
@@ -128,6 +156,50 @@ fn failed_turn() {
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
     app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "failed"));
     insta::assert_snapshot!("failed_turn", screen(&app));
+}
+
+/// `America/New_York`, looked up by name: the same lookup the system zone
+/// needs.
+fn new_york() -> jiff::tz::TimeZone {
+    jiff::tz::TimeZone::get("America/New_York").unwrap_or(jiff::tz::TimeZone::UTC)
+}
+
+#[test]
+fn prompt_bubble_shows_the_local_time_under_it() {
+    let mut app = empty();
+    app.set_zone(new_york());
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    // 2026-10-08T14:15Z, 10:15 in New York.
+    app.on_line(turn_started_at("s_aaaaaaaaaaaaaaaa", "go", 1791468900000));
+    let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
+    assert_eq!(texts, vec![" go ".to_owned(), "10:15".to_owned()]);
+    let time = app
+        .lines()
+        .into_iter()
+        .find(|line| line.to_string() == "10:15")
+        .unwrap_or_default();
+    assert!(time.style.add_modifier.contains(Modifier::DIM));
+    assert_eq!(time.alignment, Some(Alignment::Right));
+    // The rendered row ends in the conversation's last column, on the row
+    // under the bubble.
+    let area = Rect::new(0, 0, WIDTH, HEIGHT);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let at = (0..HEIGHT)
+        .find(|y| row_text(&buf, *y).contains("10:15"))
+        .expect("the time row is drawn");
+    assert!(row_text(&buf, at).ends_with("10:15"));
+    assert!(row_text(&buf, at.saturating_sub(1)).contains(" go "));
+    insta::assert_snapshot!("prompt_bubble_with_time", screen(&app));
+}
+
+#[test]
+fn prompt_bubble_defaults_to_utc() {
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started_at("s_aaaaaaaaaaaaaaaa", "go", 1791468900000));
+    let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
+    assert_eq!(texts, vec![" go ".to_owned(), "14:15".to_owned()]);
 }
 
 #[test]
@@ -203,10 +275,16 @@ fn page_down_to_the_bottom_follows_again() {
         app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", &format!("prompt {n}")));
     }
     let bottom = screen(&app);
-    // The bottom shows prompts 20 to 30. A page is the conversation's 11
+    // The bottom shows prompt 25's time through prompt 30: two rows a
+    // turn over sixty rows, eleven of conversation. A page is those 11
     // rows less one, and the top stops at the first row.
+    let time = format!("{:>60}", "00:00");
+    let prompt = |n: u32| format!("{:>59}", format!("prompt {n}"));
     app.on_key(Key::PageUp, now);
-    assert!(screen(&app).starts_with(format!("{:>59}\n", "prompt 10").as_str()));
+    let shown = screen(&app);
+    let shown: Vec<&str> = shown.lines().collect();
+    assert_eq!(shown[0], time, "one page up moves ten rows");
+    assert_eq!(shown[1], prompt(21));
     // One page down lands exactly on the bottom, which follows again: new
     // output scrolls in with no overlay.
     app.on_key(Key::PageDown, now);
@@ -214,18 +292,27 @@ fn page_down_to_the_bottom_follows_again() {
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "prompt 31"));
     let followed = screen(&app);
     assert!(!followed.contains("↓ New messages below"));
-    assert!(followed.contains(format!("{:>59}\n>", "prompt 31").as_str()));
+    assert!(followed.contains(format!("{}\n{}\n>", prompt(31), time).as_str()));
+    // Six pages up reaches the top, where another stops: 51, 41, 31, 21,
+    // 11, 1, then clamped to 0.
+    for _ in 0..6 {
+        app.on_key(Key::PageUp, now);
+    }
+    assert!(screen(&app).starts_with(format!("{}\n", prompt(1)).as_str()));
     app.on_key(Key::PageUp, now);
-    assert!(screen(&app).starts_with(format!("{:>59}\n", "prompt 11").as_str()));
-    app.on_key(Key::PageUp, now);
-    assert!(screen(&app).starts_with(format!("{:>59}\n", "prompt 1").as_str()));
+    assert!(screen(&app).starts_with(format!("{}\n", prompt(1)).as_str()));
+    // Six pages down lands exactly on the bottom: 10, 20, 30, 40, 50,
+    // then clamped to 51. Odd tops show a turn's time first, even tops
+    // its bubble: row 41 is prompt 21's time, row 10 prompt 6's bubble.
     app.on_key(Key::PageDown, now);
-    assert!(screen(&app).starts_with(format!("{:>59}\n", "prompt 11").as_str()));
-    app.on_key(Key::PageDown, now);
-    assert!(screen(&app).contains(format!("{:>59}\n>", "prompt 31").as_str()));
+    assert!(screen(&app).starts_with(format!("{}\n", prompt(6)).as_str()));
+    for _ in 0..5 {
+        app.on_key(Key::PageDown, now);
+    }
+    assert!(screen(&app).contains(format!("{}\n{}\n>", prompt(31), time).as_str()));
     // PageDown while following does nothing.
     app.on_key(Key::PageDown, now);
-    assert!(screen(&app).contains(format!("{:>59}\n>", "prompt 31").as_str()));
+    assert!(screen(&app).contains(format!("{}\n{}\n>", prompt(31), time).as_str()));
 }
 
 #[test]
@@ -256,7 +343,7 @@ fn draw_folds_an_events_file() {
     .map(|line| line.to_string())
     .join("\n");
     let shown = crate::draw(&events, 20, 4).unwrap_or_else(|error| panic!("draw: {error}"));
-    assert_eq!(shown, format!("\n{:>19}\nHello.\n>\n", "hi"));
+    assert_eq!(shown, format!("{:>19}\n{:>20}\nHello.\n>\n", "hi", "00:00"));
     assert_eq!(
         crate::draw("not json", 20, 4).map_err(|e| e.starts_with("line 1:")),
         Err(true)
@@ -292,7 +379,7 @@ fn a_short_screen_keeps_the_input_line_last() {
     );
     assert_eq!(
         sized(&mut app, 20, 4),
-        format!("{notice:>20}\n{:>19}\nPress Ctrl+C again t\n>\n", "two")
+        format!("{notice:>20}\n{:>20}\nPress Ctrl+C again t\n>\n", "00:00")
     );
 }
 
@@ -1105,10 +1192,11 @@ fn the_badge_is_a_target_over_the_cells_it_drew() {
         id: TargetId::Badge,
         rect: Rect::new(0, 10, 30, 1),
     };
-    // The open turn's prompt is a stop on the row above the badge.
+    // The open turn's prompt and its time are stops on the two rows above
+    // the badge.
     let turn = Target {
         id: TargetId::Turn(0),
-        rect: Rect::new(0, 9, 40, 1),
+        rect: Rect::new(0, 8, 40, 2),
     };
     assert_eq!(targets, vec![badge, turn]);
     // Narrower than its text, it takes the whole row.
@@ -1665,7 +1753,7 @@ fn a_turn_spanning_drawn_lines_sums_their_heights() {
         .iter()
         .find(|target| target.id == TargetId::Turn(0))
         .expect("turn 0 is drawn");
-    assert_eq!(turn.rect, Rect::new(0, 5, WIDTH, 6));
+    assert_eq!(turn.rect, Rect::new(0, 4, WIDTH, 7));
 }
 
 #[test]

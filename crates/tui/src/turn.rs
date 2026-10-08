@@ -16,6 +16,7 @@ use contract::events::{
     SteeringApplied, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted,
     ToolCallRequested, TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
 };
+use jiff::tz::TimeZone;
 use ratatui::text::Line;
 use serde_json::Value;
 
@@ -536,10 +537,17 @@ impl Turn {
         self.retry = Some((retry, failed.saturating_add(1)));
     }
 
-    /// The card's lines at `width`.
-    pub(crate) fn rows(&self, width: u16, out: &mut Rows) {
+    /// The card's lines at `width`, each prompt bubble with the local time
+    /// of day under it (`docs/tui.md`, "Turns").
+    pub(crate) fn rows(&self, width: u16, zone: &TimeZone, out: &mut Rows) {
         for prompt in &self.prompts {
+            let before = out.len();
             format::bubble(prompt, width, out);
+            if out.len() > before
+                && let Some(time) = crate::local_time::under_bubble(self.started, zone)
+            {
+                out.push(time);
+            }
         }
         for entry in &self.entries {
             match entry {

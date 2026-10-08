@@ -3,8 +3,8 @@ source: crates/tui/src/view_tests.rs
 expression: text(&buf)
 ---
 
-
                                 plan it
+                                   00:00
 Plan
 
 • read the file

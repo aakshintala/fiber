@@ -229,7 +229,10 @@ fn conversation_height_equals_the_drawn_rows() {
         let mut app = attached(width, height);
         app.on_line(turn_started(&long));
         let (screen, _) = draw(&app, width, height);
-        let drawn = screen.lines().filter(|row| row.contains("www")).count();
+        let drawn = screen
+            .lines()
+            .filter(|row| row.contains("www") || row.contains("00:00"))
+            .count();
         assert_eq!(drawn, app.conversation_height(), "{width}x{height}");
         // The header holds row 0 and the input box the last row.
         assert!(!screen.lines().next().unwrap_or_default().contains('w'));

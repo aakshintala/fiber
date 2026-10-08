@@ -1129,11 +1129,12 @@ fn a_turn_is_a_stop_before_its_own_group_lines() {
 fn y_on_a_turn_copies_its_prompt_and_replies() {
     let mut app = replied_turn();
     focus_turn(&mut app, 0);
-    // The rows with no target of their own: the prompt, the replies
-    // and the closing line; the group's own row is its line's text.
+    // The rows with no target of their own: the prompt, the time under
+    // it, the replies and the closing line; the group's own row is its
+    // line's text.
     assert_eq!(
         key(&mut app, Key::Char('y')),
-        Effect::Copy("go\none\ntwo\n▣ completed · 1 call".to_owned())
+        Effect::Copy("go\n00:00\none\ntwo\n▣ completed · 1 call".to_owned())
     );
 }
 

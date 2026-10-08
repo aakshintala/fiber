@@ -161,6 +161,7 @@ fn the_note_goes_into_the_band_and_the_size_waits_for_the_next_call() {
         texts(&app),
         [
             " go ",
+            "00:00",
             "Working.",
             "⇄ Handoff · automatic at 400.0k · writing the note…"
         ]
@@ -206,22 +207,22 @@ fn the_note_goes_into_the_band_and_the_size_waits_for_the_next_call() {
         json!({"outcome": "completed"}),
     );
     let lines = texts(&app);
-    assert_eq!(lines[3..5], ["  ▸ note", "Continuing."]);
-    assert!(lines[5].starts_with("▣ completed"), "{lines:?}");
+    assert_eq!(lines[4..6], ["  ▸ note", "Continuing."]);
+    assert!(lines[6].starts_with("▣ completed"), "{lines:?}");
     // "▸ note" opens the note inside the band.
     let note = app
         .targets()
         .into_iter()
-        .find_map(|(at, target)| (at == 3).then_some(target));
+        .find_map(|(at, target)| (at == 4).then_some(target));
     assert!(matches!(note, Some(Target::Note(_))), "{note:?}");
     if let Some(note) = note {
         app.open(note);
         assert_eq!(
-            texts(&app)[3..6],
+            texts(&app)[4..7],
             ["  ▸ note", "    ## Note", "    keep going"]
         );
         app.open(note);
-        assert_eq!(texts(&app)[4], "Continuing.");
+        assert_eq!(texts(&app)[5], "Continuing.");
     }
 }
 
@@ -236,7 +237,7 @@ fn a_failed_or_cancelled_handoff_leaves_the_context_unchanged() {
             "error": {"code": "io_failed", "message": "The note request failed."}}),
     );
     assert_eq!(
-        texts(&app)[1..],
+        texts(&app)[2..],
         ["⇄ Handoff · you asked with /handoff · context unchanged · The note request failed."]
     );
     usage(&mut app, "g_next", 29_000, json!({}));
@@ -246,7 +247,7 @@ fn a_failed_or_cancelled_handoff_leaves_the_context_unchanged() {
         json!({"outcome": "cancelled", "tokens_before": 10_000}),
     );
     assert_eq!(
-        texts(&app)[2..],
+        texts(&app)[3..],
         ["⇄ Handoff · the request did not fit · context unchanged"]
     );
 }
@@ -262,14 +263,14 @@ fn a_hooks_note_and_a_tool_started_handoff() {
             "note_text": "From the hook.", "extension": "notes"}),
     );
     assert_eq!(
-        texts(&app)[1..],
+        texts(&app)[2..],
         ["⇄ Handoff · the model handed off · 300.0k → …", "  ▸ note"]
     );
     let note = app.targets().into_iter().map(|(_, t)| t).next();
     if let Some(note) = note {
         app.open(note);
     }
-    assert_eq!(texts(&app)[3], "    From the hook.");
+    assert_eq!(texts(&app)[4], "    From the hook.");
     // With no turn open there is no card to break.
     let mut app = self::app();
     started(&mut app, "person");
@@ -302,9 +303,9 @@ fn the_band_ends_the_open_group() {
         json!({"name": "read", "arguments": {"path": "b.rs"}}),
     );
     let lines = texts(&app);
-    assert_eq!(lines.len(), 4, "{lines:?}");
-    assert!(lines[1].starts_with('•') && lines[3].starts_with('•'));
-    assert!(lines[2].starts_with('⇄'));
+    assert_eq!(lines.len(), 5, "{lines:?}");
+    assert!(lines[2].starts_with('•') && lines[4].starts_with('•'));
+    assert!(lines[3].starts_with('⇄'));
 }
 
 #[test]
@@ -325,7 +326,7 @@ fn the_nudge_is_one_dim_line_where_it_happened() {
         None,
         json!({"tokens": 268_000, "trigger_at": 400_000}),
     );
-    assert_eq!(texts(&app), [nudge, " go ", nudge]);
+    assert_eq!(texts(&app), [nudge, " go ", "00:00", nudge]);
     assert!(
         app.lines()
             .iter()
@@ -371,7 +372,7 @@ fn note_of(deltas: &[(&str, &str)], done: &[(&str, &str)]) -> Vec<String> {
     if let Some(note) = note {
         app.open(note);
     }
-    texts(&app)[3..].to_vec()
+    texts(&app)[4..].to_vec()
 }
 
 #[test]

@@ -491,8 +491,8 @@ fn the_paging_report_counts_every_loaded_line() {
     let report = crate::measure_paging(&events(&session()), 60, 12, fakes::clock::FakeClock::new())
         .unwrap_or_else(|error| panic!("{error}"));
     // Every page loaded while paging up keeps its first line: dropping one
-    // draws fewer rows.
-    assert!(report.contains("rows: 313\n"), "{report}");
+    // draws fewer rows. Six turns draw one time row each.
+    assert!(report.contains("rows: 319\n"), "{report}");
 }
 
 #[test]

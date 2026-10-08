@@ -1735,6 +1735,50 @@ fn toggling_ledgers_clears_only_group_overrides() {
     assert!(pages.overrides.contains_key(&Target::Thought(2)));
 }
 
+/// `America/New_York`, looked up by name: the same lookup the system zone
+/// needs.
+fn new_york() -> jiff::tz::TimeZone {
+    jiff::tz::TimeZone::get("America/New_York").unwrap_or(jiff::tz::TimeZone::UTC)
+}
+
+#[test]
+fn clearing_keeps_the_zone() {
+    let mut pages = Pages::new(80);
+    assert_eq!(pages.zone, jiff::tz::TimeZone::UTC);
+    pages.zone = new_york();
+    pages.clear();
+    assert_eq!(pages.zone, new_york());
+}
+
+#[test]
+fn a_reloaded_page_shows_the_same_time_row_as_live() {
+    let mut stream = Stream::new(false);
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    );
+    stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+    let lines = stream.lines;
+    let zone = new_york();
+    let mut pages = Pages::new(80);
+    pages.zone = zone.clone();
+    for line in &lines {
+        pages.apply(line);
+    }
+    let live = pages.rows();
+    // The turn started 1,700 milliseconds after the epoch.
+    let time = crate::local_time::time_of_day(1700, &zone).expect("a time");
+    assert_eq!(
+        texts(&live),
+        vec![" go ".to_owned(), time, "▣ completed".to_owned()]
+    );
+    drop_all(&mut pages);
+    let reloaded = joined(&mut pages, &lines);
+    assert_eq!(differs(&reloaded, &live), None);
+}
+
 #[test]
 fn every_row_of_the_fixture_places_inside_the_rows_it_draws() {
     let lines = session(3, false);

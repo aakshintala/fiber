@@ -82,10 +82,10 @@ fn a_match_at_a_page_edge_has_no_neighbour_across_it() {
     assert!(search_all(&mut app, &log, "needle").is_empty());
     let flat = app.find.flat();
     assert_eq!(flat.len(), 3);
-    // The prompt bubble is the page's first logical line, so the first
-    // match has a neighbour; the turn's end marker follows its last
-    // reply, so the last reply's match has one after it.
-    assert_eq!(flat[0].snippet.before, "go");
+    // The prompt bubble is the page's first logical line, with the time
+    // under it, so the first match has a neighbour; the turn's end marker
+    // follows its last reply, so the last reply's match has one after it.
+    assert_eq!(flat[0].snippet.before, "00:00");
     assert_eq!(flat[0].snippet.after, "needle two");
     assert_eq!(flat[2].snippet.before, "needle two");
     assert_eq!(flat[2].snippet.after, "▣ completed");
@@ -95,7 +95,7 @@ fn a_match_at_a_page_edge_has_no_neighbour_across_it() {
     let flat = app.find.flat();
     assert_eq!(flat.len(), 1);
     assert_eq!(flat[0].snippet.before, "");
-    assert_eq!(flat[0].snippet.after, "needle one");
+    assert_eq!(flat[0].snippet.after, "00:00");
     assert!(search_all(&mut app, &log, "completed").is_empty());
     let flat = app.find.flat();
     assert_eq!(flat.len(), 1);

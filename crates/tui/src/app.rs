@@ -15,6 +15,7 @@ use contract::events::{
 };
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, Seq, SessionId};
+use jiff::tz::TimeZone;
 use serde_json::{Map, Value, json};
 
 use crate::approvals::{self, Panel, PanelKey, Queue};
@@ -434,6 +435,12 @@ impl App {
     pub(crate) fn set_size(&mut self, width: u16, height: u16) {
         self.screen.set_size(width, height);
         self.settle();
+    }
+
+    /// Sets the zone the time of day under a prompt bubble shows
+    /// (`docs/tui.md`, "Turns").
+    pub(crate) fn set_zone(&mut self, zone: TimeZone) {
+        self.screen.pages_mut().zone = zone;
     }
 
     /// Records kitty's keyboard flags reply.

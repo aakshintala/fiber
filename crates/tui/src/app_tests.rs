@@ -664,9 +664,11 @@ fn turn_started_sets_busy_and_completed_clears_it() {
         texts(&app),
         vec![
             " hi ".to_owned(),
+            "00:00".to_owned(),
             "steer · more".to_owned(),
             "▣ completed".to_owned(),
             " next ".to_owned(),
+            "00:00".to_owned(),
         ]
     );
 }
@@ -678,7 +680,7 @@ fn failed_turn_says_why_before_it_closes() {
     attach(&mut app, clock.now(), "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
     app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "failed"));
-    assert_eq!(texts(&app)[1..], ["✗ boom · io_failed", "▣ failed"]);
+    assert_eq!(texts(&app)[2..], ["✗ boom · io_failed", "▣ failed"]);
 }
 
 #[test]
@@ -725,7 +727,12 @@ fn each_action_streams_its_own_reply() {
     }
     assert_eq!(
         texts(&app),
-        vec![" hi ".to_owned(), "one more".to_owned(), "two".to_owned()]
+        vec![
+            " hi ".to_owned(),
+            "00:00".to_owned(),
+            "one more".to_owned(),
+            "two".to_owned()
+        ]
     );
 }
 

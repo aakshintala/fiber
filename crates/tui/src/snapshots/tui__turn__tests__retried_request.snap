@@ -3,5 +3,6 @@ source: crates/tui/src/turn_tests.rs
 expression: "texts(&app).join(\"\\n\")"
 ---
  go 
+00:00
 • 1 failed model call
 ↻ Retrying in 4s · rate_limited · attempt 2 of 4
