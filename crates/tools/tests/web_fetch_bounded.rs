@@ -86,7 +86,11 @@ fn fetch(content_type: &str, page: Vec<u8>) -> Fetched {
         Some(contract::shapes::ContentPart::Text { text }) => text.clone(),
         _ => String::new(),
     };
-    assert!(result.error.is_none(), "{text}");
+    assert!(
+        result.error.is_none(),
+        "fetch failed with {} bytes of text",
+        text.len()
+    );
     Fetched {
         text,
         measured,
@@ -119,16 +123,21 @@ fn bound() -> usize {
     working(&empty) + WORKING + SLACK
 }
 
-/// Asserts `actual` is `expected` without printing either whole on
-/// failure: the length and the first differing offset.
+/// Asserts `actual` is `expected`, reporting only the lengths and the
+/// first differing offset: both strings can be page-sized.
 fn assert_markdown_eq(expected: &str, actual: &str, what: &str) {
-    assert_eq!(expected.len(), actual.len(), "{what}: lengths");
     let offset = expected
         .bytes()
         .zip(actual.bytes())
-        .position(|(a, b)| a != b)
-        .unwrap_or(expected.len().min(actual.len()));
-    assert_eq!(expected, actual, "{what}: first difference at {offset}");
+        .position(|(a, b)| a != b);
+    let same = expected.len() == actual.len() && offset.is_none();
+    assert!(
+        same,
+        "{what}: lengths {} vs {}, first difference at {}",
+        expected.len(),
+        actual.len(),
+        offset.unwrap_or(expected.len().min(actual.len()))
+    );
 }
 
 #[test]
