@@ -9,6 +9,7 @@
 //! and "Credentials").
 
 mod commands;
+mod extension_tools;
 mod git;
 mod hooks;
 mod host;
@@ -31,6 +32,7 @@ use std::path::PathBuf;
 use config::ConfigError;
 use contract::ErrorCode;
 
+pub use extension_tools::LuaTool;
 pub use git::{Origin, SHORT_NAMES, full_name, is_path};
 pub use hooks::SessionExtensions;
 pub use host::Session;

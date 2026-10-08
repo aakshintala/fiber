@@ -467,12 +467,15 @@ fn settle(
         Request::Callback { port } => (oauth::listen(port, &deliver), None),
         Request::Exec(request) => {
             let hub_exec = Arc::clone(hub);
-            let meta = ExecMeta {
+            // A run inside a tool call is what the call's declared effects
+            // were judged on, so it is not logged as `extension_exec`; one
+            // from an effects function is, as the call is not admitted yet.
+            let meta = (!matches!(target, Target::Tool(_))).then(|| ExecMeta {
                 extension: name.to_owned(),
                 program: request.program.clone(),
                 args: request.args.clone(),
                 cwd: request.cwd.clone(),
-            };
+            });
             if let Some(script) = hub.host_script() {
                 let result = script.exec(request.case_value()).map(|reply| {
                     let ran = exec::Ran {
@@ -482,7 +485,7 @@ fn settle(
                         stderr: reply.stderr.into_bytes(),
                         timed_out: false,
                     };
-                    send_exec(&hub_exec, &meta, &ran);
+                    send_exec(&hub_exec, meta.as_ref(), &ran);
                     ran
                 });
                 deliver(Reply::Exec(result));
@@ -496,10 +499,10 @@ fn settle(
                         .spawn(move || {
                             let outcome = exec::run(&request, clock.as_ref(), deadline, cancel_rx);
                             match &outcome {
-                                Ok(ran) => send_exec(&hub_exec, &meta, ran),
+                                Ok(ran) => send_exec(&hub_exec, meta.as_ref(), ran),
                                 Err(failed) => {
                                     if let Some(ran) = &failed.ran {
-                                        send_exec(&hub_exec, &meta, ran);
+                                        send_exec(&hub_exec, meta.as_ref(), ran);
                                     }
                                 }
                             }
@@ -521,7 +524,7 @@ fn settle(
             }
         }
         Request::Lock => {
-            // A command, hook or timer holds no provider credential: calling
+            // A command, hook, timer or tool holds no provider credential: calling
             // `refresh` there is an error in the calling code, raised as
             // a string.
             let no_credential = |what: &str| {
@@ -554,6 +557,10 @@ fn settle(
                 }
                 Target::Timer { .. } => {
                     deliver(Reply::Lock(Err(no_credential("timer"))));
+                    None
+                }
+                Target::Tool(_) | Target::Effects(_) => {
+                    deliver(Reply::Lock(Err(no_credential("tool"))));
                     None
                 }
             };
@@ -595,10 +602,12 @@ fn take_parked(parked: &mut Vec<Parked>, id: u64) -> bool {
 }
 
 /// Sends a finished `host.exec` run to the session as its `extension_exec`
-/// line: a scripted result reaches the session exactly as a real run's
-/// (`docs/testing.md`, "Testing an extension").
-fn send_exec(hub: &Hub, meta: &ExecMeta, ran: &exec::Ran) {
-    hub.send(contract::inbox::Delivery::ExtensionExec(meta.exec(ran)));
+/// line, when it is logged: a scripted result reaches the session exactly
+/// as a real run's (`docs/testing.md`, "Testing an extension").
+fn send_exec(hub: &Hub, meta: Option<&ExecMeta>, ran: &exec::Ran) {
+    if let Some(meta) = meta {
+        hub.send(contract::inbox::Delivery::ExtensionExec(meta.exec(ran)));
+    }
 }
 
 /// What a finished `host.exec` run is logged as: the extension, the program
