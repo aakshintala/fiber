@@ -116,7 +116,111 @@ fn joined_emoji_sequences_before_the_match_do_not_hide_it() {
     let (text, hit) = super::entry_row(&entry, 80);
     assert_eq!(crate::format::width(&text), 80);
     assert!(text.contains("needle"), "the match stays visible: {text:?}");
+    assert!(text.ends_with("needle"), "the match is whole: {text:?}");
     assert_eq!(hit, 74..80);
+}
+
+#[test]
+fn joined_lam_alef_pairs_before_the_match_do_not_hide_it() {
+    // U+0644 U+0627 measures 1 cell together but 2 as separate
+    // graphemes: summing per-grapheme widths puts the match 200 cells
+    // out and hides it.
+    let entry = Snippet {
+        before: String::new(),
+        line: format!("{}needle", "\u{644}\u{627}".repeat(100)),
+        at: 200..206,
+        after: String::new(),
+    };
+    let (text, hit) = super::entry_row(&entry, 80);
+    assert!(crate::format::width(&text) <= 80);
+    assert!(
+        text.ends_with("needle"),
+        "the match stays visible: {text:?}"
+    );
+    let cells = crate::format::width(&text);
+    assert_eq!(hit.start as usize, cells.saturating_sub(6));
+    assert_eq!(hit.end as usize, cells);
+}
+
+#[test]
+fn wide_chars_before_the_match_do_not_hide_it() {
+    let entry = Snippet {
+        before: String::new(),
+        line: format!("{}needle", "\u{3042}".repeat(100)),
+        at: 100..106,
+        after: String::new(),
+    };
+    let (text, hit) = super::entry_row(&entry, 80);
+    assert_eq!(crate::format::width(&text), 80);
+    assert!(
+        text.ends_with("needle"),
+        "the match stays visible: {text:?}"
+    );
+    assert_eq!(hit, 74..80);
+}
+
+#[test]
+fn combining_marks_before_the_match_do_not_hide_it() {
+    let entry = Snippet {
+        before: String::new(),
+        line: format!("{}needle", "e\u{301}".repeat(100)),
+        at: 200..206,
+        after: String::new(),
+    };
+    let (text, hit) = super::entry_row(&entry, 80);
+    assert_eq!(crate::format::width(&text), 80);
+    assert!(
+        text.ends_with("needle"),
+        "the match stays visible: {text:?}"
+    );
+    assert_eq!(hit, 74..80);
+}
+
+#[test]
+fn a_match_exactly_the_views_width_fills_it() {
+    // The hit alone is exactly `target`: the window is the hit, which
+    // tells `>` from `>=` in the clip guard.
+    let entry = Snippet {
+        before: String::new(),
+        line: format!("needle{}", "x".repeat(400)),
+        at: 0..6,
+        after: String::new(),
+    };
+    let (text, hit) = super::entry_row(&entry, 6);
+    assert_eq!(text, "needle");
+    assert_eq!(hit, 0..6);
+}
+
+#[test]
+fn a_wide_char_with_room_to_spare_is_kept() {
+    // `\u{3042}` is two cells: with 8 cells for it and `needle` the
+    // window keeps it, which tells `<=` from `<` in the growth guard.
+    let entry = Snippet {
+        before: String::new(),
+        line: "\u{3042}needle".to_owned(),
+        at: 1..7,
+        after: String::new(),
+    };
+    let (text, hit) = super::entry_row(&entry, 8);
+    assert_eq!(text, "\u{3042}needle");
+    assert!(text.ends_with("needle"), "the match is whole: {text:?}");
+    assert_eq!(hit, 2..8);
+}
+
+#[test]
+fn an_empty_match_anchors_the_window_at_its_bytes() {
+    // No grapheme overlaps an empty hit at a boundary: the window still
+    // grows from the grapheme holding its bytes, which tells `==` from
+    // `!=` in the anchor guard.
+    let entry = Snippet {
+        before: String::new(),
+        line: "x".repeat(400),
+        at: 0..0,
+        after: String::new(),
+    };
+    let (text, hit) = super::entry_row(&entry, 80);
+    assert_eq!(text, "x".repeat(80));
+    assert_eq!(hit, 0..0);
 }
 
 #[test]
