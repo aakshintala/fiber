@@ -2125,9 +2125,9 @@ fn a_lua_write_in_a_data_directory_is_reviewed_and_blocked() {
 /// A first-stage `allow` runs the reviewed call with no escalation. The
 /// scripted fake server cannot cut a reply at the request's output limit,
 /// so the test also pins that limit: it is what a real model's tokenizer
-/// meets, and a limit of 1 token cuts a several-token `allow` into a
-/// `reviewer_failed` escalation. The Responses protocol raises a limit
-/// below 16 to 16, so the old limit of 1 reads as 16 on the wire.
+/// meets, and a limit below the word's length cuts a several-token `allow`
+/// into a `reviewer_failed` escalation. The Responses protocol raises any
+/// limit below 16 to 16, so the test pins the exact limit.
 #[test]
 fn a_first_stage_allow_that_takes_several_tokens_runs_the_reviewed_call() {
     let setup = Setup::new();
