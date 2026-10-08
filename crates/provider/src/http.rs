@@ -14,6 +14,7 @@ use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use contract::signing::{SignRequest, Signer};
+use serde_json::Value;
 use ureq::Agent;
 use ureq::config::Config;
 use ureq::tls::{RootCerts, TlsConfig};
@@ -25,6 +26,8 @@ use ureq::unversioned::transport::{
 
 use crate::Error;
 use crate::redact::Secrets;
+
+mod date;
 
 fn validate_signed_header(name: &str, value: &str) -> Result<(), contract::signing::Error> {
     if ureq::http::HeaderName::from_bytes(name.as_bytes()).is_err() {
@@ -192,7 +195,22 @@ fn post_with(
         let retry_after = header("retry-after")
             .and_then(|v| v.parse::<f64>().ok())
             .filter(|wait| wait.is_finite() && *wait >= 0.0);
+        // Presence alone vetoes the body's wait: a `retry-after` header
+        // that is present but unparseable leaves `retry_after` unset.
+        let has_retry_after = response.headers().get("retry-after").is_some();
+        let date = response
+            .headers()
+            .get("date")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim().to_owned());
         let body = response.into_body().read_to_string().unwrap_or_default();
+        let retry_after = retry_after.or_else(|| {
+            if has_retry_after {
+                None
+            } else {
+                usage_reset(&body, date.as_deref())
+            }
+        });
         return Err(Error::Status {
             status,
             body,
@@ -202,6 +220,27 @@ fn post_with(
         });
     }
     Ok((response.into_body().into_reader(), should_retry))
+}
+
+/// The seconds from the failed reply's `Date` header to a usage-limit
+/// body's `resets_at`: only when the reply carried no `retry-after`, the
+/// body is a usage-limit body with an integer `resets_at`, and `Date`
+/// parses as an IMF-fixdate (`docs/model-routing.md`, "Protocols and
+/// providers"). No `Date`, an unparsable one, or a reset at or before the
+/// `Date` leaves the wait absent; no clock is read.
+fn usage_reset(body: &str, date: Option<&str>) -> Option<f64> {
+    let value: Value = serde_json::from_str(body).ok()?;
+    let error = value.get("error")?;
+    if !crate::error::usage_limit(error) {
+        return None;
+    }
+    let resets = error.get("resets_at")?.as_u64()?;
+    let sent = date.and_then(date::http_date)?;
+    let wait = resets.checked_sub(sent)?;
+    if wait == 0 {
+        return None;
+    }
+    Some(wait as f64)
 }
 
 /// The connector that opens the socket and keeps a handle to it. A tunnel

@@ -482,6 +482,11 @@ impl Decoder {
                 return self.finish(&event["response"]).map(Some);
             }
             "error" => {
+                // A usage-limit error is `quota_exceeded`, never retried
+                // (`docs/model-routing.md`, "Protocols and providers").
+                if crate::error::usage_limit(event) {
+                    return Err(Error::QuotaExceeded(text("message")));
+                }
                 return Err(Error::ReplyFailed {
                     code: event.get("code").and_then(Value::as_str).map(str::to_owned),
                     message: text("message"),
@@ -584,6 +589,19 @@ impl Decoder {
                 }
             },
             "failed" => {
+                let error = &response["error"];
+                // A usage-limit failure is `quota_exceeded`, never retried
+                // (`docs/model-routing.md`, "Protocols and providers").
+                // The stream carries no `Date`, so there is no wait.
+                if crate::error::usage_limit(error) {
+                    return Err(Error::QuotaExceeded(
+                        response
+                            .pointer("/error/message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned(),
+                    ));
+                }
                 return Err(Error::ReplyFailed {
                     code: response
                         .pointer("/error/code")
