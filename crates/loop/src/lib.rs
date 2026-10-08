@@ -73,7 +73,7 @@ mod warm;
 
 pub use cancel::TurnCancel;
 pub use caps::{ResultCaps, capped};
-pub use commands::{Commands, commands};
+pub use commands::{Commands, commands, skills};
 pub use conversation::rebuild;
 pub use error::Error;
 pub use handoff::HandoffSettings;

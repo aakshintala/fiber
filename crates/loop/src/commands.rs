@@ -1,13 +1,14 @@
-//! The session's `/name` commands (`docs/invocation.md`, "What each command does").
+//! The session's `/name` commands and its `skills` answer
+//! (`docs/invocation.md`, "What each command does").
 
 use std::path::Path;
 
 use contract::ErrorCode;
-use contract::events::{CommandInfo, Notice};
+use contract::events::{CommandInfo, Notice, SkillInfo};
 
 use crate::opening;
 use crate::prompt::PromptInputs;
-use crate::skills;
+use crate::skills as discovery;
 
 /// Every `/name` the session runs, and what shadowing left out: the
 /// skills and prompt templates discovery keeps that `skills.disabled` does
@@ -37,8 +38,8 @@ pub fn commands(inputs: &PromptInputs, workspace: &Path, prompts: &[CommandInfo]
     let workspace = opening::canonical(workspace);
     let (chain, _) = opening::repo_chain(&workspace);
     let top = chain.first().unwrap_or(&workspace);
-    let found = skills::discover(inputs, top);
-    let mut rows = skills::commands(&found.skills, &inputs.skills_disabled);
+    let found = discovery::discover(inputs, top);
+    let mut rows = discovery::commands(&found.skills, &inputs.skills_disabled);
     let mut notices = Vec::new();
     let skills_end = rows.len();
     for row in prompts {
@@ -79,6 +80,19 @@ pub fn commands(inputs: &PromptInputs, workspace: &Path, prompts: &[CommandInfo]
         rows.push(row.clone());
     }
     Commands { rows, notices }
+}
+
+/// Every skill discovery read, switched-off and shadowed ones included
+/// and marked: the `skills` answer's rows, from the repository's top
+/// level above `workspace`, as [`commands`] reads it. Reads skill places
+/// only, writes nothing; the opening message raises discovery's notices.
+#[must_use]
+pub fn skills(inputs: &PromptInputs, workspace: &Path) -> Vec<SkillInfo> {
+    let workspace = opening::canonical(workspace);
+    let (chain, _) = opening::repo_chain(&workspace);
+    let top = chain.first().unwrap_or(&workspace);
+    let found = discovery::discover(inputs, top);
+    discovery::rows(&found, &inputs.skills_disabled)
 }
 
 #[cfg(test)]
