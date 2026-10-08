@@ -183,6 +183,10 @@ fn a_non_fiber_model_and_an_unknown_one_fail_without_spawning() {
             "it lists the valid references: {}",
             error.message
         );
+        // The model reads the failure in the content, not the error.
+        let text = output.content.iter().map(text_of).collect::<String>();
+        assert!(text.contains(model), "{text}");
+        assert!(text.contains("fiber:fake/m"), "{text}");
         assert!(output.jobs.is_empty());
         assert_eq!(
             rig.launch_count.load(Ordering::SeqCst),
@@ -281,6 +285,11 @@ fn a_spawn_error_fails_io_failed_with_no_job() {
     );
     let error = output.error.expect("a spawn error fails");
     assert_eq!(error.code, contract::ErrorCode::IoFailed);
+    let text = output.content.iter().map(text_of).collect::<String>();
+    assert!(
+        text.contains("Starting the delegate failed"),
+        "the model sees why: {text}"
+    );
     assert!(output.jobs.is_empty());
     assert_eq!(rig.registry.list_text(), "No jobs.\n");
     assert!(

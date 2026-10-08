@@ -18,7 +18,7 @@ use std::time::Duration;
 use fakes::{Watchdog, group_empties, kill_group, within};
 
 use super::{
-    group_alive, insert, kill_every_group, listed, reap_locked, refused, retire_if_empty,
+    group_alive, insert, kill_every_group, listed, pid, reap_locked, refused, retire_if_empty,
     serial_exclusive, serial_shared, signal, spawn, with_lock,
 };
 
@@ -243,4 +243,43 @@ fn exited(pid: u32) {
             thread::yield_now();
         }
     });
+}
+
+#[test]
+fn refused_ids_never_convert_or_list() {
+    // Below any syscall: `pid` refuses them, so no probe or send can
+    // observe them and no platform variance leaks through. Deleting the
+    // refusal converts 1, which this pins.
+    assert_eq!(pid(0), None);
+    assert_eq!(pid(1), None);
+    assert!(pid(2).is_some());
+}
+
+#[test]
+fn refused_ids_are_never_listed() {
+    let _serial = serial_shared();
+    insert(0);
+    insert(1);
+    assert!(!listed(0));
+    assert!(!listed(1));
+    // A large id still lists: the refusal is specific to 1 or less.
+    insert(u32::MAX);
+    assert!(listed(u32::MAX));
+    assert!(retire_if_empty(u32::MAX));
+}
+
+#[test]
+fn a_listed_group_with_a_member_is_not_retired() {
+    let _serial = serial_shared();
+    let (mut child, watchdog) = sleeping();
+    let pgid = child.id();
+    // Listed and alive, the guard keeps it: retiring it here would drop a
+    // live group from the list while its id is still in use.
+    assert!(!retire_if_empty(pgid));
+    assert!(listed(pgid), "a live group stays listed");
+    // Unknown to the list, there is nothing to retire either.
+    assert!(!retire_if_empty(888_888_007));
+    child.kill().unwrap();
+    child.wait().unwrap();
+    watchdog.stand_down(DEADLINE);
 }

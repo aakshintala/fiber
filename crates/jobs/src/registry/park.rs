@@ -9,12 +9,6 @@ use std::time::Instant;
 use contract::clock::{Clock, Wake};
 use contract::tool::Cancel;
 
-impl Wake for Parker {
-    fn wake(&self) {
-        self.bump();
-    }
-}
-
 /// What `wait` and `stop` block on. Every bump is a job's end, a cancel or
 /// a clock move, so a wake that lands before the condvar wait is still
 /// visible in the generation.

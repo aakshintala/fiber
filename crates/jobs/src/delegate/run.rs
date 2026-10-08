@@ -411,15 +411,16 @@ impl Runner {
                 };
                 thread::spawn(|| watcher.run());
             }
-            let mut due = later(self.clock.as_ref(), POLL);
-            if !exited_seen && !lock(&fold).outstanding && next_retry < due {
-                due = next_retry;
-            }
-            if let Some(kill_at) = self.shared.kill_at()
-                && kill_at < due
-            {
-                due = kill_at;
-            }
+            // The next deadline is the earliest of the three: a stale
+            // retry or kill time never pushes it out.
+            let outstanding = lock(&fold).outstanding;
+            let due = park_due(
+                later(self.clock.as_ref(), POLL),
+                exited_seen,
+                outstanding,
+                next_retry,
+                self.shared.kill_at(),
+            );
             self.park(Some(due), seen);
         }
     }
@@ -444,17 +445,15 @@ impl Runner {
     }
 
     /// A surviving member was SIGKILLed at the reap and stays listed until
-    /// its group is empty; the report above never waits for this.
+    /// its group is empty; the report above never waits for this. No
+    /// second SIGKILL goes out here: the reap signalled every survivor
+    /// once, and nothing survives a SIGKILL it received except a process
+    /// no signal can reach.
     fn retire(&self, pgid: u32) {
         while group::listed(pgid) {
             let seen = self.park.generation();
             if group::retire_if_empty(pgid) {
                 return;
-            }
-            if let Some(kill_at) = self.shared.kill_at()
-                && self.clock.now() >= kill_at
-            {
-                group::signal(pgid, Signal::KILL);
             }
             self.park(Some(later(self.clock.as_ref(), POLL)), seen);
         }
@@ -510,6 +509,28 @@ impl Watcher {
         // the next clock move.
         self.wake.wake();
     }
+}
+
+/// The runner's next park deadline: the earliest of the poll horizon,
+/// a due retry, and the stop timer. A retry counts only while no watch
+/// has finished and none is running, so a stale retry time never pulls
+/// the deadline back (which would spin instead of parking) and an
+/// exactly equal bound changes nothing.
+pub(crate) fn park_due(
+    poll_due: Instant,
+    exited_seen: bool,
+    outstanding: bool,
+    next_retry: Instant,
+    kill_at: Option<Instant>,
+) -> Instant {
+    let mut due = poll_due;
+    if !exited_seen && !outstanding {
+        due = due.min(next_retry);
+    }
+    if let Some(kill_at) = kill_at {
+        due = due.min(kill_at);
+    }
+    due
 }
 
 /// Mints the delegate's session id: `s_` and 16 lowercase hex digits, drawn

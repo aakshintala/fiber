@@ -958,6 +958,16 @@ fn a_delegate_wait_answers_the_final_message_and_records_once() {
     );
     let answer = registry.wait(&id.0, 0, &CancelToken::new()).unwrap();
     assert!(answer.text.contains("Done scanning."), "{}", answer.text);
+    // Exactly one newline ends the message: without the guard the text
+    // runs into the `Output:` line, with a doubled guard it gains a blank
+    // one.
+    assert!(
+        answer
+            .text
+            .contains("Final message:\nDone scanning.\nOutput: "),
+        "{}",
+        answer.text
+    );
     let [
         JobRecord::DelegateFinished(finished),
         JobRecord::Completed(_),
@@ -1035,6 +1045,13 @@ fn a_dropped_delegate_end_is_indeterminate_with_an_empty_finish() {
         );
     };
     assert_eq!(finished.text, "");
+    // An empty message still ends its line: without the guard the next
+    // line starts immediately after the header.
+    assert!(
+        answer.text.contains("Final message:\n\nOutput: "),
+        "{}",
+        answer.text
+    );
     assert_eq!(completed.status, Outcome::Failed);
     assert_eq!(
         completed.error.as_ref().map(|error| error.code.clone()),

@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use crate::delegate::group::listed;
 use contract::Envelope;
 use contract::clock::Clock as _;
 use contract::events::{FiberExited, FinalMessage, Outcome};
@@ -25,7 +26,7 @@ use contract::{ActionId, ErrorCode, JobId, Seq, SessionId};
 use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir, Watchdog, group_empties, kill_pid, pids_exit, within};
 
-use super::{Launch, Launched, Runner, Watched, note_seq};
+use super::{Launch, Launched, Runner, Watched, note_seq, park_due};
 use crate::delegate::group::serial_shared;
 use crate::registry::Registry;
 
@@ -277,14 +278,18 @@ fn pid_in_file(pid: &std::path::Path) -> u32 {
 
 /// Waits until the fake watch ran `n` times, driving the clock. Bounds the
 /// wait, so a runner that stops calling fails instead of hanging. Each
-/// step gives the runner wall time: advances alone cost it none.
+/// step gives the runner wall time: advances alone cost it none. A report
+/// arriving here fails fast: swallowing it would hang the fifo write that
+/// follows on an exited child.
 fn wait_calls(rig: &Rig, n: usize) {
     for _ in 0..400 {
         if rig.script.calls().len() >= n {
             return;
         }
         rig.clock.advance(Duration::from_millis(50));
-        let _waited = rig.inbox.recv_timeout(Duration::from_millis(5));
+        if rig.inbox.recv_timeout(Duration::from_millis(5)).is_ok() {
+            panic!("the runner reported before the child could exit");
+        }
         if rig.script.calls().len() >= n {
             return;
         }
@@ -685,12 +690,16 @@ fn the_cap_at_an_exact_boundary_trips_only_past_it() {
         ]),
     ]);
     // Ten bytes: exactly at the cap. Neither the new line, its replay,
-    // nor a backoff wake may stop the delegate for that.
+    // nor a backoff wake may stop the delegate for that. Either receive
+    // failing fast: a report here means the cap tripped at the boundary,
+    // and swallowing it would hang the fifo write below on a dead child.
     std::fs::write(&rig.events, "0123456789").unwrap();
     rig.start(&shell, BOUND, 10);
     for _ in 0..6 {
         rig.clock.advance(Duration::from_millis(100));
-        let _waited = rig.inbox.recv_timeout(Duration::from_millis(20));
+        if rig.inbox.recv_timeout(Duration::from_millis(20)).is_ok() {
+            panic!("exactly at the cap is not past it");
+        }
         assert!(
             rig.inbox.try_recv().is_err(),
             "exactly at the cap is not past it"
@@ -839,6 +848,9 @@ fn a_member_outliving_a_stop_is_killed_and_the_job_still_cancels() {
         group_empties(pgid, DEADLINE),
         "the group retires once it is empty"
     );
+    // Retired, not just empty: without the retire loop the pgid would
+    // stay listed after its members are gone.
+    assert!(!listed(pgid));
     watchdog.stand_down(DEADLINE);
 }
 
@@ -934,4 +946,41 @@ fn a_blocked_watch_does_not_block_the_cap() {
         Some(ErrorCode::OutputCap)
     );
     drop(release);
+}
+
+#[test]
+fn park_due_takes_the_earliest_live_bound() {
+    let clock = FakeClock::new();
+    let t0 = clock.now();
+    let poll = t0 + Duration::from_secs(1);
+    // A due retry pulls the deadline in.
+    assert_eq!(
+        park_due(poll, false, false, t0 + Duration::from_millis(50), None),
+        t0 + Duration::from_millis(50)
+    );
+    // A future retry leaves the horizon alone.
+    assert_eq!(
+        park_due(poll, false, false, t0 + Duration::from_secs(2), None),
+        poll
+    );
+    // Once exited, a stale retry never pulls the deadline back: that
+    // would spin instead of parking.
+    assert_eq!(park_due(poll, true, false, t0, None), poll);
+    // While a watcher runs, its stale retry never pulls it back either.
+    assert_eq!(park_due(poll, false, true, t0, None), poll);
+    // The stop timer clamps everything, exited or not.
+    assert_eq!(
+        park_due(poll, true, false, t0, Some(t0 + Duration::from_millis(500))),
+        t0 + Duration::from_millis(500)
+    );
+    assert_eq!(
+        park_due(
+            poll,
+            false,
+            false,
+            t0 + Duration::from_millis(50),
+            Some(t0 + Duration::from_millis(500))
+        ),
+        t0 + Duration::from_millis(50)
+    );
 }

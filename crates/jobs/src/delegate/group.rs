@@ -37,6 +37,11 @@ pub(crate) fn refused(pgid: u32) -> bool {
 }
 
 fn pid(pgid: u32) -> Option<Pid> {
+    // Refused before conversion: no id of 1 or less ever reaches a
+    // syscall, on any platform, whatever the caller probed first.
+    if refused(pgid) {
+        return None;
+    }
     Pid::from_raw(i32::try_from(pgid).ok()?)
 }
 
@@ -70,9 +75,12 @@ pub(crate) fn spawn(cmd: &mut Command) -> io::Result<Child> {
 }
 
 /// Lists `pgid`, a group spawned outside [`spawn`]. Tests use it for a
-/// group that holds nothing.
+/// group that holds nothing. An id of 1 or less is never listed.
 #[cfg(test)]
 pub(crate) fn insert(pgid: u32) {
+    if refused(pgid) {
+        return;
+    }
     live().push(pgid);
 }
 
@@ -134,11 +142,12 @@ pub(crate) fn retire_if_empty(pgid: u32) -> bool {
 }
 
 /// Sends SIGKILL to every listed group still holding a process, all at
-/// once, and drops the empty ones from the list. A group id of 1 or less
-/// is never signalled.
+/// once, and drops the empty ones from the list. Refused ids never reach
+/// the list, and probe empty through [`pid`], so every id sent here is
+/// safe to signal; the send itself refuses them again through [`pid`].
 pub fn kill_every_group() {
     let mut live = live();
-    live.retain(|pgid| !refused(*pgid) && is_alive(*pgid));
+    live.retain(|pgid| is_alive(*pgid));
     for pgid in live.iter() {
         send(*pgid, Signal::KILL);
     }
