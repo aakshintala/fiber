@@ -330,9 +330,32 @@ impl Config {
     /// The person's `reviewer.context` notes as the reviewer reads them
     /// (`docs/permissions.md`, "What the person tells it"): the global
     /// text under its heading, then the per-project text under its own.
-    /// Empty where neither layer sets any.
+    /// A layer with no text, or only whitespace, is skipped. Empty where
+    /// neither layer sets any.
     pub fn reviewer_context(&self) -> String {
-        String::new()
+        const EVERYWHERE: &str = "## Notes that hold everywhere";
+        const PROJECT: &str = "## Notes for this project";
+        // The person's own files alone: no `-c` flag, repository or
+        // default ever reaches the render.
+        let key = ["reviewer".to_owned(), "context".to_owned()];
+        let mut global = None;
+        let mut project = None;
+        for (source, layer) in &self.layers {
+            let text = path::get(layer, &key).and_then(Value::as_str);
+            match source {
+                Source::Global(_) => global = text,
+                Source::Project(_) => project = text,
+                Source::Default | Source::Repository(_) | Source::Run => {}
+            }
+        }
+        [(EVERYWHERE, global), (PROJECT, project)]
+            .into_iter()
+            .filter_map(|(heading, text)| {
+                let text = text?.trim_end();
+                (!text.trim().is_empty()).then(|| format!("{heading}\n\n{text}"))
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
     }
 
     /// An extension's settings, merged across its layers as they were when
