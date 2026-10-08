@@ -236,6 +236,11 @@ pub enum Protocol {
     GoogleGenerativeAi,
     /// `bedrock-converse`.
     BedrockConverse,
+    /// `scripted`: reads a script file instead of a socket. Built into the
+    /// binary, so no package's data may declare it
+    /// (`docs/model-routing.md`, "The scripted provider").
+    #[serde(skip_deserializing)]
+    Scripted,
 }
 
 impl Protocol {
@@ -269,6 +274,8 @@ impl Protocol {
             ],
             Self::GoogleGenerativeAi => &["systemInstruction", "contents", "tools", "toolConfig"],
             Self::BedrockConverse => &["system", "messages", "toolConfig"],
+            // No request body is built.
+            Self::Scripted => &[],
         }
     }
 }

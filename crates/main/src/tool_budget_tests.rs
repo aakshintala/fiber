@@ -23,7 +23,9 @@ const BUDGET: usize = 8_186;
 const HOSTED_SEARCH: &str = "web_search_20250305";
 
 /// Every wire protocol; `protocol_name`'s exhaustive match keeps this list
-/// whole when a protocol is added.
+/// whole when a protocol is added. `scripted` builds no request, so it has
+/// no wire tools to measure (`docs/model-routing.md`, "The scripted
+/// provider").
 const PROTOCOLS: [Protocol; 5] = [
     Protocol::AnthropicMessages,
     Protocol::BedrockConverse,
@@ -40,6 +42,7 @@ fn protocol_name(protocol: Protocol) -> &'static str {
         Protocol::GoogleGenerativeAi => "google-generative-ai",
         Protocol::OpenaiCompletions => "openai-completions",
         Protocol::OpenaiResponses => "openai-responses",
+        Protocol::Scripted => "scripted",
     }
 }
 
@@ -100,7 +103,11 @@ fn provider(protocol: Protocol) -> Result<Option<Arc<dyn Provider>>, String> {
         model: &data.models[0],
         thinking: None,
     };
-    spoken(crate::connect::connect(model, None, None, None))
+    let here = crate::connect::Here {
+        workspace: std::path::PathBuf::new(),
+        clock: fakes::clock::FakeClock::new(),
+    };
+    spoken(crate::connect::connect(model, None, None, None, &here))
 }
 
 /// `connect`'s result: a protocol this Fiber does not speak yet is `None`;

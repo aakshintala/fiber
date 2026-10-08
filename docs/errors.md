@@ -77,7 +77,7 @@ asked for the session.
 | Code | When | Exit |
 |---|---|---|
 | `usage` | the invocation or its environment is wrong: a bad flag, no prompt with stdin on a terminal, `fiber` without a tty, an empty or relative `FIBER_HOME`, `git` is not installed, `fiber ask --worktree` outside a git repository | 2 |
-| `config_invalid` | invalid JSON, a value of the wrong type, or one extension key set under both its full and short name in a configuration file (`docs/configuration.md`) | 1 |
+| `config_invalid` | invalid JSON, a value of the wrong type, or one extension key set under both its full and short name in a configuration or script file (`docs/configuration.md`; `docs/model-routing.md`, "The scripted provider") | 1 |
 | `io_failed` | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path | 1 |
 | `log_corrupt` | a log line that cannot be encoded, or one read back that does not parse | 1 |
 | `no_model` | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id (`docs/model-routing.md`, "Naming a model") | 1 |
@@ -260,7 +260,7 @@ the lines that carry it.
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
 | `busy` | driver command | `prompt` or `reload` while a turn is running, or `rewind` mid-turn (`docs/invocation.md`, "What each command does") |
 | `closing` | exit, tool call, extension call, driver command | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set`, `state.unset` or `host.drive` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends"), or a driver command after `close` (`docs/invocation.md`, "Driver commands"), or the session `fiber ask` attached to ended before its turn completed |
-| `config_invalid` | exit, extension call | a configuration file is invalid |
+| `config_invalid` | exit, extension call | a configuration or script file is invalid |
 | `connection_failed` | exit, extension call, model call, tool call, turn | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host |
 | `context_overflow` | model call, turn | the request does not fit the context window |
 | `credential_failed` | exit, extension call, model call, turn | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |

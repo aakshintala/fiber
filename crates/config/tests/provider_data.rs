@@ -326,6 +326,37 @@ fn every_protocol_name_reads_and_an_unknown_one_is_invalid() {
     assert!(!err.to_string().contains("smoke-signals"), "{err}");
 }
 
+/// `scripted` is built into the binary (`docs/model-routing.md`, "The
+/// scripted provider"): no package's data may declare it. It fails exactly
+/// as an unknown protocol name of the same length does, at the `protocol`
+/// value.
+#[test]
+fn a_model_declaring_the_scripted_protocol_is_invalid_as_an_unknown_one() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    let data = |protocol: &str| {
+        format!(
+            r#"{{"name":"p","models":[{{"id":"m","protocol":"{protocol}","base_url":"u", "context_window": 1000}}]}}"#
+        )
+    };
+    setup.write(&dir.join("providers/p.json"), &data("scripted"));
+    let err = read_providers(&dir).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+    setup.write(&dir.join("providers/p.json"), &data("unknownx"));
+    assert_eq!(
+        err.to_string(),
+        read_providers(&dir).unwrap_err().to_string()
+    );
+    setup.write(
+        &dir.join("providers/p.json"),
+        r#"{"name":"p","models":[{"id":"m","protocol":"openai-responses","base_url":"u", "context_window": 1000}]}"#,
+    );
+    assert_eq!(
+        read_providers(&dir).unwrap()[0].models[0].protocol,
+        Protocol::OpenaiResponses
+    );
+}
+
 #[test]
 fn a_provider_file_named_for_another_provider_is_invalid() {
     let setup = Setup::new();
@@ -518,6 +549,7 @@ fn reserved_body_fields_match_the_documented_table() {
         Protocol::BedrockConverse.reserved_body_fields(),
         ["system", "messages", "toolConfig"]
     );
+    assert!(Protocol::Scripted.reserved_body_fields().is_empty());
 }
 
 #[test]
@@ -530,6 +562,7 @@ fn reads_web_search_is_true_only_for_the_known_anthropic_type() {
         Protocol::OpenaiResponses,
         Protocol::GoogleGenerativeAi,
         Protocol::BedrockConverse,
+        Protocol::Scripted,
     ] {
         assert!(
             !protocol.reads_web_search("web_search_20250305"),

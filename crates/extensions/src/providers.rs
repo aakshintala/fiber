@@ -19,6 +19,7 @@ use crate::{API, Error, LuaProvider};
 use contract::ThinkingLevel;
 
 mod placeholders;
+mod scripted;
 
 /// Every provider the installed extensions register, by name.
 #[derive(Clone, Default)]
@@ -190,6 +191,20 @@ fn read_addenda(
     Ok(addenda)
 }
 
+/// The notice leaving out a provider that claims the built-in provider's
+/// name: `scripted` reaches no network (`docs/model-routing.md`, "The
+/// scripted provider"), so no installed package may register it.
+fn reserved_scripted(extension: &str) -> Notice {
+    Notice {
+        code: ErrorCode::ExtensionFailed,
+        message: format!(
+            "The provider `scripted` is reserved for the built-in scripted provider; \
+             `{extension}`'s provider of that name is not loaded."
+        ),
+        extension: Some(extension.to_owned()),
+    }
+}
+
 /// A model named by [`Providers::resolve`]: one it lists, or one left
 /// out with `model_unconfigured`.
 #[derive(Clone)]
@@ -280,7 +295,18 @@ impl Providers {
             providers.secrets.extend(manifest.secrets.iter().cloned());
             let mut buffered: Vec<(ProviderData, BTreeMap<String, String>)> = Vec::new();
             let mut failed: Option<Notice> = None;
-            for mut data in config::read_providers(&dir)? {
+            let mut datas = config::read_providers(&dir)?;
+            // The built-in provider's name is reserved: a package that
+            // claims it is left out, with one notice, like a bad addendum
+            // leaves its providers out.
+            datas.retain(|data| {
+                if data.name != scripted::SCRIPTED {
+                    return true;
+                }
+                notices.push(reserved_scripted(&manifest.name));
+                false
+            });
+            for mut data in datas {
                 // The cached `models()` list stands in for the data file's
                 // until the refresh returns; a copy that is no list is no copy.
                 if let Some(cached) = config::read_model_cache(home, &data.name)? {
@@ -341,7 +367,10 @@ impl Providers {
     /// models from it, with one `extension_failed` notice naming the
     /// extension. The provider is kept either way, for its signer, token
     /// and cost lookup. A provider that did not register `models` only
-    /// has its handle kept: no `models()` call and no notice.
+    /// has its handle kept: no `models()` call and no notice. A provider
+    /// named `scripted` is left out whole, handle and all, with one
+    /// `extension_failed` notice naming `scripted` as reserved: the name
+    /// belongs to the built-in provider.
     pub fn add_lua(
         &mut self,
         extension: &str,
@@ -349,6 +378,9 @@ impl Providers {
         config: &Config,
     ) -> Vec<Notice> {
         let name = provider.name().to_owned();
+        if name == scripted::SCRIPTED {
+            return vec![reserved_scripted(extension)];
+        }
         self.lua.insert(name.clone(), Arc::clone(provider));
         // A provider that registers no `models`, such as one with only
         // `cost()`, keeps its data file's models.
@@ -583,6 +615,7 @@ impl Providers {
             let matches: Vec<Found<'_>> =
                 self.by_name
                     .values()
+                    .filter(|provider| provider.name != scripted::SCRIPTED)
                     .flat_map(|provider| {
                         let configured = provider
                             .models

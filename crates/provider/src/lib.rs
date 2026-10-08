@@ -19,6 +19,7 @@ mod openai_completions_messages;
 mod openai_completions_tools;
 pub mod openai_responses;
 pub mod redact;
+pub mod scripted;
 mod sse;
 mod strict;
 mod unfinished;

@@ -1,11 +1,13 @@
 //! The provider a model reaches (`docs/model-routing.md`, "Protocols and
 //! providers").
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use config::Protocol;
 use contract::ErrorCode;
 use contract::Secret;
+use contract::clock::Clock;
 use contract::provider::Provider;
 use contract::shapes::Failure;
 use doors::failure;
@@ -14,6 +16,7 @@ use provider::anthropic_messages::Messages;
 use provider::google_generative_ai::Gemini;
 use provider::openai_completions::Completions;
 use provider::openai_responses::Responses;
+use provider::scripted::{Script, ScriptError, Scripted};
 use provider::{Compat, Endpoint};
 use serde_json::Value;
 
@@ -25,7 +28,8 @@ pub(crate) fn speaks(protocol: Protocol, reference: &str) -> Result<(), Failure>
         Protocol::OpenaiResponses
         | Protocol::OpenaiCompletions
         | Protocol::AnthropicMessages
-        | Protocol::GoogleGenerativeAi => Ok(()),
+        | Protocol::GoogleGenerativeAi
+        | Protocol::Scripted => Ok(()),
     }
 }
 
@@ -39,6 +43,35 @@ fn unspoken(reference: &str) -> Failure {
     )
 }
 
+/// Where a session runs: the workspace a `scripted` model's path resolves
+/// against, and the clock its pauses wait on (`docs/model-routing.md`, "The
+/// scripted provider").
+pub(crate) struct Here {
+    /// The session's workspace.
+    pub(crate) workspace: PathBuf,
+    /// The session's clock.
+    pub(crate) clock: Arc<dyn Clock>,
+}
+
+/// The `scripted` protocol for the script at `id`, resolved against the
+/// workspace (an absolute path stands) and read whole, once: a file that
+/// cannot be read is `io_failed`, a malformed one `config_invalid`.
+fn scripted(id: &str, here: &Here) -> Result<Arc<dyn Provider>, Failure> {
+    let path = here.workspace.join(id);
+    let script = Script::read(&path).map_err(|e| {
+        let code = match &e {
+            ScriptError::Unreadable { .. } => ErrorCode::IoFailed,
+            ScriptError::Malformed { .. } => ErrorCode::ConfigInvalid,
+        };
+        failure(code, e.to_string())
+    })?;
+    Ok(Arc::new(Scripted::new(
+        path,
+        script,
+        Arc::clone(&here.clock),
+    )))
+}
+
 /// The provider a model reaches: the endpoint and protocol construction the
 /// session's model and the reviewer's share. A reviewer failure never falls
 /// back to the session's model (`docs/permissions.md`, "How it runs").
@@ -48,12 +81,13 @@ fn unspoken(reference: &str) -> Failure {
 /// provider whose package declares `cost()` carries it as its lookup, bound
 /// to this model's base URL and `key` (`docs/model-routing.md`, "Cost"). A
 /// package that fails to start gets no lookup; the calls' costs stay as
-/// first recorded.
+/// first recorded. `here` is where a `scripted` model's script is read.
 pub(crate) fn connect(
     model: extensions::Model<'_>,
     key: Option<Secret>,
     signer: Option<Arc<dyn contract::signing::Signer>>,
     lua: Option<&Arc<LuaProvider>>,
+    here: &Here,
 ) -> Result<Arc<dyn Provider>, Failure> {
     let lookup_key = key.clone();
     let endpoint = Endpoint {
@@ -109,6 +143,7 @@ pub(crate) fn connect(
             })
         }
         Protocol::BedrockConverse => return Err(unspoken(&model.reference())),
+        Protocol::Scripted => scripted(&model.model.id, here)?,
     };
     Ok(match lua {
         Some(lua) => lua

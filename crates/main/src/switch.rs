@@ -43,6 +43,9 @@ pub(crate) struct Loader {
     pub(crate) locks: Arc<dyn PathLock>,
     /// The extension that registered each Lua provider, by provider name.
     pub(crate) owners: BTreeMap<String, String>,
+    /// The session's workspace, which a `scripted` model's path resolves
+    /// against.
+    pub(crate) workspace: PathBuf,
 }
 
 /// What preparing a switch reads: the whole startup registry, holding no
@@ -165,8 +168,9 @@ impl Switching {
 
     /// Reads provider `want.name`'s access on the read thread: starts its Lua
     /// provider when none is loaded and an extension registered it, then
-    /// reads its key unless one was read before, and builds its signer.
-    /// Writes neither the keys nor the loaded providers.
+    /// reads its key unless one was read before, and builds its signer. A
+    /// scripted provider reads nothing. Writes neither the keys nor the
+    /// loaded providers.
     fn read(&self, want: Want) -> Result<Got, Failure> {
         let data = self.registry.get(&want.name).ok_or_else(|| {
             doors::failure(
@@ -174,37 +178,44 @@ impl Switching {
                 format!("No provider `{}` is installed.", want.name),
             )
         })?;
-        let lua = match (want.lua, self.loader.owners.get(&want.name)) {
-            (Some(lua), _) => Some(lua),
-            (None, Some(extension)) => Some(
-                self.loader
-                    .extensions
-                    .start_provider(
-                        &self.config,
-                        Arc::clone(&self.loader.clock),
-                        Arc::clone(&self.loader.locks),
-                        extension,
-                        &want.name,
-                    )
-                    .map_err(|e| crate::failed(e.code(), e))?,
-            ),
-            (None, None) => None,
-        };
         let mut file = None;
-        let read =
-            crate::lua_providers::session_credential(lua.as_ref(), data, &want.label, || {
-                if let Some(Some(key)) = want.known {
-                    return Ok(key);
-                }
-                let run = |command: &mut std::process::Command| self.reads.command(command);
-                let read =
-                    crate::credential::switch_credential(&self.config, data, &want.label, &run)?;
-                file = read.file;
-                Ok(read.secret)
-            })?;
+        let access = crate::scripted::access(data, || {
+            let lua = match (want.lua, self.loader.owners.get(&want.name)) {
+                (Some(lua), _) => Some(lua),
+                (None, Some(extension)) => Some(
+                    self.loader
+                        .extensions
+                        .start_provider(
+                            &self.config,
+                            Arc::clone(&self.loader.clock),
+                            Arc::clone(&self.loader.locks),
+                            extension,
+                            &want.name,
+                        )
+                        .map_err(|e| crate::failed(e.code(), e))?,
+                ),
+                (None, None) => None,
+            };
+            let read =
+                crate::lua_providers::session_credential(lua.as_ref(), data, &want.label, || {
+                    if let Some(Some(key)) = want.known {
+                        return Ok(key);
+                    }
+                    let run = |command: &mut std::process::Command| self.reads.command(command);
+                    let read = crate::credential::switch_credential(
+                        &self.config,
+                        data,
+                        &want.label,
+                        &run,
+                    )?;
+                    file = read.file;
+                    Ok(read.secret)
+                })?;
+            Ok(Access::new(lua.as_ref(), read))
+        })?;
         Ok(Got {
             label: want.label,
-            access: Access::new(lua.as_ref(), read),
+            access,
             file,
         })
     }
@@ -317,11 +328,16 @@ pub(crate) fn prepare(
                 .or_insert_with(|| (judged.label.clone(), judged.access.key.clone()));
         }
     }
+    let here = crate::Here {
+        workspace: switching.loader.workspace.clone(),
+        clock: Arc::clone(&switching.loader.clock),
+    };
     let provider = crate::connect(
         resolved,
         got.access.key.clone(),
         got.access.signer.clone(),
         got.access.lua.as_ref(),
+        &here,
     )
     .map_err(|failure| invalid(failure.message))?;
     let mut lookup = |provider: &ProviderData| -> Result<Access, Failure> {
@@ -339,6 +355,7 @@ pub(crate) fn prepare(
         &switching.registry,
         &switching.config,
         &resolved,
+        &here,
         &mut lookup,
     );
     // Loaded after the switch applies: the session's Lua provider, and the
@@ -441,9 +458,14 @@ fn resolve<'a>(
 ) -> Result<extensions::Model<'a>, Rejection> {
     let (rest, _) = Providers::split_thinking(typed);
     if rest.contains('/') {
-        return registry
-            .resolve(typed)
-            .map_err(|error| invalid(error.to_string()));
+        // A scripted model is added to the registry only at start.
+        return registry.resolve(typed).map_err(|error| {
+            invalid(if rest.starts_with("scripted/") {
+                crate::scripted::START_ONLY.to_owned()
+            } else {
+                error.to_string()
+            })
+        });
     }
     if typed != rest
         && let Some(prepared) = resolve_literal(registry, naming, typed)
