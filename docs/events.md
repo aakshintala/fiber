@@ -1300,7 +1300,7 @@ Every driver command is answered with exactly one of these, echoing its id
 |---|---|
 | `rewind` | `new_session_id` (string), the session that continues this one |
 | `tools` | `tools`, an array with one object per declared tool: `name` (string), `source` (`builtin`, `extension` or `mcp`), `server` or `extension` (string, the tool's server or extension, when not built in), `state` (`full`, `deferred` or `loaded`), `bytes` (integer) and `tokens` (integer, estimated, absent before the first request) (`docs/tools.md`, "Seeing the tools") |
-| `commands` | `commands`, an array with one object per `/name` the session runs: `name` (string), `description` (string), `argument_hint` (string, the skill's `argument-hint`, absent when it has none) and `tag` (string: `skill`, `template`, or the extension's name) (`docs/invocation.md`, "What each command does") |
+| `commands` | `commands`, an array with one object per `/name` the session runs: `name` (string), `description` (string), `argument_hint` (string, the skill's `argument-hint` or an MCP prompt's arguments, absent when it has none) and `tag` (string: `skill`, `template`, the extension's name, or the MCP server's name) (`docs/invocation.md`, "What each command does") |
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `shell` | `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command` |
 | `start` | `session_id` (string), the session the hub started, over the hub (`docs/invocation.md`, "The hub") |

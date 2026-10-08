@@ -318,7 +318,7 @@ the lines that carry it.
 | `session_not_found` | exit, hub command | a resume names no session, or a command whose `session_id` names no session, running or exited, or names a delegate that is not running (`docs/invocation.md`, "The hub" and "Lifecycle") |
 | `signal` | tool call, job | a process killed by a signal Fiber did not send |
 | `skill_invalid` | notice | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
-| `skill_shadowed` | notice | two skills share a name; the message names both paths and which one won (`docs/system-prompt.md`, "Skills") |
+| `skill_shadowed` | notice | two skills share a name, an MCP server's prompt is named like a skill, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") |
 | `skills_large` | notice | the skills listing passes 10% of the context window; the message names the sources that add the most (`docs/system-prompt.md`, "Size") |
 | `stale_file` | tool call | a write would replace a file the session has not seen in its current state |
 | `stale_request` | driver command, hub command | the command names a request, steering message, job or turn that is no longer pending, queued or running, or a `dismiss` names a session that is not a crashed session in the feed, or a cascading `delete`'s `expect` differs from the sessions it would remove; the message names them (`docs/invocation.md`, "Deleting and pruning") |
@@ -355,7 +355,7 @@ Notices, for a failure outside any action:
 | `repository_code_skipped` | an extension, hook or MCP server the repository declares was skipped, unapproved, with nobody to ask; the message names it and says to run `fiber approve` |
 | `reviewer_selection_failed` | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one; the message names the cause |
 | `skill_invalid` | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
-| `skill_shadowed` | two skills share a name; the message names both paths and which one won (`docs/system-prompt.md`, "Skills") |
+| `skill_shadowed` | two skills share a name, an MCP server's prompt is named like a skill, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") |
 | `skills_large` | the skills listing passes 10% of the context window; the message names the sources that add the most (`docs/system-prompt.md`, "Size") |
 | `tool_definitions_large` | full tool definitions take more than 10% of the context window |
 | `web_search_unavailable` | `web_search` is not declared: several search backends are installed and `web_search.backend` is unset, or it names a backend that is not installed; the message names which (`docs/tools.md`, "Web fetch and web search") |
