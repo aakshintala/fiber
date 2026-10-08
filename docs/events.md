@@ -1359,7 +1359,9 @@ ephemeral. The log does not pay to store text a completion would supersede.
 An attempt count is derived by counting `assistant_message_started` lines, never
 from a stored counter, so it cannot drift from the record. A client that shows which attempt a model call is, such as the terminal's
 "attempt 2 of 4", counts the `assistant_message_started` lines of the request's
-retries in that step.
+retries in that step. The count starts again at each `step_started`, each
+`handoff_started`, whose note request is its own, and each
+`assistant_message_completed` whose outcome is `completed`.
 
 ## Rewind
 
