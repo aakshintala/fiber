@@ -411,6 +411,74 @@ fn no_selection_starts_over_the_view() {
 }
 
 #[test]
+fn the_selected_entry_stays_on_its_occurrence_when_matches_appear_before_it() {
+    let mut app = attached(40, 10);
+    prompt(&mut app, " ");
+    // The pads stream first, so completing them later replaces their
+    // lines instead of appending.
+    app.on_line(line(
+        "assistant_message_delta",
+        json!({"text": "pad one"}),
+        Some("a_p1"),
+    ));
+    app.on_line(line(
+        "assistant_message_delta",
+        json!({"text": "pad two"}),
+        Some("a_p2"),
+    ));
+    reply(&mut app, "a_m1", "echo needle");
+    reply(&mut app, "a_m2", "echo needle");
+    scan(&mut app, "needle");
+    assert_eq!(count(&app), "1 of 2");
+    open(&mut app);
+    assert_eq!(cursor(&app), (0, 0));
+    // Two more matches appear before the identical lines: the first
+    // occurrence is now the third, and the selection stays on it.
+    reply(&mut app, "a_p1", "zero needle");
+    reply(&mut app, "a_p2", "one needle");
+    assert_eq!(count(&app), "3 of 4");
+    let view = app.find_results().expect("open");
+    assert_eq!(view.entries.len(), 4);
+    assert_eq!((view.selected, view.top), (2, 0));
+    assert_eq!(view.entries[2].1, "echo needle");
+}
+
+#[test]
+fn an_equal_match_either_side_of_the_old_ordinal_selects_the_first() {
+    let mut app = attached(40, 10);
+    prompt(&mut app, " ");
+    app.on_line(line(
+        "assistant_message_delta",
+        json!({"text": "alpha needle"}),
+        Some("a_p1"),
+    ));
+    app.on_line(line(
+        "assistant_message_delta",
+        json!({"text": "echo needle"}),
+        Some("a_m"),
+    ));
+    app.on_line(line(
+        "assistant_message_delta",
+        json!({"text": "beta needle"}),
+        Some("a_p2"),
+    ));
+    scan(&mut app, "needle");
+    assert_eq!(count(&app), "1 of 3");
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(cursor(&app), (1, 0));
+    // The middle line stops matching while the outer lines become the
+    // same occurrence: both are one ordinal away, so the first wins.
+    reply(&mut app, "a_m", "zebra needle");
+    reply(&mut app, "a_p1", "echo needle");
+    reply(&mut app, "a_p2", "echo needle");
+    assert_eq!(count(&app), "2 of 3");
+    let view = app.find_results().expect("open");
+    assert_eq!((view.selected, view.top), (0, 0));
+    assert_eq!(view.entries[0].1, "echo needle");
+}
+
+#[test]
 fn the_selected_entry_survives_new_output() {
     let mut app = turned(40, 10, &["needle one", "needle two"]);
     scan(&mut app, "needle");

@@ -368,39 +368,28 @@ impl Find {
         }
     }
 
-    /// Reconciles the current match with rescanned pages: the first equal
-    /// match stays current and keeps a pending reveal, else the first match
+    /// Reconciles the current match with rescanned pages: an equal anchor
+    /// stays current and keeps a pending reveal, else the first match
     /// after the old key's place in page order, wrapping, else none, and
-    /// nothing is revealed. Equal matches share a page and count up in
-    /// render order, so the first equal match is the nearest to the old one.
+    /// nothing is revealed (`docs/tui.md`, "Search").
     fn reconcile(&mut self, old: Match) {
         let flat = self.flat();
-        if let Some(kept) = flat.iter().find(|got| got.anchor == old.anchor) {
-            self.current = Some((**kept).clone());
-            return;
+        let next = remapped(&flat, &old).and_then(|at| flat.get(at).cloned().cloned());
+        let equal = next.as_ref().is_some_and(|got| got.anchor == old.anchor);
+        self.current = next;
+        if !equal {
+            self.reveal = false;
         }
-        let after = flat
-            .iter()
-            .find(|got| (got.anchor.page, got.nth) > (old.anchor.page, old.nth));
-        self.current = after.or(flat.first()).map(|got| (**got).clone());
-        self.reveal = false;
     }
 
     /// Reconciles the results view's selected entry with rescanned pages
-    /// the same way: the first equal match stays selected, else the
+    /// the same way: the same occurrence stays selected, else the
     /// first match after the old one's place in page order, wrapping,
     /// else the first one, and none with no matches (`docs/tui.md`,
     /// "Search").
     fn remap_selected(&mut self, old: Match, height: usize) {
         let flat = self.flat();
-        let at = flat
-            .iter()
-            .position(|kept| kept.anchor == old.anchor && kept.nth == old.nth)
-            .or_else(|| {
-                flat.iter()
-                    .position(|kept| (kept.anchor.page, kept.nth) > (old.anchor.page, old.nth))
-            })
-            .unwrap_or(0);
+        let at = remapped(&flat, &old).unwrap_or(0);
         let len = flat.len();
         if let Some(results) = self.results.as_mut() {
             results.go(at, len, height);
@@ -441,6 +430,27 @@ impl Find {
         }
         count
     }
+}
+
+/// The kept match for `old` among rescanned pages, by index: the equal
+/// anchor whose ordinal is nearest the old one, else the first match
+/// after the old key's place in page order, wrapping, else the first
+/// one, and none with no matches. The anchor matches independently of
+/// the ordinal: `nth` only locates the match on screen, so matches
+/// appearing before it shift it without losing the occurrence
+/// (`docs/tui.md`, "Search").
+fn remapped(flat: &[&Match], old: &Match) -> Option<usize> {
+    if let Some((at, _)) = flat
+        .iter()
+        .enumerate()
+        .filter(|(_, kept)| kept.anchor == old.anchor)
+        .min_by_key(|(_, kept)| kept.nth.abs_diff(old.nth))
+    {
+        return Some(at);
+    }
+    flat.iter()
+        .position(|kept| (kept.anchor.page, kept.nth) > (old.anchor.page, old.nth))
+        .or_else(|| flat.first().map(|_| 0))
 }
 
 /// One logical line's hash: what identifies it across rescans.
