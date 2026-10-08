@@ -462,10 +462,12 @@ fn a_shutdown_during_retrieval_reaches_the_fetch() {
     let (entered_tx, entered_rx) = mpsc::channel();
     let fetch: r#loop::FetchPrompt = Arc::new(
         move |_server: &str, _prompt: &str, _args: &str, cancel: &dyn Cancel| {
-            entered_tx.send(()).unwrap();
             let latch = Arc::new(Latch::default());
             cancel.subscribe(Arc::downgrade(&(Arc::clone(&latch) as Arc<dyn Wake>)));
-            latch.wait();
+            entered_tx.send(()).unwrap();
+            if !cancel.is_cancelled() {
+                latch.wait();
+            }
             assert!(cancel.is_cancelled(), "a shutdown reads cancelled");
             failed_output()
         },
