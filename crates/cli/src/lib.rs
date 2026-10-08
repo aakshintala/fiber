@@ -2,7 +2,7 @@
 //! `fiber logout`, `fiber approve`, `fiber sessions`, `fiber sessions export`,
 //! `fiber sessions delete`, `fiber sessions prune`, `fiber models`,
 //! `fiber extension install`, `fiber extension update`,
-//! `fiber extension remove`, `fiber extension list`, `fiber hub install`,
+//! `fiber extension remove`, `fiber extension list`, `fiber extension test`, `fiber hub install`,
 //! `fiber hub uninstall` and `fiber hub status`, and the hub restart
 //! `fiber update` calls, and the release install step `install.sh` runs
 //! (`docs/architecture.md`, "The modules"). `main` parses argv and
@@ -19,6 +19,7 @@ use doors::failure;
 mod approve;
 mod config;
 mod extension;
+mod extension_test;
 mod hub_service;
 mod hub_status;
 mod hub_unit;
@@ -33,6 +34,7 @@ mod table;
 pub use approve::approve;
 pub use config::{config_get, config_set};
 pub use extension::{extension_install, extension_list, extension_remove, extension_update};
+pub use extension_test::extension_test;
 pub use hub_service::{hub_install, hub_restart, hub_uninstall};
 pub use hub_status::hub_status;
 pub use login::{LogoutTarget, run_login, run_logout};
