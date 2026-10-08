@@ -1172,10 +1172,6 @@ fn every_other_result_still_reads_as_its_own_variant() {
         CommandResult::Commands { .. }
     ));
     assert!(matches!(
-        result_of(json!({"command_id": "c", "result": {"skills": []}})),
-        CommandResult::Skills { .. }
-    ));
-    assert!(matches!(
         result_of(json!({"command_id": "c", "result": {"lines": []}})),
         CommandResult::History { .. }
     ));

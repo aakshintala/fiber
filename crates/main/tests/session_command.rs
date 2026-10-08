@@ -1671,7 +1671,7 @@ fn skills_answers_from_two_sources_with_the_shadowed_and_switched_off_marked() {
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    let (_, result) = skills_answer(&client);
+    let (mut events, result) = skills_answer(&client);
     // Discovery logs canonical places, and the test root may sit behind a
     // symlinked temporary directory.
     let winner = setup
@@ -1709,10 +1709,33 @@ fn skills_answers_from_two_sources_with_the_shadowed_and_switched_off_marked() {
              "shadows": []}]})
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    events.extend(until_close(&client));
     drop(client);
-    let (status, _out, stderr) = running.wait();
+    let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(
+        kinds(&events),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "command_accepted",
+            "command_accepted",
+            "fiber_exited",
+        ],
+    );
+    assert_eq!(
+        kinds(&out),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "fiber_exited",
+        ],
+    );
 }
 
 #[test]
@@ -1726,12 +1749,36 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
     .unwrap();
     setup.provider(&server);
     let id = doors::mint("s_");
-    suspend_on_an_approval(&setup, &id);
+    let pending = suspend_on_an_approval(&setup, &id);
     workspace_skill(&setup, "later", "description: Added before the resume.\n");
 
     let mut running = setup.start_session(&id, &["--resume"]);
     let client = running.connect(&setup.socket(&id));
-    let (_, result) = skills_answer(&client);
+    // Capture the replayed request before asking for skills: it can arrive
+    // before that command's answer and be consumed with it.
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let mut resumed = false;
+    let mut events = until(&client, "the re-raised permission request", |line| {
+        if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
+            resumed = true;
+        }
+        resumed
+            && line["kind"] == "permission_requested"
+            && line["payload"]["request_id"] == pending.as_str()
+    });
+    assert_eq!(
+        events.last().unwrap()["payload"]["request_id"],
+        pending.as_str()
+    );
+
+    send(&client, r#"{"id":"c_skills","command":"skills"}"#);
+    let skills = until(&client, "the skills answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_skills"
+    });
+    let result = skills.last().unwrap()["payload"]["result"].clone();
     let path = setup
         .workspace()
         .canonicalize()
@@ -1746,7 +1793,64 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
              "path": path, "source": "repository", "model_invocable": true,
              "disabled": false, "shadows": []}]})
     );
-    // Dropping `running` kills the session, still waiting on the approval.
+    events.extend(skills);
+    send(
+        &client,
+        r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
+    );
+    events.extend(until(&client, "the close answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_close_now"
+    }));
+    events.extend(until_close(&client));
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    for stream in [&events, &out] {
+        assert_eq!(
+            kinds(stream)
+                .iter()
+                .filter(|kind| **kind == "clients")
+                .count(),
+            1,
+            "the resumed client was counted once"
+        );
+    }
+    assert_eq!(
+        kinds_except_clients(&events),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "fiber_exited",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "permission_requested",
+            "command_accepted",
+            "command_accepted",
+            "fiber_exited",
+        ],
+    );
+    assert_eq!(
+        kinds_except_clients(&out),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "permission_requested",
+            "fiber_exited",
+        ],
+    );
 }
 
 /// A 1x1 PNG, 69 bytes: within every cap, so the image child stores it byte
