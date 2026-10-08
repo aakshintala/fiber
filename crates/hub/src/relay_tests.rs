@@ -576,24 +576,44 @@ fn transfer_drops_a_dead_relay_and_reports_it() {
 
 #[test]
 fn a_transfer_registers_before_the_session_can_answer() {
-    use std::io::{BufRead, BufReader};
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::mpsc;
     use std::time::Duration;
     const DEADLINE: Duration = Duration::from_secs(10);
     const SID: &str = "s_0123456789abcdef";
     let held = fakes::TempDir::new("rt");
     let hub = std::sync::Arc::new(hub(&held));
     // The relay thread reads the session end; the fake bridges the entry
-    // writer's end back to it and answers every subscribe instantly.
+    // writer's end back to it. The reply stays gated until transfer pauses
+    // after its write and before the old registration point.
     let (relay_end, fake_write_end) = UnixStream::pair().unwrap();
     let (entry_end, fake_read_end) = UnixStream::pair().unwrap();
     fake_read_end.set_read_timeout(Some(DEADLINE)).unwrap();
     let relays: std::sync::Arc<std::sync::Mutex<Relays>> =
         std::sync::Arc::new(std::sync::Mutex::new(Relays::default()));
-    let replayed: Replayed = Replayed::default();
-    let kept: Kept = Kept::default();
+    let (written_tx, written_rx) = mpsc::channel();
+    let (release_transfer_tx, release_transfer_rx) = mpsc::channel();
+    crate::connection::lock(&relays).after_transfer_write = Some(Box::new(move || {
+        written_tx.send(()).unwrap_or(());
+        release_transfer_rx
+            .recv_timeout(DEADLINE)
+            .expect("the test releases the transfer pause");
+    }));
+    let (filter_tx, filter_rx) = mpsc::channel();
+    let (release_filter_tx, release_filter_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_replay_filter) = Some(Box::new(move |line, muted| {
+        filter_tx
+            .send((acknowledgement(line).is_some(), muted))
+            .unwrap_or(());
+        release_filter_rx
+            .recv_timeout(DEADLINE)
+            .expect("the test releases the relay pause");
+    }));
     let (client_write, client_read) = UnixStream::pair().unwrap();
     client_read.set_read_timeout(Some(DEADLINE)).unwrap();
     let client_writer = std::sync::Arc::new(std::sync::Mutex::new(client_write));
+    let replayed: Replayed = Replayed::default();
+    let kept: Kept = Kept::default();
     let epoch = crate::connection::lock(&relays).mint();
     let thread = std::thread::Builder::new()
         .name("hub-relay".to_owned())
@@ -627,14 +647,20 @@ fn a_transfer_registers_before_the_session_can_answer() {
         replayed,
         thread: None,
     });
+    let (reply_tx, reply_rx) = mpsc::channel();
     let fake = std::thread::Builder::new()
-        .name("instant-session".to_owned())
+        .name("gated-session".to_owned())
         .spawn(move || {
             let mut read = BufReader::new(fake_read_end);
             let mut buf = String::new();
-            read.read_line(&mut buf).unwrap();
+            if read.read_line(&mut buf).unwrap() == 0 {
+                return;
+            }
             let command: Value = serde_json::from_str(buf.trim_end()).unwrap();
             let id = command.get("id").cloned().unwrap();
+            reply_rx
+                .recv_timeout(DEADLINE)
+                .expect("the test releases the fake reply");
             let mut ack = serde_json::to_vec(&json!({
                 "kind": "command_accepted", "ts": 1, "schema_version": 1,
                 "payload": {"command_id": id},
@@ -642,7 +668,6 @@ fn a_transfer_registers_before_the_session_can_answer() {
             .unwrap();
             ack.push(b'\n');
             let mut write = fake_write_end.try_clone().unwrap();
-            use std::io::Write;
             write.write_all(&ack).unwrap();
             write.flush().unwrap();
             // A live line behind the acknowledgement: the client must read
@@ -662,18 +687,51 @@ fn a_transfer_registers_before_the_session_can_answer() {
         .as_object()
         .unwrap()
         .clone();
-    assert!(crate::connection::lock(&relays).transfer(SID, &line));
+    let transfer = std::thread::Builder::new()
+        .name("relay-transfer".to_owned())
+        .spawn({
+            let relays = std::sync::Arc::clone(&relays);
+            move || crate::connection::lock(&relays).transfer(SID, &line)
+        })
+        .unwrap();
+
+    let write_reached = written_rx.recv_timeout(DEADLINE).is_ok();
+    reply_tx.send(()).unwrap_or(());
+    let filter_result = if write_reached {
+        filter_rx.recv_timeout(DEADLINE).ok()
+    } else {
+        None
+    };
+    // The relay has made its filter decision while transfer is still paused.
+    // This is the bad interleaving if registration follows the write.
+    release_transfer_tx.send(()).unwrap_or(());
+    let transferred = transfer.join().unwrap();
+    release_filter_tx.send(()).unwrap_or(());
     let mut read = BufReader::new(client_read);
     let mut first = String::new();
-    read.read_line(&mut first)
-        .expect("the relay forwards a live line before the deadline");
-    let first: Value = serde_json::from_str(first.trim_end()).unwrap();
-    assert_eq!(
-        first["kind"], "session_status",
-        "the transferred acknowledgement never reaches the client: {first:?}"
-    );
-    // Tear down: dropping the entry ends both threads.
+    let first_read = read.read_line(&mut first);
+    let first_kind = first_read.ok().and_then(|_| {
+        serde_json::from_str::<Value>(first.trim_end())
+            .ok()
+            .and_then(|value| value.get("kind")?.as_str().map(str::to_owned))
+    });
+
+    // Tear down before asserting, so a failed interleaving still joins both
+    // session-side threads.
     crate::connection::lock(&relays).entries.clear();
     fake.join().unwrap();
     thread.join().unwrap();
+
+    assert!(write_reached, "transfer reached the post-write pause");
+    assert_eq!(
+        filter_result,
+        Some((true, true)),
+        "the acknowledgement is filtered before transfer resumes"
+    );
+    assert!(transferred, "the transfer completed");
+    assert_eq!(
+        first_kind.as_deref(),
+        Some("session_status"),
+        "the transferred acknowledgement never reaches the client"
+    );
 }

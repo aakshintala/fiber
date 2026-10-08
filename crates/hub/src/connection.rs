@@ -65,6 +65,9 @@ pub(crate) struct Hub {
     /// Tests only: a one-shot pause before the next forwarded session line.
     #[cfg(test)]
     pub(crate) before_forward: ForwardHook,
+    /// Tests only: observes and pauses after the relay filters a session line.
+    #[cfg(test)]
+    pub(crate) after_replay_filter: ReplayFilterHook,
     /// Tests only: a one-shot pause before an accepted `subscribe` is kept.
     #[cfg(test)]
     pub(crate) before_accepted: ForwardHook,
@@ -128,6 +131,8 @@ impl Hub {
             before_hello: Mutex::new(None),
             #[cfg(test)]
             before_forward: Mutex::new(None),
+            #[cfg(test)]
+            after_replay_filter: Mutex::new(None),
             #[cfg(test)]
             before_accepted: Mutex::new(None),
             #[cfg(test)]
@@ -293,6 +298,10 @@ impl Hub {
 /// the line about to be written, and the relays, with no lock held.
 #[cfg(test)]
 type ForwardHook = Mutex<Option<Box<dyn FnOnce(&[u8], &Arc<Mutex<Relays>>) + Send>>>;
+
+/// Tests only: a one-shot pause after a session line's replay-filter decision.
+#[cfg(test)]
+type ReplayFilterHook = Mutex<Option<Box<dyn FnOnce(&[u8], bool) + Send>>>;
 
 /// What `poll_accept` decided for one accepted stream.
 pub(crate) enum Accept {

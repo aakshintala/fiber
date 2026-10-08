@@ -66,6 +66,9 @@ pub(crate) struct Relay {
 pub(crate) struct Relays {
     pub(crate) entries: Vec<Relay>,
     pub(crate) minted: u64,
+    /// Tests only: pauses after a transfer write, before its result returns.
+    #[cfg(test)]
+    pub(crate) after_transfer_write: Option<Box<dyn FnOnce() + Send>>,
     /// Per session, the last `subscribe` it accepted, without its
     /// `session_id`: what a reconnect sends again.
     pub(crate) subscribed: Vec<(String, Map<String, Value>)>,
@@ -143,6 +146,10 @@ impl Relays {
                 lock(&entry.replayed).retain(|muted| *muted != minted);
                 entry.epoch
             } else {
+                #[cfg(test)]
+                if let Some(after_write) = self.after_transfer_write.take() {
+                    after_write();
+                }
                 return true;
             }
         };
@@ -437,7 +444,14 @@ fn relay(
                 break;
             }
             Ok(_) => {
-                if muted(&buf, &replayed) {
+                let replayed_ack = muted(&buf, &replayed);
+                #[cfg(test)]
+                {
+                    if let Some(after_filter) = lock(&hub.after_replay_filter).take() {
+                        after_filter(&buf, replayed_ack);
+                    }
+                }
+                if replayed_ack {
                     continue;
                 }
                 match settle(&buf, &kept, hub, session, exiting) {
