@@ -39,6 +39,7 @@ mod screen;
 mod shell;
 mod slash;
 mod sources;
+mod stroke;
 mod term;
 mod turn;
 mod turn_text;
