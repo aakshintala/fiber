@@ -1,15 +1,29 @@
 //! A Lua extension's tools through the public API (`docs/extensions.md`,
 //! "Registering" and "How an extension runs"), on the fake clock.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code"
+)]
 
+use std::collections::BTreeMap;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use contract::tool::Tool;
+use contract::ErrorCode;
+use contract::clock::Clock;
+use contract::inbox::Delivery;
+use contract::shapes::{ContentPart, DeclaredEffects, Effect};
+use contract::tool::{Effects, EffectsError, Output, Tool};
 use extensions::{LuaExtension, LuaTool};
 use fakes::clock::FakeClock;
+use fakes::{CancelToken, Recorder};
+use serde_json::{Map, Value, json};
 
 /// How long a test waits for a signal or an answer before failing.
 const WAIT: Duration = Duration::from_secs(5);
@@ -89,5 +103,538 @@ fn two_loads_of_one_entry_script_give_byte_identical_definitions() {
             r#""input_schema":{"properties":{"deep":{"type":"boolean"},"path":{"type":"string"}},"required":["path"],"type":"object"}"#
         )),
         "{first:?}"
+    );
+}
+
+// Calls (`docs/extensions.md`, "How an extension runs"): a tool call runs in
+// the gaps of the extension's ordered stream, under its own timeout from
+// when Fiber asked.
+
+/// When the hook cannot stop the VM, the caller waits 1 second more.
+const GRACE: Duration = Duration::from_secs(1);
+
+/// The extension's tools by name, each shareable with a calling thread.
+fn by_name(ext: &Arc<LuaExtension>) -> BTreeMap<String, Arc<LuaTool>> {
+    tools(ext)
+        .into_iter()
+        .map(|tool| (tool.definition().name, Arc::new(tool)))
+        .collect()
+}
+
+fn args(value: Value) -> Map<String, Value> {
+    let Value::Object(map) = value else {
+        panic!("arguments are an object, not {value}");
+    };
+    map
+}
+
+/// Runs `tool` on `arguments` on its own thread.
+fn run(tool: &Arc<LuaTool>, arguments: Value) -> mpsc::Receiver<Output> {
+    let (tx, rx) = mpsc::channel();
+    let tool = Arc::clone(tool);
+    std::thread::spawn(move || {
+        let output = tool.run(&args(arguments), &CancelToken::new(), &Recorder::default());
+        match tx.send(output) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    rx
+}
+
+/// The call's result, under `WAIT`.
+fn ran(rx: &mpsc::Receiver<Output>) -> Output {
+    rx.recv_timeout(WAIT).expect("waited for the tool call")
+}
+
+/// `tool`'s effects for `arguments`, on a thread under `WAIT`.
+fn effects(tool: &Arc<LuaTool>, arguments: Value) -> Result<Effects, EffectsError> {
+    let tool = Arc::clone(tool);
+    fakes::within("the effects call", WAIT, move || {
+        tool.effects(&args(arguments))
+    })
+}
+
+/// The result's text parts, joined.
+fn text(output: &Output) -> String {
+    output
+        .content
+        .iter()
+        .map(|part| {
+            let ContentPart::Text { text } = part else {
+                panic!("a non-text part {part:?}");
+            };
+            text.clone()
+        })
+        .collect()
+}
+
+/// The failure's code and message.
+fn failed(output: &Output) -> (ErrorCode, String) {
+    let failure = output.error.clone().expect("the call failed");
+    (failure.code, failure.message)
+}
+
+/// `require("go_<name>")` in `dir` signals that the callback has started:
+/// the loader opens the fifo for read, the writer here reports it and
+/// closes the fifo, and the module reads empty.
+fn go_module(dir: &Path, name: &str) -> mpsc::Receiver<()> {
+    let path = dir.join(format!("go_{name}.lua"));
+    let made = std::process::Command::new("mkfifo").arg(&path).status();
+    assert!(made.unwrap().success(), "mkfifo {path:?}");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        match tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+        drop(held);
+    });
+    rx
+}
+
+/// An HTTP server holding one request: `accepted` fires once it has read
+/// the request's head, and it answers `body` once `release` is sent. It
+/// closes unanswered after `WAIT`.
+struct Held {
+    url: String,
+    accepted: mpsc::Receiver<()>,
+    release: mpsc::Sender<()>,
+}
+
+fn hold(body: &'static str) -> Held {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let (accepted_tx, accepted) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let mut sock = listener.accept().unwrap().0;
+        let mut seen = Vec::new();
+        let mut byte = [0; 1];
+        while !seen.ends_with(b"\r\n\r\n") {
+            match sock.read(&mut byte) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => seen.push(byte[0]),
+            }
+        }
+        match accepted_tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+        if release_rx.recv_timeout(WAIT).is_ok() {
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            match sock.write_all(reply.as_bytes()) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    });
+    Held {
+        url,
+        accepted,
+        release,
+    }
+}
+
+const COUNTED: &str = r#"
+local calls = 0
+fiber.tool("still", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = { "reads" }, paths = { "a.txt" }, reversible = true },
+  timeout = 1000,
+  run = function() calls = calls + 1 return "ran" end,
+})
+fiber.tool("per_path", {
+  description = "d", input_schema = { type = "object" },
+  effects = function(args) calls = calls + 1 return { effects = { "writes" }, paths = { args.path }, reversible = false } end,
+  timeout = 1000,
+  run = function() return "ran" end,
+})
+fiber.command("count", { timeout = 1000, run = function() return tostring(calls) end })
+"#;
+
+/// Runs the command `name` on a thread under `WAIT`.
+fn command(ext: &Arc<LuaExtension>, name: &str) -> String {
+    let ext = Arc::clone(ext);
+    let name = name.to_owned();
+    fakes::within("the command", WAIT, move || ext.command(&name, "")).expect("the command ran")
+}
+
+#[test]
+fn static_effects_are_returned_without_starting_a_callback() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(dir.path(), "count", COUNTED, FakeClock::new());
+    let tools = by_name(&ext);
+    let still = &tools["still"];
+    assert_eq!(
+        effects(still, json!({})),
+        Ok(Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: Some(vec!["a.txt".to_owned()]),
+            },
+            subject: Some(String::new()),
+            prefix: None,
+            always_reviewed: false,
+        })
+    );
+    assert_eq!(command(&ext, "count"), "0");
+    assert_eq!(text(&ran(&run(still, json!({})))), "ran");
+    assert_eq!(command(&ext, "count"), "1");
+}
+
+#[test]
+fn an_effects_function_answers_each_call_from_its_arguments() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(dir.path(), "count", COUNTED, FakeClock::new());
+    let tools = by_name(&ext);
+    let per_path = &tools["per_path"];
+    for path in ["a.txt", "b.txt"] {
+        assert_eq!(
+            effects(per_path, json!({ "path": path })),
+            Ok(Effects {
+                declared: DeclaredEffects {
+                    effects: vec![Effect::Writes],
+                    reversible: false,
+                    paths: Some(vec![path.to_owned()]),
+                },
+                subject: Some(String::new()),
+                prefix: None,
+                always_reviewed: false,
+            })
+        );
+    }
+    assert_eq!(command(&ext, "count"), "2");
+}
+
+#[test]
+fn an_effects_function_that_raises_or_returns_a_bad_shape_fails_naming_the_tool() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(
+        dir.path(),
+        "fx",
+        r#"
+fiber.tool("raises", {
+  description = "d", input_schema = { type = "object" }, timeout = 1000,
+  effects = function() error("boom") end,
+  run = function() return "" end,
+})
+fiber.tool("odd", {
+  description = "d", input_schema = { type = "object" }, timeout = 1000,
+  effects = function() return { effects = { "deletes" }, reversible = true } end,
+  run = function() return "" end,
+})
+"#,
+        FakeClock::new(),
+    );
+    let tools = by_name(&ext);
+    assert_eq!(
+        effects(&tools["raises"], json!({})),
+        Err(EffectsError::Tool(
+            "the effects function of the tool `raises` failed: `fiber.test/fx`: init.lua:4: boom"
+                .to_owned()
+        ))
+    );
+    assert_eq!(
+        effects(&tools["odd"], json!({})),
+        Err(EffectsError::Tool(
+            "the effects function of the tool `odd` of `fiber.test/fx` returned effects that do not read: \"deletes\" is not `reads`, `writes`, `executes` or `network`"
+                .to_owned()
+        ))
+    );
+}
+
+#[test]
+fn an_effects_function_past_the_tools_timeout_fails_naming_the_tool() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let clock = FakeClock::new();
+    let ext = extension(
+        dir.path(),
+        "fx",
+        r#"
+fiber.tool("slow", {
+  description = "d", input_schema = { type = "object" }, timeout = 100,
+  effects = function() require("go_fx") while true do end end,
+  run = function() return "" end,
+})
+"#,
+        clock.clone(),
+    );
+    let went = go_module(dir.path(), "fx");
+    let tools = by_name(&ext);
+    let slow = Arc::clone(&tools["slow"]);
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || tx.send(slow.effects(&Map::new())));
+    went.recv_timeout(WAIT)
+        .expect("waited for the effects function to start");
+    clock.advance(Duration::from_millis(100));
+    assert_eq!(
+        rx.recv_timeout(WAIT).expect("waited for the effects call"),
+        Err(EffectsError::Tool(
+            "the effects function of the tool `slow` failed: `fiber.test/fx`: `slow.effects` passed its 100 ms timeout and was stopped."
+                .to_owned()
+        ))
+    );
+}
+
+const RETURNS: &str = r#"
+local function tool(name, run)
+  fiber.tool(name, { description = "d", input_schema = { type = "object" },
+    effects = { effects = {}, reversible = true }, timeout = 1000, run = run })
+end
+tool("plain", function() return "3 notes" end)
+tool("part", function() return { type = "text", text = "hello" } end)
+tool("part_extra", function() return { type = "text", text = "x", extra = 1 } end)
+tool("full", function()
+  return {
+    content = { { type = "text", text = "a" }, { type = "text", text = "b" } },
+    details = { count = 3 },
+    error = { code = "nonzero_exit", message = "m" },
+    control = { handoff = "n" },
+  }
+end)
+tool("nothing", function() return nil end)
+tool("number", function() return 7 end)
+tool("colour", function() return { content = "x", colour = "red" } end)
+tool("image", function() return { content = { { type = "image", path = "a.png" } } } end)
+tool("raises", function() error("boom") end)
+tool("args", function(args) return args.path .. "!" end)
+"#;
+
+#[test]
+fn each_return_maps_to_its_result() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(dir.path(), "a", RETURNS, FakeClock::new());
+    let tools = by_name(&ext);
+    let call = |name: &str| ran(&run(&tools[name], json!({})));
+    let plain = call("plain");
+    assert_eq!((text(&plain), plain.error), ("3 notes".to_owned(), None));
+    let part = call("part");
+    assert_eq!((text(&part), part.error), ("hello".to_owned(), None));
+    assert_eq!(
+        ran(&run(&tools["args"], json!({ "path": "note.txt" }))).content,
+        vec![ContentPart::Text {
+            text: "note.txt!".to_owned()
+        }]
+    );
+    let full = call("full");
+    assert_eq!(text(&full), "ab");
+    assert_eq!(full.details, Some(json!({ "count": 3 })));
+    assert_eq!(failed(&full), (ErrorCode::NonzeroExit, "m".to_owned()));
+    assert_eq!(
+        full.control.and_then(|control| control.handoff),
+        Some("n".to_owned())
+    );
+    let bad = |why: &str| (ErrorCode::ToolError, format!("the tool `{why}"));
+    for (name, why) in [
+        (
+            "part_extra",
+            "part_extra` of `fiber.test/a` returned a text part holding `extra`",
+        ),
+        ("nothing", "nothing` of `fiber.test/a` returned nothing"),
+        ("number", "number` of `fiber.test/a` returned a number"),
+        (
+            "colour",
+            "colour` of `fiber.test/a` returned `colour`, which is not `content`, `details`, `error` or `control`",
+        ),
+        (
+            "image",
+            "image` of `fiber.test/a` returned a `image` part; a tool returns only text parts",
+        ),
+    ] {
+        let output = call(name);
+        assert!(output.content.is_empty(), "{name}");
+        assert_eq!(failed(&output), bad(why), "{name}");
+    }
+    assert_eq!(
+        failed(&call("raises")),
+        (
+            ErrorCode::ToolError,
+            "`fiber.test/a`: init.lua:21: boom".to_owned()
+        )
+    );
+    // A raised error leaves the VM usable.
+    assert_eq!(text(&call("plain")), "3 notes");
+}
+
+#[test]
+fn a_run_spinning_past_its_timeout_fails_timeout_and_the_next_call_runs() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let clock = FakeClock::new();
+    let ext = extension(
+        dir.path(),
+        "slow",
+        r#"
+local calls = 0
+fiber.tool("spin", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = {}, reversible = true }, timeout = 100,
+  run = function()
+    calls = calls + 1
+    if calls == 1 then require("go_spin") while true do end end
+    return "again"
+  end,
+})
+"#,
+        clock.clone(),
+    );
+    let went = go_module(dir.path(), "spin");
+    let tools = by_name(&ext);
+    let first = run(&tools["spin"], json!({}));
+    went.recv_timeout(WAIT).expect("waited for spin to start");
+    clock.advance(Duration::from_millis(100));
+    assert_eq!(
+        failed(&ran(&first)),
+        (
+            ErrorCode::Timeout,
+            "`fiber.test/slow`: `spin` passed its 100 ms timeout and was stopped.".to_owned()
+        )
+    );
+    assert_eq!(text(&ran(&run(&tools["spin"], json!({})))), "again");
+}
+
+#[test]
+fn a_run_parked_on_a_host_call_past_its_timeout_fails_timeout_and_the_next_call_runs() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let clock = FakeClock::new();
+    let held = hold("late");
+    let ext = extension(
+        dir.path(),
+        "slow",
+        &format!(
+            r#"
+local calls = 0
+fiber.tool("wait", {{
+  description = "d", input_schema = {{ type = "object" }},
+  effects = {{ effects = {{}}, reversible = true }}, timeout = 100,
+  run = function()
+    calls = calls + 1
+    if calls == 1 then return host.http({{ url = "{}" }}).body end
+    return "again"
+  end,
+}})
+"#,
+            held.url
+        ),
+        clock.clone(),
+    );
+    let tools = by_name(&ext);
+    let deadline = clock.now().checked_add(Duration::from_millis(100)).unwrap();
+    let first = run(&tools["wait"], json!({}));
+    held.accepted
+        .recv_timeout(WAIT)
+        .expect("waited for the request to reach the server");
+    // The caller of a parked call waits to the deadline plus the grace,
+    // so the callback is parked under its deadline.
+    assert!(
+        clock.await_parked(deadline.checked_add(GRACE).unwrap(), WAIT),
+        "waited for the caller to see the call parked"
+    );
+    clock.advance(Duration::from_millis(100));
+    assert_eq!(
+        failed(&ran(&first)),
+        (
+            ErrorCode::Timeout,
+            "`fiber.test/slow`: `wait` passed its 100 ms timeout and was stopped.".to_owned()
+        )
+    );
+    assert_eq!(text(&ran(&run(&tools["wait"], json!({})))), "again");
+}
+
+#[test]
+fn two_calls_parked_on_host_calls_both_complete() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let (one, two) = (hold("one"), hold("two"));
+    let ext = extension(
+        dir.path(),
+        "pair",
+        r#"
+fiber.tool("fetch", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = { "network" }, reversible = true }, timeout = 5000,
+  run = function(args) return host.http({ url = args.url }).body end,
+})
+"#,
+        FakeClock::new(),
+    );
+    let tools = by_name(&ext);
+    let first = run(&tools["fetch"], json!({ "url": one.url }));
+    one.accepted
+        .recv_timeout(WAIT)
+        .expect("waited for the first request");
+    let second = run(&tools["fetch"], json!({ "url": two.url }));
+    two.accepted
+        .recv_timeout(WAIT)
+        .expect("waited for the second request while the first is parked");
+    two.release.send(()).unwrap();
+    assert_eq!(text(&ran(&second)), "two");
+    one.release.send(()).unwrap();
+    assert_eq!(text(&ran(&first)), "one");
+}
+
+#[test]
+fn exec_in_run_is_not_logged_and_exec_in_an_effects_function_is() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(
+        dir.path(),
+        "exec",
+        r#"
+fiber.tool("runs", {
+  description = "d", input_schema = { type = "object" },
+  effects = function() host.exec("sh", { "-c", "exit 3" }) return { effects = { "executes" }, reversible = false } end,
+  timeout = 5000,
+  run = function() return tostring(host.exec("sh", { "-c", "exit 0" }).exit_code) end,
+})
+"#,
+        FakeClock::new(),
+    );
+    let (tx, inbox) = mpsc::channel();
+    ext.deliver_to(tx);
+    let tools = by_name(&ext);
+    let runs = &tools["runs"];
+    assert_eq!(text(&ran(&run(runs, json!({})))), "0");
+    // The run's `extension_exec` would be sent before its reply resumes
+    // the callback, so it would be here by now.
+    assert!(matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert!(effects(runs, json!({})).is_ok());
+    match inbox.recv_timeout(WAIT) {
+        Ok(Delivery::ExtensionExec(exec)) => {
+            assert_eq!(exec.program, "sh");
+            assert_eq!(exec.args, ["-c", "exit 3"]);
+            assert_eq!(exec.process.exit_code, Some(3));
+        }
+        other => panic!("expected the effects function's extension_exec, got {other:?}"),
+    }
+    assert!(matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}
+
+#[test]
+fn a_refresh_from_a_tool_is_a_string_naming_the_tool() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(
+        dir.path(),
+        "refresh",
+        r#"
+fiber.tool("refresh", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = {}, reversible = true }, timeout = 5000,
+  run = function()
+    local ok, err = pcall(host.oauth.refresh, function() return { token = "t", expires_at = 1 } end)
+    return tostring(ok) .. "\n" .. type(err) .. "\n" .. tostring(err)
+  end,
+})
+"#,
+        FakeClock::new(),
+    );
+    let tools = by_name(&ext);
+    let said = text(&ran(&run(&tools["refresh"], json!({}))));
+    let mut lines = said.lines();
+    assert_eq!(lines.next(), Some("false"));
+    assert_eq!(lines.next(), Some("string"));
+    let message = lines.next().unwrap_or_default();
+    assert!(
+        message.contains("a tool has no provider credential"),
+        "{message}"
     );
 }

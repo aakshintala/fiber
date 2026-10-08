@@ -1,7 +1,12 @@
 //! `fiber.tool`'s registration checks (`docs/extensions.md`, "Registering")
 //! and the effects table they share with a call.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code"
+)]
 
 use std::sync::mpsc;
 
@@ -346,4 +351,190 @@ fn effects_from_reads_each_shape_and_refuses_each_bad_one() {
     for (value, why) in refused {
         assert_eq!(effects_from(&value), Err(why.to_owned()), "{value}");
     }
+}
+
+// A tool call runs in the gaps of the extension's ordered stream
+// (`docs/extensions.md`, "How an extension runs"): it neither waits behind
+// a parked stream item nor holds the stream while it is parked.
+
+/// Waits until `check` holds for the hub's state, or `WAIT` passes.
+fn until(ext: &LuaExtension, check: impl Fn(&super::super::Shared) -> bool) -> bool {
+    let shared = ext.hub.lock();
+    ext.hub.wait_for(shared, WAIT, check)
+}
+
+/// Whether a started call is parked on a host call.
+fn parked(shared: &super::super::Shared) -> bool {
+    shared.calls.values().any(|progress| {
+        matches!(
+            progress,
+            super::super::hub::Progress::Started { parked: true, .. }
+        )
+    })
+}
+
+/// Runs `call` on its own thread and hands back its result.
+fn on_thread<T: Send + 'static>(call: impl FnOnce() -> T + Send + 'static) -> mpsc::Receiver<T> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || match tx.send(call()) {
+        Ok(()) | Err(mpsc::SendError(_)) => {}
+    });
+    rx
+}
+
+/// `require("go_<name>")` in `dir` signals that the callback has started.
+fn go_module(dir: &std::path::Path, name: &str) -> mpsc::Receiver<()> {
+    let path = dir.join(format!("go_{name}.lua"));
+    let made = std::process::Command::new("mkfifo").arg(&path).status();
+    assert!(made.unwrap().success(), "mkfifo {path:?}");
+    on_thread(move || {
+        let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        drop(held);
+    })
+}
+
+/// A server that accepts one connection, signals, and holds it unanswered
+/// until `WAIT` passes, so a `host.http` call stays parked.
+fn hold_server() -> (String, mpsc::Receiver<()>) {
+    use std::io::Read;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let (accepted_tx, accepted) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut sock = listener.accept().unwrap().0;
+        let mut seen = Vec::new();
+        let mut byte = [0; 1];
+        while !seen.ends_with(b"\r\n\r\n") {
+            match sock.read(&mut byte) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => seen.push(byte[0]),
+            }
+        }
+        match accepted_tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+        let (_keep, wait) = mpsc::channel::<()>();
+        match wait.recv_timeout(WAIT) {
+            Ok(()) | Err(_) => {}
+        }
+        drop(sock);
+    });
+    (url, accepted)
+}
+
+/// A tool spec as Lua source with `timeout` and `run`.
+fn tool_spec(timeout: u64, run: &str) -> String {
+    format!(
+        "{{ description = \"d\", input_schema = {{ type = \"object\" }}, \
+           effects = {{ effects = {{}}, reversible = true }}, timeout = {timeout}, run = {run} }}"
+    )
+}
+
+const AFTER_TOOL_HOOK: &str = "fiber.hook(\"after_tool\", { timeout = 5000, on_failure = \"non-blocking\",\n\
+       run = function() return { content = \"hooked\" } end })\n";
+
+#[test]
+fn a_tool_call_completes_while_a_command_is_parked_on_an_ask() {
+    let (_dir, ext) = extension(&format!(
+        "fiber.command(\"wait\", {{ timeout = 5000, run = function() return tostring(host.ask(\"confirm\", {{ prompt = \"go?\" }}).confirmed) end }})\n\
+         fiber.tool(\"quick\", {})\n",
+        tool_spec(1000, "function() return \"quick\" end")
+    ));
+    ext.set_answerable(true);
+    let waiting = Arc::clone(&ext);
+    let _command = on_thread(move || waiting.command("wait", ""));
+    assert!(
+        until(&ext, |shared| !shared.asks.is_empty()),
+        "waited for the command to ask"
+    );
+    let quick = Arc::clone(&ext);
+    let ran = on_thread(move || quick.tool_run("quick", json!({})));
+    assert_eq!(
+        ran.recv_timeout(WAIT)
+            .expect("the tool call ran while the command waited")
+            .unwrap(),
+        json!("quick")
+    );
+    assert_eq!(ext.hub.lock().asks.len(), 1, "the command still waits");
+}
+
+#[test]
+fn a_hook_runs_to_completion_while_a_tool_call_is_parked() {
+    let (url, accepted) = hold_server();
+    let (_dir, ext) = extension(&format!(
+        "{AFTER_TOOL_HOOK}fiber.tool(\"hold\", {})\n",
+        tool_spec(
+            5000,
+            &format!("function() return host.http({{ url = \"{url}\" }}).body end")
+        )
+    ));
+    let holding = Arc::clone(&ext);
+    let _held = on_thread(move || holding.tool_run("hold", json!({})));
+    accepted
+        .recv_timeout(WAIT)
+        .expect("waited for the tool call to reach the server");
+    assert!(until(&ext, parked), "waited for the tool call to park");
+    let hooked = Arc::clone(&ext);
+    let answer = on_thread(move || hooked.hook("after_tool", 0, json!({"content": "x"})));
+    assert_eq!(
+        answer
+            .recv_timeout(WAIT)
+            .expect("the hook ran while the tool call was parked")
+            .unwrap(),
+        json!({"content": "hooked"})
+    );
+}
+
+/// The VM has one thread: a tool spinning in Lua holds a hook of its
+/// extension until the instruction hook stops it at its timeout.
+#[test]
+fn a_spinning_tool_holds_the_extensions_hook_until_its_timeout() {
+    let clock = FakeClock::new();
+    let dir = fakes::TempDir::new("fiber-lua-tool");
+    std::fs::write(
+        dir.path().join("init.lua"),
+        format!(
+            "{AFTER_TOOL_HOOK}fiber.tool(\"spin\", {})\n",
+            tool_spec(100, "function() require(\"go_spin\") while true do end end")
+        ),
+    )
+    .unwrap();
+    let went = go_module(dir.path(), "spin");
+    let ext = Arc::new(LuaExtension::new(
+        "fiber.test/t",
+        dir.path(),
+        "/nonexistent-fiber-home",
+        clock.clone(),
+    ));
+    let spinning = Arc::clone(&ext);
+    let spun = on_thread(move || spinning.tool_run("spin", json!({})));
+    went.recv_timeout(WAIT)
+        .expect("waited for the tool to spin");
+    let hooked = Arc::clone(&ext);
+    let answer = on_thread(move || hooked.hook("after_tool", 0, json!({"content": "x"})));
+    assert!(
+        until(&ext, |shared| shared
+            .queue
+            .iter()
+            .any(|job| matches!(job.target, Target::Hook { .. }))),
+        "waited for the hook to queue"
+    );
+    assert!(
+        answer.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the hook started while the tool held the thread"
+    );
+    clock.advance(Duration::from_millis(100));
+    let Err(Error::Timeout { callback, .. }) = spun.recv_timeout(WAIT).expect("the tool returned")
+    else {
+        panic!("the spinning tool did not time out");
+    };
+    assert_eq!(callback, "spin");
+    assert_eq!(
+        answer
+            .recv_timeout(WAIT)
+            .expect("the hook ran once the tool stopped")
+            .unwrap(),
+        json!({"content": "hooked"})
+    );
 }
