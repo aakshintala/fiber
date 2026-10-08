@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use super::{archive, checksum, gzip, header};
+use super::{archive, checksum, gzip, header, sha256};
 
 /// The header's checksum field, as a number.
 fn stored(block: &[u8; 512]) -> u64 {
@@ -76,4 +76,12 @@ fn gzip_round_trips_through_flate2() {
         .read_to_end(&mut out)
         .unwrap();
     assert_eq!(out, input);
+}
+
+#[test]
+fn sha256_is_lowercase_hex() {
+    assert_eq!(
+        sha256(b""),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
 }

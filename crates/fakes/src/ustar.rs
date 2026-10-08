@@ -68,6 +68,15 @@ pub fn gzip(bytes: &[u8]) -> Vec<u8> {
     encoder.finish().unwrap()
 }
 
+/// `bytes`' SHA-256 as lowercase hex, as a release's `.sha256` file holds it.
+pub fn sha256(bytes: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, bytes)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// Writes `bytes` at `at` in a field `width` wide.
 fn put(block: &mut [u8; 512], at: usize, width: usize, bytes: &[u8]) {
     assert!(

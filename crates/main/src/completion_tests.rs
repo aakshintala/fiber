@@ -103,6 +103,7 @@ fn the_copy_has_the_parsers_visible_grammar_in_both_directions() {
             "session",
             "refresh-model-lists",
             "serve",
+            "release-install",
         ] {
             assert!(
                 !shape.path.split(' ').any(|word| word == hidden),
@@ -236,6 +237,7 @@ fn the_zsh_script_completes_no_values_or_file_names() {
         "(bash zsh fish)",
         "grep",
         "refresh-model-lists",
+        "release-install",
     ] {
         assert!(!text.contains(absent), "{absent}\n{text}");
     }

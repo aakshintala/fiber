@@ -7,11 +7,10 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use fakes::ustar::{archive, gzip, header};
+use fakes::ustar::{archive, gzip, header, sha256 as sha};
 
 use super::{Release, expected_digest, install_release_with, scratch, swap_docs, url};
 use crate::Error;
-use crate::prepare::hex;
 
 const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -140,10 +139,6 @@ fn a_failed_move_aside_leaves_the_docs() {
     let docs = Docs::new(true);
     docs.swap(&[1]).unwrap_err();
     assert_eq!(fs::read_to_string(docs.at("docs/v")).unwrap(), "old");
-}
-
-fn sha(bytes: &[u8]) -> String {
-    hex(ring::digest::digest(&ring::digest::SHA256, bytes).as_ref())
 }
 
 /// A release with `docs/v` holding `docs`, and `anthropic` and `memory`.

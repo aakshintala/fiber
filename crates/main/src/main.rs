@@ -196,6 +196,15 @@ fn run() -> i32 {
             ::cli::refresh_model_lists(&providers, clock, Arc::new(tools::PathLocks::new()));
             0
         }
+        cli::Invocation::Run(Some(cli::Commands::ReleaseInstall { version, base_url })) => {
+            ::cli::release_install(
+                &version,
+                base_url.as_deref(),
+                env!("CARGO_PKG_VERSION"),
+                option_env!("FIBER_COMMIT"),
+                clock.as_ref(),
+            )
+        }
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => match cmd {
             cli::ExtensionCommands::Install { name_or_path } => {
                 ::cli::extension_install(&name_or_path, env!("CARGO_PKG_VERSION"), clock.as_ref())

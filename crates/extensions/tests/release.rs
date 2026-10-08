@@ -19,7 +19,7 @@ use std::time::Duration;
 use common::{Setup, manifest};
 use contract::clock::Clock;
 use extensions::{Error, Origin, Provenance, Release, Request, install_release, list, plan};
-use fakes::ustar::{archive, gzip, header};
+use fakes::ustar::{archive, gzip, header, sha256 as sha};
 use serde_json::{Value, json};
 
 const COMMIT: &str = "4f2a9c1";
@@ -98,14 +98,6 @@ fn good_docs() -> Vec<u8> {
         file("README.md", "the docs"),
         file("user/index.md", "for a person"),
     ]))
-}
-
-fn sha(bytes: &[u8]) -> String {
-    ring::digest::digest(&ring::digest::SHA256, bytes)
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
 }
 
 /// The four release files a test serves, each replaceable.
