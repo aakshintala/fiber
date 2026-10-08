@@ -530,6 +530,7 @@ fn a_locked_worktree_is_failed_logged_and_kept() {
             isolation.end();
             assert!(exists(&path), "the worktree stays");
             let line = warn_line(home.path(), id);
+            assert_eq!(line["level"], "warn");
             assert_eq!(line["code"], "io_failed");
             assert_eq!(
                 line["message"],
@@ -563,6 +564,7 @@ fn a_branch_that_cannot_be_deleted_is_failed_and_logged() {
             isolation.end();
             assert!(!exists(&path), "the worktree goes");
             assert!(branch_exists(repo.path(), &branch), "but the branch stays");
+            assert_eq!(warn_line(home.path(), id)["level"], "warn");
             assert_eq!(warn_line(home.path(), id)["code"], "io_failed");
         },
     );
@@ -849,6 +851,8 @@ fn no_message_or_log_line_carries_git_stderr() {
         git(repo.path(), &["worktree", "lock", path.to_str().unwrap()]);
         isolation.end();
         let line = warn_line(home.path(), id);
+        assert_eq!(line["level"], "warn");
+        assert_eq!(line["code"], "io_failed");
         assert_eq!(
             line["message"],
             format!(
