@@ -764,8 +764,10 @@ model may answer one, so a delegate's escalation is a block
 
 For each question, one line: `<header>: ` followed by the chosen labels, the
 typed text in quotes, or `skipped`. A `note:` line follows when the person
-added a note to the whole form. A cancelled form is the single line
-`declined`.
+added a note to the whole form. Several labels are separated by `, `; typed
+text follows the labels as a JSON string, and the note is a JSON string too.
+A header or label is written with JSON's escapes but no quotes, so every
+question stays on one line. A cancelled form is the single line `declined`.
 
 A declined form is an answer, not a failure: the call completes with status
 `completed`. The structured answers are on `interaction_resolved`.

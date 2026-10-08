@@ -236,7 +236,12 @@ impl Loop {
                             Some(&id),
                         )?;
                         let bound = tool.bound();
-                        let stream = Arc::new(Stream::new(Arc::clone(&wake), id.clone()));
+                        // `fiber ask`, a delegate, after `close`, or no inbox
+                        // wake: nobody can answer (`docs/tools.md`, "Asking
+                        // the person").
+                        let answerable = self.answerable && self.inbox_wake.is_some();
+                        let stream =
+                            Arc::new(Stream::new(Arc::clone(&wake), id.clone(), answerable));
                         release.add(Arc::clone(&stream));
                         let thread_stream = Arc::clone(&stream);
                         let call_cancel = Arc::clone(&cancel);

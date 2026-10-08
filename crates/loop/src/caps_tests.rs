@@ -311,6 +311,10 @@ impl Ask for Named {
         contract::ActionId("a_9".into())
     }
 
+    fn answerable(&self) -> bool {
+        true
+    }
+
     fn ask(&self, _asking: Asking) -> Answered {
         Answered::NoAnswer
     }

@@ -88,6 +88,10 @@ impl Ask for Unasked {
         unreachable!("the default run_asking never reads the asker")
     }
 
+    fn answerable(&self) -> bool {
+        unreachable!("the default run_asking never reads the asker")
+    }
+
     fn ask(&self, _asking: Asking) -> Answered {
         unreachable!("the default run_asking never asks")
     }

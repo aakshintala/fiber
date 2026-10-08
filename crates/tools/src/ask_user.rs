@@ -3,17 +3,21 @@
 
 use contract::ErrorCode;
 use contract::emit::Emit;
-use contract::events::Control;
+use contract::events::{Answer, Control, FormAnswer, Interaction};
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Question};
-use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
+use contract::tool::{Answered, Ask, Asking, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
-use crate::files::failed;
+use crate::files::{failed, text_output};
 
 /// The result of a call whose questions went to a program driver
 /// (`docs/tools.md`, "When a program drives the session").
 const SENT: &str = "The questions went to the driver. The answers arrive as the next prompt.";
+
+/// The result of a form the person declined or a cancel ended
+/// (`docs/tools.md`, "The result").
+const DECLINED: &str = "declined";
 
 /// Asks the driver questions. It declares no effects, so it is never
 /// reviewed. Its limits are in the schema, which the loop checks before the
@@ -104,6 +108,90 @@ impl Tool for AskUser {
             Err(message) => failed(ErrorCode::InvalidArguments, message),
         }
     }
+
+    /// Raises one `form` when a person can answer, and hands the questions
+    /// to the driver otherwise (`docs/tools.md`, "Asking the person").
+    fn run_asking(
+        &self,
+        arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        emit: &dyn Emit,
+        ask: &dyn Ask,
+    ) -> Output {
+        if !ask.answerable() {
+            return self.run(arguments, cancel, emit);
+        }
+        let questions = match questions(arguments) {
+            Ok(questions) => questions,
+            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+        };
+        let answer = ask.ask(Asking {
+            interaction: Interaction::Form {
+                fields: questions.clone(),
+            },
+            action_ids: Vec::new(),
+            until: None,
+            check: None,
+        });
+        match answer {
+            Answered::Reply(Answer::Form { answers, note }) => {
+                text_output(answered(&questions, &answers, note.as_deref()))
+            }
+            Answered::Reply(Answer::Declined { .. }) => text_output(DECLINED.to_owned()),
+            // A cancel resolved it; the loop completes the call `cancelled`
+            // (`docs/tools.md`, "Cancellation").
+            Answered::NoAnswer if cancel.is_cancelled() => text_output(DECLINED.to_owned()),
+            // `close`, or nobody left to answer: the turn ends with the
+            // questions (`docs/tools.md`, "When a program drives the
+            // session").
+            Answered::NoAnswer => to_driver(questions),
+            Answered::Reply(
+                Answer::Confirmed { .. } | Answer::Labels { .. } | Answer::Text { .. },
+            ) => failed(
+                ErrorCode::ToolError,
+                "The answer does not fit the form.".to_owned(),
+            ),
+        }
+    }
+}
+
+/// One line per question in field order, then the note (`docs/tools.md`,
+/// "The result"). Typed text and the note are JSON strings; a header or
+/// label is JSON-escaped without quotes, so each question stays on one line.
+fn answered(questions: &[Question], answers: &[FormAnswer], note: Option<&str>) -> String {
+    let mut lines: Vec<String> = questions
+        .iter()
+        .zip(answers)
+        .map(|(question, answer)| {
+            let said = match answer {
+                FormAnswer::Skipped { .. } => "skipped".to_owned(),
+                FormAnswer::Answered { labels, text } => {
+                    let mut parts: Vec<String> =
+                        labels.iter().map(|label| escaped(label)).collect();
+                    parts.extend(text.as_deref().map(quoted));
+                    parts.join(", ")
+                }
+            };
+            format!("{}: {said}", escaped(&question.header))
+        })
+        .collect();
+    lines.extend(note.map(|note| format!("note: {}", quoted(note))));
+    lines.join("\n")
+}
+
+/// `text` as a JSON string, quotes included.
+fn quoted(text: &str) -> String {
+    Value::String(text.to_owned()).to_string()
+}
+
+/// `text` with JSON's escapes but without the quotes around it.
+fn escaped(text: &str) -> String {
+    let quoted = quoted(text);
+    quoted
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(&quoted)
+        .to_owned()
 }
 
 /// The call's questions, read from the arguments the loop already checked.
