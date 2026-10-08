@@ -5,6 +5,7 @@ use super::{App, Effect};
 use crate::home::{Launch, Spot};
 use crate::keys::Key;
 use crate::link::Line;
+use crate::local_time::{new_york, turn_started_at};
 use contract::clock::Clock;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -74,31 +75,6 @@ fn an_attached_app_draws_the_conversation_screen() {
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     assert!(!app.on_home());
     assert!(app.home_screen().is_none());
-}
-
-/// `America/New_York`, looked up by name: the same lookup the system zone
-/// needs.
-fn new_york() -> jiff::tz::TimeZone {
-    jiff::tz::TimeZone::get("America/New_York").unwrap_or(jiff::tz::TimeZone::UTC)
-}
-
-/// A `turn_started` for `session` saying `text` at `ts` milliseconds.
-fn turn_started_at(session: &str, text: &str, ts: u64) -> Line {
-    Line::Session(contract::Envelope {
-        kind: "turn_started".to_owned(),
-        session_id: contract::SessionId(session.to_owned()),
-        ts,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload: serde_json::json!({"input": [{"type": "message",
-            "source": "driver",
-            "content": [{"type": "text", "text": text}]}]})
-        .as_object()
-        .cloned()
-        .unwrap_or_default(),
-    })
 }
 
 #[test]

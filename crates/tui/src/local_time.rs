@@ -4,9 +4,6 @@
 
 use jiff::tz::TimeZone;
 
-use crate::format;
-use crate::turn::Row;
-
 /// The wall-clock time of `ms` epoch milliseconds in `zone`, 24-hour and
 /// zero-padded (`09:05`, `14:15`). `None` when `ms` is past the latest
 /// instant jiff holds. The range is checked first: `from_nanosecond`
@@ -23,11 +20,33 @@ pub(crate) fn time_of_day(ms: u64, zone: &TimeZone) -> Option<String> {
     Some(stamp.to_zoned(zone.clone()).strftime("%H:%M").to_string())
 }
 
-/// [`time_of_day`] as a dim, right-aligned row with no target; `None` when
-/// there is no time to show.
-pub(crate) fn under_bubble(ms: u64, zone: &TimeZone) -> Option<Row> {
-    let time = time_of_day(ms, zone)?;
-    Some((format::dim(time).right_aligned(), None))
+/// `America/New_York`, looked up by name: the same lookup the system zone
+/// needs.
+#[cfg(test)]
+pub(crate) fn new_york() -> TimeZone {
+    TimeZone::get("America/New_York").expect("America/New_York in the system zoneinfo")
+}
+
+/// A `turn_started` envelope with one message at `ts` milliseconds.
+#[cfg(test)]
+pub(crate) fn turn_started_at(session: &str, text: &str, ts: u64) -> crate::link::Line {
+    crate::link::Line::Session(contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"input": [{
+            "type": "message",
+            "source": "driver",
+            "content": [{"type": "text", "text": text}],
+        }]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
 }
 
 #[cfg(test)]

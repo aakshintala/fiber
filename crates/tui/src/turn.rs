@@ -544,9 +544,9 @@ impl Turn {
             let before = out.len();
             format::bubble(prompt, width, out);
             if out.len() > before
-                && let Some(time) = crate::local_time::under_bubble(self.started, zone)
+                && let Some(time) = crate::local_time::time_of_day(self.started, zone)
             {
-                out.push(time);
+                out.push((format::dim(time).right_aligned(), None));
             }
         }
         for entry in &self.entries {

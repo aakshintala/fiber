@@ -5,13 +5,7 @@ use jiff::tz::TimeZone;
 use ratatui::layout::Alignment;
 use ratatui::style::Modifier;
 
-use super::{time_of_day, under_bubble};
-
-/// `America/New_York`, looked up by name: the same lookup the system zone
-/// needs, so this fails if the feature is dropped.
-fn new_york() -> TimeZone {
-    TimeZone::get("America/New_York").unwrap_or(TimeZone::UTC)
-}
+use super::{new_york, time_of_day};
 
 #[test]
 fn spring_forward_skips_the_second_hour() {
@@ -54,12 +48,26 @@ fn out_of_range_instants_have_no_time() {
 }
 
 #[test]
-fn under_bubble_is_a_dim_right_aligned_row_with_no_target() {
+fn the_time_row_is_a_dim_right_aligned_row_with_no_target() {
+    use crate::rows::Rows;
+    use crate::turn::Turn;
+
     let zone = TimeZone::UTC;
-    let (line, target) = under_bubble(1791468900000, &zone).unwrap_or_default();
+    let turn = Turn::new(vec!["go".to_owned()], 1791468900000);
+    let mut out = Rows::default();
+    turn.rows(80, &zone, &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 2);
+    let (line, target) = &rows[1];
     assert_eq!(line.to_string(), "14:15");
     assert!(line.alignment == Some(Alignment::Right));
     assert!(line.style.add_modifier.contains(Modifier::DIM));
     assert!(target.is_none());
-    assert!(under_bubble(u64::MAX, &zone).is_none());
+    // Past the latest instant jiff holds, the bubble draws with no time
+    // under it.
+    let turn = Turn::new(vec!["go".to_owned()], u64::MAX);
+    let mut out = Rows::default();
+    turn.rows(80, &zone, &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
 }

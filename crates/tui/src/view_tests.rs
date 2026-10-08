@@ -4,6 +4,7 @@ use super::{cursor, render, text};
 use crate::app::App;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
+use crate::local_time::{new_york, turn_started_at};
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Position, Rect};
@@ -64,27 +65,6 @@ fn turn_started(session: &str, text: &str) -> Line {
         }]}),
         None,
     )
-}
-
-/// A `turn_started` envelope with one message at `ts` milliseconds.
-fn turn_started_at(session: &str, text: &str, ts: u64) -> Line {
-    Line::Session(contract::Envelope {
-        kind: "turn_started".to_owned(),
-        session_id: contract::SessionId(session.to_owned()),
-        ts,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload: serde_json::json!({"input": [{
-            "type": "message",
-            "source": "driver",
-            "content": [{"type": "text", "text": text}],
-        }]})
-        .as_object()
-        .cloned()
-        .unwrap_or_default(),
-    })
 }
 
 /// A row of `buf` as text, trailing spaces kept.
@@ -156,12 +136,6 @@ fn failed_turn() {
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
     app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "failed"));
     insta::assert_snapshot!("failed_turn", screen(&app));
-}
-
-/// `America/New_York`, looked up by name: the same lookup the system zone
-/// needs.
-fn new_york() -> jiff::tz::TimeZone {
-    jiff::tz::TimeZone::get("America/New_York").unwrap_or(jiff::tz::TimeZone::UTC)
 }
 
 #[test]

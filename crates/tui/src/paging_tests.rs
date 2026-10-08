@@ -15,6 +15,7 @@ use super::{Draw, Folded, Pages, Part, fold};
 use crate::app::{App, Effect, Target};
 use crate::keys::Key;
 use crate::link::Line;
+use crate::local_time::new_york;
 use crate::rows::Rows;
 use crate::turn::{Row, Turn};
 
@@ -1733,12 +1734,6 @@ fn toggling_ledgers_clears_only_group_overrides() {
     pages.toggle_ledgers();
     assert!(!pages.overrides.contains_key(&Target::Group(1)));
     assert!(pages.overrides.contains_key(&Target::Thought(2)));
-}
-
-/// `America/New_York`, looked up by name: the same lookup the system zone
-/// needs.
-fn new_york() -> jiff::tz::TimeZone {
-    jiff::tz::TimeZone::get("America/New_York").unwrap_or(jiff::tz::TimeZone::UTC)
 }
 
 #[test]
