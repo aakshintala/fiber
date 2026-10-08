@@ -312,18 +312,32 @@ fn wait_ready(path: &std::path::Path) {
     });
 }
 
+/// Waits, with a wall-clock bound, until the fake clock shows a parked
+/// waiter: the thread under test reached its clock wait. A parked entry
+/// proves it passed every check before the wait, so work observed after
+/// this cannot have skipped supervision.
+fn wait_parked(clock: &Arc<FakeClock>) {
+    within("a waiter parks on the clock", DEADLINE, {
+        let clock = Arc::clone(clock);
+        move || loop {
+            if !clock.parked().is_empty() {
+                return;
+            }
+            thread::yield_now();
+        }
+    });
+}
+
 /// Waits, driving the fake clock, until `pgid` leaves the jobs list:
-/// retirement runs on wakes, and advances alone cost the runner no wall
-/// time, so each step also gives it some. Panics boundedly instead of
-/// asserting on a list the runner has not reached yet.
+/// retirement runs on wakes. Panics boundedly instead of asserting on a
+/// list the runner has not reached yet.
 fn wait_retired(clock: &FakeClock, pgid: u32) {
-    let (_tick, tock) = mpsc::channel::<()>();
-    for _ in 0..200 {
+    for _ in 0..400 {
         if !listed(pgid) {
             return;
         }
         clock.advance(Duration::from_millis(50));
-        let _waited = tock.recv_timeout(Duration::from_millis(5));
+        thread::yield_now();
     }
     panic!("pgid {pgid} was not retired");
 }
@@ -917,17 +931,19 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         watch,
     );
     // The stop sets the bound; the member ignores nothing and no other
-    // thread signals this group. The retire thread runs from here, so a
-    // timer that fires early sprays into the pre-bound window below.
+    // thread signals this group.
     stop.0();
     let done = thread::spawn(move || runner.retire(pgid));
+    // Synchronise: retire must be parked on the clock, having passed
+    // every check before its wait, before time moves at all.
+    wait_parked(&clock);
     // Pre-bound wakes stay silent: only the reap-time signal, which never
     // ran here, could have gone out. An inverted timer sprays here and
-    // fails this line.
-    let (_tick, tock) = mpsc::channel::<()>();
+    // fails this line. The thread proved itself parked above, so this
+    // silence was supervised, not starved.
     for _ in 0..20 {
         clock.advance(Duration::from_millis(100));
-        let _waited = tock.recv_timeout(Duration::from_millis(20));
+        thread::yield_now();
     }
     assert_eq!(kills(pgid), 0, "no SIGKILL before the bound");
     // Past the bound the timer fires on every wake until the group is
@@ -935,7 +951,7 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
     // timer that stays silent past the bound fails the wait below.
     for _ in 0..100 {
         clock.advance(Duration::from_millis(100));
-        let _waited = tock.recv_timeout(Duration::from_millis(20));
+        thread::yield_now();
         if kills(pgid) >= 1 {
             break;
         }
@@ -949,7 +965,7 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
             break;
         }
         clock.advance(Duration::from_millis(50));
-        let _waited = tock.recv_timeout(Duration::from_millis(5));
+        thread::yield_now();
     }
     assert!(done.is_finished(), "retire returned once empty");
     done.join().unwrap();
