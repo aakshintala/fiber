@@ -497,7 +497,7 @@ impl Loop {
         if !self.answerable {
             // Step 7 checks `answerable` before asking; only a standing
             // ask reaches this denial.
-            return Ok(Asked::Gone(self.unanswerable(id, turn, None)?));
+            return Ok(Asked::Gone(self.unanswerable(id, turn)?));
         }
         let request = PermissionRequested {
             request_id: RequestId(super::mint("r_")),
@@ -510,19 +510,18 @@ impl Loop {
 
     /// Denies a call no person can answer (`docs/permissions.md`,
     /// "Headless"): a session started by `fiber ask`, or one `close` has
-    /// been taken. `request_id` is set when the request was already raised.
+    /// been taken.
     pub(crate) fn unanswerable(
         &mut self,
         id: &ActionId,
         turn: &TurnId,
-        request_id: Option<RequestId>,
     ) -> Result<Box<ToolCallCompleted>, Error> {
         let reason = "No person can answer an approval in this session.";
         self.decided(
             id,
             turn,
             resolved(
-                request_id,
+                None,
                 Decision::Deny,
                 DecidedBy::StandingRule,
                 Some(reason.to_owned()),
