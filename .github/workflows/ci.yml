@@ -54,10 +54,12 @@ jobs:
         id: base
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            base=$PR_BASE
+            # The merge ref's first parent is the main commit the run
+            # merged onto. The event's base.sha can be older, and the diff
+            # would then charge main's commits in between to the pull request.
+            base=$(git rev-parse HEAD^1)
           else
             # The backstop compares against the last main commit whose
             # backstop passed. This is the only Actions API call CI makes.
