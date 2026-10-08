@@ -75,10 +75,10 @@ impl Loop {
                 changed_by: None,
             });
         }
-        let full = crate::conversation::text(&ran.text);
+        let (parts, full) = joined(ran.text);
         let Some(hooks) = self.hooks.clone() else {
             return Ok(self
-                .capped(ran.text, full, ran.details, None, bound, id)?
+                .capped(parts, full, ran.details, None, bound, id)?
                 .with(ran.images));
         };
         let answer = hooks.after_tool(&AfterToolCall {
@@ -95,7 +95,7 @@ impl Loop {
         let changed_by = (!answer.changed_by.is_empty()).then_some(answer.changed_by);
         let mut shaped = match answer.outcome {
             AfterToolOutcome::Unchanged => self
-                .capped(ran.text, full, ran.details, None, bound, id)?
+                .capped(parts, full, ran.details, None, bound, id)?
                 .with(ran.images),
             // Its only content is the line: images go too.
             AfterToolOutcome::Withheld { extension } => Shaped {
@@ -114,12 +114,12 @@ impl Loop {
                 artifact,
             } => {
                 let details = details.or(ran.details);
-                let (text, full) = match content {
-                    Some(text) if text.is_empty() => (Vec::new(), text),
-                    Some(text) => (vec![ContentPart::Text { text: text.clone() }], text),
-                    None => (ran.text, full),
+                let (parts, full) = match content {
+                    Some(text) if text.is_empty() => (Some(Vec::new()), text),
+                    Some(text) => (None, text),
+                    None => (parts, full),
                 };
-                self.capped(text, full, details, artifact, bound, id)?
+                self.capped(parts, full, details, artifact, bound, id)?
                     .with(ran.images)
             }
         };
@@ -127,13 +127,14 @@ impl Loop {
         Ok(shaped)
     }
 
-    /// `text`, whose joined text is `full`, cut to `bound`. The artifact
+    /// The text parts whose joined text is `full`, cut to `bound`: `parts`,
+    /// or `full` as the one part when `parts` is `None`. The artifact
     /// holds `artifact` when a hook returned it, written even when `full`
     /// fits, or else `full` when it was cut. A hook's artifact that cannot
     /// be written fails the turn, as a log write does.
     fn capped(
         &self,
-        text: Vec<ContentPart>,
+        parts: Option<Vec<ContentPart>>,
         full: String,
         details: Option<Value>,
         artifact: Option<String>,
@@ -146,7 +147,10 @@ impl Loop {
             let (kept, artifact) = self.log.cut_output(&full, bound, &name);
             (vec![ContentPart::Text { text: kept }], artifact)
         } else {
-            (text, None)
+            (
+                parts.unwrap_or_else(|| vec![ContentPart::Text { text: full }]),
+                None,
+            )
         };
         let artifact = match artifact {
             // The hook's text replaces what the cut wrote under the same
@@ -161,6 +165,19 @@ impl Loop {
             changed_by: None,
         })
     }
+}
+
+/// The joined text of `parts`, and the parts when they are not that text
+/// as one part. A lone text part is moved into the joined text, so a large
+/// result is never copied; several are joined with `\n`.
+fn joined(parts: Vec<ContentPart>) -> (Option<Vec<ContentPart>>, String) {
+    let parts = match <[ContentPart; 1]>::try_from(parts) {
+        Ok([ContentPart::Text { text }]) => return (None, text),
+        Ok(one) => Vec::from(one),
+        Err(parts) => parts,
+    };
+    let full = crate::conversation::text(&parts);
+    (Some(parts), full)
 }
 
 impl Shaped {

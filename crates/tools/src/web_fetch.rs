@@ -3,14 +3,14 @@
 //! page returned as text or saved to the session's `artifacts/`.
 
 mod charset;
+mod download;
 mod http;
 mod markdown;
 mod target;
 
 use std::collections::hash_map::RandomState;
-use std::fs::{self, OpenOptions};
 use std::hash::BuildHasher;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,6 +26,7 @@ use serde_json::{Map, Value, json};
 use ureq::http::Uri;
 
 use crate::files::{failed, string_argument, text_output};
+use download::{Artifact, Html, Sink, Wrap};
 use http::{Ended, Get, Head, Hop, Limit, Stop, guarded};
 
 const MISSING: &str = "Give the page's address as `url`.";
@@ -54,6 +55,8 @@ pub struct WebFetch {
     /// `Some` fixes the proxy: tests, so a developer's environment does not
     /// reach them. `None` reads it from the environment on every call.
     proxy: Option<Option<ureq::Proxy>>,
+    /// Wraps each artifact's file: tests only.
+    wrap: Option<Wrap>,
 }
 
 impl WebFetch {
@@ -69,6 +72,7 @@ impl WebFetch {
                     .map(|addresses| addresses.collect())
             }),
             proxy: None,
+            wrap: None,
         }
     }
 
@@ -79,9 +83,17 @@ impl WebFetch {
         self
     }
 
-    /// Fixes the proxy, `None` meaning a direct connection.
+    /// Writes each artifact through `wrap`'s writer around its file.
     #[cfg(test)]
-    pub(crate) fn with_proxy(mut self, proxy: Option<ureq::Proxy>) -> Self {
+    pub(crate) fn with_artifact_writer(mut self, wrap: Wrap) -> Self {
+        self.wrap = Some(wrap);
+        self
+    }
+
+    /// Fixes the proxy, `None` meaning a direct connection, so the proxy
+    /// environment is not read.
+    #[must_use]
+    pub fn with_proxy(mut self, proxy: Option<ureq::Proxy>) -> Self {
         self.proxy = Some(proxy);
         self
     }
@@ -140,13 +152,33 @@ impl Tool for WebFetch {
     }
 }
 
+/// A 2xx response's body as it was read, by what its content type says to
+/// do with it. Only a text page is held whole: it is the result. An HTML
+/// page went to its artifact and its converter as it was read, a saved type
+/// to its artifact, and anything else was only counted.
+enum Body {
+    Text(Vec<u8>),
+    Html {
+        artifact: Artifact,
+        html: Box<Html>,
+        length: u64,
+    },
+    Saved {
+        artifact: Artifact,
+        length: u64,
+    },
+    Unsupported {
+        length: u64,
+    },
+}
+
 /// What one hop's response came to.
 enum Reply {
     /// A redirect to follow, with its `location`.
     Redirect(String),
     /// A 2xx response: the head and the body read, one byte past the limit
     /// at most.
-    Page(Head, Vec<u8>),
+    Page(Head, Body),
     /// Any other response, with the start of its body.
     Refused(Head, Vec<u8>),
 }
@@ -187,7 +219,7 @@ impl WebFetch {
                         }
                     }
                 }
-                Ok(Reply::Page(head, bytes)) => return self.page(&uri, &head, &bytes),
+                Ok(Reply::Page(head, body)) => return self.page(&uri, &head, body),
                 Ok(Reply::Refused(head, bytes)) => return refused(&uri, &head, &bytes),
                 Err(Ended::Stopped(stop)) => return stopped_output(&uri, stop),
                 Err(Ended::Failed(output)) => return *output,
@@ -246,78 +278,131 @@ impl WebFetch {
             pinned: (!via_proxy).then_some(addresses.as_slice()),
             proxy: proxy.cloned(),
         };
-        hop.get(&request, read_reply).map_err(|message| {
-            Box::new(failed(
-                ErrorCode::ConnectionFailed,
-                format!("could not fetch {uri}: {message}."),
-            ))
-        })
+        let stopped = || hop.stopped().is_some();
+        hop.get(&request, |head, body| self.read_reply(head, body, &stopped))
+            .map_err(|message| {
+                Box::new(failed(
+                    ErrorCode::ConnectionFailed,
+                    format!("could not fetch {uri}: {message}."),
+                ))
+            })
     }
 
-    /// A 2xx response, as the result.
-    fn page(&self, uri: &Uri, head: &Head, bytes: &[u8]) -> Output {
-        if u64::try_from(bytes.len()).is_ok_and(|length| length > MAX_BODY) {
+    /// A 2xx response, as the result. A page past the limit is too large,
+    /// whatever else went wrong; then a page that could not be saved fails.
+    /// An HTML page's markdown, and a text page's body, become the result
+    /// itself, the first line put in front of it.
+    fn page(&self, uri: &Uri, head: &Head, body: Body) -> Output {
+        let length = match &body {
+            Body::Text(bytes) => u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            Body::Html { length, .. }
+            | Body::Saved { length, .. }
+            | Body::Unsupported { length } => *length,
+        };
+        if length > MAX_BODY {
             return failed(
                 ErrorCode::TooLarge,
                 format!("{uri} is larger than 10 MiB ({MAX_BODY} bytes); nothing was kept."),
             );
         }
-        let kind = head
-            .content_type
-            .as_deref()
-            .map_or(Kind::Unsupported, kind_of);
         let first = format!(
             "{uri} {} {}",
             head.status,
             head.content_type.as_deref().unwrap_or_default()
         );
-        match kind {
-            Kind::Markdown => match self.save(bytes, "html") {
+        match body {
+            Body::Html { artifact, html, .. } => match artifact.keep() {
                 Ok(path) => {
-                    let page = charset::decode(head.content_type.as_deref(), bytes);
-                    let markdown = markdown::to_markdown(&page);
-                    text_output(format!("{first}; raw page at {path}\n\n{markdown}"))
+                    let mut markdown = html.finish();
+                    markdown.insert_str(0, &format!("{first}; raw page at {path}\n\n"));
+                    text_output(markdown)
                 }
                 Err(message) => failed(ErrorCode::ToolError, message),
             },
-            Kind::Text => text_output(format!("{first}\n\n{}", String::from_utf8_lossy(bytes))),
-            Kind::Saved(extension) => match self.save(bytes, extension) {
+            Body::Text(bytes) => {
+                let mut text = String::from_utf8(bytes).unwrap_or_else(|invalid| {
+                    String::from_utf8_lossy(invalid.as_bytes()).into_owned()
+                });
+                text.insert_str(0, &format!("{first}\n\n"));
+                text_output(text)
+            }
+            Body::Saved { artifact, length } => match artifact.keep() {
                 Ok(path) => text_output(format!(
-                    "{first}\n\nSaved to {path} ({} bytes). Read it with `read`.\n",
-                    bytes.len()
+                    "{first}\n\nSaved to {path} ({length} bytes). Read it with `read`.\n"
                 )),
                 Err(message) => failed(ErrorCode::ToolError, message),
             },
-            Kind::Unsupported => failed(
+            Body::Unsupported { length } => failed(
                 ErrorCode::UnsupportedFile,
                 format!(
-                    "{uri} is {}, which `web_fetch` cannot read ({} bytes).",
+                    "{uri} is {}, which `web_fetch` cannot read ({length} bytes).",
                     head.content_type
                         .as_deref()
-                        .map_or("of no content type".to_owned(), |ty| format!("`{ty}`")),
-                    bytes.len()
+                        .map_or("of no content type".to_owned(), |ty| format!("`{ty}`"))
                 ),
             ),
         }
     }
 
-    /// Saves the download under a fresh name in `artifacts/`, as it came.
-    fn save(&self, bytes: &[u8], extension: &str) -> Result<String, String> {
+    /// A new artifact in `artifacts/` under a fresh name.
+    fn artifact(&self, extension: &str) -> Artifact {
         let stem = format!("w_{:016x}", RandomState::new().hash_one(()));
-        let path = self.artifacts.join(format!("{stem}.{extension}"));
-        let saved = fs::create_dir_all(&self.artifacts).and_then(|()| {
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)?
-                .write_all(bytes)
-        });
-        match saved {
-            Ok(()) => Ok(path.display().to_string()),
-            Err(error) => Err(format!(
-                "could not save the download to {}: {error}.",
-                path.display()
-            )),
+        Artifact::create(&self.artifacts, &stem, extension, self.wrap.as_ref())
+    }
+
+    /// Reads what the response calls for: nothing of a redirect, the start
+    /// of a body that is not 2xx, and a page's whole body up to one byte
+    /// past the limit. A text page is read whole; any other page is read in
+    /// pieces into where it goes, and the read fails at the first piece
+    /// after `stopped` turns true.
+    fn read_reply(
+        &self,
+        head: Head,
+        body: &mut dyn Read,
+        stopped: &dyn Fn() -> bool,
+    ) -> io::Result<Reply> {
+        let redirect = matches!(head.status, 301 | 302 | 303 | 307 | 308);
+        match (&head.location, redirect, head.status) {
+            (Some(location), true, _) => Ok(Reply::Redirect(location.clone())),
+            (_, _, 200..300) => {
+                let limit = MAX_BODY.saturating_add(1);
+                let kind = head
+                    .content_type
+                    .as_deref()
+                    .map_or(Kind::Unsupported, kind_of);
+                let mut sink = Sink {
+                    artifact: None,
+                    html: None,
+                    stopped,
+                };
+                match kind {
+                    Kind::Text => {
+                        let bytes = read_up_to(body, limit, head.content_length)?;
+                        return Ok(Reply::Page(head, Body::Text(bytes)));
+                    }
+                    Kind::Markdown => {
+                        sink.artifact = Some(self.artifact("html"));
+                        sink.html = Some(Html::new(head.content_type.as_deref()));
+                    }
+                    Kind::Saved(extension) => sink.artifact = Some(self.artifact(extension)),
+                    Kind::Unsupported => {}
+                }
+                let length = download::copy(body, limit, &mut sink)?;
+                let page = match (sink.artifact, sink.html) {
+                    (Some(artifact), Some(html)) => Body::Html {
+                        artifact,
+                        html: Box::new(html),
+                        length,
+                    },
+                    (Some(artifact), None) => Body::Saved { artifact, length },
+                    (None, _) => Body::Unsupported { length },
+                };
+                Ok(Reply::Page(head, page))
+            }
+            _ => {
+                let bytes = read_up_to(body, ERROR_BODY, head.content_length)?;
+                Ok(Reply::Refused(head, bytes))
+            }
         }
     }
 }
@@ -361,25 +446,12 @@ fn kind_of(content_type: &str) -> Kind {
     }
 }
 
-/// Reads what the response calls for: nothing of a redirect, the whole body
-/// of a page up to the limit, and the start of any other body.
-fn read_reply(head: Head, body: &mut dyn Read) -> io::Result<Reply> {
-    let redirect = matches!(head.status, 301 | 302 | 303 | 307 | 308);
-    match (&head.location, redirect, head.status) {
-        (Some(location), true, _) => Ok(Reply::Redirect(location.clone())),
-        (_, _, 200..300) => {
-            let bytes = read_up_to(body, MAX_BODY.saturating_add(1))?;
-            Ok(Reply::Page(head, bytes))
-        }
-        _ => {
-            let bytes = read_up_to(body, ERROR_BODY)?;
-            Ok(Reply::Refused(head, bytes))
-        }
-    }
-}
-
-fn read_up_to(body: &mut dyn Read, limit: u64) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
+/// Reads at most `limit` bytes of `body`, reserving room for `hint` of
+/// them first, never more than `limit`: the stated length is server input,
+/// so it sizes the buffer and never decides how much is read.
+fn read_up_to(body: &mut dyn Read, limit: u64, hint: Option<u64>) -> io::Result<Vec<u8>> {
+    let reserve = hint.map_or(0, |hint| hint.min(limit));
+    let mut bytes = Vec::with_capacity(usize::try_from(reserve).unwrap_or(0));
     body.take(limit).read_to_end(&mut bytes)?;
     Ok(bytes)
 }

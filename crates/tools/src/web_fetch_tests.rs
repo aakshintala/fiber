@@ -17,7 +17,7 @@ use fakes::clock::FakeClock;
 use fakes::{CancelToken, ConnectProxy, ProviderServer, Recorder, Response, TempDir};
 use serde_json::{Map, Value, json};
 
-use super::{Kind, WebFetch, kind_of, read_reply};
+use super::{Kind, WebFetch, kind_of, read_up_to};
 use crate::web_fetch::http::Head;
 
 /// How long a test waits for a fetch to finish.
@@ -264,6 +264,57 @@ fn an_html_download_that_cannot_be_saved_is_a_tool_error() {
     );
 }
 
+/// A writer that takes `room` bytes, then fails every write.
+struct FillsUp {
+    file: fs::File,
+    room: usize,
+}
+
+impl std::io::Write for FillsUp {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.room {
+            return Err(std::io::Error::other("the disk is full"));
+        }
+        self.room -= bytes.len();
+        self.file.write(bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+/// Wraps each artifact in a writer that fills up after 1 MiB.
+fn fills_up_after_a_mib(tool: WebFetch) -> WebFetch {
+    tool.with_artifact_writer(Arc::new(|file| {
+        Box::new(FillsUp {
+            file,
+            room: 1 << 20,
+        })
+    }))
+}
+
+/// Whether `artifacts/` holds no file.
+fn no_file_in(rig: &Rig) -> bool {
+    fs::read_dir(rig.artifacts()).map_or(true, |mut entries| entries.next().is_none())
+}
+
+#[test]
+fn an_html_download_whose_write_fails_is_a_tool_error_and_leaves_no_file() {
+    let server = serve([ok("text/html", "<p>x</p>".repeat(2 << 20 >> 3))]);
+    let rig = Rig::new().with(fills_up_after_a_mib);
+    let output = rig.fetch(&server.url());
+    assert_eq!(code(&output), Some(ErrorCode::ToolError));
+    let message = text(&output);
+    let prefix = format!(
+        "could not save the download to {}/w_",
+        rig.artifacts().display()
+    );
+    assert!(message.starts_with(&prefix), "{message}");
+    assert!(message.ends_with(".html: the disk is full.\n"), "{message}");
+    assert!(no_file_in(&rig), "the partial file is removed");
+}
+
 #[test]
 fn xhtml_comes_back_as_markdown() {
     let server = serve([ok("application/xhtml+xml", "<p>x</p>")]);
@@ -438,7 +489,7 @@ fn a_download_too_large_for_a_saved_type_is_too_large_too() {
     let rig = Rig::new();
     let output = rig.fetch(&server.url());
     assert_eq!(code(&output), Some(ErrorCode::TooLarge));
-    assert!(!rig.artifacts().exists(), "nothing was saved");
+    assert!(no_file_in(&rig), "nothing was kept");
 }
 
 #[test]
@@ -475,6 +526,15 @@ fn statuses_at_the_edges_of_2xx() {
     }
 }
 
+/// A tool for calling `read_reply` directly: the heads given it name no
+/// content type, so it saves nothing.
+fn direct_tool() -> WebFetch {
+    WebFetch::new(
+        std::path::PathBuf::from("/nonexistent/artifacts"),
+        FakeClock::new(),
+    )
+}
+
 #[test]
 fn the_classification_of_a_status_at_the_edges_of_2xx() {
     let reply = |status: u16| {
@@ -482,8 +542,12 @@ fn the_classification_of_a_status_at_the_edges_of_2xx() {
             status,
             content_type: None,
             location: None,
+            content_length: None,
         };
-        match read_reply(head, &mut &b"body"[..]).unwrap() {
+        match direct_tool()
+            .read_reply(head, &mut &b"body"[..], &|| false)
+            .unwrap()
+        {
             super::Reply::Page(..) => "page",
             super::Reply::Refused(..) => "refused",
             super::Reply::Redirect(_) => "redirect",
@@ -497,15 +561,38 @@ fn the_classification_of_a_status_at_the_edges_of_2xx() {
 }
 
 #[test]
+fn a_body_is_read_into_room_reserved_for_its_stated_length_never_past_the_limit() {
+    let body = b"0123456789";
+    let read = |limit: u64, hint: Option<u64>| read_up_to(&mut &body[..], limit, hint).unwrap();
+    let exact = read(20, Some(10));
+    assert_eq!(exact, body);
+    assert_eq!(exact.capacity(), 10, "the stated length is reserved");
+    let over = read(5, Some(100));
+    assert_eq!(over, b"01234");
+    assert_eq!(over.capacity(), 5, "never more than the limit is reserved");
+    let none = read(20, None);
+    assert_eq!(none, body);
+    assert!(none.capacity() >= 10);
+    let short = read(5, Some(3));
+    assert_eq!(
+        short, b"01234",
+        "a body longer than stated is still cut at the limit"
+    );
+}
+
+#[test]
 fn only_a_redirect_status_with_a_location_redirects() {
     let reply = |status: u16, location: Option<&str>| {
         let head = Head {
             status,
             content_type: None,
             location: location.map(str::to_owned),
+            content_length: None,
         };
         matches!(
-            read_reply(head, &mut &b""[..]).unwrap(),
+            direct_tool()
+                .read_reply(head, &mut &b""[..], &|| false)
+                .unwrap(),
             super::Reply::Redirect(_)
         )
     };
@@ -1319,4 +1406,281 @@ fn the_requests_carry_no_body_and_a_get() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].method, "GET");
     assert!(requests[0].body.is_empty());
+}
+
+/// A writer that, after its first write, says so on `wrote` and waits for
+/// `release` before returning: the read is held inside the download.
+struct HoldsFirst {
+    file: fs::File,
+    first: bool,
+    wrote: mpsc::Sender<()>,
+    release: Arc<std::sync::Mutex<Receiver<()>>>,
+}
+
+impl std::io::Write for HoldsFirst {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.file.write(bytes)?;
+        if std::mem::take(&mut self.first) {
+            // The test may have stopped waiting.
+            match self.wrote.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            let release = self.release.lock().unwrap();
+            // A test that never releases fails on its own deadline.
+            match release.recv_timeout(SIGNAL) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+/// A fetch of a stalled 64 KiB-prefix HTML body whose artifact's first
+/// write holds the read until the test releases it.
+struct HeldDownload {
+    rig: Rig,
+    server: ProviderServer,
+    url: String,
+    call: Call,
+    prefix: Vec<u8>,
+    release: mpsc::Sender<()>,
+}
+
+fn held_download() -> HeldDownload {
+    let prefix = "<p>held</p>".repeat(64 * 1024 / 11).into_bytes();
+    let server =
+        serve([Response::stall(200, prefix.clone(), 2 * prefix.len())
+            .header("content-type", "text/html")]);
+    let url = format!("{}/page", server.url());
+    let (wrote_tx, wrote) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+    let rig = Rig::new().with(move |tool| {
+        tool.with_artifact_writer(Arc::new(move |file| {
+            Box::new(HoldsFirst {
+                file,
+                first: true,
+                wrote: wrote_tx.clone(),
+                release: Arc::clone(&release_rx),
+            })
+        }))
+    });
+    let call = rig.start(&url);
+    wrote
+        .recv_timeout(SIGNAL)
+        .expect("the first piece is written within its deadline");
+    let saved: Vec<_> = fs::read_dir(rig.artifacts())
+        .unwrap()
+        .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+        .collect();
+    assert_eq!(saved.len(), 1, "one artifact exists");
+    assert!(
+        !saved[0].is_empty() && prefix.starts_with(&saved[0]),
+        "the artifact holds the start of the page"
+    );
+    HeldDownload {
+        rig,
+        server,
+        url,
+        call,
+        prefix,
+        release,
+    }
+}
+
+#[test]
+fn a_cancel_while_the_download_is_saved_leaves_no_file() {
+    let held = held_download();
+    held.call.cancel.cancel();
+    held.release.send(()).unwrap();
+    let output = held.call.wait();
+    assert_eq!(text(&output), "Cancelled and stopped.\n");
+    assert!(no_file_in(&held.rig), "the partial artifact is removed");
+    assert!(held.prefix.len() > 60 * 1024);
+    drop(held.server);
+}
+
+#[test]
+fn a_deadline_while_the_download_is_saved_leaves_no_file() {
+    let held = held_download();
+    assert!(
+        held.rig
+            .clock
+            .await_parked(held.rig.clock.origin() + Duration::from_secs(60), SIGNAL),
+        "the watcher waits for the deadline"
+    );
+    held.rig.clock.advance(Duration::from_secs(60));
+    held.release.send(()).unwrap();
+    let output = held.call.wait();
+    assert_eq!(code(&output), Some(ErrorCode::Timeout));
+    assert_eq!(
+        text(&output),
+        format!("{}: the request took over 60 seconds.\n", held.url)
+    );
+    assert!(no_file_in(&held.rig), "the partial artifact is removed");
+}
+
+/// A head for an HTML page read straight from memory.
+fn html_head() -> Head {
+    Head {
+        status: 200,
+        content_type: Some("text/html".to_owned()),
+        location: None,
+        content_length: None,
+    }
+}
+
+#[test]
+fn a_cancel_that_lands_after_the_read_finished_still_leaves_no_file() {
+    use crate::web_fetch::http::{Ended, Limit, Stop, guarded};
+    let rig = Rig::new();
+    let clock: Arc<dyn contract::clock::Clock> = rig.clock.clone();
+    let cancel = CancelToken::new();
+    let deadline = rig.clock.origin() + Duration::from_secs(60);
+    let result = guarded(&clock, &cancel, deadline, Limit::Request, |_hop| {
+        let reply = rig
+            .tool
+            .read_reply(html_head(), &mut &b"<p>whole</p>"[..], &|| false);
+        assert_eq!(fs::read_dir(rig.artifacts()).unwrap().count(), 1);
+        cancel.cancel();
+        reply.map_err(|_| ())
+    });
+    assert!(matches!(result, Err(Ended::Stopped(Stop::Cancelled))));
+    assert!(no_file_in(&rig), "the finished artifact is removed");
+}
+
+#[test]
+fn a_deadline_that_passes_after_the_read_finished_still_leaves_no_file() {
+    use crate::web_fetch::http::{Ended, Limit, Stop, guarded};
+    let rig = Rig::new();
+    let clock: Arc<dyn contract::clock::Clock> = rig.clock.clone();
+    let cancel = CancelToken::new();
+    let deadline = rig.clock.origin() + Duration::from_secs(60);
+    let result = guarded(&clock, &cancel, deadline, Limit::Request, |_hop| {
+        let reply = rig
+            .tool
+            .read_reply(html_head(), &mut &b"<p>whole</p>"[..], &|| false);
+        assert_eq!(fs::read_dir(rig.artifacts()).unwrap().count(), 1);
+        assert!(
+            rig.clock.await_parked(deadline, SIGNAL),
+            "the watcher waits for the deadline"
+        );
+        rig.clock.advance(Duration::from_secs(60));
+        reply.map_err(|_| ())
+    });
+    assert!(matches!(
+        result,
+        Err(Ended::Stopped(Stop::Timeout(Limit::Request)))
+    ));
+    assert!(no_file_in(&rig), "the finished artifact is removed");
+}
+
+#[test]
+fn an_html_download_of_exactly_ten_mib_succeeds() {
+    let page = vec![b' '; TEN_MIB];
+    let server = serve([ok("text/html", page.clone())]);
+    let rig = Rig::new();
+    let output = rig.fetch(&server.url());
+    assert_eq!(code(&output), None, "{}", text(&output));
+    let path = text(&output)
+        .split_once("; raw page at ")
+        .and_then(|(_, rest)| rest.split_once("\n\n"))
+        .map(|(path, _)| path.to_owned())
+        .unwrap();
+    assert!(fs::read(path).unwrap() == page, "the page is saved whole");
+}
+
+fn too_large(url: &str) -> String {
+    format!("{url} is larger than 10 MiB (10485760 bytes); nothing was kept.\n")
+}
+
+#[test]
+fn an_html_download_one_byte_past_ten_mib_is_too_large_and_leaves_no_file() {
+    let server = serve([ok("text/html", vec![b' '; TEN_MIB + 1])]);
+    let url = format!("{}/page", server.url());
+    let rig = Rig::new();
+    let output = rig.fetch(&url);
+    assert_eq!(code(&output), Some(ErrorCode::TooLarge));
+    assert_eq!(text(&output), too_large(&url));
+    assert!(no_file_in(&rig), "nothing was kept");
+}
+
+#[test]
+fn an_html_body_cut_short_is_connection_failed_and_leaves_no_file() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (mut socket, _) = fakes::within("the server accepts the request", SIGNAL, move || {
+            listener.accept().unwrap()
+        });
+        socket
+            .set_read_timeout(Some(SIGNAL))
+            .expect("a read deadline is set");
+        let mut socket = fakes::within("the server reads the request", SIGNAL, move || {
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                let read = std::io::Read::read(&mut socket, &mut byte).unwrap();
+                assert_eq!(read, 1, "the request ended before its head did");
+                request.push(byte[0]);
+            }
+            socket
+        });
+        std::io::Write::write_all(
+            &mut socket,
+            b"HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: 100\r\n\r\n<p>abc",
+        )
+        .unwrap();
+    });
+    let url = format!("http://127.0.0.1:{port}/page");
+    let rig = Rig::new();
+    let output = rig.fetch(&url);
+    fakes::within("the server answers", SIGNAL, || server.join().unwrap());
+    assert_eq!(code(&output), Some(ErrorCode::ConnectionFailed));
+    assert_eq!(
+        text(&output),
+        format!("could not fetch {url}: Peer disconnected.\n")
+    );
+    assert!(no_file_in(&rig), "the partial artifact is removed");
+}
+
+#[test]
+fn a_page_too_large_is_too_large_even_when_it_could_not_be_saved() {
+    let server = serve([ok("text/html", vec![b' '; TEN_MIB + 1])]);
+    let url = format!("{}/page", server.url());
+    let rig = Rig::new().with(fills_up_after_a_mib);
+    let output = rig.fetch(&url);
+    assert_eq!(text(&output), too_large(&url));
+    assert!(no_file_in(&rig), "the partial file is removed");
+}
+
+#[test]
+fn a_page_too_large_is_too_large_even_when_its_directory_is_a_file() {
+    let server = serve([ok("text/html", vec![b' '; TEN_MIB + 1])]);
+    let url = format!("{}/page", server.url());
+    let rig = Rig::new();
+    fs::write(rig.artifacts(), "a file where the directory goes").unwrap();
+    let output = rig.fetch(&url);
+    assert_eq!(text(&output), too_large(&url));
+}
+
+#[test]
+fn an_unsupported_download_is_counted_without_being_kept() {
+    let server = serve([ok("application/octet-stream", vec![7u8; 4 << 20])]);
+    let url = format!("{}/page", server.url());
+    let rig = Rig::new();
+    let output = rig.fetch(&url);
+    assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile));
+    assert_eq!(
+        text(&output),
+        format!(
+            "{url} is `application/octet-stream`, which `web_fetch` cannot read ({} bytes).\n",
+            4 << 20
+        )
+    );
+    assert!(!rig.artifacts().exists(), "nothing is saved");
 }

@@ -4,7 +4,8 @@
 //! `cargo run -p tools --example call -- shell '{"command":"echo hi"}'`
 //!
 //! `read`, `write` and `edit` use a fresh session, so a replacing `write` is
-//! refused with `stale_file`.
+//! refused with `stale_file`. `web_fetch` saves its artifacts in a temporary
+//! directory removed on exit, and measures its deadlines on the system clock.
 
 #![allow(
     clippy::print_stdout,
@@ -19,9 +20,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use contract::clock::{Clock, Wake};
 use contract::tool::{Output, Tool};
-use fakes::{CancelToken, Recorder};
+use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Map, Value};
-use tools::{Files, Shell};
+use tools::{Files, Shell, WebFetch};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -36,7 +37,10 @@ fn main() -> ExitCode {
         usage();
         return ExitCode::from(2);
     };
-    if !matches!(name.as_str(), "read" | "write" | "edit" | "shell") {
+    if !matches!(
+        name.as_str(),
+        "read" | "write" | "edit" | "shell" | "web_fetch"
+    ) {
         usage();
         return ExitCode::from(2);
     }
@@ -74,6 +78,14 @@ fn main() -> ExitCode {
         "edit" => Files::new(workspace)
             .edit()
             .run(&arguments, &cancel, &Recorder::default()),
+        "web_fetch" => {
+            let session = TempDir::new("fiber-call-web-fetch");
+            WebFetch::new(session.path().join("artifacts"), Arc::new(ProcessClock)).run(
+                &arguments,
+                &cancel,
+                &Recorder::default(),
+            )
+        }
         _ => {
             usage();
             return ExitCode::from(2);
@@ -92,7 +104,7 @@ fn main() -> ExitCode {
 }
 
 fn usage() {
-    eprintln!("usage: call <read|write|edit|shell> '{{...}}'");
+    eprintln!("usage: call <read|write|edit|shell|web_fetch> '{{...}}'");
     eprintln!("A replacing write is refused with stale_file: each run is a fresh session.");
 }
 

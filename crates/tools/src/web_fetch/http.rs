@@ -234,6 +234,9 @@ pub(super) struct Head {
     pub(super) status: u16,
     pub(super) content_type: Option<String>,
     pub(super) location: Option<String>,
+    /// The body's length as the server stated it in `content-length`:
+    /// server input, a size hint only.
+    pub(super) content_length: Option<u64>,
 }
 
 /// What one GET asks for.
@@ -291,6 +294,7 @@ impl Hop {
             status: response.status().as_u16(),
             content_type: header("content-type"),
             location: header("location"),
+            content_length: response.body().content_length(),
         };
         let mut body = response.into_body().into_reader();
         read(head, &mut body).map_err(|error| error.to_string())

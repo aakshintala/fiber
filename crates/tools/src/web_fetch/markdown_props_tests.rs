@@ -10,7 +10,7 @@
 
 use proptest::prelude::*;
 
-use super::{convert, to_markdown};
+use super::{Stream, convert, to_markdown};
 
 /// Whether `word` appears as a whole word in `output`: split on
 /// non-alphanumerics, so `v1` never matches inside `v12`.
@@ -147,5 +147,25 @@ proptest! {
         for slice in 1..8usize {
             prop_assert_eq!(convert(&html, slice), whole.clone());
         }
+    }
+
+    /// Pushing the page through the stream in any run of piece sizes
+    /// converts exactly like the whole page.
+    #[test]
+    fn any_chunking_through_the_stream_converts_like_the_whole_page(
+        html in "<p>é &mdash; <a href=\"/x\">v</a></p><script>y</script><title>t</title>|[a-z<>/&;é\r\n ]{0,200}",
+        sizes in proptest::collection::vec(1usize..16, 1..40),
+    ) {
+        let mut stream = Stream::default();
+        let mut rest = html.as_str();
+        for size in sizes.iter().cycle() {
+            if rest.is_empty() {
+                break;
+            }
+            let (piece, tail) = rest.split_at(rest.ceil_char_boundary((*size).min(rest.len())));
+            stream.push(piece);
+            rest = tail;
+        }
+        prop_assert_eq!(stream.finish(), to_markdown(&html));
     }
 }
