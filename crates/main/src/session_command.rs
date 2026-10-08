@@ -193,6 +193,7 @@ pub(crate) fn new_session(
                     inbox,
                     r#loop::capped(tools, &caps),
                     permissions,
+                    None,
                 )
                 .and_then(|looped| {
                     r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;

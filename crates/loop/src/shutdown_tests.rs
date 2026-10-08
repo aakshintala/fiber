@@ -186,6 +186,7 @@ impl World {
                 credential_files: Vec::new(),
                 rules: Arc::new(NoRules),
             },
+            None,
         )
         .unwrap()
         .cancelled_by(Arc::clone(&cancel))
@@ -503,6 +504,7 @@ fn an_extension_log_taken_while_settling_is_written_and_never_saved() {
             credential_files: Vec::new(),
             rules: Arc::new(NoRules),
         },
+        None,
     )
     .unwrap();
     let mut watched = log.watch();

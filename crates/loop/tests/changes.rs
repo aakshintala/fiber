@@ -1174,6 +1174,7 @@ impl Resumed {
             inbox,
             Vec::new(),
             self.permissions(),
+            None,
         )
         .unwrap()
     }

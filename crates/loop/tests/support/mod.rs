@@ -1154,6 +1154,7 @@ impl Session {
                 credential_files,
                 rules: rules.clone(),
             },
+            None,
         )
         .unwrap()
         .cancelled_by(Arc::clone(&cancel));

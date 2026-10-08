@@ -18,6 +18,7 @@ use contract::events::{CacheLifetime, Event, Grant, PreambleReason, SessionStart
 use contract::inbox::Delivery;
 use contract::provider::{Cost, Input, ModelRequest, Provider, ToolDefinition};
 use contract::shapes::Failure;
+use contract::shapes::Worktree;
 use contract::tool::Tool;
 use log::Log;
 pub(crate) use util::{ended, mint, variables};
@@ -249,7 +250,12 @@ impl Loop {
     /// Starts a new session's loop, writing `session_started`. `tools` are
     /// registered by name, each with who registered it: `builtin`, or the
     /// extension or MCP server. A later one replaces an earlier one of the
-    /// same name (`docs/architecture.md`, "Tool seam").
+    /// same name (`docs/architecture.md`, "Tool seam"). `worktree` is the
+    /// worktree the session runs in, when Fiber created one for it.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the session's whole start: its worktree rides last"
+    )]
     pub fn start(
         log: Arc<Log>,
         provider: Arc<dyn Provider>,
@@ -258,6 +264,7 @@ impl Loop {
         inbox: Receiver<Delivery>,
         tools: Vec<(String, Arc<dyn Tool>)>,
         permissions: Permissions,
+        worktree: Option<Worktree>,
     ) -> Result<Self, Error> {
         let (tools, replaced) = calls::register(tools);
         let workspace = PathBuf::from(&permissions.workspace);
@@ -270,6 +277,7 @@ impl Loop {
                 parent: None,
                 forked_from: None,
                 rewind: None,
+                worktree,
             }),
             None,
             None,

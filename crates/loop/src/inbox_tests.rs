@@ -13,6 +13,7 @@ use contract::events::{
 };
 use contract::inbox::{Ack, Delivery};
 use contract::shapes::Process;
+use contract::shapes::Worktree;
 use contract::{RequestId, TurnId};
 use log::Log;
 
@@ -55,6 +56,11 @@ fn exec(program: &str) -> ExtensionExec {
 }
 
 fn started() -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
+    started_with(None)
+}
+
+/// [`started`] with `worktree` on `session_started`.
+fn started_with(worktree: Option<Worktree>) -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
     let home = fakes::TempDir::new("fiber-exec-inbox");
     let workspace = home.path().join("workspace");
     let credentials = home.path().join("credentials");
@@ -90,10 +96,29 @@ fn started() -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
             credential_files: Vec::new(),
             rules: Arc::new(NoRules),
         },
+        worktree,
     )
     .unwrap();
     let watched = log.watch();
     (looped, log, watched, home)
+}
+
+#[test]
+fn start_records_the_worktree_on_session_started() {
+    let (_looped, _log, _watched, home) = started_with(Some(Worktree {
+        path: "/w".to_owned(),
+        branch: "fiber/s_test".to_owned(),
+    }));
+    let lines = log::read(&home.path().join("s_test")).unwrap();
+    assert_eq!(lines[0].kind, "session_started");
+    assert_eq!(
+        lines[0].payload["worktree"],
+        serde_json::json!({"path": "/w", "branch": "fiber/s_test"}),
+    );
+    let (_looped, _log, _watched, home) = started();
+    let lines = log::read(&home.path().join("s_test")).unwrap();
+    assert_eq!(lines[0].kind, "session_started");
+    assert!(!lines[0].payload.contains_key("worktree"));
 }
 
 struct NoRules;

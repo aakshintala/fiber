@@ -201,7 +201,8 @@ fn samples() -> Vec<(&'static str, Value)> {
             "variables": {"path": "/usr/bin:/bin", "names": ["HOME"], "source": "login_shell"},
             "parent": {"session_id": "s", "delegate_id": "j"},
             "forked_from": {"session_id": "s", "seq": 3},
-            "rewind": {"summary": "s", "note": "n", "jobs": ["j"]}}),
+            "rewind": {"summary": "s", "note": "n", "jobs": ["j"]},
+            "worktree": {"path": "/w", "branch": "fiber/s"}}),
         ),
         (
             "rewound",

@@ -310,6 +310,7 @@ fn run_with(
             credential_files: Vec::new(),
             rules: Arc::new(NoRules),
         },
+        None,
     )
     .unwrap()
     .answerable(false)
