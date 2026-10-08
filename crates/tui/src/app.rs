@@ -362,6 +362,7 @@ impl App {
             },
         };
         lines.extend(self.home_outgoing());
+        lines.extend(self.find_outgoing());
         self.settle();
         lines
     }
@@ -387,6 +388,7 @@ impl App {
             self.link = Link::Down;
             self.notices.push("Connection lost.".to_owned());
         }
+        self.find_lost();
         self.abandon_copy();
         self.settle();
     }
@@ -732,6 +734,11 @@ impl App {
         }
         if self.session() != Some(&envelope.session_id) {
             return Vec::new();
+        }
+        // The search's fetch answers here, never in the pages: its lines
+        // fold into the scan and go no further.
+        if let Some(send) = self.find_answered(envelope) {
+            return send;
         }
         let mut send = Vec::new();
         if envelope.kind == "turn_started"

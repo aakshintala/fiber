@@ -81,3 +81,51 @@ fn parse_line_splits_and_refuses_malformed() {
     assert!(parse_line("not json").is_none());
     assert!(parse_line(r#"{"kind": 1}"#).is_none());
 }
+
+#[test]
+fn history_answer_reads_lines_and_rejections() {
+    use super::history_answer;
+    let line = |kind: &str, payload: serde_json::Value| contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId("s_x".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    };
+    // Accepted with lines reads them.
+    let lines = vec![
+        line("turn_started", serde_json::json!({"input": []})),
+        line(
+            "turn_completed",
+            serde_json::json!({"outcome": "completed"}),
+        ),
+    ];
+    let accepted = line(
+        "command_accepted",
+        serde_json::json!({"command_id": "c_1", "result": {"lines": lines}}),
+    );
+    assert_eq!(history_answer(&accepted).expect("lines"), lines);
+    // Accepted without readable lines is an error naming it.
+    let unreadable = line(
+        "command_accepted",
+        serde_json::json!({"command_id": "c_1", "result": {}}),
+    );
+    assert_eq!(
+        history_answer(&unreadable).unwrap_err(),
+        "the answer could not be read"
+    );
+    // Rejected with a message carries it, else `rejected`.
+    let rejected = line(
+        "command_rejected",
+        serde_json::json!({"command_id": "c_1", "message": "past the latest line"}),
+    );
+    assert_eq!(
+        history_answer(&rejected).unwrap_err(),
+        "past the latest line"
+    );
+    let bare = line("command_rejected", serde_json::json!({"command_id": "c_1"}));
+    assert_eq!(history_answer(&bare).unwrap_err(), "rejected");
+}

@@ -164,9 +164,10 @@ impl Band {
             Line::styled("  ▸ note".to_owned(), TINT),
             Some(Target::Note(self.id)),
         ));
-        if self.open {
+        if out.open_scope(Target::Note(self.id), self.open) {
             format::opened(&note, "    ", out);
         }
+        out.end_scope();
     }
 }
 

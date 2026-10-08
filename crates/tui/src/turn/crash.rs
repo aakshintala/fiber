@@ -123,11 +123,12 @@ impl Aside {
                 let names: Vec<&str> = jobs.iter().map(|(name, _)| name.as_str()).collect();
                 let line = Line::raw(format!("Orphaned jobs: {}", names.join(", ")));
                 out.push((line, Some(Target::Orphans(*id))));
-                if *open {
+                if out.open_scope(Target::Orphans(*id), *open) {
                     for (name, message) in jobs {
                         out.push((format::dim(format!("  {name}: {message}")), None));
                     }
                 }
+                out.end_scope();
             }
         }
     }

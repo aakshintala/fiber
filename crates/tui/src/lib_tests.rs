@@ -4,6 +4,7 @@ use super::{Input, Loop, Screen};
 use crate::app::App;
 use crate::keys::{Event, Key};
 use crate::link::Line;
+use contract::clock::Clock;
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -1549,4 +1550,147 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
     assert_eq!(lp.step(Input::Bytes(b"\t".to_vec()), &idle), None);
     assert_eq!(lp.app.draft(), "sub/b.rs ");
     assert!(lp.search.is_none());
+}
+
+/// A session of three pages with `xyzzy` on its first page, seqs from 1.
+fn search_session() -> Vec<contract::Envelope> {
+    let session = contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    let mut lines = Vec::new();
+    let mut seq = 0u64;
+    let mut push = |kind: &str, payload: serde_json::Value| {
+        seq += 1;
+        lines.push(contract::Envelope {
+            kind: kind.to_owned(),
+            session_id: session.clone(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: Some(contract::Seq(seq)),
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        });
+    };
+    let prompt = || {
+        serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]})
+    };
+    let mut turn = |replies: &[&str]| {
+        push("turn_started", prompt());
+        for reply in replies {
+            push("text_completed", serde_json::json!({"text": reply}));
+        }
+        push(
+            "turn_completed",
+            serde_json::json!({"outcome": "completed"}),
+        );
+    };
+    turn(&["xyzzy here"]);
+    let filler = ["f"; 8];
+    for _ in 0..8 {
+        turn(&filler);
+    }
+    turn(&["middle"]);
+    for _ in 0..8 {
+        turn(&filler);
+    }
+    turn(&["tail"]);
+    lines
+}
+
+#[test]
+fn the_pause_thread_sends_find_due_on_the_fake_clock() {
+    let clock = fakes::clock::FakeClock::new();
+    let origin = clock.origin();
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.clock = clock.clone();
+    assert!(lp.app.on_line(Line::Hub(hello())).is_empty());
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    for envelope in search_session() {
+        lp.app.on_line(Line::Session(envelope));
+    }
+    assert!(lp.app.pages().page_count() > 2);
+    assert!(lp.app.pages().part(0).is_none(), "the first page dropped");
+    let (hub, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    lp.hub = Some(hub);
+    let (found, due) = mpsc::channel();
+    lp.files_out = Some(found);
+    let (_, main) = mpsc::channel::<Input>();
+    // Ctrl+F and three keystrokes in one read: three pauses, one
+    // generation each.
+    assert_eq!(
+        lp.step(Input::Bytes(vec![0x06, b'x', b'y', b'z']), &main),
+        None
+    );
+    // Each pause sleeps on the injected clock, then sends its generation.
+    let mut generations = Vec::new();
+    for _ in 0..3 {
+        match due
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for FindDue: {err}"))
+        {
+            Input::FindDue(generation) => generations.push(generation),
+            Input::Bytes(_)
+            | Input::Hub(_)
+            | Input::Connected(..)
+            | Input::ConnectFailed(_)
+            | Input::Disconnected
+            | Input::Resize
+            | Input::Files { .. } => panic!("a pause sent something else"),
+        }
+    }
+    generations.sort();
+    assert_eq!(generations, [1, 2, 3]);
+    // The three sleeps moved the fake clock by three pauses. A mutant
+    // that skips the sleep leaves it still.
+    assert_eq!(
+        clock.now(),
+        origin
+            .checked_add(Duration::from_millis(750))
+            .expect("750ms after the origin")
+    );
+    // A mutant that drops the send fails above, within `DEADLINE`.
+    let (_, main) = mpsc::channel::<Input>();
+    for generation in generations {
+        assert_eq!(lp.step(Input::FindDue(generation), &main), None);
+    }
+    // Only the current generation scans: exactly one `history` command
+    // reaches the hub.
+    theirs
+        .set_read_timeout(Some(DEADLINE))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    let mut reader = BufReader::new(theirs);
+    let mut text = String::new();
+    reader
+        .read_line(&mut text)
+        .unwrap_or_else(|err| panic!("read: {err}"));
+    let command: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|err| panic!("{text:?}: {err}"));
+    assert_eq!(command["command"], "history");
+    assert_eq!(command["session_id"], "s_aaaaaaaaaaaaaaaa");
+    let range = lp
+        .app
+        .pages()
+        .index()
+        .pages()
+        .first()
+        .map(|page| (page.first_seq.0, page.last_seq.0))
+        .expect("a first page");
+    assert_eq!(
+        (
+            command["args"]["from_seq"].as_u64().unwrap_or(0),
+            command["args"]["to_seq"].as_u64().unwrap_or(0)
+        ),
+        range
+    );
+    // Nothing more goes out: the stale generations send nothing.
+    let mut stream = reader.into_inner();
+    stream
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("nonblocking: {err}"));
+    let mut byte = [0u8; 1];
+    match stream.read(&mut byte) {
+        Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+        read => panic!("more than one command reached the hub: {read:?}"),
+    }
 }

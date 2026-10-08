@@ -142,6 +142,153 @@ fn query(app: &App) -> String {
     app.find_bar().map(|bar| bar.query).unwrap_or_default()
 }
 
+/// The bar's count.
+fn count(app: &App) -> String {
+    app.find_bar().map(|bar| bar.count).unwrap_or_default()
+}
+
+/// One durable session envelope with `seq`, recorded in `log` for the
+/// fake hub's answers.
+fn numbered(
+    log: &mut Vec<contract::Envelope>,
+    seq: &mut u64,
+    kind: &str,
+    payload: serde_json::Value,
+    action: Option<&str>,
+) -> Line {
+    *seq += 1;
+    let envelope = contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: action.map(|id| contract::ActionId(id.to_owned())),
+        seq: Some(contract::Seq(*seq)),
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    };
+    log.push(envelope.clone());
+    Line::Session(envelope)
+}
+
+/// A turn of `replies` text replies, seqs from `seq`, recorded in `log`.
+fn text_turn(log: &mut Vec<contract::Envelope>, seq: &mut u64, app: &mut App, replies: &[&str]) {
+    app.on_line(numbered(
+        log,
+        seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    for reply in replies {
+        app.on_line(numbered(
+            log,
+            seq,
+            "text_completed",
+            json!({"text": reply}),
+            Some("a_m"),
+        ));
+    }
+    app.on_line(numbered(
+        log,
+        seq,
+        "turn_completed",
+        json!({"outcome": "completed"}),
+        None,
+    ));
+}
+
+/// The fake hub's `history` answer to command `id` for `from` to `to`:
+/// the logged lines it holds.
+fn hub_answer(id: &str, log: &[contract::Envelope], from: u64, to: u64) -> Line {
+    let held: Vec<contract::Envelope> = log
+        .iter()
+        .filter(|line| line.seq.is_some_and(|seq| from <= seq.0 && seq.0 <= to))
+        .cloned()
+        .collect();
+    Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"command_id": id, "result": {"lines": held}})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+/// The `history` command `line` asks for: its id and seq range.
+fn command(line: &str) -> (String, u64, u64) {
+    let value: serde_json::Value = serde_json::from_str(line).expect("a command line");
+    assert_eq!(value["command"], "history");
+    (
+        value["id"].as_str().unwrap_or_default().to_owned(),
+        value["args"]["from_seq"].as_u64().unwrap_or(0),
+        value["args"]["to_seq"].as_u64().unwrap_or(0),
+    )
+}
+
+/// Answers every pending search fetch from `log`, starting with `first`,
+/// until none remains: at most the pages plus one round. Returns every
+/// seq range asked for, in order.
+fn answer_all(app: &mut App, log: &[contract::Envelope], first: Vec<String>) -> Vec<(u64, u64)> {
+    let mut outgoing = first;
+    outgoing.extend(app.find_outgoing());
+    let mut ranges = Vec::new();
+    let mut ids = Vec::new();
+    for _ in 0..app.pages().page_count().saturating_add(2) {
+        let Some(line) = outgoing.into_iter().next() else {
+            return ranges;
+        };
+        let (id, from, to) = command(&line);
+        assert!(!ids.contains(&id), "the same fetch went out twice");
+        ids.push(id.clone());
+        ranges.push((from, to));
+        outgoing = app.on_line(hub_answer(&id, log, from, to));
+    }
+    panic!("the scan never settled");
+}
+
+/// Opens the bar, types `query` and starts the scan, answering every
+/// fetch from `log`. Returns every seq range asked for, in order.
+fn search_all(app: &mut App, log: &[contract::Envelope], query: &str) -> Vec<(u64, u64)> {
+    if app.find_bar().is_some() {
+        assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    }
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    let mut generation = app.find.generation;
+    for ch in query.chars() {
+        generation += 1;
+        assert_eq!(
+            app.on_key(Key::Char(ch), now()),
+            Effect::FindPause {
+                generation,
+                after: FIND_PAUSE,
+            }
+        );
+    }
+    let first = app.find_due(generation);
+    answer_all(app, log, first)
+}
+
+/// The current match's line text, if any.
+fn current_text(app: &App) -> Option<String> {
+    let current = app.find.current.clone()?;
+    let (rows, texts) = app.pages().page_text_open(current.anchor.page)?;
+    crate::logical::logical(&rows, &texts)
+        .into_iter()
+        .find(|line| {
+            line.text.chars().count() == current.anchor.line_len
+                && super::line_hash(&line.text) == current.anchor.line_hash
+        })
+        .map(|line| line.text)
+}
+
 /// The app drawn at 80x24 as text.
 fn screen(app: &App) -> String {
     let area = Rect::new(0, 0, 80, 24);
@@ -340,4 +487,865 @@ fn find_bar_with_copied_and_notices_below() {
     app.copied = true;
     app.notices.push("A notice.".to_owned());
     insta::assert_snapshot!("find_bar_with_copied_and_notices_below", screen(&app));
+}
+
+#[test]
+fn resident_pages_are_scanned_with_no_command() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["a needle here", "plain"]);
+    assert_eq!(app.pages().page_count(), 1);
+    let ranges = search_all(&mut app, &log, "needle");
+    assert!(ranges.is_empty(), "a resident scan sends nothing");
+    assert_eq!(count(&app), "1 of 1");
+    assert_eq!(current_text(&app).as_deref(), Some("a needle here"));
+}
+
+#[test]
+fn a_dropped_page_is_fetched_with_history_and_scanned_on_its_answer() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["a needle here"]);
+    for turn in 0..16 {
+        let filler: Vec<String> = (0..4).map(|line| format!("filler {turn} {line}")).collect();
+        let refs: Vec<&str> = filler.iter().map(String::as_str).collect();
+        text_turn(&mut log, &mut seq, &mut app, &refs);
+    }
+    assert!(app.pages().page_count() > 1);
+    assert!(app.pages().part(0).is_none(), "the first page dropped");
+    let ranges = search_all(&mut app, &log, "needle");
+    assert!(!ranges.is_empty(), "the dropped page is fetched");
+    assert_eq!(count(&app), "1 of 1");
+    let current = app.find.current.clone().expect("a current match");
+    assert_eq!(current.anchor.page, 0);
+    // The answer folds into the scan, never into the pages.
+    assert!(app.pages().part(0).is_none());
+    // The reveal scrolled to the dropped page, so it loads next frame.
+    let start = app.pages().index().start(0);
+    assert_eq!(app.top(), Some(start));
+    let first = log.first().and_then(|line| line.seq).expect("a first seq");
+    assert!(app.needs().iter().any(|range| range.contains(&first)));
+}
+
+#[test]
+fn a_page_over_256_lines_is_fetched_in_chunks() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    for line in 0..300 {
+        let text = if line == 290 {
+            "a needle here".to_owned()
+        } else {
+            format!("filler {line}")
+        };
+        app.on_line(numbered(
+            &mut log,
+            &mut seq,
+            "text_completed",
+            json!({"text": text}),
+            Some("a_m"),
+        ));
+    }
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_completed",
+        json!({"outcome": "completed"}),
+        None,
+    ));
+    // One page of 302 lines, dropped below the window.
+    assert_eq!(app.pages().page_count(), 1);
+    for _ in 0..20 {
+        text_turn(&mut log, &mut seq, &mut app, &["filler"]);
+    }
+    assert!(app.pages().part(0).is_none());
+    let first = app
+        .pages()
+        .index()
+        .pages()
+        .first()
+        .map(|page| (page.first_seq.0, page.last_seq.0));
+    let Some((first_seq, last_seq)) = first else {
+        panic!("no first page");
+    };
+    assert!(
+        last_seq - first_seq >= 256,
+        "fewer than 257 lines: {first_seq}..={last_seq}"
+    );
+    let ranges = search_all(&mut app, &log, "needle");
+    assert_eq!(
+        ranges,
+        [(first_seq, first_seq + 255), (first_seq + 256, last_seq),]
+    );
+    assert_eq!(count(&app), "1 of 1");
+}
+
+#[test]
+fn the_scan_starts_at_the_page_on_screen_and_wraps() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["page zero"]);
+    for _ in 0..8 {
+        text_turn(
+            &mut log,
+            &mut seq,
+            &mut app,
+            &[
+                "filler", "filler", "filler", "filler", "filler", "filler", "filler", "filler",
+            ],
+        );
+    }
+    text_turn(&mut log, &mut seq, &mut app, &["page one"]);
+    for _ in 0..8 {
+        text_turn(
+            &mut log,
+            &mut seq,
+            &mut app,
+            &[
+                "filler", "filler", "filler", "filler", "filler", "filler", "filler", "filler",
+            ],
+        );
+    }
+    text_turn(&mut log, &mut seq, &mut app, &["page two"]);
+    assert!(app.pages().page_count() > 2, "fewer than three pages");
+    // The view follows at the bottom: the scan starts on the last page.
+    let last = app.pages().page_count() - 1;
+    let ranges = search_all(&mut app, &log, "page");
+    // Only dropped pages are fetched, in scan order past the screen page.
+    let starts: Vec<u64> = ranges.into_iter().map(|(from, _)| from).collect();
+    let page_starts: Vec<u64> = app
+        .pages()
+        .index()
+        .pages()
+        .iter()
+        .map(|page| page.first_seq.0)
+        .collect();
+    assert_eq!(starts.first(), page_starts.first(), "page 0 fetches first");
+    assert_eq!(count(&app), "3 of 3");
+    let current = app.find.current.clone().expect("a current match");
+    assert_eq!(
+        current.anchor.page, last,
+        "the screen page's match is current"
+    );
+}
+
+#[test]
+fn the_first_match_at_or_after_the_top_row_is_current() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    let mut replies = vec!["needle above"];
+    replies.extend((0..8).map(|_| "filler"));
+    replies.push("needle below");
+    let refs: Vec<&str> = replies.clone();
+    text_turn(&mut log, &mut seq, &mut app, &refs);
+    assert_eq!(app.pages().page_count(), 1);
+    // The top row between the two matches: only the one below can become
+    // current, and nothing scrolls back.
+    app.jump(2);
+    assert_eq!(app.top(), Some(2));
+    let ranges = search_all(&mut app, &log, "needle");
+    assert!(ranges.is_empty());
+    assert_eq!(count(&app), "2 of 2");
+    assert_eq!(current_text(&app).as_deref(), Some("needle below"));
+    assert_eq!(app.top(), Some(2));
+}
+
+#[test]
+fn with_no_match_below_the_top_the_first_after_wrapping_is_current() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["needle zero"]);
+    for _ in 0..8 {
+        text_turn(
+            &mut log,
+            &mut seq,
+            &mut app,
+            &[
+                "filler", "filler", "filler", "filler", "filler", "filler", "filler", "filler",
+            ],
+        );
+    }
+    text_turn(
+        &mut log,
+        &mut seq,
+        &mut app,
+        &[
+            "needle one",
+            "tail",
+            "tail",
+            "tail",
+            "tail",
+            "tail",
+            "tail",
+            "tail",
+            "tail",
+            "tail",
+            "tail",
+            "tail",
+            "tail",
+        ],
+    );
+    assert!(app.pages().page_count() > 1);
+    // Past the last page's match, which sits above the top row: nothing
+    // at or after the top anywhere after it, so page 0's match wins.
+    let start = app.pages().index().start(1);
+    let (rows, _) = app.pages().page_text(1).expect("the last page");
+    let at = rows
+        .iter()
+        .position(|(line, _)| line.to_string().contains("needle one"))
+        .expect("the match line");
+    app.jump(start + at + 1);
+    assert_eq!(app.top(), Some(start + at + 1));
+    search_all(&mut app, &log, "needle");
+    assert_eq!(count(&app), "1 of 2");
+    let current = app.find.current.clone().expect("a current match");
+    assert_eq!(current.anchor.page, 0);
+}
+
+#[test]
+fn a_match_in_a_closed_section_counts_from_its_section_line() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "reasoning_started",
+        json!({}),
+        Some("a_r"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "reasoning_completed",
+        json!({"text": "weigh it\nneedle hidden"}),
+        Some("a_r"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": "reply"}),
+        Some("a_m"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_completed",
+        json!({"outcome": "completed"}),
+        None,
+    ));
+    let ranges = search_all(&mut app, &log, "needle");
+    assert!(ranges.is_empty());
+    assert_eq!(count(&app), "1 of 1");
+    let current = app.find.current.clone().expect("a current match");
+    assert!(!current.anchor.scopes.is_empty(), "no section named");
+    let (row, hidden) = app.current_place(&current).expect("a row");
+    assert!(hidden, "a closed section's match shows as hidden");
+    // Its row is the section's own line.
+    let (rows, _) = app.pages().page_text(0).expect("the resident page");
+    let section = rows
+        .iter()
+        .position(|(_, target)| {
+            target.is_some_and(|target| current.anchor.scopes.contains(&target))
+        })
+        .expect("the section line");
+    assert_eq!(row, section);
+}
+
+/// A two-page app with `needle` on its dropped first page: the fetch for
+/// page 0 on the wire, answered from `log`. Returns the fetch line.
+fn dropped_fetch() -> (App, Vec<contract::Envelope>, String) {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["a needle here"]);
+    for turn in 0..16 {
+        let filler: Vec<String> = (0..4).map(|line| format!("filler {turn} {line}")).collect();
+        let refs: Vec<&str> = filler.iter().map(String::as_str).collect();
+        text_turn(&mut log, &mut seq, &mut app, &refs);
+    }
+    assert!(app.pages().page_count() > 1);
+    assert!(app.pages().part(0).is_none(), "the first page dropped");
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    let mut generation = 0u64;
+    for ch in "needle".chars() {
+        generation += 1;
+        assert_eq!(
+            app.on_key(Key::Char(ch), now()),
+            Effect::FindPause {
+                generation,
+                after: FIND_PAUSE,
+            }
+        );
+    }
+    let mut first = app.find_due(generation);
+    first.extend(app.find_outgoing());
+    assert_eq!(first.len(), 1, "one fetch on the wire");
+    (app, log, first.into_iter().next().unwrap_or_default())
+}
+
+#[test]
+fn a_new_query_drops_the_stale_answer() {
+    let (mut app, log, fetch) = dropped_fetch();
+    let (id, _, _) = command(&fetch);
+    // A new query while it is in flight sends nothing new.
+    assert_eq!(
+        app.on_key(Key::Char('s'), now()),
+        Effect::FindPause {
+            generation: 7,
+            after: FIND_PAUSE,
+        }
+    );
+    assert!(app.find_due(7).is_empty());
+    assert!(app.find.fetch.is_some(), "the stale fetch stays recorded");
+    // Its answer folds nothing: the page stays dropped.
+    let (_, from, to) = command(&fetch);
+    let outgoing = app.on_line(hub_answer(&id, &log, from, to));
+    assert!(app.pages().part(0).is_none());
+    // The pump runs for the current generation instead.
+    assert_eq!(outgoing.len(), 1);
+    let (next, _, _) = command(&outgoing[0]);
+    assert_ne!(next, id);
+}
+
+#[test]
+fn keys_typed_during_a_fetch_are_handled_before_its_answer() {
+    let (mut app, log, fetch) = dropped_fetch();
+    let (id, _, _) = command(&fetch);
+    assert_eq!(
+        app.on_key(Key::Char('x'), now()),
+        Effect::FindPause {
+            generation: 7,
+            after: FIND_PAUSE,
+        }
+    );
+    assert_eq!(query(&app), "needlex");
+    assert_eq!(app.draft(), "");
+    let (_, from, to) = command(&fetch);
+    assert!(app.on_line(hub_answer(&id, &log, from, to)).is_empty());
+    assert_eq!(query(&app), "needlex");
+    // Its pause then starts the new query's scan: the next request goes
+    // out for it.
+    let outgoing = app.find_due(7);
+    assert_eq!(outgoing.len(), 1, "the new query fetches next");
+    let (next, _, _) = command(&outgoing[0]);
+    assert_ne!(next, id);
+}
+
+#[test]
+fn a_rejected_answer_marks_the_search_incomplete_with_a_notice() {
+    let (mut app, _, fetch) = dropped_fetch();
+    let (id, _, _) = command(&fetch);
+    let rejected = Line::Session(contract::Envelope {
+        kind: "command_rejected".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"command_id": id, "message": "past the latest line"})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    });
+    let outgoing = app.on_line(rejected);
+    assert!(outgoing.is_empty(), "a rejected page is not fetched again");
+    assert!(count(&app).ends_with(" · incomplete"));
+    assert_eq!(
+        app.notice(),
+        Some("Could not search all of history: past the latest line")
+    );
+}
+
+#[test]
+fn an_unreadable_answer_marks_it_incomplete() {
+    let (mut app, _, fetch) = dropped_fetch();
+    let (id, _, _) = command(&fetch);
+    let unreadable = Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"command_id": id, "result": {}})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    });
+    assert!(app.on_line(unreadable).is_empty());
+    assert!(count(&app).ends_with(" · incomplete"));
+    assert_eq!(
+        app.notice(),
+        Some("Could not search all of history: the answer could not be read")
+    );
+}
+
+#[test]
+fn a_lost_link_marks_it_incomplete() {
+    let (mut app, _, _) = dropped_fetch();
+    app.disconnected();
+    assert!(app.find.fetch.is_none());
+    assert!(count(&app).ends_with(" · incomplete"));
+    assert_eq!(
+        app.notice(),
+        Some("Could not search all of history: connection lost")
+    );
+}
+
+#[test]
+fn live_output_rescans_the_open_page() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": "nothing here"}),
+        Some("a_m"),
+    ));
+    let ranges = search_all(&mut app, &log, "cat");
+    assert!(ranges.is_empty());
+    assert_eq!(count(&app), "no matches");
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": "a cat sat"}),
+        Some("a_n"),
+    ));
+    assert_eq!(count(&app), "1 of 1");
+    assert_eq!(current_text(&app).as_deref(), Some("a cat sat"));
+}
+
+#[test]
+fn an_equal_length_reply_change_rescans_the_open_page() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(line(
+        "assistant_message_delta",
+        json!({"text": "cat"}),
+        Some("a_m"),
+    ));
+    let ranges = search_all(&mut app, &log, "cat");
+    assert!(ranges.is_empty());
+    assert_eq!(count(&app), "1 of 1");
+    // The completion replaces the streamed text with equal length: the
+    // card changes, so the page rescans and the match is gone.
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": "dog"}),
+        Some("a_m"),
+    ));
+    assert_eq!(app.find.total, 0);
+    assert!(app.find.current.is_none());
+    assert_eq!(count(&app), "no matches");
+}
+
+#[test]
+fn typing_starts_no_scan_until_the_pause() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["abc here"]);
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    for (at, ch) in "abc".chars().enumerate() {
+        let generation = u64::try_from(at).unwrap_or(0) + 1;
+        assert_eq!(
+            app.on_key(Key::Char(ch), now()),
+            Effect::FindPause {
+                generation,
+                after: FIND_PAUSE,
+            }
+        );
+    }
+    assert!(app.find_due(1).is_empty());
+    assert!(app.find_due(2).is_empty());
+    assert_eq!(count(&app), "");
+    assert_eq!(app.find.total, 0);
+    assert!(!app.find.due);
+    assert!(!app.find_due(3).is_empty() || app.find.total > 0);
+    assert_eq!(count(&app), "1 of 1");
+}
+
+#[test]
+fn an_earlier_generation_due_does_nothing() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["abc here"]);
+    let ranges = search_all(&mut app, &log, "abc");
+    assert!(ranges.is_empty());
+    assert_eq!(count(&app), "1 of 1");
+    // A flipped guard would scan again on the stale pause.
+    assert!(app.find_due(1).is_empty());
+    assert!(app.find_due(2).is_empty());
+    assert_eq!(count(&app), "1 of 1");
+    assert_eq!(app.find.total, 1);
+}
+
+#[test]
+fn a_query_change_during_a_fetch_sends_nothing_new() {
+    let (mut app, log, fetch) = dropped_fetch();
+    let (id, _, _) = command(&fetch);
+    assert_eq!(
+        app.on_key(Key::Char('s'), now()),
+        Effect::FindPause {
+            generation: 7,
+            after: FIND_PAUSE,
+        }
+    );
+    // The new generation scans its resident pages but sends nothing: one
+    // request stays on the wire.
+    let outgoing = app.find_due(7);
+    assert!(outgoing.is_empty());
+    assert!(app.find_outgoing().is_empty());
+    let (_, from, to) = command(&fetch);
+    let outgoing = app.on_line(hub_answer(&id, &log, from, to));
+    assert!(
+        app.pages().part(0).is_none(),
+        "the stale answer folds nothing"
+    );
+    assert_eq!(outgoing.len(), 1, "then the next request goes out");
+}
+
+#[test]
+fn a_page_cut_scans_the_new_page() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    for _ in 0..20 {
+        text_turn(&mut log, &mut seq, &mut app, &["filler"]);
+    }
+    let ranges = search_all(&mut app, &log, "cat");
+    assert_eq!(count(&app), "no matches");
+    // A new turn cuts a page: the page never scanned scans too.
+    let before = app.pages().page_count();
+    text_turn(&mut log, &mut seq, &mut app, &["a cat sat"]);
+    assert!(app.pages().page_count() >= before);
+    assert_eq!(count(&app), "1 of 1");
+    assert_eq!(current_text(&app).as_deref(), Some("a cat sat"));
+    let _ = ranges;
+}
+
+#[test]
+fn the_cap_stops_the_scan_at_10000() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    for _ in 0..2 {
+        app.on_line(numbered(
+            &mut log,
+            &mut seq,
+            "text_completed",
+            json!({"text": "x ".repeat(6000)}),
+            Some("a_m"),
+        ));
+    }
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    assert_eq!(
+        app.on_key(Key::Char('x'), now()),
+        Effect::FindPause {
+            generation: 1,
+            after: FIND_PAUSE,
+        }
+    );
+    assert!(app.find_due(1).is_empty(), "no page drops: no fetch");
+    assert!(app.find.fetch.is_none());
+    assert_eq!(app.find.total, 10_000);
+    assert!(app.find.capped);
+    assert_eq!(count(&app), "1 of 10000+");
+}
+
+#[test]
+fn an_empty_query_clears_everything() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["xy here"]);
+    let ranges = search_all(&mut app, &log, "xy");
+    assert!(ranges.is_empty());
+    assert_eq!(count(&app), "1 of 1");
+    assert_eq!(
+        app.on_key(Key::Backspace, now()),
+        Effect::FindPause {
+            generation: 3,
+            after: FIND_PAUSE
+        }
+    );
+    assert_eq!(
+        app.on_key(Key::Backspace, now()),
+        Effect::FindPause {
+            generation: 4,
+            after: FIND_PAUSE
+        }
+    );
+    assert_eq!(query(&app), "");
+    assert!(app.find_due(4).is_empty());
+    assert_eq!(app.find.total, 0);
+    assert!(app.find.current.is_none());
+    assert_eq!(count(&app), "");
+}
+
+#[test]
+fn a_match_across_a_soft_wrap_matches_the_unwrapped_text() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    let reply = format!("{} brown fox jumps", "x".repeat(33));
+    text_turn(&mut log, &mut seq, &mut app, &[reply.as_str()]);
+    let (rows, _) = app.pages().page_text(0).expect("the resident page");
+    assert!(rows.len() > 3, "the reply wraps: {}", rows.len());
+    let ranges = search_all(&mut app, &log, "brown fox");
+    assert!(ranges.is_empty());
+    assert_eq!(count(&app), "1 of 1");
+    // The anchor names the whole unwrapped line, not a screen row.
+    let current = app.find.current.clone().expect("a current match");
+    assert_eq!(current.anchor.line_len, reply.chars().count());
+}
+
+#[test]
+fn a_new_width_keeps_the_matches() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["a needle here"]);
+    let ranges = search_all(&mut app, &log, "needle");
+    assert!(ranges.is_empty());
+    let before = app.find.current.clone().expect("a current match");
+    app.set_size(50, 10);
+    assert_eq!(count(&app), "1 of 1");
+    assert_eq!(
+        app.find.current.clone().map(|kept| kept.anchor),
+        Some(before.anchor)
+    );
+}
+
+#[test]
+fn a_dropped_pages_usage_change_refetches_it() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    let usage = |tokens: u64| {
+        json!({"generation_id": "g0", "model": "fake/m",
+            "tokens": {"input": tokens, "cache_read": 0, "cache_write": {}, "output": 40},
+            "input_bytes": 0, "cost": null})
+    };
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": "old words"}),
+        Some("a_m"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "usage_recorded",
+        usage(100),
+        Some("a_m"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_completed",
+        json!({"outcome": "completed"}),
+        None,
+    ));
+    for turn in 0..16 {
+        let filler: Vec<String> = (0..4).map(|line| format!("filler {turn} {line}")).collect();
+        let refs: Vec<&str> = filler.iter().map(String::as_str).collect();
+        text_turn(&mut log, &mut seq, &mut app, &refs);
+    }
+    assert!(app.pages().part(0).is_none(), "the first page dropped");
+    search_all(&mut app, &log, "zzz");
+    assert_eq!(count(&app), "no matches");
+    // A late usage line for its turn moves its ▣ line: the dropped page
+    // scans again, fetched from the hub.
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "usage_recorded",
+        usage(200),
+        Some("a_m"),
+    ));
+    let outgoing = app.find_outgoing();
+    assert_eq!(outgoing.len(), 1, "the dropped page refetches");
+    let range = app
+        .pages()
+        .index()
+        .pages()
+        .first()
+        .map(|page| (page.first_seq.0, page.last_seq.0));
+    let (_, from, to) = command(&outgoing[0]);
+    assert_eq!(Some((from, to)), range);
+}
+
+#[test]
+fn rescanning_keeps_the_current_match_when_an_earlier_one_appears() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    let mut replies = vec!["needle one"];
+    replies.extend((0..10).map(|_| "filler"));
+    replies.push("needle two");
+    let refs: Vec<&str> = replies.clone();
+    text_turn(&mut log, &mut seq, &mut app, &refs);
+    app.jump(2);
+    assert_eq!(app.top(), Some(2));
+    search_all(&mut app, &log, "needle");
+    assert_eq!(current_text(&app).as_deref(), Some("needle two"));
+    let current = app.find.current.clone().expect("a current match");
+    // Scrolling up makes the earlier match eligible, and live output
+    // rescans: the current match stays.
+    app.jump(0);
+    text_turn(&mut log, &mut seq, &mut app, &["filler"]);
+    assert_eq!(
+        app.find.current.clone().map(|kept| kept.anchor),
+        Some(current.anchor)
+    );
+    assert_eq!(current_text(&app).as_deref(), Some("needle two"));
+}
+
+#[test]
+fn the_current_falls_to_the_next_match_when_its_line_is_gone() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(line(
+        "assistant_message_delta",
+        json!({"text": "alpha needle"}),
+        Some("a_m1"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": "beta needle"}),
+        Some("a_m2"),
+    ));
+    let ranges = search_all(&mut app, &log, "needle");
+    assert!(ranges.is_empty());
+    assert_eq!(current_text(&app).as_deref(), Some("alpha needle"));
+    // Its line rewritten without the query: the completion replaces the
+    // streamed text, the next match becomes current, and nothing is
+    // revealed twice.
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": "alpha gone"}),
+        Some("a_m1"),
+    ));
+    assert_eq!(count(&app), "1 of 1");
+    assert_eq!(current_text(&app).as_deref(), Some("beta needle"));
+}
+
+#[test]
+fn matches_stay_in_page_then_render_order_after_rescans() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["zero a", "zero b"]);
+    for _ in 0..8 {
+        text_turn(
+            &mut log,
+            &mut seq,
+            &mut app,
+            &[
+                "filler", "filler", "filler", "filler", "filler", "filler", "filler", "filler",
+            ],
+        );
+    }
+    text_turn(&mut log, &mut seq, &mut app, &["one a"]);
+    search_all(&mut app, &log, "zero");
+    // A rescan replaces whole pages: the order stays page order, then
+    // render order.
+    text_turn(&mut log, &mut seq, &mut app, &["filler"]);
+    let flat: Vec<(usize, usize)> = app
+        .find
+        .flat()
+        .into_iter()
+        .map(|kept| (kept.anchor.page, kept.nth))
+        .collect();
+    assert_eq!(flat, [(0, 0), (0, 1)]);
+    search_all(&mut app, &log, "a");
+    let flat: Vec<(usize, usize)> = app
+        .find
+        .flat()
+        .into_iter()
+        .map(|kept| (kept.anchor.page, kept.nth))
+        .collect();
+    assert!(!flat.is_empty());
+    let mut ordered = flat.clone();
+    ordered.sort();
+    assert_eq!(flat, ordered, "page order, then render order");
 }

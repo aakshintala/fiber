@@ -446,21 +446,7 @@ impl<B: Backend> Loop<B> {
             };
             match input {
                 Input::Hub(Line::Session(line)) if answers(&line, id) => {
-                    return if line.kind == "command_accepted" {
-                        line.payload
-                            .get("result")
-                            .and_then(|result| result.get("lines"))
-                            .cloned()
-                            .and_then(|lines| serde_json::from_value(lines).ok())
-                            .ok_or_else(|| "the answer could not be read".to_owned())
-                    } else {
-                        Err(line
-                            .payload
-                            .get("message")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("rejected")
-                            .to_owned())
-                    };
+                    return link::history_answer(&line);
                 }
                 Input::Disconnected => {
                     self.lost();

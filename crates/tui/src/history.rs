@@ -453,6 +453,7 @@ impl App {
         let height = self.conversation_height();
         self.screen.settle(height);
         self.settle_pending_turn();
+        self.settle_find();
         if !self.history.waiting {
             return;
         }

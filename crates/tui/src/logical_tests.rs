@@ -131,3 +131,37 @@ fn every_char_maps_back_to_its_row_or_to_a_joining_space() {
         ]
     );
 }
+
+#[test]
+fn matches_folds_case_per_character() {
+    // ASCII folds; an empty query matches nothing.
+    assert_eq!(matches("Hello there", "hello"), vec![0..5]);
+    assert_eq!(matches("Hello there", ""), []);
+    // `É` folds to `é`, one character to one.
+    assert_eq!(matches("ÉTÉ", "été"), vec![0..3]);
+    // `İ` lowercases to two characters, so it compares as itself.
+    assert_eq!(matches("İ", "i"), []);
+    assert_eq!(matches("İ", "İ"), vec![0..1]);
+    // Non-overlapping, left to right.
+    assert_eq!(matches("aaaa", "aaa"), vec![0..3]);
+    assert_eq!(matches("ababab", "abab"), vec![0..4]);
+    // Ranges count characters, not bytes.
+    assert_eq!(matches("héllo", "llo"), vec![2..5]);
+}
+
+#[test]
+fn a_logical_line_takes_the_scopes_of_its_first_row() {
+    use crate::app::Target;
+    use crate::rows::Rows;
+    let mut collected = Rows::default();
+    assert!(collected.open_scope(Target::Group(3), true));
+    let (first, first_text) = row("alpha", Join::Break, 0);
+    let (second, second_text) = row("beta", Join::WrapSpace, 0);
+    collected.push_text(first, first_text);
+    collected.push_text(second, second_text);
+    let (built, texts) = collected.into_parts();
+    let lines = logical(&built, &texts);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].text, "alpha beta");
+    assert_eq!(lines[0].scopes, vec![Target::Group(3)]);
+}

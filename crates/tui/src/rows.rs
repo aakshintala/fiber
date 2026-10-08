@@ -5,6 +5,7 @@
 
 use std::ops::{Deref, Range};
 
+use crate::app::Target;
 use crate::turn::Row;
 
 /// How a row's text follows the row before it.
@@ -31,6 +32,10 @@ pub(crate) struct RowText {
     /// The links drawn on the row: each one's cells in the line and its
     /// destination (`docs/tui.md`, "Links": links are handled on click).
     pub(crate) links: Vec<(Range<u16>, String)>,
+    /// The collapsible sections the row is inside, outermost first: what
+    /// a search draw opens, and what a match names (`docs/tui.md`,
+    /// "Search").
+    pub(crate) scopes: Vec<Target>,
 }
 
 impl RowText {
@@ -41,6 +46,7 @@ impl RowText {
             skip: 0,
             decoration: false,
             links: Vec::new(),
+            scopes: Vec::new(),
         }
     }
 }
@@ -50,16 +56,46 @@ impl RowText {
 pub(crate) struct Rows {
     rows: Vec<Row>,
     texts: Vec<RowText>,
+    /// The collapsible sections the next row lands inside, outermost
+    /// first.
+    scopes: Vec<Target>,
+    /// A search draw: every collapsible body draws, open or not
+    /// (`docs/tui.md`, "Search": every match is counted at once).
+    all_open: bool,
 }
 
 impl Rows {
+    /// Rows for a search draw: every collapsible body draws.
+    pub(crate) fn all_open() -> Self {
+        Self {
+            all_open: true,
+            ..Self::default()
+        }
+    }
+
+    /// Enters what `target` opens: a collapsible body draws when `open`
+    /// on a normal draw, and always on a search draw. Every row pushed
+    /// until [`Rows::end_scope`] names `target` among its scopes,
+    /// outermost first. A body with no target draws as it would closed:
+    /// nothing could reveal a match there.
+    pub(crate) fn open_scope(&mut self, target: Target, open: bool) -> bool {
+        self.scopes.push(target);
+        open || self.all_open
+    }
+
+    /// Leaves the innermost open section; nothing without one.
+    pub(crate) fn end_scope(&mut self) {
+        self.scopes.pop();
+    }
+
     /// Adds a row that starts a line of its own.
     pub(crate) fn push(&mut self, row: Row) {
         self.push_text(row, RowText::plain());
     }
 
     /// Adds a row with what it adds to its logical line.
-    pub(crate) fn push_text(&mut self, row: Row, text: RowText) {
+    pub(crate) fn push_text(&mut self, row: Row, mut text: RowText) {
+        text.scopes = self.scopes.clone();
         self.rows.push(row);
         self.texts.push(text);
     }
