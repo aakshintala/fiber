@@ -9,7 +9,7 @@
     reason = "test code"
 )]
 
-use std::os::unix::process::CommandExt as _;
+use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
@@ -63,28 +63,45 @@ fn a_spawned_group_is_listed() {
     watchdog.stand_down(DEADLINE);
 }
 
+/// Reaps `child` on its own thread, at most `DEADLINE` of wall clock:
+/// the caller cannot block on it, or a child that ignores the signal
+/// would hang the test instead of failing it.
+fn reap(mut child: std::process::Child, signal: &str) -> std::process::ExitStatus {
+    let (done, waited) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = done.send(child.wait());
+    });
+    waited
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|_| panic!("{signal} did not end the child within {DEADLINE:?}"))
+        .unwrap_or_else(|source| panic!("waiting the child failed: {source}"))
+}
+
 #[test]
 fn a_live_group_gets_sigterm() {
     let _serial = serial_shared();
-    let (mut child, watchdog) = sleeping();
+    let (child, watchdog) = sleeping();
     let pgid = child.id();
     assert!(signal(pgid, rustix::process::Signal::TERM));
+    // Reaped before the emptiness check: on Linux a zombie still answers
+    // kill(-pgid, 0), so the group reads occupied until it is reaped.
+    assert_eq!(reap(child, "SIGTERM").signal(), Some(15));
     assert!(group_empties(pgid, DEADLINE), "SIGTERM emptied the group");
-    child.wait().unwrap();
     watchdog.stand_down(DEADLINE);
 }
 
 #[test]
 fn kill_every_group_kills_every_listed_group() {
     let _serial = serial_exclusive();
-    let (mut first, first_watch) = sleeping();
-    let (mut second, second_watch) = sleeping();
+    let (first, first_watch) = sleeping();
+    let (second, second_watch) = sleeping();
     let (first_pgid, second_pgid) = (first.id(), second.id());
     kill_every_group();
+    // Reaped before the emptiness checks, as above: zombies read occupied.
+    assert_eq!(reap(first, "SIGKILL").signal(), Some(9));
+    assert_eq!(reap(second, "SIGKILL").signal(), Some(9));
     assert!(group_empties(first_pgid, DEADLINE));
     assert!(group_empties(second_pgid, DEADLINE));
-    first.wait().unwrap();
-    second.wait().unwrap();
     first_watch.stand_down(DEADLINE);
     second_watch.stand_down(DEADLINE);
 }
