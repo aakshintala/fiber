@@ -1372,8 +1372,9 @@ earlier point. A person starts one from the terminal, a driver with the
   `forked_from { session_id, seq }`, the pointer a fork uses
   (`docs/delegates.md`, "Forks"), and no `parent`. No `parent` is what tells a
   rewind from a delegate's fork. Nothing is copied, and the old session keeps
-  its history. The pointer is the record: listing sessions finds "A continued
-  as B" on B's first line, which listing already reads.
+  its history. The pointer is the record: nothing else stores the link, and
+  whatever needs it reads B's first line, as deleting a session does to find
+  its dependents (`docs/invocation.md`, "Deleting and pruning").
 - **The point is a step boundary:** the start of a turn, just after the
   person's input, or just after a batch of tool results. Every tool call before
   it has its result.
