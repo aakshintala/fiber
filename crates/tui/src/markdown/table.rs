@@ -8,7 +8,7 @@ use pulldown_cmark::Alignment;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
-use super::{Cell, Role, char_width, spans_of, style, wrap_joined_indices};
+use super::{Cell, Role, char_width, link_cols, spans_of, style, wrap_joined_indices};
 
 /// Cells between columns.
 const GAP: usize = 2;
@@ -145,35 +145,8 @@ impl Table {
                     spans.push(Span::raw(" ".repeat(before)));
                     col = col.saturating_add(before);
                     let piece_start = col;
-                    // Each link of this cell that this visual line holds,
-                    // from its first cell to its last one's end.
-                    for (range, url) in cell_links {
-                        let mut first: Option<usize> = None;
-                        let mut last: Option<usize> = None;
-                        for (at, source) in indices.iter().enumerate() {
-                            if range.contains(source) {
-                                first.get_or_insert(at);
-                                last = Some(at);
-                            }
-                        }
-                        if let (Some(first), Some(last)) = (first, last)
-                            && let Some(cells) = piece.get(first..=last)
-                        {
-                            let mut start = piece_start;
-                            for (ch, _) in piece.get(..first).unwrap_or_default() {
-                                start = start.saturating_add(char_width(*ch));
-                            }
-                            let mut end = start;
-                            for (ch, _) in cells {
-                                end = end.saturating_add(char_width(*ch));
-                            }
-                            let start = u16::try_from(start).unwrap_or(u16::MAX);
-                            let end = u16::try_from(end).unwrap_or(u16::MAX);
-                            if start < end {
-                                links_out.push((start..end, url.clone()));
-                            }
-                        }
-                    }
+                    // Each link of this cell that this visual line holds.
+                    links_out.extend(link_cols(piece, indices, piece_start, cell_links));
                     spans.extend(spans_of(piece));
                     col = col.saturating_add(cells_width(piece));
                     spans.push(Span::raw(" ".repeat(pad.saturating_sub(before))));

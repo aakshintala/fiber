@@ -661,17 +661,7 @@ fn wrap(
         .collect()
 }
 
-/// Wraps `cells` into rows: the first `first` cells wide, the others
-/// `rest`. See [`wrap`].
-#[cfg(test)]
-fn wrap_cells(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<Vec<Cell>> {
-    wrap_joined(cells, first, rest, words)
-        .into_iter()
-        .map(|(row, _)| row)
-        .collect()
-}
-
-/// [`wrap_cells`]' rows, each with how it joins the row before: the first
+/// [`wrap_joined_indices`]' rows, each with how it joins the row before: the first
 /// and each after a newline break; one broken inside a word joins with
 /// nothing; one broken where spaces were dropped joins with one space.
 fn wrap_joined(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<(Vec<Cell>, Join)> {

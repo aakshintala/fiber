@@ -41,15 +41,23 @@ pub(crate) fn urls(text: &str) -> Vec<Range<usize>> {
     let mut out = Vec::new();
     let mut at = 0usize;
     while at < text.len() {
-        let rest = &text[at..];
-        let lower = rest.to_ascii_lowercase();
-        let prefix = if lower.starts_with("https://") {
+        // A scheme starts here, in any case; anything else moves one
+        // char forward, and a multibyte char is never a scheme start.
+        let prefix = if text
+            .get(at..at.saturating_add("https://".len()))
+            .is_some_and(|head| head.eq_ignore_ascii_case("https://"))
+        {
             "https://".len()
-        } else if lower.starts_with("http://") {
+        } else if text
+            .get(at..at.saturating_add("http://".len()))
+            .is_some_and(|head| head.eq_ignore_ascii_case("http://"))
+        {
             "http://".len()
         } else {
-            // One char forward; a multibyte char is never a scheme start.
-            let next = rest.chars().next().map_or(1, |ch| ch.len_utf8());
+            let next = text
+                .get(at..)
+                .and_then(|rest| rest.chars().next())
+                .map_or(1, |ch| ch.len_utf8());
             at = at.saturating_add(next);
             continue;
         };
@@ -120,7 +128,6 @@ impl App {
         // the one link drawn over those rows.
         let mut found: Vec<(usize, u16, String, Rect)> = Vec::new();
         let index = self.screen.pages().index();
-        let width = self.screen.pages().wrap_width().max(1);
         let area_width = area.width.max(1);
         // Each resident page once, its rows with their texts as drawn now.
         let mut pages: BTreeMap<usize, (Vec<crate::turn::Row>, Vec<crate::rows::RowText>)> =
@@ -145,7 +152,7 @@ impl App {
                 let to = line_end.min(end);
                 if from < to {
                     self.line_links(
-                        text, from, to, y0, top, last, area, width, area_width, &mut found,
+                        text, from, to, y0, top, last, area, area_width, &mut found,
                     );
                 }
                 grow = line_end;
@@ -200,11 +207,9 @@ impl App {
         top: usize,
         last: u16,
         area: Rect,
-        width: u16,
         area_width: u16,
         found: &mut Vec<(usize, u16, String, Rect)>,
     ) {
-        let _ = width;
         // Markdown links: their columns in the line.
         for (range, url) in &text.links {
             let start = range.start.min(area_width);

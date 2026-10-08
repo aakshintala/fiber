@@ -25,6 +25,11 @@ fn urls_finds_bare_urls_and_cuts_trailing_punctuation() {
             vec!["https://example.com"],
         ),
         (
+            "an uppercase scheme",
+            "see HTTP://example.com/a here",
+            vec!["HTTP://example.com/a"],
+        ),
+        (
             "a trailing period",
             "see http://example.com.",
             vec!["http://example.com"],

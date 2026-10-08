@@ -433,12 +433,12 @@ fn the_widest_of_unequal_columns_shrinks_first() {
     assert_eq!(lines[0], "aaaaaaaa  bbbbbbb");
 }
 
-/// `text` wrapped by [`super::wrap_cells`], each row as a string.
+/// `text` wrapped by [`super::wrap_joined`], each row as a string.
 fn wrapped(text: &str, first: usize, rest: usize, words: bool) -> Vec<String> {
     let cells: Vec<(char, Style)> = text.chars().map(|ch| (ch, Style::default())).collect();
-    super::wrap_cells(&cells, first, rest, words)
+    super::wrap_joined(&cells, first, rest, words)
         .iter()
-        .map(|row| row.iter().map(|(ch, _)| ch).collect())
+        .map(|(row, _)| row.iter().map(|(ch, _)| ch).collect())
         .collect()
 }
 
