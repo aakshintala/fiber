@@ -47,7 +47,7 @@ fn hello() -> Line {
 
 /// An app connected to the hub and attached to [`SESSION`] at `width` by
 /// `height`, with no home: the conversation is the whole screen.
-fn attached(width: u16, height: u16) -> App {
+pub(super) fn attached(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(width, height);
     assert!(app.on_line(hello()).is_empty());
@@ -143,7 +143,7 @@ fn query(app: &App) -> String {
 }
 
 /// The bar's count.
-fn count(app: &App) -> String {
+pub(super) fn count(app: &App) -> String {
     app.find_bar().map(|bar| bar.count).unwrap_or_default()
 }
 
@@ -172,7 +172,12 @@ fn numbered(
 }
 
 /// A turn of `replies` text replies, seqs from `seq`, recorded in `log`.
-fn text_turn(log: &mut Vec<contract::Envelope>, seq: &mut u64, app: &mut App, replies: &[&str]) {
+pub(super) fn text_turn(
+    log: &mut Vec<contract::Envelope>,
+    seq: &mut u64,
+    app: &mut App,
+    replies: &[&str],
+) {
     app.on_line(numbered(
         log,
         seq,
@@ -256,7 +261,11 @@ fn answer_all(app: &mut App, log: &[contract::Envelope], first: Vec<String>) -> 
 
 /// Opens the bar, types `query` and starts the scan, answering every
 /// fetch from `log`. Returns every seq range asked for, in order.
-fn search_all(app: &mut App, log: &[contract::Envelope], query: &str) -> Vec<(u64, u64)> {
+pub(super) fn search_all(
+    app: &mut App,
+    log: &[contract::Envelope],
+    query: &str,
+) -> Vec<(u64, u64)> {
     if app.find_bar().is_some() {
         assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     }
@@ -284,7 +293,7 @@ fn current_text(app: &App) -> Option<String> {
         .into_iter()
         .find(|line| {
             line.text.chars().count() == current.anchor.line_len
-                && super::line_hash(&line.text) == current.anchor.line_hash
+                && super::scan::line_hash(&line.text) == current.anchor.line_hash
         })
         .map(|line| line.text)
 }
@@ -2262,106 +2271,6 @@ fn a_page_of_257_lines_keeps_its_first_chunk_when_its_last_line_is_fetched_alone
     );
     // The match sits in the first chunk: the last line's fetch keeps it.
     assert_eq!(count(&app), "1 of 1");
-}
-
-#[test]
-fn a_snippet_is_its_line_and_one_line_either_side_cut_to_400() {
-    let mut app = attached(40, 10);
-    let mut log = Vec::new();
-    let mut seq = 0u64;
-    let long: String = format!("{}needle{}", "x".repeat(250), "x".repeat(250));
-    let exact: String = format!("needle{}", "y".repeat(394));
-    text_turn(
-        &mut log,
-        &mut seq,
-        &mut app,
-        &["the line before", &long, &exact, "the line after"],
-    );
-    assert!(search_all(&mut app, &log, "needle").is_empty());
-    let flat = app.find.flat();
-    assert_eq!(flat.len(), 2);
-    // The long line is cut to 400 characters around the match.
-    let first = &flat[0].snippet;
-    assert_eq!(first.line.chars().count(), super::SNIPPET);
-    assert_eq!(first.at, 197..203);
-    assert_eq!(&first.line[first.at.start..first.at.end], "needle");
-    assert_eq!(first.before, "the line before");
-    assert_eq!(first.after, exact);
-    // A line of exactly 400 characters stays whole.
-    let second = &flat[1].snippet;
-    assert_eq!(second.line, exact);
-    assert_eq!(second.at, 0..6);
-    assert_eq!(
-        second.before,
-        long.chars().take(super::SNIPPET).collect::<String>()
-    );
-    assert_eq!(second.after, "the line after");
-}
-
-#[test]
-fn two_matches_on_lines_sharing_their_first_400_characters_stay_distinct() {
-    let mut app = attached(40, 10);
-    let mut log = Vec::new();
-    let mut seq = 0u64;
-    let shared = "s".repeat(400);
-    let one = format!("{shared}needle one");
-    let two = format!("{shared}needle two");
-    let end = format!("{}needle", "z".repeat(400));
-    text_turn(&mut log, &mut seq, &mut app, &[&one, &two, &end]);
-    assert!(search_all(&mut app, &log, "needle").is_empty());
-    // Identity is the whole line's hash, never the cut snippet: all
-    // three matches are kept, each cut around its own match.
-    let flat = app.find.flat();
-    assert_eq!(flat.len(), 3);
-    assert_ne!(flat[0].anchor, flat[1].anchor);
-    for kept in &flat {
-        assert_eq!(kept.snippet.line.chars().count(), super::SNIPPET);
-        assert_eq!(
-            &kept.snippet.line[kept.snippet.at.start..kept.snippet.at.end],
-            "needle"
-        );
-    }
-    assert_eq!(flat[0].snippet.at, 390..396);
-    assert_eq!(flat[1].snippet.at, 390..396);
-    // A match at the line's end cuts the last 400 characters.
-    assert_eq!(flat[2].snippet.at, 394..400);
-    assert_ne!(flat[0].snippet.line, flat[1].snippet.line);
-    assert_eq!(count(&app), "1 of 3");
-}
-
-#[test]
-fn a_match_at_a_page_edge_has_no_neighbour_across_it() {
-    let mut app = attached(40, 10);
-    let mut log = Vec::new();
-    let mut seq = 0u64;
-    text_turn(
-        &mut log,
-        &mut seq,
-        &mut app,
-        &["needle one", "needle two", "needle three"],
-    );
-    assert!(search_all(&mut app, &log, "needle").is_empty());
-    let flat = app.find.flat();
-    assert_eq!(flat.len(), 3);
-    // The prompt bubble is the page's first logical line, so the first
-    // match has a neighbour; the turn's end marker follows its last
-    // reply, so the last reply's match has one after it.
-    assert_eq!(flat[0].snippet.before, "go");
-    assert_eq!(flat[0].snippet.after, "needle two");
-    assert_eq!(flat[2].snippet.before, "needle two");
-    assert_eq!(flat[2].snippet.after, "▣ completed");
-    // The bubble is the page's first line and the end marker its last:
-    // a match on either has no line past the edge.
-    assert!(search_all(&mut app, &log, "go").is_empty());
-    let flat = app.find.flat();
-    assert_eq!(flat.len(), 1);
-    assert_eq!(flat[0].snippet.before, "");
-    assert_eq!(flat[0].snippet.after, "needle one");
-    assert!(search_all(&mut app, &log, "completed").is_empty());
-    let flat = app.find.flat();
-    assert_eq!(flat.len(), 1);
-    assert_eq!(flat[0].snippet.before, "needle three");
-    assert_eq!(flat[0].snippet.after, "");
 }
 
 #[test]
