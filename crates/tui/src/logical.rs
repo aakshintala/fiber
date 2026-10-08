@@ -92,16 +92,16 @@ pub(crate) fn matches(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
     let mut at = 0usize;
-    // Every window starts inside the text, so the scan always ends.
-    while at < chars.len() && at.saturating_add(folded.len()) <= chars.len() {
-        let hit = folded.iter().enumerate().all(|(offset, want)| {
-            chars
-                .get(at + offset)
-                .is_some_and(|got| fold(*got) == *want)
-        });
+    let len = folded.len();
+    // `get` ends the scan at the last window that fits the text.
+    while let Some(window) = chars.get(at..at.saturating_add(len)) {
+        let hit = window
+            .iter()
+            .zip(&folded)
+            .all(|(got, want)| fold(*got) == *want);
         if hit {
-            out.push(at..at + folded.len());
-            at = at.saturating_add(folded.len());
+            out.push(at..at + len);
+            at = at.saturating_add(len);
         } else {
             at = at.saturating_add(1);
         }
