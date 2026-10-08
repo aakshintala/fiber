@@ -255,3 +255,130 @@ fn a_call_before_the_point_is_not_listed() {
     let note = rewind_note(&dir, Seq(101)).unwrap();
     assert!(note.contains("No file was written and no command was run after this point."));
 }
+
+/// Standing rules that allow nothing and remember nothing.
+struct NoRules;
+
+impl contract::rules::Rules for NoRules {
+    fn read(&self) -> Result<contract::rules::StandingRules, contract::rules::RulesError> {
+        Ok(contract::rules::StandingRules {
+            global: Vec::new(),
+            project: Vec::new(),
+        })
+    }
+
+    fn remember(
+        &self,
+        _tool: &str,
+        _prefix: &str,
+        _session: &contract::SessionId,
+    ) -> Result<(), contract::rules::RulesError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_rewound_loop_takes_its_thinking_and_its_trigger_from_the_logged_build() {
+    // The build's thinking level is the session's own choice, and the
+    // trigger is set without waiting for a preamble build that never
+    // comes.
+    use contract::events::{
+        CacheLifetime, PreambleBuilt, PreambleReason, SessionStarted, Variables, VariablesSource,
+    };
+    let root = fakes::TempDir::new("loop-rewound-trigger");
+    let home = root.path().to_path_buf();
+    let parent = home.join("s_parent00000001");
+    std::fs::create_dir_all(&parent).unwrap();
+    let line = |kind: &str, seq: u64, event: &Event| Envelope {
+        kind: kind.to_owned(),
+        session_id: SessionId("s_parent00000001".to_owned()),
+        ts: 1_759_150_000_000 + seq,
+        schema_version: SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(Seq(seq)),
+        payload: event.payload().unwrap(),
+    };
+    let built = Event::PreambleBuilt(PreambleBuilt {
+        reason: PreambleReason::Start,
+        model: "fake/model-1".to_owned(),
+        context_window: 200_000,
+        trigger_at: None,
+        thinking: Some("high".to_owned()),
+        tool_choice: "auto".to_owned(),
+        cache_lifetime: CacheLifetime::OneHour,
+        credential: None,
+        system_prompt: String::new(),
+        tools: Vec::new(),
+        replaced: Vec::new(),
+    });
+    let mut text = serde_json::to_string(&line(
+        "session_started",
+        0,
+        &Event::SessionStarted(SessionStarted {
+            workspace: "/w".to_owned(),
+            variables: Variables {
+                path: "/usr/bin".to_owned(),
+                names: Vec::new(),
+                source: VariablesSource::Inherited,
+            },
+            parent: None,
+            forked_from: None,
+            rewind: None,
+            worktree: None,
+        }),
+    ))
+    .unwrap();
+    text.push('\n');
+    text.push_str(&serde_json::to_string(&line("preamble_built", 1, &built)).unwrap());
+    text.push('\n');
+    std::fs::write(parent.join("events.jsonl"), text).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let log = std::sync::Arc::new(
+        log::Log::create(&home, SessionId("s_child00000001".into()), clock.clone()).unwrap(),
+    );
+    let dir = log.dir().to_path_buf();
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = clock;
+    let mut prompt = crate::PromptInputs::new(
+        home.clone(),
+        "/bin/sh".to_owned(),
+        dir.join("events.jsonl").display().to_string(),
+        clock,
+        100_000,
+    );
+    prompt.credential = Some("work".to_owned());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _tx = tx;
+    let rules: std::sync::Arc<dyn contract::rules::Rules> = std::sync::Arc::new(NoRules);
+    let looped = Loop::rewound(
+        log,
+        Rewound {
+            from: contract::shapes::Point {
+                session_id: SessionId("s_parent00000001".to_owned()),
+                seq: Seq(1),
+            },
+            note: String::new(),
+            worktree: None,
+        },
+        std::sync::Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+        crate::Model {
+            reference: "fake/model-1".to_owned(),
+            cost: None,
+            subscription: false,
+        },
+        prompt,
+        rx,
+        Vec::new(),
+        crate::Permissions {
+            workspace: home.display().to_string(),
+            credentials: home.clone(),
+            credential_files: Vec::new(),
+            rules,
+        },
+    )
+    .unwrap();
+    assert_eq!(looped.chosen, Some(contract::ThinkingLevel::High));
+    // The default handoff settings against a 100,000-token window: the
+    // window fraction loses to the token trigger.
+    assert_eq!(looped.handoff.trigger_at, Some(70_000));
+}

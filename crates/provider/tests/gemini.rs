@@ -2052,3 +2052,30 @@ fn sent_tools_are_sent_verbatim_and_set_the_strictness() {
     assert_eq!(empty.get("tools"), None);
     assert_eq!(empty.get("toolConfig"), None);
 }
+
+#[test]
+fn a_sent_declaration_without_a_schema_is_not_strict() {
+    // The strictness comes from each sent declaration's
+    // `parametersJsonSchema`: one without it counts as loose, whatever
+    // the wired tools hold.
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let sent = vec![
+        json!({"name": "b_tool", "description": "Sent."}),
+        json!({"name": "a_tool", "description": "Sent."}),
+    ];
+    let mut request = request();
+    request.sent_tools = Some(
+        sent.iter()
+            .map(|tool| tool.as_object().unwrap().clone())
+            .collect(),
+    );
+    run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(body["tools"][0]["functionDeclarations"], Value::Array(sent));
+    assert_eq!(
+        body["toolConfig"],
+        json!({"functionCallingConfig": {"mode": "AUTO"}})
+    );
+}

@@ -331,3 +331,22 @@ fn last_line_drops_a_torn_tail() {
     let found = last_line(&dir).unwrap();
     assert_eq!(found.kind, "session_started");
 }
+
+#[test]
+fn a_forked_from_that_names_no_point_is_a_pointer() {
+    // The pointer reads as a session and a `seq`, or not at all: a
+    // `forked_from` without either is corrupt, not absent.
+    let home = fakes::TempDir::new("log-history-bad-fork");
+    let sessions = home.path().join("sessions");
+    let mut without_seq = started("s_aaaaaaaaaaaaaaaa", 0, None);
+    without_seq["payload"]["forked_from"] = json!({"session_id": "s_bbbbbbbbbbbbbbbb"});
+    write_log(&sessions, "s_aaaaaaaaaaaaaaaa", &[without_seq]);
+    let error = history(&sessions.join("s_aaaaaaaaaaaaaaaa")).unwrap_err();
+    assert!(matches!(error, Error::Pointer { .. }));
+    assert_eq!(error.code(), contract::ErrorCode::LogCorrupt);
+    let mut not_an_object = started("s_bbbbbbbbbbbbbbbb", 0, None);
+    not_an_object["payload"]["forked_from"] = json!("s_aaaaaaaaaaaaaaaa");
+    write_log(&sessions, "s_bbbbbbbbbbbbbbbb", &[not_an_object]);
+    let error = history(&sessions.join("s_bbbbbbbbbbbbbbbb")).unwrap_err();
+    assert!(matches!(error, Error::Pointer { .. }));
+}

@@ -17,6 +17,7 @@ use contract::events::{
     ModelSettings, Outcome, PermissionResolved, PreambleBuilt, PreambleReason, SessionStarted,
     SwitchSource, TurnStarted, UsageRecorded, Variables, VariablesSource,
 };
+use contract::provider::Input;
 use contract::shapes::{ContentPart, Origin, Point, Sender, Tokens};
 use contract::{ActionId, Envelope, GenerationId, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
@@ -115,6 +116,21 @@ fn built(credential: Option<&str>) -> Event {
 
 fn turn() -> Event {
     Event::TurnStarted(TurnStarted { input: Vec::new() })
+}
+
+fn message_turn(text: &str) -> Event {
+    Event::TurnStarted(TurnStarted {
+        input: vec![InputItem::Message {
+            content: vec![ContentPart::Text {
+                text: text.to_owned(),
+            }],
+            sender: Sender {
+                origin: Origin::Driver,
+                command_id: None,
+            },
+            changed_by: None,
+        }],
+    })
 }
 
 fn handoff() -> Event {
@@ -384,6 +400,82 @@ fn the_window_reader_makes_a_parent_image_absolute_and_keeps_the_owns() {
                 .display()
                 .to_string(),
             "artifacts/b.png".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn the_window_reader_starts_mid_chain_at_a_parents_handoff() {
+    // A completed handoff in the middle segment puts the window there:
+    // the reader holds nothing before it, whatever segment it is on.
+    const C: &str = "s_cccccccccccccccc";
+    let (_home, sessions) = sessions("mid-chain");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, Some("t_a1"), None, &message_turn("a-one")),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[
+            envelope(B, 0, None, None, &started("/w", Some((A, 1)))),
+            envelope(B, 1, Some("t_b2"), None, &message_turn("b-two")),
+            envelope(B, 2, Some("t_b2"), None, &handoff()),
+            envelope(B, 3, Some("t_b3"), None, &message_turn("b-three")),
+        ],
+    );
+    write_log(
+        &sessions,
+        C,
+        &[envelope(C, 0, None, None, &started("/w", Some((B, 3))))],
+    );
+    let folded = resumed(&sessions.join(C)).unwrap();
+    assert_eq!(folded.window, (1, 1));
+    let log = Log::open(
+        &sessions,
+        SessionId(C.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = read_window(&log, folded.window, folded.end).unwrap();
+    let held: Vec<(&str, u64, &str)> = lines
+        .iter()
+        .map(|line| {
+            (
+                line.session_id.0.as_str(),
+                line.seq.unwrap().0,
+                line.kind.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        held,
+        [
+            (B, 1, "turn_started"),
+            (B, 2, "handoff_completed"),
+            (B, 3, "turn_started"),
+            (C, 0, "session_started"),
+        ]
+    );
+    assert_eq!(
+        crate::conversation::rebuild(&lines, "fake/model-1").unwrap(),
+        [
+            Input::User {
+                text: "b-two".to_owned(),
+                images: Vec::new(),
+            },
+            Input::User {
+                text: String::new(),
+                images: Vec::new(),
+            },
+            Input::User {
+                text: "b-three".to_owned(),
+                images: Vec::new(),
+            },
         ]
     );
 }

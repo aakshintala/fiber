@@ -226,6 +226,60 @@ fn a_rewound_session_holds_only_its_own_first_line_before_its_prompt() {
 }
 
 #[test]
+fn a_job_the_old_session_left_running_is_no_orphan_in_the_new_one() {
+    // The new session adopts no job, so a `job_started` the old log never
+    // ended writes no orphaned `job_completed` there.
+    use contract::events::JobStarted;
+    let session = run_a();
+    session
+        .log
+        .append(
+            &contract::events::Event::JobStarted(JobStarted {
+                job_id: contract::JobId("j_orphan".into()),
+                tool: None,
+                extension: None,
+                description: "a running job".into(),
+                output_path: "jobs/j_orphan".into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    let lines = log::read(&session.dir).unwrap();
+    let at = lines.last().unwrap().seq.unwrap().0;
+    let (b, tx, provider, dir) = start_b(
+        &session,
+        B_ID,
+        Point {
+            session_id: SessionId("s_test".into()),
+            seq: Seq(at),
+        },
+        String::new(),
+        None,
+        vec![Scripted::text("three-done")],
+    );
+    let lines = log::read(&dir).unwrap();
+    assert_eq!(kinds(&lines), ["session_started"]);
+    let _b = run_turn(b, &tx, "three");
+    let lines = log::read(&dir).unwrap();
+    assert!(
+        lines.iter().all(|line| line.kind != "job_completed"),
+        "no orphaned completion is written"
+    );
+    let first = &provider.requests()[0];
+    assert!(
+        first.conversation.iter().all(|input| match input {
+            Input::User { text, .. } => !text.contains("j_orphan"),
+            Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. } => true,
+        }),
+        "no job notice reaches the model"
+    );
+}
+
+#[test]
 fn a_rewound_sessions_first_request_matches_the_olds_at_the_point() {
     let session = run_a();
     let a_lines = log::read(&session.dir).unwrap();
