@@ -10,7 +10,7 @@
 )]
 
 use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -25,10 +25,16 @@ use super::{
 /// How long a test waits on a child before it fails.
 const DEADLINE: Duration = Duration::from_secs(10);
 
-/// A group that holds `sleep 60`, listed through [`spawn`].
+/// A group that holds `sleep 60`, listed through [`spawn`]. Its stdio is
+/// null, so even a child that outlives the test holds no harness pipe.
 fn sleeping() -> (std::process::Child, fakes::Watchdog) {
     let mut command = Command::new("sleep");
-    command.arg("60").process_group(0);
+    command
+        .arg("60")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
     let child = spawn(&mut command).unwrap();
     let pgid = child.id();
     let watchdog = Watchdog::group(pgid);
@@ -147,6 +153,9 @@ fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
             "-c",
             &format!("sleep 60 & echo $! > '{}'; exit 0", pidfile.display()),
         ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .process_group(0);
     let mut child = spawn(&mut command).unwrap();
     let pgid = child.id();
@@ -185,7 +194,12 @@ fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
 fn an_unlisted_live_group_is_not_signalled() {
     let _serial = serial_shared();
     let mut command = Command::new("sleep");
-    command.arg("60").process_group(0);
+    command
+        .arg("60")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
     let mut child = command.spawn().unwrap();
     let pgid = child.id();
     let watchdog = Watchdog::group(pgid);
@@ -200,9 +214,18 @@ fn an_unlisted_live_group_is_not_signalled() {
 fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
     let _serial = serial_shared();
     let mut command = Command::new("sh");
-    command.arg("-c").arg("exit 0").process_group(0);
+    command
+        .arg("-c")
+        .arg("exit 0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
     let mut child = spawn(&mut command).unwrap();
     let pid = child.id();
+    // Short-lived, but guarded like every spawned child: a mutant that
+    // kept it alive would otherwise leave it behind.
+    let watchdog = Watchdog::group(pid);
     // The leader has exited, and nobody reaps it but the call below.
     exited(pid);
     // The lock is held while the reap runs on another thread: it cannot
@@ -221,6 +244,7 @@ fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
     drop(held);
     waited.recv_timeout(DEADLINE).expect("the reap ran");
     assert!(!listed(pid), "the empty group retired under the lock");
+    watchdog.stand_down(DEADLINE);
 }
 
 /// Whether `pid` has exited without being reaped: `waitid` with `NOWAIT`

@@ -19,7 +19,7 @@ use contract::jobs::{JobRecord, Jobs as _};
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::tool::Tool as _;
 use fakes::clock::FakeClock;
-use fakes::{Recorder, TempDir};
+use fakes::{Recorder, TempDir, Watchdog, within};
 
 use super::DelegateSpawn;
 use super::run::{Launch, Launched, Resolve, Watch, mint_session_id};
@@ -97,6 +97,26 @@ fn resolve() -> Resolve {
             Err(vec!["fiber:fake/m".to_owned()])
         }
     })
+}
+
+/// The `sleep` the rig's launcher started, read from its pidfile: armed
+/// as its watchdog so a failing test leaves no child behind.
+fn child_group(rig: &Rig) -> Watchdog {
+    let pid = rig._dir.path().join("child.pid");
+    let pid: u32 = within("the child writes its pid", DEADLINE, move || {
+        loop {
+            let Ok(text) = std::fs::read_to_string(&pid) else {
+                std::thread::yield_now();
+                continue;
+            };
+            let Ok(pid) = text.trim().parse() else {
+                std::thread::yield_now();
+                continue;
+            };
+            return pid;
+        }
+    });
+    Watchdog::group(pid)
 }
 
 fn tool(rig: &Rig) -> DelegateSpawn {
@@ -249,6 +269,7 @@ fn a_good_call_returns_its_receipt_with_started_records() {
     assert_eq!(launched.model, "fake/m");
     // The stop reaches the running child; the clock lets the runner reap
     // it so no thread is left parked.
+    let _watchdog = child_group(&rig);
     assert_eq!(rig.registry.stop_delegates(), 1);
     rig.clock.advance(Duration::from_secs(6));
 }
@@ -317,6 +338,7 @@ fn a_stop_before_the_runner_connects_still_ends_cancelled() {
     assert!(output.error.is_none());
     // Stopping at once races the runner's first watch; the stop wins and
     // the job ends cancelled once the runner reaps it.
+    let _watchdog = child_group(&rig);
     assert_eq!(rig.registry.stop_delegates(), 1);
     for _ in 0..200 {
         if let Ok(Delivery::Job(notice)) = rig.inbox.try_recv() {
