@@ -23,6 +23,7 @@ mod input;
 mod jigs;
 mod keymap;
 mod keys;
+mod keyset;
 mod layout;
 mod link;
 mod local_time;
@@ -55,6 +56,8 @@ use contract::{HubLine, SessionId};
 use crate::link::Line;
 
 pub use home::Launch;
+
+pub use keyset::KeysSetup;
 
 pub use jigs::{draw, hover_frames, measure_paging};
 

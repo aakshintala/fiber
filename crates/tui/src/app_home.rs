@@ -157,6 +157,17 @@ impl App {
             .is_some_and(|home| matches!(home.prompt, Some(Prompt::Quit)))
     }
 
+    /// Whether a home modal holds the keyboard: the delete question or
+    /// the workspace picker, the two `home_key` branches after the quit
+    /// question.
+    pub(super) fn home_modal(&self) -> bool {
+        self.on_home()
+            && self
+                .home
+                .as_ref()
+                .is_some_and(|home| home.prompt.is_some() || home.picker.is_some())
+    }
+
     /// What home draws, or `None` unless [`App::on_home`] holds.
     pub(crate) fn home_screen(&self) -> Option<HomeScreen> {
         let home = self.home.as_ref().filter(|_| self.on_home())?;

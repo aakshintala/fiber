@@ -1,5 +1,8 @@
 //! The key bindings, as data (`docs/tui.md`, "Bindings").
 
+use crate::keys::{Edit, Key};
+use crate::keyset::{Canon, Contexts};
+
 /// One row of the "Bindings" table, word for word with the code marks
 /// dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,6 +17,12 @@ pub(crate) struct Binding {
     pub(crate) keys: &'static str,
     /// Its other paths: a slash command, a click; empty when none.
     pub(crate) other_paths: &'static str,
+    /// The contexts the action acts in.
+    pub(crate) contexts: Contexts,
+    /// The default key names, in groups of one key per variant in order.
+    pub(crate) defaults: &'static [&'static str],
+    /// The canonical event per variant.
+    pub(crate) events: &'static [Canon],
 }
 
 /// Every binding, in the table's order.
@@ -24,6 +33,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Send a prompt, or a steering message during a turn",
         keys: "Enter",
         other_paths: "",
+        contexts: Contexts::INPUT,
+        defaults: &["enter"],
+        events: &[Canon::Key(Key::Enter)],
     },
     Binding {
         area: "Sessions",
@@ -31,6 +43,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Insert a line break",
         keys: "Shift+Enter",
         other_paths: "Ctrl+J",
+        contexts: Contexts::INPUT_STEERING,
+        defaults: &["shift+enter", "ctrl+j"],
+        events: &[Canon::Edit(Edit::ShiftEnter)],
     },
     Binding {
         area: "Sessions",
@@ -38,6 +53,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Close what is on top; interrupt the turn when nothing is open",
         keys: "Esc",
         other_paths: "click the overlay's ✕ or outside it; click \"esc to interrupt\"",
+        contexts: Contexts::ALL,
+        defaults: &["esc"],
+        events: &[Canon::Key(Key::Esc)],
     },
     Binding {
         area: "Sessions",
@@ -45,6 +63,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Clear the draft, then quit",
         keys: "Ctrl+C, twice within about a second on an empty box",
         other_paths: "/quit",
+        contexts: Contexts::ALL,
+        defaults: &["ctrl+c"],
+        events: &[Canon::Key(Key::CtrlC)],
     },
     Binding {
         area: "Sessions",
@@ -52,6 +73,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Go home",
         keys: "⌥0",
         other_paths: "/home",
+        contexts: Contexts::INPUT_STEERING_CONVERSATION,
+        defaults: &["alt+0"],
+        events: &[Canon::Action],
     },
     Binding {
         area: "Sessions",
@@ -59,6 +83,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Start a new session",
         keys: "Ctrl+N",
         other_paths: "/new",
+        contexts: Contexts::INPUT_STEERING_CONVERSATION,
+        defaults: &["ctrl+n"],
+        events: &[Canon::Action],
     },
     Binding {
         area: "Sessions",
@@ -66,6 +93,21 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Switch to the session of rail card N",
         keys: "⌥1 to ⌥9",
         other_paths: "click the card",
+        contexts: Contexts::ALL,
+        defaults: &[
+            "alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9",
+        ],
+        events: &[
+            Canon::Key(Key::AltDigit(1)),
+            Canon::Key(Key::AltDigit(2)),
+            Canon::Key(Key::AltDigit(3)),
+            Canon::Key(Key::AltDigit(4)),
+            Canon::Key(Key::AltDigit(5)),
+            Canon::Key(Key::AltDigit(6)),
+            Canon::Key(Key::AltDigit(7)),
+            Canon::Key(Key::AltDigit(8)),
+            Canon::Key(Key::AltDigit(9)),
+        ],
     },
     Binding {
         area: "Sessions",
@@ -73,6 +115,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Delete the selected exited session in the session list",
         keys: "Delete, or Backspace, on the row",
         other_paths: "click the row's ✕",
+        contexts: Contexts::CONVERSATION,
+        defaults: &["delete", "backspace"],
+        events: &[Canon::Edit(Edit::Delete)],
     },
     Binding {
         area: "The input box",
@@ -80,6 +125,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Recall an earlier prompt from the project of the session on screen",
         keys: "↑ in an empty box",
         other_paths: "",
+        contexts: Contexts::INPUT,
+        defaults: &["up"],
+        events: &[Canon::Key(Key::Up)],
     },
     Binding {
         area: "The input box",
@@ -87,6 +135,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Search those prompts",
         keys: "Ctrl+R",
         other_paths: "",
+        contexts: Contexts::INPUT_STEERING,
+        defaults: &["ctrl+r"],
+        events: &[Canon::Key(Key::CtrlR)],
     },
     Binding {
         area: "The input box",
@@ -94,6 +145,16 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Move by word",
         keys: "⌥← ⌥→, Ctrl+← Ctrl+→",
         other_paths: "",
+        contexts: Contexts::INPUT_STEERING,
+        defaults: &[
+            "alt+left",
+            "alt+right",
+            "ctrl+left",
+            "ctrl+right",
+            "alt+b",
+            "alt+f",
+        ],
+        events: &[Canon::Edit(Edit::WordLeft), Canon::Edit(Edit::WordRight)],
     },
     Binding {
         area: "The input box",
@@ -101,6 +162,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Delete a word",
         keys: "⌥Backspace",
         other_paths: "",
+        contexts: Contexts::INPUT_STEERING,
+        defaults: &["alt+backspace"],
+        events: &[Canon::Edit(Edit::DeleteWord)],
     },
     Binding {
         area: "The input box",
@@ -108,6 +172,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Start or end of the line",
         keys: "⌘← ⌘→, where the terminal passes them",
         other_paths: "",
+        contexts: Contexts::INPUT_STEERING,
+        defaults: &["super+left", "super+right"],
+        events: &[Canon::Edit(Edit::LineStart), Canon::Edit(Edit::LineEnd)],
     },
     Binding {
         area: "The input box",
@@ -115,6 +182,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Open the draft, or a pasted token, in $VISUAL or $EDITOR",
         keys: "Ctrl+G",
         other_paths: "click the token",
+        contexts: Contexts::INPUT_STEERING_CONVERSATION,
+        defaults: &["ctrl+g"],
+        events: &[Canon::Key(Key::CtrlG)],
     },
     Binding {
         area: "The input box",
@@ -122,6 +192,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Paste an image",
         keys: "Ctrl+V",
         other_paths: "",
+        contexts: Contexts::INPUT_STEERING,
+        defaults: &["ctrl+v"],
+        events: &[Canon::None],
     },
     Binding {
         area: "The conversation",
@@ -129,6 +202,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Open or close the ledgers",
         keys: "Ctrl+O",
         other_paths: "click a group's line",
+        contexts: Contexts::ALL,
+        defaults: &["ctrl+o"],
+        events: &[Canon::Key(Key::CtrlO)],
     },
     Binding {
         area: "The conversation",
@@ -136,6 +212,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Move focus from the input box into the conversation",
         keys: "Shift+Tab",
         other_paths: "click an item",
+        contexts: Contexts::INPUT_STEERING_CONVERSATION,
+        defaults: &["shift+tab"],
+        events: &[Canon::Key(Key::BackTab)],
     },
     Binding {
         area: "The conversation",
@@ -143,6 +222,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Move focus to the next or previous item",
         keys: "↓ ↑, j k",
         other_paths: "click an item",
+        contexts: Contexts::CONVERSATION,
+        defaults: &["down", "up", "j", "k"],
+        events: &[Canon::Key(Key::Down), Canon::Key(Key::Up)],
     },
     Binding {
         area: "The conversation",
@@ -150,6 +232,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Open the focused item",
         keys: "Enter",
         other_paths: "click it",
+        contexts: Contexts::CONVERSATION,
+        defaults: &["enter"],
+        events: &[Canon::Key(Key::Enter)],
     },
     Binding {
         area: "The conversation",
@@ -157,6 +242,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Copy the focused item",
         keys: "y",
         other_paths: "select it",
+        contexts: Contexts::CONVERSATION,
+        defaults: &["y"],
+        events: &[Canon::Key(Key::Char('y'))],
     },
     Binding {
         area: "The conversation",
@@ -164,6 +252,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Move focus to the panel, the rail, then the conversation",
         keys: "Tab",
         other_paths: "click the area",
+        contexts: Contexts::CONVERSATION,
+        defaults: &["tab"],
+        events: &[Canon::Key(Key::Tab)],
     },
     Binding {
         area: "The conversation",
@@ -171,6 +262,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Show or hide the panel",
         keys: "⌥P",
         other_paths: "/panel",
+        contexts: Contexts::ALL,
+        defaults: &["alt+p"],
+        events: &[Canon::Key(Key::AltP)],
     },
     Binding {
         area: "The conversation",
@@ -178,6 +272,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Show or hide the rail",
         keys: "⌥R",
         other_paths: "drag its edge",
+        contexts: Contexts::ALL,
+        defaults: &["alt+r"],
+        events: &[Canon::Key(Key::AltR)],
     },
     Binding {
         area: "The conversation",
@@ -185,6 +282,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Search",
         keys: "Ctrl+F; Cmd+F where forwarded",
         other_paths: "",
+        contexts: Contexts::INPUT_STEERING_CONVERSATION,
+        defaults: &["ctrl+f", "super+f"],
+        events: &[Canon::Key(Key::CtrlF)],
     },
     Binding {
         area: "The conversation",
@@ -192,6 +292,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Open the search results",
         keys: "Ctrl+F with search open",
         other_paths: "click the match count",
+        contexts: Contexts::SEARCH,
+        defaults: &["ctrl+f", "super+f"],
+        events: &[Canon::Key(Key::CtrlF)],
     },
     Binding {
         area: "The conversation",
@@ -199,6 +302,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Next or previous match",
         keys: "Enter or ↓, Shift+Enter or ↑, with search open",
         other_paths: "",
+        contexts: Contexts::SEARCH,
+        defaults: &["enter", "shift+enter", "down", "up"],
+        events: &[Canon::Key(Key::Down), Canon::Key(Key::Up)],
     },
     Binding {
         area: "The conversation",
@@ -206,6 +312,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Jump to the end",
         keys: "End",
         other_paths: "click \"↓ New messages below\"",
+        contexts: Contexts::ALL,
+        defaults: &["end"],
+        events: &[Canon::Key(Key::End)],
     },
     Binding {
         area: "Steering",
@@ -213,6 +322,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Select a queued steering message",
         keys: "⌥↑ ⌥↓",
         other_paths: "its mouse target",
+        contexts: Contexts::INPUT_STEERING_CONVERSATION,
+        defaults: &["alt+up", "alt+down"],
+        events: &[Canon::Key(Key::AltUp), Canon::Key(Key::AltDown)],
     },
     Binding {
         area: "Steering",
@@ -220,6 +332,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Amend it",
         keys: "Enter",
         other_paths: "its mouse target",
+        contexts: Contexts::STEERING,
+        defaults: &["enter"],
+        events: &[Canon::Key(Key::Enter)],
     },
     Binding {
         area: "Steering",
@@ -227,6 +342,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Drop it",
         keys: "⌥X",
         other_paths: "its mouse target",
+        contexts: Contexts::INPUT_STEERING_CONVERSATION,
+        defaults: &["alt+x"],
+        events: &[Canon::Key(Key::AltX)],
     },
     Binding {
         area: "Requests, models and help",
@@ -234,6 +352,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Reopen a request put aside, or move to the next, the oldest first, switching to its session",
         keys: "⌥A",
         other_paths: "/approvals; click the badge or a waiting card",
+        contexts: Contexts::ALL,
+        defaults: &["alt+a"],
+        events: &[Canon::Key(Key::AltA)],
     },
     Binding {
         area: "Requests, models and help",
@@ -241,6 +362,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Open the model picker",
         keys: "Ctrl+L",
         other_paths: "/model",
+        contexts: Contexts::INPUT_STEERING_CONVERSATION,
+        defaults: &["ctrl+l"],
+        events: &[Canon::None],
     },
     Binding {
         area: "Requests, models and help",
@@ -248,6 +372,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
         description: "Open the key map",
         keys: "F1",
         other_paths: "/? or /help",
+        contexts: Contexts::ALL,
+        defaults: &["f1"],
+        events: &[Canon::Key(Key::F1)],
     },
 ];
 

@@ -25,6 +25,7 @@ fn app(width: u16, height: u16, on_home: bool) -> App {
         model: None,
         thinking: None,
         logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),

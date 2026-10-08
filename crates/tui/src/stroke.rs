@@ -89,15 +89,6 @@ pub(crate) struct Stroke {
 }
 
 impl Stroke {
-    // debt: Part 1a tests only; Part 1b's keyset consumes key names.
-    // Upgrade trigger: Part 1b.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "debt: Part 1a tests only; Part 1b's keyset consumes key names."
-        )
-    )]
     /// Reads a key name such as `ctrl+t`, `alt+up` or `shift+enter`:
     /// case-insensitive, the modifiers in any order, `control` for `ctrl`,
     /// `opt`, `option` or `meta` for `alt`, `cmd` or `command` for `super`,
@@ -206,15 +197,6 @@ impl Stroke {
         text
     }
 
-    // debt: Part 1a tests only; Part 1b's keyset consumes key names.
-    // Upgrade trigger: Part 1b.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "debt: Part 1a tests only; Part 1b's keyset consumes key names."
-        )
-    )]
     /// The shown form in the bindings table's style: `Ctrl+T`, `⌥P`,
     /// `Shift+Enter`, `⌘←`, `↑`, `F1`, `y`.
     pub(crate) fn label(&self) -> String {

@@ -58,6 +58,8 @@ pub fn run(
     };
     let mut app = App::new(launch.workspace.clone());
     app.set_zone(jiff::tz::TimeZone::system());
+    let mut launch = launch;
+    app.set_keys(std::mem::take(&mut launch.keys));
     app.set_home(launch);
     app.set_size(width, height);
     let mut terminal = Loop {
@@ -205,13 +207,7 @@ impl<B: Backend> Loop<B> {
             Input::Bytes(bytes) => {
                 for event in self.parser.feed(&bytes) {
                     let effect = match event {
-                        Event::Stroke(stroke) => match crate::keys::default_event(&stroke) {
-                            Some(Event::Key(key)) => self.app.on_key(key, self.clock.now()),
-                            Some(Event::Edit(edit)) => self.app.on_edit(edit),
-                            Some(Event::Stroke(_) | Event::Mouse(_) | Event::Reply(_)) | None => {
-                                Effect::None
-                            }
-                        },
+                        Event::Stroke(stroke) => self.app.on_press(stroke, self.clock.now()),
                         Event::Key(key) => self.app.on_key(key, self.clock.now()),
                         Event::Edit(edit) => self.app.on_edit(edit),
                         Event::Mouse(mouse) => {

@@ -45,6 +45,7 @@ mod focus;
 mod history;
 #[path = "app_home.rs"]
 mod home;
+mod keyboard;
 mod links;
 #[path = "app_mouse.rs"]
 mod mouse;
@@ -232,6 +233,8 @@ pub(crate) struct App {
     select: select::Selection,
     /// Conversation search (`docs/tui.md`, "Search").
     find: find::Find,
+    /// The effective bindings (`docs/tui.md`, "Bindings").
+    keyboard: keyboard::Keyboard,
     /// Whether a link opener is on `PATH` (`docs/tui.md`, "Links").
     opener: bool,
 }
@@ -265,6 +268,7 @@ impl App {
             chrome: chrome::Chrome::default(),
             select: select::Selection::default(),
             find: find::Find::default(),
+            keyboard: keyboard::Keyboard::default(),
             opener: false,
         }
     }

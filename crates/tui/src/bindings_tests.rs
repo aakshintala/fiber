@@ -1,6 +1,7 @@
 //! Tests for the bindings table.
 
 use super::BINDINGS;
+use crate::stroke::Stroke;
 
 /// The ids of actions that edit the draft in the input box, and search: the rule in
 /// `docs/tui.md`, "Rules" exempts them from having a mouse target or a
@@ -115,5 +116,65 @@ fn the_editing_exemptions_are_bindings() {
             BINDINGS.iter().any(|binding| binding.id == id),
             "{id} is not a binding"
         );
+    }
+}
+
+#[test]
+fn every_default_key_parses() {
+    for binding in BINDINGS {
+        for name in binding.defaults {
+            assert!(
+                Stroke::parse(name).is_ok(),
+                "{}: {name} does not parse",
+                binding.id
+            );
+        }
+    }
+}
+
+#[test]
+fn every_row_lists_whole_variant_groups() {
+    for binding in BINDINGS {
+        assert!(
+            !binding.events.is_empty(),
+            "{} has no canonical event",
+            binding.id
+        );
+        assert_eq!(
+            binding.defaults.len() % binding.events.len(),
+            0,
+            "{}: {} defaults for {} variants",
+            binding.id,
+            binding.defaults.len(),
+            binding.events.len()
+        );
+    }
+}
+
+/// Default keys whose label the doc's row does not spell out: the legacy
+/// ⌥← ⌥→ forms, the Cmd+F alias the search rows write as `Cmd+F`, and
+/// the middle rail rows the cell covers with a range.
+const UNLISTED: [&str; 10] = [
+    "alt+b", "alt+f", "super+f", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8",
+];
+
+#[test]
+fn every_listed_default_key_shows_in_its_row() {
+    for binding in BINDINGS {
+        for name in binding.defaults {
+            if UNLISTED.contains(name) {
+                continue;
+            }
+            let label = Stroke::parse(name)
+                .unwrap_or_else(|err| panic!("{}: {name}: {err}", binding.id))
+                .label();
+            assert!(
+                binding.keys.contains(&label) || binding.other_paths.contains(&label),
+                "{}: {label} is neither in {:?} nor {:?}",
+                binding.id,
+                binding.keys,
+                binding.other_paths
+            );
+        }
     }
 }
