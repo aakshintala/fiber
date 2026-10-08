@@ -237,6 +237,9 @@ fn a_good_call_returns_its_receipt_with_started_records() {
         &fakes::CancelToken::new(),
         &Recorder::default(),
     );
+    // Guard first: the child is already running, so arm its watchdog
+    // before any assertion that could fail and strand it.
+    let _watchdog = child_group(&rig);
     assert!(output.error.is_none());
     // The call records its start; the runner reports the end later, so
     // the answer carries exactly the two start records.
@@ -268,8 +271,8 @@ fn a_good_call_returns_its_receipt_with_started_records() {
     assert_eq!(launched.parent.0, "s_parent");
     assert_eq!(launched.model, "fake/m");
     // The stop reaches the running child; the clock lets the runner reap
-    // it so no thread is left parked.
-    let _watchdog = child_group(&rig);
+    // it so no thread is left parked. The watchdog above already guards
+    // it.
     assert_eq!(rig.registry.stop_delegates(), 1);
     rig.clock.advance(Duration::from_secs(6));
 }
@@ -336,9 +339,11 @@ fn a_stop_before_the_runner_connects_still_ends_cancelled() {
         &Recorder::default(),
     );
     assert!(output.error.is_none());
+    // Guard first, for the same reason: the stop below races the
+    // runner, and any failing assert must still clean up the child.
+    let _watchdog = child_group(&rig);
     // Stopping at once races the runner's first watch; the stop wins and
     // the job ends cancelled once the runner reaps it.
-    let _watchdog = child_group(&rig);
     assert_eq!(rig.registry.stop_delegates(), 1);
     for _ in 0..200 {
         if let Ok(Delivery::Job(notice)) = rig.inbox.try_recv() {

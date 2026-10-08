@@ -387,14 +387,14 @@ fn the_watch_flow_completes_with_the_delegate_text() {
         envelope(1, "turn_completed", serde_json::json!({})),
         exited_line(2, "Done."),
     ])]);
+    // Backstop armed before the shell starts: the child exits on
+    // its own in milliseconds; this only fires if a mutant strands it.
+    let watchdog = Watchdog::matching("fiber-delegate-watch-flow");
     rig.start(
         &format!(": fiber-delegate-watch-flow; printf '%s\\n' '{line}'; exit 0"),
         BOUND,
         1024,
     );
-    // Backstop: the child exits on its own in milliseconds; this only
-    // fires if a mutant strands it.
-    let watchdog = Watchdog::matching("fiber-delegate-watch-flow");
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Completed);
     assert_eq!(
@@ -431,14 +431,14 @@ fn a_pre_session_error_fails_with_that_error() {
     .unwrap();
     // Every watch is refused: the child failed before it could bind.
     let rig = rig(vec![]);
+    // Backstop armed before the shell starts: the child exits on
+    // its own in milliseconds; this only fires if a mutant strands it.
+    let watchdog = Watchdog::matching("fiber-delegate-presession");
     rig.start(
         &format!(": fiber-delegate-presession; printf '%s\\n' '{line}'; exit 1"),
         BOUND,
         1024,
     );
-    // Backstop: the child exits on its own in milliseconds; this only
-    // fires if a mutant strands it.
-    let watchdog = Watchdog::matching("fiber-delegate-presession");
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Failed);
     assert_eq!(
@@ -461,14 +461,14 @@ fn a_child_that_exits_before_any_connect_uses_stdout() {
     let _serial = serial_shared();
     let line = json_line(1, "Quick.");
     let rig = rig(vec![]);
+    // Backstop armed before the shell starts: the child exits on
+    // its own in milliseconds; this only fires if a mutant strands it.
+    let watchdog = Watchdog::matching("fiber-delegate-early-exit");
     rig.start(
         &format!(": fiber-delegate-early-exit; printf '%s\\n' '{line}'; exit 0"),
         BOUND,
         1024,
     );
-    // Backstop: the child exits on its own in milliseconds; this only
-    // fires if a mutant strands it.
-    let watchdog = Watchdog::matching("fiber-delegate-early-exit");
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Completed);
     assert_eq!(
@@ -527,10 +527,14 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
     // the reap: the fold proceeds after the bound with no `fiber_exited`,
     // and does not hang.
     let shell = format!(
-        "perl -MPOSIX -e 'POSIX::setsid(); sleep 60;' & echo $! > '{}'",
+        "perl -MPOSIX -e 'POSIX::setsid(); sleep 60; # fiber-delegate-held-stdout' & echo $! > '{}'",
         member_pid.display()
     );
     let rig = rig(vec![]);
+    // Backstop armed before the shell starts: on any early failure the
+    // Drop kills the escaped sleeper, which would otherwise hold stdout
+    // for 60 s.
+    let watchdog = Watchdog::matching("fiber-delegate-held-stdout");
     rig.start(&shell, BOUND, 1024);
     let member = pid_in_file(&member_pid);
     let notice = reported(&rig);
@@ -548,16 +552,17 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
         pids_exit(&[member], DEADLINE),
         "the escaped member is reaped"
     );
+    watchdog.stand_down(DEADLINE);
 }
 
 #[test]
 fn exit_zero_with_no_line_anywhere_is_indeterminate() {
     let _serial = serial_shared();
     let rig = rig(vec![]);
-    rig.start(": fiber-delegate-exit-zero; exit 0", BOUND, 1024);
-    // Backstop: the child exits on its own in milliseconds; this only
-    // fires if a mutant strands it.
+    // Backstop armed before the shell starts: the child exits on its own
+    // in milliseconds; this only fires if a mutant strands it.
     let watchdog = Watchdog::matching("fiber-delegate-exit-zero");
+    rig.start(": fiber-delegate-exit-zero; exit 0", BOUND, 1024);
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Failed);
     assert_eq!(
@@ -656,9 +661,9 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
         ]),
         WatchReply::Exited(vec![exited_line(3, "Replayed.")]),
     ]);
-    rig.start(&shell, BOUND, 1024);
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
+    rig.start(&shell, BOUND, 1024);
     // The child waits for the third delivery before it may exit: the
     // replay above cannot win the race with the reap.
     wait_calls(&rig, 3);
@@ -680,9 +685,9 @@ fn the_watch_is_not_called_again_after_fiber_exited() {
     let fifo = fifo(dir.path(), "release");
     let shell = format!("read _ < '{}'; exit 0", fifo.display());
     let rig = rig(vec![WatchReply::Exited(vec![exited_line(1, "Once.")])]);
-    rig.start(&shell, BOUND, 1024);
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
+    rig.start(&shell, BOUND, 1024);
     wait_calls(&rig, 1);
     release_fifo(&fifo, b"go\n");
     let notice = reported(&rig);
@@ -794,9 +799,9 @@ fn the_cap_at_an_exact_boundary_trips_only_past_it() {
     // failing fast: a report here means the cap tripped at the boundary,
     // and swallowing it would hang the fifo write below on a dead child.
     std::fs::write(&rig.events, "0123456789").unwrap();
-    rig.start(&shell, BOUND, 10);
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
+    rig.start(&shell, BOUND, 10);
     for _ in 0..6 {
         rig.clock.advance(Duration::from_millis(100));
         if rig.inbox.recv_timeout(Duration::from_millis(20)).is_ok() {
@@ -834,9 +839,9 @@ fn a_disconnected_cap_trips_on_a_backoff_wake() {
     );
     let rig = rig(vec![]);
     let shell = shell.replace("EVENTS", &rig.events.to_string_lossy());
-    rig.start(&shell, BOUND, 32);
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
+    rig.start(&shell, BOUND, 32);
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Failed);
     assert_eq!(
@@ -864,9 +869,9 @@ fn a_stop_before_the_cap_keeps_cancelled() {
     );
     let rig = rig(vec![]);
     let shell = shell.replace("EVENTS", &rig.events.to_string_lossy());
-    rig.start(&shell, BOUND, 10);
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
+    rig.start(&shell, BOUND, 10);
     wait_ready(&ready);
     assert_eq!(rig.registry.stop_delegates(), 1);
     for _ in 0..5 {
@@ -1110,9 +1115,9 @@ fn a_blocked_watch_does_not_block_the_cap() {
     let (release, gate) = mpsc::channel();
     let rig = rig(vec![WatchReply::Block(gate)]);
     let shell = shell.replace("EVENTS", &rig.events.to_string_lossy());
-    rig.start(&shell, BOUND, 32);
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&block.to_string_lossy());
+    rig.start(&shell, BOUND, 32);
     // No line is ever delivered: the backoff wakes alone trip the cap.
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Failed);
