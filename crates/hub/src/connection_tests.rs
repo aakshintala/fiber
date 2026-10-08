@@ -307,7 +307,22 @@ fn start_rejects_bad_args_without_starting_a_session() {
             "start",
             json!({"workspace": "/absent/fiber-hub-test"}),
         ),
-        command("c_6", "status", json!({"level": "full"})),
+        command(
+            "c_6",
+            "start",
+            json!({"workspace": workspace, "worktree": "yes"}),
+        ),
+        command(
+            "c_7",
+            "start",
+            json!({"workspace": workspace, "worktree": 1}),
+        ),
+        command(
+            "c_8",
+            "start",
+            json!({"workspace": workspace, "worktree": Value::Null}),
+        ),
+        command("c_9", "status", json!({"level": "full"})),
     ];
     for line in &bad {
         client.send(line);
@@ -315,6 +330,7 @@ fn start_rejects_bad_args_without_starting_a_session() {
         assert_eq!(code, "invalid_arguments");
     }
     assert!(starter.received().is_empty());
+    assert!(starter.started_worktrees().is_empty());
 }
 
 #[test]
@@ -340,6 +356,60 @@ fn start_answers_with_the_session_id() {
         serde_json::to_value(&reread).unwrap(),
         json!({"command_id": "c_1", "result": result})
     );
+}
+
+#[test]
+fn start_with_worktree_true_starts_in_a_worktree() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command(
+        "c_1",
+        "start",
+        json!({"workspace": workspace, "worktree": true}),
+    ));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_1");
+    let session = result.get("session_id").unwrap().as_str().unwrap();
+    assert!(session.starts_with("s_"));
+    assert_eq!(starter.started_worktrees(), [true]);
+}
+
+#[test]
+fn start_with_worktree_false_starts_in_place() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command(
+        "c_1",
+        "start",
+        json!({"workspace": workspace, "worktree": false}),
+    ));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_1");
+    assert!(result.get("session_id").is_some());
+    assert_eq!(starter.started_worktrees(), [false]);
+}
+
+#[test]
+fn start_without_worktree_starts_in_place() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command("c_1", "start", json!({"workspace": workspace})));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_1");
+    assert!(result.get("session_id").is_some());
+    assert_eq!(starter.started_worktrees(), [false]);
 }
 
 /// A pre-bound fake session: it records what the hub forwards and answers

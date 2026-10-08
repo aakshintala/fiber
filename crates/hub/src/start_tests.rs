@@ -164,6 +164,18 @@ fn an_accepted_start_mints_a_session_id_and_binds_its_socket() {
 }
 
 #[test]
+fn worktree_reaches_the_starter() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let workspace = temp.workspace();
+    let outcome = started(temp.hub(starter.clone()), workspace, None, true, None);
+    let Outcome::Accepted { .. } = outcome else {
+        panic!("the start is accepted");
+    };
+    assert_eq!(starter.started_worktrees(), [true]);
+}
+
+#[test]
 fn a_session_that_exits_first_rejects_with_its_fiber_exited() {
     let temp = Temp::new();
     let exited = failure(ErrorCode::NoModel, "No model is configured.");
@@ -385,6 +397,7 @@ fn held(temp: &Temp, starter: FakeStarter, content: &Value) -> (Arc<Hub>, Box<He
                 &CommandId("c_start".to_owned()),
                 &workspace,
                 None,
+                false,
                 Some(&content),
             );
             done_tx.send(outcome).unwrap_or(());
