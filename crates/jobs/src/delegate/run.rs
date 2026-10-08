@@ -4,7 +4,6 @@
 //! returns nothing to the tool, which answers as soon as the spawn and the
 //! record are done.
 
-use std::cell::RefCell;
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
 use std::io::{self, BufRead, BufReader, Read};
@@ -141,7 +140,7 @@ impl Shared {
     }
 }
 
-fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
+fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
     state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -170,12 +169,26 @@ impl Wake for Parker {
     }
 }
 
-/// What the watch feeds the fold: the last new `seq`, and the socket's
-/// `fiber_exited` when it received one.
+/// What the watch feeds the fold, shared with the watcher thread: the
+/// last new `seq`, the socket's `fiber_exited` when it received one, and
+/// the one-shot result of the running watch.
 #[derive(Default)]
 struct Fold {
     last_seq: Option<u64>,
     socket: Option<FiberExited>,
+    /// A watcher thread is inside the blocking socket read.
+    outstanding: bool,
+    /// The running watch's result, for the runner to take once.
+    result: Option<WatchResult>,
+}
+
+/// What one watch call returned, for the runner to take once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchResult {
+    /// A `fiber_exited` line arrived: the runner watches no more.
+    Exited,
+    /// The connection closed or refused: the runner backs off.
+    Retry,
 }
 
 /// Whether `seq` is a line the watch delivers: a `seq` past the last one
@@ -318,25 +331,24 @@ impl Runner {
             }
         }
         let pgid = child.id();
-        let fold = RefCell::new(Fold::default());
-        let mut on_line = |envelope: &Envelope| {
-            let mut fold = fold.borrow_mut();
-            if !note_seq(&mut fold.last_seq, envelope.seq.map(|seq| seq.0)) {
-                return;
-            }
-            if over_cap(&self.output_path, self.cap) {
-                self.shared.halt(Termination::OutputCap);
-            }
-            if envelope.kind == "fiber_exited"
-                && let Some(exited) = fiber_exited_of(&envelope.payload)
-            {
-                fold.socket = Some(exited);
-            }
-        };
+        // The fold is shared with the watcher thread, which owns the
+        // blocking socket read: this thread never waits on the socket
+        // and always reaches the reap and the stop timer.
+        let fold = Arc::new(Mutex::new(Fold::default()));
+        let wake = Arc::clone(&self.park) as Arc<dyn Wake>;
         let mut backoff = START_BACKOFF;
         let mut next_retry = self.clock.now();
         let mut exited_seen = false;
         loop {
+            // One watch result, when the watcher finished one.
+            match lock(&fold).result.take() {
+                Some(WatchResult::Exited) => exited_seen = true,
+                Some(WatchResult::Retry) => {
+                    next_retry = later(self.clock.as_ref(), backoff);
+                    backoff = (backoff * 2).min(MAX_BACKOFF);
+                }
+                None => {}
+            }
             // The cap is judged on the real length of the log, on every
             // wake, whether or not a connection is up.
             if over_cap(&self.output_path, self.cap) {
@@ -347,7 +359,7 @@ impl Runner {
             if let Some(status) = group::reap_locked(&mut child, pgid) {
                 let stdout = self.await_drain(&drain_rx);
                 drop(_lifeline);
-                let socket = fold.borrow().socket.clone();
+                let socket = lock(&fold).socket.clone();
                 let (completed, finished) = outcome(
                     self.shared.reason(),
                     socket.as_ref(),
@@ -364,19 +376,32 @@ impl Runner {
             {
                 group::signal(pgid, Signal::KILL);
             }
-            if !exited_seen && self.clock.now() >= next_retry {
-                match (self.watch)(&self.session_id, &mut on_line) {
-                    Ok(Watched::Exited) => {
-                        exited_seen = true;
-                    }
-                    Ok(Watched::Closed) | Err(_) => {
-                        next_retry = later(self.clock.as_ref(), backoff);
-                        backoff = (backoff * 2).min(MAX_BACKOFF);
-                    }
+            // A watch starts when one is due and none is running. The
+            // watcher thread owns the blocking read; a second never
+            // starts while one is outstanding.
+            let launch = {
+                let mut fold = lock(&fold);
+                if exited_seen || fold.outstanding || self.clock.now() < next_retry {
+                    false
+                } else {
+                    fold.outstanding = true;
+                    true
                 }
+            };
+            if launch {
+                let watcher = Watcher {
+                    watch: Arc::clone(&self.watch),
+                    session_id: self.session_id.clone(),
+                    fold: Arc::clone(&fold),
+                    shared: Arc::clone(&self.shared),
+                    output_path: self.output_path.clone(),
+                    cap: self.cap,
+                    wake: Arc::clone(&wake),
+                };
+                thread::spawn(|| watcher.run());
             }
             let mut due = later(self.clock.as_ref(), POLL);
-            if !exited_seen && next_retry < due {
+            if !exited_seen && !lock(&fold).outstanding && next_retry < due {
                 due = next_retry;
             }
             if let Some(kill_at) = self.shared.kill_at()
@@ -420,6 +445,57 @@ impl Runner {
             }
             self.park(Some(later(self.clock.as_ref(), POLL)));
         }
+    }
+}
+
+/// One watch call on its own thread: the blocking socket read lives
+/// here, so the runner thread always reaches the reap, the cap checks
+/// and the stop timer. Left to finish on its own once the child is
+/// reaped: a watch that outlives the child ends at EOF.
+struct Watcher {
+    watch: Watch,
+    session_id: SessionId,
+    fold: Arc<Mutex<Fold>>,
+    shared: Arc<Shared>,
+    output_path: PathBuf,
+    cap: u64,
+    wake: Arc<dyn Wake>,
+}
+
+impl Watcher {
+    fn run(self) {
+        let result = (self.watch)(&self.session_id, &mut |envelope: &Envelope| {
+            let exited = {
+                let mut fold = lock(&self.fold);
+                if !note_seq(&mut fold.last_seq, envelope.seq.map(|seq| seq.0)) {
+                    return;
+                }
+                if envelope.kind == "fiber_exited" {
+                    fiber_exited_of(&envelope.payload)
+                } else {
+                    None
+                }
+            };
+            // Checked per delivered line, as the runner checks it per
+            // wake: no lock is held across the halt.
+            if over_cap(&self.output_path, self.cap) {
+                self.shared.halt(Termination::OutputCap);
+            }
+            if let Some(exited) = exited {
+                lock(&self.fold).socket = Some(exited);
+            }
+        });
+        {
+            let mut fold = lock(&self.fold);
+            fold.outstanding = false;
+            fold.result = Some(match result {
+                Ok(Watched::Exited) => WatchResult::Exited,
+                Ok(Watched::Closed) | Err(_) => WatchResult::Retry,
+            });
+        }
+        // Wakes the runner's park at once: the result must not wait for
+        // the next clock move.
+        self.wake.wake();
     }
 }
 

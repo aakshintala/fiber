@@ -46,6 +46,10 @@ enum WatchReply {
     Refused,
     Closed(Vec<Envelope>),
     Exited(Vec<Envelope>),
+    /// Blocks until the test releases the gate, at most the wall bound:
+    /// the runner must supervise without it. Dropping the sender releases
+    /// it too, so a failed test never leaves the watcher parked.
+    Block(mpsc::Receiver<()>),
 }
 
 impl Script {
@@ -76,6 +80,10 @@ impl Script {
                     on_line(line);
                 }
                 Ok(Watched::Exited)
+            }
+            Some(WatchReply::Block(gate)) => {
+                let _released = gate.recv_timeout(Duration::from_secs(30));
+                Err(io::Error::other("released"))
             }
         }
     }
@@ -511,7 +519,9 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
         );
         rig.clock.advance(Duration::from_millis(gap));
     }
-    // The eighth call succeeds; the child binds and its lines flow.
+    // The eighth call succeeds; the child binds and its lines flow. It
+    // lands a wake after the seventh retry is consumed, so wait for it.
+    wait_calls(&rig, 8);
     std::fs::write(&fifo, "go\n").unwrap();
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Completed);
@@ -843,4 +853,85 @@ fn a_new_seq_counts_and_a_replay_does_not() {
         note_seq(&mut last, None),
         "a line without seq always counts"
     );
+}
+
+#[test]
+fn a_blocked_watch_still_lets_a_stop_through() {
+    let _serial = serial_shared();
+    let dir = TempDir::new("fiber-delegate-blocked-stop");
+    let pidfile = dir.path().join("pid");
+    let ready = dir.path().join("ready");
+    let block = fifo(dir.path(), "block");
+    let shell = format!(
+        "echo $$ > '{}'; trap '' TERM; echo ready > '{}'; read _ < '{}'",
+        pidfile.display(),
+        ready.display(),
+        block.display()
+    );
+    // The watch blocks until the test releases it; the runner must still
+    // supervise the child: one watcher runs, and the stop timer fires on
+    // the clock without it.
+    let (release, gate) = mpsc::channel();
+    let rig = rig(vec![WatchReply::Block(gate)]);
+    rig.start(&shell, BOUND, 1024);
+    let pgid = pid_in_file(&pidfile);
+    let watchdog = Watchdog::group(pgid);
+    wait_ready(&ready);
+    assert_eq!(rig.registry.stop_delegates(), 1);
+    for _ in 0..12 {
+        rig.clock.advance(Duration::from_millis(500));
+    }
+    let notice = reported(&rig);
+    assert_eq!(notice.completed.status, Outcome::Cancelled);
+    assert_eq!(
+        notice
+            .completed
+            .process
+            .as_ref()
+            .and_then(|process| process.signal.clone()),
+        Some("SIGKILL".to_owned())
+    );
+    assert!(
+        crate::delegate::group::sent_signals()
+            .iter()
+            .any(|(signalled, signal)| *signalled == pgid
+                && *signal == rustix::process::Signal::KILL),
+        "SIGKILL went out once the bound passed"
+    );
+    rig.clock.advance(Duration::from_secs(1));
+    assert_eq!(
+        rig.script.calls().len(),
+        1,
+        "one watcher runs while it is blocked, never one per wake"
+    );
+    drop(release);
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_blocked_watch_does_not_block_the_cap() {
+    let _serial = serial_shared();
+    let dir = TempDir::new("fiber-delegate-blocked-cap");
+    let block = fifo(dir.path(), "block");
+    let shell = format!(
+        "for i in 1 2 3 4; do echo filler-line >> '{}'; done; read _ < '{}'",
+        "EVENTS",
+        block.display()
+    );
+    let (release, gate) = mpsc::channel();
+    let rig = rig(vec![WatchReply::Block(gate)]);
+    let shell = shell.replace("EVENTS", &rig.events.to_string_lossy());
+    rig.start(&shell, BOUND, 32);
+    // No line is ever delivered: the backoff wakes alone trip the cap.
+    let notice = reported(&rig);
+    assert_eq!(notice.completed.status, Outcome::Failed);
+    assert_eq!(
+        notice
+            .completed
+            .error
+            .as_ref()
+            .map(|error| error.code.clone()),
+        Some(ErrorCode::OutputCap)
+    );
+    drop(release);
 }
