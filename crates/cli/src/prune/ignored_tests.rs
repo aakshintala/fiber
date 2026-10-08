@@ -137,7 +137,8 @@ fn push_children_pushes_readable_and_counts_each_unreadable() {
         Err(std::io::Error::other("entry")),
         Ok(PathBuf::from("b")),
     ];
-    let unreadable = push_children(children.into_iter(), &mut stack);
+    let mut unreadable = 0_u64;
+    push_children(children.into_iter(), &mut stack, &mut unreadable);
     assert_eq!(unreadable, 2);
     assert_eq!(stack, vec![PathBuf::from("a"), PathBuf::from("b")]);
 }

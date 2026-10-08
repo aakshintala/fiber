@@ -94,20 +94,19 @@ fn label(first: &std::ffi::OsStr) -> String {
     out
 }
 
-/// Pushes each readable child path onto `stack` and returns how many
-/// children could not be read.
+/// Pushes each readable child path onto `stack` and counts each child that
+/// could not be read into `unreadable`.
 fn push_children(
     children: impl Iterator<Item = std::io::Result<PathBuf>>,
     stack: &mut Vec<PathBuf>,
-) -> u64 {
-    let mut unreadable = 0_u64;
+    unreadable: &mut u64,
+) {
     for child in children {
         match child {
             Ok(path) => stack.push(path),
-            Err(_) => unreadable += 1,
+            Err(_) => *unreadable += 1,
         }
     }
-    unreadable
 }
 
 /// The bytes under `path` and how many entries could not be read: every
@@ -130,8 +129,11 @@ fn sized(path: PathBuf) -> (u64, u64) {
         } else if meta.is_dir() {
             match std::fs::read_dir(&next) {
                 Ok(entries) => {
-                    unreadable +=
-                        push_children(entries.map(|child| child.map(|c| c.path())), &mut stack);
+                    push_children(
+                        entries.map(|child| child.map(|c| c.path())),
+                        &mut stack,
+                        &mut unreadable,
+                    );
                 }
                 Err(_) => unreadable += 1,
             }
