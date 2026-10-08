@@ -104,6 +104,8 @@ codes! {
     Malformed,
     /// A cancelled call the server may still act on.
     McpCancelRequested,
+    /// Fiber could not get an MCP server's prompt.
+    McpPromptFailed,
     /// A required MCP server failed to start.
     McpRequiredServerFailed,
     /// A repository's required MCP server is not approved.

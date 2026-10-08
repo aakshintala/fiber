@@ -286,6 +286,7 @@ the lines that carry it.
 | `log_corrupt` | exit, hub command | a log line that cannot be encoded, or one read back that does not parse |
 | `malformed` | driver command, hub command | a command line that is not a JSON object, has no string `id` or `command`, has `args` of the wrong type, or has a key no command line takes (`docs/invocation.md`, "Driver commands") |
 | `mcp_cancel_requested` | tool call | a cancelled call the server may still act on |
+| `mcp_prompt_failed` | driver command | Fiber could not get an MCP server's prompt: the server failed, did not answer in time, refused it, or returned content Fiber cannot send |
 | `mcp_required_server_failed` | exit | a required MCP server failed to start |
 | `mcp_server_unapproved` | exit | a repository's required MCP server is not approved; run `fiber approve` in the repository |
 | `mcp_server_unavailable` | tool call, MCP server | the server failed to start or died |
@@ -362,7 +363,7 @@ Notices, for a failure outside any action:
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `invalid_arguments`,
 `unknown_command`, `closing`, `io_failed`, `duplicate_command`, `session_not_found`,
-`message_refused`, `hook_failed`)
+`message_refused`, `hook_failed`, `mcp_prompt_failed`)
 are `docs/invocation.md`, "Driver commands".
 
 ## Not settled here
