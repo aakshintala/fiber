@@ -280,7 +280,7 @@ Durable. The last line a process writes for a session.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `exit_code` | integer | yes | the process's exit code (`docs/invocation.md`, "Lifecycle") |
-| `usage` | `usage` | yes | this process's model calls for the session, its delegates included (`docs/loop.md`, "Spending budget"); a cost that settles after exit is missing from it |
+| `usage` | `usage` | yes | this process's model calls for the session, its delegates included (`docs/loop.md`, "Spending budget"); a cost that settles after exit is missing from it; absent only on the line a process prints when it fails before any session exists ("The envelope") |
 | `final_action_id` | string | no | the `action_id` of the final assistant message, when there is one |
 | `text` | string | no | that message's text: its `text_completed` parts joined in order; present exactly when `final_action_id` is |
 | `error` | `error` | no | why the process failed (`docs/errors.md`, "What a caller gets") |
