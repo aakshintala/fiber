@@ -25,6 +25,9 @@ struct Queued {
     /// The `steer` that sent it; `None` for Fiber's own message, which
     /// cannot be selected.
     command_id: Option<String>,
+    /// Whether the message holds an image: such a row cannot be selected
+    /// for editing, but it can still be dropped.
+    image: bool,
 }
 
 /// The queue, the selected row and the draft it stashed.
@@ -47,6 +50,9 @@ impl Steering {
             .map(|message| Queued {
                 text: crate::app::text_of(&message.content),
                 command_id: message.sender.command_id.as_ref().map(|id| id.0.clone()),
+                image: message.content.iter().any(|part| {
+                    matches!(part, contract::shapes::ContentPart::Image { .. })
+                }),
             })
             .collect();
         if self
@@ -63,12 +69,13 @@ impl Steering {
         self.selected.is_some()
     }
 
-    /// The selectable rows' indices, oldest first.
+    /// The selectable rows' indices, oldest first: rows a `steer` sent,
+    /// without an image.
     fn selectable(&self) -> impl DoubleEndedIterator<Item = usize> + '_ {
         self.rows
             .iter()
             .enumerate()
-            .filter(|(_, row)| row.command_id.is_some())
+            .filter(|(_, row)| row.command_id.is_some() && !row.image)
             .map(|(at, _)| at)
     }
 
@@ -112,11 +119,14 @@ impl Steering {
 
     /// Selects the row at `at` and loads its text into `draft`, stashing
     /// the draft when nothing was selected; false when the row cannot be
-    /// selected.
+    /// selected, including a row holding an image.
     pub(crate) fn select(&mut self, at: usize, draft: &mut Draft) -> bool {
         let Some(row) = self.rows.get(at) else {
             return false;
         };
+        if row.image {
+            return false;
+        }
         let Some(id) = row.command_id.clone() else {
             return false;
         };
@@ -129,10 +139,11 @@ impl Steering {
         true
     }
 
-    /// Clears the selection, the stash back in `draft`.
+    /// Clears the selection, the stash back in `draft` under a fresh
+    /// serial.
     pub(crate) fn clear(&mut self, draft: &mut Draft) {
         if self.selected.take().is_some() {
-            *draft = std::mem::take(&mut self.stash);
+            draft.put_back(std::mem::take(&mut self.stash));
         }
     }
 
@@ -246,10 +257,13 @@ impl App {
             return Effect::None;
         };
         let id = mint();
-        let text = std::mem::replace(&mut self.draft, stash).expand();
-        let content = json!({"content": [{"type": "text", "text": text}]});
-        lines.push(session_command(&id, "steer", &session, Some(content)).to_string());
-        self.pending.insert(id, (Kind::Steer, text));
+        let taken = std::mem::take(&mut self.draft);
+        self.draft.put_back(stash);
+        lines.push(
+            session_command(&id, "steer", &session, Some(super::commands::content_arg(&taken)))
+                .to_string(),
+        );
+        self.pending.insert(id, (Kind::Steer, taken));
         Effect::Send(lines)
     }
 
@@ -268,7 +282,7 @@ impl App {
                 let id = mint();
                 let args = json!({ "command_id": row });
                 let line = session_command(&id, "steer_drop", &session, Some(args));
-                self.pending.insert(id, (Kind::SteerDrop, String::new()));
+                self.pending.insert(id, (Kind::SteerDrop, Draft::default()));
                 line.to_string()
             })
             .collect();

@@ -334,7 +334,6 @@ impl Draft {
     }
 
     /// Whether the draft holds an image.
-    #[allow(dead_code, reason = "the paste gate holds images in a later task")]
     pub(crate) fn has_image(&self) -> bool {
         self.pieces
             .iter()
@@ -350,7 +349,6 @@ impl Draft {
     /// text is one text part, each image one image part; an empty text
     /// part is left out. A draft without images sends exactly one text
     /// part, or none when empty.
-    #[allow(dead_code, reason = "the paste gate holds images in a later task")]
     pub(crate) fn content(&self) -> Vec<contract::commands::SentPart> {
         use contract::commands::SentPart;
         let mut parts = Vec::new();
@@ -381,8 +379,9 @@ impl Draft {
     /// The editor returned `text` for the whole draft: each `[Image #N]`
     /// naming one of the draft's images, 1 to its count, becomes that
     /// image again, first occurrence only; an image whose label is gone is
-    /// dropped, and other text stays text. The cursor ends at the end,
-    /// under a fresh serial.
+    /// dropped, and other text stays text. Line breaks read as a paste's
+    /// do, and control characters but tabs go, as in [`Draft::set`]. The
+    /// cursor ends at the end, under a fresh serial.
     #[allow(dead_code, reason = "the loop lands reads in a later task")]
     pub(crate) fn edited(&mut self, text: &str) {
         let images: Vec<Arc<str>> = self
@@ -395,7 +394,8 @@ impl Draft {
             .collect();
         let mut used = vec![false; images.len()];
         let mut pieces = Vec::new();
-        let mut rest = text;
+        let cleaned = clean(text);
+        let mut rest = cleaned.as_str();
         while let Some(ch) = rest.chars().next() {
             if ch == '['
                 && let Some((image, tail)) = take_label(rest, &images, &mut used)
@@ -419,7 +419,6 @@ impl Draft {
 
     /// Puts the moved draft `back` in the box: its pieces under a fresh
     /// serial, the cursor at its end.
-    #[allow(dead_code, reason = "the paste gate holds images in a later task")]
     pub(crate) fn put_back(&mut self, back: Draft) {
         let len = back.pieces.len();
         let next = self.next.max(back.next);

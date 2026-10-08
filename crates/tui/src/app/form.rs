@@ -7,6 +7,7 @@ use contract::events::{CommandAccepted, CommandRejected};
 use super::{App, Effect, Kind, Link, mint, read, session_command};
 use crate::approvals::form::Spot;
 use crate::approvals::{PanelKey, Queue};
+use crate::input::Draft;
 
 impl App {
     /// Sends the shown request's answer. With the link down nothing goes
@@ -42,7 +43,7 @@ impl App {
         let Some(line) = make(&mut self.queue, &id) else {
             return Effect::None;
         };
-        self.pending.insert(id, (Kind::Reply, String::new()));
+        self.pending.insert(id, (Kind::Reply, Draft::default()));
         Effect::Send(vec![line])
     }
 
@@ -81,7 +82,7 @@ impl App {
         };
         let cancel = mint();
         let line = session_command(&cancel, "cancel", &session, None).to_string();
-        self.pending.insert(cancel, (Kind::Cancel, String::new()));
+        self.pending.insert(cancel, (Kind::Cancel, Draft::default()));
         vec![line]
     }
 }

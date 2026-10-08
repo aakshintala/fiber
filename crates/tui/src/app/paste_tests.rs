@@ -610,3 +610,84 @@ fn a_rebound_paste_image_reads_only_in_input_and_steering() {
     assert_eq!(press(&mut app, "ctrl+v"), Effect::None);
     assert_eq!(app.input().expand(), "hi");
 }
+
+/// The id of the single line a send carries.
+fn sent_id(effect: Effect) -> String {
+    match effect {
+        Effect::Send(lines) => {
+            assert_eq!(lines.len(), 1);
+            let line: Value =
+                serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+            line["id"].as_str().unwrap_or_else(|| panic!("no id")).to_owned()
+        }
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_) => panic!("nothing sent"),
+    }
+}
+
+/// Rejects the prompt `id` on the session: its draft comes back.
+fn reject(app: &mut App, id: &str) {
+    let rejected = session_line(
+        S_A,
+        "command_rejected",
+        json!({"command_id": id, "code": "busy", "message": "Busy."}),
+        None,
+    );
+    assert!(app.on_line(rejected).is_empty());
+}
+
+#[test]
+fn a_result_after_enter_and_rejection_is_dropped() {
+    // A6: the rejected prompt's draft comes back with a fresh serial, so
+    // the running ticket's result drops and the gate stays shut until it
+    // does; the next Ctrl+V reads.
+    let mut app = attached();
+    type_text(&mut app, "look");
+    assert_eq!(press(&mut app, "ctrl+v"), Effect::ReadImage(0));
+    let id = sent_id(press(&mut app, "enter"));
+    reject(&mut app, &id);
+    assert_eq!(app.input().expand(), "look");
+    assert_eq!(press(&mut app, "ctrl+v"), Effect::None);
+    app.on_image(0, Ok("AAA".to_owned()));
+    assert_eq!(app.input().expand(), "look");
+    assert!(!app.input().has_image());
+    assert_eq!(press(&mut app, "ctrl+v"), Effect::ReadImage(1));
+}
+
+#[test]
+fn a_result_after_a_steering_selection_and_esc_is_dropped() {
+    // A7: the stash comes back through put_back, with a fresh serial.
+    let mut app = attached();
+    type_text(&mut app, "look");
+    assert_eq!(press(&mut app, "ctrl+v"), Effect::ReadImage(0));
+    select_newest(&mut app);
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert_eq!(app.input().expand(), "look");
+    app.on_image(0, Ok("AAA".to_owned()));
+    assert_eq!(app.input().expand(), "look");
+    assert!(!app.input().has_image());
+    assert_eq!(press(&mut app, "ctrl+v"), Effect::ReadImage(1));
+}
+
+#[test]
+fn a_result_after_an_amend_is_dropped() {
+    // A7b: the same through an amend.
+    let mut app = attached();
+    type_text(&mut app, "look");
+    assert_eq!(press(&mut app, "ctrl+v"), Effect::ReadImage(0));
+    select_newest(&mut app);
+    assert!(matches!(press(&mut app, "enter"), Effect::Send(_)));
+    assert_eq!(app.input().expand(), "look");
+    app.on_image(0, Ok("AAA".to_owned()));
+    assert_eq!(app.input().expand(), "look");
+    assert!(!app.input().has_image());
+    assert_eq!(press(&mut app, "ctrl+v"), Effect::ReadImage(1));
+}
