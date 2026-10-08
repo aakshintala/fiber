@@ -7,8 +7,8 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, MutexGuard};
 use std::time::{Duration, Instant};
 
 use contract::clock::Wake;
@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::extension_tools::LuaTool;
 use crate::{Error, host};
 
-use super::hub::Progress;
+use super::hub::{Hub, Progress};
 use super::{LuaExtension, Next, Phase, Shared, Target};
 
 /// The longest tool name a provider accepts (`docs/mcp.md`, "Tools and
@@ -275,7 +275,8 @@ impl LuaExtension {
     /// it returned, under the tool's timeout, or `None` once `cancel`
     /// stopped it (`docs/tools.md`, "Cancellation"). It runs in the gaps of
     /// the extension's ordered stream, as a provider function does. A
-    /// cancelled call that has not started never runs; one parked on a host
+    /// cancelled call that has not started never runs; one that suspends on
+    /// a host call starts no host work and ends there; one parked on a host
     /// call is dropped, and one parked on `host.exec` returns only once the
     /// run has stopped; one running Lua is stopped by the deadline hook, or
     /// abandoned with the VM past its grace.
@@ -336,6 +337,26 @@ impl ExecAdmit {
     }
 }
 
+impl Hub {
+    /// Admits the host work a suspended callback of the call `id` asks for,
+    /// and returns the lock the work starts under, so no stop or cancel lands
+    /// between the check and the start. A stopped extension admits nothing,
+    /// and `judge` ends its calls. A cancelled call admits nothing and ends
+    /// here, its waiter woken: the thread drops the callback, so nothing
+    /// else would end it.
+    pub(super) fn admit(&self, id: u64) -> Option<MutexGuard<'_, Shared>> {
+        let mut shared = self.lock();
+        if !matches!(shared.phase, Phase::Ready(_)) {
+            return None;
+        }
+        if shared.end_cancelled(id) {
+            self.notify();
+            return None;
+        }
+        Some(shared)
+    }
+}
+
 /// What a tool call's caller does next: as [`Shared::judge`] says, or
 /// `None` once the call was cancelled.
 type Judged = (Option<Next>, Vec<Delivery>);
@@ -362,25 +383,13 @@ impl Shared {
         }
     }
 
-    /// Admits host work once the extension is ready: the check holds the
-    /// admission lock through the spawn, so no abandon lands between them.
-    /// Drive and HTTP workers start through here; exec admits through
-    /// `admit_exec`, which also registers its run.
-    pub(super) fn admit_work(&self) -> bool {
-        matches!(self.phase, Phase::Ready(_))
-    }
-
-    /// Admits an exec run for the call `id` when the extension is ready
-    /// and the call is not cancelled: both checks and registration hold one
-    /// lock, so neither an abandon nor a cancel lands between them. Returns
-    /// the stop receiver the run watches, or `None` when no run starts.
-    pub(super) fn admit_exec(&mut self, id: u64) -> Option<std::sync::mpsc::Receiver<()>> {
-        if !matches!(self.phase, Phase::Ready(_)) || self.cancelled.contains(&id) {
-            return None;
-        }
+    /// Registers an exec run for the call `id`, admitted by [`Hub::admit`]
+    /// under the same lock hold, and returns the stop receiver the run
+    /// watches.
+    pub(super) fn register_exec(&mut self, id: u64) -> std::sync::mpsc::Receiver<()> {
         let (stop, rx) = std::sync::mpsc::channel::<()>();
         self.execs.insert(id, ExecAdmit { stop: Some(stop) });
-        Some(rx)
+        rx
     }
 
     /// Stops the admitted exec run of the call `id`, if any: the sender's

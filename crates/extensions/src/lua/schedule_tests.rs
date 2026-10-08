@@ -1,10 +1,11 @@
 //! `take_parked` (`docs/extensions.md`, "Host calls"): a failed drive
 //! spawn drops exactly the callback `settle` just parked, and nothing else.
 //! `settle` starts no host work for a stopped extension, and a cancel that
-//! lands after a callback returned leaves its result. Exec admission
-//! (`docs/tools.md`, "Cancellation"): a run is admitted only while ready,
-//! its stop reaches the run without the Lua thread, and a cancelled call
-//! waits for its group to empty, even abandoned.
+//! lands after a callback returned leaves its result. Admission
+//! (`docs/tools.md`, "Cancellation"): host work starts only while ready and
+//! never for a cancelled call, which ends there; an exec run's stop reaches
+//! it without the Lua thread, and a cancelled call waits for its group to
+//! empty, even abandoned.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
@@ -28,7 +29,6 @@ fn entry(lua: &mlua::Lua, id: u64) -> Parked {
         wake: None,
         _cancel: None,
         ask: None,
-        exec: false,
     }
 }
 
@@ -169,84 +169,60 @@ fn ready_hub() -> Arc<Hub> {
     hub
 }
 
-/// An exec run is admitted only while the extension is ready: stopping
-/// first admits nothing and registers nothing, so a flipped phase check
-/// admitting while stopped would fail here.
-#[test]
-fn admit_exec_registers_only_while_ready() {
-    let clock = fakes::clock::FakeClock::new();
-    let hub = Hub::new(clock.clone());
+/// A started tool call `id` on `hub`, as `next` leaves it for `settle`.
+fn started(hub: &Hub) -> u64 {
     let mut shared = hub.lock();
     let now = hub.clock().now();
     let id = shared.push(Target::Tool("t".to_owned()), serde_json::Value::Null, now);
-    assert!(shared.admit_exec(id).is_none(), "idle admits no run");
-    assert!(!shared.exec_pending(id), "nothing is registered");
-    shared.phase = Phase::Stopped(Error::Stopped {
-        extension: "fiber.test/stopped".to_owned(),
-    });
-    assert!(shared.admit_exec(id).is_none(), "stopped admits no run");
-    assert!(!shared.exec_pending(id), "nothing is registered");
-    shared.phase = Phase::Ready(Default::default());
-    let rx = shared.admit_exec(id);
-    assert!(rx.is_some(), "ready admits the run");
-    assert!(shared.exec_pending(id), "the run is registered");
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: None,
+            parked: false,
+        },
+    );
+    id
 }
 
-/// A cancel signal delivered before exec admission leaves no run to spawn:
-/// admitting despite the cancelled mark would fail the first assertion.
+/// Host work is admitted only while the extension is ready: a flipped
+/// phase check admitting while idle or stopped would fail here.
 #[test]
-fn cancel_before_exec_admission_starts_no_run() {
-    let hub = ready_hub();
-    let now = hub.clock().now();
-    let id = {
-        let mut shared = hub.lock();
-        let id = shared.push(Target::Tool("t".to_owned()), serde_json::Value::Null, now);
-        shared.calls.insert(
-            id,
-            Progress::Started {
-                deadline: None,
-                parked: false,
-            },
-        );
-        id
-    };
-    let (cancelled_tx, cancelled_rx) = std::sync::mpsc::channel();
-    let cancelling_hub = Arc::clone(&hub);
-    let cancelling = std::thread::spawn(move || {
-        cancelling_hub.lock().cancel_call(id);
-        cancelled_tx.send(()).expect("cancellation is signalled");
+fn admit_holds_only_while_ready() {
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    let id = started(&hub);
+    assert!(hub.admit(id).is_none(), "idle admits no work");
+    hub.lock().phase = Phase::Stopped(Error::Stopped {
+        extension: "fiber.test/stopped".to_owned(),
     });
-    cancelled_rx
-        .recv_timeout(Duration::from_secs(5))
-        .expect("cancellation is ordered before admission");
-    cancelling.join().expect("the cancellation thread ends");
+    assert!(hub.admit(id).is_none(), "stopped admits no work");
+    hub.lock().phase = Phase::Ready(Default::default());
+    assert!(hub.admit(id).is_some(), "ready admits work");
+}
 
-    let mut shared = hub.lock();
+/// A cancelled call admits no host work and ends cancelled there, while an
+/// uncancelled one is admitted and left started: admitting despite the
+/// mark, or leaving the cancelled call started, would fail here.
+#[test]
+fn admit_ends_a_cancelled_call_and_admits_the_rest() {
+    let hub = ready_hub();
+    let kept = started(&hub);
+    let cancelled = started(&hub);
+    hub.lock().cancel_call(cancelled);
     assert!(
-        shared.admit_exec(id).is_none(),
+        hub.admit(cancelled).is_none(),
         "cancelled work is not admitted"
     );
-    assert!(
-        !shared.exec_pending(id),
-        "no stop sender or run is registered"
-    );
-}
-
-/// Host work is admitted only while the extension is ready: the drive and
-/// HTTP workers share this check, so a flipped check admitting while
-/// stopped would fail here.
-#[test]
-fn admit_work_holds_only_while_ready() {
-    let clock = fakes::clock::FakeClock::new();
-    let hub = Hub::new(clock);
+    assert!(hub.admit(kept).is_some(), "uncancelled work is admitted");
     let mut shared = hub.lock();
-    assert!(!shared.admit_work(), "idle admits no work");
-    shared.phase = Phase::Stopped(Error::Stopped {
-        extension: "fiber.test/stopped".to_owned(),
-    });
-    assert!(!shared.admit_work(), "stopped admits no work");
-    shared.phase = Phase::Ready(Default::default());
-    assert!(shared.admit_work(), "ready admits work");
+    let now = hub.clock().now();
+    assert!(
+        matches!(shared.calls.get(&kept), Some(Progress::Started { .. })),
+        "the admitted call stays started"
+    );
+    assert!(
+        judged(&mut shared, cancelled, now).is_none(),
+        "the cancelled call ends cancelled"
+    );
 }
 
 /// Stopping the extension stops its admitted exec without the Lua thread:
@@ -259,7 +235,7 @@ fn stopping_an_extension_stops_its_admitted_exec() {
     let mut shared = hub.lock();
     let now = hub.clock().now();
     let id = shared.push(Target::Tool("t".to_owned()), serde_json::Value::Null, now);
-    let rx = shared.admit_exec(id).expect("ready admits the run");
+    let rx = shared.register_exec(id);
     assert!(
         matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
         "no stop is signalled yet"
@@ -295,7 +271,7 @@ fn cancelling_a_started_call_stops_its_admitted_exec() {
             parked: true,
         },
     );
-    let rx = shared.admit_exec(id).expect("ready admits the run");
+    let rx = shared.register_exec(id);
     assert!(
         matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
         "no stop is signalled yet"
@@ -357,7 +333,7 @@ fn a_cancelled_abandoned_call_waits_for_its_exec() {
             parked: true,
         },
     );
-    shared.admit_exec(id).expect("ready admits the run");
+    shared.register_exec(id);
     shared.cancel_call(id);
     shared.phase = Phase::Stopped(Error::Stopped {
         extension: "fiber.test/stopped".to_owned(),
@@ -408,7 +384,7 @@ fn an_uncancelled_abandoned_call_with_exec_still_fails() {
             parked: true,
         },
     );
-    shared.admit_exec(id).expect("ready admits the run");
+    shared.register_exec(id);
     shared.phase = Phase::Stopped(Error::Stopped {
         extension: "fiber.test/stopped".to_owned(),
     });
@@ -428,14 +404,14 @@ impl Drop for SettleGuard {
     }
 }
 
-/// An abandon between the phase check and the spawn starts no host work:
-/// the admission rechecks see Stopped, so nothing parks, nothing registers
-/// and neither marker stays absent by luck. Each settle runs on its own
-/// ready hub, and one hook abandons whichever hub the calling tool belongs
-/// to, ordered by the hook call itself, with no sleeps. Without the
-/// rechecks the spawns would park the callbacks, failing the first asserts.
+/// An abandon before admission starts no host work: `Hub::admit` sees
+/// Stopped, so nothing parks, nothing registers and neither marker stays
+/// absent by luck. Each settle runs on its own ready hub, and one hook
+/// abandons whichever hub the calling tool belongs to, ordered by the hook
+/// call itself, with no sleeps. Without the phase check the spawns would
+/// park the callbacks, failing the first asserts.
 #[test]
-fn abandon_between_check_and_spawn_starts_no_host_work() {
+fn an_abandon_before_admission_starts_no_host_work() {
     let dir = fakes::TempDir::new("fiber-schedule-race");
     let exec_marker = dir.path().join("exec-started");
     let drive_marker = dir.path().join("drive-started");
@@ -559,4 +535,78 @@ impl contract::extension::Drive for TouchDrive {
             Ok(()) | Err(_) => {}
         }
     }
+}
+
+/// A cancel ordered before admission by the settle hook starts no host
+/// work and ends the call: nothing parks, no run registers, neither marker
+/// appears, and the waiter finds the call cancelled rather than started.
+/// Without the cancelled check in `Hub::admit`, the drive would start and
+/// the exec would park; without its ending, the call would stay started.
+#[test]
+fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
+    let dir = fakes::TempDir::new("fiber-schedule-cancel");
+    let exec_marker = dir.path().join("exec-started");
+    let drive_marker = dir.path().join("drive-started");
+    let hub = ready_hub();
+    hub.set_driver(Arc::new(TouchDrive {
+        marker: drive_marker.clone(),
+    }) as Arc<dyn contract::extension::Drive>);
+    pause_settle({
+        let hub = Arc::clone(&hub);
+        Arc::new(move |target: &Target| {
+            if let Target::Tool(name) = target
+                && let Some(id) = name.strip_prefix("cancel-").and_then(|id| id.parse().ok())
+            {
+                hub.lock().cancel_call(id);
+            }
+        })
+    });
+    let _guard = SettleGuard;
+    let lua = mlua::Lua::new();
+    let requests = [
+        Request::Exec(exec::ExecRequest {
+            program: "sh".to_owned(),
+            args: vec![
+                "-c".to_owned(),
+                format!("touch '{}'", exec_marker.display()),
+            ],
+            cwd: dir.path().to_path_buf(),
+            cap: 1024,
+        }),
+        Request::Drive(crate::host::DriveRequest {
+            command: "prompt".to_owned(),
+            args: serde_json::Map::new(),
+        }),
+    ];
+    for request in requests {
+        let id = started(&hub);
+        let target = Target::Tool(format!("cancel-{id}"));
+        let mut parked = Vec::new();
+        settle(
+            &start_in(dir.path()),
+            &hub,
+            &mut parked,
+            id,
+            &target,
+            Ok(Step::Suspend {
+                thread: entry(&lua, id).thread,
+                deadline: None,
+                timeout: Duration::from_millis(100),
+                target: target.clone(),
+                request,
+            }),
+        );
+        assert!(parked.is_empty(), "nothing is parked");
+        let shared = hub.lock();
+        assert!(!shared.exec_pending(id), "no run is registered");
+        assert!(
+            matches!(shared.calls.get(&id), Some(Progress::Cancelled)),
+            "the call ended cancelled"
+        );
+    }
+    assert!(!exec_marker.exists(), "no exec starts for a cancelled call");
+    assert!(
+        !drive_marker.exists(),
+        "no drive starts for a cancelled call"
+    );
 }

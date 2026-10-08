@@ -41,9 +41,6 @@ struct Parked {
     /// The `host.ask` question this callback waits on, if any: plain data,
     /// removed from the registry by whoever answers it first.
     ask: Option<contract::RequestId>,
-    /// It waits on a `host.exec` run, which a cancel ends only once the run
-    /// has stopped and delivered.
-    exec: bool,
 }
 
 /// What the thread does next, outside the lock.
@@ -186,12 +183,12 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
             return None;
         }
         if let Some(pos) = parked.iter().position(|p| shared.cancelled.contains(&p.id)) {
-            // A cancelled callback goes, and its host call with it. A
-            // `host.exec` run is asked to stop when its sender drops, and
-            // the call ends once that run delivers.
+            // A cancelled callback goes, and its host call with it. The call
+            // ends once no admitted `host.exec` run is going; a run still
+            // going ends it when it delivers.
             let p = parked.swap_remove(pos);
             let unsent = p.ask.as_ref().and_then(|request| shared.decline(request));
-            if !p.exec {
+            if !shared.exec_pending(p.id) {
                 shared.end_cancelled(p.id);
             }
             hub.notify();
@@ -347,24 +344,23 @@ fn settle(
             request,
         }) => (thread, target, deadline, timeout, request),
     };
-    {
-        let shared = hub.lock();
-        // A stopped extension starts no host work: its callback, even one
-        // still running on an abandoned thread, has no way out but the host.
-        if !matches!(shared.phase, Phase::Ready(_)) {
-            return;
-        }
-    }
     #[cfg(test)]
     settle_hook(&target);
-    let exec = matches!(request, Request::Exec(_));
+    // Read before the admission lock below takes it.
+    let driver = hub.driver();
+    // Every host call is admitted here: a stopped extension, whose callback
+    // may still run on an abandoned thread, or a cancelled call starts
+    // nothing. Work that spawns starts under this lock hold; the rest drops
+    // it first and is stopped with its parked callback.
+    let Some(mut shared) = hub.admit(id) else {
+        return;
+    };
     let deliver: Deliver = {
         let hub = Arc::clone(hub);
         Arc::new(move |reply| hub.deliver(id, reply))
     };
     let (cancel, wake) = match request {
         Request::Ask(interaction) => {
-            let mut shared = hub.lock();
             if !shared.answerable || shared.sealed || shared.disposed {
                 // nobody_to_answer_returns_declined_at_once: as headless
                 // approvals write no request.
@@ -393,7 +389,6 @@ fn settle(
                     wake: None,
                     _cancel: None,
                     ask: Some(request_id),
-                    exec: false,
                 });
                 if let Some(progress) = shared.calls.get_mut(&id) {
                     *progress = Progress::Started {
@@ -409,8 +404,6 @@ fn settle(
             (None, None)
         }
         Request::Drive(request) => {
-            // Read before the admission lock below takes it.
-            let driver = hub.driver();
             match driver {
                 Some(driver) => {
                     // The door runs the command elsewhere, as `host.http`
@@ -421,12 +414,6 @@ fn settle(
                     // returns, and a reply for an unparked id is dropped.
                     // No off-thread wait to cancel: the parked deadline
                     // bounds the call, and a late answer is dropped.
-                    // Parked and spawned under one lock hold with the phase
-                    // recheck, so no abandon lands between them.
-                    let mut shared = hub.lock();
-                    if !shared.admit_work() {
-                        return;
-                    }
                     parked.push(Parked {
                         id,
                         thread,
@@ -436,7 +423,6 @@ fn settle(
                         wake: None,
                         _cancel: None,
                         ask: None,
-                        exec: false,
                     });
                     if let Some(progress) = shared.calls.get_mut(&id) {
                         *progress = Progress::Started {
@@ -448,8 +434,6 @@ fn settle(
                     let extension = name.to_owned();
                     let command = request.command;
                     let args = request.args;
-                    // Spawned under the admission lock, so the worker never
-                    // starts after Stopped: `stop` waits for this lock.
                     let spawned =
                         thread::Builder::new()
                             .name(format!("drive {name}"))
@@ -488,6 +472,7 @@ fn settle(
                 None => {
                     // drive_without_a_driver_is_closing: only a sealed
                     // extension sees this; it raises `closing`.
+                    drop(shared);
                     deliver(Reply::Drive(Err((
                         contract::ErrorCode::Closing,
                         "host.drive: the session is closing".to_owned(),
@@ -497,17 +482,10 @@ fn settle(
             }
         }
         Request::Http(request) => {
-            // Read before the admission lock below takes it.
-            let script = hub.host_script();
-            if let Some(script) = script {
+            if let Some(script) = hub.host_script() {
+                drop(shared);
                 deliver(Reply::Http(script.http(request.case_value())));
             } else {
-                // Parked and spawned under one lock hold with the phase
-                // recheck, so no abandon lands between them.
-                let mut shared = hub.lock();
-                if !shared.admit_work() {
-                    return;
-                }
                 parked.push(Parked {
                     id,
                     thread,
@@ -517,7 +495,6 @@ fn settle(
                     wake: None,
                     _cancel: None,
                     ask: None,
-                    exec: false,
                 });
                 if let Some(progress) = shared.calls.get_mut(&id) {
                     *progress = Progress::Started {
@@ -525,8 +502,6 @@ fn settle(
                         parked: true,
                     };
                 }
-                // Spawned under the admission lock, so the worker never
-                // starts after Stopped: `stop` waits for this lock.
                 let spawned = thread::Builder::new()
                     .name(format!("http {name}"))
                     .spawn(move || deliver(Reply::Http(host::perform(&request))));
@@ -547,7 +522,10 @@ fn settle(
             }
             (None, None)
         }
-        Request::Callback { port } => (oauth::listen(port, &deliver), None),
+        Request::Callback { port } => {
+            drop(shared);
+            (oauth::listen(port, &deliver), None)
+        }
         Request::Exec(request) => {
             let hub_exec = Arc::clone(hub);
             // A run inside a tool call is what the call's declared effects
@@ -559,9 +537,8 @@ fn settle(
                 args: request.args.clone(),
                 cwd: request.cwd.clone(),
             });
-            // Read before the admission lock below takes it.
-            let script = hub.host_script();
-            if let Some(script) = script {
+            if let Some(script) = hub.host_script() {
+                drop(shared);
                 let result = script.exec(request.case_value()).map(|reply| {
                     let ran = exec::Ran {
                         exit_code: Some(reply.code),
@@ -576,14 +553,9 @@ fn settle(
                 deliver(Reply::Exec(result));
                 (None, None)
             } else {
-                // Admitted under one lock hold with the phase check, so no
-                // abandon lands between them; parked there too. The stop
-                // sender stays in the hub, so the stop reaches the run
-                // without the Lua thread, and the run's end clears it.
-                let mut shared = hub.lock();
-                let Some(cancel_rx) = shared.admit_exec(id) else {
-                    return;
-                };
+                // The stop sender stays in the hub, so the stop reaches the
+                // run without the Lua thread, and the run's end clears it.
+                let cancel_rx = shared.register_exec(id);
                 parked.push(Parked {
                     id,
                     thread,
@@ -593,7 +565,6 @@ fn settle(
                     wake: None,
                     _cancel: None,
                     ask: None,
-                    exec: true,
                 });
                 if let Some(progress) = shared.calls.get_mut(&id) {
                     *progress = Progress::Started {
@@ -602,8 +573,6 @@ fn settle(
                     };
                 }
                 let clock = hub.clock_handle();
-                // Spawned under the admission lock, so the worker never
-                // starts after Stopped: `stop` waits for this lock.
                 let spawned =
                     thread::Builder::new()
                         .name(format!("exec {name}"))
@@ -644,6 +613,7 @@ fn settle(
             }
         }
         Request::Lock => {
+            drop(shared);
             // A command, hook, timer or tool holds no provider credential: calling
             // `refresh` there is an error in the calling code, raised as
             // a string.
@@ -686,8 +656,11 @@ fn settle(
             };
             (cancel, None)
         }
-        // Past the end of time is no sleep.
-        Request::Sleep(d) => (None, hub.clock().now().checked_add(d)),
+        Request::Sleep(d) => {
+            drop(shared);
+            // Past the end of time is no sleep.
+            (None, hub.clock().now().checked_add(d))
+        }
     };
     parked.push(Parked {
         id,
@@ -696,7 +669,6 @@ fn settle(
         deadline,
         timeout,
         wake,
-        exec,
         _cancel: cancel,
         ask: None,
     });
@@ -713,9 +685,9 @@ fn settle(
 #[cfg(test)]
 type SettleHook = Arc<dyn Fn(&Target) + Send + Sync>;
 
-/// A test's pause inside `settle`, between the stopped-phase check and the
-/// admission of host work: it runs without the hub lock, so the test may
-/// abandon the VM there, forcing the race without sleeps. The hook sees
+/// A test's pause inside `settle`, after the callback suspended and before
+/// its host work is admitted: it runs without the hub lock, so the test may
+/// abandon the VM or cancel the call there, without sleeps. The hook sees
 /// only calls for the tool it names; every other call passes through.
 #[cfg(test)]
 static SETTLE_HOOK: std::sync::Mutex<Option<SettleHook>> = std::sync::Mutex::new(None);
