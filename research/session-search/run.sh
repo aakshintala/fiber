@@ -9,9 +9,9 @@
 # each after evicting every file of the corpus. One scan per process.
 # Each row is the median of its five runs.
 #
-# Cold runs need GNU dd (`iflag=nocache`, Linux); without it the cold rows
-# are skipped. Eviction is confirmed with `fincore` when it is installed;
-# without it the cold rows still run and `resident_bytes` reads `unconfirmed`.
+# Cold runs need Linux and python3; the helper residency.py evicts each corpus
+# file and checks that no page of it is resident; a sample whose eviction is
+# not confirmed is not scanned, and the script fails after 3 attempts.
 #
 # Each scan runs under `/usr/bin/time` so its peak RSS lands in the trailing
 # `peak_rss_bytes` column (median of the five runs' peaks, in bytes): GNU
@@ -26,6 +26,7 @@
 # kept between runs; delete it when done. Needs about 9 GB of free disk.
 set -euo pipefail
 cd "$(dirname "$0")"
+RESIDENCY="$PWD/residency.py"
 
 cargo build --release
 BIN=$PWD/target/release/session-search
@@ -37,7 +38,7 @@ MANY="retry budget"
 NONE="zqxv no such text"
 
 cold=no
-if dd --version >/dev/null 2>&1; then
+if [ "$(uname -s)" = Linux ] && command -v python3 >/dev/null 2>&1; then
   cold=yes
 fi
 
@@ -53,18 +54,21 @@ TIMEFILE=$(mktemp)
 trap 'rm -f "$TIMEFILE"' EXIT
 
 evict() {
-  find "$1" -type f -print0 |
-    xargs -0 -n 64 sh -c 'for f; do dd if="$f" iflag=nocache count=0 status=none; done' _
+  python3 -I "$RESIDENCY" evict "$1"
 }
 
-# Bytes of the corpus still in the page cache, or "unconfirmed".
 resident() {
-  if command -v fincore >/dev/null 2>&1; then
-    find "$1" -type f -print0 | xargs -0 fincore --bytes --noheadings --output RES |
-      awk '{ total += $1 } END { print total + 0 }'
-  else
-    echo unconfirmed
-  fi
+  python3 -I "$RESIDENCY" resident "$1"
+}
+
+evict_confirmed() {
+  for _ in 1 2 3; do
+    evict "$1"
+    if [ "$(resident "$1")" = 0 ]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 median() { sort -n | awk '{ v[NR] = $1 } END { print v[int((NR + 1) / 2)] }'; }
@@ -94,16 +98,18 @@ for corpus in 300:25 1300:25 4000:25 1300:0; do
       if [ "$cache" = warm ]; then "$BIN" scan "$home" "$query" >/dev/null; fi
       for _ in $(seq "$RUNS"); do
         if [ "$cache" = cold ]; then
-          evict "$home"
-          left=$(resident "$home")
+          evict_confirmed "$home" || { echo "eviction not confirmed: $home" >&2; exit 1; }
+          left=confirmed
         fi
         case "$rss_mode" in
           gnu)
-            read -r ms hits _ < <(/usr/bin/time -f '%M' "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
+            out=$(/usr/bin/time -f '%M' "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
+            read -r ms hits _ <<<"$out"
             rss=$(( $(cat "$TIMEFILE") * 1024 ))
             ;;
           bsd)
-            read -r ms hits _ < <(/usr/bin/time -l "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
+            out=$(/usr/bin/time -l "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
+            read -r ms hits _ <<<"$out"
             rss=$(awk '/maximum resident set size/ { print $1 }' "$TIMEFILE")
             ;;
         esac
