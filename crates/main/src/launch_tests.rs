@@ -175,3 +175,31 @@ fn global_and_project_keys_merge_as_written() {
             .unwrap_or_default()
     );
 }
+
+#[test]
+fn attention_switches_come_from_config_with_defaults() {
+    let dir = fakes::TempDir::new("fiber-launch-attention");
+    let workspace = dir.path().to_path_buf();
+    let plain = config(dir.path(), &workspace, Vec::new());
+    let unset = launch(workspace.clone(), &workspace, &plain);
+    assert!(unset.attention.notification);
+    assert!(unset.attention.bell);
+    assert!(unset.attention.title);
+    for (key, check) in [
+        ("tui.attention.notification=false", (false, true, true)),
+        ("tui.attention.bell=false", (true, false, true)),
+        ("tui.attention.title=false", (true, true, false)),
+    ] {
+        let set_config = config(dir.path(), &workspace, vec![key.to_owned()]);
+        let set = launch(workspace.clone(), &workspace, &set_config);
+        assert_eq!(
+            (
+                set.attention.notification,
+                set.attention.bell,
+                set.attention.title
+            ),
+            check,
+            "{key}"
+        );
+    }
+}

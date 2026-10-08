@@ -14,12 +14,32 @@
 # first writes one line to it (`printf 'held\n' > "$dir/held-<tool>"`),
 # then blocks on `read -r _ < "$dir/release-<tool>"`, then answers. No
 # sleep, no polling. A tool without a release FIFO answers at once. A
-# `notify-<tool>`
-# file makes the server send `notifications/tools/list_changed` before it
-# answers that tool's call. A `fail-start` file makes the server exit 1
-# before reading anything.
+# `notify-<tool>` file makes the server send `notifications/tools/list_changed`
+# before it answers that tool's call. A `tools.json` file holds the `tools/list` answer, and makes
+# `initialize` advertise the tools capability; one holding exactly
+# `error` makes the server a prompt-only one: no tools capability, and
+# `tools/list` answers JSON-RPC error -32601, as a server without tools
+# support would. A `fail-start` file makes the server exit 1 before
+# reading anything.
 #
-# It answers `initialize`, `tools/list`, `tools/call` and `ping`, appends
+# A `prompts.json` file, a JSON array of prompt objects, each with `name`
+# and optionally `description` and `arguments`, makes `initialize`
+# advertise the prompts capability (`"prompts":{}` among its
+# `capabilities`) and `prompts/list` answer `{"prompts":<file>}`. A
+# `prompts.json` holding exactly `error` makes `prompts/list` answer
+# JSON-RPC error -32603 instead. `prompts/get` reads the last `"name"` on the line (params encode with sorted keys,
+# so the top-level `name` follows `arguments`, as for `tools/call`) and
+# answers `prompt-<name>.json` as the `result`; a result file holding
+# exactly `hang` is never answered, one holding exactly `exit` makes the
+# server exit without answering, and a missing file answers -32602
+# "Unknown prompt". A `cursor-forever` file makes every `tools/list`
+# and `prompts/list` answer carry `"nextCursor":"again"`, at once. When
+# the file holds a method name (`tools/list` or `prompts/list`), only
+# that method's list pages forever: one handshake pages tools before
+# prompts, so an endless prompt list needs tools pages to end.
+#
+# It answers `initialize`, `tools/list`, `tools/call`, `prompts/list`,
+# `prompts/get` and `ping`, appends
 # every received line to `requests.log`, and writes its working directory
 # to `cwd.txt` and its pid to `pid.txt`. Anything else shaped as a request
 # gets JSON-RPC error -32601; notifications get no answer.
@@ -49,6 +69,15 @@ pick() {
     printf '%s' "$1" | sed -n "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p"
 }
 
+pages_again() {
+    # $1: the list method. Whether its answers carry another page: an
+    # empty `cursor-forever` file pages every list, one holding a method
+    # name only that method's list.
+    [ -f "$dir/cursor-forever" ] || return 1
+    [ -z "$(cat "$dir/cursor-forever")" ] && return 0
+    [ "$(cat "$dir/cursor-forever")" = "$1" ]
+}
+
 id_of() {
     printf '%s' "$1" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p'
 }
@@ -65,11 +94,63 @@ while IFS= read -r line; do
     id="$(id_of "$line")"
     case "$method" in
         initialize)
-            answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"serverInfo\":{\"name\":\"fx\",\"version\":\"0.0.0\"}}}"
+            caps=""
+            if [ -f "$dir/tools.json" ] && [ "$(cat "$dir/tools.json")" != "error" ]; then
+                caps='"tools":{}'
+            fi
+            if [ -f "$dir/prompts.json" ]; then
+                if [ -n "$caps" ]; then
+                    caps="$caps,"
+                fi
+                caps="$caps\"prompts\":{}"
+            fi
+            answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{$caps},\"serverInfo\":{\"name\":\"fx\",\"version\":\"0.0.0\"}}}"
             ;;
         tools/list)
-            tools="$(cat "$dir/tools.json")"
-            answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":$tools}}"
+            if [ -f "$dir/tools.json" ] && [ "$(cat "$dir/tools.json")" = "error" ]; then
+                answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32601,\"message\":\"Method not found: tools/list\"}}"
+            else
+                if [ -f "$dir/tools.json" ]; then
+                    tools="$(cat "$dir/tools.json")"
+                else
+                    tools="[]"
+                fi
+                if pages_again "tools/list"; then
+                    answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":$tools,\"nextCursor\":\"again\"}}"
+                else
+                    answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":$tools}}"
+                fi
+            fi
+            ;;
+        prompts/list)
+            if [ "$(cat "$dir/prompts.json")" = "error" ]; then
+                answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32603,\"message\":\"Internal error\"}}"
+            else
+                prompts="$(cat "$dir/prompts.json")"
+                if pages_again "prompts/list"; then
+                    answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"prompts\":$prompts,\"nextCursor\":\"again\"}}"
+                else
+                    answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"prompts\":$prompts}}"
+                fi
+            fi
+            ;;
+        prompts/get)
+            # The last `"name"` on the line: our client encodes params
+            # with sorted keys, so the prompt's top-level `name` sorts
+            # after `arguments` and any `name` inside them.
+            name="$(printf '%s' "$line" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')"
+            result="$dir/prompt-$name.json"
+            if [ -f "$result" ]; then
+                if [ "$(cat "$result")" = "exit" ]; then
+                    exit 0
+                fi
+                if [ "$(cat "$result")" != "hang" ]; then
+                    body="$(cat "$result")"
+                    answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$body}"
+                fi
+            elif [ -n "$id" ]; then
+                answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32602,\"message\":\"Unknown prompt: $name\"}}"
+            fi
             ;;
         tools/call)
             # The last `"name"` on the line: our client encodes params
