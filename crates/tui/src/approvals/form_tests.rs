@@ -799,15 +799,60 @@ fn left_and_right_on_next_and_chat_move_between_tabs() {
 
 #[test]
 fn left_and_right_on_every_submit_row_move_between_tabs() {
-    for ups in 0..3 {
-        let mut form = two_choices();
-        press(&mut form, &[Key::Tab, Key::Tab, Key::Down]);
-        for _ in 0..ups {
-            press(&mut form, &[Key::Up]);
-        }
-        arrows(&mut form, &[false]);
-        assert_eq!(tabs(&form), "A  [B]  Submit", "{ups}");
-    }
+    // `Tab` from the last question lands on Send; `Up` from Send lands on
+    // the note, `Down` on Chat.
+    let mut form = two_choices();
+    press(&mut form, &[Key::Tab, Key::Tab]);
+    arrows(&mut form, &[false]);
+    assert_eq!(tabs(&form), "A  [B]  Submit");
+    let mut form = two_choices();
+    press(&mut form, &[Key::Tab, Key::Tab, Key::Down]);
+    arrows(&mut form, &[false]);
+    assert_eq!(tabs(&form), "A  [B]  Submit");
+}
+
+#[test]
+fn left_and_right_on_the_note_move_the_note_cursor_and_keep_the_tab() {
+    let mut form = two_choices();
+    press(&mut form, &[Key::Tab, Key::Tab, Key::Up]);
+    type_text(&mut form, "ab");
+    assert_eq!(cursor(&form), r#"› note: "ab""#);
+    arrows(&mut form, &[false]);
+    assert_eq!(tabs(&form), "A  B  [Submit]");
+    type_text(&mut form, "x");
+    assert_eq!(cursor(&form), r#"› note: "axb""#);
+    arrows(&mut form, &[false, false, false, false]);
+    arrows(&mut form, &[true, true, true, true, true, true]);
+    assert_eq!(tabs(&form), "A  B  [Submit]");
+    type_text(&mut form, "z");
+    assert_eq!(cursor(&form), r#"› note: "axbz""#);
+    arrows(&mut form, &[false]);
+    type_text(&mut form, "w");
+    assert_eq!(cursor(&form), r#"› note: "axbwz""#);
+}
+
+#[test]
+fn shift_tab_and_tab_leave_the_note_row() {
+    let mut form = two_choices();
+    press(&mut form, &[Key::Tab, Key::Tab, Key::Up]);
+    press(&mut form, &[Key::BackTab]);
+    assert_eq!(tabs(&form), "A  [B]  Submit");
+    press(&mut form, &[Key::Tab]);
+    assert_eq!(tabs(&form), "A  B  [Submit]");
+    assert_eq!(cursor(&form), "› Submit");
+}
+
+#[test]
+fn backspace_on_the_note_removes_the_char_before_the_cursor() {
+    let mut form = two_choices();
+    press(&mut form, &[Key::Tab, Key::Tab, Key::Up]);
+    type_text(&mut form, "abc");
+    arrows(&mut form, &[false]);
+    press(&mut form, &[Key::Backspace]);
+    assert_eq!(cursor(&form), r#"› note: "ac""#);
+    arrows(&mut form, &[false, false, false]);
+    press(&mut form, &[Key::Backspace]);
+    assert_eq!(cursor(&form), r#"› note: "ac""#);
 }
 
 #[test]
