@@ -113,9 +113,12 @@ impl Relays {
     /// Transfers the kept level `line` onto `session`'s existing relay:
     /// sends it under a hub-minted id the relay thread drops, and keeps it
     /// for the session. A relay already holding the level is left alone.
-    /// True when nothing more is needed: the level is kept, and either no
-    /// relay exists or the existing one carries it. False when no relay
-    /// exists and the level is only kept: the caller connects one.
+    /// The id registers before the write: the running relay answers even
+    /// an instant reply after the registration, never before it, so its
+    /// acknowledgement never leaks to the client. True when nothing more
+    /// is needed: the level is kept, and either no relay exists or the
+    /// existing one carries it. False when no relay exists and the level
+    /// is only kept: the caller connects one.
     pub(crate) fn transfer(&mut self, session: &str, line: &Map<String, Value>) -> bool {
         if self.subscription(session).is_some() {
             return true;
@@ -135,10 +138,11 @@ impl Relays {
             let Some(bytes) = line_bytes(&line) else {
                 return true;
             };
+            lock(&entry.replayed).push(minted.clone());
             if write_all(&entry.writer, &bytes).is_err() {
+                lock(&entry.replayed).retain(|muted| *muted != minted);
                 entry.epoch
             } else {
-                lock(&entry.replayed).push(minted);
                 return true;
             }
         };

@@ -573,3 +573,107 @@ fn transfer_drops_a_dead_relay_and_reports_it() {
         "the level is kept anyway"
     );
 }
+
+#[test]
+fn a_transfer_registers_before_the_session_can_answer() {
+    use std::io::{BufRead, BufReader};
+    use std::time::Duration;
+    const DEADLINE: Duration = Duration::from_secs(10);
+    const SID: &str = "s_0123456789abcdef";
+    let held = fakes::TempDir::new("rt");
+    let hub = std::sync::Arc::new(hub(&held));
+    // The relay thread reads the session end; the fake bridges the entry
+    // writer's end back to it and answers every subscribe instantly.
+    let (relay_end, fake_write_end) = UnixStream::pair().unwrap();
+    let (entry_end, fake_read_end) = UnixStream::pair().unwrap();
+    fake_read_end.set_read_timeout(Some(DEADLINE)).unwrap();
+    let relays: std::sync::Arc<std::sync::Mutex<Relays>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Relays::default()));
+    let replayed: Replayed = Replayed::default();
+    let kept: Kept = Kept::default();
+    let (client_write, client_read) = UnixStream::pair().unwrap();
+    client_read.set_read_timeout(Some(DEADLINE)).unwrap();
+    let client_writer = std::sync::Arc::new(std::sync::Mutex::new(client_write));
+    let epoch = crate::connection::lock(&relays).mint();
+    let thread = std::thread::Builder::new()
+        .name("hub-relay".to_owned())
+        .spawn({
+            let hub = std::sync::Arc::clone(&hub);
+            let writer = std::sync::Arc::clone(&client_writer);
+            let relays = std::sync::Arc::clone(&relays);
+            let replayed = std::sync::Arc::clone(&replayed);
+            let kept = std::sync::Arc::clone(&kept);
+            move || {
+                relay(
+                    RelayThread {
+                        epoch,
+                        replayed,
+                        kept,
+                    },
+                    SID,
+                    relay_end,
+                    &hub,
+                    &writer,
+                    &relays,
+                )
+            }
+        })
+        .unwrap();
+    crate::connection::lock(&relays).entries.push(Relay {
+        session: SID.to_owned(),
+        epoch,
+        writer: entry_end,
+        kept,
+        replayed,
+        thread: None,
+    });
+    let fake = std::thread::Builder::new()
+        .name("instant-session".to_owned())
+        .spawn(move || {
+            let mut read = BufReader::new(fake_read_end);
+            let mut buf = String::new();
+            read.read_line(&mut buf).unwrap();
+            let command: Value = serde_json::from_str(buf.trim_end()).unwrap();
+            let id = command.get("id").cloned().unwrap();
+            let mut ack = serde_json::to_vec(&json!({
+                "kind": "command_accepted", "ts": 1, "schema_version": 1,
+                "payload": {"command_id": id},
+            }))
+            .unwrap();
+            ack.push(b'\n');
+            let mut write = fake_write_end.try_clone().unwrap();
+            use std::io::Write;
+            write.write_all(&ack).unwrap();
+            write.flush().unwrap();
+            // A live line behind the acknowledgement: the client must read
+            // this first, never the hub-only acknowledgement.
+            let status =
+                b"{\"kind\":\"session_status\",\"ts\":1,\"schema_version\":1,\"payload\":{}}\n";
+            write.write_all(status).unwrap();
+            write.flush().unwrap();
+            // Hold the session open until the entry goes away.
+            buf.clear();
+            match read.read_line(&mut buf) {
+                Ok(_) | Err(_) => {}
+            }
+        })
+        .unwrap();
+    let line = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    assert!(crate::connection::lock(&relays).transfer(SID, &line));
+    let mut read = BufReader::new(client_read);
+    let mut first = String::new();
+    read.read_line(&mut first)
+        .expect("the relay forwards a live line before the deadline");
+    let first: Value = serde_json::from_str(first.trim_end()).unwrap();
+    assert_eq!(
+        first["kind"], "session_status",
+        "the transferred acknowledgement never reaches the client: {first:?}"
+    );
+    // Tear down: dropping the entry ends both threads.
+    crate::connection::lock(&relays).entries.clear();
+    fake.join().unwrap();
+    thread.join().unwrap();
+}
