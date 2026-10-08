@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::fake::FakeStarter;
+use crate::{Started, Starter};
 use contract::events::SessionStatus;
 
 /// `wall()` on a fake clock nobody advances, in milliseconds.
@@ -44,7 +45,7 @@ impl Temp {
         Self { dir, held }
     }
 
-    fn hub(&self, starter: FakeStarter) -> Arc<Hub> {
+    fn hub(&self, starter: impl Starter + 'static) -> Arc<Hub> {
         let timed: Arc<dyn Clock> = fakes::clock::FakeClock::new();
         Arc::new(Hub::new(
             &self.dir,
@@ -405,6 +406,128 @@ fn start_without_worktree_starts_in_place() {
     assert_eq!(id, "c_1");
     assert!(result.get("session_id").is_some());
     assert_eq!(starter.started_worktrees(), [false]);
+}
+
+/// A starter that records each `start`'s overrides and binds through
+/// [`FakeStarter`].
+struct Recording {
+    inner: FakeStarter,
+    seen: Arc<Mutex<Vec<Vec<String>>>>,
+}
+
+impl Recording {
+    fn new(home: &Path) -> Self {
+        Self {
+            inner: FakeStarter::bind_and_hold(home),
+            seen: Arc::default(),
+        }
+    }
+}
+
+impl Starter for Recording {
+    fn start(
+        &self,
+        id: &SessionId,
+        workspace: &Path,
+        model: Option<&str>,
+        overrides: &[&str],
+        worktree: bool,
+    ) -> std::io::Result<Box<dyn Started>> {
+        lock(&self.seen).push(overrides.iter().map(|text| text.to_string()).collect());
+        self.inner.start(id, workspace, model, &[], worktree)
+    }
+
+    fn resume(&self, id: &SessionId, workspace: &Path) -> std::io::Result<Box<dyn Started>> {
+        self.inner.resume(id, workspace)
+    }
+
+    fn rewind(
+        &self,
+        id: &SessionId,
+        workspace: &Path,
+        from: &SessionId,
+    ) -> std::io::Result<Box<dyn Started>> {
+        self.inner.rewind(id, workspace, from)
+    }
+}
+
+#[test]
+fn start_with_overrides_reaches_the_starter_in_order() {
+    let temp = Temp::new();
+    let starter = Recording::new(&temp.dir);
+    let seen = starter.seen.clone();
+    let hub = temp.hub(starter);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command(
+        "c_1",
+        "start",
+        json!({"workspace": workspace, "overrides": ["retry.attempts=2", "model=fake/m2"]}),
+    ));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_1");
+    assert!(result.get("session_id").is_some());
+    assert_eq!(
+        lock(&seen).clone(),
+        [vec![
+            "retry.attempts=2".to_owned(),
+            "model=fake/m2".to_owned()
+        ]]
+    );
+}
+
+#[test]
+fn start_with_empty_or_missing_overrides_starts_with_none() {
+    for (id, with_empty) in [("c_1", true), ("c_2", false)] {
+        let temp = Temp::new();
+        let starter = Recording::new(&temp.dir);
+        let seen = starter.seen.clone();
+        let hub = temp.hub(starter);
+        let mut client = Client::connect(&hub);
+        client.hello();
+        let workspace = temp.workspace();
+        let mut args = json!({"workspace": workspace});
+        if with_empty {
+            args["overrides"] = json!([]);
+        }
+        client.send(&command(id, "start", args));
+        let (echoed, result) = accepted(&client.next("the acknowledgement"));
+        assert_eq!(echoed, id);
+        assert!(result.get("session_id").is_some());
+        assert_eq!(lock(&seen).clone(), [Vec::<String>::new()]);
+    }
+}
+
+#[test]
+fn start_with_malformed_overrides_is_invalid_arguments() {
+    let temp = Temp::new();
+    let starter = Recording::new(&temp.dir);
+    let seen = starter.seen.clone();
+    let hub = temp.hub(starter);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    let bad = [
+        json!("retry.attempts=2"),
+        json!([1]),
+        json!(["retry.attempts=2", 2]),
+        json!([Value::Null]),
+        Value::Null,
+        json!({}),
+    ];
+    for (n, overrides) in bad.into_iter().enumerate() {
+        let id = format!("c_{}", n + 1);
+        client.send(&command(
+            &id,
+            "start",
+            json!({"workspace": workspace, "overrides": overrides}),
+        ));
+        let (code, echoed, _) = rejected(&client.next("the rejection"));
+        assert_eq!(code, "invalid_arguments", "{overrides}");
+        assert_eq!(echoed.as_deref(), Some(id.as_str()), "{overrides}");
+    }
+    assert!(lock(&seen).is_empty());
 }
 
 /// A pre-bound fake session: it records what the hub forwards and answers
