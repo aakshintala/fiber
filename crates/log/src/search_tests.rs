@@ -29,7 +29,7 @@ use super::*;
 use crate::Log;
 
 /// A Fiber home whose sessions are written with [`Log`].
-struct Home {
+pub(super) struct Home {
     dir: TempDir,
     clock: Arc<FakeClock>,
     /// How many times the identity function ran.
@@ -37,7 +37,7 @@ struct Home {
 }
 
 impl Home {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             dir: TempDir::new("log-search-scan"),
             clock: FakeClock::new(),
@@ -45,17 +45,17 @@ impl Home {
         }
     }
 
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         self.dir.path()
     }
 
-    fn sessions(&self, key: &str) -> PathBuf {
+    pub(super) fn sessions(&self, key: &str) -> PathBuf {
         self.path().join("projects").join(key).join("sessions")
     }
 
     /// A session `id` under `key` started in `workspace`, holding
     /// `text_completed` lines with `texts`.
-    fn session(&self, key: &str, id: &str, workspace: &str, texts: &[&str]) -> PathBuf {
+    pub(super) fn session(&self, key: &str, id: &str, workspace: &str, texts: &[&str]) -> PathBuf {
         let log = Log::create(
             &self.sessions(key),
             SessionId(id.into()),
@@ -73,7 +73,7 @@ impl Home {
 
     /// The scanner for a session in `workspace`. Workspaces under `/b` are
     /// project `/b`, under `/c` project `/c`; every other is project `/a`.
-    fn scanner(&self, workspace: &str) -> SessionScan {
+    pub(super) fn scanner(&self, workspace: &str) -> SessionScan {
         let calls = Arc::clone(&self.calls);
         let identity: Identity = Arc::new(move |path: &Path| {
             calls.fetch_add(1, AtomicOrdering::SeqCst);
@@ -87,7 +87,7 @@ impl Home {
         SessionScan::new(self.path(), Path::new(workspace), identity)
     }
 
-    fn calls(&self) -> usize {
+    pub(super) fn calls(&self) -> usize {
         self.calls.load(AtomicOrdering::SeqCst)
     }
 }
@@ -116,7 +116,7 @@ fn started(workspace: &str) -> Event {
     )
 }
 
-fn query(text: &str, all_projects: bool, limit: usize) -> Query {
+pub(super) fn query(text: &str, all_projects: bool, limit: usize) -> Query {
     Query {
         text: text.into(),
         all_projects,
@@ -134,7 +134,7 @@ fn sessions_of(found: &Found) -> Vec<&str> {
     ids
 }
 
-fn raw(dir: &Path, bytes: &[u8]) {
+pub(super) fn raw(dir: &Path, bytes: &[u8]) {
     let mut log = OpenOptions::new()
         .append(true)
         .open(dir.join("events.jsonl"))
@@ -146,7 +146,7 @@ fn set_mode(path: &Path, mode: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }
 
-fn hit(label: Label, ts: u64, session: &str, seq: u64) -> Hit {
+pub(super) fn hit(label: Label, ts: u64, session: &str, seq: u64) -> Hit {
     Hit {
         session_id: SessionId(session.into()),
         name: String::new(),
@@ -166,13 +166,13 @@ fn keys(hits: &[Hit]) -> Vec<(Label, u64, String, u64)> {
 }
 
 /// A [`Cancel`] that turns true after `after` checks.
-struct After {
-    checks: AtomicUsize,
+pub(super) struct After {
+    pub(super) checks: AtomicUsize,
     after: usize,
 }
 
 impl After {
-    fn new(after: usize) -> Self {
+    pub(super) fn new(after: usize) -> Self {
         Self {
             checks: AtomicUsize::new(0),
             after,
@@ -525,22 +525,20 @@ fn an_entry_that_cannot_be_read_is_a_problem() {
     // (a mode on the parent fails the listing itself), so the shared
     // per-entry handling is tested with an error value directly. Both
     // directory listings route through it.
-    let mut out = Collect::new(10);
+    let mut problems = Vec::new();
     let dir = Path::new("/projects/-a/sessions");
     let error = std::io::Error::other("boom");
-    assert!(entry(dir, Err(error), &mut out).is_none());
-    assert_eq!(
-        out.problems,
-        ["Could not read: /projects/-a/sessions: boom"]
-    );
+    assert!(entry(dir, Err(error), &mut |problem| problems.push(problem)).is_none());
+    assert_eq!(problems, ["Could not read: /projects/-a/sessions: boom"]);
     // An entry that reads passes through untouched.
     let home = Home::new();
     fs::write(home.path().join("f"), "").unwrap();
     let mut entries = fs::read_dir(home.path()).unwrap();
     let next = entries.next().unwrap();
     let path = next.as_ref().unwrap().path();
-    assert_eq!(entry(dir, next, &mut out).map(|e| e.path()), Some(path));
-    assert_eq!(out.problems.len(), 1);
+    let entry = entry(dir, next, &mut |problem| problems.push(problem));
+    assert_eq!(entry.map(|e| e.path()), Some(path));
+    assert_eq!(problems.len(), 1);
 }
 
 #[test]
@@ -668,7 +666,7 @@ fn a_directory_whose_first_line_is_not_session_started_is_not_a_session() {
 
 /// A scanner whose identity function cancels `cancel` when it is asked
 /// about `/a/one`, so the cancel lands while that session is read.
-fn cancelling_scanner(home: &Home, cancel: &CancelToken) -> SessionScan {
+pub(super) fn cancelling_scanner(home: &Home, cancel: &CancelToken) -> SessionScan {
     let fire = cancel.clone();
     let identity: Identity = Arc::new(move |path: &Path| {
         if path == Path::new("/a/one") {
@@ -688,7 +686,12 @@ fn a_cancel_is_seen_before_the_next_session() {
     fs::remove_file(next.join("events.jsonl")).unwrap();
     symlink(first.join("events.jsonl"), next.join("events.jsonl")).unwrap();
     let cancel = CancelToken::new();
-    let found = cancelling_scanner(&home, &cancel).scan(&query("needle", false, 10), &cancel);
+    // One worker: a second could read the linked log before the cancel.
+    let found = cancelling_scanner(&home, &cancel).search(
+        &query("needle", false, 10),
+        &cancel,
+        Ok(NonZeroUsize::MIN),
+    );
     assert_eq!(found, Found::default());
 }
 
@@ -736,8 +739,8 @@ fn a_cancel_is_seen_before_the_next_project() {
     let counted = After::new(usize::MAX);
     let found = scan.scan(&query("needle", true, 10), &counted);
     assert_eq!((found.total, found.problems.len()), (1, 1));
-    // The last check of an uncancelled scan is the one before the link.
-    let checks = counted.checks.load(AtomicOrdering::SeqCst);
-    let found = scan.scan(&query("needle", true, 10), &After::new(checks - 1));
-    assert_eq!((found.total, found.problems), (1, vec![]));
+    // The scan's check, the one before `-a`, then the one before the link:
+    // every project is listed before any session is read.
+    let found = scan.scan(&query("needle", true, 10), &After::new(2));
+    assert_eq!(found, Found::default());
 }
