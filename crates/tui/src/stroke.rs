@@ -6,27 +6,11 @@
 //! is lowercase with the modifiers in `ctrl`, `shift`, `alt`, `super` order;
 //! the shown form follows the bindings table's style.
 
-// debt: T1 interim; T2's parser constructs these types. Upgrade trigger: T2.
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "debt: T1 interim; T2's parser constructs these types."
-    )
-)]
 /// The modifiers held with a stroke: Ctrl, Shift, Alt (option) and Super
 /// (command).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub(crate) struct Mods(u8);
 
-// debt: T1 interim; T2's parser constructs these types. Upgrade trigger: T2.
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "debt: T1 interim; T2's parser constructs these types."
-    )
-)]
 impl Mods {
     /// No modifiers.
     pub(crate) const NONE: Mods = Mods(0);
@@ -45,14 +29,6 @@ impl Mods {
     }
 }
 
-// debt: T1 interim; T2's parser combines modifiers. Upgrade trigger: T2.
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "debt: T1 interim; T2's parser combines modifiers."
-    )
-)]
 impl std::ops::BitOr for Mods {
     type Output = Mods;
 
@@ -61,14 +37,6 @@ impl std::ops::BitOr for Mods {
     }
 }
 
-// debt: T1 interim; T2's parser constructs these codes. Upgrade trigger: T2.
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "debt: T1 interim; T2's parser constructs these codes."
-    )
-)]
 /// One key without its modifiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Code {
@@ -110,14 +78,6 @@ pub(crate) enum Code {
     F(u8),
 }
 
-// debt: T1 interim; T2's parser constructs strokes. Upgrade trigger: T2.
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "debt: T1 interim; T2's parser constructs strokes."
-    )
-)]
 /// One key and its modifiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Stroke {
@@ -213,8 +173,17 @@ impl Stroke {
                         let mut folded = ch.to_lowercase();
                         match (folded.next(), folded.next()) {
                             (Some(one), None) if one != ch => {
-                                mods = mods | Mods::SHIFT;
-                                Code::Char(one)
+                                // Fold only when shift round-trips: the
+                                // uppercase of the lowercase is the letter
+                                // again, so `name` and the shown form agree
+                                // on it (`ß` stays `ß`, `ẞ` stays `ẞ`).
+                                let mut back = one.to_uppercase();
+                                if (back.next(), back.next()) == (Some(ch), None) {
+                                    mods = mods | Mods::SHIFT;
+                                    Code::Char(one)
+                                } else {
+                                    Code::Char(ch)
+                                }
                             }
                             _ => Code::Char(ch),
                         }

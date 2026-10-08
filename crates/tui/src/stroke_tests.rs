@@ -59,6 +59,10 @@ fn names_parse() {
         ("+", plain(Code::Char('+'))),
         ("ctrl++", modified(Code::Char('+'), Mods::CTRL)),
         ("f", plain(Code::Char('f'))),
+        // Shift folds only when it round-trips: `ß` stays `ß` and `ẞ`
+        // stays `ẞ`, since the uppercase of `ß` is two characters.
+        ("ß", plain(Code::Char('ß'))),
+        ("ẞ", plain(Code::Char('ẞ'))),
         ("ctrl+t", modified(Code::Char('t'), Mods::CTRL)),
         ("control+t", modified(Code::Char('t'), Mods::CTRL)),
         ("alt+p", modified(Code::Char('p'), Mods::ALT)),

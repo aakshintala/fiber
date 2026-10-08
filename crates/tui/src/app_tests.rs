@@ -751,7 +751,9 @@ fn keys_feed_into_the_draft() {
     let mut parser = Parser::default();
     let mut app = app();
     for event in parser.feed(b"hi\x7f!") {
-        if let crate::keys::Event::Key(key) = event {
+        if let crate::keys::Event::Stroke(stroke) = event
+            && let Some(crate::keys::Event::Key(key)) = crate::keys::default_event(&stroke)
+        {
             assert_eq!(app.on_key(key, now), Effect::None);
         }
     }

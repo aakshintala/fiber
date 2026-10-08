@@ -204,6 +204,13 @@ impl<B: Backend> Loop<B> {
             Input::Bytes(bytes) => {
                 for event in self.parser.feed(&bytes) {
                     let effect = match event {
+                        Event::Stroke(stroke) => match crate::keys::default_event(&stroke) {
+                            Some(Event::Key(key)) => self.app.on_key(key, self.clock.now()),
+                            Some(Event::Edit(edit)) => self.app.on_edit(edit),
+                            Some(Event::Stroke(_) | Event::Mouse(_) | Event::Reply(_)) | None => {
+                                Effect::None
+                            }
+                        },
                         Event::Key(key) => self.app.on_key(key, self.clock.now()),
                         Event::Edit(edit) => self.app.on_edit(edit),
                         Event::Mouse(mouse) => {
