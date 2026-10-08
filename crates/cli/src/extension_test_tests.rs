@@ -23,7 +23,7 @@ use serde_json::json;
 
 use super::{
     ChildEnvironment, RunOptions, RunTimeouts, child_command, discover_cases, extension_test_with,
-    process_group_id, should_kill_group, summary,
+    process_group_id, summary,
 };
 
 const TEST_WAIT: Duration = Duration::from_secs(15);
@@ -324,14 +324,6 @@ fn zero_exit_requires_one_ok_verdict_and_no_reason_lines() {
         "FAIL reason\n  extra reason\nFAIL wrong verdict\n  case child exited with exit code 0 without a successful verdict\n0 passed, 2 failed\n"
     );
     assert!(err.is_empty());
-}
-
-#[test]
-fn group_cleanup_covers_each_reap_and_remaining_group_state() {
-    assert!(should_kill_group(true, false));
-    assert!(should_kill_group(false, true));
-    assert!(should_kill_group(true, true));
-    assert!(!should_kill_group(false, false));
 }
 
 #[test]

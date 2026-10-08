@@ -130,15 +130,17 @@ fn extension_test_with(
     let mut failed = 0;
     for case in cases {
         let fallback_name = case_name(&case);
-        let outcome = run_case(&package, &case, &fallback_name, fiber, options);
-        if outcome.passed {
-            passed += 1;
-            writeln!(out, "ok {}", outcome.name).unwrap_or(());
-        } else {
-            failed += 1;
-            writeln!(out, "FAIL {}", outcome.name).unwrap_or(());
-            for reason in outcome.reasons {
-                writeln!(out, "  {}", reason.trim()).unwrap_or(());
+        match run_case(&package, &case, &fallback_name, fiber, options) {
+            CaseOutcome::Passed { name } => {
+                passed += 1;
+                writeln!(out, "ok {name}").unwrap_or(());
+            }
+            CaseOutcome::Failed { name, reasons } => {
+                failed += 1;
+                writeln!(out, "FAIL {name}").unwrap_or(());
+                for reason in reasons {
+                    writeln!(out, "  {}", reason.trim()).unwrap_or(());
+                }
             }
         }
     }
@@ -170,10 +172,18 @@ fn discover_cases(package: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(cases)
 }
 
-struct CaseOutcome {
-    name: String,
-    passed: bool,
-    reasons: Vec<String>,
+enum CaseOutcome {
+    Passed { name: String },
+    Failed { name: String, reasons: Vec<String> },
+}
+
+impl CaseOutcome {
+    fn failed(name: &str, reason: String) -> Self {
+        Self::Failed {
+            name: name.to_owned(),
+            reasons: vec![reason],
+        }
+    }
 }
 
 fn case_name(path: &Path) -> String {
@@ -189,11 +199,7 @@ fn run_case(
     fiber: &Path,
     options: &RunOptions,
 ) -> CaseOutcome {
-    let outcome = |reason: String| CaseOutcome {
-        name: fallback_name.to_owned(),
-        passed: false,
-        reasons: vec![reason],
-    };
+    let outcome = |reason: String| CaseOutcome::failed(fallback_name, reason);
     let directory = match RunDirectory::new(&options.temp_root) {
         Ok(directory) => directory,
         Err(error) => return outcome(format!("temporary case directory: {error}")),
@@ -227,9 +233,8 @@ fn run_case(
             ChildOutcome::TimedOut { text } => {
                 let lines: Vec<_> = text.lines().collect();
                 let (name, _) = parse_verdict(&lines, fallback_name);
-                CaseOutcome {
+                CaseOutcome::Failed {
                     name,
-                    passed: false,
                     reasons: vec![format!("did not finish within {:?}", options.timeouts.case)],
                 }
             }
@@ -240,11 +245,7 @@ fn run_case(
                     && reasons.is_empty()
                     && lines.first().is_some_and(|line| line.starts_with("ok "));
                 if passed {
-                    CaseOutcome {
-                        name,
-                        passed: true,
-                        reasons: Vec::new(),
-                    }
+                    CaseOutcome::Passed { name }
                 } else {
                     let reasons = if reasons.is_empty() {
                         vec![format!(
@@ -254,20 +255,23 @@ fn run_case(
                     } else {
                         reasons
                     };
-                    CaseOutcome {
-                        name,
-                        passed: false,
-                        reasons,
-                    }
+                    CaseOutcome::Failed { name, reasons }
                 }
             }
         }
     })();
     if let Err(error) = directory.cleanup() {
-        result.passed = false;
-        result
-            .reasons
-            .push(format!("removing temporary case files: {error}"));
+        let reason = format!("removing temporary case files: {error}");
+        result = match result {
+            CaseOutcome::Passed { name } => CaseOutcome::Failed {
+                name,
+                reasons: vec![reason],
+            },
+            CaseOutcome::Failed { name, mut reasons } => {
+                reasons.push(reason);
+                CaseOutcome::Failed { name, reasons }
+            }
+        };
     }
     result
 }
@@ -377,7 +381,7 @@ fn run_child(
         .spawn(move || {
             let result = lock(&child_for_reaper)
                 .take()
-                .map(wait_child)
+                .map(|mut child: Child| child.wait())
                 .unwrap_or_else(|| Err(io::Error::other("case child handle was already taken")));
             let _sent = send.send(result);
             wake.wake();
@@ -435,7 +439,7 @@ fn run_child(
     )?;
     let group_remains =
         group_alive(group).map_err(|error| format!("checking the case process group: {error}"))?;
-    if should_kill_group(status.is_none(), group_remains) {
+    if status.is_none() || group_remains {
         signal_group(group, Signal::KILL)
             .map_err(|error| format!("sending SIGKILL to case group: {error}"))?;
     }
@@ -455,10 +459,6 @@ fn run_child(
     Ok(ChildOutcome::TimedOut {
         text: read_output(stdout)?,
     })
-}
-
-fn wait_child(mut child: Child) -> io::Result<ExitStatus> {
-    child.wait()
 }
 
 fn read_output(path: &Path) -> Result<String, String> {
@@ -550,10 +550,6 @@ fn group_alive(group: u32) -> io::Result<bool> {
 
 /// Refuses a process-group id that could reach processes outside this case
 /// (`docs/testing.md`, "Running tests").
-fn should_kill_group(status_missing: bool, group_remains: bool) -> bool {
-    status_missing || group_remains
-}
-
 fn process_group_id(group: u32) -> io::Result<Pid> {
     if group <= 1 {
         return Err(io::Error::new(
