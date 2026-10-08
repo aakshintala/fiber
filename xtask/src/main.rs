@@ -92,8 +92,9 @@ fn run(args: &[String]) -> Result<bool, String> {
             println!("package_specs={}", package_specs.join(" "));
             println!("libraries={}", libraries.join(" "));
             println!("library_specs={}", library_specs.join(" "));
-            if selection.packages().iter().any(|package| package == "main") {
-                let extension_packages = select::extension_packages(&selection, Path::new("."))?;
+            if let Some(extension_packages) =
+                select::extension_packages(&selection, Path::new("."))?
+            {
                 println!("extension_packages={}", extension_packages.join(" "));
             }
             Ok(true)

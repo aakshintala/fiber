@@ -95,7 +95,7 @@ const MUTANT_SHARDS: u64 = 6;
 /// Crates whose tests read a first-party package under `providers/` or
 /// `extensions/` (`docs/ci.md`, "Selection"); sorted. Checked against the
 /// sources by `package_reader_mismatches`.
-const PACKAGE_READERS: &[&str] = &["config", "extensions", "main"];
+const PACKAGE_READERS: &[&str] = &["config", "main"];
 /// The package whose tests are the binary-level tests (`docs/ci.md`,
 /// "Selection"): the `fiber` binary.
 const BINARY_TESTS: &str = "main";
@@ -336,13 +336,13 @@ pub(crate) fn classify(files: &[String], members: &Members) -> Selection {
 pub(crate) fn extension_packages(
     selection: &Selection,
     root: &Path,
-) -> Result<Vec<String>, String> {
+) -> Result<Option<Vec<String>>, String> {
     if !selection
         .packages()
         .iter()
         .any(|package| package == BINARY_TESTS)
     {
-        return Ok(Vec::new());
+        return Ok(None);
     }
 
     let mut packages = BTreeSet::new();
@@ -387,7 +387,7 @@ pub(crate) fn extension_packages(
             }
         }
     }
-    Ok(packages.into_iter().collect())
+    Ok(Some(packages.into_iter().collect()))
 }
 
 fn classify_with(

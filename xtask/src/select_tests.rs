@@ -1311,20 +1311,8 @@ fn main_reads_a_package() -> RustFile {
     )
 }
 
-fn extensions_reads_a_package() -> RustFile {
-    package_src(
-        "extensions",
-        "crates/extensions/tests/openrouter_cost.rs",
-        "fn package() -> PathBuf {\n    PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../providers/openrouter\")\n}\n",
-    )
-}
-
 fn package_ok_files() -> Vec<RustFile> {
-    vec![
-        config_reads_a_package(),
-        extensions_reads_a_package(),
-        main_reads_a_package(),
-    ]
+    vec![config_reads_a_package(), main_reads_a_package()]
 }
 
 /// `members()` with the `tools` and `xtask` crates: only the package-reader
@@ -1370,11 +1358,7 @@ fn an_unlisted_crate_that_reads_a_package_fails() {
 #[test]
 fn a_listed_crate_with_no_reading_source_fails() {
     assert_eq!(
-        package_reader_mismatches(
-            &[config_reads_a_package(), extensions_reads_a_package()],
-            &package_members()
-        )
-        .unwrap(),
+        package_reader_mismatches(&[config_reads_a_package()], &package_members()).unwrap(),
         ["main: listed as reading a first-party package, but no source reads one"]
     );
 }
@@ -1558,7 +1542,11 @@ fn extension_case_repo() -> crate::test_dir::TestDir {
     root.write("providers/acme/tests/case.json", "{}");
     root.write("extensions/alpha/tests/case.json", "{}");
     root.write("providers/no-cases/tests/notes.md", "not a case");
+    root.write("providers/no-tests/extension.json", "{}");
+    root.write("providers/nested-only/tests/sub/case.json", "{}");
+    root.write("providers/not-a-package", "not a directory");
     root.write("extensions/alpha/tests/nested/ignored.json", "{}");
+    std::fs::create_dir(root.path().join("providers/no-cases/tests/directory.json")).unwrap();
     root
 }
 
@@ -1577,7 +1565,11 @@ fn loop_change_selects_all_direct_case_packages_in_sorted_order() {
     assert!(selection.packages().iter().any(|package| package == "main"));
     assert_eq!(
         extension_packages(&selection, root.path()).unwrap(),
-        strings(&["extensions/alpha", "providers/acme", "providers/openrouter"])
+        Some(strings(&[
+            "extensions/alpha",
+            "providers/acme",
+            "providers/openrouter"
+        ]))
     );
 }
 
@@ -1586,11 +1578,7 @@ fn a_diff_without_binary_tests_selects_no_extension_packages() {
     let root = extension_case_repo();
     let selection = classify(&strings(&["xtask/src/x.rs"]), &package_members());
     assert!(!selection.packages().iter().any(|package| package == "main"));
-    assert!(
-        extension_packages(&selection, root.path())
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(extension_packages(&selection, root.path()).unwrap(), None);
 }
 
 #[test]
@@ -1602,7 +1590,11 @@ fn first_party_package_change_selects_every_package_with_cases() {
     );
     assert_eq!(
         extension_packages(&selection, root.path()).unwrap(),
-        strings(&["extensions/alpha", "providers/acme", "providers/openrouter"])
+        Some(strings(&[
+            "extensions/alpha",
+            "providers/acme",
+            "providers/openrouter"
+        ]))
     );
 }
 
@@ -1610,9 +1602,25 @@ fn first_party_package_change_selects_every_package_with_cases() {
 fn only_direct_json_files_make_a_case_package() {
     let root = extension_case_repo();
     let selection = selection_with_main_for_loop_change();
-    assert!(
-        !extension_packages(&selection, root.path())
-            .unwrap()
-            .contains(&"providers/no-cases".to_owned())
+    let packages = extension_packages(&selection, root.path())
+        .unwrap()
+        .unwrap();
+    for ignored in [
+        "providers/no-cases",
+        "providers/no-tests",
+        "providers/nested-only",
+    ] {
+        assert!(!packages.contains(&ignored.to_owned()), "{packages:?}");
+    }
+}
+
+#[test]
+fn a_missing_package_root_group_is_empty() {
+    let root = crate::test_dir::TestDir::new("extension-packages-no-group");
+    root.write("providers/acme/tests/case.json", "{}");
+    let selection = selection_with_main_for_loop_change();
+    assert_eq!(
+        extension_packages(&selection, root.path()).unwrap(),
+        Some(strings(&["providers/acme"]))
     );
 }
