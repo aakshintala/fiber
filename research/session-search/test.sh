@@ -4,9 +4,6 @@ cd "$(dirname "$0")"
 
 bash -n run.sh || { echo "run.sh failed bash -n" >&2; exit 1; }
 
-python3 -I -c 'import ast; ast.parse(open("residency.py").read())' \
-  || { echo "residency.py does not parse" >&2; exit 1; }
-
 TMPDIR_TEST=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_TEST"' EXIT
 

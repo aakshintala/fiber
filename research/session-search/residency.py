@@ -2,25 +2,19 @@
 
 import ctypes
 import os
+import stat
 import sys
 
 
 def _files(root):
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            d for d in dirnames if not os.path.islink(os.path.join(dirpath, d))
-        ]
         for name in filenames:
             path = os.path.join(dirpath, name)
-            if os.path.islink(path):
-                continue
             try:
-                st = os.stat(path)
+                st = os.lstat(path)
             except OSError:
                 continue
-            if (st.st_mode & 0o170000) != 0o100000:
-                continue
-            if st.st_size == 0:
+            if not stat.S_ISREG(st.st_mode) or st.st_size == 0:
                 continue
             yield path
 
@@ -52,8 +46,6 @@ def resident_bytes(root):
         fd = os.open(path, os.O_RDONLY)
         try:
             size = os.fstat(fd).st_size
-            if size == 0:
-                continue
             pages = (size + page - 1) // page
             length = pages * page
             addr = libc.mmap(None, length, 1, 1, fd, 0)
@@ -65,9 +57,7 @@ def resident_bytes(root):
                 if libc.mincore(addr, length, ctypes.addressof(vec)) != 0:
                     err = ctypes.get_errno()
                     raise OSError(err, os.strerror(err), path)
-                for i in range(pages):
-                    if vec[i] & 1:
-                        total += page
+                total += page * sum(v & 1 for v in vec)
             finally:
                 libc.munmap(addr, length)
         finally:
