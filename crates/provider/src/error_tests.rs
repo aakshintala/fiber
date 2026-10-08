@@ -1,7 +1,9 @@
 //! The code a quota, billing, rate-limit or unknown-model reply maps to:
 //! the documented quota shapes (`research/provider-errors/quota.md`, one
-//! fixture each in `research/provider-errors/documented/`) and the recorded
-//! replies (`research/retry-signals`, `research/provider-errors`).
+//! fixture each in `research/provider-errors/documented/`), the recorded
+//! replies (`research/retry-signals`, `research/provider-errors`), and the
+//! ChatGPT/codex usage-limit shape (`research/codex-responses-probe`,
+//! "The usage-limit error body").
 
 use std::path::Path;
 
@@ -502,5 +504,127 @@ fn a_failed_status_records_the_asked_wait_in_milliseconds_rounded_up() {
             "absent for {seconds:?}: {value}"
         );
         assert!(value.get("retry_after").is_none(), "{value}");
+    }
+}
+
+// unprobed: shape from pi `parseErrorResponse` and codex-cli strings,
+// `research/codex-responses-probe`, "The usage-limit error body".
+fn usage_limit_body(field: &str, code: &str) -> String {
+    format!(
+        r#"{{"error":{{"{field}":"{code}","message":"The usage limit has been reached","plan_type":"plus","resets_at":1791396000}}}}"#
+    )
+}
+
+#[test]
+fn a_usage_limit_code_is_quota_exceeded_at_any_status() {
+    for code in ["usage_limit_reached", "usage_not_included"] {
+        for field in ["code", "type"] {
+            for http in [400, 401, 403, 429, 500] {
+                let body = usage_limit_body(field, code);
+                assert_eq!(
+                    status(http, &body, None),
+                    ErrorCode::QuotaExceeded,
+                    "{field}={code} at {http}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn only_the_usage_limit_codes_are_quota_exceeded() {
+    // `rate_limit_exceeded` stays a rate limit, as a code or a type.
+    for field in ["code", "type"] {
+        let body =
+            format!(r#"{{"error":{{"{field}":"rate_limit_exceeded","message":"Slow down."}}}}"#);
+        assert_eq!(status(429, &body, None), ErrorCode::RateLimited, "{field}");
+    }
+    // Near misses keep their old codes.
+    assert_eq!(
+        status(429, r#"{"error":{"code":"usage_limit"}}"#, None),
+        ErrorCode::RateLimited,
+    );
+    assert_eq!(
+        status(429, r#"{"error":{"type":"usage_limit_reached "}}"#, None),
+        ErrorCode::RateLimited,
+    );
+    assert_eq!(
+        status(429, r#"{"error":{"message":"usage_limit_reached"}}"#, None),
+        ErrorCode::RateLimited,
+    );
+    assert_eq!(
+        status(429, r#"{"error":{"code":402}}"#, None),
+        ErrorCode::RateLimited,
+    );
+    assert_eq!(status(429, "not json", None), ErrorCode::RateLimited,);
+}
+
+#[test]
+fn a_usage_limit_failure_names_the_reset_time() {
+    let failed = Error::Status {
+        status: 429,
+        body: usage_limit_body("type", "usage_limit_reached"),
+        retry_after: Some(7200.0),
+        should_retry: None,
+        url: String::new(),
+    }
+    .failure("codex", &Secrets::default());
+    assert_eq!(failed.code, ErrorCode::QuotaExceeded);
+    assert_eq!(failed.retry_after_ms, Some(7_200_000));
+    assert_eq!(
+        failed.message,
+        "codex reached its usage limit; it resets at 2026-10-07 18:00 UTC."
+    );
+    assert_eq!(
+        failed.provider.unwrap().message,
+        "The usage limit has been reached"
+    );
+}
+
+#[test]
+fn a_usage_limit_failure_without_a_reset_names_no_time() {
+    for body in [
+        r#"{"error":{"code":"usage_limit_reached","message":"Limited."}}"#.to_owned(),
+        r#"{"error":{"code":"usage_limit_reached","resets_at":"tomorrow"}}"#.to_owned(),
+        r#"{"error":{"code":"usage_limit_reached","resets_at":-1}}"#.to_owned(),
+        r#"{"error":{"code":"usage_limit_reached","resets_at":1791396000.5}}"#.to_owned(),
+    ] {
+        let failed = Error::Status {
+            status: 400,
+            body,
+            retry_after: None,
+            should_retry: None,
+            url: String::new(),
+        }
+        .failure("codex", &Secrets::default());
+        assert_eq!(failed.code, ErrorCode::QuotaExceeded);
+        assert_eq!(failed.retry_after_ms, None);
+        assert_eq!(failed.message, "codex reached its usage limit.");
+    }
+}
+
+#[test]
+fn reset_times_name_the_civil_date_in_utc() {
+    // Through the failure message, from `resets_at` alone: no clock is read.
+    for (resets_at, day) in [
+        (0_u64, "1970-01-01 00:00 UTC"),
+        (1_835_395_200_u64, "2028-02-29 00:00 UTC"),
+        (1_798_761_540_u64, "2026-12-31 23:59 UTC"),
+        (4_102_444_800_u64, "2100-01-01 00:00 UTC"),
+    ] {
+        let body =
+            format!(r#"{{"error":{{"code":"usage_not_included","resets_at":{resets_at}}}}}"#);
+        let failed = Error::Status {
+            status: 403,
+            body,
+            retry_after: None,
+            should_retry: None,
+            url: String::new(),
+        }
+        .failure("codex", &Secrets::default());
+        assert_eq!(
+            failed.message,
+            format!("codex reached its usage limit; it resets at {day}.")
+        );
     }
 }

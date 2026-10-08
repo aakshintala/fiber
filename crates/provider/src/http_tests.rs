@@ -772,3 +772,98 @@ fn a_signer_without_credentials_reports_none() {
             .is_empty()
     );
 }
+
+// unprobed: shape from pi `parseErrorResponse` and codex-cli strings,
+// `research/codex-responses-probe`, "The usage-limit error body".
+const USAGE_LIMIT_BODY: &str = r#"{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"plus","resets_at":1791396000}}"#;
+const USAGE_DATE: &str = "Wed, 07 Oct 2026 16:00:00 GMT";
+
+/// The status failure one `post_with` against `server` returns.
+fn failed_status(server: &fakes::ProviderServer) -> crate::Error {
+    let (sent, _) = posted(
+        format!("{}/v1", server.url()),
+        &[],
+        b"{}",
+        None,
+        &std::sync::Arc::default(),
+        None,
+    );
+    let Err(err) = sent.map(|_| ()) else {
+        panic!("a 429 was not a status failure");
+    };
+    err
+}
+
+#[test]
+fn a_usage_limit_body_waits_from_its_date_header_to_its_reset() {
+    let server = fakes::ProviderServer::start([
+        fakes::Response::status(429, USAGE_LIMIT_BODY).header("date", USAGE_DATE),
+        fakes::Response::status(429, USAGE_LIMIT_BODY).header("date", USAGE_DATE),
+    ])
+    .unwrap();
+    let crate::Error::Status { retry_after, .. } = failed_status(&server) else {
+        panic!("not a status failure");
+    };
+    // `resets_at` 18:00 minus `Date` 16:00, in seconds.
+    assert_eq!(retry_after, Some(7200.0));
+    assert_eq!(
+        failed_status(&server).code(),
+        contract::ErrorCode::QuotaExceeded
+    );
+}
+
+#[test]
+fn a_retry_after_header_wins_over_the_usage_reset() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(429, USAGE_LIMIT_BODY)
+        .header("date", USAGE_DATE)
+        .header("retry-after", "7")])
+    .unwrap();
+    let crate::Error::Status { retry_after, .. } = failed_status(&server) else {
+        panic!("not a status failure");
+    };
+    assert_eq!(retry_after, Some(7.0));
+}
+
+#[test]
+fn a_usage_limit_without_a_usable_date_sets_no_wait() {
+    let bodies = [
+        ("no date", USAGE_LIMIT_BODY, None),
+        ("bad date", USAGE_LIMIT_BODY, Some("not a date")),
+        (
+            "reset at the date",
+            USAGE_LIMIT_BODY,
+            Some("Wed, 07 Oct 2026 18:00:00 GMT"),
+        ),
+        (
+            "reset before the date",
+            USAGE_LIMIT_BODY,
+            Some("Wed, 07 Oct 2026 19:00:00 GMT"),
+        ),
+    ];
+    for (name, body, date) in bodies {
+        let mut response = fakes::Response::status(429, body);
+        if let Some(date) = date {
+            response = response.header("date", date);
+        }
+        let server = fakes::ProviderServer::start([response]).unwrap();
+        let crate::Error::Status { retry_after, .. } = failed_status(&server) else {
+            panic!("not a status failure: {name}");
+        };
+        assert_eq!(retry_after, None, "{name}");
+    }
+    for body in [
+        r#"{"error":{"type":"usage_limit_reached","resets_at":"soon"}}"#,
+        r#"{"error":{"type":"usage_limit_reached","resets_at":1791396000.5}}"#,
+        r#"{"error":{"type":"usage_limit_reached"}}"#,
+        r#"{"error":{"message":"Slow down."}}"#,
+    ] {
+        let server = fakes::ProviderServer::start([
+            fakes::Response::status(429, body).header("date", USAGE_DATE)
+        ])
+        .unwrap();
+        let crate::Error::Status { retry_after, .. } = failed_status(&server) else {
+            panic!("not a status failure: {body}");
+        };
+        assert_eq!(retry_after, None, "{body}");
+    }
+}
