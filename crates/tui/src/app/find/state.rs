@@ -156,7 +156,7 @@ impl Find {
     /// The count beside the query, as drawn.
     pub(super) fn count(&self, pages: &Pages) -> String {
         // A new query clears the count until its pause passes.
-        if self.query.is_empty() || !self.due {
+        if !self.due {
             return String::new();
         }
         let mut count = if self.total == 0 {

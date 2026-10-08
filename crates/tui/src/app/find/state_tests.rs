@@ -4,7 +4,9 @@
 use ratatui::layout::Rect;
 use serde_json::json;
 
-use super::super::tests::{SESSION, attached, dropped_fetch, now, search_all, text_turn};
+use super::super::tests::{
+    SESSION, attached, dropped_fetch, now, search_all, text_turn, three_matches,
+};
 use crate::app::{App, Effect};
 use crate::keys::Key;
 
@@ -35,6 +37,39 @@ fn a_match_on_the_top_row_at_the_start_is_current() {
             .is_some_and(|current| flat.first().is_some_and(|first| current == *first)),
         "the top-row needle is not current"
     );
+}
+
+#[test]
+fn a_query_change_or_close_clears_due_the_store_and_the_fetch() {
+    // A query change clears the pause, the store and the current match;
+    // a fetch on the wire stays recorded but stale.
+    let (mut app, _, _) = dropped_fetch();
+    assert!(matches!(app.find.type_query("x"), Effect::FindPause { .. }));
+    assert!(!app.find.due());
+    assert_eq!(app.find.total(), 0);
+    assert!(app.find.current().is_none());
+    assert!(app.find.fetching(), "the stale fetch stays recorded");
+    // Closing drops the fetch too: nothing is due on a closed bar.
+    app.find.close();
+    assert!(!app.find.fetching());
+    assert!(!app.find.due());
+    assert_eq!(app.find.total(), 0);
+    assert!(!app.find.is_open());
+    // A backspace clears the pause and the kept matches.
+    let (mut app, log) = three_matches();
+    search_all(&mut app, &log, "needle");
+    assert!(app.find.due());
+    assert!(matches!(app.find.pop_query(), Effect::FindPause { .. }));
+    assert!(!app.find.due());
+    assert_eq!(app.find.total(), 0);
+    // Opening clears the pause and the query, so a set pause always
+    // means an open bar with a query.
+    let (mut app, log) = three_matches();
+    search_all(&mut app, &log, "needle");
+    assert!(app.find.due());
+    app.find.open();
+    assert!(!app.find.due());
+    assert!(app.find.query().is_empty());
 }
 
 /// An envelope of `kind` from `session` whose payload names command `id`.

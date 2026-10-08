@@ -326,7 +326,7 @@ impl App {
     /// none at or after the top row anywhere after it. At most one request
     /// is ever on the wire, whatever the generation.
     fn pump_find(&mut self) {
-        if !self.find.is_open() || !self.find.due() || self.find.query().is_empty() {
+        if !self.find.due() {
             return;
         }
         let count = self.screen.pages().page_count();
@@ -458,9 +458,6 @@ impl App {
     /// The link went down: the fetch clears, and a running scan is
     /// incomplete with the notice that says why.
     pub(in crate::app) fn find_lost(&mut self) {
-        if !self.find.is_open() {
-            return;
-        }
         if self.find.lose() {
             self.notices
                 .push(format!("Could not search all of history: {LOST}"));
@@ -471,7 +468,7 @@ impl App {
     /// whose revision moved, reconciles the current match, fetches what
     /// dropped, and reveals the current match.
     pub(in crate::app) fn settle_find(&mut self) {
-        if !self.find.is_open() || !self.find.due() || self.find.query().is_empty() {
+        if !self.find.due() {
             return;
         }
         let old = self.find.current().cloned();

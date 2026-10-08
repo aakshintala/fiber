@@ -1382,7 +1382,7 @@ fn matches_stay_in_page_then_render_order_after_rescans() {
 }
 
 /// An app with three `needle` replies on one page.
-fn three_matches() -> (App, Vec<contract::Envelope>) {
+pub(super) fn three_matches() -> (App, Vec<contract::Envelope>) {
     let mut app = attached(40, 10);
     let mut log = Vec::new();
     let mut seq = 0u64;
