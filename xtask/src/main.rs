@@ -26,7 +26,7 @@
 //!   pull_request|push --comment FILE`: judges the benchmark result files
 //!   against the budget table and writes the pull request comment; exit 1
 //!   when a budget, a head self-check or the table mapping fails
-//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `check-docs`: the checks
+//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `check-docs`, `ci-needs`: the checks
 
 #![allow(
     clippy::print_stdout,
@@ -35,6 +35,7 @@
 )]
 
 mod bench;
+mod ci_needs;
 mod docs;
 mod rules;
 mod select;
@@ -241,6 +242,11 @@ fn run(args: &[String]) -> Result<bool, String> {
             }
             report("check-docs", &failures, "ok")
         }
+        "ci-needs" => report(
+            "ci-needs",
+            &ci_needs::check(&read(ci_needs::WORKFLOW)?, &read(ci_needs::CI_DOC)?)?,
+            "every job but ci and the report jobs is in the ci job's needs",
+        ),
         "bench-report" => {
             let event = bench::Event::parse(&flag(rest, "--event")?)?;
             let comment_path = flag(rest, "--comment")?;

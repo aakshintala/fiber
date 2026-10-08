@@ -612,6 +612,32 @@ fn docs_only_reports_whether_the_files_are_docs() {
 }
 
 #[test]
+fn ci_needs_passes_fails_and_errors() {
+    const WORKFLOW: &str = "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  lint:\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: [select, lint]\n    runs-on: ubuntu-24.04\n";
+    const DOC: &str = "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`. Done.\n";
+    const FAILURE: &str = "ci-needs: .github/workflows/ci.yml: job lint is not in the ci job's needs, so CI passes without it; add it to needs, or, if it reports and gates nothing, add it to REPORT_JOBS in xtask/src/ci_needs.rs and to docs/ci.md, \"The merge gate\"\n";
+    let dir = workspace();
+    dir.write(".github/workflows/ci.yml", WORKFLOW);
+    dir.write("docs/ci.md", DOC);
+    assert_eq!(
+        xtask(&dir, &["ci-needs"], &[], ""),
+        (
+            0,
+            "ci-needs: every job but ci and the report jobs is in the ci job's needs\n".to_owned()
+        )
+    );
+    dir.write(
+        ".github/workflows/ci.yml",
+        &WORKFLOW.replace("needs: [select, lint]", "needs: [select]"),
+    );
+    assert_eq!(xtask(&dir, &["ci-needs"], &[], ""), (1, FAILURE.to_owned()));
+    std::fs::remove_file(dir.path().join("docs/ci.md")).unwrap();
+    let (code, out) = xtask(&dir, &["ci-needs"], &[], "");
+    assert_eq!(code, 2);
+    assert!(out.contains("docs/ci.md"), "{out}");
+}
+
+#[test]
 fn an_unknown_or_missing_command_is_an_error() {
     let dir = TestDir::new("unknown");
     assert_eq!(

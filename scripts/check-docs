@@ -2,4 +2,5 @@
 # The docs check (docs/ci.md, "The docs check"). It lives in xtask.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-exec cargo xtask check-docs
+cargo xtask check-docs
+cargo xtask ci-needs

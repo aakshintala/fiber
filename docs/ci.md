@@ -34,6 +34,13 @@ the selection itself fails, `CI` fails. On a draft pull request the verdict
 job reports as `CI (draft)`, so the required `CI` check stays pending until
 the pull request is marked ready, which starts the full run.
 
+Every job in `.github/workflows/ci.yml` but the verdict job is in the
+verdict job's `needs`, except the jobs that report and gate nothing:
+`backstop_report`, `bench_comment`. They run outside the verdict, so their
+result never decides `CI`. The docs check fails when any other job is
+missing from `needs`, so a new job, such as a new shard, cannot run
+without gating the merge.
+
 The selection is one job that every other job waits for, so it does as
 little as it can: it works out the selection and, on a pull request, runs
 the docs check, below.
@@ -163,7 +170,7 @@ network (`docs/testing.md`).
 ## The docs check
 
 `scripts/check-docs` checks `docs/`, `GLOSSARY.md`, `AGENTS.md` and
-`README.md`, offline. It fails when:
+`README.md`, offline, and the CI gate wiring below. It fails when:
 
 - a relative Markdown link, or its `#anchor`, does not resolve
 - a section citation, such as `` (`docs/workflow.md`, "The gate") ``, names a
@@ -171,6 +178,10 @@ network (`docs/testing.md`).
 - a backticked path under `docs/`, `crates/`, `scripts/`, `research/` or
   `.github/` does not exist. A path with a placeholder in it, such as
   `docs/<area>.md`, is not checked.
+- a job in `.github/workflows/ci.yml` other than the verdict job and the
+  report jobs is missing from the verdict job's `needs`, or the report
+  jobs named in "The merge gate" differ from the check's own list
+  (`cargo xtask ci-needs`)
 
 It runs in the selection job on every pull request, not only docs-only
 ones, because the change that breaks a citation is usually a code change
