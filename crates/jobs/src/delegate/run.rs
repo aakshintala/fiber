@@ -153,6 +153,11 @@ fn later(clock: &dyn Clock, bound: Duration) -> Instant {
         .unwrap_or_else(|| clock.now())
 }
 
+/// Whether the stop's SIGKILL bound has arrived.
+fn kill_due(kill_at: Option<Instant>, now: Instant) -> bool {
+    kill_at.is_some_and(|kill_at| now >= kill_at)
+}
+
 /// What wakes the runner's parks: bumped on every clock move, as the
 /// registry's `seq` is, so a wake that lands before the wait is still
 /// visible.
@@ -456,9 +461,7 @@ impl Runner {
             if group::retire_if_empty(pgid) {
                 return;
             }
-            if let Some(kill_at) = self.shared.kill_at()
-                && self.clock.now() >= kill_at
-            {
+            if kill_due(self.shared.kill_at(), self.clock.now()) {
                 group::signal(pgid, Signal::KILL);
             }
             self.park(Some(later(self.clock.as_ref(), POLL)), seen);

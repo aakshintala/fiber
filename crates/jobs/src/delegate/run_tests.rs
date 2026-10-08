@@ -27,7 +27,9 @@ use contract::{ActionId, ErrorCode, JobId, Seq, SessionId};
 use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir, Watchdog, group_empties, kill_pid, pids_exit, within};
 
-use super::{Launch, Launched, Runner, Watch, Watched, mint_session_id, note_seq, park_due};
+use super::{
+    Launch, Launched, Runner, Watch, Watched, kill_due, mint_session_id, note_seq, park_due,
+};
 use crate::delegate::group::serial_shared;
 use crate::registry::Registry;
 
@@ -305,22 +307,6 @@ fn wait_ready(path: &std::path::Path) {
     within("the child arms its traps", DEADLINE, move || {
         loop {
             if std::fs::read_to_string(&path).is_ok_and(|text| !text.trim().is_empty()) {
-                return;
-            }
-            thread::yield_now();
-        }
-    });
-}
-
-/// Waits, with a wall-clock bound, until the fake clock shows a parked
-/// waiter: the thread under test reached its clock wait. A parked entry
-/// proves it passed every check before the wait, so work observed after
-/// this cannot have skipped supervision.
-fn wait_parked(clock: &Arc<FakeClock>) {
-    within("a waiter parks on the clock", DEADLINE, {
-        let clock = Arc::clone(clock);
-        move || loop {
-            if !clock.parked().is_empty() {
                 return;
             }
             thread::yield_now();
@@ -913,11 +899,6 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
     let mut member = crate::delegate::group::spawn(&mut member).unwrap();
     let pgid = member.id();
     let watchdog = Watchdog::group(pgid);
-    let (reaped_tx, reaped_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let _status = member.wait();
-        let _sent = reaped_tx.send(());
-    });
     let watch: Watch = Arc::new(|_: &SessionId, _: &mut dyn FnMut(&Envelope)| {
         Err(std::io::Error::other("refused"))
     });
@@ -933,43 +914,37 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
     // The stop sets the bound; the member ignores nothing and no other
     // thread signals this group.
     stop.0();
-    let done = thread::spawn(move || runner.retire(pgid));
-    // Synchronise: retire must be parked on the clock, having passed
-    // every check before its wait, before time moves at all.
-    wait_parked(&clock);
-    // Pre-bound wakes stay silent: only the reap-time signal, which never
-    // ran here, could have gone out. An inverted timer sprays here and
-    // fails this line. The thread proved itself parked above, so this
-    // silence was supervised, not starved.
-    for _ in 0..20 {
-        clock.advance(Duration::from_millis(100));
-        thread::yield_now();
-    }
-    assert_eq!(kills(pgid), 0, "no SIGKILL before the bound");
-    // Past the bound the timer fires on every wake until the group is
-    // empty; the reaper thread below reaps the member for retirement. A
-    // timer that stays silent past the bound fails the wait below.
-    for _ in 0..100 {
-        clock.advance(Duration::from_millis(100));
-        thread::yield_now();
-        if kills(pgid) >= 1 {
-            break;
-        }
-    }
-    assert!(kills(pgid) >= 1, "SIGKILL went out once the bound passed");
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        runner.retire(pgid);
+        let _sent = done_tx.send(());
+    });
+    let first_poll = clock.origin() + Duration::from_secs(1);
+    assert!(
+        clock.await_parked(first_poll, DEADLINE),
+        "retire waits on the fake clock"
+    );
+    let mark = clock.advance_marked(BOUND + Duration::from_secs(1));
+    let after_bound = clock.origin() + BOUND + Duration::from_secs(1);
+    assert!(
+        clock.await_parked_since(&mark, Some(after_bound + Duration::from_secs(1)), DEADLINE),
+        "retire checks the timer and parks again past the bound"
+    );
+    assert!(kills(pgid) >= 1, "SIGKILL went out past the bound");
+
+    let (reaped_tx, reaped_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _status = member.wait();
+        let _sent = reaped_tx.send(());
+    });
     reaped_rx
         .recv_timeout(DEADLINE)
-        .expect("the timer killed the member");
-    for _ in 0..200 {
-        if done.is_finished() {
-            break;
-        }
-        clock.advance(Duration::from_millis(50));
-        thread::yield_now();
-    }
-    assert!(done.is_finished(), "retire returned once empty");
-    done.join().unwrap();
-    wait_retired(&clock, pgid);
+        .expect("the killed member was reaped");
+
+    let _mark = clock.advance_marked(Duration::from_secs(1));
+    done_rx
+        .recv_timeout(DEADLINE)
+        .expect("retire returned once the group was empty");
     assert!(!listed(pgid));
     watchdog.stand_down(DEADLINE);
 }
@@ -1103,4 +1078,22 @@ fn park_due_takes_the_earliest_live_bound() {
         ),
         t0 + Duration::from_millis(50)
     );
+}
+
+#[test]
+fn kill_due_matches_the_exact_boundaries() {
+    let clock = FakeClock::new();
+    let kill_at = clock.now() + Duration::from_secs(1);
+    let tick = Duration::from_nanos(1);
+    let before = kill_at.checked_sub(tick).unwrap();
+    let after = kill_at.checked_add(tick).unwrap();
+
+    for (case, kill_at, now, expected) in [
+        ("no bound", None, kill_at, false),
+        ("one tick before", Some(kill_at), before, false),
+        ("at the bound", Some(kill_at), kill_at, true),
+        ("one tick after", Some(kill_at), after, true),
+    ] {
+        assert_eq!(kill_due(kill_at, now), expected, "{case}");
+    }
 }
