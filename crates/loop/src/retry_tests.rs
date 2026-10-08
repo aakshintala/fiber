@@ -1,15 +1,15 @@
 //! Unit tests of `Retry::decide`: retryable failures, backoff and attempt limit
 //! (`docs/model-routing.md`, "When a model call fails").
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::thread;
-use std::time::Duration;
-
-const TURN_WAIT_DEADLINE: Duration = Duration::from_secs(5);
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::{Loop, Model};
 use contract::ErrorCode;
+use contract::clock::{Clock, Wake};
 use contract::inbox::{Ack, Delivery, Message};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
@@ -19,6 +19,9 @@ use fakes::{Scripted, ScriptedProvider};
 use log::Log;
 
 use super::{Decision, Retry};
+
+const RETRY_DELAY: Duration = Duration::from_secs(2);
+const TURN_WAIT_DEADLINE: Duration = Duration::from_secs(5);
 
 fn failure(code: ErrorCode) -> Failure {
     Failure {
@@ -285,38 +288,50 @@ fn a_saturated_asked_wait_fails_at_once_whatever_the_cap() {
 #[test]
 fn advancing_on_retry_scheduled_does_not_stretch_the_retry_deadline() {
     const DEADLINE: Duration = Duration::from_secs(5);
-    const DELAY: Duration = Duration::from_secs(2);
-    // A full advance after the line releases the retry with no further
-    // advance: the deadline was fixed before the line was appended.
-    let mut full = RetryRun::start();
+    const PARTIAL_ADVANCE: Duration = Duration::from_secs(1);
+    // The wrapper advances after `retry_scheduled` but inside the retry's
+    // first wait_until, before FakeClock evaluates whether to park.
+    let mut full = RetryRun::start(RETRY_DELAY);
     full.wait_for_retry_scheduled(DEADLINE);
-    full.clock.advance(DELAY);
     full.wait_for_retry_started(DEADLINE);
+    assert_eq!(
+        full.clock.now(),
+        full.origin + RETRY_DELAY,
+        "the full advance released the retry without a later advance"
+    );
     full.finish();
 
-    // A smaller advance leaves the retry parked at its fixed deadline, and
-    // the rest releases it.
-    let mut partial = RetryRun::start();
+    // A smaller advance before the park leaves the retry parked at its
+    // deadline; only the later remainder releases it.
+    let mut partial = RetryRun::start(PARTIAL_ADVANCE);
     partial.wait_for_retry_scheduled(DEADLINE);
-    partial.clock.advance(Duration::from_secs(1));
     assert!(
-        partial.clock.await_parked(partial.origin + DELAY, DEADLINE),
+        partial
+            .clock
+            .await_parked(partial.origin + RETRY_DELAY, DEADLINE),
         "the retry stays parked at its fixed deadline"
+    );
+    assert_eq!(
+        partial.clock.now(),
+        partial.origin + PARTIAL_ADVANCE,
+        "the wrapper advanced only part of the delay before delegating"
     );
     assert_eq!(
         partial.provider.requests().len(),
         1,
         "a smaller advance releases no retry"
     );
-    partial.clock.advance(Duration::from_secs(1));
+    let remaining = RETRY_DELAY
+        .checked_sub(PARTIAL_ADVANCE)
+        .expect("the partial advance is shorter than the retry delay");
+    partial.clock.advance(remaining);
     partial.wait_for_retry_started(DEADLINE);
     partial.finish();
 }
 
 /// One failing-then-recovering turn on a fake clock: the loop runs on its
-/// own thread and the test watches its log. The `retry_scheduled` line the
-/// loop already emits is the signal each advance waits on (`docs/testing.md`,
-/// "Waits and timeouts").
+/// own thread and the test watches its log. Its test clock advances from the
+/// retry's `wait_until`, after `retry_scheduled` and before FakeClock parks.
 struct RetryRun {
     _home: fakes::TempDir,
     origin: std::time::Instant,
@@ -329,9 +344,9 @@ struct RetryRun {
 
 impl RetryRun {
     /// Starts a turn whose first call fails retryably and whose retry
-    /// succeeds, and returns before the loop waits: the test advances the
-    /// clock only after `retry_scheduled` is on the log.
-    fn start() -> Self {
+    /// succeeds. The test clock advances on the retry deadline's first
+    /// `wait_until`, after `retry_scheduled` is on the log.
+    fn start(advance_before_park: Duration) -> Self {
         let home = fakes::TempDir::new("fiber-retry-deadline");
         let workspace = home.path().join("workspace");
         let credentials = home.path().join("credentials");
@@ -339,7 +354,13 @@ impl RetryRun {
         std::fs::create_dir_all(&credentials).unwrap();
         let clock = FakeClock::new();
         let origin = clock.origin();
-        let clock_for_loop: Arc<dyn contract::clock::Clock> = clock.clone();
+        let clock_for_loop: Arc<dyn Clock> = Arc::new(AdvanceBeforeParkClock {
+            retry_deadline: origin + RETRY_DELAY,
+            advance: advance_before_park,
+            advanced: AtomicBool::new(false),
+            inner: Arc::clone(&clock),
+            subscriptions: Mutex::new(Vec::new()),
+        });
         let log = Arc::new(
             Log::create(
                 home.path(),
@@ -419,27 +440,23 @@ impl RetryRun {
     /// rather than resetting a timeout for every line.
     fn wait_for_event(&mut self, kind: &'static str, deadline: Duration) {
         let watcher = self.watcher.take().expect("the log watcher is available");
-        let (watcher, lines) = fakes::within(
-            &format!("log event {kind}"),
-            deadline,
-            move || {
-                let mut watcher = watcher;
-                let mut lines = Vec::new();
-                loop {
-                    match watcher.recv() {
-                        Ok(Some(line)) => {
-                            let reached = line.kind == kind;
-                            lines.push(line);
-                            if reached {
-                                return (watcher, lines);
-                            }
+        let (watcher, lines) = fakes::within(&format!("log event {kind}"), deadline, move || {
+            let mut watcher = watcher;
+            let mut lines = Vec::new();
+            loop {
+                match watcher.recv() {
+                    Ok(Some(line)) => {
+                        let reached = line.kind == kind;
+                        lines.push(line);
+                        if reached {
+                            return (watcher, lines);
                         }
-                        Ok(None) => panic!("the session log ended before {kind}"),
-                        Err(error) => panic!("reading the session log before {kind}: {error}"),
                     }
+                    Ok(None) => panic!("the session log ended before {kind}"),
+                    Err(error) => panic!("reading the session log before {kind}: {error}"),
                 }
-            },
-        );
+            }
+        });
         self.watcher = Some(watcher);
         for line in &lines {
             self.note(line);
@@ -475,6 +492,54 @@ impl RetryRun {
         if line.kind == "assistant_message_started" {
             self.starts += 1;
         }
+    }
+}
+
+struct AdvanceBeforeParkClock {
+    inner: Arc<FakeClock>,
+    retry_deadline: Instant,
+    advance: Duration,
+    advanced: AtomicBool,
+    subscriptions: Mutex<Vec<Weak<dyn Wake>>>,
+}
+
+impl Clock for AdvanceBeforeParkClock {
+    fn now(&self) -> Instant {
+        self.inner.now()
+    }
+
+    fn wall(&self) -> SystemTime {
+        self.inner.wall()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        self.inner.sleep(duration);
+    }
+
+    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        if until == Some(self.retry_deadline) && !self.advanced.swap(true, Ordering::SeqCst) {
+            self.inner.advance(self.advance);
+        }
+        let subscriptions = {
+            let mut pending = self
+                .subscriptions
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            std::mem::take(&mut *pending)
+        };
+        for waker in subscriptions {
+            self.inner.subscribe(waker);
+        }
+        self.inner.wait_until(until, wait);
+    }
+
+    // Install subscriptions at wait entry: an advance from wait_until must
+    // not re-enter SharedWake while its park lock is held.
+    fn subscribe(&self, waker: Weak<dyn Wake>) {
+        self.subscriptions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(waker);
     }
 }
 
