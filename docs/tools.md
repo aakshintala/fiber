@@ -47,9 +47,8 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 - Adapting a schema to each wire protocol, and carrying images to a protocol
   that cannot take them in a tool result, is the provider module's job, not the
   tool's. It never rewrites a schema to fit strict mode. A tool is sent with `strict:
-  true` only when its schema fits the vendor's strict subset, as every
-  built-in tool's does except a tool whose section says it is sent with
-  `strict: false` (`ask_user`, `name_session`) (`docs/model-routing.md`,
+  true` only when its schema fits the vendor's strict subset, and with
+  `strict: false` otherwise, a built-in tool included (`docs/model-routing.md`,
   "Protocols and providers").
 
 ## Before a call runs
@@ -1086,6 +1085,11 @@ flags").
   string; `all_projects` (optional, default false) searches every project in
   Fiber home instead of the session's own; `limit` (optional, default 20) is
   the most hits returned.
+- The session's own project is the sessions under `projects/<key>/` whose
+  `session_started` workspace belongs to the same project as this session's,
+  as resume checks it (`docs/state.md`, "Projects"); another
+  project's sessions that share the key are searched only with
+  `all_projects`.
 - It scans `events.jsonl` directly with the same ripgrep crates as the
   shell's `grep` ("Search"). There is no index: the answer is always
   current, and nothing is written. A line that matches is decoded, and the
@@ -1094,9 +1098,9 @@ flags").
   escapes it (`"` as `\"`, `\` as `\\`, a newline as `\n`, other control
   characters as `\u00XX`), case-insensitively, so it selects every line whose
   decoded text could match.
-- It searches everything a log holds: messages from the person and the model,
-  the inputs of tool calls, and their outputs, including the full outputs in
-  `artifacts/`.
+- It searches messages from the person and the model, the inputs of tool
+  calls, and their outputs, including the full outputs in `artifacts/`. A
+  search never returns `session_search`'s own calls or their results.
 - Each hit is labelled `message`, `tool_input` or `tool_output`. `message` is
   the text of `turn_started` message items, `steering_applied`,
   `text_completed`, and the answers in `interaction_resolved`. `tool_input` is
@@ -1124,9 +1128,13 @@ flags").
   `credentials/`. Its
   definition never changes, so it is declared in every session, in full, and
   counts toward the built-in budget ("Size budget in CI").
-- Scanning the owner's 1.3 GB of pi and Claude Code logs took 0.05 to 0.35 s
-  with a warm cache on macOS arm64 (2026-10-03, `rg -l -F`). Cold-cache and
-  Linux timings are not measured.
+- Its optional properties and the `minLength` and `minimum` limits put its
+  schema outside the strict subset, so it is sent with `strict: false`.
+- One scan of 1.3 GB of logs with no artifacts took 2.4 s warm on macOS arm64
+  and 6.7 to 6.9 s cold on a Linux x86_64 runner; the same logs with a tool
+  output in 25 saved as an artifact took 5 to 6 s warm. The scan reads one
+  thread. Timings and method:
+  [research/session-search](../research/session-search/README.md).
 
 ## Provider quota
 

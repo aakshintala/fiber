@@ -26,12 +26,13 @@ use support::Deadline;
 
 /// The request's tool order: the loop keys tools by name, so this is name
 /// order, whatever order `main` pushes them in.
-const TOOL_NAMES: [&str; 8] = [
+const TOOL_NAMES: [&str; 9] = [
     "ask_user",
     "edit",
     "handoff",
     "jobs",
     "read",
+    "session_search",
     "shell",
     "web_fetch",
     "write",

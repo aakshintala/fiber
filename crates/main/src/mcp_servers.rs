@@ -90,8 +90,9 @@ pub(crate) fn session_tools(
     Failure,
 > {
     let fiber = fiber.map_err(|message| crate::failed(ErrorCode::IoFailed, message))?;
-    let (mut tools, mut infos, driver, forget, images) =
-        crate::builtin::builtin(fiber, workspace, artifacts, clock, jobs, locks, web_search)?;
+    let (mut tools, mut infos, driver, forget, images) = crate::builtin::builtin(
+        fiber, home, workspace, artifacts, clock, jobs, locks, web_search,
+    )?;
     // Every spec starts with the session, except a cached non-required
     // one, which is declared from its cache and starts on its first call;
     // a server that fails is left out and its failure is returned for the
