@@ -714,7 +714,10 @@ fn take_label<'a>(
     used: &mut [bool],
 ) -> Option<(Piece, &'a str)> {
     let tail = text.strip_prefix("[Image #")?;
-    let digits = tail.bytes().take_while(|byte| byte.is_ascii_digit()).count();
+    let digits = tail
+        .bytes()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
     let (number, rest) = tail.split_at(digits);
     let rest = rest.strip_prefix(']')?;
     let at = number.parse::<usize>().ok()?.checked_sub(1)?;

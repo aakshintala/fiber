@@ -82,7 +82,8 @@ impl App {
         };
         let cancel = mint();
         let line = session_command(&cancel, "cancel", &session, None).to_string();
-        self.pending.insert(cancel, (Kind::Cancel, Draft::default()));
+        self.pending
+            .insert(cancel, (Kind::Cancel, Draft::default()));
         vec![line]
     }
 }

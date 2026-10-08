@@ -773,8 +773,8 @@ impl App {
                     let sent = self.pending.remove(&accepted.command_id.0);
                     self.commands_answered(&accepted);
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
-                    let item =
-                        shell.and_then(|(_, draft)| shell::answered(&draft.expand(), accepted.result));
+                    let item = shell
+                        .and_then(|(_, draft)| shell::answered(&draft.expand(), accepted.result));
                     changed |= self.screen.pages_mut().add_shell(item);
                 }
             }

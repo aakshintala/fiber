@@ -509,7 +509,10 @@ fn ctrl_g_and_ctrl_r_in_legacy_and_kitty_forms() {
 
 #[test]
 fn ctrl_v_in_legacy_and_kitty_forms() {
-    assert_eq!(feed_all(&[&[0x16u8] as &[u8]]), vec![Event::Key(Key::CtrlV)]);
+    assert_eq!(
+        feed_all(&[&[0x16u8] as &[u8]]),
+        vec![Event::Key(Key::CtrlV)]
+    );
     assert_eq!(feed_all(&[b"\x1b[118;5u"]), vec![Event::Key(Key::CtrlV)]);
     // A lock key changes nothing; another modifier is no binding.
     assert_eq!(feed_all(&[b"\x1b[118;69u"]), vec![Event::Key(Key::CtrlV)]);

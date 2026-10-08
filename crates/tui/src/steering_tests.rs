@@ -186,9 +186,8 @@ fn with_image(draft: &mut Draft) -> Steering {
         serde_json::json!({"content": [{"type": "text", "text": "three"}],
             "source": "driver", "command_id": "c_3"}),
     ];
-    let queue: SteeringQueue =
-        serde_json::from_value(serde_json::json!({ "messages": messages }))
-            .unwrap_or(SteeringQueue { messages: vec![] });
+    let queue: SteeringQueue = serde_json::from_value(serde_json::json!({ "messages": messages }))
+        .unwrap_or(SteeringQueue { messages: vec![] });
     let mut steering = Steering::default();
     steering.fold(&queue, draft);
     steering
@@ -242,8 +241,7 @@ fn attached() -> crate::app::App {
 
 /// The steering queue of `queue` on the attached session.
 fn feed(app: &mut crate::app::App, queue: &SteeringQueue) {
-    let payload =
-        serde_json::to_value(queue).unwrap_or(serde_json::json!({"messages": []}));
+    let payload = serde_json::to_value(queue).unwrap_or(serde_json::json!({"messages": []}));
     let line = crate::link::Line::Session(contract::Envelope {
         kind: "steering_queue".to_owned(),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
@@ -264,7 +262,10 @@ fn an_amend_sends_the_drafts_images() {
     use crate::app::Effect;
     use crate::keys::Key;
     let mut app = attached();
-    feed(&mut app, &queue(&[("one", Some("c_1")), ("two", Some("c_2"))]));
+    feed(
+        &mut app,
+        &queue(&[("one", Some("c_1")), ("two", Some("c_2"))]),
+    );
     app.select_steering(0);
     assert_eq!(app.input().expand(), "one");
     let now = fakes::clock::FakeClock::new().now();

@@ -106,7 +106,9 @@ impl App {
                 }
                 Some(Effect::None)
             }
-            Key::Char(_) | Key::Backspace | Key::CtrlR | Key::CtrlV | Key::CtrlF => Some(Effect::None),
+            Key::Char(_) | Key::Backspace | Key::CtrlR | Key::CtrlV | Key::CtrlF => {
+                Some(Effect::None)
+            }
             Key::CtrlC
             | Key::CtrlO
             | Key::PageUp

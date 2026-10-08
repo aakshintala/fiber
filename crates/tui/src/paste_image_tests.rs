@@ -13,8 +13,7 @@ use fakes::clock::FakeClock;
 use fakes::{TempDir, Watchdog, group_empties, kill_pid, pids_exit};
 
 use super::{
-    Decode, Failed, NO_CLIPBOARD, Reader, apple_script_png, command, png_size, read, refused,
-    start,
+    Decode, Failed, NO_CLIPBOARD, Reader, apple_script_png, command, png_size, read, refused, start,
 };
 
 /// One named wall-clock deadline for every blocking wait.
@@ -109,10 +108,7 @@ fn the_clipboard_command_follows_the_machine() {
         None
     );
     // C5: off macOS, osascript alone on PATH is nothing.
-    assert_eq!(
-        command(false, env(&[]), on_path(&["osascript"])),
-        None
-    );
+    assert_eq!(command(false, env(&[]), on_path(&["osascript"])), None);
     // C6: Wayland reads through wl-paste; without it, through xclip; an
     // empty WAYLAND_DISPLAY is unset.
     assert_eq!(
@@ -148,10 +144,7 @@ fn the_clipboard_command_follows_the_machine() {
         command(false, env(&[("DISPLAY", ":0")]), on_path(&["wl-paste"])),
         None
     );
-    assert_eq!(
-        command(false, env(&[]), on_path(&["xclip"])),
-        None
-    );
+    assert_eq!(command(false, env(&[]), on_path(&["xclip"])), None);
     // C8: every reader's arguments and decode, exactly.
     assert_eq!(osascript().decode, Decode::AppleScript);
     assert_eq!(wl_paste().decode, Decode::Raw);
@@ -240,7 +233,10 @@ fn apple_script_output_decodes_to_png_bytes() {
         Some(PIXEL.to_vec())
     );
     // D7: `«data PNGf»` is empty, then no image.
-    assert_eq!(apple_script_png("«data PNGf»\n".as_bytes()), Some(Vec::new()));
+    assert_eq!(
+        apple_script_png("«data PNGf»\n".as_bytes()),
+        Some(Vec::new())
+    );
 }
 
 #[test]
@@ -362,13 +358,19 @@ fn answered(rx: &mpsc::Receiver<Result<Vec<u8>, Failed>>, what: &str) -> Result<
 /// returning the watchdog and the group id.
 fn watch(test: &ChildTest) -> (Watchdog, u32) {
     let ids = test.ready.wait(DEADLINE);
-    let pgid = ids.first().copied().unwrap_or_else(|| panic!("no ready line"));
+    let pgid = ids
+        .first()
+        .copied()
+        .unwrap_or_else(|| panic!("no ready line"));
     (Watchdog::group(pgid), pgid)
 }
 
 /// The group emptied after the read, then the watchdog stands down.
 fn reaped(watchdog: Watchdog, pgid: u32, what: &str) {
-    assert!(group_empties(pgid, DEADLINE), "{what} left its group behind");
+    assert!(
+        group_empties(pgid, DEADLINE),
+        "{what} left its group behind"
+    );
     watchdog.stand_down(DEADLINE);
 }
 
@@ -435,7 +437,12 @@ fn apple_script_past_its_frame_cap_is_too_large() {
 
 /// Advances the clock to just before the limit and proves the worker
 /// parked again there; the answer channel is still empty.
-fn waiting(rx: &mpsc::Receiver<Result<Vec<u8>, Failed>>, clock: &Arc<FakeClock>, end: std::time::Instant, what: &str) {
+fn waiting(
+    rx: &mpsc::Receiver<Result<Vec<u8>, Failed>>,
+    clock: &Arc<FakeClock>,
+    end: std::time::Instant,
+    what: &str,
+) {
     assert!(
         clock.await_parked(end, DEADLINE),
         "{what}: the read never parked at its deadline"
@@ -464,10 +471,7 @@ fn the_limit_kills_a_hung_command() {
     // millisecond later it has timed out.
     waiting(&rx, &clock, end, "the hung command");
     clock.advance(Duration::from_millis(1));
-    assert_eq!(
-        answered(&rx, "the hung command"),
-        Err(Failed::TimedOut)
-    );
+    assert_eq!(answered(&rx, "the hung command"), Err(Failed::TimedOut));
     reaped(watchdog, pgid, "the hung command");
 }
 
@@ -503,10 +507,7 @@ fn a_signalled_command_is_no_image() {
     let reader = test.reader("kill -KILL $$", Decode::Raw);
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 1024);
     let (watchdog, pgid) = watch(&test);
-    assert_eq!(
-        answered(&rx, "the signalled command"),
-        Err(Failed::NoImage)
-    );
+    assert_eq!(answered(&rx, "the signalled command"), Err(Failed::NoImage));
     reaped(watchdog, pgid, "the signalled command");
 }
 
@@ -581,7 +582,10 @@ fn a_descendant_that_escapes_the_group_cannot_hold_the_read() {
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 1024);
     let (watchdog, pgid) = watch(&test);
     let escaped = test.ready.wait(DEADLINE);
-    let escaped = escaped.first().copied().unwrap_or_else(|| panic!("no escaped pid"));
+    let escaped = escaped
+        .first()
+        .copied()
+        .unwrap_or_else(|| panic!("no escaped pid"));
     let marker = Watchdog::matching(&test.dir.path().display().to_string());
     clock.advance(LIMIT);
     assert_eq!(
@@ -632,7 +636,10 @@ fn a_successful_read_kills_what_the_command_left_behind() {
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 1024);
     let (watchdog, pgid) = watch(&test);
     let left = test.ready.wait(DEADLINE);
-    let sleep = left.first().copied().unwrap_or_else(|| panic!("no sleep pid"));
+    let sleep = left
+        .first()
+        .copied()
+        .unwrap_or_else(|| panic!("no sleep pid"));
     assert_eq!(answered(&rx, "the successful read"), Ok(PIXEL.to_vec()));
     assert!(group_empties(pgid, DEADLINE));
     assert!(pids_exit(&[sleep], DEADLINE));
@@ -754,8 +761,10 @@ fn start_posts_the_pixel_refusal_as_its_notice() {
     assert_eq!(ticket, 7);
     assert_eq!(
         result,
-        Err("The image on the clipboard cannot be read: 50000001x1 is 50000001 pixels; \
+        Err(
+            "The image on the clipboard cannot be read: 50000001x1 is 50000001 pixels; \
              the limit is 50000000"
-            .to_owned())
+                .to_owned()
+        )
     );
 }

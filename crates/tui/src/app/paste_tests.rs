@@ -289,7 +289,9 @@ fn a_result_after_the_editor_returns_the_draft_is_dropped() {
 fn a_result_after_a_token_edit_lands() {
     // A3: editing one paste token keeps the draft, so the image lands.
     let mut app = attached();
-    app.on_edit(Edit::Paste("l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\nl11\n".to_owned()));
+    app.on_edit(Edit::Paste(
+        "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\nl11\n".to_owned(),
+    ));
     assert_eq!(press(&mut app, "ctrl+v"), Effect::ReadImage(0));
     app.editor_returned(Target::Token(1), Ok("short".to_owned()));
     app.on_image(0, Ok("AAA".to_owned()));
@@ -528,13 +530,7 @@ fn row_keys(app: &App) -> Vec<u64> {
 fn ctrl_v_does_nothing_with_the_quit_question_open() {
     let mut app = home();
     linked(&mut app);
-    app.on_line(live(
-        S_A,
-        "here",
-        "/w",
-        "-w",
-        json!({"state": "streaming"}),
-    ));
+    app.on_line(live(S_A, "here", "/w", "-w", json!({"state": "streaming"})));
     type_text(&mut app, "hi");
     app.quit();
     assert!(app.quit_open());
@@ -553,9 +549,17 @@ fn ctrl_v_does_nothing_with_the_delete_question_open() {
     type_text(&mut app, "hi");
     let key = row_keys(&app)[0];
     app.home_click(Spot::Stop(key));
-    assert!(app.home_screen().and_then(|screen| screen.question).is_some());
+    assert!(
+        app.home_screen()
+            .and_then(|screen| screen.question)
+            .is_some()
+    );
     stays_shut(&mut app);
-    assert!(app.home_screen().and_then(|screen| screen.question).is_some());
+    assert!(
+        app.home_screen()
+            .and_then(|screen| screen.question)
+            .is_some()
+    );
 }
 
 #[test]
@@ -616,9 +620,11 @@ fn sent_id(effect: Effect) -> String {
     match effect {
         Effect::Send(lines) => {
             assert_eq!(lines.len(), 1);
-            let line: Value =
-                serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
-            line["id"].as_str().unwrap_or_else(|| panic!("no id")).to_owned()
+            let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+            line["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("no id"))
+                .to_owned()
         }
         Effect::None
         | Effect::Quit

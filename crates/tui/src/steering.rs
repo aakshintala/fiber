@@ -50,9 +50,10 @@ impl Steering {
             .map(|message| Queued {
                 text: crate::app::text_of(&message.content),
                 command_id: message.sender.command_id.as_ref().map(|id| id.0.clone()),
-                image: message.content.iter().any(|part| {
-                    matches!(part, contract::shapes::ContentPart::Image { .. })
-                }),
+                image: message
+                    .content
+                    .iter()
+                    .any(|part| matches!(part, contract::shapes::ContentPart::Image { .. })),
             })
             .collect();
         if self
@@ -260,8 +261,13 @@ impl App {
         let taken = std::mem::take(&mut self.draft);
         self.draft.put_back(stash);
         lines.push(
-            session_command(&id, "steer", &session, Some(super::commands::content_arg(&taken)))
-                .to_string(),
+            session_command(
+                &id,
+                "steer",
+                &session,
+                Some(super::commands::content_arg(&taken)),
+            )
+            .to_string(),
         );
         self.pending.insert(id, (Kind::Steer, taken));
         Effect::Send(lines)

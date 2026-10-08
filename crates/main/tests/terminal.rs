@@ -652,17 +652,18 @@ fn ctrl_v_pastes_an_image_that_the_session_stores() {
     fs::create_dir_all(&bin).unwrap();
     let (name, body) = if cfg!(target_os = "macos") {
         let hex: String = PIXEL.iter().map(|byte| format!("{byte:02X}")).collect();
-        ("osascript", format!("printf '\\302\\253data PNGf{hex}\\302\\273\\n'"))
+        (
+            "osascript",
+            format!("printf '\\302\\253data PNGf{hex}\\302\\273\\n'"),
+        )
     } else {
         let octal: String = PIXEL.iter().map(|byte| format!("\\{byte:03o}")).collect();
         ("wl-paste", format!("printf '{octal}'"))
     };
     fakes::script(&bin, name, &body);
-    let path = std::env::join_paths(
-        std::iter::once(bin).chain(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        )),
-    )
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
     .unwrap();
     let mut env: Vec<(&str, &OsStr)> = vec![("PATH", &path)];
     if !cfg!(target_os = "macos") {

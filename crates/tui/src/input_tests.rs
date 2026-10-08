@@ -780,5 +780,8 @@ fn the_editor_return_relinks_image_labels() {
 #[test]
 fn expand_shows_an_image_as_its_label() {
     // I10.
-    assert_eq!(with_image("look ", "AAA", " here").expand(), "look [Image #1] here");
+    assert_eq!(
+        with_image("look ", "AAA", " here").expand(),
+        "look [Image #1] here"
+    );
 }

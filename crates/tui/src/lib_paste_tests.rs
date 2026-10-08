@@ -10,9 +10,9 @@ use std::time::Duration;
 use ratatui::backend::TestBackend;
 
 use super::tests::{feed, hello, new_loop};
+use crate::Input;
 use crate::link::Line;
 use crate::paste_image::{Decode, Reader};
-use crate::Input;
 
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -74,7 +74,8 @@ fn ctrl_v_then_enter_sends_the_image_to_the_hub() {
     lp.files_out = Some(out);
     let (ours, theirs) = UnixStream::pair().unwrap();
     lp.hub = Some(ours);
-    lp.app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     assert!(lp.app.on_line(Line::Hub(hello())).is_empty());
     let (_, step_rx) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(vec![0x16]), &step_rx), None);
@@ -85,7 +86,13 @@ fn ctrl_v_then_enter_sends_the_image_to_the_hub() {
     assert_eq!(ticket, 0);
     assert_eq!(result.unwrap(), PIXEL_BASE64);
     assert_eq!(
-        lp.step(Input::Image { ticket, result: Ok(PIXEL_BASE64.to_owned()) }, &step_rx),
+        lp.step(
+            Input::Image {
+                ticket,
+                result: Ok(PIXEL_BASE64.to_owned())
+            },
+            &step_rx
+        ),
         None
     );
     assert_eq!(lp.app.input().expand(), "[Image #1]");

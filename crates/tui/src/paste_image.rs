@@ -174,7 +174,10 @@ pub(crate) fn read(
     limit: Duration,
     cap: usize,
 ) -> Result<Vec<u8>, Failed> {
-    let deadline = clock.now().checked_add(limit).unwrap_or_else(|| clock.now());
+    let deadline = clock
+        .now()
+        .checked_add(limit)
+        .unwrap_or_else(|| clock.now());
     let (program, args) = reader.argv.split_first().map_or_else(
         || (String::new(), [].as_slice()),
         |(program, args)| (program.clone(), args),
@@ -213,7 +216,9 @@ fn signal_group(id: u32) {
     let Some(pid) = pid_of(id) else {
         return;
     };
-    match rustix::process::kill_process_group(pid, Signal::KILL) { Ok(_) | Err(_) => {} }
+    match rustix::process::kill_process_group(pid, Signal::KILL) {
+        Ok(_) | Err(_) => {}
+    }
 }
 
 /// SIGKILL to the child itself. A refused id sends nothing.
@@ -221,7 +226,9 @@ fn signal_pid(id: u32) {
     let Some(pid) = pid_of(id) else {
         return;
     };
-    match rustix::process::kill_process(pid, Signal::KILL) { Ok(_) | Err(_) => {} }
+    match rustix::process::kill_process(pid, Signal::KILL) {
+        Ok(_) | Err(_) => {}
+    }
 }
 
 /// How the worker's wait ended.
@@ -246,7 +253,9 @@ impl Wake for PipeWake {
     fn wake(&self) {
         use std::os::unix::io::AsFd as _;
         let write = self.write.lock().unwrap_or_else(PoisonError::into_inner);
-        match rustix::io::write(write.as_fd(), b"x") { Ok(_) | Err(_) => {} }
+        match rustix::io::write(write.as_fd(), b"x") {
+            Ok(_) | Err(_) => {}
+        }
     }
 }
 
@@ -298,8 +307,10 @@ fn wait_for_exit(id: u32) {
         return;
     };
     loop {
-        match rustix::process::waitid(WaitId::Pid(pid), WaitIdOptions::EXITED | WaitIdOptions::NOWAIT)
-        {
+        match rustix::process::waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+        ) {
             Ok(_) => return,
             Err(Errno::INTR) => {}
             Err(_) => return,
@@ -327,7 +338,9 @@ fn run(
     let mut stdout = child.stdout.take();
     if let Some(stdout) = stdout.as_mut() {
         use std::os::unix::io::AsFd as _;
-        match rustix::io::ioctl_fionbio(stdout.as_fd(), true) { Ok(_) | Err(_) => {} }
+        match rustix::io::ioctl_fionbio(stdout.as_fd(), true) {
+            Ok(_) | Err(_) => {}
+        }
     }
     let (wake_read, wake_write) = match std::io::pipe() {
         Ok((read, write)) => (read, write),
@@ -343,8 +356,12 @@ fn run(
     };
     {
         use std::os::unix::io::AsFd as _;
-        match rustix::io::ioctl_fionbio(wake_read.as_fd(), true) { Ok(_) | Err(_) => {} }
-        match rustix::io::ioctl_fionbio(wake_write.as_fd(), true) { Ok(_) | Err(_) => {} }
+        match rustix::io::ioctl_fionbio(wake_read.as_fd(), true) {
+            Ok(_) | Err(_) => {}
+        }
+        match rustix::io::ioctl_fionbio(wake_write.as_fd(), true) {
+            Ok(_) | Err(_) => {}
+        }
     }
     let wake: Arc<dyn Wake> = Arc::new(PipeWake {
         write: Mutex::new(wake_write),
@@ -357,7 +374,9 @@ fn run(
         .name("tui-paste-watch".to_owned())
         .spawn(move || {
             wait_for_exit(id);
-            match exited_tx.send(()) { Ok(_) | Err(_) => {} }
+            match exited_tx.send(()) {
+                Ok(_) | Err(_) => {}
+            }
             watcher_wake.wake();
         });
     let watcher = match watcher {
@@ -422,7 +441,9 @@ fn run(
     match exited_rx.recv() {
         Ok(_) | Err(_) => {}
     }
-    match watcher.join() { Ok(_) | Err(_) => {} }
+    match watcher.join() {
+        Ok(_) | Err(_) => {}
+    }
     let status = child.wait().map(|status| status.success()).unwrap_or(false);
     finish(end, status, out, decode)
 }
