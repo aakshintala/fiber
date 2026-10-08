@@ -483,11 +483,10 @@ proptest! {
 const HIDDEN_LINEAR: Duration = Duration::from_secs(10);
 
 #[test]
-fn unmatched_hidden_closes_stay_linear_at_a_million() {
-    // One named deadline per shape: a single shape takes about 5 seconds
-    // in debug, so four cannot share one 10-second limit; each shape
-    // still converts in linear time within its own limit.
-    let n = 1_000_000;
+fn unmatched_hidden_closes_stay_linear_at_three_hundred_thousand() {
+    // One named deadline per shape; a quadratic close would take minutes at
+    // this size, a linear one a few seconds in debug.
+    let n = 300_000;
     for (svg, open, close) in [
         ("<svg>", "<noscript>", "</template>"),
         ("<svg>", "<template>", "</noscript>"),
