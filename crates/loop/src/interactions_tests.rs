@@ -11,7 +11,9 @@
 
 use std::sync::{Arc, mpsc};
 use std::thread;
+use std::time::Duration;
 
+use contract::clock::Clock as _;
 use contract::clock::Wake;
 use contract::events::Interaction;
 use contract::inbox::Delivery;
@@ -22,6 +24,9 @@ use log::Log;
 
 use crate::progress::{SharedWake, Stream};
 use crate::{Loop, Model};
+
+/// Bound on every wait in this test: the raise park and the answer receive.
+const DEADLINE: Duration = Duration::from_secs(5);
 
 /// Rules that hold nothing.
 struct Still;
@@ -131,17 +136,22 @@ fn a_cancel_landing_before_the_take_declines_the_ask() {
     let wake = Arc::new(SharedWake::default());
     let action = ActionId("a_1".into());
     let stream = Arc::new(Stream::new(Arc::clone(&wake), action.clone(), true));
-    // A running call raises from its own thread and blocks, as it does.
+    // A running call raises from its own thread and blocks, as it does,
+    // reporting its answer for a bounded receive.
+    let (answer_tx, answer_rx) = mpsc::channel();
     let asker = Arc::clone(&stream);
-    let answered = thread::spawn(move || asker.ask(asking()));
-    // Each raise bumps the wake, so the park never misses one.
+    let asked = thread::spawn(move || {
+        let _sent = answer_tx.send(asker.ask(asking()));
+    });
+    // The raise is the only bump, and the wake retains it, so one bounded
+    // park sees it whenever it lands.
     let clock = fakes::clock::FakeClock::new();
-    loop {
-        if format!("{:?}", stream.asking()).contains("\"raised\"") {
-            break;
-        }
-        wake.park(clock.as_ref(), None);
-    }
+    let deadline = clock.now() + DEADLINE;
+    wake.park(clock.as_ref(), Some(deadline));
+    assert!(
+        format!("{:?}", stream.asking()).contains("\"raised\""),
+        "the call raised its ask"
+    );
     // The cancel lands after the take, before the decision read.
     let cancel = Arc::clone(&looped.cancel);
     super::AFTER_TAKE.with(|hook| {
@@ -158,7 +168,13 @@ fn a_cancel_landing_before_the_take_declines_the_ask() {
     assert_eq!(resolved.payload["by"], "fiber");
     assert_eq!(resolved.payload["declined"], true);
     assert!(stream.asking().pending().is_none());
-    assert_eq!(answered.join().unwrap(), Answered::NoAnswer);
+    assert_eq!(
+        answer_rx
+            .recv_timeout(DEADLINE)
+            .expect("the cancel declined the ask"),
+        Answered::NoAnswer
+    );
+    asked.join().expect("the asker exited");
 }
 
 #[test]
