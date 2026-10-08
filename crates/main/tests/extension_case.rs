@@ -494,10 +494,58 @@ fiber.provider("acme", {{ cost = {{ timeout = 5000, run = function() return 0.5 
 fn unsupported_provider_call_is_a_malformed_case() {
     let setup = setup("");
     let value = json!({
-        "call": {"provider": "openrouter", "function": "models", "arg": {}},
+        "call": {"provider": "openrouter", "function": "quota", "arg": {}},
         "returns": []
     });
-    assert_malformed(&run_case(&setup, "unsupported", &value), "cost");
+    let output = run_case(&setup, "unsupported", &value);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("FAIL "), "{stdout}");
+    assert!(
+        stdout.contains("cost") && stdout.contains("models"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn provider_models_call_cases_match_returns_errors_and_use_no_socket() {
+    let server =
+        ProviderServer::start([Response::status(200, r#"{"live":true}"#.as_bytes())]).unwrap();
+    let setup = setup_named(
+        "github.com/aakshintala/fiber/providers/openrouter",
+        r#"fiber.provider("openrouter", { models = { timeout = 5000, run = function() return {
+  { id = "m1", protocol = "openai-responses", base_url = "http://127.0.0.1:1/v1", context_window = 1000 },
+  { id = "m2", protocol = "openai-responses", base_url = "http://127.0.0.1:1/v1", context_window = 1000 },
+} end } })"#,
+    );
+    let good = json!({
+        "call": {"provider": "openrouter", "function": "models", "arg": {}},
+        "returns": [{"id": "m1"}, {"id": "m2"}]
+    });
+    assert_success(&run_case(&setup, "models-match", &good));
+    assert!(server.requests().is_empty(), "call case opened a socket");
+
+    let mismatch = json!({
+        "call": {"provider": "openrouter", "function": "models", "arg": {}},
+        "returns": [{"id": "m1"}]
+    });
+    assert_failure(&run_case(&setup, "models-mismatch", &mismatch), "returns");
+    assert!(server.requests().is_empty(), "call case opened a socket");
+
+    let error_setup = setup_named(
+        "github.com/aakshintala/fiber/providers/openrouter",
+        r#"fiber.provider("openrouter", { models = { timeout = 5000, run = function() error("discovery failed") end } })"#,
+    );
+    let error_case = json!({
+        "call": {"provider": "openrouter", "function": "models", "arg": {}},
+        "error": {"code": "extension_failed"}
+    });
+    assert_success(&run_case(&error_setup, "models-error", &error_case));
 }
 
 #[test]
