@@ -265,34 +265,22 @@ impl Find {
         }
     }
 
-    /// Reconciles the current match with rescanned pages: the equal match
-    /// whose `nth` is nearest the old one stays current and keeps a
-    /// pending reveal, else the first match after the old key's place in
-    /// page order, wrapping, else none, and nothing is revealed.
+    /// Reconciles the current match with rescanned pages: the first equal
+    /// match stays current and keeps a pending reveal, else the first match
+    /// after the old key's place in page order, wrapping, else none, and
+    /// nothing is revealed. Equal matches share a page and count up in
+    /// render order, so the first equal match is the nearest to the old one.
     fn reconcile(&mut self, old: Match) {
-        let mut best: Option<&Match> = None;
-        let mut after: Option<&Match> = None;
-        let mut first: Option<&Match> = None;
-        for got in self.flat() {
-            first.get_or_insert(got);
-            if got.anchor == old.anchor {
-                let nearer = best.is_none_or(|best: &Match| {
-                    ordinal_distance(got, &old) < ordinal_distance(best, &old)
-                });
-                if nearer {
-                    best = Some(got);
-                }
-            }
-            if after.is_none() && (got.anchor.page, got.nth) > (old.anchor.page, old.nth) {
-                after = Some(got);
-            }
+        let flat = self.flat();
+        if let Some(kept) = flat.iter().find(|got| got.anchor == old.anchor) {
+            self.current = Some((**kept).clone());
+            return;
         }
-        if let Some(kept) = best {
-            self.current = Some(kept.clone());
-        } else {
-            self.current = after.or(first).cloned();
-            self.reveal = false;
-        }
+        let after = flat
+            .iter()
+            .find(|got| (got.anchor.page, got.nth) > (old.anchor.page, old.nth));
+        self.current = after.or(flat.first()).map(|got| (**got).clone());
+        self.reveal = false;
     }
 
     /// The count beside the query, as drawn.
@@ -329,14 +317,6 @@ impl Find {
         }
         count
     }
-}
-
-/// How far apart two matches are: pages first, then `nth`.
-fn ordinal_distance(got: &Match, old: &Match) -> usize {
-    got.anchor
-        .page
-        .saturating_sub(old.anchor.page)
-        .saturating_add(got.nth.saturating_sub(old.nth))
 }
 
 /// One logical line's hash: what identifies it across rescans.
@@ -804,7 +784,6 @@ impl App {
         }
         if self.find.fetch.is_none()
             && self.find.current.is_none()
-            && self.find.total > 0
             && !self.find.wants(self.screen.pages())
             && let Some(first) = self.find.flat().first().cloned().cloned()
         {
