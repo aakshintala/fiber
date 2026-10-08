@@ -428,6 +428,10 @@ fn attribute(tag: &Tag, wanted: &str) -> Option<String> {
 mod tests;
 
 #[cfg(test)]
+#[path = "markdown_bounds_tests.rs"]
+mod bounds_tests;
+
+#[cfg(test)]
 #[path = "markdown_props_tests.rs"]
 mod props_tests;
 

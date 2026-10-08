@@ -17,6 +17,10 @@ use std::cell::RefCell;
 /// A block is large while its layout's size is at least this: 1 MiB.
 pub const LARGE: usize = 1 << 20;
 
+/// A block is byte-tracked while its layout's size is at least this:
+/// 64 KiB.
+pub const CHAIN: usize = 64 << 10;
+
 /// How many large blocks one thread's scopes can track alive at once.
 const SLOTS: usize = 64;
 
@@ -166,7 +170,7 @@ unsafe impl GlobalAlloc for Counting {
 /// After `f` returns, when more large blocks were alive at once than the
 /// table holds.
 #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
-pub fn large_blocks_during<T>(f: impl FnOnce() -> T) -> (T, usize) {
+pub fn large_blocks_during<T>(f: impl FnOnce() -> T) -> Counted<T> {
     let mut outer = 0;
     tracked(|tracked| {
         tracked.depth += 1;
@@ -184,6 +188,62 @@ pub fn large_blocks_during<T>(f: impl FnOnce() -> T) -> (T, usize) {
         "more than {SLOTS} large blocks were alive at once; the count is too low"
     );
     (value, peak)
+}
+
+/// A scope's value with the most large blocks alive at once while it ran.
+pub type Counted<T> = (T, usize);
+
+/// A scope's value with the byte peaks [`bytes_during`] measured.
+pub type Metered<T> = (T, Bytes);
+
+/// The byte peaks one [`bytes_during`] scope measured. It copies out the
+/// slot table when the scope ends, so [`Bytes::peak_without`] reads no
+/// thread state. Without [`Counting`] installed both peaks are 0.
+#[derive(Clone, Copy, Debug)]
+pub struct Bytes {
+    peak: usize,
+    withouts: [(usize, usize); SLOTS],
+}
+
+impl Bytes {
+    /// The most bytes allocated on this thread and not yet freed at once
+    /// while the scope ran, counted from the scope's start and never
+    /// below 0.
+    pub fn peak(self) -> usize {
+        self.peak
+    }
+
+    /// The same peak with the slotted block living at `address` at the
+    /// scope's end left out at every moment it was slotted; an address
+    /// that is no slot's gives [`Bytes::peak`].
+    pub fn peak_without(self, address: *const u8) -> usize {
+        let _ = self
+            .withouts
+            .iter()
+            .find(|(slot, _)| *slot == address.addr());
+        self.peak
+    }
+}
+
+/// Runs `f` and returns its value with the byte peaks this thread
+/// measured while it ran. Scopes nest as [`large_blocks_during`]'s do.
+/// Without [`Counting`] installed nothing is recorded and both peaks
+/// are 0.
+///
+/// # Panics
+///
+/// After `f` returns, when more byte-tracked blocks were alive at once
+/// than the table holds.
+#[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+pub fn bytes_during<T>(f: impl FnOnce() -> T) -> Metered<T> {
+    let value = f();
+    (
+        value,
+        Bytes {
+            peak: 0,
+            withouts: [(0, 0); SLOTS],
+        },
+    )
 }
 
 /// An open scope, closed when `f` returns or, if it unwinds, when dropped.

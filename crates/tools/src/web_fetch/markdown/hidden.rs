@@ -146,6 +146,14 @@ impl Hidden {
         }
     }
 
+    /// The bytes the open hidden elements retain: a test seam for the
+    /// byte bound. Task 5 puts the stack at one byte per element and
+    /// shrinks it back; until then this is today's three depth stacks.
+    #[cfg(test)]
+    pub(super) fn open_capacity(&self) -> usize {
+        8 * (self.svgs.capacity() + self.noscripts.capacity() + self.templates.capacity())
+    }
+
     /// Whether the head is still open after this text token.
     pub(super) fn text_is_in_head(&mut self, text: &str) -> bool {
         if !text.chars().all(|c| c.is_ascii_whitespace()) {

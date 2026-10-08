@@ -40,6 +40,13 @@ impl Writer {
         self.pre > 0
     }
 
+    /// The markdown written so far: a test seam for the output-multiple
+    /// argument, which checks the widest item marker.
+    #[cfg(test)]
+    pub(super) fn output(&self) -> &str {
+        &self.out
+    }
+
     pub(super) fn block_quote(&mut self, closing: bool) {
         self.block_break();
         self.quote = if closing {

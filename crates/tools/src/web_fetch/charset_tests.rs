@@ -433,3 +433,110 @@ fn a_meta_before_byte_1024_is_taken() {
     let (_, _, bytes) = pages().swap_remove(0);
     assert!(converted(None, &bytes, 1).contains('あ'));
 }
+
+/// Every `encoding_rs` encoding by its canonical label.
+fn encodings() -> Vec<(&'static str, &'static encoding_rs::Encoding)> {
+    let labels = [
+        "utf-8",
+        "ibm866",
+        "iso-8859-2",
+        "iso-8859-3",
+        "iso-8859-4",
+        "iso-8859-5",
+        "iso-8859-6",
+        "iso-8859-7",
+        "iso-8859-8",
+        "iso-8859-8-i",
+        "iso-8859-10",
+        "iso-8859-13",
+        "iso-8859-14",
+        "iso-8859-15",
+        "iso-8859-16",
+        "koi8-r",
+        "koi8-u",
+        "macintosh",
+        "windows-874",
+        "windows-1250",
+        "windows-1251",
+        "windows-1252",
+        "windows-1253",
+        "windows-1254",
+        "windows-1255",
+        "windows-1256",
+        "windows-1257",
+        "windows-1258",
+        "x-mac-cyrillic",
+        "gbk",
+        "gb18030",
+        "big5",
+        "euc-jp",
+        "iso-2022-jp",
+        "shift_jis",
+        "euc-kr",
+        "utf-16be",
+        "utf-16le",
+        "x-user-defined",
+        "replacement",
+    ];
+    labels
+        .into_iter()
+        .map(|label| {
+            let encoding = encoding_rs::Encoding::for_label(label.as_bytes())
+                .unwrap_or_else(|| panic!("{label} names an encoding"));
+            (label, encoding)
+        })
+        .collect()
+}
+
+/// `bytes` decoded through [`Decoding`] in pieces of `split`: the text
+/// handed over, joined.
+fn decoded_total(encoding: &'static encoding_rs::Encoding, bytes: &[u8], split: usize) -> String {
+    let mut decoding = Decoding::new(encoding);
+    let mut text = String::new();
+    let mut pieces = bytes.chunks(split.max(1)).peekable();
+    if pieces.peek().is_none() {
+        decoding.push(&[], true, &mut |part| text.push_str(part));
+    } else {
+        for piece in pieces {
+            decoding.push(piece, false, &mut |part| text.push_str(part));
+        }
+        decoding.push(&[], true, &mut |part| text.push_str(part));
+    }
+    text
+}
+
+#[test]
+fn every_encoding_expands_at_most_three_bytes_per_byte() {
+    // Fixed patterns first, so every encoding is covered whatever the
+    // property test below draws: all byte values, lone high bytes, and a
+    // split at every small size and either side of the decoder's room.
+    let mut pattern: Vec<u8> = (0..=255u8).cycle().take(8 * 1024).collect();
+    pattern.extend_from_slice(&[0xe3, 0x81]);
+    for (label, encoding) in encodings() {
+        for split in [1, 2, 3, 7, 1023, 1024, 1025, 64 * 1024] {
+            let text = decoded_total(encoding, &pattern, split);
+            assert!(
+                text.len() <= 3 * pattern.len(),
+                "{label}, split at {split}: {} bytes for {}",
+                text.len(),
+                pattern.len()
+            );
+        }
+    }
+}
+
+#[test]
+fn random_bytes_expand_at_most_three_bytes_per_byte() {
+    use proptest::prelude::*;
+    let encodings = encodings();
+    proptest!(|(choice in 0..encodings.len(), bytes in proptest::collection::vec(proptest::num::u8::ANY, 0..2048), split in 1..70000usize)| {
+        let (label, encoding) = encodings[choice];
+        let text = decoded_total(encoding, &bytes, split);
+        prop_assert!(
+            text.len() <= 3 * bytes.len(),
+            "{label}: {} bytes for {}",
+            text.len(),
+            bytes.len()
+        );
+    });
+}
