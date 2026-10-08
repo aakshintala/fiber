@@ -85,10 +85,7 @@ pub(super) fn run(
             }
             let mut session = Collect::new(limit);
             search(dir, &mut session);
-            let taken = session.take_problems();
-            if !taken.is_empty() {
-                problems.push((index, taken));
-            }
+            problems.push((index, session.take_problems()));
             hits.merge(session);
         }
         found

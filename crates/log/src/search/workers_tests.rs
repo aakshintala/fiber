@@ -477,7 +477,6 @@ fn taking_problems_leaves_the_hits() {
     out.hit(hit(Label::Message, 1, "s_a", 1));
     out.problem("one".to_owned());
     let taken = out.take_problems();
-    assert!(!taken.is_empty());
     assert_eq!((taken.problems.len(), taken.total), (1, 0));
     let found = out.found();
     assert_eq!((found.hits.len(), found.total), (1, 1));

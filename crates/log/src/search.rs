@@ -408,16 +408,10 @@ impl Collect {
 
     /// Moves this one's problems out, into one that holds only them.
     pub(super) fn take_problems(&mut self) -> Self {
-        Self {
-            problems: std::mem::take(&mut self.problems),
-            more_problems: std::mem::take(&mut self.more_problems),
-            ..Self::new(self.limit)
-        }
-    }
-
-    /// Whether this one holds no hit, count or problem.
-    pub(super) fn is_empty(&self) -> bool {
-        self.total == 0 && self.problems.is_empty() && self.more_problems == 0
+        let mut taken = Self::new(self.limit);
+        std::mem::swap(&mut taken.problems, &mut self.problems);
+        taken.more_problems = std::mem::take(&mut self.more_problems);
+        taken
     }
 
     /// Lists `problem`, or counts it once [`PROBLEMS`] are listed.
