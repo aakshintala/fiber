@@ -539,6 +539,7 @@ impl App {
                 | Key::CtrlO
                 | Key::CtrlG
                 | Key::CtrlR
+                | Key::CtrlF
                 | Key::CtrlC
                 | Key::AltUp
                 | Key::AltDown
@@ -583,6 +584,7 @@ impl App {
                 | Key::CtrlO
                 | Key::CtrlG
                 | Key::CtrlR
+                | Key::CtrlF
                 | Key::AltUp
                 | Key::AltDown
                 | Key::AltX
@@ -613,6 +615,7 @@ impl App {
                 | Key::F1
                 | Key::CtrlG
                 | Key::CtrlR
+                | Key::CtrlF
                 | Key::AltUp
                 | Key::AltDown
                 | Key::AltX

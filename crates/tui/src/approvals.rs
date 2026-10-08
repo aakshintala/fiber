@@ -284,6 +284,7 @@ impl Queue {
             | Key::PageDown
             | Key::End
             | Key::CtrlC
+            | Key::CtrlF
             | Key::F1
             | Key::CtrlO
             | Key::AltP

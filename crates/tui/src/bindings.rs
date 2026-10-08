@@ -195,6 +195,13 @@ pub(crate) const BINDINGS: &[Binding] = &[
     },
     Binding {
         area: "The conversation",
+        id: "search_next_prev",
+        description: "Next or previous match",
+        keys: "Enter or ↓, Shift+Enter or ↑, with search open",
+        other_paths: "",
+    },
+    Binding {
+        area: "The conversation",
         id: "jump_to_end",
         description: "Jump to the end",
         keys: "End",

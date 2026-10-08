@@ -435,6 +435,7 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
+        | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
@@ -760,6 +761,7 @@ fn a_click_on_a_row_opens_it() {
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
+        | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
@@ -2405,6 +2407,7 @@ fn stop(app: &mut App) -> Vec<Value> {
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
+        | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)

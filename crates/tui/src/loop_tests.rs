@@ -332,6 +332,7 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             | Input::Connected(..)
             | Input::ConnectFailed(_)
             | Input::Disconnected
+            | Input::FindDue(_)
             | Input::Files { .. } => "other".to_owned(),
             Input::Resize => "resize".to_owned(),
         })

@@ -532,6 +532,7 @@ mod through_the_app {
             Effect::None
             | Effect::Quit
             | Effect::ListFiles
+            | Effect::FindPause { .. }
             | Effect::Search { .. }
             | Effect::Editor { .. }
             | Effect::Exit(_)

@@ -253,6 +253,22 @@ impl<B: Backend> Loop<B> {
                             return Some(0);
                         }
                         Effect::ListFiles => self.list_files(),
+                        Effect::FindPause { generation, after } => {
+                            if let Some(out) = &self.files_out {
+                                let clock = Arc::clone(&self.clock);
+                                let out = out.clone();
+                                // A pause thread outliving the loop finds
+                                // the channel closed and returns.
+                                drop(
+                                    std::thread::Builder::new()
+                                        .name("tui-find-pause".to_owned())
+                                        .spawn(move || {
+                                            clock.sleep(after);
+                                            drop(out.send(Input::FindDue(generation)));
+                                        }),
+                                );
+                            }
+                        }
                         Effect::Search { generation, query } => {
                             if let Some(search) = &self.search {
                                 search.search(generation, query);
@@ -289,6 +305,10 @@ impl<B: Backend> Loop<B> {
                 self.app.disconnected();
             }
             Input::Files { generation, result } => self.app.on_files(generation, result),
+            Input::FindDue(generation) => {
+                let lines = self.app.find_due(generation);
+                self.send(&lines);
+            }
             Input::Resize => {
                 if let Some(Ok((width, height))) = self.tty.as_ref().map(term::size) {
                     self.app.set_size(width, height);
@@ -451,6 +471,7 @@ impl<B: Backend> Loop<B> {
                 | Input::Connected(..)
                 | Input::ConnectFailed(_)
                 | Input::Resize
+                | Input::FindDue(_)
                 | Input::Files { .. }) => self.stash.push_back(other),
             }
         }

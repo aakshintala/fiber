@@ -783,6 +783,7 @@ keyboard's reach.
 | Show or hide the rail | `toggle_rail` | ⌥R | drag its edge |
 | Search | `search` | Ctrl+F; Cmd+F where forwarded | |
 | Open the search results | `search_results` | Ctrl+F with search open | click the match count |
+| Next or previous match | `search_next_prev` | Enter or ↓, Shift+Enter or ↑, with search open | |
 | Jump to the end | `jump_to_end` | End | click "↓ New messages below" |
 | Select a queued steering message | `select_steering` | ⌥↑ ⌥↓ | its mouse target |
 | Amend it | `amend_steering` | Enter | its mouse target |

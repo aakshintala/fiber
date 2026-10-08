@@ -108,6 +108,9 @@ impl App {
         if let Some(effect) = self.offer_edit(&edit) {
             return effect;
         }
+        if let Some(effect) = self.find_edit(&edit) {
+            return effect;
+        }
         if self.search_edit(&edit) || (self.focus.is_some() && self.panel().is_none()) {
             return Effect::None;
         }
@@ -144,7 +147,8 @@ impl App {
             | Key::BackTab
             | Key::F1
             | Key::CtrlG
-            | Key::CtrlR => None,
+            | Key::CtrlR
+            | Key::CtrlF => None,
         }
     }
 
@@ -371,7 +375,8 @@ impl App {
             | Key::F1
             | Key::CtrlO
             | Key::CtrlG
-            | Key::CtrlR => return None,
+            | Key::CtrlR
+            | Key::CtrlF => return None,
         }
         Some(Effect::None)
     }
@@ -421,6 +426,7 @@ impl App {
     /// for its answer only the draft is cleared.
     pub(super) fn go_home(&mut self) {
         self.draft.clear();
+        self.close_find();
         if matches!(self.phase, Phase::Pending { .. }) {
             return;
         }
@@ -520,7 +526,8 @@ impl App {
             | Key::F1
             | Key::CtrlO
             | Key::CtrlG
-            | Key::CtrlR => Some(top),
+            | Key::CtrlR
+            | Key::CtrlF => Some(top),
         };
         Some(Effect::None)
     }

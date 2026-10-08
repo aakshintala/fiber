@@ -197,6 +197,7 @@ impl Offer {
             | Key::BackTab
             | Key::CtrlG
             | Key::CtrlR
+            | Key::CtrlF
             | Key::AltUp
             | Key::AltDown
             | Key::AltX

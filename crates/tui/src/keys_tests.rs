@@ -690,3 +690,16 @@ fn escape_zero_is_still_dropped() {
     assert_eq!(feed_all(&[b"\x1b[48;3u"]), Vec::new());
     assert_eq!(feed_all(&[b"\x1b[58;3u"]), Vec::new());
 }
+
+#[test]
+fn ctrl_f_and_cmd_f_parse() {
+    assert_eq!(
+        feed_all(&[&[0x06u8] as &[u8]]),
+        vec![Event::Key(Key::CtrlF)]
+    );
+    assert_eq!(feed_all(&[b"\x1b[102;5u"]), vec![Event::Key(Key::CtrlF)]);
+    assert_eq!(feed_all(&[b"\x1b[102;9u"]), vec![Event::Key(Key::CtrlF)]);
+    // Alt+F stays a word move, and another modifier is no binding.
+    assert_eq!(feed_all(&[b"\x1b[102;3u"]), edit(Edit::WordRight));
+    assert!(feed_all(&[b"\x1b[102;13u"]).is_empty());
+}

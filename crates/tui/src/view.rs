@@ -291,8 +291,11 @@ fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
         overlay_cross(buf, area, targets);
         return;
     }
-    // "Copied" takes the corner's first row while it shows.
-    y = y.saturating_add(u16::from(app.copied()));
+    // "Copied" takes the corner's first row while it shows, below the
+    // search bar while it is open (`docs/tui.md`, "Notices").
+    y = y
+        .saturating_add(u16::from(app.find_bar().is_some()))
+        .saturating_add(u16::from(app.copied()));
     for notice in app.notices() {
         let top = y;
         let mut wide = 0;
@@ -364,6 +367,11 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
         .map_or(area, |layout| chrome::body(&layout));
     if app.panel().is_some() || app.focused().is_some() || app.offer_open() {
         return None;
+    }
+    // The search bar's cursor at its query's end, while it is open
+    // (`docs/tui.md`, "Search").
+    if let Some(bar) = app.find_bar() {
+        return marks::bar_cursor(&bar, area);
     }
     let (rows, _, row, col) = input_box(app, area.width);
     let below = to_u16(rows.len().saturating_sub(row));
@@ -476,8 +484,9 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
     if app.copied() && area.height > 0 {
         let width = to_u16(COPIED.len());
         let x = area.x.saturating_add(area.width.saturating_sub(width));
+        let y = area.y.saturating_add(u16::from(app.find_bar().is_some()));
         let shown = usize::from(area.width);
-        buf.set_stringn(x, area.y, COPIED, shown, style(Role::Accent));
+        buf.set_stringn(x, y, COPIED, shown, style(Role::Accent));
     }
 }
 
