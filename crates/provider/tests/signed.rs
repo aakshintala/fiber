@@ -362,3 +362,66 @@ fn a_failed_credential_or_sign_keeps_its_text_apart_from_fiber_s_sentence() {
         );
     }
 }
+
+/// Adds the account-id header a codex `credential()` returns.
+struct AccountId;
+
+impl Signer for AccountId {
+    fn sign(&self, _: &SignRequest<'_>) -> Result<Vec<(String, String)>, contract::signing::Error> {
+        Ok(vec![(
+            "chatgpt-account-id".to_owned(),
+            "acct_secret".to_owned(),
+        )])
+    }
+}
+
+#[test]
+fn a_credential_header_value_is_redacted_in_a_failure() {
+    let server = ProviderServer::start([Response::status(500, "for acct_secret")]).unwrap();
+    let endpoint = endpoint("codex", &server, Arc::new(AccountId));
+    let (failure, _) = failed(Box::new(Responses::new(endpoint).request(&request())));
+    assert_eq!(failure.code, ErrorCode::ProviderUnavailable);
+    let said = failure.provider.unwrap();
+    assert_eq!(said.status, Some(500));
+    assert_eq!(said.message.as_str(), "for [redacted]");
+}
+
+/// Reports a credential no returned header carries, in the error it raises.
+struct Leaking {
+    credential: contract::Secret,
+}
+
+impl Signer for Leaking {
+    fn sign(&self, _: &SignRequest<'_>) -> Result<Vec<(String, String)>, contract::signing::Error> {
+        Err(contract::signing::Error::Credential {
+            code: ErrorCode::CredentialFailed,
+            message: "saw acct_secret".into(),
+        })
+    }
+
+    fn credentials(&self) -> Vec<contract::Secret> {
+        vec![self.credential.clone()]
+    }
+}
+
+#[test]
+fn a_sign_error_echoing_a_listed_credential_is_redacted() {
+    let server = ProviderServer::start([Response::status(500, "{}")]).unwrap();
+    let endpoint = endpoint(
+        "codex",
+        &server,
+        Arc::new(Leaking {
+            credential: contract::Secret::new("acct_secret".into()),
+        }),
+    );
+    let (failure, should_retry) = failed(Box::new(Responses::new(endpoint).request(&request())));
+    assert_eq!(failure.code, ErrorCode::CredentialFailed);
+    assert_eq!(should_retry, Some(false));
+    let said = failure.provider.unwrap();
+    assert_eq!(said.status, None);
+    assert_eq!(said.message.as_str(), "saw [redacted]");
+    assert!(
+        server.requests().is_empty(),
+        "an unsigned request is never sent"
+    );
+}
