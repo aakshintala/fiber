@@ -15,6 +15,24 @@ struct Link {
     bracket: bool,
 }
 
+/// The markdown output, at most fourteen times the decoded page. Every
+/// output byte is one of five kinds: text, markers (`#`, `-`, `N. `,
+/// `**`, `_`, backticks, ` | `, `---`, fences, `[`, `](`, `)`, `![`),
+/// newlines, indentation (at most 14 bytes, written only by an `<li>`),
+/// and quote prefixes (at most 16 bytes, written only before the first
+/// byte of a line that is not a newline). Text is never longer than its
+/// source, apart from character references, whose output stays under
+/// twice their source. Each prefixed line is charged to two distinct
+/// pieces of input: the one that wrote the newline before it and the one
+/// that wrote its first byte, each charged at most one line in each role.
+/// Per tag, the most it writes over its shortest source is `<li>` with 53
+/// bytes for 4 (a newline, 16 prefix, 14 indent and a `N. ` marker of at
+/// most 22), 13.25 times; `<h6>` writes 25 for 4, `<hr>` 23 for 4,
+/// `</pre>` 22 for 6, `<b>` 18 for 3, and a `pre` text line 18 for 2. The
+/// trailing newline adds at most 1 byte on a page of at least 1. So 13.25
+/// is the worst a page reaches, and 14 leaves margin; ordinary pages stay
+/// below 2. Charset expansion is counted apart: decoding hands over at
+/// most 3 bytes per downloaded byte.
 pub(super) struct Writer {
     out: String,
     /// Whether the last thing written was whitespace, so another is dropped.
