@@ -1158,7 +1158,9 @@ fn an_empty_query_clears_everything() {
         }
     );
     assert_eq!(query(&app), "");
+    // An empty query starts no scan, even at the current generation.
     assert!(app.find_due(4).is_empty());
+    assert!(!app.find.due);
     assert_eq!(app.find.total, 0);
     assert!(app.find.current.is_none());
     assert_eq!(count(&app), "");
@@ -1882,4 +1884,363 @@ fn a_match_one_row_above_marks_nothing() {
     app.jump(row.saturating_add(1));
     assert_eq!(app.top(), Some(row.saturating_add(1)));
     assert!(app.find_marks(Rect::new(0, 0, 40, 10)).is_empty());
+}
+
+/// An envelope of `kind` from `session` whose payload names command `id`.
+fn command_reply(kind: &str, session: &str, id: &str) -> contract::Envelope {
+    contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"command_id": id})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }
+}
+
+#[test]
+fn answers_takes_only_the_fetchs_reply_from_the_attached_session() {
+    let mut app = attached(40, 10);
+    let session = contract::SessionId(SESSION.to_owned());
+    // No fetch on the wire: nothing answers.
+    assert!(
+        !app.find
+            .answers(&command_reply("command_accepted", SESSION, "c_1"), &session)
+    );
+    app.find.fetch = Some(super::Fetch {
+        id: "c_1".to_owned(),
+        page: 0,
+        generation: 0,
+        held: Vec::new(),
+    });
+    assert!(
+        app.find
+            .answers(&command_reply("command_accepted", SESSION, "c_1"), &session)
+    );
+    assert!(
+        app.find
+            .answers(&command_reply("command_rejected", SESSION, "c_1"), &session)
+    );
+    assert!(
+        !app.find
+            .answers(&command_reply("text_completed", SESSION, "c_1"), &session)
+    );
+    assert!(!app.find.answers(
+        &command_reply("command_accepted", "s_other", "c_1"),
+        &session
+    ));
+    assert!(
+        !app.find
+            .answers(&command_reply("command_accepted", SESSION, "c_2"), &session)
+    );
+}
+
+/// An anchor on `page` for the record and reconcile tests: its line hash
+/// tells equal-looking matches apart.
+fn anchor_at(page: usize, hash: u64) -> super::Anchor {
+    super::Anchor {
+        page,
+        scopes: Vec::new(),
+        line_hash: hash,
+        line_len: 1,
+        at: 0..1,
+    }
+}
+
+/// A match on `page` with line hash `hash`, the `nth` of its kind there.
+fn match_at(page: usize, hash: u64, nth: usize) -> super::Match {
+    super::Match {
+        anchor: anchor_at(page, hash),
+        nth,
+    }
+}
+
+#[test]
+fn record_caps_only_past_the_limit() {
+    let mut app = attached(40, 10);
+    // Three matches of room left: three found fill it without capping.
+    app.find.total = super::MAX_MATCHES - 3;
+    let found: Vec<_> = (0..3).map(|_| (anchor_at(0, 1), 0usize, false)).collect();
+    let kept = app.find.record(0, 1, found);
+    assert_eq!(kept.len(), 3);
+    assert!(
+        !app.find.capped,
+        "exactly the room left is not past the cap"
+    );
+    assert_eq!(app.find.total, super::MAX_MATCHES);
+    let more: Vec<_> = (0..4).map(|_| (anchor_at(1, 1), 0usize, false)).collect();
+    assert!(app.find.record(1, 1, more).is_empty());
+    assert!(app.find.capped);
+}
+
+#[test]
+fn a_page_wants_scanning_until_it_is_scanned_at_its_revision() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["needle"]);
+    assert_eq!(app.pages().page_count(), 1);
+    assert!(app.find.wants(app.pages()), "a page never scanned wants it");
+    let ranges = search_all(&mut app, &log, "needle");
+    assert!(ranges.is_empty());
+    assert!(!app.find.wants(app.pages()), "a scanned page wants nothing");
+}
+
+#[test]
+fn scanning_holds_while_a_page_waits_or_a_fetch_is_on_the_wire() {
+    // Typed, not yet due: nothing fetched, a page unscanned.
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["needle"]);
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    for ch in "needle".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    assert!(app.find.fetch.is_none());
+    assert!(app.find.scanning(app.pages()));
+    // A fetch on the wire keeps it scanning even at the cap.
+    let (mut app, _, _) = dropped_fetch();
+    app.find.capped = true;
+    assert!(app.find.scanning(app.pages()));
+}
+
+/// A two-page app whose first page drops with no `needle` on it, and whose
+/// last page holds one, searched: the fetch for the first page is on the
+/// wire while the last page's match is already kept. Returns the app, its
+/// log and the fetch line.
+fn resident_match_and_dropped_fetch() -> (App, Vec<contract::Envelope>, String) {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["filler"]);
+    for turn in 0..16 {
+        let filler: Vec<String> = (0..4).map(|line| format!("filler {turn} {line}")).collect();
+        let refs: Vec<&str> = filler.iter().map(String::as_str).collect();
+        text_turn(&mut log, &mut seq, &mut app, &refs);
+    }
+    text_turn(&mut log, &mut seq, &mut app, &["a needle here"]);
+    assert!(app.pages().part(0).is_none(), "the first page dropped");
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    let mut generation = 0u64;
+    for ch in "needle".chars() {
+        generation += 1;
+        assert_eq!(
+            app.on_key(Key::Char(ch), now()),
+            Effect::FindPause {
+                generation,
+                after: FIND_PAUSE,
+            }
+        );
+    }
+    let mut first = app.find_due(generation);
+    first.extend(app.find_outgoing());
+    assert_eq!(first.len(), 1, "one fetch on the wire");
+    (app, log, first.into_iter().next().unwrap_or_default())
+}
+
+#[test]
+fn the_count_says_scanning_beside_the_matches_it_has_kept() {
+    let (mut app, log, fetch) = resident_match_and_dropped_fetch();
+    assert_eq!(count(&app), "1 of 1…");
+    let ranges = answer_all(&mut app, &log, vec![fetch]);
+    assert_eq!(ranges.len(), 1);
+    assert_eq!(count(&app), "1 of 1");
+}
+
+#[test]
+fn marks_follow_the_bar_the_pause_and_the_kept_matches() {
+    // Each guard alone clears the marks: a pause still to pass, no kept
+    // match, and a closed bar.
+    let searched = || {
+        let mut app = attached(40, 10);
+        let mut log = Vec::new();
+        let mut seq = 0u64;
+        text_turn(&mut log, &mut seq, &mut app, &["needle one"]);
+        search_all(&mut app, &log, "needle");
+        app
+    };
+    let area = Rect::new(0, 0, 40, 10);
+    assert_eq!(searched().find_marks(area).len(), 6);
+    let mut app = searched();
+    app.find.due = false;
+    assert!(app.find_marks(area).is_empty(), "no marks before the pause");
+    let mut app = searched();
+    app.find.total = 0;
+    assert!(
+        app.find_marks(area).is_empty(),
+        "no marks with no kept match"
+    );
+    let mut app = searched();
+    app.find.open = false;
+    assert!(
+        app.find_marks(area).is_empty(),
+        "no marks with the bar closed"
+    );
+}
+
+#[test]
+fn a_mark_on_the_right_edge_is_not_drawn() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["xxxxx needle"]);
+    search_all(&mut app, &log, "needle");
+    // The match starts at column 6: an area six wide has no room for it.
+    assert!(app.find_marks(Rect::new(0, 0, 6, 10)).is_empty());
+    assert_eq!(app.find_marks(Rect::new(0, 0, 7, 10)).len(), 1);
+}
+
+#[test]
+fn a_mark_one_row_below_the_viewport_is_not_drawn() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    let mut replies: Vec<&str> = (0..30).map(|_| "filler").collect();
+    replies.push("needle top");
+    replies.extend((0..15).map(|_| "filler"));
+    text_turn(&mut log, &mut seq, &mut app, &replies);
+    search_all(&mut app, &log, "needle");
+    let current = app.find.current.clone().expect("a current match");
+    let (row, _) = app.current_place(&current).expect("a row");
+    // The match on the viewport's last row shows; one row lower it does not.
+    // "needle" is six chars, one mark each.
+    app.jump(row.saturating_sub(9));
+    assert_eq!(app.find_marks(Rect::new(0, 0, 40, 10)).len(), 6);
+    app.jump(row.saturating_sub(10));
+    assert!(app.find_marks(Rect::new(0, 0, 40, 10)).is_empty());
+}
+
+#[test]
+fn a_match_on_the_last_row_marks_it_when_that_row_is_on_top() {
+    // A one-row screen: the session's last row is the only row it can top.
+    let mut app = attached(40, 1);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    // A running turn: its last row is the reply, not a completed marker.
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": "needle last"}),
+        Some("a_m"),
+    ));
+    search_all(&mut app, &log, "needle");
+    let current = app.find.current.clone().expect("a current match");
+    let (row, _) = app.current_place(&current).expect("a row");
+    app.jump(row);
+    assert_eq!(app.top(), Some(row));
+    assert_eq!(app.find_marks(Rect::new(0, 0, 40, 1)).len(), 6);
+}
+
+#[test]
+fn a_match_across_a_soft_wrap_marks_each_drawn_cell_once() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    let reply = format!("{} brown fox jumps", "x".repeat(33));
+    text_turn(&mut log, &mut seq, &mut app, &[reply.as_str()]);
+    search_all(&mut app, &log, "brown fox");
+    let marks = app.find_marks(Rect::new(0, 0, 40, 10));
+    let mut cells: Vec<(u16, u16)> = marks.iter().map(|(rect, _)| (rect.x, rect.y)).collect();
+    let drawn = cells.len();
+    cells.sort();
+    cells.dedup();
+    assert_eq!(cells.len(), drawn, "a cell marked twice");
+    assert_eq!(drawn, 8, "brown and fox, the wrap's space is no cell");
+}
+
+#[test]
+fn find_lost_ends_only_a_running_scan_on_an_open_bar() {
+    let mut app = attached(40, 10);
+    // Open bar, no fetch on the wire: nothing is lost.
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    app.find_lost();
+    assert!(!app.find.incomplete);
+    assert_eq!(app.notices.newest(), None);
+}
+
+#[test]
+fn find_matches_counts_the_kept_matches() {
+    let (mut app, log) = three_matches();
+    assert!(search_all(&mut app, &log, "needle").is_empty());
+    assert_eq!(app.find_matches(), 3);
+}
+
+#[test]
+fn reconcile_keeps_the_equal_match_then_moves_after_the_old_place_and_wraps() {
+    let mut app = attached(40, 10);
+    app.find.matches = std::collections::BTreeMap::from([
+        (0, vec![match_at(0, 1, 0)]),
+        (1, vec![match_at(1, 2, 0)]),
+        (2, vec![match_at(2, 1, 0)]),
+        (3, vec![match_at(3, 1, 0)]),
+    ]);
+    app.find.total = 4;
+    // The old match is gone from page 1: the next match after its place
+    // is on page 2, not the other line at the same place or page 0.
+    app.find.reveal = true;
+    app.find.reconcile(match_at(1, 1, 0));
+    assert_eq!(app.find.current.as_ref().map(|m| m.anchor.page), Some(2));
+    assert!(!app.find.reveal);
+    // An equal match stays current and keeps a pending reveal.
+    app.find.reveal = true;
+    app.find.reconcile(match_at(2, 1, 0));
+    assert_eq!(app.find.current.as_ref().map(|m| m.anchor.page), Some(2));
+    assert!(app.find.reveal);
+    // Nothing after the old place: the scan wraps to the first match.
+    app.find.reconcile(match_at(4, 9, 0));
+    assert_eq!(app.find.current.as_ref().map(|m| m.anchor.page), Some(0));
+    assert!(!app.find.reveal);
+}
+
+#[test]
+fn a_page_of_257_lines_keeps_its_first_chunk_when_its_last_line_is_fetched_alone() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    // A turn of 257 lines: its start, 255 replies and its end.
+    let replies: Vec<String> = (0..255)
+        .map(|line| {
+            if line == 0 {
+                "a needle here".to_owned()
+            } else {
+                format!("filler {line}")
+            }
+        })
+        .collect();
+    let refs: Vec<&str> = replies.iter().map(String::as_str).collect();
+    text_turn(&mut log, &mut seq, &mut app, &refs);
+    for _ in 0..20 {
+        text_turn(&mut log, &mut seq, &mut app, &["filler"]);
+    }
+    assert!(app.pages().part(0).is_none(), "the first page dropped");
+    let (first_seq, last_seq) = app
+        .pages()
+        .index()
+        .pages()
+        .first()
+        .map(|page| (page.first_seq.0, page.last_seq.0))
+        .expect("a first page");
+    assert_eq!(last_seq - first_seq, 256, "the page holds 257 lines");
+    let ranges = search_all(&mut app, &log, "needle");
+    assert_eq!(
+        ranges,
+        [(first_seq, first_seq + 255), (first_seq + 256, last_seq)]
+    );
+    // The match sits in the first chunk: the last line's fetch keeps it.
+    assert_eq!(count(&app), "1 of 1");
 }

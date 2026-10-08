@@ -150,6 +150,16 @@ fn matches_folds_case_per_character() {
 }
 
 #[test]
+fn a_query_longer_than_the_text_matches_nothing_and_the_scan_ends() {
+    // A window past the text's end never hits, and the scan stops there.
+    assert_eq!(matches("ab", "abc"), []);
+    assert_eq!(matches("", "a"), []);
+    // A match that ends exactly at the text's end is found.
+    assert_eq!(matches("xabc", "abc"), vec![1..4]);
+    assert_eq!(matches("abcabc", "abc"), vec![0..3, 3..6]);
+}
+
+#[test]
 fn a_logical_line_takes_the_scopes_of_its_first_row() {
     use crate::app::Target;
     use crate::rows::Rows;

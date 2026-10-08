@@ -249,3 +249,28 @@ fn the_current_match_is_brighter() {
     assert_eq!(app.on_key(Key::Enter, now), Effect::None);
     insta::assert_snapshot!("the_current_match_is_brighter", marked(&app, 40, 12));
 }
+
+#[test]
+fn the_bar_cursor_sits_after_the_query_on_the_bar_row() {
+    let mut app = replied(40, 12, "needle");
+    search(&mut app, "ab");
+    let (buf, _) = draw(&app, 40, 12);
+    let row_text = |y: u16| -> String {
+        (0..40u16)
+            .filter_map(|x| buf.cell((x, y)).map(|cell| cell.symbol().to_owned()))
+            .collect()
+    };
+    // The bar's text as drawn: the cursor sits just past its query.
+    let (y, col) = (0..12u16)
+        .find_map(|y| {
+            row_text(y)
+                .find("find: ab")
+                .map(|byte| (y, row_text(y)[..byte].chars().count()))
+        })
+        .expect("the bar is drawn");
+    let x = u16::try_from(col + "find: ab".len()).expect("a column");
+    assert_eq!(
+        crate::view::cursor(&app, Rect::new(0, 0, 40, 12)),
+        Some(ratatui::layout::Position::new(x, y))
+    );
+}
