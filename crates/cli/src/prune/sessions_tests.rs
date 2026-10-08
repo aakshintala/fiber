@@ -498,37 +498,3 @@ fn an_old_root_whose_only_child_has_no_workspace_is_skipped_then_listed() {
         ["s_00000000000000a1", "s_00000000000000b2"]
     );
 }
-
-#[test]
-fn the_repository_probe_sees_bare_and_git_directories_as_inside() {
-    let root = fakes::TempDir::new("cli-prune-probe");
-    let plain = root.path().join("plain");
-    fs::create_dir_all(&plain).unwrap();
-    assert!(!super::super::in_repository(&plain));
-    let repo = root.path().join("repo");
-    fs::create_dir_all(&repo).unwrap();
-    assert!(
-        Command::new("git")
-            .args(["init", "-q"])
-            .arg(&repo)
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(super::super::in_repository(&repo));
-    assert!(super::super::in_repository(&repo.join(".git")));
-    let bare = root.path().join("bare.git");
-    assert!(
-        Command::new("git")
-            .args(["init", "-q", "--bare"])
-            .arg(&bare)
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(super::super::in_repository(&bare));
-}

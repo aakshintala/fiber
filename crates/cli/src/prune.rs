@@ -5,7 +5,6 @@
 
 use std::io::{self, BufReader, IsTerminal, Write};
 use std::path::Path;
-use std::process::Stdio;
 use std::time::SystemTime;
 
 use contract::ErrorCode;
@@ -204,21 +203,6 @@ fn prune_run(
         worktree_total,
         ask.err,
     )
-}
-
-/// Whether `cwd` is inside a git repository: `git -C cwd rev-parse
-/// --git-dir` exits 0, with stdin and stderr null. A failure to spawn git
-/// counts as outside.
-fn in_repository(cwd: &Path) -> bool {
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["rev-parse", "--git-dir"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
 }
 
 /// Prints every row: sessions by id, then worktrees by name, then `logs/`

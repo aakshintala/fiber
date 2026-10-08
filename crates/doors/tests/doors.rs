@@ -24,8 +24,8 @@ use contract::inbox::Delivery;
 use contract::shapes::{ContentPart, Failure, Origin};
 use contract::{ErrorCode, SessionId, TurnId};
 use doors::{
-    InstallSummary, Session, exit_before_session, failure, in_repository, install_approved, mint,
-    project, prompt, remove_approved,
+    InstallSummary, Session, exit_before_session, failure, install_approved, mint, project, prompt,
+    remove_approved, resolve_project,
 };
 use log::Log;
 use serde_json::Value;
@@ -275,21 +275,24 @@ fn the_project_is_gits_shared_directory_or_the_launch_directory() {
 }
 
 #[test]
-fn a_project_is_in_a_repository_only_when_it_is_not_the_launch_directory() {
+fn a_project_reports_whether_git_found_a_repository() {
     let temp = Temp::new();
+    let git = |args: &[&str], dir: &std::path::Path| {
+        let init = Command::new("git").args(args).arg(dir).status();
+        assert!(init.unwrap().success());
+    };
     let plain = temp.0.join("plain");
     fs::create_dir_all(&plain).unwrap();
-    assert!(!in_repository(&plain, &project(&plain)));
+    assert!(!resolve_project(&plain).in_repository);
     let repo = temp.0.join("repo");
     fs::create_dir_all(repo.join("docs")).unwrap();
-    let init = Command::new("git")
-        .arg("init")
-        .arg("-q")
-        .arg(&repo)
-        .status();
-    assert!(init.unwrap().success());
-    let docs = repo.join("docs");
-    assert!(in_repository(&docs, &project(&docs)));
+    git(&["init", "-q"], &repo);
+    assert!(resolve_project(&repo).in_repository);
+    assert!(resolve_project(&repo.join("docs")).in_repository);
+    assert!(resolve_project(&repo.join(".git")).in_repository);
+    let bare = temp.0.join("bare.git");
+    git(&["init", "-q", "--bare"], &bare);
+    assert!(resolve_project(&bare).in_repository);
 }
 
 /// A session's log and the door side opened on it, in `home` under `temp`.

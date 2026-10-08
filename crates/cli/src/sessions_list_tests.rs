@@ -13,7 +13,6 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -127,25 +126,29 @@ fn exited(id: &str, name: &str, how: &str, status: Option<Value>) -> Value {
     row
 }
 
-/// Runs the list against `answers` in `workspace` with project `identity`:
-/// the outcome, what it printed, and the command the hub read.
+/// A project at `path`, inside a repository or not.
+fn project_at(path: &str, in_repository: bool) -> doors::Project {
+    doors::Project {
+        path: path.into(),
+        in_repository,
+    }
+}
+
+/// Runs the list against `answers` in `project`: the outcome, what it
+/// printed, and the command the hub read.
 fn listing(
-    workspace: &Path,
-    identity: &Path,
+    project: &doors::Project,
     all: bool,
     json: bool,
     answers: &[Value],
 ) -> (Result<(), contract::shapes::Failure>, String, Value) {
-    let workspace = workspace.to_owned();
-    let identity = identity.to_owned();
+    let project = project.clone();
     let answers = answers.to_owned();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let mut hub = FakeHub::new(&answers);
         let mut out = Vec::new();
-        let ran = run(&workspace, &identity, all, json, &mut out, &mut || {
-            hub.connect()
-        });
+        let ran = run(&project, all, json, &mut out, &mut || hub.connect());
         let text = String::from_utf8(out).unwrap();
         let sent = hub.sent();
         tx.send((ran, text, sent)).unwrap_or(());
@@ -155,13 +158,7 @@ fn listing(
 
 /// The JSON Lines `fiber sessions --json` prints for `result`.
 fn json_rows(result: Value) -> Vec<Value> {
-    let (ran, out, _) = listing(
-        Path::new("/w"),
-        Path::new("/w"),
-        false,
-        true,
-        &[accepted(result)],
-    );
+    let (ran, out, _) = listing(&project_at("/w", false), false, true, &[accepted(result)]);
     ran.unwrap();
     out.lines()
         .map(|line| serde_json::from_str(line).unwrap())
@@ -175,8 +172,7 @@ fn empty() -> Value {
 #[test]
 fn inside_a_repository_without_all_the_request_names_the_project() {
     let (ran, _, sent) = listing(
-        Path::new("/r/w"),
-        Path::new("/r/.git"),
+        &project_at("/r/.git", true),
         false,
         false,
         &[accepted(empty())],
@@ -190,10 +186,9 @@ fn inside_a_repository_without_all_the_request_names_the_project() {
 
 #[test]
 fn with_all_or_outside_a_repository_the_request_names_no_project() {
-    for (identity, all) in [("/r/.git", true), ("/w", false)] {
+    for (identity, in_repository, all) in [("/r/.git", true, true), ("/w", false, false)] {
         let (ran, _, sent) = listing(
-            Path::new("/w"),
-            Path::new(identity),
+            &project_at(identity, in_repository),
             all,
             false,
             &[accepted(empty())],
@@ -210,8 +205,7 @@ fn with_all_or_outside_a_repository_the_request_names_no_project() {
 #[test]
 fn lines_before_the_answer_are_skipped() {
     let (ran, out, _) = listing(
-        Path::new("/w"),
-        Path::new("/w"),
+        &project_at("/w", false),
         false,
         true,
         &[
@@ -228,8 +222,7 @@ fn lines_before_the_answer_are_skipped() {
 #[test]
 fn a_rejection_is_a_failure_with_its_code_and_message() {
     let (ran, out, _) = listing(
-        Path::new("/w"),
-        Path::new("/w"),
+        &project_at("/w", false),
         false,
         false,
         &[hub_line(
@@ -246,7 +239,7 @@ fn a_rejection_is_a_failure_with_its_code_and_message() {
 
 #[test]
 fn an_end_before_the_answer_is_io_failed() {
-    let (ran, _, _) = listing(Path::new("/w"), Path::new("/w"), false, false, &[]);
+    let (ran, _, _) = listing(&project_at("/w", false), false, false, &[]);
     let failure = ran.unwrap_err();
     assert_eq!(failure.code, ErrorCode::IoFailed);
     assert!(
@@ -354,13 +347,7 @@ fn the_name_is_the_statuss_else_the_rows_and_an_empty_one_is_a_dash_in_text() {
             json!("")
         ]
     );
-    let (ran, out, _) = listing(
-        Path::new("/w"),
-        Path::new("/w"),
-        false,
-        false,
-        &[accepted(result)],
-    );
+    let (ran, out, _) = listing(&project_at("/w", false), false, false, &[accepted(result)]);
     ran.unwrap();
     let lines: Vec<&str> = out.lines().collect();
     assert!(lines[1].ends_with("  -"), "{}", lines[1]);
@@ -370,8 +357,7 @@ fn the_name_is_the_statuss_else_the_rows_and_an_empty_one_is_a_dash_in_text() {
 #[test]
 fn json_keys_come_in_the_documented_order() {
     let (ran, out, _) = listing(
-        Path::new("/w"),
-        Path::new("/w"),
+        &project_at("/w", false),
         false,
         true,
         &[accepted(json!({
@@ -393,8 +379,7 @@ fn json_keys_come_in_the_documented_order() {
 #[test]
 fn text_is_a_padded_table_with_a_header_and_two_decimal_spend() {
     let (ran, out, _) = listing(
-        Path::new("/w"),
-        Path::new("/w"),
+        &project_at("/w", false),
         false,
         false,
         &[accepted(json!({
@@ -420,13 +405,7 @@ fn a_multiline_name_is_one_row_in_text_and_whole_in_json() {
     let result = json!({"live": [live("s_1", idle(name))], "exited": []});
     let rows = json_rows(result.clone());
     assert_eq!(rows[0]["name"], json!(name));
-    let (ran, out, _) = listing(
-        Path::new("/w"),
-        Path::new("/w"),
-        false,
-        false,
-        &[accepted(result)],
-    );
+    let (ran, out, _) = listing(&project_at("/w", false), false, false, &[accepted(result)]);
     ran.unwrap();
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines.len(), 2, "{out}");
@@ -435,13 +414,7 @@ fn a_multiline_name_is_one_row_in_text_and_whole_in_json() {
 
 #[test]
 fn no_rows_prints_the_header_in_text_and_nothing_in_json() {
-    let (ran, out, _) = listing(
-        Path::new("/w"),
-        Path::new("/w"),
-        false,
-        false,
-        &[accepted(empty())],
-    );
+    let (ran, out, _) = listing(&project_at("/w", false), false, false, &[accepted(empty())]);
     ran.unwrap();
     assert_eq!(out, "id  state  spend  waits on  name\n");
     assert!(json_rows(empty()).is_empty());
