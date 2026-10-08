@@ -30,6 +30,7 @@ fn anything_but_an_imf_fixdate_is_none() {
         "Wed, 07 oct 2026 16:00:00 GMT",  // the month is exactly `Oct`
         "Wed, 07 Foo 2026 16:00:00 GMT",  // no such month
         "Wed, 07 Oct 26 16:00:00 GMT",    // the year is four digits
+        "Wed, 07 Oct 02026 16:00:00 GMT", // digit-only, but the year is five digits
         "Wed 07 Oct 2026 16:00:00 GMT",   // no comma after the weekday
         "Wed, 07 Oct 2026 16:00 GMT",     // no seconds
         "Wed, 07 Oct 2026 16:00:00 GMT ", // nothing after the zone
@@ -38,6 +39,37 @@ fn anything_but_an_imf_fixdate_is_none() {
         "Thu, 01 Jan 1970 00:00:60 GMT",  // no leap second
     ] {
         assert_eq!(http_date(text), None, "{text}");
+    }
+}
+
+#[test]
+fn every_month_name_parses_to_its_month() {
+    for (month, seconds) in [
+        ("Jan", 946_684_800),
+        ("Feb", 949_363_200),
+        ("Mar", 951_868_800),
+        ("Apr", 954_547_200),
+        ("May", 957_139_200),
+        ("Jun", 959_817_600),
+        ("Jul", 962_409_600),
+        ("Aug", 965_088_000),
+        ("Sep", 967_766_400),
+        ("Oct", 970_358_400),
+        ("Nov", 973_036_800),
+        ("Dec", 975_628_800),
+    ] {
+        let date = format!("Wed, 01 {month} 2000 00:00:00 GMT");
+        assert_eq!(http_date(&date), Some(seconds), "{date}");
+    }
+}
+
+#[test]
+fn every_thirty_day_month_accepts_day_thirty_and_rejects_day_thirty_one() {
+    for month in ["Apr", "Jun", "Sep", "Nov"] {
+        let accepted = format!("Wed, 30 {month} 2024 00:00:00 GMT");
+        let rejected = format!("Wed, 31 {month} 2024 00:00:00 GMT");
+        assert!(http_date(&accepted).is_some(), "{accepted}");
+        assert_eq!(http_date(&rejected), None, "{rejected}");
     }
 }
 

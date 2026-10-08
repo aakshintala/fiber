@@ -582,6 +582,22 @@ fn a_usage_limit_failure_names_the_reset_time() {
 }
 
 #[test]
+fn another_quota_shape_keeps_the_generic_status_message() {
+    let failed = Error::Status {
+        status: 429,
+        body: r#"{"error":{"code":"credit_balance_exhausted","message":"No credits left."}}"#
+            .to_owned(),
+        retry_after: None,
+        should_retry: None,
+        url: String::new(),
+    }
+    .failure("openai", &Secrets::default());
+
+    assert_eq!(failed.code, ErrorCode::QuotaExceeded);
+    assert_eq!(failed.message, "openai answered HTTP 429.");
+}
+
+#[test]
 fn a_usage_limit_failure_without_a_reset_names_no_time() {
     for body in [
         r#"{"error":{"code":"usage_limit_reached","message":"Limited."}}"#.to_owned(),
@@ -608,9 +624,16 @@ fn reset_times_name_the_civil_date_in_utc() {
     // Through the failure message, from `resets_at` alone: no clock is read.
     for (resets_at, day) in [
         (0_u64, "1970-01-01 00:00 UTC"),
+        (915_148_800_u64, "1999-01-01 00:00 UTC"),
+        (946_598_400_u64, "1999-12-31 00:00 UTC"),
+        (946_684_800_u64, "2000-01-01 00:00 UTC"),
+        (951_782_400_u64, "2000-02-29 00:00 UTC"),
+        (951_868_800_u64, "2000-03-01 00:00 UTC"),
         (1_835_395_200_u64, "2028-02-29 00:00 UTC"),
         (1_798_761_540_u64, "2026-12-31 23:59 UTC"),
         (4_102_444_800_u64, "2100-01-01 00:00 UTC"),
+        (4_107_542_400_u64, "2100-03-01 00:00 UTC"),
+        (13_574_563_200_u64, "2400-02-29 00:00 UTC"),
     ] {
         let body =
             format!(r#"{{"error":{{"code":"usage_not_included","resets_at":{resets_at}}}}}"#);
