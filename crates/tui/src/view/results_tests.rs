@@ -106,6 +106,20 @@ fn a_long_row_windows_around_its_match() {
 }
 
 #[test]
+fn joined_emoji_sequences_before_the_match_do_not_hide_it() {
+    let entry = Snippet {
+        before: String::new(),
+        line: format!("{}needle", "\u{1f469}\u{200d}\u{1f4bb}".repeat(100)),
+        at: 300..306,
+        after: String::new(),
+    };
+    let (text, hit) = super::entry_row(&entry, 80);
+    assert_eq!(crate::format::width(&text), 80);
+    assert!(text.contains("needle"), "the match stays visible: {text:?}");
+    assert_eq!(hit, 74..80);
+}
+
+#[test]
 fn a_long_preceding_line_never_hides_the_match() {
     // A 400-character line before the match at width 80: the match
     // text appears in the row.

@@ -7,6 +7,7 @@ use std::ops::Range;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
 
 use super::to_u16;
 use crate::app::Snippet;
@@ -122,21 +123,21 @@ fn entry_row(entry: &Snippet, width: u16) -> (String, Range<u16>) {
 }
 
 /// The cells `win..stop` of `text` with the match `start..end` relative
-/// to them: chars straddling an edge are dropped, so the row never runs
+/// to them: graphemes straddling an edge are dropped, so the row never runs
 /// past the view (`docs/tui.md`, "Search").
 fn windowed(text: &str, start: usize, end: usize, win: usize, stop: usize) -> (String, Range<u16>) {
     let mut out = String::new();
     let mut cells = 0usize;
     let mut shown = 0u16..0u16;
-    let mut wide = [0u8; 4];
-    for ch in text.chars() {
-        let step = crate::format::width(ch.encode_utf8(&mut wide));
+    for grapheme in Span::raw(text).styled_graphemes(Style::default()) {
+        // Use the whole-string width measure so traversal agrees with the bounds.
+        let step = crate::format::width(grapheme.symbol);
         let next = cells.saturating_add(step);
         if cells >= win && next <= stop {
             if cells == start {
                 shown.start = to_u16(crate::format::width(&out));
             }
-            out.push(ch);
+            out.push_str(grapheme.symbol);
             if next == end {
                 shown.end = to_u16(crate::format::width(&out));
             }
