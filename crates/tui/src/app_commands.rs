@@ -149,6 +149,7 @@ impl App {
             | Key::F1
             | Key::CtrlG
             | Key::CtrlR
+            | Key::CtrlV
             | Key::CtrlF => None,
         }
     }
@@ -359,6 +360,8 @@ impl App {
                     return Some(self.on_enter());
                 }
             }
+            // Ctrl+V never reaches the draft behind an open panel.
+            Key::CtrlV => {}
             Key::Char(_)
             | Key::Backspace
             | Key::CtrlC
@@ -528,6 +531,7 @@ impl App {
             | Key::CtrlO
             | Key::CtrlG
             | Key::CtrlR
+            | Key::CtrlV
             | Key::CtrlF => Some(top),
         };
         Some(Effect::None)

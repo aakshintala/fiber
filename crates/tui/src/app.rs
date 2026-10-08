@@ -357,6 +357,7 @@ impl App {
             Key::AltP => self.toggle_panel(),
             Key::AltR | Key::AltDigit(_) => Effect::None,
             Key::CtrlR => self.open_search(),
+            Key::CtrlV => Effect::None,
             Key::CtrlF => Effect::None,
             Key::CtrlG => self.open_in_editor(),
             Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),

@@ -238,6 +238,7 @@ impl App {
             | Key::F1
             | Key::CtrlG
             | Key::CtrlR
+            | Key::CtrlV
             | Key::CtrlF
             | Key::AltUp
             | Key::AltDown
@@ -284,7 +285,7 @@ impl App {
             Key::Esc => self.history.search = None,
             // Keys that would change the draft behind the panel do
             // nothing while it is open.
-            Key::Tab | Key::BackTab | Key::CtrlG | Key::AltUp | Key::AltDown | Key::AltX => {}
+            Key::Tab | Key::BackTab | Key::CtrlG | Key::CtrlV | Key::AltUp | Key::AltDown | Key::AltX => {}
             Key::CtrlC
             | Key::CtrlO
             | Key::CtrlF

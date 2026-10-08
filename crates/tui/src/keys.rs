@@ -59,6 +59,8 @@ pub(crate) enum Key {
     /// Alt+1 to Alt+9 (`ESC 1` to `ESC 9` in one read, `CSI 49;3u` to
     /// `CSI 57;3u`): `rail_row_n`, the digit.
     AltDigit(u8),
+    /// Ctrl+V (`0x16`, `CSI 118;5u`): `paste_image`.
+    CtrlV,
 }
 
 /// One key that edits the draft (`docs/tui.md`, "The input box",
@@ -204,6 +206,7 @@ pub(crate) fn default_event(stroke: &Stroke) -> Option<Event> {
         "ctrl+o" => key(Key::CtrlO),
         "ctrl+g" => key(Key::CtrlG),
         "ctrl+r" => key(Key::CtrlR),
+        "ctrl+v" => key(Key::CtrlV),
         "ctrl+f" | "super+f" => key(Key::CtrlF),
         "ctrl+j" => edit(Edit::CtrlJ),
         "alt+a" => key(Key::AltA),

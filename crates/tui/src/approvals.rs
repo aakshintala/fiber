@@ -217,7 +217,7 @@ impl Approval {
             // Tab, Shift+Tab, Ctrl+G and Ctrl+R do nothing in the panel,
             // which stands in the input box's place; F1 opens the key map
             // over it.
-            Key::Esc | Key::AltA | Key::Tab | Key::BackTab | Key::CtrlG | Key::CtrlR => {}
+            Key::Esc | Key::AltA | Key::Tab | Key::BackTab | Key::CtrlG | Key::CtrlR | Key::CtrlV => {}
             // The layout's keys reach the screen behind the panel.
             Key::PageUp
             | Key::PageDown
