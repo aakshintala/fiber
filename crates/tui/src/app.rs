@@ -51,6 +51,7 @@ mod links;
 #[path = "app_mouse.rs"]
 mod mouse;
 mod offer;
+mod paste;
 pub(crate) mod results;
 mod screen;
 mod select;
@@ -133,6 +134,9 @@ pub(crate) enum Effect {
     },
     /// Open this URL with the link opener (`docs/tui.md`, "Links").
     OpenLink(String),
+    /// Read an image from the clipboard for this ticket, off the loop
+    /// thread: the worker posts the base64 or the notice to show.
+    ReadImage(u64),
 }
 
 /// Which command the terminal sent and waits on.
@@ -188,6 +192,8 @@ pub(crate) struct App {
     /// Home's state, once `run` sets it; `None` keeps today's screen.
     home: Option<home::Home>,
     draft: Draft,
+    /// The one clipboard image read at a time, and its ticket.
+    paste: paste::Paste,
     phase: Phase,
     link: Link,
     /// Lines held until the hub connects: the `start` of an early Enter.
@@ -247,6 +253,7 @@ impl App {
             workspace,
             home: None,
             draft: Draft::default(),
+            paste: paste::Paste::default(),
             phase: Phase::Starting,
             link: Link::Waiting,
             held: Vec::new(),
@@ -357,7 +364,7 @@ impl App {
             Key::AltP => self.toggle_panel(),
             Key::AltR | Key::AltDigit(_) => Effect::None,
             Key::CtrlR => self.open_search(),
-            Key::CtrlV => Effect::None,
+            Key::CtrlV => self.paste.press(self.draft.serial()),
             Key::CtrlF => Effect::None,
             Key::CtrlG => self.open_in_editor(),
             Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),

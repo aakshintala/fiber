@@ -33,7 +33,7 @@ enum Piece {
         text: String,
     },
     /// A pasted image, shown as its positional label.
-    #[allow(dead_code, reason = "the paste gate holds images in a later task")]
+    #[allow(dead_code, reason = "the loop lands reads in a later task")]
     Image {
         /// The image's bytes, in base64.
         data: Arc<str>,
@@ -50,7 +50,6 @@ pub(crate) struct Draft {
     next: usize,
     /// The draft's serial: a read's result lands only while the box holds
     /// the draft it started for.
-    #[allow(dead_code, reason = "the paste gate holds images in a later task")]
     serial: u64,
 }
 
@@ -329,7 +328,7 @@ impl Draft {
     }
 
     /// Inserts the pasted image's base64 at the cursor, as one piece.
-    #[allow(dead_code, reason = "the paste gate holds images in a later task")]
+    #[allow(dead_code, reason = "the loop lands reads in a later task")]
     pub(crate) fn insert_image(&mut self, data: Arc<str>) {
         self.put(Piece::Image { data });
     }
@@ -343,7 +342,6 @@ impl Draft {
     }
 
     /// The draft's serial.
-    #[allow(dead_code, reason = "the paste gate holds images in a later task")]
     pub(crate) fn serial(&self) -> u64 {
         self.serial
     }
@@ -385,7 +383,7 @@ impl Draft {
     /// image again, first occurrence only; an image whose label is gone is
     /// dropped, and other text stays text. The cursor ends at the end,
     /// under a fresh serial.
-    #[allow(dead_code, reason = "the paste gate holds images in a later task")]
+    #[allow(dead_code, reason = "the loop lands reads in a later task")]
     pub(crate) fn edited(&mut self, text: &str) {
         let images: Vec<Arc<str>> = self
             .pieces
@@ -714,7 +712,7 @@ fn token(number: usize, text: String) -> Piece {
 /// The image `text` names at its start: `[Image #N]` for one of `images`,
 /// 1 to their count, each relinking once through `used`. `None` for any
 /// other text, which stays text.
-#[allow(dead_code, reason = "the paste gate holds images in a later task")]
+#[allow(dead_code, reason = "the loop lands reads in a later task")]
 fn take_label<'a>(
     text: &'a str,
     images: &[Arc<str>],

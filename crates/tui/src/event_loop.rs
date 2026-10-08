@@ -257,6 +257,8 @@ impl<B: Backend> Loop<B> {
                             return Some(0);
                         }
                         Effect::ListFiles => self.list_files(),
+                        // Dropped until the loop holds the clipboard reader.
+                        Effect::ReadImage(_) => {}
                         Effect::FindPause { generation, after } => {
                             if let Some(out) = &self.files_out {
                                 let clock = Arc::clone(&self.clock);
