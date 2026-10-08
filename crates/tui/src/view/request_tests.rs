@@ -455,3 +455,32 @@ fn form_words_row_scrolled_to_the_caret_at_30x12() {
         Some((29, row))
     );
 }
+
+#[test]
+fn the_caret_stops_at_the_last_column() {
+    let mut panel = numbered(2, true);
+    panel.caret = Some((1, 12));
+    let area = Rect::new(0, 0, 10, 4);
+    assert_eq!(
+        super::caret(&panel, area, area.bottom()),
+        Some(ratatui::layout::Position::new(9, 3))
+    );
+    panel.caret = Some((1, 9));
+    assert_eq!(
+        super::caret(&panel, area, area.bottom()),
+        Some(ratatui::layout::Position::new(9, 3))
+    );
+}
+
+#[test]
+fn a_caret_on_a_line_scrolled_off_is_not_drawn() {
+    let mut panel = numbered(5, true);
+    panel.caret = Some((0, 1));
+    let area = Rect::new(0, 0, 10, 4);
+    assert_eq!(super::caret(&panel, area, area.bottom()), None);
+    panel.caret = Some((1, 1));
+    assert_eq!(
+        super::caret(&panel, area, area.bottom()),
+        Some(ratatui::layout::Position::new(1, 0))
+    );
+}

@@ -100,15 +100,12 @@ pub(super) fn draw(
         // A spot over columns sits on a line that fits one row.
         let rect = match spot.cols {
             None => rect,
-            Some((from, to)) => {
-                let to = to.min(area.width);
-                Rect::new(
-                    area.x.saturating_add(from),
-                    rect.y,
-                    to.saturating_sub(from),
-                    1,
-                )
-            }
+            Some((from, to)) => Rect::new(
+                area.x.saturating_add(from),
+                rect.y,
+                to.saturating_sub(from),
+                1,
+            ),
         };
         targets.push(Target {
             id: TargetId::Form(spot.spot),

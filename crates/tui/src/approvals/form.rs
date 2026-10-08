@@ -627,13 +627,15 @@ fn words_row(answer: &Field, here: bool, cols: u16) -> (String, Option<u16>) {
         );
     }
     let words: Vec<char> = clean(&answer.words).chars().collect();
-    let caret = answer.caret.min(words.len());
+    let caret = answer.caret;
     let before =
         |start: usize| -> String { words.get(start..caret).unwrap_or_default().iter().collect() };
-    let mut start = 0;
-    while here && start < caret && width(&prefix) + width(&before(start)) >= usize::from(cols) {
-        start += 1;
-    }
+    let fits = |start: usize| width(&prefix) + width(&before(start)) < usize::from(cols);
+    let start = if here {
+        (0..caret).find(|start| fits(*start)).unwrap_or(caret)
+    } else {
+        0
+    };
     let shown: String = words.get(start..).unwrap_or_default().iter().collect();
     let line = cut(&format!("{prefix}{shown}"), usize::from(cols));
     let caret = here.then(|| cells(&prefix).saturating_add(cells(&before(start))));
