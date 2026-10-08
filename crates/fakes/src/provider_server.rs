@@ -194,7 +194,11 @@ impl State {
     fn record(&mut self, request: Request) {
         self.requests.push(request);
         if let Some(limit) = self.body_limit
-            && let Some(old) = self.requests.len().checked_sub(limit + 1)
+            && let Some(old) = self
+                .requests
+                .len()
+                .checked_sub(limit)
+                .and_then(|n| n.checked_sub(1))
             && let Some(request) = self.requests.get_mut(old)
         {
             request.body = Vec::new();
