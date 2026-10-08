@@ -3483,6 +3483,65 @@ fn a_chosen_row_workspace_takes_its_git_flag() {
 }
 
 #[test]
+fn choosing_the_launch_workspace_with_no_rows_keeps_the_switch() {
+    // No row names the launch directory, so reading the feed would
+    // lose the flag: the choice keeps the launch flag.
+    let mut app = git_home();
+    linked(&mut app);
+    assert!(shows_switch(&app));
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(chips(&app)[0], "[w]");
+    assert!(shows_switch(&app));
+}
+
+#[test]
+fn a_chosen_workspace_keeps_the_switch_after_its_row_leaves() {
+    // The flag is read when the workspace is chosen, so dropping its
+    // backing row keeps the switch.
+    let mut app = git_home();
+    linked(&mut app);
+    app.on_line(git_live("s_aaaaaaaaaaaaaaaa", "git work", "/git-ws"));
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    assert_eq!(app.home_click(Spot::Pick(1)), Effect::None);
+    assert_eq!(chips(&app)[0], "[git-ws]");
+    assert!(shows_switch(&app));
+    app.home
+        .as_mut()
+        .unwrap_or_else(|| panic!("home"))
+        .sessions
+        .remove(&contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    assert!(rows(&app).is_empty());
+    assert_eq!(chips(&app)[0], "[git-ws]");
+    assert!(shows_switch(&app));
+}
+
+#[test]
+fn outside_git_choosing_a_plain_workspace_hides_the_switch() {
+    // The launch directory is outside git, and a git row elsewhere
+    // must not leak its flag into the chosen workspace.
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(git_live("s_aaaaaaaaaaaaaaaa", "git work", "/git-ws"));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "plain work",
+        "/plain-ws",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    assert!(!shows_switch(&app));
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(chips(&app)[0], "[plain-ws]");
+    assert!(!shows_switch(&app));
+}
+
+#[test]
 fn clicking_a_picker_row_resets_the_switch_off() {
     let mut app = git_home();
     linked(&mut app);

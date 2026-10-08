@@ -55,6 +55,11 @@ pub(super) struct Home {
     blockers: Vec<String>,
     /// The workspace picked for the next `start`, else the launch one.
     chosen: Option<String>,
+    /// Whether the picked workspace is in git, read when it was
+    /// chosen: the launch flag for the launch directory, else whether
+    /// some row in that workspace was. Reading it back keeps the
+    /// switch while its rows leave the feed.
+    chosen_git: bool,
     /// The new worktree switch is on: the next `start` asks for a new
     /// worktree of the workspace. Choosing a workspace turns it off.
     worktree: bool,
@@ -136,6 +141,7 @@ impl App {
             focus_list: false,
             blockers: Vec::new(),
             chosen: None,
+            chosen_git: false,
             worktree: false,
             picker: None,
             prompt: None,
@@ -1094,9 +1100,7 @@ impl App {
             .and_then(|home| home.picker.as_ref())
             .and_then(|(list, selected)| list.get(*selected).cloned());
         if let (Some(home), Some(workspace)) = (self.home.as_mut(), choice) {
-            home.chosen = Some(workspace);
-            home.worktree = false;
-            home.picker = None;
+            home.choose(workspace);
         }
     }
 
@@ -1116,9 +1120,7 @@ impl App {
             .and_then(|home| home.picker.as_ref())
             .and_then(|(list, _)| list.get(at).cloned());
         if let (Some(home), Some(workspace)) = (self.home.as_mut(), choice) {
-            home.chosen = Some(workspace);
-            home.worktree = false;
-            home.picker = None;
+            home.choose(workspace);
         }
         Effect::None
     }
@@ -1287,12 +1289,14 @@ impl App {
                     .chosen
                     .clone()
                     .unwrap_or_else(|| home.launch.workspace.display().to_string());
-                let mut args = serde_json::Map::new();
-                args.insert("workspace".to_owned(), Value::String(workspace));
-                if home.worktree && home.in_git() {
-                    args.insert("worktree".to_owned(), Value::Bool(true));
+                let mut args = json!({"workspace": workspace});
+                if home.worktree
+                    && home.in_git()
+                    && let Some(object) = args.as_object_mut()
+                {
+                    object.insert("worktree".to_owned(), json!(true));
                 }
-                Value::Object(args)
+                args
             }
             None => json!({ "workspace": self.workspace.display().to_string() }),
         }
@@ -1301,13 +1305,28 @@ impl App {
 
 impl Home {
     /// Whether the new worktree switch shows: the workspace in use is
-    /// in git. With none chosen that is the launch directory; else some
-    /// row in that workspace is.
+    /// in git. With none chosen that is the launch directory; else the
+    /// flag read when the workspace was chosen.
     fn in_git(&self) -> bool {
         match &self.chosen {
             None => self.launch.git,
-            Some(chosen) => self.sessions.in_git(chosen),
+            Some(_) => self.chosen_git,
         }
+    }
+
+    /// Records the workspace picked for the next `start`, turning the
+    /// new worktree switch off and keeping whether it is in git: the
+    /// launch flag for the launch directory, else whether some row in
+    /// that workspace is then.
+    fn choose(&mut self, workspace: String) {
+        self.chosen_git = if workspace == self.launch.workspace.display().to_string() {
+            self.launch.git
+        } else {
+            self.sessions.in_git(&workspace)
+        };
+        self.chosen = Some(workspace);
+        self.worktree = false;
+        self.picker = None;
     }
 }
 
