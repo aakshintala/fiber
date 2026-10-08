@@ -1731,3 +1731,27 @@ fn toggling_ledgers_clears_only_group_overrides() {
     assert!(!pages.overrides.contains_key(&Target::Group(1)));
     assert!(pages.overrides.contains_key(&Target::Thought(2)));
 }
+
+#[test]
+fn every_row_of_the_fixture_places_inside_the_rows_it_draws() {
+    let lines = session(3, false);
+    for width in [12, 40, 120] {
+        let mut pages = Pages::new(width);
+        for line in &lines {
+            pages.apply(line);
+        }
+        for (line, _) in joined(&mut pages, &lines) {
+            let rows = crate::view::rows(line.clone(), width);
+            for placed in crate::cells::place(&line, width) {
+                assert!(
+                    usize::from(placed.row) < rows,
+                    "{line:?} at {width}: {placed:?}"
+                );
+                assert!(
+                    placed.col.saturating_add(placed.width) <= width,
+                    "{line:?} at {width}: {placed:?}"
+                );
+            }
+        }
+    }
+}

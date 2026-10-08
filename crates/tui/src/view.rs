@@ -53,7 +53,7 @@ pub(crate) const HOVER_TINT: Style = Style::new().bg(Color::Indexed(238));
 pub(crate) const FOCUS_STYLE: Style = Style::new().add_modifier(Modifier::REVERSED);
 
 /// One line, wrapped the way it draws.
-fn paragraph(line: Line<'_>) -> Paragraph<'_> {
+pub(crate) fn paragraph(line: Line<'_>) -> Paragraph<'_> {
     Paragraph::new(line).wrap(Wrap { trim: false })
 }
 
