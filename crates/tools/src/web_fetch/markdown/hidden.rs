@@ -149,17 +149,23 @@ impl Hidden {
     }
 
     /// Whether any `template` is open.
-    fn templates_open(&self) -> bool {
+    pub(super) fn templates_open(&self) -> bool {
         match self.counts {
             [_, _, templates] => templates > 0,
         }
     }
 
     /// Whether a `noscript` stands at or above the outermost `svg`.
-    fn noscripts_above(&self) -> bool {
+    pub(super) fn noscripts_above(&self) -> bool {
         match self.above {
             [_, noscripts, _] => noscripts > 0,
         }
+    }
+
+    /// The at-and-above-the-outermost-`svg` counts, for tests.
+    #[cfg(test)]
+    pub(super) fn above_counts(&self) -> [usize; 3] {
+        self.above
     }
 
     /// The whole-stack count of `kind`.
@@ -241,14 +247,16 @@ impl Hidden {
 
     /// Pops the innermost open hidden element, keeping its counts. With
     /// no `svg` open the above counts are the whole counts, restored when
-    /// the last one closes; below the outermost `svg` nothing stands
-    /// above one.
+    /// the last one closes. With one still open the popped element stood
+    /// at or above the outermost one, so its above count falls too: the
+    /// outermost `svg` still stands at `svg_base`, and the stack still
+    /// holds it, so the length left is past `svg_base` without checking.
     fn pop(&mut self) {
         if let Some(kind) = self.stack.pop() {
             *self.whole(kind) -= 1;
             if !self.in_svg() {
                 self.above = self.counts;
-            } else if self.stack.len() >= self.svg_base {
+            } else {
                 *self.over(kind) -= 1;
             }
         }
@@ -282,8 +290,11 @@ impl Hidden {
                     && self.stack.get(self.svg_base - 1) == Some(&Kind::Noscript)
                 {
                     // Every `noscript` stands below the outermost `svg`:
-                    // the one just below it closes with what it hides.
-                    while self.stack.len() > self.svg_base - 1 {
+                    // the one just below it closes with what it hides. The
+                    // count is fixed before popping, so the loop ends even
+                    // when the stack is empty: no condition flips to forever.
+                    let extra = self.stack.len() - (self.svg_base - 1);
+                    for _ in 0..extra {
                         self.pop();
                     }
                 }

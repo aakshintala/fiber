@@ -225,6 +225,28 @@ mod oracle {
             self.head == Head::In
         }
 
+        pub(super) fn templates_open(&self) -> bool {
+            !self.templates.is_empty()
+        }
+
+        pub(super) fn noscripts_above(&self) -> bool {
+            match self.svgs.first() {
+                None => !self.noscripts.is_empty(),
+                Some(&outer) => self.noscripts.iter().any(|&at| at >= outer),
+            }
+        }
+
+        pub(super) fn above_counts(&self) -> [usize; 3] {
+            match self.svgs.first() {
+                None => [self.svgs.len(), self.noscripts.len(), self.templates.len()],
+                Some(&outer) => [
+                    self.svgs.iter().filter(|&&at| at >= outer).count(),
+                    self.noscripts.iter().filter(|&&at| at >= outer).count(),
+                    self.templates.iter().filter(|&&at| at >= outer).count(),
+                ],
+            }
+        }
+
         pub(super) fn open(&mut self, name: &str, tag: &Tag) {
             if name == "head" {
                 if self.head == Head::Before {
@@ -581,6 +603,101 @@ fn a_pop_above_the_svg_keeps_the_noscript_below_it() {
     assert_eq!(hidden.in_svg(), oracle.in_svg());
     assert!(hidden.is_hidden());
     assert!(hidden.in_svg());
+}
+
+/// Popping two `noscript`s above the outermost `svg` spends the
+/// above-`svg` count twice: after the first pop one stays above, after
+/// the second none does. Two stay open so decrementing (`-= 1`) and
+/// dividing (`/= 1`, a no-op) differ, and skipping the decrement (`<`
+/// for `>=`) leaves the count high: each pop is checked against the
+/// oracle, down to `len == svg_base + 1` and back to one above.
+#[test]
+fn popping_noscripts_above_the_svg_spends_the_above_count_twice() {
+    let mut hidden = Hidden::default();
+    let mut oracle = oracle::Oracle::default();
+    for name in ["svg", "noscript", "noscript"] {
+        let tag = start(name, false, vec![]);
+        hidden.open(name, &tag);
+        oracle.open(name, &tag);
+    }
+    assert_eq!(hidden.above_counts(), oracle.above_counts());
+    assert_eq!(hidden.above_counts(), [1, 2, 0]);
+    hidden.end("noscript");
+    oracle.end("noscript");
+    assert_eq!(hidden.is_hidden(), oracle.is_hidden());
+    assert_eq!(hidden.in_svg(), oracle.in_svg());
+    assert_eq!(hidden.noscripts_above(), oracle.noscripts_above());
+    assert_eq!(hidden.templates_open(), oracle.templates_open());
+    assert_eq!(hidden.above_counts(), oracle.above_counts());
+    assert_eq!(hidden.above_counts(), [1, 1, 0]);
+    hidden.end("noscript");
+    oracle.end("noscript");
+    assert_eq!(hidden.is_hidden(), oracle.is_hidden());
+    assert_eq!(hidden.in_svg(), oracle.in_svg());
+    assert_eq!(hidden.noscripts_above(), oracle.noscripts_above());
+    assert_eq!(hidden.templates_open(), oracle.templates_open());
+    assert_eq!(hidden.above_counts(), oracle.above_counts());
+    assert_eq!(hidden.above_counts(), [1, 0, 0]);
+    assert!(hidden.in_svg());
+    assert!(!hidden.noscripts_above());
+}
+
+/// Closing the `noscript` below the outermost `svg` pops exactly to
+/// `len == svg_base - 1` and stops: with nothing above one, the end tag
+/// closes the `svg`, what it hides, and the `noscript` below it, leaving
+/// the stack empty like the oracle.
+#[test]
+fn closing_the_noscript_below_the_svg_stops_at_base_minus_one() {
+    let mut hidden = Hidden::default();
+    let mut oracle = oracle::Oracle::default();
+    for name in ["noscript", "svg", "template", "template"] {
+        let tag = start(name, false, vec![]);
+        hidden.open(name, &tag);
+        oracle.open(name, &tag);
+    }
+    assert_eq!(hidden.above_counts(), oracle.above_counts());
+    assert_eq!(hidden.above_counts(), [1, 0, 2]);
+    hidden.end("noscript");
+    oracle.end("noscript");
+    assert_eq!(hidden.is_hidden(), oracle.is_hidden());
+    assert_eq!(hidden.in_svg(), oracle.in_svg());
+    assert_eq!(hidden.noscripts_above(), oracle.noscripts_above());
+    assert_eq!(hidden.templates_open(), oracle.templates_open());
+    assert_eq!(hidden.above_counts(), oracle.above_counts());
+    assert!(!hidden.is_hidden());
+    assert!(!hidden.in_svg());
+}
+
+/// How long the inflated-above-count close may take before it fails.
+const HIDDEN_POP_HANG: Duration = Duration::from_secs(10);
+
+/// Growing the above-`svg` count instead of spending it (`+=` for `-=`)
+/// leaves a `noscript` above one after both close: the next
+/// `</noscript>` then looks for one that is no longer there and never
+/// finds it. The close runs under a wall-clock limit so the mutant fails
+/// the test within seconds instead of hanging the job.
+#[test]
+fn growing_the_above_count_hangs_the_next_noscript_close() {
+    fakes::within("the inflated noscript close", HIDDEN_POP_HANG, move || {
+        let mut hidden = Hidden::default();
+        let mut oracle = oracle::Oracle::default();
+        for name in ["svg", "noscript", "noscript"] {
+            let tag = start(name, false, vec![]);
+            hidden.open(name, &tag);
+            oracle.open(name, &tag);
+        }
+        hidden.end("noscript");
+        oracle.end("noscript");
+        hidden.end("noscript");
+        oracle.end("noscript");
+        assert_eq!(hidden.above_counts(), oracle.above_counts());
+        hidden.end("noscript");
+        oracle.end("noscript");
+        assert_eq!(hidden.is_hidden(), oracle.is_hidden());
+        assert_eq!(hidden.in_svg(), oracle.in_svg());
+        assert!(hidden.is_hidden());
+        assert!(hidden.in_svg());
+    });
 }
 
 /// Asserts `markdown` is at most 14 times its page, naming the ratio.
