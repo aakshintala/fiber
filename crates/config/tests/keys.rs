@@ -897,7 +897,9 @@ fn a_run_flag_reviewer_context_is_ignored_as_person_files() {
         &setup.project(),
         r#"{"reviewer": {"context": "Never touch infra/prod."}}"#,
     );
-    let config = setup.load(&["reviewer.context=from the command line"]).unwrap();
+    let config = setup
+        .load(&["reviewer.context=from the command line"])
+        .unwrap();
     let [notice] = config.notices() else {
         panic!("{:?}", config.notices());
     };

@@ -2773,7 +2773,10 @@ fn a_reviewed_call_carries_the_notes_after_the_shared_instructions() {
     let project_heading = instructions.find("## Notes for this project").unwrap();
     let project = instructions.find("Never touch infra/prod.").unwrap();
     assert!(
-        shared < everywhere && everywhere < global && global < project_heading && project_heading < project,
+        shared < everywhere
+            && everywhere < global
+            && global < project_heading
+            && project_heading < project,
         "{instructions:?}"
     );
 }
