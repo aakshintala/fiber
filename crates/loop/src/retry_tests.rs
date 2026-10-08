@@ -289,8 +289,10 @@ fn a_saturated_asked_wait_fails_at_once_whatever_the_cap() {
 fn advancing_on_retry_scheduled_does_not_stretch_the_retry_deadline() {
     const DEADLINE: Duration = Duration::from_secs(5);
     const PARTIAL_ADVANCE: Duration = Duration::from_secs(1);
-    // The wrapper advances after `retry_scheduled` but inside the retry's
-    // first wait_until, before FakeClock evaluates whether to park.
+    // The wrapper advances on the first `now()` that sees `retry_scheduled`
+    // on its own log watcher: after the deadline read in fixed production, so
+    // `wait_retry`'s own check releases at once; a regressed read after the
+    // line would advance first and push its deadline a full delay out.
     let mut full = RetryRun::start(RETRY_DELAY);
     full.wait_for_retry_scheduled(DEADLINE);
     full.wait_for_retry_started(DEADLINE);
@@ -314,7 +316,7 @@ fn advancing_on_retry_scheduled_does_not_stretch_the_retry_deadline() {
     assert_eq!(
         partial.clock.now(),
         partial.origin + PARTIAL_ADVANCE,
-        "the wrapper advanced only part of the delay before delegating"
+        "the wrapper advanced only part of the delay on seeing the line"
     );
     assert_eq!(
         partial.provider.requests().len(),
@@ -330,8 +332,8 @@ fn advancing_on_retry_scheduled_does_not_stretch_the_retry_deadline() {
 }
 
 /// One failing-then-recovering turn on a fake clock: the loop runs on its
-/// own thread and the test watches its log. Its test clock advances from the
-/// retry's `wait_until`, after `retry_scheduled` and before FakeClock parks.
+/// own thread and the test watches its log. Its test clock advances once,
+/// from the first `now()` that sees `retry_scheduled` on its own watcher.
 struct RetryRun {
     _home: fakes::TempDir,
     origin: std::time::Instant,
@@ -344,8 +346,8 @@ struct RetryRun {
 
 impl RetryRun {
     /// Starts a turn whose first call fails retryably and whose retry
-    /// succeeds. The test clock advances on the retry deadline's first
-    /// `wait_until`, after `retry_scheduled` is on the log.
+    /// succeeds. The test clock advances on the first `now()` after
+    /// `retry_scheduled` is appended.
     fn start(advance_before_park: Duration) -> Self {
         let home = fakes::TempDir::new("fiber-retry-deadline");
         let workspace = home.path().join("workspace");
@@ -354,13 +356,16 @@ impl RetryRun {
         std::fs::create_dir_all(&credentials).unwrap();
         let clock = FakeClock::new();
         let origin = clock.origin();
-        let clock_for_loop: Arc<dyn Clock> = Arc::new(AdvanceBeforeParkClock {
-            retry_deadline: origin + RETRY_DELAY,
+        let session_log = home.path().join("s_retry_deadline/events.jsonl");
+        let test_clock = Arc::new(AdvanceOnScheduledClock {
             advance: advance_before_park,
             advanced: AtomicBool::new(false),
+            scheduled: AtomicBool::new(false),
+            watcher: Mutex::new(None),
             inner: Arc::clone(&clock),
             subscriptions: Mutex::new(Vec::new()),
         });
+        let clock_for_loop: Arc<dyn Clock> = test_clock.clone();
         let log = Arc::new(
             Log::create(
                 home.path(),
@@ -369,6 +374,10 @@ impl RetryRun {
             )
             .unwrap(),
         );
+        // The test clock's own watcher: registered before the turn starts,
+        // so the loop's later `retry_scheduled` is already queued when its
+        // thread next calls `now()`.
+        test_clock.set_watcher(log.watch());
         let (inbox, receiver) = mpsc::channel();
         let provider = Arc::new(ScriptedProvider::new(vec![
             Scripted::failed(Failure {
@@ -391,10 +400,7 @@ impl RetryRun {
             crate::prompt::PromptInputs::new(
                 home.path().to_path_buf(),
                 "/bin/sh".into(),
-                home.path()
-                    .join("s_retry_deadline/events.jsonl")
-                    .display()
-                    .to_string(),
+                session_log.display().to_string(),
                 clock_for_loop,
                 fakes::CONTEXT_WINDOW,
             ),
@@ -463,8 +469,7 @@ impl RetryRun {
         }
     }
 
-    /// Reads until `retry_scheduled`, the signal used by the test clock's
-    /// advance-before-park wrapper.
+    /// Reads until `retry_scheduled`, the line the test clock advances on.
     fn wait_for_retry_scheduled(&mut self, deadline: Duration) {
         self.wait_for_event("retry_scheduled", deadline);
     }
@@ -495,16 +500,62 @@ impl RetryRun {
     }
 }
 
-struct AdvanceBeforeParkClock {
+/// A test clock whose `now()` advances the inner [`FakeClock`] once, on the
+/// first call that sees `retry_scheduled` on its own log watcher.
+/// `retry_scheduled` is ephemeral, so it never reaches the log file: the
+/// wrapper polls its watcher in `now()` instead. The poll is deterministic
+/// because the loop appends the line, queueing it under the log lock, on its
+/// own thread before its next `now()`; a flag set from the test's own
+/// watcher could land after that `now()` already ran.
+struct AdvanceOnScheduledClock {
     inner: Arc<FakeClock>,
-    retry_deadline: Instant,
     advance: Duration,
     advanced: AtomicBool,
+    scheduled: AtomicBool,
+    watcher: Mutex<Option<log::Watcher>>,
     subscriptions: Mutex<Vec<Weak<dyn Wake>>>,
 }
 
-impl Clock for AdvanceBeforeParkClock {
+impl AdvanceOnScheduledClock {
+    fn set_watcher(&self, watcher: log::Watcher) {
+        *self.watcher.lock().unwrap_or_else(PoisonError::into_inner) = Some(watcher);
+    }
+
+    /// Latches `scheduled` once `retry_scheduled` reaches the wrapper's own
+    /// watcher. Only drains what is already queued, so `now()` never waits.
+    fn poll_scheduled(&self) {
+        if self.scheduled.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut slot = self.watcher.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(watcher) = slot.as_mut() else {
+            return;
+        };
+        loop {
+            match watcher.try_recv() {
+                Ok(Some(line)) => {
+                    if line.kind == "retry_scheduled" {
+                        self.scheduled.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                }
+                Ok(None) | Err(_) => return,
+            }
+        }
+    }
+}
+
+impl Clock for AdvanceOnScheduledClock {
+    /// Advances once on the first call after the line is queued, then
+    /// returns the (advanced) time. Fixed production reads `now()` for its
+    /// deadline before appending the line, so that read advances nothing and
+    /// this fires on `wait_retry`'s own check; a regressed read after the
+    /// append fires here and pushes its deadline a full delay out.
     fn now(&self) -> Instant {
+        self.poll_scheduled();
+        if self.scheduled.load(Ordering::SeqCst) && !self.advanced.swap(true, Ordering::SeqCst) {
+            self.inner.advance(self.advance);
+        }
         self.inner.now()
     }
 
@@ -517,9 +568,6 @@ impl Clock for AdvanceBeforeParkClock {
     }
 
     fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
-        if until == Some(self.retry_deadline) && !self.advanced.swap(true, Ordering::SeqCst) {
-            self.inner.advance(self.advance);
-        }
         let subscriptions = {
             let mut pending = self
                 .subscriptions
@@ -533,7 +581,7 @@ impl Clock for AdvanceBeforeParkClock {
         self.inner.wait_until(until, wait);
     }
 
-    // Install subscriptions at wait entry: an advance from wait_until must
+    // Install subscriptions at wait entry: an advance from `now()` must
     // not re-enter SharedWake while its park lock is held.
     fn subscribe(&self, waker: Weak<dyn Wake>) {
         self.subscriptions
