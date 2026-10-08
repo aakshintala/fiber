@@ -28,7 +28,9 @@ pub struct Commands {
 
 /// Every `/name` the session runs: its skills and prompt templates, read
 /// from the places the opening message reads, from the repository's top
-/// level above `workspace`, then `prompts` after them. Reads skill places
+/// level above `workspace`, then `prompts` after them. `prompts` arrives
+/// sorted by server name, so the first in name order wins a shared name
+/// (`docs/system-prompt.md`, "Skills"). Reads skill places
 /// only, writes nothing; the opening message raises discovery's notices.
 #[must_use]
 pub fn commands(inputs: &PromptInputs, workspace: &Path, prompts: &[CommandInfo]) -> Commands {
@@ -38,12 +40,8 @@ pub fn commands(inputs: &PromptInputs, workspace: &Path, prompts: &[CommandInfo]
     let found = skills::discover(inputs, top);
     let mut rows = skills::commands(&found.skills, &inputs.skills_disabled);
     let mut notices = Vec::new();
-    // Prompt rows sort by server name, so the first in name order wins a
-    // shared name (`docs/system-prompt.md`, "Skills").
-    let mut ordered: Vec<&CommandInfo> = prompts.iter().collect();
-    ordered.sort_by(|left, right| left.tag.cmp(&right.tag));
     let skills_end = rows.len();
-    for row in ordered {
+    for row in prompts {
         if inputs.skills_disabled.iter().any(|off| off == &row.name) {
             continue;
         }

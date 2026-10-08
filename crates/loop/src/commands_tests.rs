@@ -136,13 +136,13 @@ fn a_skill_shadows_a_prompt_with_a_notice() {
 #[test]
 fn the_first_servers_prompt_wins_a_shared_name_with_a_notice() {
     let tree = Tree::new();
-    // Passed `zz` first: the rows sort by server name, so `aa` wins.
+    // Sorted by server name, as callers pass them: `aa` first wins.
     let listed = commands(
         &tree.inputs(),
         &tree.top(),
         &[
-            prompt("greet", "Greets from zz.", "zz"),
             prompt("greet", "Greets from aa.", "aa"),
+            prompt("greet", "Greets from zz.", "zz"),
         ],
     );
     assert_eq!(listed.rows, [prompt("greet", "Greets from aa.", "aa")]);
