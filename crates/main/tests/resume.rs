@@ -1272,7 +1272,12 @@ fn a_suspended_approval_is_refused_then_the_prompt_runs_next() {
         .unwrap();
     assert_eq!(resolved["payload"]["request_id"], "r_9");
     assert_eq!(resolved["payload"]["decision"], "deny");
-    assert_eq!(resolved["payload"]["decided_by"], "standing_rule");
+    assert_eq!(resolved["payload"]["decided_by"], "cancel");
+    assert_eq!(
+        resolved["payload"]["reason"],
+        "The session was resumed with nobody to answer."
+    );
+    assert!(resolved["payload"].get("reviewer").is_none());
 
     // Stdout's durable lines are the log's tail, byte for byte.
     let log = fs::read_to_string(&events).unwrap();
