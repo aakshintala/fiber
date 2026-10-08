@@ -160,3 +160,27 @@ fn a_cancel_landing_before_the_take_declines_the_ask() {
     assert!(stream.asking().pending().is_none());
     assert_eq!(answered.join().unwrap(), Answered::NoAnswer);
 }
+
+#[test]
+fn unanswerable_when_no_answer_can_come() {
+    // (answerable, inbox wake, cancelled, unanswerable): each row flips
+    // one disjunct of `interactions_unanswerable`.
+    let rows = [
+        (true, true, false, false),
+        (false, true, false, true),
+        (true, false, false, true),
+        (true, true, true, true),
+    ];
+    for (answerable, woken, cancelled, expected) in rows {
+        let (looped, _home) = looped(answerable, woken);
+        if cancelled {
+            assert!(looped.cancel.arm());
+            assert!(looped.cancel.cancel());
+        }
+        assert_eq!(
+            looped.interactions_unanswerable(),
+            expected,
+            "answerable={answerable} woken={woken} cancelled={cancelled}"
+        );
+    }
+}
