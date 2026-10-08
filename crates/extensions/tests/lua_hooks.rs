@@ -104,7 +104,7 @@ fn load(setup: &Setup, overrides: &[&str], clock: Arc<FakeClock>) -> Arc<Session
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
-        let _sent = tx.send(SessionExtensions::load(&home, &config, clock, locks));
+        let _sent = tx.send(SessionExtensions::load(&home, &config, clock, locks, None));
     });
     Arc::new(
         rx.recv_timeout(WAIT)

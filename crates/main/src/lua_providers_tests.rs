@@ -70,6 +70,7 @@ fn an_unconfigured_model_is_left_out_and_a_setting_fills_it() {
         &config,
         fakes::clock::FakeClock::new(),
         Arc::new(PathLocks::new()),
+        None,
     );
     let naming = add_lua(&extensions, &mut providers, &config).unwrap();
     assert!(
@@ -92,6 +93,7 @@ fn an_unconfigured_model_is_left_out_and_a_setting_fills_it() {
         &config,
         fakes::clock::FakeClock::new(),
         Arc::new(PathLocks::new()),
+        None,
     );
     add_lua(&extensions, &mut providers, &config).unwrap();
     assert_eq!(
@@ -113,6 +115,7 @@ fn a_settings_file_that_cannot_be_read_fails_with_config_invalid() {
         &config,
         fakes::clock::FakeClock::new(),
         Arc::new(PathLocks::new()),
+        None,
     );
     let err = add_lua(&extensions, &mut providers, &config).unwrap_err();
     assert_eq!(err.code, ErrorCode::ConfigInvalid);
@@ -162,6 +165,7 @@ fn the_session_label_and_shared_credential_name_reach_credential() {
         &config,
         fakes::clock::FakeClock::new(),
         Arc::new(PathLocks::new()),
+        None,
     );
     add_lua(&extensions, &mut providers, &config).unwrap();
     let data = providers.data("acme");

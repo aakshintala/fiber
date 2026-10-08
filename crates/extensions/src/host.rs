@@ -26,6 +26,7 @@ pub(crate) mod exec;
 pub(crate) mod failure;
 mod fs;
 mod log;
+pub(crate) mod script;
 mod settings;
 pub(crate) mod timers;
 mod ui;

@@ -225,11 +225,12 @@ pairing code, list devices and revoke one, through the hub commands
 Every command that talks to the hub takes `--hub <name>` to use a hub from
 the client's list instead of the default.
 
-**Internal commands.** Fiber starts its own processes with internal
-commands: the session command, the hub, the image child ("Processes"), the
-release install step that `install.sh` runs (`docs/releasing.md`,
-"Installing"), and the `grep` and `find` that the file tools run (`docs/tools.md`). None is in
-the menu, and no person or client runs them.
+**Internal commands.** Fiber starts child processes for the session command,
+the hub, the case runner that `fiber extension test` starts, and the image
+child ("Processes"). The release install step runs from `install.sh`
+(`docs/releasing.md`, "Installing"). The file tools start `grep` and `find`
+(`docs/tools.md`). These commands are not in the menu. No person or client runs
+them.
 
 The flags are `-h`, `--help`, `-v` and `--version`. There is no `-V`.
 `-v` and `--version` are top-level only: `fiber ask -v` is an unknown

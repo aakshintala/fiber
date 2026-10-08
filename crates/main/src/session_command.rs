@@ -60,20 +60,21 @@ pub(crate) fn run(
         clock,
         &signals,
         fiber,
+        None,
     )
 }
 
-/// One function builds and runs every new session (`docs/invocation.md`,
+/// One function prepares every new session (`docs/invocation.md`,
 /// "Processes"): `fiber ask` and the internal session command differ
 /// only in the id's source (minted vs `--id`), the workspace (the current
 /// directory on entry, applied by chdir before the call) and the first
 /// deliveries (prompt plus `close` vs an optional prompt). With `worktree`
-/// the session is isolated first: the process arms, the worktree is
-/// created, and the workspace moves into it before the session runs, and
-/// the worktree ends afterwards, however the run went.
+/// the process arms, creates the worktree and enters it before the session
+/// runs, then ends the worktree however the run went. Case sessions share
+/// their clock and host script with extension setup and execution.
 #[allow(
     clippy::too_many_arguments,
-    reason = "every new session's whole start, built once"
+    reason = "session preparation carries worktree and case inputs to the shared runner"
 )]
 pub(crate) fn new_session(
     id: SessionId,
@@ -84,9 +85,14 @@ pub(crate) fn new_session(
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
+    case_run: Option<Arc<crate::case::run::CaseRun>>,
 ) -> i32 {
+    let clock = case_run.as_ref().map_or(clock, |case| case.session_clock());
+    let host = case_run.as_ref().map(|case| case.host_script());
     if !worktree {
-        return match run_new(id, model, prompt, one_turn, None, clock, signals, fiber) {
+        return match run_new(
+            id, model, prompt, one_turn, None, clock, signals, fiber, host, case_run,
+        ) {
             Ok(code) => code,
             Err(failure) => report(signals, failure),
         };
@@ -133,6 +139,8 @@ pub(crate) fn new_session(
         clock,
         signals,
         fiber,
+        host,
+        case_run,
     );
     isolation.end();
     match result {
@@ -141,12 +149,11 @@ pub(crate) fn new_session(
     }
 }
 
-/// Today's `new_session` body: builds and runs the session, printing no
-/// failure. Every `Err` is reported by [`report`], after the worktree ends
-/// when one was created.
+/// Builds and runs the session with an optional worktree. Every `Err` is
+/// reported by [`report`], after the worktree ends when one was created.
 #[allow(
     clippy::too_many_arguments,
-    reason = "every new session's whole start, built once"
+    reason = "session execution carries its isolation, case and startup inputs"
 )]
 fn run_new(
     id: SessionId,
@@ -157,8 +164,10 @@ fn run_new(
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
+    host: Option<Arc<extensions::HostScript>>,
+    case_run: Option<Arc<crate::case::run::CaseRun>>,
 ) -> Result<i32, Failure> {
-    let mut parts = parts_with(model, None, None, None, Arc::clone(&clock))?;
+    let mut parts = parts_with(model, None, None, None, Arc::clone(&clock), host)?;
     crash::attach(&id);
     let dir = parts.sessions.join(&id.0);
     // The session directory's log: the opening message's environment
@@ -222,14 +231,12 @@ fn run_new(
         }
     };
     job_emit.set(Arc::new(log::WeakEmit::new(&log)) as _);
-    let session = match Session::open(
-        &home,
-        &dir,
-        &log,
-        Arc::clone(&clock),
-        infos,
-        Box::new(io::stdout()),
-    ) {
+    let event_output: Box<dyn io::Write + Send> = if case_run.is_some() {
+        Box::new(io::sink())
+    } else {
+        Box::new(io::stdout())
+    };
+    let session = match Session::open(&home, &dir, &log, Arc::clone(&clock), infos, event_output) {
         Ok(session) => session,
         Err(e) => {
             session_servers.servers.stop();
@@ -260,12 +267,22 @@ fn run_new(
         return Ok(code);
     }
     let inbox_wake = session.inbox_wake();
+    let case_driver = case_run.as_ref().and_then(|case| {
+        match case.start(session.driver(), Arc::clone(&log), Arc::clone(&cancel)) {
+            Ok(driver) => Some(driver),
+            Err(error) => {
+                case.record_failure(format!("starting the case driver: {error}"));
+                None
+            }
+        }
+    });
+    let run_one_turn = one_turn || (case_run.is_some() && case_driver.is_none());
     let code = run_turn(
         &session,
         &log,
         &dir,
         prompt,
-        one_turn,
+        run_one_turn,
         cancel,
         |inbox, cancel| {
             finish(
@@ -300,7 +317,7 @@ fn run_new(
                 // Only one-turn `fiber ask` runs with no client: the
                 // session command serves clients that may answer
                 // (`docs/permissions.md`, "Headless").
-                !one_turn,
+                !run_one_turn,
                 reviewer,
                 limits,
                 retry,
@@ -308,6 +325,16 @@ fn run_new(
             )
         },
     );
+    if let Some(case_driver) = case_driver {
+        match case_driver.join() {
+            Ok(()) => {}
+            Err(_) => {
+                if let Some(case) = &case_run {
+                    case.record_failure("the case driver panicked".to_owned());
+                }
+            }
+        }
+    }
     session_servers.servers.stop();
     close(session, log, &home, &dir, &workspace, &*clock);
     Ok(code)

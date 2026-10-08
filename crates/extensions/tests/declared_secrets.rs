@@ -77,7 +77,7 @@ fn load(setup: &Setup) -> Arc<SessionExtensions> {
     std::thread::spawn(move || {
         let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
         let clock: Arc<FakeClock> = FakeClock::new();
-        let _sent = tx.send(SessionExtensions::load(&home, &config, clock, locks));
+        let _sent = tx.send(SessionExtensions::load(&home, &config, clock, locks, None));
     });
     Arc::new(
         rx.recv_timeout(WAIT)

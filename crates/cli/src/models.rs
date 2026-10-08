@@ -266,7 +266,13 @@ pub fn models(
                 &mut io::stdout(),
                 &mut io::stderr(),
                 &|config: &Config| {
-                    SessionExtensions::load(&home, config, Arc::clone(&clock), Arc::clone(&locks))
+                    SessionExtensions::load(
+                        &home,
+                        config,
+                        Arc::clone(&clock),
+                        Arc::clone(&locks),
+                        None,
+                    )
                 },
                 &|providers| match &exe {
                     Ok(path) => spawn_refresh(path, providers).map(drop),
@@ -326,7 +332,7 @@ fn refresh_run(
         })
         && let Ok((providers, _)) = Providers::load(home)
     {
-        let loaded = SessionExtensions::load(home, &config, clock, locks);
+        let loaded = SessionExtensions::load(home, &config, clock, locks, None);
         refresh_named(names, &providers, &loaded, &config);
     }
 }

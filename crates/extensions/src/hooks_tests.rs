@@ -96,11 +96,19 @@ impl Home {
     }
 
     fn load(&self, overrides: &[&str]) -> Arc<SessionExtensions> {
+        self.load_with_host(overrides, None)
+    }
+
+    fn load_with_host(
+        &self,
+        overrides: &[&str],
+        host: Option<Arc<crate::host::script::HostScript>>,
+    ) -> Arc<SessionExtensions> {
         let config = self.config(overrides);
         let home = self.home();
         let locks: Arc<dyn contract::files::PathLock> = Arc::new(FakeLock::new());
         Arc::new(bounded(move || {
-            SessionExtensions::load(&home, &config, FakeClock::new(), locks)
+            SessionExtensions::load(&home, &config, FakeClock::new(), locks, host)
         }))
     }
 }
@@ -1218,6 +1226,47 @@ fn start(
             started
         })
     })
+}
+
+#[test]
+fn a_later_provider_start_keeps_the_case_host_script_from_load() {
+    let home = Home::new();
+    let marker = home.root.path().join("starts");
+    let url = "http://127.0.0.1:1/case-only";
+    home.install(
+        "prov",
+        Some(&format!(
+            "local ok, seen = pcall(host.fs.read, {:?})\n\
+             if not ok or seen == nil then seen = \"\" end\n\
+             host.fs.write({:?}, seen .. \"x\")\n\
+             if seen ~= \"\" then\n\
+             local reply = host.http({{url = {:?}}})\n\
+             assert(reply.status == 200 and reply.body == \"started later\")\n\
+             end\n{}",
+            marker.display().to_string(),
+            marker.display().to_string(),
+            url,
+            crediting("p")
+        )),
+    );
+    let host = crate::host::script::HostScript::new(
+        vec![crate::host::script::HttpEntry {
+            request: json!({"url": url}),
+            reply: Ok((200, b"started later".to_vec())),
+        }],
+        Vec::new(),
+    );
+    let mut session = home.load_with_host(&[], Some(Arc::clone(&host)));
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    Arc::get_mut(&mut session)
+        .expect("the test holds the only Arc")
+        .retain_lua_providers(&[]);
+
+    let provider = start(&home, &session, "fiber.test/prov", "p").unwrap();
+
+    assert_eq!(provider.name(), "p");
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "xx");
+    assert!(host.unmet().is_empty(), "{:?}", host.unmet());
 }
 
 #[test]

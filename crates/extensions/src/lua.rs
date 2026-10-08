@@ -278,6 +278,13 @@ impl LuaExtension {
         self
     }
 
+    /// Sets the host calls the case runner scripts for this extension
+    /// (`docs/testing.md`, "Testing an extension").
+    pub fn with_host_script(self, script: Arc<host::script::HostScript>) -> Self {
+        self.hub.set_host_script(script);
+        self
+    }
+
     /// The clock this extension's deadlines read.
     pub(crate) fn clock(&self) -> &dyn Clock {
         self.hub.clock()

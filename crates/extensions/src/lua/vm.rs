@@ -28,6 +28,9 @@ pub(super) struct Vm {
     /// The session's workspace, resolving an `exec` `cwd` as `host.fs`
     /// paths are.
     workspace: PathBuf,
+    /// The host calls the case runner scripts, absent in ordinary sessions
+    /// (`docs/testing.md`, "Testing an extension").
+    host_script: Option<Arc<crate::host::script::HostScript>>,
     /// The extension's memory cap in bytes, bounding each `exec` stream.
     memory_cap: usize,
     /// What the host calls yield, so a callback's own yield is not a request.
@@ -133,6 +136,7 @@ impl Vm {
             deadline,
             clock,
             workspace,
+            host_script: hub.host_script(),
             memory_cap: *memory_cap,
             http_tag,
             commands,
@@ -336,8 +340,12 @@ impl Vm {
             )? {
                 setup::Poll::Done(value) => return Ok(value),
                 setup::Poll::Host(host::Request::Http(request)) => {
-                    let reply = host::Reply::Http(host::perform(&request));
-                    args = host::resume_values(&self.lua, &self.clock, reply).map_err(fail)?;
+                    let result = match &self.host_script {
+                        Some(script) => script.http(request.case_value()),
+                        None => host::perform(&request),
+                    };
+                    args = host::resume_values(&self.lua, &self.clock, host::Reply::Http(result))
+                        .map_err(fail)?;
                 }
                 // The Lua half refuses these in the entry script before it yields.
                 setup::Poll::Host(
