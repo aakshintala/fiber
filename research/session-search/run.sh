@@ -9,17 +9,18 @@
 # each after evicting every file of the corpus. One scan per process.
 # Each row is the median of its five runs.
 #
-# Cold runs need GNU dd (`iflag=nocache`, Linux). Eviction is confirmed with
-# `fincore` when it is installed. Elsewhere the cold rows are skipped.
+# Cold runs need GNU dd (`iflag=nocache`, Linux); without it the cold rows
+# are skipped. Eviction is confirmed with `fincore` when it is installed;
+# without it the cold rows still run and `resident_bytes` reads `unconfirmed`.
 #
 # Each scan runs under `/usr/bin/time` so its peak RSS lands in the trailing
 # `peak_rss_bytes` column (median of the five runs' peaks, in bytes): GNU
 # `time -f %M` on Linux (KiB, times 1024), BSD `time -l`'s maximum resident
-# set size on macOS. Without `/usr/bin/time` the column reads `unavailable`
-# and the run still succeeds. The wrapper reports on stderr, so the scan's
-# own `ms` timing on stdout is unchanged. The column is appended at the end,
-# so earlier rows without it are untouched. The script prints the core count
-# (`nproc`, else `getconf _NPROCESSORS_ONLN`) once at the start for the log.
+# set size on macOS. The script needs `/usr/bin/time` and exits without it.
+# The wrapper reports on stderr, so the scan's own `ms` timing on stdout is
+# unchanged. The column is appended at the end, so earlier rows without it
+# are untouched. The script prints the core count (`getconf
+# _NPROCESSORS_ONLN`) once at the start for the log.
 #
 # CORPUS (default: $TMPDIR/fiber-session-search) holds the generated homes,
 # kept between runs; delete it when done. Needs about 9 GB of free disk.
@@ -40,19 +41,13 @@ if dd --version >/dev/null 2>&1; then
   cold=yes
 fi
 
-if command -v nproc >/dev/null 2>&1; then
-  echo "nproc: $(nproc)"
-else
-  echo "nproc: $(getconf _NPROCESSORS_ONLN)"
-fi
+echo "nproc: $(getconf _NPROCESSORS_ONLN)"
 
-rss_mode=none
-if command -v /usr/bin/time >/dev/null 2>&1; then
-  case "$(uname -s)" in
-    Linux) rss_mode=gnu ;;
-    Darwin) rss_mode=bsd ;;
-  esac
-fi
+command -v /usr/bin/time >/dev/null || { echo "needs /usr/bin/time" >&2; exit 1; }
+case "$(uname -s)" in
+  Linux) rss_mode=gnu ;;
+  Darwin) rss_mode=bsd ;;
+esac
 TIMEFILE=$(mktemp)
 trap 'rm -f "$TIMEFILE"' EXIT
 
@@ -95,7 +90,6 @@ for corpus in 300:25 1300:25 4000:25 1300:0; do
       rss_values=()
       hits=
       left=
-      rss_bad=no
       if [ "$cache" = warm ]; then "$BIN" scan "$home" "$query" >/dev/null; fi
       for _ in $(seq "$RUNS"); do
         if [ "$cache" = cold ]; then
@@ -105,34 +99,21 @@ for corpus in 300:25 1300:25 4000:25 1300:0; do
         case "$rss_mode" in
           gnu)
             read -r ms hits _ < <(/usr/bin/time -f '%M' "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
-            rss_kb=$(cat "$TIMEFILE")
-            case "$rss_kb" in
-              ''|*[!0-9]*) rss=unavailable ;;
-              *) rss=$((rss_kb * 1024)) ;;
-            esac
+            rss=$(( $(cat "$TIMEFILE") * 1024 ))
             ;;
           bsd)
             read -r ms hits _ < <(/usr/bin/time -l "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
             rss=$(awk '/maximum resident set size/ { print $1 }' "$TIMEFILE")
-            case "$rss" in
-              ''|*[!0-9]*) rss=unavailable ;;
-            esac
             ;;
-          *)
-            read -r ms hits _ < <("$BIN" scan "$home" "$query")
-            rss=unavailable
-            ;;
+        esac
+        case "$rss" in
+          ''|*[!0-9]*) echo "could not read peak RSS" >&2; exit 1 ;;
         esac
         times+=("$ms")
         rss_values+=("$rss")
-        if [ "$rss" = unavailable ]; then rss_bad=yes; fi
       done
       med=$(printf '%s\n' "${times[@]}" | median)
-      if [ "$rss_bad" = yes ]; then
-        rss_med=unavailable
-      else
-        rss_med=$(printf '%s\n' "${rss_values[@]}" | median)
-      fi
+      rss_med=$(printf '%s\n' "${rss_values[@]}" | median)
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date +%F)" "$PLATFORM" "$mib" "$every" "$log_mib" "$artifact_mib" "$sessions" \
         "$query" "$cache" "${left:-}" "$med" "$(IFS=,; echo "${times[*]}")" "$hits" "$rss_med" |
