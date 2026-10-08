@@ -433,3 +433,25 @@ fn each_tab_target_covers_its_cells() {
         Some(Rect::new(14, y, 6, 1))
     );
 }
+
+#[test]
+fn form_words_row_scrolled_to_the_caret_at_30x12() {
+    let mut app = asking(base_and_name(false), 30, 12);
+    press(&mut app, &[Key::Tab]);
+    let words: Vec<Key> = "a long answer that runs past thirty columns"
+        .chars()
+        .map(Key::Char)
+        .collect();
+    press(&mut app, &words);
+    let (shown, _) = screen(&app, 30, 12);
+    insta::assert_snapshot!("form_words_row_scrolled_to_the_caret_at_30x12", shown);
+    let area = Rect::new(0, 0, 30, 12);
+    let row = shown
+        .lines()
+        .position(|row| row.starts_with("› ✎"))
+        .and_then(|row| u16::try_from(row).ok());
+    assert_eq!(
+        super::super::cursor(&app, area).map(|at| (at.x, Some(at.y))),
+        Some((29, row))
+    );
+}

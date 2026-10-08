@@ -6,7 +6,7 @@ use contract::commands::{ReplyAnswer, SentFormAnswer};
 use contract::shapes::{Question, True};
 
 use super::{Panel, PanelKey, PanelSpot};
-use crate::format::width;
+use crate::format::{cut, width};
 use crate::keys::{Edit, Key};
 
 /// A question form and what the person has answered so far.
@@ -28,6 +28,8 @@ struct Field {
     picks: Picks,
     /// The words typed on the question's words row.
     words: String,
+    /// The text cursor on the words row: the characters before it.
+    caret: usize,
 }
 
 impl Field {
@@ -102,6 +104,7 @@ impl Form {
                     Picks::One(None)
                 },
                 words: String::new(),
+                caret: 0,
             })
             .collect();
         let mut form = Self {
@@ -146,8 +149,9 @@ impl Form {
     }
 
     /// An editing key: a paste is typed on the words row, or into the note
-    /// on the Submit tab, a control character as a space. Every other edit
-    /// does nothing.
+    /// on the Submit tab, a control character as a space; ← and → move the
+    /// words row's text cursor there, and move between the tabs from every
+    /// other row. Every other edit does nothing.
     pub(crate) fn on_edit(&mut self, edit: &Edit) {
         match edit {
             Edit::Paste(text) => {
@@ -155,9 +159,9 @@ impl Form {
                     self.type_char(if ch.is_control() { ' ' } else { ch });
                 }
             }
-            Edit::Left
-            | Edit::Right
-            | Edit::ShiftEnter
+            Edit::Left => self.arrow(false),
+            Edit::Right => self.arrow(true),
+            Edit::ShiftEnter
             | Edit::CtrlJ
             | Edit::WordLeft
             | Edit::WordRight
@@ -226,7 +230,14 @@ impl Form {
                 }
                 Some(Picks::One(_)) | None => self.enter(),
             },
-            Spot::Tab(_) | Spot::Words | Spot::Note => PanelKey::Handled,
+            Spot::Words => {
+                let field = self.tab();
+                if let Some(answer) = self.answers.get_mut(field) {
+                    answer.caret = answer.words.chars().count();
+                }
+                PanelKey::Handled
+            }
+            Spot::Tab(_) | Spot::Note => PanelKey::Handled,
             Spot::Next | Spot::Send | Spot::Chat => self.enter(),
         }
     }
@@ -245,10 +256,39 @@ impl Form {
         push(&mut panel, &header, None, false);
         self.tab_line(width, &mut panel);
         match self.at {
-            Cursor::Question { field, row } => self.question_lines(field, row, &mut panel),
+            Cursor::Question { field, row } => self.question_lines(field, row, width, &mut panel),
             Cursor::Submit(row) => self.submit_lines(row, &mut panel),
         }
         panel
+    }
+
+    /// ← or →: one character on the words row, stopping at either end;
+    /// from any other row, the previous or next tab, stopping at the first
+    /// question and at Submit.
+    fn arrow(&mut self, right: bool) {
+        if let Cursor::Question {
+            field,
+            row: Row::Words,
+        } = self.at
+        {
+            if let Some(answer) = self.answers.get_mut(field) {
+                answer.caret = if right {
+                    answer
+                        .caret
+                        .saturating_add(1)
+                        .min(answer.words.chars().count())
+                } else {
+                    answer.caret.saturating_sub(1)
+                };
+            }
+            return;
+        }
+        let tab = self.tab();
+        self.open_tab(if right {
+            tab.saturating_add(1)
+        } else {
+            tab.saturating_sub(1)
+        });
     }
 
     /// The tab shown: a question's index, or the question count for Submit.
@@ -345,7 +385,9 @@ impl Form {
         match self.at {
             Cursor::Question { field, .. } => {
                 if let Some(answer) = self.answers.get_mut(field) {
-                    answer.words.push(ch);
+                    let at = byte_at(&answer.words, answer.caret);
+                    answer.words.insert(at, ch);
+                    answer.caret = answer.caret.saturating_add(1);
                 }
                 self.at = Cursor::Question {
                     field,
@@ -359,16 +401,20 @@ impl Form {
         }
     }
 
-    /// Backspace deletes the last character on the words row and the note
-    /// row, and does nothing elsewhere.
+    /// Backspace deletes the character before the text cursor on the words
+    /// row and the note's last character on the note row, and does nothing
+    /// elsewhere.
     fn backspace(&mut self) {
         match self.at {
             Cursor::Question {
                 field,
                 row: Row::Words,
             } => {
-                if let Some(answer) = self.answers.get_mut(field) {
-                    answer.words.pop();
+                if let Some(answer) = self.answers.get_mut(field)
+                    && let Some(before) = answer.caret.checked_sub(1)
+                {
+                    answer.words.remove(byte_at(&answer.words, before));
+                    answer.caret = before;
                 }
             }
             Cursor::Submit(SubmitRow::Note) => {
@@ -477,7 +523,7 @@ impl Form {
     /// Question `field`'s rows: the question, its options with their
     /// descriptions, the words row, `Next →` or `Review →`, and "Chat
     /// about this".
-    fn question_lines(&self, field: usize, at: Row, panel: &mut Panel) {
+    fn question_lines(&self, field: usize, at: Row, cols: u16, panel: &mut Panel) {
         let (Some(question), Some(answer)) = (self.fields.get(field), self.answers.get(field))
         else {
             return;
@@ -499,13 +545,12 @@ impl Form {
             }
             push(panel, &line, Some(Spot::Option(option)), row == at);
         }
-        let words = if answer.words.is_empty() {
-            "answer in words"
-        } else {
-            answer.words.as_str()
-        };
-        let line = format!("{} ✎ {words}", mark(Row::Words));
-        push(panel, &line, Some(Spot::Words), at == Row::Words);
+        let here = at == Row::Words;
+        let (line, caret) = words_row(answer, here, cols);
+        if let Some(caret) = caret {
+            panel.caret = Some((panel.lines.len(), caret));
+        }
+        push(panel, &line, Some(Spot::Words), here);
         let next = if field.saturating_add(1) == self.fields.len() {
             "Review →"
         } else {
@@ -566,6 +611,41 @@ fn push(panel: &mut Panel, text: &str, spot: Option<Spot>, here: bool) {
     if here {
         panel.cursor = Some(line);
     }
+}
+
+/// The words row at `cols` columns and, when the cursor is on it (`here`),
+/// the text cursor's column. The row never wraps: it shows the words from
+/// their first character, clipped at the width, unless the text cursor
+/// would reach the width, when it shows them from the first character that
+/// puts the text cursor on the last column.
+fn words_row(answer: &Field, here: bool, cols: u16) -> (String, Option<u16>) {
+    let prefix = format!("{} ✎ ", if here { '›' } else { ' ' });
+    if answer.words.is_empty() {
+        return (
+            format!("{prefix}answer in words"),
+            here.then(|| cells(&prefix)),
+        );
+    }
+    let words: Vec<char> = clean(&answer.words).chars().collect();
+    let caret = answer.caret.min(words.len());
+    let before =
+        |start: usize| -> String { words.get(start..caret).unwrap_or_default().iter().collect() };
+    let mut start = 0;
+    while here && start < caret && width(&prefix) + width(&before(start)) >= usize::from(cols) {
+        start += 1;
+    }
+    let shown: String = words.get(start..).unwrap_or_default().iter().collect();
+    let line = cut(&format!("{prefix}{shown}"), usize::from(cols));
+    let caret = here.then(|| cells(&prefix).saturating_add(cells(&before(start))));
+    (line, caret)
+}
+
+/// The byte where the character `chars` characters into `text` starts, or
+/// the end.
+fn byte_at(text: &str, chars: usize) -> usize {
+    text.char_indices()
+        .nth(chars)
+        .map_or(text.len(), |(at, _)| at)
 }
 
 /// How many display cells `text` takes, as a screen column.

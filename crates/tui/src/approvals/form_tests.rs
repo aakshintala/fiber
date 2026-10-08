@@ -430,8 +430,6 @@ fn a_paste_is_typed_on_the_words_row_or_into_the_note() {
 #[test]
 fn every_other_edit_does_nothing() {
     let edits = [
-        Edit::Left,
-        Edit::Right,
         Edit::ShiftEnter,
         Edit::CtrlJ,
         Edit::WordLeft,
@@ -743,4 +741,166 @@ fn the_panel_marks_the_cursor_line_and_each_rows_spot() {
         .map(|spot| (spot.line, spot.spot))
         .collect();
     assert_eq!(rows, [(4, Spot::Note), (5, Spot::Send), (6, Spot::Chat)]);
+}
+
+/// Two single-choice questions `A` and `B`, each with options `x` and `y`.
+fn two_choices() -> Form {
+    form(json!([
+        {"header": "A", "question": "A?", "options": [{"label": "x"}, {"label": "y"}]},
+        {"header": "B", "question": "B?", "options": [{"label": "x"}, {"label": "y"}]}
+    ]))
+}
+
+/// Presses ← (`false`) or → (`true`) for each entry.
+fn arrows(form: &mut Form, right: &[bool]) {
+    for right in right {
+        form.on_edit(if *right { &Edit::Right } else { &Edit::Left });
+    }
+}
+
+/// The words row's line and the text cursor's column at `cols` columns.
+fn words_at(form: &Form, cols: u16) -> (String, Option<u16>) {
+    let panel = form.panel("h".to_owned(), cols);
+    let line = panel
+        .spots
+        .iter()
+        .find(|spot| spot.spot == Spot::Words)
+        .and_then(|spot| panel.lines.get(spot.line).cloned())
+        .unwrap_or_default();
+    (line, panel.caret.map(|(_, col)| col))
+}
+
+#[test]
+fn left_and_right_on_an_option_row_move_between_tabs_and_stop_at_the_ends() {
+    let mut form = two_choices();
+    arrows(&mut form, &[true]);
+    assert_eq!(tabs(&form), "A  [B]  Submit");
+    assert_eq!(cursor(&form), "› ( ) x");
+    arrows(&mut form, &[true, true]);
+    assert_eq!(tabs(&form), "A  B  [Submit]");
+    arrows(&mut form, &[false]);
+    assert_eq!(tabs(&form), "A  [B]  Submit");
+    arrows(&mut form, &[false, false]);
+    assert_eq!(tabs(&form), "[A]  B  Submit");
+}
+
+#[test]
+fn left_and_right_on_next_and_chat_move_between_tabs() {
+    let mut form = two_choices();
+    press(&mut form, &[Key::Down, Key::Down, Key::Down]);
+    assert_eq!(cursor(&form), "› Next →");
+    arrows(&mut form, &[true]);
+    assert_eq!(tabs(&form), "A  [B]  Submit");
+    press(&mut form, &[Key::Down, Key::Down, Key::Down, Key::Down]);
+    assert_eq!(cursor(&form), "› Chat about this");
+    arrows(&mut form, &[false]);
+    assert_eq!(tabs(&form), "[A]  B  Submit");
+}
+
+#[test]
+fn left_and_right_on_every_submit_row_move_between_tabs() {
+    for ups in 0..3 {
+        let mut form = two_choices();
+        press(&mut form, &[Key::Tab, Key::Tab, Key::Down]);
+        for _ in 0..ups {
+            press(&mut form, &[Key::Up]);
+        }
+        arrows(&mut form, &[false]);
+        assert_eq!(tabs(&form), "A  [B]  Submit", "{ups}");
+    }
+}
+
+#[test]
+fn left_and_right_on_the_words_row_move_the_text_cursor_and_stop_at_the_ends() {
+    let mut form = base_and_name(false);
+    press(&mut form, &[Key::Tab]);
+    type_text(&mut form, "abc");
+    assert_eq!(words_at(&form, 60), ("› ✎ abc".to_owned(), Some(7)));
+    arrows(&mut form, &[true]);
+    assert_eq!(words_at(&form, 60).1, Some(7));
+    arrows(&mut form, &[false, false]);
+    assert_eq!(words_at(&form, 60).1, Some(5));
+    arrows(&mut form, &[false, false]);
+    assert_eq!(words_at(&form, 60).1, Some(4));
+    assert_eq!(tabs(&form), "Base  [Name ✓]  Submit");
+    arrows(&mut form, &[true]);
+    assert_eq!(words_at(&form, 60).1, Some(5));
+}
+
+#[test]
+fn typing_and_a_paste_insert_at_the_text_cursor() {
+    let mut form = base_and_name(false);
+    press(&mut form, &[Key::Tab]);
+    type_text(&mut form, "ad");
+    arrows(&mut form, &[false]);
+    type_text(&mut form, "b");
+    form.on_edit(&Edit::Paste("c\n".to_owned()));
+    assert_eq!(words_at(&form, 60), ("› ✎ abc d".to_owned(), Some(8)));
+    assert_eq!(
+        answer(&form)["answers"][1],
+        json!({"labels": [], "text": "abc d"})
+    );
+}
+
+#[test]
+fn backspace_removes_the_character_before_the_text_cursor() {
+    let mut form = base_and_name(false);
+    press(&mut form, &[Key::Tab]);
+    type_text(&mut form, "abc");
+    arrows(&mut form, &[false]);
+    press(&mut form, &[Key::Backspace]);
+    assert_eq!(words_at(&form, 60), ("› ✎ ac".to_owned(), Some(5)));
+    arrows(&mut form, &[false]);
+    press(&mut form, &[Key::Backspace]);
+    assert_eq!(words_at(&form, 60), ("› ✎ ac".to_owned(), Some(4)));
+}
+
+#[test]
+fn a_click_on_the_words_row_puts_the_text_cursor_at_the_end() {
+    let mut form = base_and_name(false);
+    press(&mut form, &[Key::Tab]);
+    type_text(&mut form, "abc");
+    arrows(&mut form, &[false, false]);
+    press(&mut form, &[Key::Down]);
+    assert_eq!(form.click(Spot::Words), PanelKey::Handled);
+    assert_eq!(words_at(&form, 60).1, Some(7));
+}
+
+#[test]
+fn the_words_row_scrolls_only_when_the_text_cursor_would_reach_the_width() {
+    let mut form = base_and_name(false);
+    press(&mut form, &[Key::Tab]);
+    type_text(&mut form, "abcdefgh");
+    // The text cursor after `h` is at column 12.
+    assert_eq!(words_at(&form, 14), ("› ✎ abcdefgh".to_owned(), Some(12)));
+    assert_eq!(words_at(&form, 13), ("› ✎ abcdefgh".to_owned(), Some(12)));
+    assert_eq!(words_at(&form, 12), ("› ✎ bcdefgh".to_owned(), Some(11)));
+    // Off the row, the words show from their start, clipped.
+    press(&mut form, &[Key::Down]);
+    assert_eq!(words_at(&form, 8), ("  ✎ abcd".to_owned(), None));
+}
+
+#[test]
+fn a_wide_character_counts_two_cells_on_the_words_row() {
+    let mut form = base_and_name(false);
+    press(&mut form, &[Key::Tab]);
+    type_text(&mut form, "名前");
+    assert_eq!(words_at(&form, 9), ("› ✎ 名前".to_owned(), Some(8)));
+    assert_eq!(words_at(&form, 8), ("› ✎ 前".to_owned(), Some(6)));
+}
+
+#[test]
+fn a_words_row_narrower_than_its_mark_shows_the_mark_only() {
+    let mut form = base_and_name(false);
+    press(&mut form, &[Key::Tab]);
+    type_text(&mut form, "ab");
+    assert_eq!(words_at(&form, 3), ("› ✎".to_owned(), Some(4)));
+}
+
+#[test]
+fn the_panel_places_the_caret_on_the_words_line() {
+    let mut form = base_and_name(false);
+    assert_eq!(form.panel("h".to_owned(), 60).caret, None);
+    press(&mut form, &[Key::Down, Key::Down]);
+    assert_eq!(form.panel("h".to_owned(), 60).caret, Some((5, 4)));
 }
