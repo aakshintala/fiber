@@ -60,15 +60,18 @@ pub(crate) fn access(
 
 /// A scripted provider has no credential label: `asked` is `credential_missing`.
 pub(crate) fn label(provider: &ProviderData, asked: Option<&str>) -> Result<(), Failure> {
-    let _ = (provider, asked);
+    if let Some(label) = asked
+        && is_scripted(provider)
+    {
+        return Err(crate::credential::no_label(&provider.name, label, &[]));
+    }
     Ok(())
 }
 
 /// The label `provider` records on `preamble_built` and `model_changed`:
 /// none for a scripted provider, else `label`.
 pub(crate) fn credential(provider: &ProviderData, label: String) -> Option<String> {
-    let _ = provider;
-    Some(label)
+    (!is_scripted(provider)).then_some(label)
 }
 
 /// The configured warming for `model`: none for a scripted model, which has

@@ -243,8 +243,8 @@ impl Switching {
                     // provider is on now answers without a read
                     // (`docs/model-routing.md`, "Which credential a session uses").
                     // A Lua `credential()` provider never reaches this
-                    // callback, and a scripted provider never reads, so both
-                    // accept any label.
+                    // callback, so it accepts any label; a scripted provider
+                    // was rejected before the read (`scripted::label`).
                     let current = self.selected_of(
                         &self
                             .remembered
