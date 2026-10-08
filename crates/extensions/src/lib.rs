@@ -21,6 +21,7 @@ mod manage;
 mod oauth;
 mod prepare;
 mod providers;
+mod release;
 mod repository;
 mod resolve;
 
@@ -223,6 +224,16 @@ pub enum Error {
         /// Where it was downloaded from.
         url: String,
     },
+    /// A release archive Fiber will not unpack: not gzip, not plain ustar, a
+    /// member that is not a file, a directory or a relative symlink inside
+    /// its directory, or a layout that is not the release's.
+    #[error("`{archive}`: {why}")]
+    BadArchive {
+        /// The archive's file name.
+        archive: String,
+        /// Why, naming the member.
+        why: String,
+    },
     /// A move failed and some extensions could not be put back.
     #[error("The install failed ({why}) and these could not be put back: {}", stuck.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "))]
     Rollback {
@@ -411,6 +422,7 @@ impl Error {
             | Self::BadRecord { .. }
             | Self::InstallStep { .. }
             | Self::BinaryChecksum { .. }
+            | Self::BadArchive { .. }
             | Self::Rollback { .. } => ErrorCode::IoFailed,
             Self::InstallExited { .. } => ErrorCode::NonzeroExit,
             Self::MajorConflict { .. } | Self::NoVersion { .. } | Self::Unresolved => {

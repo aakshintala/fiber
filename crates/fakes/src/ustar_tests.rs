@@ -1,0 +1,79 @@
+use std::io::Read;
+
+use super::{archive, checksum, gzip, header};
+
+/// The header's checksum field, as a number.
+fn stored(block: &[u8; 512]) -> u64 {
+    let field = String::from_utf8_lossy(&block[148..154]).into_owned();
+    u64::from_str_radix(&field, 8).unwrap()
+}
+
+/// Every byte of the header, with the checksum field counted as spaces.
+fn summed(block: &[u8; 512]) -> u64 {
+    block
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            if (148..156).contains(&i) {
+                32
+            } else {
+                u64::from(*b)
+            }
+        })
+        .sum()
+}
+
+#[test]
+fn a_header_carries_the_magic_and_a_matching_checksum() {
+    let block = header("dir/file.txt", b'0', 5, 0o644, "");
+    assert_eq!(&block[257..263], b"ustar\0");
+    assert_eq!(&block[263..265], b"00");
+    assert_eq!(&block[0..12], b"dir/file.txt");
+    assert_eq!(block[156], b'0');
+    assert_eq!(&block[124..135], b"00000000005");
+    assert_eq!(&block[100..107], b"0000644");
+    assert_eq!(stored(&block), summed(&block));
+}
+
+#[test]
+fn a_long_name_is_split_into_prefix_and_name() {
+    let long = format!("{}/{}", "p".repeat(120), "n".repeat(90));
+    let block = header(&long, b'0', 0, 0o644, "");
+    assert_eq!(&block[0..90], "n".repeat(90).as_bytes());
+    assert_eq!(block[90], 0);
+    assert_eq!(&block[345..465], "p".repeat(120).as_bytes());
+}
+
+#[test]
+fn a_symlink_header_holds_its_target() {
+    let block = header("link", b'2', 0, 0o777, "sub/target");
+    assert_eq!(&block[157..167], b"sub/target");
+    assert_eq!(block[156], b'2');
+}
+
+#[test]
+fn checksum_recomputes_after_a_change() {
+    let mut block = header("a", b'0', 0, 0o644, "");
+    block[0] = b'b';
+    assert_ne!(stored(&block), summed(&block));
+    checksum(&mut block);
+    assert_eq!(stored(&block), summed(&block));
+}
+
+#[test]
+fn an_archive_pads_each_member_and_ends_with_two_zero_blocks() {
+    let bytes = archive(&[(header("a", b'0', 3, 0o644, ""), b"abc")]);
+    assert_eq!(bytes.len(), 512 * 4);
+    assert_eq!(&bytes[512..515], b"abc");
+    assert!(bytes[515..].iter().all(|b| *b == 0));
+}
+
+#[test]
+fn gzip_round_trips_through_flate2() {
+    let input = b"hello, archive".repeat(100);
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(&gzip(&input)[..])
+        .read_to_end(&mut out)
+        .unwrap();
+    assert_eq!(out, input);
+}
