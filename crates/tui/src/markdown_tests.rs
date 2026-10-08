@@ -562,3 +562,14 @@ fn a_link_in_a_wrapped_table_cell_covers_both_rows() {
         .collect();
     assert!(hits.len() >= 2, "{rows:?}");
 }
+
+#[test]
+fn a_link_with_no_cells_to_draw_has_no_link_entry() {
+    // A zero-width character draws no cell, so the link has no columns.
+    let rendered = render("[\u{200b}](http://x.example)", 40);
+    assert!(
+        rendered.text.iter().all(|text| text.links.is_empty()),
+        "{:?}",
+        rendered.text
+    );
+}

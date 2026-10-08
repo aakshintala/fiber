@@ -401,3 +401,54 @@ fn a_press_on_a_link_still_starts_a_selection() {
         Effect::Copy(_)
     ));
 }
+
+#[test]
+fn a_bare_url_is_drawn_on_exactly_its_own_cells() {
+    // Each URL starts or ends at a line edge or beside a space, so a
+    // cell off at either end moves the rect's column or width.
+    let url = "http://example.com/a";
+    let cases = [
+        ("see http://example.com/a here", 4, 20),
+        ("http://example.com/a here", 0, 20),
+        ("see http://example.com/a", 4, 20),
+    ];
+    for (text, col, width) in cases {
+        let mut app = replied(60, 12, text);
+        app.set_opener(true);
+        let area = app.conversation_area();
+        let found = app.visible_links(area);
+        let link = found
+            .iter()
+            .find(|link| link.url == url)
+            .unwrap_or_else(|| panic!("no bare link in {text:?}: {found:?}"));
+        assert_eq!(link.rects.len(), 1, "{text:?}: {link:?}");
+        let rect = link.rects[0];
+        assert_eq!(
+            (rect.x, rect.width),
+            (area.x.saturating_add(col), width),
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn the_same_url_on_two_separated_rows_is_two_links() {
+    let mut app = replied(60, 16, "http://a.example\n\nbetween\n\nhttp://a.example");
+    app.set_opener(true);
+    let found = app.visible_links(app.conversation_area());
+    let hits: Vec<_> = found
+        .iter()
+        .filter(|link| link.url == "http://a.example")
+        .collect();
+    assert_eq!(hits.len(), 2, "{found:?}");
+    assert!(hits.iter().all(|link| link.rects.len() == 1), "{hits:?}");
+}
+
+#[test]
+fn two_different_urls_on_adjacent_rows_stay_two_links() {
+    let mut app = replied(60, 12, "http://a.example  \nhttp://b.example");
+    app.set_opener(true);
+    let found = app.visible_links(app.conversation_area());
+    let urls: Vec<&str> = found.iter().map(|link| link.url.as_str()).collect();
+    assert_eq!(urls, ["http://a.example", "http://b.example"], "{found:?}");
+}
