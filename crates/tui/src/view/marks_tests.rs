@@ -187,10 +187,9 @@ fn no_color_keeps_selection_and_matches_distinct() {
     // The cells each mark carries, by its role marker before the paint.
     let at = |style: ratatui::style::Style| {
         let marked = style.bg.unwrap_or_default();
-        (0..40).flat_map(|x| (0..12).map(move |y| (x, y))).find(|at| {
-            buf.cell(*at)
-                .is_some_and(|cell| cell.bg == marked)
-        })
+        (0..40)
+            .flat_map(|x| (0..12).map(move |y| (x, y)))
+            .find(|at| buf.cell(*at).is_some_and(|cell| cell.bg == marked))
     };
     let (selected, matched, current) = (
         at(SELECTION).expect("a selected cell"),
@@ -211,10 +210,7 @@ fn no_color_keeps_selection_and_matches_distinct() {
     }
     assert_eq!(cell(selected).modifier, Modifier::REVERSED);
     assert_eq!(cell(matched).modifier, Modifier::UNDERLINED);
-    assert_eq!(
-        cell(current).modifier,
-        Modifier::REVERSED | Modifier::BOLD
-    );
+    assert_eq!(cell(current).modifier, Modifier::REVERSED | Modifier::BOLD);
     assert!(
         cell(selected).modifier != cell(matched).modifier
             && cell(matched).modifier != cell(current).modifier
