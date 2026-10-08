@@ -93,6 +93,9 @@ pub(crate) fn judge(
     if let Some(rule) = find(rules, tool, subject, RuleDecision::Ask) {
         return Verdict::Ask(rule);
     }
+    if effects.always_reviewed {
+        return Verdict::Review;
+    }
     if fast_path(&effects.declared, workspace, home) {
         return Verdict::Allow(None);
     }

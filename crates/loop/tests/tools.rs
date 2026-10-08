@@ -1064,6 +1064,7 @@ impl Tool for HostedSearch {
             },
             subject: Some(String::new()),
             prefix: None,
+            always_reviewed: false,
         })
     }
 

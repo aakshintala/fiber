@@ -205,6 +205,10 @@ pub(crate) struct TestTool {
     pub(crate) subject: Option<String>,
     /// The widening a rule would offer.
     pub(crate) prefix: Option<String>,
+    /// When true the call skips the fast path, session grants and standing
+    /// allows, and still meets the credential deny and the standing deny
+    /// and ask rules.
+    pub(crate) always_reviewed: bool,
     /// What a call returns.
     pub(crate) output: Output,
     pub(crate) bound: Bound,
@@ -246,6 +250,7 @@ impl TestTool {
             }),
             subject: Some(String::new()),
             prefix: None,
+            always_reviewed: false,
             output: Output {
                 content: vec![ContentPart::Text { text: text.into() }],
                 ..Output::default()
@@ -306,6 +311,7 @@ impl Tool for TestTool {
             declared,
             subject: self.subject.clone(),
             prefix: self.prefix.clone(),
+            always_reviewed: self.always_reviewed,
         })
     }
 
@@ -385,6 +391,7 @@ impl Tool for WriteFile {
             },
             subject: Some(String::new()),
             prefix: None,
+            always_reviewed: false,
         })
     }
 

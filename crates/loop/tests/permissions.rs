@@ -684,3 +684,106 @@ fn the_projects_rule_is_reported_over_a_global_one() {
     );
     assert_eq!(completed(&lines)[0].payload["status"], "completed");
 }
+
+#[test]
+fn an_always_reviewed_call_reaches_the_reviewer_despite_a_project_allow() {
+    // A call a project standing allow names, declared always reviewed: it
+    // skips the standing allow and is judged by the reviewer instead
+    // (`docs/permissions.md`, "The order a call is judged in").
+    let flagged = Arc::new({
+        let mut tool = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
+        tool.subject = Some("npm test --watch".into());
+        tool.prefix = Some("npm test".into());
+        tool.always_reviewed = true;
+        tool
+    });
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![flagged.clone() as Arc<dyn Tool>],
+    );
+    session.rules.set(standing(
+        Vec::new(),
+        vec![rule(RuleDecision::Allow, "shell", "npm test")],
+    ));
+    // One block hands the call to a person at once.
+    let reviewer = session.reviewer_limits(
+        vec![
+            Scripted::text("check"),
+            Scripted::text("block writes the index"),
+        ],
+        r#loop::BlockLimits {
+            consecutive: 1,
+            session: 20,
+        },
+    );
+    let answered = on_request(&session, {
+        let inbox = session.inbox.clone();
+        move |id| inbox.send(reply(id, deny(Some("not now")))).unwrap()
+    });
+    let lines = go(&mut session);
+    answered.join().unwrap();
+    // The standing allow did not answer the call: the reviewer was
+    // consulted for both stages.
+    assert_eq!(reviewer.requests().len(), 2);
+    let requested = line(&lines, "permission_requested");
+    assert_eq!(requested.payload["step"], "review");
+    assert_eq!(
+        requested.payload["escalation"],
+        json!({"cause": "consecutive_blocks", "reason": "writes the index"})
+    );
+    // An allow it remembered could never match, so the escalation offers
+    // no rule to remember.
+    assert_eq!(requested.payload.get("rule"), None);
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "person");
+    assert_eq!(
+        resolved.payload["request_id"],
+        requested.payload["request_id"]
+    );
+    let done = completed(&lines)[0];
+    assert_eq!(done.payload["status"], "denied");
+    assert_eq!(done.payload["reason"], "person");
+    assert!(flagged.ran().is_empty(), "a denied call never runs");
+
+    // The control: the same call without the flag takes the standing
+    // allow, and the reviewer is never consulted.
+    let plain = Arc::new({
+        let mut tool = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
+        tool.subject = Some("npm test --watch".into());
+        tool.prefix = Some("npm test".into());
+        tool
+    });
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![plain.clone() as Arc<dyn Tool>],
+    );
+    session.rules.set(standing(
+        Vec::new(),
+        vec![rule(RuleDecision::Allow, "shell", "npm test")],
+    ));
+    let reviewer = session.reviewer(Vec::new());
+    let lines = go(&mut session);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(&[
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+        ])
+    );
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "allow");
+    assert_eq!(resolved.payload["decided_by"], "standing_rule");
+    assert_eq!(completed(&lines)[0].payload["status"], "completed");
+    assert_eq!(plain.ran().len(), 1);
+    assert!(reviewer.requests().is_empty());
+}

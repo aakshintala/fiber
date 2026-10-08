@@ -26,6 +26,14 @@ fn call(effects: Vec<Effect>, paths: Option<Vec<&str>>, subject: Option<&str>) -
         declared: declared(effects, paths),
         subject: subject.map(str::to_owned),
         prefix: None,
+        always_reviewed: false,
+    }
+}
+
+fn reviewed(effects: Effects) -> Effects {
+    Effects {
+        always_reviewed: true,
+        ..effects
     }
 }
 
@@ -561,6 +569,7 @@ fn credential_paths_match_inside_the_directory_and_fail_closed() {
             },
             subject: Some(String::new()),
             prefix: None,
+            always_reviewed: false,
         };
         judge(
             "read",
@@ -865,4 +874,254 @@ fn an_ill_fitting_reply_does_not_fit() {
         remember: Some(remembered()),
     };
     assert!(answer(Some(&offer()), &reply).is_none());
+}
+
+#[test]
+fn an_always_reviewed_call_skips_a_session_grant() {
+    let (_root, workspace, home, credentials) = dirs();
+    let grants = [Grant {
+        tool: "shell".into(),
+        prefix: "npm test".into(),
+    }];
+    let plain = Effects {
+        subject: Some("npm test --watch".into()),
+        prefix: Some("npm test".into()),
+        ..call(vec![Effect::Executes], None, Some("npm test --watch"))
+    };
+    let verdict = judge(
+        "shell",
+        &plain,
+        &empty_rules(),
+        &grants,
+        &workspace,
+        &home,
+        &credentials,
+        &[],
+    );
+    assert!(matches!(
+        verdict,
+        Verdict::Allow(Some(DecidedBy::SessionGrant))
+    ));
+    let verdict = judge(
+        "shell",
+        &reviewed(plain),
+        &empty_rules(),
+        &grants,
+        &workspace,
+        &home,
+        &credentials,
+        &[],
+    );
+    assert!(matches!(verdict, Verdict::Review));
+}
+
+#[test]
+fn an_always_reviewed_call_skips_a_standing_allow() {
+    let (_root, workspace, home, credentials) = dirs();
+    let standing = rules(
+        vec![rule(RuleDecision::Allow, "shell", "npm test")],
+        Vec::new(),
+    );
+    let plain = call(vec![Effect::Executes], None, Some("npm test --watch"));
+    let verdict = judge(
+        "shell",
+        &plain,
+        &standing,
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+        &[],
+    );
+    assert!(matches!(
+        verdict,
+        Verdict::Allow(Some(DecidedBy::StandingRule))
+    ));
+    let verdict = judge(
+        "shell",
+        &reviewed(plain),
+        &standing,
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+        &[],
+    );
+    assert!(matches!(verdict, Verdict::Review));
+}
+
+#[test]
+fn an_always_reviewed_markdown_write_skips_the_data_directory_fast_path() {
+    let (_root, workspace, home, credentials) = dirs();
+    let kept = data_markdown(&home);
+    let plain = call(vec![Effect::Writes], Some(vec![kept.as_str()]), Some(""));
+    let verdict = judge(
+        "write",
+        &plain,
+        &empty_rules(),
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+        &[],
+    );
+    assert!(matches!(verdict, Verdict::Allow(None)));
+    let verdict = judge(
+        "write",
+        &reviewed(plain),
+        &empty_rules(),
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+        &[],
+    );
+    assert!(matches!(verdict, Verdict::Review));
+}
+
+#[test]
+fn an_always_reviewed_read_skips_the_read_fast_path() {
+    let (_root, workspace, home, credentials) = dirs();
+    let plain = call(vec![Effect::Reads], None, Some(""));
+    let verdict = judge(
+        "read",
+        &plain,
+        &empty_rules(),
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+        &[],
+    );
+    assert!(matches!(verdict, Verdict::Allow(None)));
+    let verdict = judge(
+        "read",
+        &reviewed(plain),
+        &empty_rules(),
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+        &[],
+    );
+    assert!(matches!(verdict, Verdict::Review));
+}
+
+#[test]
+fn an_always_reviewed_call_still_meets_the_credential_deny() {
+    let (_root, workspace, home, credentials) = dirs();
+    let secret = credentials.join("token");
+    std::fs::write(&secret, "s3cret").unwrap();
+    let spelled = secret.display().to_string();
+    let plain = call(vec![Effect::Reads], Some(vec![spelled.as_str()]), Some(""));
+    let verdict = judge(
+        "read",
+        &plain,
+        &empty_rules(),
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+        &[],
+    );
+    assert!(matches!(
+        verdict,
+        Verdict::Deny {
+            by: DecidedBy::CredentialDeny,
+            ..
+        }
+    ));
+    let verdict = judge(
+        "read",
+        &reviewed(plain),
+        &empty_rules(),
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+        &[],
+    );
+    assert!(matches!(
+        verdict,
+        Verdict::Deny {
+            by: DecidedBy::CredentialDeny,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn an_always_reviewed_call_still_meets_a_standing_deny() {
+    let (_root, workspace, home, credentials) = dirs();
+    let standing = rules(
+        vec![rule(RuleDecision::Deny, "shell", "npm test")],
+        Vec::new(),
+    );
+    let plain = call(vec![Effect::Executes], None, Some("npm test"));
+    let verdict = judge(
+        "shell",
+        &plain,
+        &standing,
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+        &[],
+    );
+    assert!(matches!(
+        verdict,
+        Verdict::Deny {
+            by: DecidedBy::StandingRule,
+            ..
+        }
+    ));
+    let verdict = judge(
+        "shell",
+        &reviewed(plain),
+        &standing,
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+        &[],
+    );
+    assert!(matches!(
+        verdict,
+        Verdict::Deny {
+            by: DecidedBy::StandingRule,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn an_always_reviewed_call_still_meets_a_standing_ask() {
+    let (_root, workspace, home, credentials) = dirs();
+    let standing = rules(
+        vec![rule(RuleDecision::Ask, "shell", "npm test")],
+        Vec::new(),
+    );
+    let plain = call(vec![Effect::Executes], None, Some("npm test"));
+    let verdict = judge(
+        "shell",
+        &plain,
+        &standing,
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+        &[],
+    );
+    assert!(matches!(verdict, Verdict::Ask(_)));
+    let verdict = judge(
+        "shell",
+        &reviewed(plain),
+        &standing,
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+        &[],
+    );
+    assert!(matches!(verdict, Verdict::Ask(_)));
 }

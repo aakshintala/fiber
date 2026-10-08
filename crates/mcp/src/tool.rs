@@ -64,6 +64,7 @@ impl McpTool {
                 declared: hints.declared(),
                 subject: Some(String::new()),
                 prefix: None,
+                always_reviewed: false,
             },
             call: Call {
                 server: server.to_owned(),

@@ -128,8 +128,12 @@ pub struct Request {
     /// Headers in the order received, names lowercased, credential values
     /// replaced by their fingerprints.
     pub headers: Vec<(String, String)>,
-    /// The body bytes, as received.
+    /// The body bytes, as received. Empty once the request is older than the
+    /// server's body limit ([`ProviderServer::keep_last_bodies`]); `body_len`
+    /// still gives its size.
     pub body: Vec<u8>,
+    /// The size of the body as received, in bytes.
+    pub body_len: usize,
 }
 
 impl Request {
@@ -142,7 +146,10 @@ impl Request {
     }
 }
 
-#[derive(Default)]
+/// How many of the newest requests keep their bodies unless a test asks for
+/// more.
+const DEFAULT_BODY_LIMIT: usize = 64;
+
 struct State {
     script: VecDeque<Response>,
     /// Responses claimed by request path: the first request to a path takes
@@ -151,6 +158,8 @@ struct State {
     /// The response of every request past the script.
     fallback: Option<Response>,
     requests: Vec<Request>,
+    /// How many of the newest requests keep their bodies; `None` keeps all.
+    body_limit: Option<usize>,
     stopping: bool,
     /// When set, a recorded request is not answered until [`ProviderServer::release`].
     hold: bool,
@@ -160,6 +169,41 @@ struct State {
     partial: usize,
     /// Stalled connections whose client side closed.
     closed: usize,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            script: VecDeque::new(),
+            routes: Vec::new(),
+            fallback: None,
+            requests: Vec::new(),
+            body_limit: Some(DEFAULT_BODY_LIMIT),
+            stopping: false,
+            hold: false,
+            permits: 0,
+            partial: 0,
+            closed: 0,
+        }
+    }
+}
+
+impl State {
+    /// Records `request`, then drops the body of the one request that has
+    /// just fallen out of the body limit.
+    fn record(&mut self, request: Request) {
+        self.requests.push(request);
+        if let Some(limit) = self.body_limit
+            && let Some(old) = self
+                .requests
+                .len()
+                .checked_sub(limit)
+                .and_then(|n| n.checked_sub(1))
+            && let Some(request) = self.requests.get_mut(old)
+        {
+            request.body = Vec::new();
+        }
+    }
 }
 
 /// A fake provider listening on a local port. Each request gets the next
@@ -226,6 +270,23 @@ impl ProviderServer {
     /// definition's base URL.
     pub fn url(&self) -> String {
         format!("http://{}", self.addr)
+    }
+
+    /// Keeps full bodies for only the newest `limit` requests (64 by
+    /// default); older requests keep their metadata and `body_len`. Call it
+    /// before the first request arrives.
+    #[must_use]
+    pub fn keep_last_bodies(self, limit: usize) -> Self {
+        lock(&self.state).body_limit = Some(limit);
+        self
+    }
+
+    /// Keeps every request's full body, for a test that reads back more than
+    /// the default limit.
+    #[must_use]
+    pub fn keep_all_bodies(self) -> Self {
+        lock(&self.state).body_limit = None;
+        self
     }
 
     /// Every request received so far, in arrival order. A request is
@@ -375,7 +436,7 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
     let request_path = request.path.clone();
     let response = {
         let mut state = lock(state);
-        state.requests.push(request);
+        state.record(request);
         arrived.notify_all();
         // A malformed body is the client's bug: it gets a 400 and the script
         // keeps its next response.
@@ -489,6 +550,7 @@ fn read_request(reader: &mut impl BufRead) -> io::Result<(Request, Option<Malfor
             method,
             path,
             headers,
+            body_len: body.len(),
             body,
         },
         malformed,
