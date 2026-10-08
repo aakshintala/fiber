@@ -24,6 +24,27 @@ pub(crate) fn arm(signals: &Signals) {
     );
 }
 
+/// Arms the signals just before the session's worktree is created: from
+/// now a signal is recorded, every server still starting is told to stop,
+/// and the worktree's own reads are cancelled, killing its `git` and the
+/// hook together. At the bound the reads go first, then every command
+/// group and MCP server still alive is killed.
+pub(crate) fn arm_isolating(signals: &Signals, reads: &Arc<crate::switch::Reads>) {
+    let record_reads = Arc::clone(reads);
+    let bound_reads = Arc::clone(reads);
+    signals.arm(
+        Box::new(move || {
+            mcp::stop_every_start();
+            record_reads.cancel();
+        }),
+        Box::new(move || {
+            bound_reads.cancel();
+            tools::kill_every_group();
+            extensions::kill_every_group();
+            mcp::kill_every_server();
+        }),
+    );
+}
 /// Starts the session just before its first line: the code of a signal
 /// that came while armed, or `None` with the shutdown wired. A shutdown
 /// cancels the turn for good, ends a switch's credential read and kills its

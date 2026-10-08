@@ -19,6 +19,8 @@ const CLOSING: &str = "The session is shutting down.";
 
 /// The reads of one session: whether shutdown cancelled them, who waits on
 /// one, and the process group of every credential command they started.
+/// The session's worktree creation runs its `git worktree add` through a
+/// `Reads` of its own, so a signal kills git and its hook together.
 #[derive(Default)]
 pub(crate) struct Reads {
     state: Mutex<State>,

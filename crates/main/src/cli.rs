@@ -15,12 +15,12 @@ const MENU: &str = r#"Fiber, a coding agent.
 Usage: fiber <command> [arguments]
 
 Sessions:
-  ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
-  sessions [--all] [--json]                             List sessions: id, state, name, what it waits on, spend
-  sessions delete [--cascade] [--yes] <id>              Delete a session, and with --cascade the sessions that continue it
-  sessions export <id> [<path>]                         Write the session's log and its artifacts to <path>
-  sessions prune [--older-than <duration>] [--dry-run]  Delete old sessions, worktrees and diagnostic logs
-  models [<search>] [--json]                            List the models the installed providers serve
+  ask [--model <model>] [--resume <id>] [--worktree] [<prompt>] [-]  Run one session of one turn; its events go to stdout
+  sessions [--all] [--json]                                          List sessions: id, state, name, what it waits on, spend
+  sessions delete [--cascade] [--yes] <id>                           Delete a session, and with --cascade the sessions that continue it
+  sessions export <id> [<path>]                                      Write the session's log and its artifacts to <path>
+  sessions prune [--older-than <duration>] [--dry-run]               Delete old sessions, worktrees and diagnostic logs
+  models [<search>] [--json]                                         List the models the installed providers serve
 
 Fiber itself:
   approve [--yes]                           Show what this repository ships and approve it
@@ -400,6 +400,11 @@ pub(crate) struct SessionArgs {
     /// hub").
     #[arg(long, conflicts_with = "prompt")]
     pub(crate) resume: bool,
+
+    /// Run the session in a new worktree (`docs/invocation.md`,
+    /// "Isolation").
+    #[arg(long, conflicts_with = "resume")]
+    pub(crate) worktree: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -412,6 +417,11 @@ pub(crate) struct AskArgs {
     /// of starting a new one (`docs/invocation.md`, "Lifecycle").
     #[arg(long, value_name = "id")]
     pub(crate) resume: Option<String>,
+
+    /// Run the session in a new worktree (`docs/invocation.md`,
+    /// "Isolation").
+    #[arg(long, conflicts_with = "resume")]
+    pub(crate) worktree: bool,
 
     /// The prompt. A final `-` reads stdin.
     #[arg(value_name = "prompt", num_args = 0..)]
