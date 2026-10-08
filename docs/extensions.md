@@ -1007,7 +1007,7 @@ each to finish, within its timeout. That is where a worklog or a memory
 written at session end runs. It writes to the extension's data directory
 (`docs/state.md`, "What each part holds"), not to extension state: these
 deliveries come after `fiber_exited`, the last line the log takes, so
-`state.set` and `state.unset` fail with code `closing`. A process extension then has its manifest's
+`state.set`, `state.unset` and `host.drive` fail with code `closing`. A process extension then has its manifest's
 `exit_timeout_ms` to finish, and after that gets the shutdown sequence every
 child gets: SIGTERM, 800 ms, then SIGKILL (`docs/invocation.md`, "Shutdown").
 

@@ -813,6 +813,8 @@ backend.
   start of the body.
 - Redirects are followed, to any host, for at most 10 hops. Fiber judges only
   the URL the model wrote, because the server chooses a redirect ("Effects").
+  An eleventh redirect, or one to a URL Fiber cannot parse, fails with
+  `http_error`.
 - A URL is fetched as written: `http://` is not upgraded, so a server on
   `localhost` or an intranet host works.
 - Fetch refuses link-local addresses (`169.254.0.0/16`, `fe80::/10`) and
