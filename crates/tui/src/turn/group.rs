@@ -63,6 +63,8 @@ pub(crate) struct Call {
     pub(crate) asking: bool,
     /// It had `tool_call_started`.
     pub(crate) started: bool,
+    /// The question form it raised.
+    pub(crate) asked: Option<super::answers::Asked>,
 }
 
 /// A call still streaming: its message, position, name and raw text.

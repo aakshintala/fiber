@@ -626,16 +626,21 @@ impl Group {
                 if !call.changes.is_empty() {
                     row.push_str(&format!(" +{added} −{removed}"));
                 }
-                match call.status {
-                    None if self.cut && call.started => {
-                        row.push_str(" · ? may have run; not run again");
-                    }
-                    None => row.push_str(" · running"),
-                    Some(CallStatus::Completed) => {}
-                    Some(CallStatus::Failed) => row.push_str(" · failed"),
-                    Some(CallStatus::Denied) => row.push_str(" · denied"),
-                    Some(CallStatus::Cancelled) => row.push_str(" · cancelled"),
-                }
+                // The person's answer to a form replaces the status.
+                let status = match call.status {
+                    None if self.cut && call.started => " · ? may have run; not run again",
+                    None => " · running",
+                    Some(CallStatus::Completed) => "",
+                    Some(CallStatus::Failed) => " · failed",
+                    Some(CallStatus::Denied) => " · denied",
+                    Some(CallStatus::Cancelled) => " · cancelled",
+                };
+                row.push_str(
+                    call.asked
+                        .as_ref()
+                        .and_then(|asked| asked.suffix())
+                        .unwrap_or(status),
+                );
                 let line = if call.changes.is_empty() {
                     dim(row)
                 } else {

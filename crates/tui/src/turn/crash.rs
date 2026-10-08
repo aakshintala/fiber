@@ -186,7 +186,11 @@ fn orphans<'a>(
         .flat_map(|turn| turn.entries.iter_mut())
         .filter_map(|entry| match entry {
             Entry::Aside(aside) => Some(aside),
-            Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) | Entry::Band(_) => None,
+            Entry::Reply { .. }
+            | Entry::Steer(_)
+            | Entry::Group(_)
+            | Entry::Band(_)
+            | Entry::Answers(_) => None,
         });
     fold.asides
         .iter_mut()

@@ -25,6 +25,7 @@ use crate::format;
 use crate::markdown;
 use crate::rows::Rows;
 
+mod answers;
 pub(crate) mod crash;
 mod group;
 mod handoff;
@@ -85,6 +86,8 @@ pub(crate) enum Entry {
     Aside(crash::Aside),
     /// A handoff's band: what follows is the second card.
     Band(handoff::Band),
+    /// The person's answers to a question form.
+    Answers(answers::Answered),
 }
 
 /// One turn's card.
@@ -215,7 +218,7 @@ impl Turn {
                     break;
                 }
                 Entry::Group(_) | Entry::Band(_) => break,
-                Entry::Reply { .. } | Entry::Steer(_) | Entry::Aside(_) => {}
+                Entry::Reply { .. } | Entry::Steer(_) | Entry::Aside(_) | Entry::Answers(_) => {}
             }
         }
         match found {
@@ -247,7 +250,8 @@ impl Turn {
                 | Entry::Steer(_)
                 | Entry::Group(_)
                 | Entry::Aside(_)
-                | Entry::Band(_) => None,
+                | Entry::Band(_)
+                | Entry::Answers(_) => None,
             })
             .nth(nth);
         match found {
@@ -497,11 +501,19 @@ impl Turn {
             }
             Target::Note(id) => self.entries.iter_mut().find_map(|entry| match entry {
                 Entry::Band(band) => band.toggle(Target::Note(id)),
-                Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) | Entry::Aside(_) => None,
+                Entry::Reply { .. }
+                | Entry::Steer(_)
+                | Entry::Group(_)
+                | Entry::Aside(_)
+                | Entry::Answers(_) => None,
             }),
             Target::Orphans(id) => self.entries.iter_mut().find_map(|entry| match entry {
                 Entry::Aside(aside) => aside.toggle(Target::Orphans(id)),
-                Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) | Entry::Band(_) => None,
+                Entry::Reply { .. }
+                | Entry::Steer(_)
+                | Entry::Group(_)
+                | Entry::Band(_)
+                | Entry::Answers(_) => None,
             }),
             Target::Login | Target::Copy { .. } => None,
         }
@@ -515,7 +527,9 @@ impl Turn {
             || self.entries.iter_mut().any(|entry| match entry {
                 Entry::Aside(aside) => aside.set_open(target, open),
                 Entry::Band(band) => band.set_open(target, open),
-                Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) => false,
+                Entry::Reply { .. } | Entry::Steer(_) | Entry::Group(_) | Entry::Answers(_) => {
+                    false
+                }
             })
     }
 
@@ -560,6 +574,7 @@ impl Turn {
                 }
                 Entry::Aside(aside) => aside.rows(out),
                 Entry::Band(band) => band.rows(out),
+                Entry::Answers(answered) => answered.rows(out),
             }
         }
         if let Some((ending, ts)) = &self.ended {
@@ -677,6 +692,9 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
         "preamble_built" | "handoff_started" | "handoff_completed" | "context_nudged" => {
             handoff::fold(turns, fold, envelope)
         }
+        // Interaction lines name their calls in the payload, not the
+        // envelope.
+        "interaction_requested" | "interaction_resolved" => answers::fold(turns, envelope),
         _ => action.is_some_and(|action| fold_action(turns, fold, envelope, action)),
     };
     if let Some(turn) = open(turns) {
