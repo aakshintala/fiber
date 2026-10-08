@@ -550,6 +550,7 @@ impl Decoder {
         actions.extend(calls.into_iter().map(|call| {
             let arguments = match serde_json::from_str(&call.arguments) {
                 Ok(Value::Object(map)) => Value::Object(map),
+                _ if call.arguments.is_empty() => Value::Object(serde_json::Map::new()),
                 Ok(_) | Err(_) => Value::String(call.arguments),
             };
             ReplyAction::ToolCall(ToolCallRequested {
