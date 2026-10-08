@@ -39,6 +39,26 @@ fn running<'a>(calls: &'a Calls<'a>) -> impl Iterator<Item = (&'a ActionId, &'a 
         .filter_map(|(id, stream)| stream.map(|stream| (*id, stream)))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A cancel the test runs after the take, before the decision read:
+    /// the order a cancel landing between the two would force
+    /// (`docs/testing.md`, "What a change ships with" allows the hook
+    /// where no outside seam reaches the race).
+    static AFTER_TAKE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Runs the hook [`AFTER_TAKE`] holds, if any, then clears it.
+#[cfg(test)]
+fn pause_after_take() {
+    AFTER_TAKE.with(|hook| {
+        if let Some(paused) = hook.borrow_mut().take() {
+            paused();
+        }
+    });
+}
+
 /// The request the step may suspend on: its only call without a written
 /// completion waits on a pending interaction raised with `suspends`. While
 /// another call has no result, its result would be written after this
@@ -84,6 +104,14 @@ impl Loop {
         self
     }
 
+    /// Whether no answer can come for an ask taken now: `fiber ask`, a
+    /// delegate, after `close`, or a loop no inbox wake reaches
+    /// (`docs/permissions.md`, "Headless"). A cancelled turn, a shutdown
+    /// included, resolves what it holds.
+    fn interactions_unanswerable(&self) -> bool {
+        !self.answerable || self.inbox_wake.is_none() || self.turn_cancelled()
+    }
+
     /// Writes the lines for every ask raised since the last pass, answers
     /// at once the ones nobody can answer, and resolves each pending one
     /// whose `until` passed or that nobody can answer any more.
@@ -93,18 +121,20 @@ impl Loop {
         turn: &TurnId,
     ) -> Result<(), Error> {
         let now = self.log.clock().now();
-        // `fiber ask`, a delegate, after `close`, or a loop no inbox wake
-        // reaches: no answer can come (`docs/permissions.md`, "Headless").
-        // A cancelled turn, a shutdown included, resolves what it holds.
-        let nobody = !self.answerable || self.inbox_wake.is_none() || self.turn_cancelled();
-        // A shutdown leaves a question that suspends pending when no later
-        // call of the step is without its result, so resuming raises it
-        // again (`docs/invocation.md`, "Shutdown").
-        let kept = self.answerable && self.inbox_wake.is_some() && self.shutting_down();
         let last = calls.last().map(|(id, _)| *id);
         for (id, stream) in running(calls) {
             let slot = stream.asking();
-            if let Some(asking) = slot.take_raised() {
+            let raised = slot.take_raised();
+            #[cfg(test)]
+            pause_after_take();
+            // Read after the take, per slot: a cancel landing before it
+            // declines the ask.
+            let nobody = self.interactions_unanswerable();
+            // A shutdown leaves a question that suspends pending when no later
+            // call of the step is without its result, so resuming raises it
+            // again (`docs/invocation.md`, "Shutdown").
+            let kept = self.answerable && self.inbox_wake.is_some() && self.shutting_down();
+            if let Some(asking) = raised {
                 // A request raised again on resume is already written: the
                 // ask pends under it (`docs/events.md`, "Resume").
                 let again = slot.take_reraise();
@@ -339,3 +369,7 @@ impl Loop {
         self.append(&Event::InteractionResolved(resolved), turn, None)
     }
 }
+
+#[cfg(test)]
+#[path = "interactions_tests.rs"]
+mod tests;
