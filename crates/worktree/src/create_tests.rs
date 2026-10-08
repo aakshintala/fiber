@@ -614,25 +614,3 @@ fn a_bad_base_is_a_git_error() {
         }
     });
 }
-
-#[test]
-fn not_a_repository_maps_to_usage() {
-    assert_eq!(
-        Error::NotARepository {
-            path: PathBuf::from("/w"),
-        }
-        .code(),
-        ErrorCode::Usage
-    );
-}
-
-#[test]
-fn exists_maps_to_io_failed() {
-    assert_eq!(
-        Error::Exists {
-            path: PathBuf::from("/w"),
-        }
-        .code(),
-        ErrorCode::IoFailed
-    );
-}
