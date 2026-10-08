@@ -25,7 +25,7 @@ type SessionTools = (
     Arc<dyn contract::images::Images>,
 );
 
-/// `ask_user`, `edit`, `handoff`, `read`, `session_search`, `shell`,
+/// `ask_user`, `delegate_spawn`, `edit`, `handoff`, `read`, `session_search`, `shell`,
 /// `web_fetch`, `write` and `jobs`, each registered by `builtin`, and
 /// `web_search` when `web_search` names the hosted search type of the
 /// session's model. `session_search` searches the logs under `home`, Fiber
@@ -52,6 +52,7 @@ pub(crate) fn builtin(
     jobs: &Arc<jobs::Registry>,
     locks: &Arc<tools::PathLocks>,
     web_search: Option<&str>,
+    delegates: &crate::delegates::Delegates,
 ) -> Result<SessionTools, Failure> {
     let files = Arc::new(
         tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks))
@@ -71,6 +72,7 @@ pub(crate) fn builtin(
         Arc::new(tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber));
     let mut built = vec![
         registered(tools::AskUser)?,
+        registered(delegates.tool())?,
         registered(files.edit())?,
         registered(tools::Handoff)?,
         registered(files.read())?,

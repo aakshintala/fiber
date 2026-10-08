@@ -249,10 +249,26 @@ pub(crate) fn run_new(
         mcp,
         switching,
         switchable,
+        resolve,
         web_search,
     } = parts;
     let (job_emit, jobs) = late_emit::registry(&dir, &clock);
     shutdown::arm(signals);
+    // Every session declares `delegate_spawn`: a delegate is its own
+    // session, so the child re-executes this binary.
+    let fiber_path = fiber
+        .clone()
+        .map_err(|message| failed(ErrorCode::IoFailed, message))?;
+    let delegates = crate::delegates::Delegates::new(
+        fiber_path,
+        home.clone(),
+        id.clone(),
+        workspace.clone(),
+        sessions.clone(),
+        jobs.clone(),
+        Arc::clone(&clock),
+        resolve,
+    );
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line; every server starts with the session too.
     let (tools, infos, driver, session_servers) = mcp_servers::session_tools(
@@ -265,6 +281,7 @@ pub(crate) fn run_new(
         &locks,
         mcp.specs,
         web_search.as_deref(),
+        &delegates,
     )?;
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);

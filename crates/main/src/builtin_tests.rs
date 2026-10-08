@@ -25,6 +25,27 @@ impl Emit for Quiet {
     fn emit(&self, _event: &Event) {}
 }
 
+/// The delegates the `builtin` calls declare tools for: no model
+/// resolves, so `delegate_spawn` is declared but never runs one.
+fn delegates() -> crate::delegates::Delegates {
+    let root = fakes::TempDir::new("fiber-builtin-delegate");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    crate::delegates::Delegates::new(
+        root.path().join("fiber-stub"),
+        root.path().join("home"),
+        contract::SessionId("s_test".into()),
+        root.path().to_path_buf(),
+        root.path().join("sessions"),
+        jobs,
+        clock,
+        Arc::new(|_| Err(Vec::new())),
+    )
+}
 /// How long a test waits for one builtin tool call, in real time.
 ///
 /// Each wrapped call starts a child (bash for the driver shell; the image
@@ -65,6 +86,7 @@ fn the_driver_shell_runs_echo() {
         &jobs,
         &Arc::new(tools::PathLocks::new()),
         None,
+        &delegates(),
     )
     .unwrap();
     let mut arguments = serde_json::Map::new();
@@ -110,6 +132,7 @@ fn read_is_wired_to_the_image_child() {
         &jobs,
         &Arc::new(tools::PathLocks::new()),
         None,
+        &delegates(),
     )
     .unwrap();
     let (_, read) = tools
@@ -152,6 +175,7 @@ fn the_forget_callback_clears_what_the_file_tools_have_seen() {
         &jobs,
         &Arc::new(tools::PathLocks::new()),
         None,
+        &delegates(),
     )
     .unwrap();
     let tool = |name: &str| {
@@ -199,6 +223,7 @@ fn without_the_forget_callback_the_same_write_goes_through() {
         &jobs,
         &Arc::new(tools::PathLocks::new()),
         None,
+        &delegates(),
     )
     .unwrap();
     let tool = |name: &str| {
@@ -246,6 +271,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
         &jobs,
         &Arc::new(tools::PathLocks::new()),
         None,
+        &delegates(),
     )
     .unwrap();
     let names: Vec<String> = tools
@@ -259,6 +285,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
         names,
         [
             "ask_user",
+            "delegate_spawn",
             "edit",
             "handoff",
             "read",
@@ -274,6 +301,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
         listed,
         [
             "ask_user",
+            "delegate_spawn",
             "edit",
             "handoff",
             "read",
@@ -308,6 +336,7 @@ fn session_search_declares_reads_on_the_workspace_project_in_fiber_home() {
         &jobs,
         &Arc::new(tools::PathLocks::new()),
         None,
+        &delegates(),
     )
     .unwrap();
     let (_, search) = tools
@@ -358,6 +387,7 @@ fn the_model_shell_is_non_interactive() {
         &jobs,
         &Arc::new(tools::PathLocks::new()),
         None,
+        &delegates(),
     )
     .unwrap();
     let shell = tools
@@ -397,6 +427,7 @@ fn registered_with(web_search: Option<&str>) -> (Vec<(String, Option<String>)>, 
         &jobs,
         &Arc::new(tools::PathLocks::new()),
         web_search,
+        &delegates(),
     )
     .unwrap();
     let definitions = tools
@@ -452,6 +483,7 @@ fn hosted_is_what_builtin_registers_for_web_search() {
         &jobs,
         &Arc::new(tools::PathLocks::new()),
         Some("web_search_20250305"),
+        &delegates(),
     )
     .unwrap();
     let (tool, info) = super::hosted("web_search_20250305").unwrap();
@@ -557,6 +589,7 @@ fn every_builtin_schema_keeps_to_the_documented_subset() {
         &jobs,
         &Arc::new(tools::PathLocks::new()),
         Some("web_search_20250305"),
+        &delegates(),
     )
     .unwrap();
     assert!(tools.len() >= 9, "web_search and jobs register too");
