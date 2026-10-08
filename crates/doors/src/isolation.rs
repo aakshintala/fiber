@@ -111,14 +111,28 @@ impl Isolation {
     pub fn end(self) {
         let mut held = Vec::new();
         let mut known = Vec::new();
-        for user in users(&self.home, &self.created.path) {
+        let first = users(&self.home, &self.created.path);
+        for user in &first {
             match log::try_hold(&user.dir) {
                 Ok(log::Hold::Held(lock)) => {
                     held.push(lock);
-                    known.push(user.id);
+                    known.push(user.id.clone());
                 }
                 Ok(log::Hold::Busy) | Err(_) => return,
             }
+        }
+        // A process whose log ends `rewound` never removes its worktree:
+        // the session that continues it runs there
+        // (`docs/invocation.md`, "Isolation"). The creator's lock above
+        // holds its log still, so its last line is read under it, before
+        // any git command runs.
+        if first
+            .iter()
+            .find(|user| user.id == self.session)
+            .and_then(|creator| log::last_line(&creator.dir))
+            .is_some_and(|line| line.kind == "rewound")
+        {
+            return;
         }
         #[cfg(test)]
         if let Some(pause) = &self.pause {
@@ -150,10 +164,6 @@ impl Isolation {
             Ok(_) => return,
             Err(error) => return self.failed(&error),
         }
-        // #624 (rewind): a process whose log ends `rewound` never removes
-        // its worktree. The creator's own `Started` is listed above with
-        // its `dir`, so the check reads the last line of its
-        // `events.jsonl` under its held lock here.
         for user in users(&self.home, &self.created.path) {
             if known.contains(&user.id) {
                 continue;

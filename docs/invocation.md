@@ -1047,7 +1047,7 @@ delegate's `isolation: worktree` (`docs/delegates.md`), by the terminal's
 All three use the same rules (`docs/delegates.md`, "Worktrees"): a new branch
 from the workspace's HEAD in a worktree under
 `~/.fiber/projects/<key>/worktrees/<id>`, removed at the end when it holds
-nothing uncommitted and no commits beyond its base, kept otherwise. Outside a
+nothing uncommitted and no commits beyond its base, kept otherwise. A session that ends `rewound` keeps its worktree whatever it holds: the session that continues it runs there, records the same `worktree`, and never removes it either; `fiber sessions prune` removes it later. Outside a
 git repository a delegate's `isolation: worktree` fails with
 `invalid_arguments`, and `fiber ask --worktree` is a usage error. The session
 records the worktree on `session_started` (`docs/events.md`). The `worktree`
