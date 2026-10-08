@@ -24,7 +24,10 @@ use contract::shapes::Failure;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use super::{Status, installed, probe, probe_with, render_json, render_text};
+use super::{
+    AnswerRead, Status, classify_answer, ignore_closed_peer, installed, is_answer_timeout,
+    is_closed_peer, is_missing, probe, probe_with, render_json, render_text,
+};
 use crate::hub_unit::{Manager, name};
 
 /// One named deadline per wait.
@@ -483,5 +486,194 @@ fn the_json_is_one_line_in_field_order() {
     assert_eq!(
         render_json(&stopped()).unwrap(),
         r#"{"running":false,"version":null,"port":null,"clients":0,"devices":[],"installed":false}"#
+    );
+}
+
+#[test]
+fn only_a_missing_devices_dir_is_no_devices() {
+    assert!(is_missing(std::io::ErrorKind::NotFound));
+    for kind in [
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::NotADirectory,
+        std::io::ErrorKind::TimedOut,
+        std::io::ErrorKind::WouldBlock,
+        std::io::ErrorKind::InvalidInput,
+        std::io::ErrorKind::ConnectionReset,
+    ] {
+        assert!(!is_missing(kind), "{kind:?}");
+    }
+}
+
+#[test]
+fn devices_is_empty_when_absent_and_an_error_when_not_a_dir() {
+    let (_dir, home) = home();
+    let probed = home.clone();
+    let empty = fakes::within("the probe", DEADLINE, move || {
+        super::devices(&probed).unwrap()
+    });
+    assert!(empty.is_empty());
+    // `hub/devices` as a file fails with `NotADirectory`, not `NotFound`.
+    fs::create_dir_all(home.join("hub")).unwrap();
+    fs::write(home.join("hub/devices"), b"x").unwrap();
+    let error = super::devices(&home).unwrap_err();
+    assert_eq!(error.code, ErrorCode::IoFailed);
+}
+
+#[test]
+fn only_a_timeout_is_a_late_answer() {
+    assert!(is_answer_timeout(std::io::ErrorKind::WouldBlock));
+    assert!(is_answer_timeout(std::io::ErrorKind::TimedOut));
+    for kind in [
+        std::io::ErrorKind::NotFound,
+        std::io::ErrorKind::ConnectionRefused,
+        std::io::ErrorKind::NotADirectory,
+        std::io::ErrorKind::InvalidInput,
+        std::io::ErrorKind::ConnectionReset,
+        std::io::ErrorKind::UnexpectedEof,
+    ] {
+        assert!(!is_answer_timeout(kind), "{kind:?}");
+    }
+}
+
+#[test]
+fn a_status_answer_read_is_classified() {
+    use std::io::ErrorKind;
+    fn error(kind: ErrorKind) -> std::io::Error {
+        std::io::Error::new(kind, "injected for the test")
+    }
+    assert!(matches!(classify_answer(Ok(0)), AnswerRead::Closed));
+    assert!(matches!(classify_answer(Ok(1)), AnswerRead::Bytes(1)));
+    assert!(matches!(
+        classify_answer(Err(error(ErrorKind::WouldBlock))),
+        AnswerRead::Late
+    ));
+    assert!(matches!(
+        classify_answer(Err(error(ErrorKind::TimedOut))),
+        AnswerRead::Late
+    ));
+    for kind in [
+        ErrorKind::NotFound,
+        ErrorKind::ConnectionReset,
+        ErrorKind::InvalidInput,
+        ErrorKind::UnexpectedEof,
+    ] {
+        assert!(
+            matches!(classify_answer(Err(error(kind))), AnswerRead::Lost(_)),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn only_the_closed_peer_refusal_is_ignored() {
+    use std::io::ErrorKind;
+    fn error(kind: ErrorKind) -> std::io::Error {
+        std::io::Error::new(kind, "injected for the test")
+    }
+    assert!(is_closed_peer(ErrorKind::InvalidInput));
+    for kind in [
+        ErrorKind::NotFound,
+        ErrorKind::TimedOut,
+        ErrorKind::WouldBlock,
+        ErrorKind::ConnectionReset,
+    ] {
+        assert!(!is_closed_peer(kind), "{kind:?}");
+    }
+    assert!(ignore_closed_peer(Ok(())).is_ok());
+    assert!(ignore_closed_peer(Err(error(ErrorKind::InvalidInput))).is_ok());
+    for kind in [
+        ErrorKind::TimedOut,
+        ErrorKind::WouldBlock,
+        ErrorKind::NotFound,
+        ErrorKind::ConnectionReset,
+    ] {
+        let folded = ignore_closed_peer(Err(error(kind)));
+        assert_eq!(folded.unwrap_err().kind(), kind, "{kind:?}");
+    }
+}
+
+/// The child's marker: set, the test runs `hub_status` and exits with its
+/// code, without touching the service manager: no hub runs, so nothing is
+/// started and no manager is called.
+const CHILD: &str = "FIBER_CLI_HUB_STATUS_CHILD";
+
+/// Which rendering the child asks for.
+const CASE: &str = "FIBER_CLI_HUB_STATUS_CASE";
+
+/// How long the child may run before the test kills it and fails.
+const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+
+/// Runs the child case `case` with `vars` in its environment and returns
+/// its exit code.
+fn child_exit(test: &str, case: &str, vars: &[(&str, &Path)]) -> i32 {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            &format!("{test}::hub_status_exits_without_the_manager"),
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD, "1")
+        .env(CASE, case)
+        .env_remove("XDG_CONFIG_HOME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command.process_group(0);
+    for (key, value) in vars {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().unwrap();
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || tx.send(child.wait().unwrap()));
+    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+        fakes::kill_pid(pid, "KILL").unwrap();
+        panic!("waited {CHILD_DEADLINE:?} for the hub status child to exit");
+    };
+    status.code().expect("the child exits with a code")
+}
+
+#[test]
+fn hub_status_exits_without_the_manager() {
+    if std::env::var_os(CHILD).is_some() {
+        let clock = FakeClock::new();
+        let code = match std::env::var(CASE).unwrap().as_str() {
+            "text" => super::hub_status(false, &*clock),
+            "json" => super::hub_status(true, &*clock),
+            case => panic!("unknown hub status child case: {case}"),
+        };
+        std::process::exit(code);
+    }
+    let name = module_path!().split_once("::").unwrap().1;
+    // A relative `FIBER_HOME` is a usage error before anything runs.
+    assert_eq!(
+        child_exit(name, "text", &[("FIBER_HOME", Path::new("relative"))]),
+        2
+    );
+    let dir = fakes::TempDir::new("cli-hub-status-exit");
+    let home = dir.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let user = dir.path().join("user");
+    fs::create_dir_all(&user).unwrap();
+    // With no hub running the status is 0, in text and in JSON.
+    assert_eq!(
+        child_exit(
+            name,
+            "text",
+            &[("FIBER_HOME", home.as_path()), ("HOME", user.as_path())]
+        ),
+        0
+    );
+    assert_eq!(
+        child_exit(
+            name,
+            "json",
+            &[("FIBER_HOME", home.as_path()), ("HOME", user.as_path())]
+        ),
+        0
     );
 }

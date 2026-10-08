@@ -213,6 +213,17 @@ fn the_login_service_round_trip() {
     let setup = Setup::new();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
+    // The installed hub runs under the service manager's bare environment:
+    // only `FIBER_HOME` reaches it, so the test env var the fake provider
+    // declares never arrives. The stored credential is read first, so store
+    // the fake key the way `fiber login fake` writes it.
+    config::store_credential(
+        &setup.home(),
+        "fake",
+        "default",
+        &contract::Secret::new("sk-test".to_owned()),
+    )
+    .unwrap();
     let _uninstall = Uninstall {
         command: Some(fiber(&setup, &["hub", "uninstall"])),
         deadline: setup.deadline,

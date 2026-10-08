@@ -24,7 +24,10 @@ use contract::shapes::Failure;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use super::{RERUN, Ran, Runner, SystemRunner, hub_answers, install, restart, uninstall};
+use super::{
+    RERUN, Ran, Runner, SystemRunner, current_exe, hub_answers, hub_install, hub_restart,
+    hub_uninstall, install, is_missing, read_unit, restart, uninstall,
+};
 use crate::hub_unit::{Manager, Service, name};
 
 /// One named deadline per blocking call.
@@ -876,5 +879,160 @@ fn a_failure_with_no_stderr_or_exit_code_says_so() {
             "`systemctl --user restart {}.service` failed with no exit code.",
             service.name
         )
+    );
+}
+
+#[test]
+fn only_a_missing_unit_is_no_unit() {
+    assert!(is_missing(io::ErrorKind::NotFound));
+    for kind in [
+        io::ErrorKind::PermissionDenied,
+        io::ErrorKind::NotADirectory,
+        io::ErrorKind::IsADirectory,
+        io::ErrorKind::TimedOut,
+        io::ErrorKind::WouldBlock,
+        io::ErrorKind::InvalidInput,
+        io::ErrorKind::ConnectionReset,
+        io::ErrorKind::UnexpectedEof,
+    ] {
+        assert!(!is_missing(kind), "{kind:?}");
+    }
+}
+
+#[test]
+fn read_unit_is_none_when_absent_some_when_present_and_an_error_otherwise() {
+    let dir = fakes::TempDir::new("cli-hub-read-unit");
+    let absent = dir.path().join("absent.service");
+    assert_eq!(read_unit(&absent).unwrap(), None);
+    let file = dir.path().join("hub.service");
+    fs::write(&file, b"unit").unwrap();
+    assert_eq!(read_unit(&file).unwrap(), Some(b"unit".to_vec()));
+    // Reading a directory fails with `IsADirectory`, not `NotFound`.
+    let error = read_unit(dir.path()).unwrap_err();
+    assert_eq!(error.code, ErrorCode::IoFailed);
+}
+
+#[test]
+fn current_exe_is_the_running_binary() {
+    let exe = current_exe().unwrap();
+    assert!(exe.is_absolute(), "{}", exe.display());
+    assert!(!exe.as_os_str().is_empty());
+}
+
+#[test]
+fn hub_restart_with_no_unit_file_restarts_nothing() {
+    let dir = fakes::TempDir::new("cli-hub-restart");
+    let home = dir.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    assert!(!hub_restart(&home).unwrap());
+}
+
+#[test]
+fn hub_restart_with_too_long_a_home_is_a_usage_error() {
+    let home = PathBuf::from(format!("/tmp/{}", "h".repeat(300)));
+    let error = hub_restart(&home).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Usage);
+}
+
+/// The child's marker: set, the test runs one exit-code wrapper and exits
+/// with its code, without touching the service manager: every case fails
+/// before any manager call, or runs no call.
+const CHILD: &str = "FIBER_CLI_HUB_SERVICE_CHILD";
+
+/// Which wrapper the child runs.
+const CASE: &str = "FIBER_CLI_HUB_SERVICE_CASE";
+
+/// How long the child may run before the test kills it and fails.
+const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+
+/// Runs the child case `case` with `vars` in its environment and returns
+/// its exit code.
+fn child_exit(test: &str, case: &str, vars: &[(&str, &Path)]) -> i32 {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            &format!("{test}::hub_wrappers_exit_without_the_manager"),
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD, "1")
+        .env(CASE, case)
+        .env_remove("XDG_CONFIG_HOME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command.process_group(0);
+    for (key, value) in vars {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().unwrap();
+    let pid = child.id();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(child.wait().unwrap()));
+    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+        fakes::kill_pid(pid, "KILL").unwrap();
+        panic!("waited {CHILD_DEADLINE:?} for the hub wrapper child to exit");
+    };
+    status.code().expect("the child exits with a code")
+}
+
+#[test]
+fn hub_wrappers_exit_without_the_manager() {
+    if std::env::var_os(CHILD).is_some() {
+        let clock = FakeClock::new();
+        let code = match std::env::var(CASE).unwrap().as_str() {
+            "install-relative" => hub_install(None, &*clock),
+            "install-unwritable" => hub_install(None, &*clock),
+            "uninstall-fresh" => hub_uninstall(),
+            "uninstall-relative" => hub_uninstall(),
+            case => panic!("unknown hub wrapper child case: {case}"),
+        };
+        std::process::exit(code);
+    }
+    let name = module_path!().split_once("::").unwrap().1;
+    // A relative `FIBER_HOME` is a usage error before anything runs.
+    assert_eq!(
+        child_exit(
+            name,
+            "install-relative",
+            &[("FIBER_HOME", Path::new("relative"))]
+        ),
+        2
+    );
+    assert_eq!(
+        child_exit(
+            name,
+            "uninstall-relative",
+            &[("FIBER_HOME", Path::new("relative"))]
+        ),
+        2
+    );
+    let dir = fakes::TempDir::new("cli-hub-wrappers");
+    let home = dir.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    // A fresh home uninstalls nothing and exits 0 with no manager call.
+    let user = dir.path().join("user");
+    fs::create_dir_all(&user).unwrap();
+    assert_eq!(
+        child_exit(
+            name,
+            "uninstall-fresh",
+            &[("FIBER_HOME", home.as_path()), ("HOME", user.as_path())]
+        ),
+        0
+    );
+    // A unit path under a file fails before any manager call.
+    let file = dir.path().join("user-file");
+    fs::write(&file, b"x").unwrap();
+    assert_eq!(
+        child_exit(
+            name,
+            "install-unwritable",
+            &[("FIBER_HOME", home.as_path()), ("HOME", file.as_path())]
+        ),
+        1
     );
 }

@@ -138,6 +138,56 @@ fn probe_with(
     })
 }
 
+/// Whether a devices error means there are no devices: any other error
+/// fails the read.
+fn is_missing(kind: io::ErrorKind) -> bool {
+    kind == io::ErrorKind::NotFound
+}
+
+/// Whether a status answer read error is the deadline passing: any other
+/// read error fails as the hub lost.
+fn is_answer_timeout(kind: io::ErrorKind) -> bool {
+    matches!(kind, io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
+}
+
+/// Whether a read-timeout error is the closed-peer refusal to ignore:
+/// macOS refuses the option once the peer has closed, while its buffered
+/// bytes stay readable and a read of the closed socket does not block.
+fn is_closed_peer(kind: io::ErrorKind) -> bool {
+    kind == io::ErrorKind::InvalidInput
+}
+
+/// What one status answer read means.
+enum AnswerRead {
+    /// Bytes towards the answer.
+    Bytes(usize),
+    /// The hub closed before answering.
+    Closed,
+    /// The answer deadline passed.
+    Late,
+    /// Any other read failure.
+    Lost(io::Error),
+}
+
+/// Classifies one status answer read, so tests inject each outcome.
+fn classify_answer(read: io::Result<usize>) -> AnswerRead {
+    match read {
+        Ok(0) => AnswerRead::Closed,
+        Ok(read) => AnswerRead::Bytes(read),
+        Err(e) if is_answer_timeout(e.kind()) => AnswerRead::Late,
+        Err(e) => AnswerRead::Lost(e),
+    }
+}
+
+/// Folds a `set_read_timeout` result, ignoring the closed-peer refusal,
+/// so tests inject each outcome.
+fn ignore_closed_peer(set: io::Result<()>) -> io::Result<()> {
+    match set {
+        Err(error) if is_closed_peer(error.kind()) => Ok(()),
+        other => other,
+    }
+}
+
 /// The global `hub.port`; a project's value is never read.
 fn port(home: &Path) -> Result<Option<u16>, Failure> {
     let Some(value) = config::get_global(home, "hub.port").map_err(|e| failed(e.code(), e))? else {
@@ -170,7 +220,7 @@ fn devices(home: &Path) -> Result<Vec<String>, Failure> {
     };
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if is_missing(e.kind()) => return Ok(Vec::new()),
         Err(e) => return Err(lost(e)),
     };
     let mut names = Vec::new();
@@ -216,23 +266,16 @@ fn ask(
             .ok_or_else(late)?;
         set_read_timeout(stream, Some(left)).map_err(lost)?;
         before_read();
-        let read = match stream.read(&mut chunk) {
-            Ok(0) => {
+        let read = match classify_answer(stream.read(&mut chunk)) {
+            AnswerRead::Bytes(read) => read,
+            AnswerRead::Closed => {
                 return Err(failed(
                     ErrorCode::IoFailed,
                     "the hub closed the connection before answering status",
                 ));
             }
-            Ok(read) => read,
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                ) =>
-            {
-                return Err(late());
-            }
-            Err(e) => return Err(lost(e)),
+            AnswerRead::Late => return Err(late()),
+            AnswerRead::Lost(e) => return Err(lost(e)),
         };
         pending.extend_from_slice(chunk.get(..read).unwrap_or_default());
         while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
@@ -282,14 +325,10 @@ fn answer(line: &[u8]) -> Result<Option<(String, u64)>, Failure> {
     }
 }
 
-/// Sets `stream`'s read timeout. `InvalidInput` is ignored: macOS refuses
-/// the option once the peer has closed, while its buffered bytes stay
-/// readable and a read of the closed socket does not block.
+/// Sets `stream`'s read timeout, ignoring the closed-peer refusal (see
+/// [`is_closed_peer`]).
 fn set_read_timeout(stream: &UnixStream, timeout: Option<Duration>) -> io::Result<()> {
-    match stream.set_read_timeout(timeout) {
-        Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(()),
-        other => other,
-    }
+    ignore_closed_peer(stream.set_read_timeout(timeout))
 }
 
 /// One `key: value` line per field.

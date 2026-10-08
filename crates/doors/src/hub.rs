@@ -100,6 +100,82 @@ pub fn connect_within(
     ))
 }
 
+/// Whether a connect error means no hub runs, so the client starts one
+/// and keeps polling: the socket is absent or nobody listens yet. Any
+/// other error fails as is.
+fn is_absent(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+    )
+}
+
+/// Whether a handshake read error is the deadline passing, so the connect
+/// fails `TimedOut`: any other read error fails as is.
+fn is_hello_timeout(kind: io::ErrorKind) -> bool {
+    matches!(kind, io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
+}
+
+/// Whether another handshake read fits before the deadline: at it or past
+/// it none is left.
+fn has_time_left(left: &Duration) -> bool {
+    !left.is_zero()
+}
+
+/// Whether the hello line's last byte is a carriage return to strip: a
+/// `\r\n` ending speaks `hub_hello` too.
+fn strips_cr(last: Option<&u8>) -> bool {
+    last == Some(&b'\r')
+}
+
+/// Whether the first line's kind is not the opening `hub_hello`.
+fn rejects_hello(kind: &str) -> bool {
+    kind != "hub_hello"
+}
+
+/// Whether the hello's schema version is not this build's.
+fn rejects_schema(version: u32) -> bool {
+    version != SCHEMA_VERSION
+}
+
+/// Whether a read-timeout error is the closed-peer refusal to ignore:
+/// macOS refuses the option once the peer has closed, while its buffered
+/// bytes stay readable and a read of the closed socket does not block.
+fn is_closed_peer(kind: io::ErrorKind) -> bool {
+    kind == io::ErrorKind::InvalidInput
+}
+
+/// What one handshake byte-read means.
+enum HelloRead {
+    /// One byte towards the line.
+    Byte,
+    /// End of stream before the line: the idle-exit race.
+    Race,
+    /// The deadline passed while reading.
+    TimedOut,
+    /// Any other read failure.
+    Failed(io::Error),
+}
+
+/// Classifies one handshake byte-read, so tests inject each outcome.
+fn classify_hello_read(read: io::Result<usize>) -> HelloRead {
+    match read {
+        Ok(0) => HelloRead::Race,
+        Ok(_) => HelloRead::Byte,
+        Err(error) if is_hello_timeout(error.kind()) => HelloRead::TimedOut,
+        Err(error) => HelloRead::Failed(error),
+    }
+}
+
+/// Folds a `set_read_timeout` result, ignoring the closed-peer refusal,
+/// so tests inject each outcome.
+fn ignore_closed_peer(set: io::Result<()>) -> io::Result<()> {
+    match set {
+        Err(error) if is_closed_peer(error.kind()) => Ok(()),
+        other => other,
+    }
+}
+
 enum Poll {
     /// EOF before `hub_hello`: retry the whole connect once.
     Race,
@@ -120,12 +196,7 @@ fn poll(
     loop {
         match UnixStream::connect(&socket) {
             Ok(stream) => return read_hello_with(stream, &socket, hello_within, clock, &mut || {}),
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-                ) =>
-            {
+            Err(error) if is_absent(error.kind()) => {
                 if !*started {
                     start().map_err(Poll::Failed)?;
                     *started = true;
@@ -161,12 +232,7 @@ fn poll_until(
             Ok(stream) => {
                 return read_hello_until(stream, &socket, deadline, total, clock, before_read);
             }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-                ) =>
-            {
+            Err(error) if is_absent(error.kind()) => {
                 if !*started {
                     start().map_err(Poll::Failed)?;
                     *started = true;
@@ -217,32 +283,25 @@ fn read_hello_until(
     loop {
         let left = deadline
             .checked_duration_since(clock.now())
-            .filter(|left| !left.is_zero())
+            .filter(has_time_left)
             .ok_or_else(timed_out)?;
         set_read_timeout(&stream, Some(left)).map_err(Poll::Failed)?;
         before_read();
-        match stream.read(&mut byte) {
-            Ok(0) => return Err(Poll::Race),
-            Ok(_) => {
+        match classify_hello_read(stream.read(&mut byte)) {
+            HelloRead::Race => return Err(Poll::Race),
+            HelloRead::TimedOut => return Err(timed_out()),
+            HelloRead::Failed(error) => return Err(Poll::Failed(error)),
+            HelloRead::Byte => {
                 if byte[0] == b'\n' {
                     break;
                 }
                 buf.push(byte[0]);
             }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                ) =>
-            {
-                return Err(timed_out());
-            }
-            Err(error) => return Err(Poll::Failed(error)),
         }
     }
     set_read_timeout(&stream, None).map_err(Poll::Failed)?;
     // A carriage return ends the line too.
-    while buf.last() == Some(&b'\r') {
+    while strips_cr(buf.last()) {
         buf.pop();
     }
     let hello: HubLine = serde_json::from_slice(&buf).map_err(|_| {
@@ -251,13 +310,13 @@ fn read_hello_until(
             "the hub did not speak `hub_hello` first",
         ))
     })?;
-    if hello.kind != "hub_hello" {
+    if rejects_hello(&hello.kind) {
         return Err(Poll::Failed(io::Error::new(
             io::ErrorKind::InvalidData,
             "the hub did not speak `hub_hello` first",
         )));
     }
-    if hello.schema_version != SCHEMA_VERSION {
+    if rejects_schema(hello.schema_version) {
         return Err(Poll::Failed(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
@@ -306,28 +365,21 @@ fn read_hello_with(
         };
         set_read_timeout(&stream, left).map_err(Poll::Failed)?;
         before_read();
-        match stream.read(&mut byte) {
-            Ok(0) => return Err(Poll::Race),
-            Ok(_) => {
+        match classify_hello_read(stream.read(&mut byte)) {
+            HelloRead::Race => return Err(Poll::Race),
+            HelloRead::TimedOut => return Err(timed_out()),
+            HelloRead::Failed(error) => return Err(Poll::Failed(error)),
+            HelloRead::Byte => {
                 if byte[0] == b'\n' {
                     break;
                 }
                 buf.push(byte[0]);
             }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                ) =>
-            {
-                return Err(timed_out());
-            }
-            Err(error) => return Err(Poll::Failed(error)),
         }
     }
     set_read_timeout(&stream, None).map_err(Poll::Failed)?;
     // A carriage return ends the line too.
-    while buf.last() == Some(&b'\r') {
+    while strips_cr(buf.last()) {
         buf.pop();
     }
     let hello: HubLine = serde_json::from_slice(&buf).map_err(|_| {
@@ -336,13 +388,13 @@ fn read_hello_with(
             "the hub did not speak `hub_hello` first",
         ))
     })?;
-    if hello.kind != "hub_hello" {
+    if rejects_hello(&hello.kind) {
         return Err(Poll::Failed(io::Error::new(
             io::ErrorKind::InvalidData,
             "the hub did not speak `hub_hello` first",
         )));
     }
-    if hello.schema_version != SCHEMA_VERSION {
+    if rejects_schema(hello.schema_version) {
         return Err(Poll::Failed(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
@@ -355,14 +407,12 @@ fn read_hello_with(
     Ok((stream, hello))
 }
 
-/// Sets `stream`'s read timeout. `InvalidInput` is ignored: macOS refuses
-/// the option once the peer has closed, while its buffered bytes stay
-/// readable and a read of the closed socket does not block.
+/// Sets `stream`'s read timeout, ignoring the closed-peer refusal (see
+/// [`is_closed_peer`]): macOS refuses the option once the peer has closed,
+/// while its buffered bytes stay readable and a read of the closed socket
+/// does not block.
 fn set_read_timeout(stream: &UnixStream, timeout: Option<Duration>) -> io::Result<()> {
-    match stream.set_read_timeout(timeout) {
-        Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(()),
-        other => other,
-    }
+    ignore_closed_peer(stream.set_read_timeout(timeout))
 }
 
 #[cfg(test)]

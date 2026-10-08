@@ -390,11 +390,17 @@ fn must(runner: &dyn Runner, program: &str, args: &[String]) -> Result<(), Failu
     ))
 }
 
+/// Whether a unit-file error means there is no unit file: any other
+/// error fails the read.
+fn is_missing(kind: io::ErrorKind) -> bool {
+    kind == io::ErrorKind::NotFound
+}
+
 /// The unit file's bytes, `None` when there is none.
 fn read_unit(unit: &Path) -> Result<Option<Vec<u8>>, Failure> {
     match fs::read(unit) {
         Ok(bytes) => Ok(Some(bytes)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) if is_missing(e.kind()) => Ok(None),
         Err(e) => Err(failed(
             ErrorCode::IoFailed,
             format!("reading {}: {e}", unit.display()),
