@@ -19,8 +19,9 @@ use contract::events::{McpServerFailed, ServerFailure, ToolInfo, ToolSource, Too
 use contract::shapes::Failure;
 use contract::tool::Tool;
 
-use crate::cache;
+use crate::cache::{self, Cached};
 use crate::effects::Hints;
+use crate::prompt::{ListedPrompt, PromptSource, Prompts};
 use crate::server::{ListedTool, Server};
 use crate::slot::Slot;
 use crate::tool::McpTool;
@@ -91,6 +92,9 @@ pub struct Started {
     /// The servers, started or waiting for their first call, stopped when
     /// the session ends.
     pub servers: Servers,
+    /// Every runnable prompt of every server that listed, tagged with its
+    /// server's name (`docs/mcp.md`, "Prompts and resources").
+    pub prompts: Prompts,
     /// The first `required` server that failed to start or missed its
     /// deadline, in spec order. When set, the caller stops `servers` and
     /// fails the session; `tools` and `infos` are meaningless, and no
@@ -172,10 +176,12 @@ pub fn start(
     let mut failed = Vec::new();
     let mut required_failed = None;
     let mut slots = Vec::new();
+    let mut sources = Vec::new();
     for (_, opened) in opened {
         match opened {
-            Opened::Up(slot, declared) => {
+            Opened::Up(slot, declared, listed) => {
                 slots.push(Arc::clone(&slot));
+                sources.extend(listed);
                 tools.extend(declared.into_iter().map(|tool| {
                     let info = info(&tool);
                     let registered_by = tool.registered_by.clone();
@@ -192,7 +198,8 @@ pub fn start(
         }
     }
     // Lazy servers declare from the cache with no spawn: a session that
-    // never calls one never spawns it.
+    // never calls one never spawns it. Their prompts come from the same
+    // cached lists, so a `/name` is answered before anything starts.
     for (_, spec, cached) in lazy {
         let slot = Slot::lazy(
             spec.clone(),
@@ -204,7 +211,8 @@ pub fn start(
         );
         let link: Weak<Slot> = Arc::downgrade(&slot);
         slots.push(slot);
-        let listed: Vec<ListedTool> = cached.iter().map(ListedTool::read).collect();
+        sources.extend(sources_of(&spec.name, &cached.prompts));
+        let listed: Vec<ListedTool> = cached.tools.iter().map(ListedTool::read).collect();
         tools.extend(declare(&spec, &listed, &link).into_iter().map(|tool| {
             let info = info(&tool);
             let registered_by = tool.registered_by.clone();
@@ -222,6 +230,7 @@ pub fn start(
         infos,
         failed,
         servers: Servers { slots },
+        prompts: Prompts::collect(sources),
         required_failed,
     }
 }
@@ -232,7 +241,7 @@ pub(crate) struct Declared {
 }
 
 pub(crate) enum Opened {
-    Up(Arc<Slot>, Vec<Declared>),
+    Up(Arc<Slot>, Vec<Declared>, Vec<PromptSource>),
     Down(McpServerFailed),
     RequiredDown(McpServerFailed),
 }
@@ -265,14 +274,18 @@ pub(crate) fn open(
             };
         }
     };
-    let entries: Vec<serde_json::Value> = open.tools;
+    let live = Cached {
+        tools: open.tools,
+        prompts: open.prompts,
+    };
     cache::write(
         cache,
         &name,
         &cache::key(&spec.command, &spec.args, &spec.env),
-        &entries,
+        &live,
     );
-    let tools: Vec<ListedTool> = entries.iter().map(ListedTool::read).collect();
+    let tools: Vec<ListedTool> = live.tools.iter().map(ListedTool::read).collect();
+    let listed = sources_of(&name, &live.prompts);
     let slot = Slot::running(
         spec.clone(),
         workspace,
@@ -280,11 +293,22 @@ pub(crate) fn open(
         clock,
         version,
         open.server,
-        entries,
+        live,
     );
     let link: Weak<Slot> = Arc::downgrade(&slot);
     let declared = declare(&spec, &tools, &link);
-    Opened::Up(slot, declared)
+    Opened::Up(slot, declared, listed)
+}
+
+/// One prompt row source per listed prompt of `server`.
+fn sources_of(server: &str, prompts: &[serde_json::Value]) -> Vec<PromptSource> {
+    prompts
+        .iter()
+        .map(|entry| PromptSource {
+            server: server.to_owned(),
+            prompt: ListedPrompt::read(entry),
+        })
+        .collect()
 }
 
 /// `enabled` names only these, `disabled` removes those, both is enabled

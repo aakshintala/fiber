@@ -77,13 +77,17 @@ impl Setup {
         }
     }
 
-    /// Writes the cache for `spec` holding `tools`, as a first start would.
+    /// Writes the cache for `spec` holding `tools` and no prompts, as a
+    /// first start would.
     fn write_cache(&self, spec: &ServerSpec, tools: &[Value]) {
         crate::cache::write(
             &self.cache(),
             &spec.name,
             &crate::cache::key(&spec.command, &spec.args, &spec.env),
-            tools,
+            &crate::cache::Cached {
+                tools: tools.to_vec(),
+                prompts: Vec::new(),
+            },
         );
     }
 
@@ -215,10 +219,25 @@ impl Setup {
                 &BTreeMap::new(),
             ),
         )
-        .expect("the cache holds a list")
+        .expect("the cache holds lists")
+        .tools
         .iter()
         .map(|entry| ListedTool::read(entry).name)
         .collect()
+    }
+
+    fn cached_prompts(&self) -> Vec<Value> {
+        crate::cache::read(
+            &self.cache(),
+            "fx",
+            &crate::cache::key(
+                &fakes::mcp_fixture().display().to_string(),
+                &[self.dir.path().display().to_string()],
+                &BTreeMap::new(),
+            ),
+        )
+        .expect("the cache holds lists")
+        .prompts
     }
 
     fn listed(name: &str) -> Vec<Value> {
@@ -463,7 +482,8 @@ fn a_call_to_a_removed_tool_fails_without_calling_and_updates_the_cache() {
     )
     .expect("the cache holds the live list");
     assert_eq!(
-        live.iter()
+        live.tools
+            .iter()
             .map(|entry| ListedTool::read(entry).name)
             .collect::<Vec<_>>(),
         ["echo"],
@@ -844,5 +864,34 @@ fn a_late_death_of_a_replaced_server_records_nothing() {
     let after = setup.run(&tool);
     assert!(after.error.is_none(), "{:?}", after.error);
     assert!(after.servers.is_empty());
+    setup.stop(started.servers);
+}
+
+#[test]
+fn a_changed_prompt_list_rewrites_the_cache() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    setup.result("echo", HI);
+    setup.populate(setup.spec("fx"));
+    assert_eq!(setup.cached_prompts(), Vec::<Value>::new());
+    // Only the prompt list changes: the tools are untouched.
+    std::fs::write(
+        setup.dir.path().join("prompts.json"),
+        json!([{"name": "greet", "description": "Greets."}]).to_string(),
+    )
+    .expect("prompts.json");
+    let started = setup.start(vec![setup.spec("fx")]);
+    assert!(started.failed.is_empty());
+    let tool = setup.tool(&started, "mcp__fx__echo");
+    let output = setup.run(&tool);
+    assert!(output.error.is_none());
+    assert_eq!(
+        setup.cached_prompts(),
+        json!([{"name": "greet", "description": "Greets."}])
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    );
+    assert_eq!(setup.cached_names(), ["echo"]);
     setup.stop(started.servers);
 }
