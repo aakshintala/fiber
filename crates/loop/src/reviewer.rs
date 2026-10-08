@@ -102,8 +102,11 @@ pub(crate) fn sections() -> Sections {
 /// wrote no notes, else the notes after them. One builder serves both
 /// stages and the handoff selection, so every reviewer request shares
 /// one system prompt.
-fn system_prompt(shared: &str, _notes: &str) -> String {
-    shared.to_owned()
+fn system_prompt(shared: &str, notes: &str) -> String {
+    if notes.trim().is_empty() {
+        return shared.to_owned();
+    }
+    format!("{shared}\n\n{notes}")
 }
 
 /// What a first-stage verdict that read says.
