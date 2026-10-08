@@ -141,6 +141,28 @@ The load spread the one-thread runs more than the parallel ones (the
 corpus with no artifacts, `retry budget`, had a peak memory footprint
 (`/usr/bin/time -l`) of 4.7 MiB on one thread and 11.0 MiB in parallel.
 
+## Results: Linux x86_64, parallel scan
+
+GitHub's `ubuntu-24.04` runner (2026-10-08): x86_64, 4 vCPUs (`nproc`
+4), parallel scan, run 37742699357. Its 16 rows are the last 16 in
+`results.tsv` (platform `Linux x86_64`, date 2026-10-08). Medians of five
+runs, in seconds; peak RSS is the scan process's peak in MiB, measured with
+GNU time. Earlier rows have no RSS.
+
+| Logs | Artifacts | Query | Warm | Cold | Peak RSS |
+|---|---|---|---|---|---|
+| 304 MiB | 187 MiB | many hits | 0.58 | 1.20 | 8.2 |
+| 304 MiB | 187 MiB | no hits | 0.43 | 1.11 | 6.8 |
+| 1,308 MiB | 808 MiB | many hits | 2.44 | 5.16 | 9.1 |
+| 1,308 MiB | 808 MiB | no hits | 1.83 | 5.15 | 7.5 |
+| 4,011 MiB | 2,476 MiB | many hits | 7.50 | 16.2 | 10.5 |
+| 4,011 MiB | 2,476 MiB | no hits | 5.62 | 16.2 | 8.8 |
+| 1,304 MiB | none | many hits | 1.54 | 3.05 | 7.6 |
+| 1,304 MiB | none | no hits | 1.68 | 3.06 | 7.5 |
+
+Cold is unconfirmed: `fincore` is not on the runner, so nothing checks
+that eviction cleared the cache. Verifying that is #1340.
+
 ## Reproducing
 
 ```sh
