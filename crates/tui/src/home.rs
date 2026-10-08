@@ -30,6 +30,7 @@ pub(crate) enum Spot {
 }
 
 /// What the terminal knows about where it was launched.
+#[derive(Default)]
 pub struct Launch {
     /// The launch directory; `start`'s default workspace.
     pub workspace: PathBuf,
@@ -61,6 +62,8 @@ pub struct Launch {
     /// The person's `keys` (`docs/configuration.md`, "Keys"): the
     /// effective bindings overlay it onto the defaults at startup.
     pub keys: crate::KeysSetup,
+    /// `tui.theme`: the theme, or following the terminal's appearance.
+    pub theme: crate::ThemeSetting,
 }
 
 /// What home draws, built by [`crate::app::App::home_screen`].

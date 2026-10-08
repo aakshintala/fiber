@@ -1,14 +1,21 @@
 //! The screen: ratatui on a fixed viewport sized from the injected tty, the
 //! last frame drawn and its click targets (`docs/tui.md`, "Mouse and
 //! hover"). A frame equal to the last writes nothing.
+//!
+//! Frames are drawn with role markers (`crate::theme`); the frame kept for
+//! the "nothing changed" comparison keeps them, and only the copy written
+//! to the terminal is painted with the look's colours.
 
 use ratatui::backend::{Backend, ClearType, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size};
+use ratatui::style::Style;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
 use crate::app::App;
+use crate::look::Look;
 use crate::mouse::Target;
+use crate::theme::Role;
 use crate::view;
 
 /// One frame: the cells, and where the cursor shows, if anywhere.
@@ -22,6 +29,8 @@ pub(crate) struct Screen<B: Backend> {
     last: Option<Frame>,
     /// The click targets of the last frame drawn: what a click hits.
     targets: Vec<Target>,
+    /// The theme and colour depth frames are painted with.
+    look: Look,
 }
 
 impl<B: Backend> Screen<B> {
@@ -41,7 +50,14 @@ impl<B: Backend> Screen<B> {
             area,
             last: None,
             targets: Vec::new(),
+            look: Look::default(),
         })
+    }
+
+    /// Paints every later frame with `look`; the next draw repaints whole.
+    pub(crate) fn set_look(&mut self, look: Look) {
+        self.look = look;
+        self.last = None;
     }
 
     /// Draws `app`, the cursor shown at the draft's cursor or hidden,
@@ -64,10 +80,10 @@ impl<B: Backend> Screen<B> {
         pointer: Option<(u16, u16)>,
         mut render: impl FnMut(&App, Rect, &mut Buffer, Option<(u16, u16)>) -> Vec<Target>,
     ) -> Result<(), B::Error> {
-        let mut cells = Buffer::empty(self.area);
+        let mut cells = themed(self.area);
         self.targets = render(app, self.area, &mut cells, pointer);
         if app.drawn(&self.targets) {
-            cells = Buffer::empty(self.area);
+            cells = themed(self.area);
             self.targets = render(app, self.area, &mut cells, pointer);
             let _ = app.drawn(&self.targets);
         }
@@ -75,8 +91,10 @@ impl<B: Backend> Screen<B> {
         if self.last.as_ref() == Some(&next) {
             return Ok(());
         }
+        let look = &self.look;
         self.terminal.draw(|frame| {
             frame.buffer_mut().clone_from(&next.0);
+            look.paint(frame.buffer_mut());
             if let Some(cursor) = next.1 {
                 frame.set_cursor_position(cursor);
             }
@@ -120,6 +138,19 @@ impl<B: Backend> Screen<B> {
     pub(crate) fn last(&self) -> Option<&(Buffer, Option<Position>)> {
         self.last.as_ref()
     }
+}
+
+/// A blank frame on the theme's text and background colours, so text drawn
+/// with no colour of its own takes the theme's (`docs/tui.md`, "Themes").
+fn themed(area: Rect) -> Buffer {
+    let mut cells = Buffer::empty(area);
+    cells.set_style(
+        area,
+        Style::new()
+            .fg(Role::Text.color())
+            .bg(Role::Background.color()),
+    );
+    cells
 }
 
 /// A backend that reports the size read from the injected tty. ratatui
