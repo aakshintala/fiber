@@ -21,6 +21,7 @@ use contract::shapes::Failure;
 use contract::shapes::Worktree;
 use contract::tool::Tool;
 use log::Log;
+use serde_json::{Map, Value};
 pub(crate) use util::{ended, mint, variables};
 
 mod answer;
@@ -35,6 +36,7 @@ mod conversation;
 mod diag;
 mod error;
 mod handoff;
+mod history;
 mod hooks;
 mod hosted;
 mod inbox;
@@ -51,6 +53,7 @@ mod questions;
 mod resume;
 mod retry;
 mod reviewer;
+mod rewind;
 mod schema;
 mod shutdown;
 mod skill_header;
@@ -70,12 +73,14 @@ pub use commands::commands;
 pub use conversation::rebuild;
 pub use error::Error;
 pub use handoff::HandoffSettings;
+pub use history::forked;
 pub use permission::Permissions;
 pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
 pub use prompt::PromptInputs;
 pub use resume::{Resumed, resumed};
 pub use retry::Retry;
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
+pub use rewind::{Rewound, rewind_note};
 pub use switch::{Hosted, NO_SWITCH, Prepare, Prepared, Switchable};
 
 /// The model a session's calls reach, and the prices those calls are logged
@@ -244,6 +249,11 @@ struct Preamble {
     system_prompt: String,
     /// The tools as sent, in name order.
     tools: Vec<ToolDefinition>,
+    /// The tools as the parent session sent them: a rewound session's
+    /// first request sends these verbatim, so it matches its parent's
+    /// bytes (`docs/events.md`, "Rewind"). `None` sends what `tools`
+    /// wires; any later build clears it back to `None`.
+    sent_tools: Option<Vec<Map<String, Value>>>,
     /// The tool choice as sent, and as `preamble_built` records it.
     tool_choice: String,
     /// The cache lifetime as sent, and as `preamble_built` records it.

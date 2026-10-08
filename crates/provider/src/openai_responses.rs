@@ -199,7 +199,13 @@ fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
 /// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
 /// "Bytes").
 fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
-    let tools: Vec<Value> = wire_tools(&request.tools)
+    // A rewound session's first request sends its parent's logged build
+    // verbatim, so it matches the parent's bytes (`docs/events.md`,
+    // "Rewind").
+    let tools: Vec<Value> = request
+        .sent_tools
+        .clone()
+        .unwrap_or_else(|| wire_tools(&request.tools))
         .into_iter()
         .map(Value::Object)
         .collect();

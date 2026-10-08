@@ -88,6 +88,7 @@ fn request() -> ModelRequest {
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: "session_1".into(),
         previous_end: None,
+        sent_tools: None,
         max_output_tokens: None,
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
@@ -849,6 +850,7 @@ fn the_previous_end_marker_lands_on_the_boundary_it_names() {
     let request = ModelRequest {
         conversation: four_turn_conversation(),
         previous_end: Some(2),
+        sent_tools: None,
         cache_lifetime: CacheLifetime::OneHour,
         ..request()
     };
@@ -2274,6 +2276,7 @@ fn the_previous_end_marker_lands_on_a_multi_block_users_last_block() {
             },
         ],
         previous_end: Some(1),
+        sent_tools: None,
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -2331,4 +2334,27 @@ fn a_reply_carries_the_size_of_the_body_it_sent() {
             media: false,
         }
     );
+}
+
+#[test]
+fn sent_tools_are_sent_verbatim_in_order() {
+    // A rewound session's first request carries its parent's logged build,
+    // not what its own tools would wire (`docs/events.md`, "Rewind").
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let sent = vec![
+        json!({"name": "b_tool", "description": "Second.",
+               "input_schema": {"type": "object"}, "strict": true}),
+        json!({"name": "a_tool", "description": "First.",
+               "input_schema": {"type": "object"}, "strict": false}),
+    ];
+    let mut request = request();
+    request.sent_tools = Some(
+        sent.iter()
+            .map(|tool| tool.as_object().unwrap().clone())
+            .collect(),
+    );
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(sent_body(&server, 0)["tools"], Value::Array(sent));
 }

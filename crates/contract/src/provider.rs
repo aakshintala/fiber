@@ -95,6 +95,12 @@ pub struct ModelRequest {
     pub cache_key: String,
     /// The conversation, in log order.
     pub conversation: Vec<Input>,
+    /// The tools as a rewound session's parent sent them, in that order:
+    /// a rewound session's first request sends these verbatim, so it
+    /// matches its parent's bytes (`docs/events.md`, "Rewind"). `None`
+    /// sends what `tools` wires. Any later build clears it back to `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_tools: Option<Vec<Map<String, Value>>>,
     /// The index into `conversation` where the previous request in this
     /// session ended; `None` on the first request. Anthropic puts its second
     /// cache marker there (`docs/prompt-cache.md`, "Cache markers and keys").

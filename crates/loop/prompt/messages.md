@@ -154,3 +154,23 @@ Fiber: this result was moved out of your context. Its full text is at {path}.
 ## budget-line
 
 Fiber: these files are {size} bytes, over their budget of {budget} bytes. Prune them.
+
+## rewind-note
+
+Fiber: this conversation was rewound to this point. Nothing was undone on disk: what Fiber's tools did after this point is still in the workspace.
+
+{changes}
+
+## rewind-written
+
+Files written after this point:
+{paths}
+
+## rewind-ran
+
+Commands run after this point that may have changed files:
+{calls}
+
+## rewind-unchanged
+
+No file was written and no command was run after this point.
