@@ -3,6 +3,7 @@
 //! one its data declares. A stored credential that fails does not fall back.
 
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
+#![allow(clippy::panic, reason = "test helpers; a hang is the test's failure")]
 
 mod common;
 
@@ -726,4 +727,33 @@ fn an_env_or_command_source_names_no_file() {
         let read = read_with(&config, &provider, output).unwrap();
         assert_eq!(read.file, None, "{}", provider.name);
     }
+}
+
+/// `docs/configuration.md`, "Secrets": a command runs once per process, so
+/// every caller of one `Config` and its clones shares the key it gave.
+#[test]
+fn a_command_runs_once_however_often_the_credential_is_read() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    let marker = setup.root().join("runs");
+    let script = format!("echo run >> '{}'; printf key", marker.display());
+    let provider = acme(command(&["sh", "-c", &script]));
+    let read = marker.clone();
+    let (runs, keys) = within(move || {
+        let keys = [
+            default_key(&config, &provider).unwrap(),
+            default_key(&config, &provider).unwrap(),
+            default_key(&config.clone(), &provider).unwrap(),
+        ];
+        (std::fs::read_to_string(read).unwrap().lines().count(), keys)
+    });
+    assert_eq!(runs, 1);
+    assert!(keys.iter().all(|key| key.expose() == "key"));
+}
+
+fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(f()));
+    rx.recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap_or_else(|_| panic!("the credential reads did not return in time"))
 }

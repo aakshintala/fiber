@@ -110,6 +110,9 @@ pub struct Config {
     /// The bytes of every `config/<extension>.json` in each layer, by path.
     settings_files: BTreeMap<PathBuf, Vec<u8>>,
     notices: Vec<Notice>,
+    /// What each `command` credential source printed or why it failed, by
+    /// stored credential name and label; shared by every clone.
+    commands: credential::CommandRuns,
 }
 
 /// Shows where the configuration came from, never a value: a `-c` value or an
@@ -204,6 +207,7 @@ impl Config {
             run_settings,
             settings_files,
             notices,
+            commands: credential::CommandRuns::default(),
         })
     }
 
