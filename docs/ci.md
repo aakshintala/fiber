@@ -244,6 +244,18 @@ in `docs/user/` is generated from the same command definitions as `fiber help`
 and shell completion, and the docs check fails when the committed copy differs
 from what the generator writes.
 
+## Manually dispatched workflows
+
+Two workflows never run on a push or a pull request. Someone starts them with
+`gh workflow run <file> --ref <branch>`, and GitHub allows that only once the
+workflow file is on `main`.
+
+- `tui-demo.yml` builds the two static Linux binaries of the tui-prototype demo
+  (`research/tui-prototype/demo`).
+- `dependency-probe.yml` runs the dependency memory probe on Linux x86_64,
+  Linux arm64 and macOS arm64 and uploads one table per runner
+  (`docs/dependencies.md`, "Measuring memory").
+
 ## Job time limits
 
 Every job sets `timeout-minutes`. A hung runner then fails at the bound, `gh-ci`

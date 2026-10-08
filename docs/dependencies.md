@@ -86,6 +86,14 @@ so that row is the peak of the busiest one on top of everything linked, not
 the cost of all of them holding memory at once. The image child's crates are
 not in that together binary: the session never runs image code.
 
+Run the probe from a session with
+`gh workflow run dependency-probe.yml --ref <branch>`, then
+`gh run watch` and `gh run download <run-id>`. The workflow
+(`.github/workflows/dependency-probe.yml`) runs `run.sh` on `ubuntu-24.04`,
+`ubuntu-24.04-arm` and `macos-26` (macOS arm64), and uploads each table as the
+artifact `dependency-probe-<runner>`. A runner's figures differ from run to
+run by the noise floor below.
+
 A new crate gets a workload in the probe and a row here, measured on Linux
 x86_64, Linux arm64 and macOS arm64. A crate already in the tree through another
 crate, with the same features, that becomes a direct dependency adds no code:
