@@ -895,6 +895,93 @@ fn an_ask_that_does_not_suspend_keeps_the_session_past_the_idle_delay() {
     );
 }
 
+/// A session shut down on its form, the form's `interaction_requested`,
+/// and the lines through `fiber_exited`.
+type ShutDown = (Session, Envelope, Vec<Envelope>);
+
+/// Runs a session whose only call is `former`'s form until the step waits
+/// on the pending form, then shuts it down. A question with no timeout
+/// lives like a pending approval, so the shutdown alone ends the step
+/// with the form still pending; the idle delay never fires. Returns the
+/// session, the form's `interaction_requested`, and the lines through
+/// `fiber_exited`.
+fn shut_down_on_form(former: &Arc<Former>) -> ShutDown {
+    let mut session = session(&["former"], vec![former.clone()], Some(IDLE));
+    let tap = Tap::new(&session.log);
+    let at = session.clock.now() + IDLE;
+    let finished = start(&mut session);
+    let requested = tap.wait_for("interaction_requested");
+    assert!(
+        session.clock.await_parked(at, DEADLINE),
+        "the step waits on the pending form"
+    );
+    session.cancel.shutdown(143);
+    assert_eq!(finish(&mut session, &finished), None);
+    let lines = exit(&mut session, Some(143));
+    (session, requested, lines)
+}
+
+#[test]
+fn a_shutdown_leaves_a_form_that_is_the_steps_only_call_pending() {
+    let former = Arc::new(Former::new());
+    let (_session, requested, lines) = shut_down_on_form(&former);
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            &["tool_call_started", "interaction_requested", "fiber_exited"],
+        ],
+    );
+    assert!(
+        of_kind(&lines, "interaction_resolved").is_empty(),
+        "the form stays pending"
+    );
+    assert!(
+        of_kind(&lines, "tool_call_completed").is_empty(),
+        "the call never completes"
+    );
+    let exited = of_kind(&lines, "fiber_exited")[0];
+    assert_eq!(exited.payload["exit_code"], 143);
+    assert_eq!(exited.payload["suspended_on"], request_id(&requested));
+    assert_eq!(requested.payload["resumes"], true);
+    assert_eq!(former.runs().len(), 1);
+}
+
+#[test]
+fn a_reply_after_a_shutdown_answers_the_form_raised_again() {
+    let former = Arc::new(Former::new());
+    let (mut session, requested, _) = shut_down_on_form(&former);
+    session.resume(vec![former.clone()]);
+    let tap = Tap::new(&session.log);
+    let finished = run_turn(&mut session);
+    let raised = tap.wait_for("interaction_requested");
+    assert_eq!(raised.payload, requested.payload, "the same request");
+    let request = request_id(&raised);
+    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+    assert_eq!(
+        finish(&mut session, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            RERAISED,
+            &["interaction_resolved", "tool_call_completed"],
+            DONE,
+        ],
+    );
+    assert_eq!(
+        of_kind(&lines, "interaction_resolved")[0].payload["by"],
+        "person"
+    );
+    assert_eq!(
+        of_kind(&lines, "tool_call_completed")[0].payload["status"],
+        "completed"
+    );
+    assert_eq!(former.runs().len(), 2);
+}
+
 /// Runs a session whose only call is `former`'s form until the idle delay
 /// exits it, and returns it with the form's `interaction_requested`. The
 /// lines through that line are read; the rest are not.
@@ -1051,6 +1138,43 @@ fn the_idle_delay_in_the_finishing_turn_suspends_on_the_same_request() {
         of_kind(&lines, "fiber_exited")[0].payload["suspended_on"],
         request_id(&requested)
     );
+}
+
+#[test]
+fn a_shutdown_in_the_finishing_turn_suspends_on_the_same_request() {
+    let former = Arc::new(Former::new());
+    let (mut session, requested) = resumed_on_form(&former);
+    session.looped = session
+        .looped
+        .take()
+        .map(|looped| looped.idle_exit(Some(IDLE)));
+    let at = session.clock.now() + IDLE;
+    let tap = Tap::new(&session.log);
+    let finished = run_turn(&mut session);
+    tap.wait_for("interaction_requested");
+    // The raised-again line is written before the call's worker asks,
+    // so only the step waiting on the pending form proves the call
+    // asked and the loop pended it. The shutdown alone ends the step.
+    assert!(
+        session.clock.await_parked(at, DEADLINE),
+        "the finishing step waits on the pending form"
+    );
+    session.cancel.shutdown(143);
+    assert_eq!(finish(&mut session, &finished), None);
+    let lines = exit(&mut session, Some(143));
+    assert_kinds(&lines, &[RERAISED, &["fiber_exited"]]);
+    assert!(
+        of_kind(&lines, "interaction_resolved").is_empty(),
+        "the form stays pending"
+    );
+    assert!(
+        of_kind(&lines, "tool_call_completed").is_empty(),
+        "the call never completes"
+    );
+    let exited = of_kind(&lines, "fiber_exited")[0];
+    assert_eq!(exited.payload["suspended_on"], request_id(&requested));
+    assert_eq!(exited.payload["exit_code"], 143);
+    assert_eq!(former.runs().len(), 2);
 }
 
 #[test]
