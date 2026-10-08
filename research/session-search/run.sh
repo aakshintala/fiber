@@ -47,6 +47,7 @@ command -v /usr/bin/time >/dev/null || { echo "needs /usr/bin/time" >&2; exit 1;
 case "$(uname -s)" in
   Linux) rss_mode=gnu ;;
   Darwin) rss_mode=bsd ;;
+  *) echo "needs Linux or Darwin" >&2; exit 1 ;;
 esac
 TIMEFILE=$(mktemp)
 trap 'rm -f "$TIMEFILE"' EXIT
