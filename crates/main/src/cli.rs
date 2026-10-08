@@ -412,6 +412,28 @@ pub(crate) struct SessionArgs {
     /// "Isolation").
     #[arg(long, conflicts_with = "resume")]
     pub(crate) worktree: bool,
+
+    /// The parent session: its id. A Fiber delegate records it and its job
+    /// id on `session_started` (`docs/delegates.md`, "Events").
+    #[arg(
+        long,
+        value_name = "session_id",
+        value_parser = parse_session_id,
+        requires = "delegate_id",
+        requires = "prompt",
+        conflicts_with = "resume",
+        conflicts_with = "worktree"
+    )]
+    pub(crate) parent: Option<String>,
+
+    /// The delegate's job id in its parent session.
+    #[arg(
+        long = "delegate-id",
+        value_name = "job_id",
+        value_parser = parse_job_id,
+        requires = "parent"
+    )]
+    pub(crate) delegate_id: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -453,6 +475,22 @@ fn parse_session_id(text: &str) -> Result<String, String> {
         Ok(text.to_owned())
     } else {
         Err("a session id is `s_` followed by 16 lowercase hex digits".to_owned())
+    }
+}
+
+/// A delegate id: `j_` followed by exactly 16 lowercase hex digits, the
+/// shape a job id has. Anything else cannot name a job, so it is a usage
+/// error before anything is read or created.
+fn parse_job_id(text: &str) -> Result<String, String> {
+    let hex = text.strip_prefix("j_").unwrap_or("");
+    let valid = hex.len() == 16
+        && hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+    if valid {
+        Ok(text.to_owned())
+    } else {
+        Err("a job id is `j_` followed by 16 lowercase hex digits".to_owned())
     }
 }
 

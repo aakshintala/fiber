@@ -293,6 +293,7 @@ impl Jobs for FakeJobs {
                         match inbox.send(Delivery::Job(JobNotice {
                             completed: completed.clone(),
                             claim: Claim(Box::new(|| true)),
+                            delegate: None,
                         })) {
                             Ok(()) | Err(_) => {}
                         }

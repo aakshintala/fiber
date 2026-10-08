@@ -6,7 +6,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::ErrorCode;
-use crate::events::{JobCompleted, JobLine, JobStarted};
+use crate::events::{DelegateFinished, DelegateStarted, JobCompleted, JobLine, JobStarted};
 
 /// What opening a job asks for. The opener supplies [`Stop`]; the registry
 /// mints the id and the output file.
@@ -181,6 +181,11 @@ impl OpenError {
 pub enum JobRecord {
     /// `job_started`.
     Started(JobStarted),
+    /// `delegate_started`: a Fiber delegate's run began.
+    DelegateStarted(DelegateStarted),
+    /// `delegate_finished`: a Fiber delegate's run ended, written just
+    /// before `job_completed`.
+    DelegateFinished(DelegateFinished),
     /// `job_completed`.
     Completed(JobCompleted),
 }

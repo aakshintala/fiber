@@ -388,7 +388,7 @@ impl Loop {
                         content: message.content.clone(),
                         sender: message.sender.clone(),
                     }),
-                    Queued::Job(_)
+                    Queued::Job(..)
                     | Queued::Line(_)
                     | Queued::Handoff(..)
                     | Queued::Pending(..) => None,
@@ -537,9 +537,9 @@ impl Loop {
             // untaken.
             Delivery::Job(notice) => {
                 if !(self.closing && input.pieces.is_empty() && !self.has_jobs())
-                    && let Some(completed) = crate::jobs::claimed(notice)
+                    && let Some((completed, delegate)) = crate::jobs::claimed(notice)
                 {
-                    input.pieces.push(Queued::Job(completed));
+                    input.pieces.push(Queued::Job(completed, delegate));
                 }
             }
             Delivery::JobLine(line) => {

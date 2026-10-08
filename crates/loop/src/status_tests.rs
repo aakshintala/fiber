@@ -829,6 +829,24 @@ fn delegates_are_counted_apart_from_jobs() {
 }
 
 #[test]
+fn a_delegate_is_dropped_on_its_end_even_without_its_finish() {
+    // An orphaned delegate resumed without its finish leaves no
+    // `delegate_finished`: its bare `job_completed` still removes it.
+    let mut w = world();
+    w.start();
+    w.live();
+    *w.running.lock().unwrap() = vec![job("j2")];
+    w.feed("delegate_started", None, &delegate_started("j2"));
+    assert_eq!(w.status().delegates, 1);
+    w.feed(
+        "job_completed",
+        None,
+        &json!({"job_id": "j2", "status": "completed"}),
+    );
+    assert_eq!(w.status().delegates, 0);
+}
+
+#[test]
 fn history_is_folded_without_reading_the_jobs_or_the_branch_until_live() {
     let mut w = world();
     *w.running.lock().unwrap() = vec![job("j1")];

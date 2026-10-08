@@ -14,11 +14,11 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock as _;
-use contract::events::{ExtensionLog, JobCompleted, JobLine, Outcome};
+use contract::events::{DelegateFinished, ExtensionLog, JobCompleted, JobLine, Outcome};
 use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message, Rejection};
 use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
 use contract::rules::{Rules, RulesError, StandingRules};
-use contract::shapes::{ContentPart, Origin, Sender as From};
+use contract::shapes::{ContentPart, Origin, Sender as From, Tokens, Usage};
 use contract::{CommandId, Envelope, ErrorCode, JobId, SessionId};
 use fakes::clock::FakeClock;
 use log::Log;
@@ -68,8 +68,50 @@ impl Listed {
 
     /// Ends `id`: its notice reaches `inbox`, then `running` drops it.
     fn end(&self, id: &str, inbox: &Sender<Delivery>) {
+        self.end_with(id, inbox, None);
+    }
+
+    /// [`Listed::end`], with a delegate's finish riding the notice.
+    fn end_delegate(&self, id: &str, inbox: &Sender<Delivery>, text: &str) {
+        self.end_with(
+            id,
+            inbox,
+            Some(DelegateFinished {
+                job_id: JobId(id.into()),
+                text: text.into(),
+                artifact: None,
+                questions: None,
+                usage: Usage {
+                    tokens: Tokens {
+                        input: 0,
+                        cache_read: 0,
+                        cache_write: std::collections::BTreeMap::new(),
+                        output: 0,
+                    },
+                    cost: Some(0.0),
+                    subscription_cost: 0.0,
+                },
+                worktree: None,
+            }),
+        );
+    }
+
+    /// Ends `id`: its notice reaches `inbox`, then `running` drops it.
+    fn end_with(&self, id: &str, inbox: &Sender<Delivery>, delegate: Option<DelegateFinished>) {
         let mut ids = self.ids.lock().unwrap();
-        inbox.send(notice(id)).unwrap();
+        inbox
+            .send(Delivery::Job(JobNotice {
+                completed: JobCompleted {
+                    job_id: JobId(id.into()),
+                    status: Outcome::Cancelled,
+                    error: None,
+                    process: None,
+                    output_tail: None,
+                },
+                claim: Claim(Box::new(|| true)),
+                delegate,
+            }))
+            .unwrap();
         ids.retain(|listed| listed.0 != id);
     }
 }
@@ -111,6 +153,7 @@ fn notice(id: &str) -> Delivery {
             output_tail: None,
         },
         claim: Claim(Box::new(|| true)),
+        delegate: None,
     })
 }
 
@@ -254,6 +297,70 @@ fn a_shutdown_stops_a_running_job_and_writes_its_end_before_run_returns() {
     assert_eq!(end.payload["job_id"], "j_1");
     assert_eq!(end.payload["status"], "cancelled");
     assert_eq!(end.turn_id, None);
+}
+
+#[test]
+fn settle_writes_a_queued_delegate_finish_before_its_end() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let mut world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>);
+    world.looped.queued.push_back(crate::jobs::Queued::Job(
+        JobCompleted {
+            job_id: JobId("j_1".into()),
+            status: Outcome::Cancelled,
+            error: None,
+            process: None,
+            output_tail: None,
+        },
+        Some(DelegateFinished {
+            job_id: JobId("j_1".into()),
+            text: "Done.".into(),
+            artifact: None,
+            questions: None,
+            usage: Usage {
+                tokens: Tokens {
+                    input: 0,
+                    cache_read: 0,
+                    cache_write: std::collections::BTreeMap::new(),
+                    output: 0,
+                },
+                cost: Some(0.0),
+                subscription_cost: 0.0,
+            },
+            worktree: None,
+        }),
+    ));
+    world.cancel.shutdown(143);
+    let (finished, _inbox, held) = world.spawn_run();
+    ran(&finished);
+    assert_eq!(
+        held.kinds(),
+        ["session_started", "delegate_finished", "job_completed"]
+    );
+    let lines = held.durable();
+    assert_eq!(lines[1].payload["job_id"], "j_1");
+    assert_eq!(lines[1].payload["text"], "Done.");
+    assert_eq!(lines[1].turn_id, None);
+    assert_eq!(lines[2].payload["job_id"], "j_1");
+    assert_eq!(lines[2].turn_id, None);
+}
+
+#[test]
+fn settle_writes_a_delegate_finish_delivered_while_settling() {
+    let (jobs, stops) = Listed::new(&["j_1"]);
+    let world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>);
+    world.cancel.shutdown(143);
+    let (finished, inbox, held) = world.spawn_run();
+    assert_eq!(stopped(&stops), "j_1");
+    jobs.end_delegate("j_1", &inbox, "Done.");
+    ran(&finished);
+    assert_eq!(
+        held.kinds(),
+        ["session_started", "delegate_finished", "job_completed"]
+    );
+    let lines = held.durable();
+    assert_eq!(lines[1].payload["text"], "Done.");
+    assert_eq!(lines[2].payload["job_id"], "j_1");
+    assert_eq!(lines[2].payload["status"], "cancelled");
 }
 
 #[test]

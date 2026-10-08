@@ -439,7 +439,11 @@ impl Registry {
                     }));
                     // A loop that is gone takes no news; the end stays
                     // recorded for `list`.
-                    let _sent = inbox.send(Delivery::Job(JobNotice { completed, claim }));
+                    let _sent = inbox.send(Delivery::Job(JobNotice {
+                        completed,
+                        claim,
+                        delegate: None,
+                    }));
                 }
             }
         }

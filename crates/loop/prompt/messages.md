@@ -91,6 +91,16 @@ Fiber: monitor {job_id} printed:
 
 {suppressed} earlier deliveries were suppressed by the rate limit; restart the monitor with a more selective filter if you need them.
 
+## delegate-finished
+
+Fiber: delegate {job_id} finished. Its final message:
+{text}
+
+## delegate-questions
+
+It ended waiting for answers to these questions:
+{questions}
+
 ## jobs-pending
 
 Fiber: this session is about to end, and these background jobs are still running: {job_ids}. Stop any you do not need with `jobs stop`; the rest will be waited for.
