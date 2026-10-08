@@ -213,12 +213,12 @@ The shipped tooling has three parts:
   request, so an extension that changes the prompt still gets its scripted
   replies. It bypasses the vendor decoders, which the fake server tests
   (`docs/model-routing.md`, "The scripted provider").
-- **Test cases.** A case gives the script, the prompt and what must happen:
-  the event kinds in order and the fields under test, as an event-stream test
-  asserts ("Event streams"). One case format serves Lua and process
-  extensions alike. Its exact shape is set by the ticket that builds it and
-  proven on Fiber's first-party extensions before anyone else relies on it.
-- **A runner, `fiber extension test [path]`.** It runs an extension's cases
+- **Test cases.** A session case gives a script and prompt, then checks the
+  complete ordered durable event stream and selected fields. A call case
+  invokes a provider function and checks its return or error. Both can script
+  host calls. See `docs/extensions.md`, "Testing an extension", for the case
+  format.
+- **A runner, `fiber extension test [<path>]`.** It runs an extension's cases
   against the built binary in a temporary `FIBER_HOME` and exits non-zero when
   any case fails (`docs/invocation.md`). While the runner drives a session, a
   case may script the extension's host calls (a `host.http` reply, a
