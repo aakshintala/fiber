@@ -19,8 +19,8 @@ use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    Decision, DelegateFinished, JobCompleted, Outcome, ToolCallArgumentsDelta, ToolCallRequested,
-    TurnOutcome,
+    Decision, DelegateFinished, JobCompleted, Outcome, Parent, ToolCallArgumentsDelta,
+    ToolCallRequested, TurnOutcome,
 };
 use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message};
 use contract::jobs::{Jobs, OpenError};
@@ -621,6 +621,95 @@ fn exactly_16_kib_is_not_cut() {
     assert_eq!(lines[2].kind, "delegate_finished");
     assert_eq!(lines[2].payload["text"], full.as_str());
     assert!(lines[2].payload.get("artifact").is_none());
+}
+
+#[test]
+fn delegate_mode_writes_its_parent_and_no_worktree() {
+    fn opened(id: &str, parent: Option<Parent>) -> (fakes::TempDir, std::path::PathBuf) {
+        let home = fakes::TempDir::new("fiber-delegate-open");
+        let workspace = home.path().join("workspace");
+        let credentials = home.path().join("credentials");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&credentials).unwrap();
+        let fake = fakes::clock::FakeClock::new();
+        let clock: Arc<dyn contract::clock::Clock> = fake.clone();
+        let log =
+            Arc::new(Log::create(home.path(), SessionId(id.into()), Arc::clone(&clock)).unwrap());
+        let (_, rx) = mpsc::channel();
+        let permissions = crate::Permissions {
+            workspace: workspace.display().to_string(),
+            credentials,
+            credential_files: Vec::new(),
+            rules: Arc::new(AskGated),
+        };
+        let prompt = crate::prompt::PromptInputs::new(
+            home.path().to_path_buf(),
+            "/bin/sh".into(),
+            home.path()
+                .join(format!("{id}/events.jsonl"))
+                .display()
+                .to_string(),
+            clock,
+            fakes::CONTEXT_WINDOW,
+        );
+        let model = Model {
+            reference: "fake/model".into(),
+            cost: None,
+            subscription: false,
+        };
+        match parent {
+            Some(parent) => Loop::delegate(
+                log,
+                Arc::new(ScriptedProvider::new(Vec::new())),
+                model,
+                prompt,
+                rx,
+                Vec::new(),
+                permissions,
+                parent,
+            ),
+            None => Loop::start(
+                log,
+                Arc::new(ScriptedProvider::new(Vec::new())),
+                model,
+                prompt,
+                rx,
+                Vec::new(),
+                permissions,
+                None,
+            ),
+        }
+        .unwrap();
+        let dir = home.path().join(id);
+        (home, dir)
+    }
+    let parent = Parent {
+        session_id: SessionId("s_parent0000000001".into()),
+        delegate_id: JobId("j_de1e6a7e12345678".into()),
+    };
+    let (_home, dir) = opened("s_delegate00000001", Some(parent));
+    let lines: Vec<Envelope> = log::read(&dir)
+        .unwrap()
+        .into_iter()
+        .filter(Envelope::is_durable)
+        .collect();
+    assert_eq!(lines[0].kind, "session_started");
+    assert_eq!(
+        lines[0].payload["parent"],
+        json!({
+            "session_id": "s_parent0000000001",
+            "delegate_id": "j_de1e6a7e12345678",
+        })
+    );
+    assert!(lines[0].payload.get("worktree").is_none());
+    let (_home, dir) = opened("s_plain000000000001", None);
+    let lines: Vec<Envelope> = log::read(&dir)
+        .unwrap()
+        .into_iter()
+        .filter(Envelope::is_durable)
+        .collect();
+    assert_eq!(lines[0].kind, "session_started");
+    assert!(lines[0].payload.get("parent").is_none());
 }
 
 #[test]

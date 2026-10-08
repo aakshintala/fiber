@@ -14,7 +14,9 @@ use std::sync::mpsc::Receiver;
 
 pub(crate) use completion::Step;
 use contract::ErrorCode;
-use contract::events::{CacheLifetime, Event, Grant, PreambleReason, SessionStarted, ToolReplaced};
+use contract::events::{
+    CacheLifetime, Event, Grant, Parent, PreambleReason, SessionStarted, ToolReplaced,
+};
 use contract::inbox::Delivery;
 use contract::provider::{Cost, Input, ModelRequest, Provider, ToolDefinition};
 use contract::shapes::Failure;
@@ -275,7 +277,7 @@ impl Loop {
     /// worktree the session runs in, when Fiber created one for it.
     #[allow(
         clippy::too_many_arguments,
-        reason = "the session's whole start: its worktree rides last"
+        reason = "the session's whole start: its parent and worktree ride last"
     )]
     pub fn start(
         log: Arc<Log>,
@@ -287,6 +289,67 @@ impl Loop {
         permissions: Permissions,
         worktree: Option<Worktree>,
     ) -> Result<Self, Error> {
+        Self::open(
+            log,
+            provider,
+            model,
+            prompt,
+            inbox,
+            tools,
+            permissions,
+            None,
+            worktree,
+        )
+    }
+
+    /// A Fiber delegate's loop: as [`Loop::start`], but the session's
+    /// `session_started` names its parent (`docs/delegates.md`, "Events").
+    /// A delegate never runs in a worktree of its own.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the session's whole start: its parent rides last"
+    )]
+    pub fn delegate(
+        log: Arc<Log>,
+        provider: Arc<dyn Provider>,
+        model: Model,
+        prompt: prompt::PromptInputs,
+        inbox: Receiver<Delivery>,
+        tools: Vec<(String, Arc<dyn Tool>)>,
+        permissions: Permissions,
+        parent: Parent,
+    ) -> Result<Self, Error> {
+        Self::open(
+            log,
+            provider,
+            model,
+            prompt,
+            inbox,
+            tools,
+            permissions,
+            Some(parent),
+            None,
+        )
+    }
+
+    /// [`Loop::start`] and [`Loop::delegate`] through one writer: the
+    /// session's `session_started` carries `parent` (`None` for a plain
+    /// start) and `worktree` (`None` for a delegate).
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the session's whole start: its parent and worktree ride last"
+    )]
+    fn open(
+        log: Arc<Log>,
+        provider: Arc<dyn Provider>,
+        model: Model,
+        prompt: prompt::PromptInputs,
+        inbox: Receiver<Delivery>,
+        tools: Vec<(String, Arc<dyn Tool>)>,
+        permissions: Permissions,
+        parent: Option<Parent>,
+        worktree: Option<Worktree>,
+    ) -> Result<Self, Error> {
         let (tools, replaced) = calls::register(tools);
         let workspace = PathBuf::from(&permissions.workspace);
         let workspace = workspace.canonicalize().unwrap_or(workspace);
@@ -295,7 +358,7 @@ impl Loop {
             &Event::SessionStarted(SessionStarted {
                 workspace: permissions.workspace.clone(),
                 variables: variables(),
-                parent: None,
+                parent,
                 forked_from: None,
                 rewind: None,
                 worktree,
