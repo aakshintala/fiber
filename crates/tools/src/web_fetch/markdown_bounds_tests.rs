@@ -514,6 +514,75 @@ fn the_hidden_stack_shrinks_back_after_deep_nesting() {
     );
 }
 
+/// A capacity of 64 never shrinks: the floor holds however few elements
+/// stay open.
+#[test]
+fn hidden_capacity_64_never_shrinks() {
+    let mut hidden = Hidden::default();
+    let tag = start("template", false, vec![]);
+    for _ in 0..64 {
+        hidden.open("template", &tag);
+    }
+    assert_eq!(hidden.open_capacity(), 64);
+    for _ in 0..63 {
+        hidden.end("template");
+    }
+    assert!(hidden.is_hidden());
+    assert_eq!(hidden.open_capacity(), 64);
+    hidden.end("template");
+    assert!(!hidden.is_hidden());
+    assert_eq!(hidden.open_capacity(), 64);
+}
+
+/// The stack halves only while its length stays below a quarter of its
+/// capacity: `len * 4 == capacity` holds, `len * 4 == capacity - 1`
+/// shrinks.
+#[test]
+fn hidden_shrink_holds_until_a_quarter() {
+    let mut hidden = Hidden::default();
+    let tag = start("template", false, vec![]);
+    for _ in 0..65 {
+        hidden.open("template", &tag);
+    }
+    assert_eq!(hidden.open_capacity(), 128);
+    for _ in 0..33 {
+        hidden.end("template");
+    }
+    assert!(hidden.is_hidden());
+    assert_eq!(hidden.open_capacity(), 128);
+    hidden.end("template");
+    assert!(hidden.is_hidden());
+    assert_eq!(hidden.open_capacity(), 64);
+}
+
+/// Closing the element above the outermost `svg` must not spend the
+/// `noscript` below it: popping the template decrements only its own
+/// above-`svg` count, so a later `</noscript>` with the `svg` still open
+/// closes nothing.
+#[test]
+fn a_pop_above_the_svg_keeps_the_noscript_below_it() {
+    let mut hidden = Hidden::default();
+    let mut oracle = oracle::Oracle::default();
+    for (name, self_closing) in [
+        ("noscript", false),
+        ("template", false),
+        ("svg", false),
+        ("template", false),
+    ] {
+        let tag = start(name, self_closing, vec![]);
+        hidden.open(name, &tag);
+        oracle.open(name, &tag);
+    }
+    hidden.end("template");
+    oracle.end("template");
+    hidden.end("noscript");
+    oracle.end("noscript");
+    assert_eq!(hidden.is_hidden(), oracle.is_hidden());
+    assert_eq!(hidden.in_svg(), oracle.in_svg());
+    assert!(hidden.is_hidden());
+    assert!(hidden.in_svg());
+}
+
 /// Asserts `markdown` is at most 14 times its page, naming the ratio.
 fn assert_bounded(html: &str, markdown: &str, what: &str) {
     assert!(
