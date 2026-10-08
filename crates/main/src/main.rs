@@ -9,6 +9,7 @@
 )]
 
 mod builtin;
+mod case;
 mod cli;
 mod clock;
 mod completion;
