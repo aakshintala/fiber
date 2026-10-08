@@ -525,6 +525,29 @@ fn a_rewind_without_a_minted_session_settles_to_nothing() {
 }
 
 #[test]
+fn an_accepted_prompt_naming_a_minted_session_starts_nothing() {
+    let held = fakes::TempDir::new("rs");
+    let hub = hub(&held);
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let prompt = json!({"id": "c_p1", "command": "prompt", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![("c_p1".to_owned(), prompt)]));
+    // Only a rewind starts a session, whatever result an acknowledgement carries.
+    let ack = serde_json::to_vec(&json!({
+        "kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_p1", "result": {"new_session_id": "s_bbbbbbbbbbbbbbbb"}},
+    }))
+    .unwrap();
+    assert!(
+        settle(&ack, &kept, &hub, sid, false).is_none(),
+        "an accepted prompt starts nothing, even with a minted-shape session"
+    );
+    assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
+}
+
+#[test]
 fn muted_drops_each_replay_once() {
     let ack = |id: &str| {
         serde_json::to_vec(&json!({
@@ -571,6 +594,37 @@ fn transfer_drops_a_dead_relay_and_reports_it() {
         relays.subscription(sid),
         Some(line),
         "the level is kept anyway"
+    );
+}
+
+#[test]
+fn a_failed_transfer_unmutes_only_its_own_minted_id() {
+    let mut relays = Relays::default();
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let line = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let epoch = relays.mint();
+    let (writer, peer) = UnixStream::pair().unwrap();
+    writer.shutdown(std::net::Shutdown::Both).unwrap_or(());
+    drop(peer);
+    // A mute from an earlier replay is still waiting for its acknowledgement.
+    let replayed: Replayed = Replayed::default();
+    replayed.lock().unwrap().push("c_unrelated".to_owned());
+    relays.entries.push(Relay {
+        session: sid.to_owned(),
+        epoch,
+        writer,
+        kept: Kept::default(),
+        replayed: std::sync::Arc::clone(&replayed),
+        thread: None,
+    });
+    assert!(!relays.transfer(sid, &line));
+    assert_eq!(
+        *replayed.lock().unwrap(),
+        vec!["c_unrelated".to_owned()],
+        "the failed write's minted mute is removed and the other stays"
     );
 }
 
