@@ -43,6 +43,14 @@ fn block_limits_reads_configuration() {
     assert_eq!(limits.session, 9);
 }
 
+/// Where the reviewer connects: no scripted model is reviewed here.
+fn here() -> crate::Here {
+    crate::Here {
+        workspace: std::path::PathBuf::new(),
+        clock: fakes::clock::FakeClock::new(),
+    }
+}
+
 /// The reviewer's `cache.lifetime` under `overrides`, from
 /// [`crate::choose_reviewer`]: the session runs `fake/session`, reviewed by
 /// `fake/reviewer`.
@@ -79,6 +87,7 @@ fn reviewer_lifetime(overrides: &[&str]) -> contract::events::CacheLifetime {
     .unwrap();
     let (providers, _notices) = extensions::Providers::load(&home).unwrap();
     let session = providers.resolve("fake/session").unwrap();
+    let here = here();
     let mut lookup = |_: &config::ProviderData| -> Result<
         crate::lua_providers::Access,
         contract::shapes::Failure,
@@ -89,7 +98,8 @@ fn reviewer_lifetime(overrides: &[&str]) -> contract::events::CacheLifetime {
             lua: None,
         })
     };
-    let reviewer = crate::choose_reviewer(&providers, &config, &session, &mut lookup).unwrap();
+    let reviewer =
+        crate::choose_reviewer(&providers, &config, &session, &here, &mut lookup).unwrap();
     assert_eq!(reviewer.model.reference, "fake/reviewer");
     reviewer.cache_lifetime
 }
@@ -167,6 +177,7 @@ fn the_reviewer_connects_with_the_lua_provider_its_access_names() {
         .map(|(_, provider)| std::sync::Arc::clone(provider))
         .expect("the package registers its provider");
     let session = providers.resolve(reference).unwrap();
+    let here = here();
     for (with, carries) in [(Some(&lua), true), (None, false)] {
         let mut lookup = |_: &config::ProviderData| {
             Ok(crate::lua_providers::Access::new(
@@ -174,7 +185,8 @@ fn the_reviewer_connects_with_the_lua_provider_its_access_names() {
                 (Some(contract::Secret::new("key".to_owned())), None),
             ))
         };
-        let reviewer = crate::choose_reviewer(&providers, &config, &session, &mut lookup).unwrap();
+        let reviewer =
+            crate::choose_reviewer(&providers, &config, &session, &here, &mut lookup).unwrap();
         assert_eq!(reviewer.model.reference, reference);
         assert_eq!(reviewer.provider.cost_lookup().is_some(), carries);
     }

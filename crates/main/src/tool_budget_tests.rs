@@ -103,7 +103,11 @@ fn provider(protocol: Protocol) -> Result<Option<Arc<dyn Provider>>, String> {
         model: &data.models[0],
         thinking: None,
     };
-    spoken(crate::connect::connect(model, None, None, None))
+    let here = crate::connect::Here {
+        workspace: std::path::PathBuf::new(),
+        clock: fakes::clock::FakeClock::new(),
+    };
+    spoken(crate::connect::connect(model, None, None, None, &here))
 }
 
 /// `connect`'s result: a protocol this Fiber does not speak yet is `None`;

@@ -24,6 +24,7 @@ mod lua_providers;
 mod mcp_servers;
 mod prompt_files;
 mod resume;
+mod scripted;
 mod session_command;
 mod session_extensions;
 mod settings;
@@ -52,7 +53,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use config::{Config, Layer, Sources};
-use connect::connect;
+use connect::{Here, connect};
 use contract::inbox::Delivery;
 use contract::provider::Provider;
 use contract::shapes::Failure;
@@ -493,6 +494,7 @@ fn parts_in(
     let mut extensions =
         extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock), session_locks);
     let naming = lua_providers::add_lua(&extensions, &mut providers, &config)?;
+    scripted::prepare(&mut providers, &config, recorded);
     let owners = (extensions.lua_providers().iter())
         .map(|(extension, lua)| (lua.name().to_owned(), extension.clone()))
         .collect();
@@ -514,12 +516,19 @@ fn parts_in(
     let label =
         recorded_credential.map_or_else(|| config.credential_label(model.provider), str::to_owned);
     let lua = providers.lua(&model.provider.name);
-    let (key, signer) = lua_providers::session_credential(lua, model.provider, &label, || {
-        crate::credential::session_credential(&config, model.provider, recorded_credential)
-            .map(|(_, key)| key)
+    let lua_providers::Access { key, signer, .. } = scripted::access(model.provider, || {
+        lua_providers::session_credential(lua, model.provider, &label, || {
+            crate::credential::session_credential(&config, model.provider, recorded_credential)
+                .map(|(_, key)| key)
+        })
+        .map(|read| lua_providers::Access::new(lua, read))
     })?;
     let session_credential = (key.clone(), signer.clone());
-    let provider = connect(model, key, signer, lua)?;
+    let here = Here {
+        workspace: workspace.clone(),
+        clock: Arc::clone(&clock),
+    };
+    let provider = connect(model, key, signer, lua, &here)?;
     // The credentials read at startup, seeding `Switching`'s keys: the
     // session's entry first, so a reviewer on its provider reuses them.
     let mut credentials: switch::Credentials = BTreeMap::new();
@@ -530,19 +539,21 @@ fn parts_in(
     let reviewer = {
         let mut lookup =
             |provider: &config::ProviderData| -> Result<lua_providers::Access, Failure> {
-                let lua = providers.lua(&provider.name);
-                if let Some((_, read)) = credentials.get(&provider.name) {
-                    return Ok(lua_providers::Access::new(lua, read.clone()));
-                }
-                let label = config.credential_label(provider);
-                let read = lua_providers::session_credential(lua, provider, &label, || {
-                    crate::credential::session_credential(&config, provider, None)
-                        .map(|(_, key)| key)
-                })?;
-                credentials.insert(provider.name.clone(), (label, read.clone()));
-                Ok(lua_providers::Access::new(lua, read))
+                scripted::access(provider, || {
+                    let lua = providers.lua(&provider.name);
+                    if let Some((_, read)) = credentials.get(&provider.name) {
+                        return Ok(lua_providers::Access::new(lua, read.clone()));
+                    }
+                    let label = config.credential_label(provider);
+                    let read = lua_providers::session_credential(lua, provider, &label, || {
+                        crate::credential::session_credential(&config, provider, None)
+                            .map(|(_, key)| key)
+                    })?;
+                    credentials.insert(provider.name.clone(), (label, read.clone()));
+                    Ok(lua_providers::Access::new(lua, read))
+                })
             };
-        choose_reviewer(&providers, &config, &model, &mut lookup)
+        choose_reviewer(&providers, &config, &model, &here, &mut lookup)
     };
     // Every refreshed provider the session does not use is unloaded once
     // its list is written: only the session's and the reviewer's stay
@@ -568,7 +579,7 @@ fn parts_in(
     let retry = settings::retry_policy(&config);
     let handoff = handoff::handoff_settings(&config, &model.reference());
     let idle = settings::idle_exit(&config);
-    let warm = settings::warm(&config);
+    let warm = scripted::warm(model.model, settings::warm(&config));
     let mut startup_notices = Vec::new();
     let thinking = settings::thinking(
         model.thinking,
@@ -584,6 +595,7 @@ fn parts_in(
         clock: Arc::clone(&clock),
         locks: locks.clone(),
         owners,
+        workspace: workspace.clone(),
     };
     let switching = switch::Switching::new(
         providers.clone(),
@@ -685,6 +697,7 @@ fn choose_reviewer(
     providers: &Providers,
     config: &Config,
     session: &extensions::Model<'_>,
+    here: &Here,
     credential: &mut dyn FnMut(&config::ProviderData) -> Result<lua_providers::Access, Failure>,
 ) -> Result<r#loop::Reviewer, Failure> {
     let typed = reviewer_reference(config, session)?;
@@ -697,7 +710,7 @@ fn choose_reviewer(
     // The token is read once, so a failing `credential()` fails here:
     // not a startup error, the loop gets it and every reviewed call
     // escalates it (`docs/permissions.md`, "How it runs").
-    let provider = connect(model, access.key, access.signer, access.lua.as_ref())?;
+    let provider = connect(model, access.key, access.signer, access.lua.as_ref(), here)?;
     Ok(r#loop::Reviewer {
         provider,
         model: Model {

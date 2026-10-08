@@ -280,6 +280,7 @@ fn loader(
         clock: fakes::clock::FakeClock::new(),
         locks: Arc::new(tools::PathLocks::new()),
         owners,
+        workspace: PathBuf::new(),
     }
 }
 
@@ -1599,4 +1600,76 @@ fn a_reviewers_file_source_joins_the_credential_files() {
         made.credential_files,
         vec![fixture.key_file.canonicalize().unwrap()]
     );
+}
+
+/// `Switching` as `parts_in` builds it for a session started with
+/// `overrides`, its scripted references added, over a workspace holding
+/// `s.json` and `r.json`, with `fake`'s key read at startup.
+fn scripted_switching(fixture: &Fixture, overrides: &[&str]) -> Arc<Switching> {
+    for name in ["s.json", "r.json"] {
+        std::fs::write(
+            fixture.workspace.join(name),
+            r#"{"steps": [{"text": "Hi."}]}"#,
+        )
+        .unwrap();
+    }
+    let config = config(fixture, overrides);
+    let (mut providers, _) = Providers::load(&fixture.home).unwrap();
+    crate::scripted::prepare(&mut providers, &config, None);
+    let extensions = extensions::SessionExtensions::load(
+        &fixture.home,
+        &config,
+        fakes::clock::FakeClock::new(),
+        Arc::new(tools::PathLocks::new()),
+    );
+    let mut loader = loader(Arc::new(extensions), BTreeMap::new());
+    loader.workspace = fixture.workspace.clone();
+    Arc::new(Switching::new(
+        providers,
+        Vec::new(),
+        config,
+        startup(&["fake"]),
+        Vec::new(),
+        loader,
+    ))
+}
+
+/// The registry a session switches within is fixed at start, so a scripted
+/// model it did not start with is rejected with how to choose one
+/// (`docs/model-routing.md`, "The scripted provider").
+#[test]
+fn a_scripted_model_the_session_did_not_start_with_is_rejected() {
+    let fixture = fixture("fiber-switch-scripted-new");
+    for overrides in [&["model=scripted/s.json"][..], &[]] {
+        let switching = scripted_switching(&fixture, overrides);
+        let rejection = rejected(&switching, &args("scripted/r.json"), None);
+        assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+        assert_eq!(rejection.message, crate::scripted::START_ONLY);
+    }
+    // Any other unknown reference keeps its own message.
+    let switching = scripted_switching(&fixture, &["model=scripted/s.json"]);
+    let rejection = rejected(&switching, &args("nobody/m"), None);
+    assert_ne!(rejection.message, crate::scripted::START_ONLY);
+}
+
+#[test]
+fn a_switch_to_the_startup_scripted_model_reads_no_credential() {
+    let fixture = fixture("fiber-switch-scripted-back");
+    let switching = scripted_switching(&fixture, &["model=scripted/s.json"]);
+    let made = prepared(&switching, &args("scripted/s.json"), None);
+    assert_eq!(made.model.reference, "scripted/s.json");
+    assert!(made.model.cost.is_none());
+    // A credential read would fail: the scripted provider declares none.
+    assert!(made.credential_files.is_empty());
+}
+
+/// A scripted reviewer's read is bypassed on a switch as at startup: the
+/// reviewer resolves to its own script with no credential.
+#[test]
+fn a_scripted_reviewer_stands_across_a_switch() {
+    let fixture = fixture("fiber-switch-scripted-reviewer");
+    let switching = scripted_switching(&fixture, &["reviewer.model=scripted/r.json"]);
+    let made = prepared(&switching, &args("fake/m"), None);
+    let reviewer = made.reviewer.expect("the reviewer resolved");
+    assert_eq!(reviewer.model.reference, "scripted/r.json");
 }

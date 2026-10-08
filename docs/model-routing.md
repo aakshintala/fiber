@@ -224,14 +224,46 @@ of a socket. A script is a list of steps, each one model reply: text, a tool
 call with its arguments, a given error such as a rate limit, or a reply
 streamed slowly. Each request takes the next step, in order. A request is
 never matched against a step, so a prompt that changes does not change the
-reply. A request after the last step fails the turn. The exact script format
-is set by the ticket that builds it (`docs/testing.md`, "Testing an
-extension").
+reply. A request after the last step fails the turn.
+
+A script is a JSON file, `{"steps": [...]}`, read whole each time a model on
+it is connected: when a session starts or resumes on it, switches back to it,
+or resolves its reviewer to it. Each step is an object, a reply or an error:
+
+- A reply has `text`, a string or a list of strings streamed as fragments in
+  order, or `tool_calls`, a list of `{"name": ..., "arguments": {...}}`, or
+  both. It may add `reasoning`, a string streamed before the text; `usage`,
+  the `input`, `output` and `cache_read` tokens it reports, each 0 when
+  absent; and `every_ms`, a pause on the session's clock before every text
+  fragment after the first. Its tool calls' ids are `call_<step>_<n>`, both
+  counted from 1. It names no generation and reports no cost.
+- An error is `{"error": {"code": ..., "message": ..., "retry_after_ms": ...}}`,
+  alone in its step. `code` is one a failed model call has (`docs/errors.md`,
+  "A failed model call"), and `retry_after_ms` may be left out.
+
+```json
+{"steps": [
+  {"text": ["Reading ", "the file."], "tool_calls": [{"name": "read", "arguments": {"path": "notes.md"}}]},
+  {"error": {"code": "rate_limited", "message": "Slow down.", "retry_after_ms": 2000}},
+  {"text": "Done.", "every_ms": 200, "usage": {"input": 120, "output": 4}}
+]}
+```
+
+Each request takes one step, a retried request included, so a `rate_limited`
+step followed by a text step is a retry that succeeds. A request after the
+last step fails `invalid_request`, which is never retried, naming the script
+and the request. Each connection starts at step 1, and a reviewer on a script
+has its own steps. A script that cannot be read fails with `io_failed`, and a
+malformed one with `config_invalid` naming the file and the step: at startup
+before any line is written, on a switch as its rejection, and for a reviewer
+as a reviewer failure.
 
 A session selects it with an ordinary model reference, `scripted/<path>`,
 where the model id is the script's path, resolved against the session's
 workspace. It needs no credential and has no quota, cost or prompt cache. The
-model picker does not offer it, and it is never chosen unless named.
+model picker does not offer it, and it is never chosen unless named. A session
+switches only to a scripted model it started with: `/model` naming another
+`scripted/<path>` is rejected with `invalid_arguments`.
 
 It exists for testing extensions, reproducing a bug from a script anyone can
 replay, and running a pipeline end to end without a model. It bypasses the
