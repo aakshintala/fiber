@@ -1070,7 +1070,7 @@ session:
   `session_started`; `docs/delegates.md`, "Forks"; `docs/events.md`,
   "Rewind"). `--cascade` deletes them too, and whatever points at them; it is
   refused if any of them is held. Finding them reads the first line of each
-  session log, as listing does.
+  session log.
 - **When `expect` is supplied, a cascade removes only the sessions the person confirmed.** A client sends them in `delete`'s `expect` ("The hub"): the session and everything `--cascade` adds. When the sessions the hub would remove differ, such as a fork made while the question was open, the delete is rejected `stale_request`, the message names the sessions it would remove now, and nothing is deleted. `fiber sessions delete` and pruning send no `expect`.
 - **Delete is permanent.** It removes the session's directory: its log and its
   artifacts together. There is no trash. The terminal asks first, naming the
