@@ -69,6 +69,7 @@ pub(crate) struct PanelState {
     again: bool,
     baseline: Option<bool>,
     branch: Option<Branch>,
+    scroll: usize,
 }
 
 impl PanelState {
@@ -273,6 +274,11 @@ impl PanelState {
         self.branch.as_ref()
     }
 
+    /// How many rows the panel has scrolled.
+    pub(crate) fn scroll(&self) -> usize {
+        self.scroll
+    }
+
     /// Folds the branch query's answer: the first line trimmed is the
     /// branch, `HEAD` reads detached, and anything else leaves the row
     /// out. Clears the query; a turn end held while it was in flight
@@ -415,6 +421,22 @@ impl App {
             return self.branch_query().into_iter().collect();
         }
         Vec::new()
+    }
+
+    /// Scrolls the panel by three rows, picked, not measured: down clamped
+    /// to the rows past the panel's text rows, up saturating at the top.
+    pub(super) fn scroll_panel(&mut self, up: bool) {
+        let Some(panel) = self.chrome().layout().and_then(|layout| layout.panel) else {
+            return;
+        };
+        let rows = crate::view::panel::rows(self, panel.width);
+        let height = usize::from(panel.height.saturating_sub(1));
+        let max = rows.len().saturating_sub(height);
+        if up {
+            self.panel_state.scroll = self.panel_state.scroll.saturating_sub(3);
+        } else {
+            self.panel_state.scroll = self.panel_state.scroll.saturating_add(3).min(max);
+        }
     }
 
     /// A click on a panel item.

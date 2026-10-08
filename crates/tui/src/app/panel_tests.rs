@@ -1041,3 +1041,97 @@ fn clicking_the_branch_with_the_link_down_sends_nothing() {
     app.attach(contract::SessionId(SESSION.to_owned()));
     assert_eq!(app.on_click(TargetId::Panel(Spot::Branch)), Effect::None);
 }
+
+/// An app with home state at 160x40, attached.
+fn panel_app() -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: CARDS.map(str::to_owned).to_vec(),
+        ..Default::default()
+    });
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.set_size(160, 40);
+    app
+}
+
+/// Folds a widget of sixty lines.
+fn big_widget(app: &mut App) {
+    let lines: Vec<String> = (0..60).map(|n| format!("line {n:02}")).collect();
+    app.on_line(session_line(
+        SESSION,
+        "extension_ui",
+        serde_json::json!({"extension": "plan", "widget": "tasks", "lines": lines}),
+    ));
+}
+
+/// A mouse report of `kind` at 0-based `col`, `row`.
+fn mouse(kind: crate::keys::MouseKind, col: u16, row: u16) -> crate::keys::Mouse {
+    crate::keys::Mouse { kind, col, row }
+}
+
+#[test]
+fn the_wheel_scrolls_the_panel_by_three_and_clamps() {
+    use crate::keys::MouseKind;
+    let mut app = panel_app();
+    big_widget(&mut app);
+    let down = mouse(MouseKind::WheelDown, 140, 20);
+    for expected in [3, 6, 9, 12, 15, 18, 21] {
+        app.on_wheel(&down);
+        assert_eq!(app.panel_state().scroll(), expected);
+    }
+    app.on_wheel(&down);
+    assert_eq!(app.panel_state().scroll(), 22);
+    app.on_wheel(&down);
+    assert_eq!(app.panel_state().scroll(), 22);
+    let up = mouse(MouseKind::WheelUp, 140, 20);
+    for expected in [19, 16, 13, 10, 7, 4, 1] {
+        app.on_wheel(&up);
+        assert_eq!(app.panel_state().scroll(), expected);
+    }
+    app.on_wheel(&up);
+    assert_eq!(app.panel_state().scroll(), 0);
+    app.on_wheel(&up);
+    assert_eq!(app.panel_state().scroll(), 0);
+}
+
+#[test]
+fn the_wheel_over_the_conversation_does_not_scroll_the_panel() {
+    use crate::keys::MouseKind;
+    let mut app = panel_app();
+    big_widget(&mut app);
+    app.on_wheel(&mouse(MouseKind::WheelDown, 140, 20));
+    assert_eq!(app.panel_state().scroll(), 3);
+    app.on_wheel(&mouse(MouseKind::WheelDown, 10, 20));
+    assert_eq!(app.panel_state().scroll(), 3);
+}
+
+#[test]
+fn motion_over_the_panel_does_not_scroll_it() {
+    use crate::keys::MouseKind;
+    let mut app = panel_app();
+    big_widget(&mut app);
+    app.on_wheel(&mouse(MouseKind::Motion, 140, 20));
+    assert_eq!(app.panel_state().scroll(), 0);
+}
+
+#[test]
+fn a_panel_that_fits_never_scrolls() {
+    use crate::keys::MouseKind;
+    let mut app = panel_app();
+    app.on_line(widget("plan", "tasks", &["one"]));
+    app.on_wheel(&mouse(MouseKind::WheelDown, 140, 20));
+    assert_eq!(app.panel_state().scroll(), 0);
+}
+
+#[test]
+fn scrolling_without_a_panel_rect_does_nothing() {
+    use crate::keys::MouseKind;
+    let mut app = attached();
+    app.on_wheel(&mouse(MouseKind::WheelDown, 10, 5));
+    app.scroll_panel(false);
+    assert_eq!(app.panel_state().scroll(), 0);
+}

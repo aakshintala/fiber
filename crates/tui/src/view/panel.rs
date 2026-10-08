@@ -106,9 +106,17 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<Row> {
 pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     let text = text_width(area.width);
     let width = u16::try_from(text).unwrap_or(u16::MAX);
+    let rows = rows(app, area.width);
+    // A screen that grew never shows a gap: a scroll past the end clamps
+    // when drawn.
+    let height = usize::from(area.height.saturating_sub(1));
+    let skip = app
+        .panel_state()
+        .scroll()
+        .min(rows.len().saturating_sub(height));
     let x = area.x.saturating_add(2);
     let mut y = area.y.saturating_add(1);
-    for row in rows(app, area.width) {
+    for row in rows.iter().skip(skip) {
         if y >= area.bottom() {
             break;
         }

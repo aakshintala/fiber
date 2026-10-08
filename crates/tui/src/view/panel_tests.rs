@@ -520,6 +520,50 @@ fn fold_job(app: &mut App, id: &str, description: &str) {
     ));
 }
 
+/// Folds a widget of sixty lines.
+fn big_widget(app: &mut App) {
+    let lines: Vec<String> = (0..60).map(|n| format!("line {n:02}")).collect();
+    app.on_line(session_line(
+        "extension_ui",
+        serde_json::json!({"extension": "plan", "widget": "tasks", "lines": lines}),
+    ));
+}
+
+/// A wheel-down over the panel's middle.
+fn wheel_down(app: &mut App) {
+    use crate::keys::{Mouse, MouseKind};
+    app.on_wheel(&Mouse {
+        kind: MouseKind::WheelDown,
+        col: 140,
+        row: 20,
+    });
+}
+
+#[test]
+fn panel_scrolled() {
+    let mut app = attached(160, 40);
+    big_widget(&mut app);
+    wheel_down(&mut app);
+    wheel_down(&mut app);
+    assert_eq!(app.panel_state().scroll(), 6);
+    let (buf, _) = draw_targets(&app);
+    insta::assert_snapshot!("panel_scrolled", super::super::text(&buf));
+}
+
+#[test]
+fn a_scroll_past_the_end_after_a_resize_is_clamped_when_drawn() {
+    let mut app = attached(160, 40);
+    big_widget(&mut app);
+    for _ in 0..8 {
+        wheel_down(&mut app);
+    }
+    assert_eq!(app.panel_state().scroll(), 22);
+    app.set_size(160, 60);
+    let (buf, _) = draw_targets(&app);
+    let shown = super::super::text(&buf);
+    assert_eq!(shown.lines().nth(1).unwrap_or_default(), "  line 01");
+}
+
 #[test]
 fn the_top_five_by_lines_changed_ties_by_path() {
     let mut app = attached(160, 40);

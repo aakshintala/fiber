@@ -2,8 +2,9 @@
 //! hover").
 
 use super::{App, Effect, Target};
-use crate::keys::Key;
+use crate::keys::{Key, Mouse, MouseKind};
 use crate::mouse::TargetId;
+use ratatui::layout::Position;
 
 impl App {
     /// Handles a click on `target` (`docs/tui.md`, "Bindings"): the badge
@@ -73,5 +74,26 @@ impl App {
     pub(crate) fn put_aside(&mut self) {
         self.queue.on_key(&Key::Esc);
         self.settle();
+    }
+
+    /// The mouse wheel over the panel scrolls it (`docs/tui.md`, "The
+    /// panel"). Anything else does nothing: it settles nothing else and
+    /// returns nothing.
+    pub(crate) fn on_wheel(&mut self, mouse: &Mouse) {
+        let up = match mouse.kind {
+            MouseKind::WheelUp => true,
+            MouseKind::WheelDown => false,
+            MouseKind::Press(_) | MouseKind::Release | MouseKind::Motion | MouseKind::Drag(_) => {
+                return;
+            }
+        };
+        let over = self
+            .chrome()
+            .regions()
+            .panel
+            .is_some_and(|panel| panel.contains(Position::new(mouse.col, mouse.row)));
+        if over {
+            self.scroll_panel(up);
+        }
     }
 }
