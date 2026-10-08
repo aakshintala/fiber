@@ -447,7 +447,10 @@ runs in the background and never holds a list back.
 
 The age of a list is the age of its cache file, so sessions that start
 together refresh a provider once. A provider already refreshing is not
-started again. Nothing refreshes on a timer, so an idle Fiber does no work.
+started again. A `models()` that fails, or returns something other than a
+model list, leaves the cached list in place, with an `extension_failed`
+notice naming the extension. Nothing refreshes on a timer, so an idle Fiber
+does no work.
 A refresh never changes the tool definitions a session has sent: an agent sees
 a new list only through a tool result (`docs/prompt-cache.md`).
 
