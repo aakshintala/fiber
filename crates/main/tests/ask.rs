@@ -1986,6 +1986,35 @@ fn the_providers_reviewer_model_decides_a_reviewed_call() {
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let resolved = run
         .lines
         .iter()
