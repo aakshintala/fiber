@@ -1193,6 +1193,152 @@ fn session_rejects_an_id_that_is_not_a_minted_session_id() {
 }
 
 #[test]
+fn session_parent_parses_with_its_delegate_id_and_prompt() {
+    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/home/u/proj",
+        "--model",
+        "fake/m",
+        "--prompt",
+        "hi",
+        "--parent",
+        "s_aaaaaaaaaaaaaaaa",
+        "--delegate-id",
+        "j_bbbbbbbbbbbbbbbb",
+    ]) else {
+        panic!("session with --parent");
+    };
+    assert_eq!(args.parent.as_deref(), Some("s_aaaaaaaaaaaaaaaa"));
+    assert_eq!(args.delegate_id.as_deref(), Some("j_bbbbbbbbbbbbbbbb"));
+    assert!(!args.resume);
+    assert!(!args.worktree);
+}
+
+#[test]
+fn session_parent_without_its_delegate_id_or_prompt_is_a_usage_error() {
+    let missing_id = sentence(&[
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--prompt",
+        "hi",
+        "--parent",
+        "s_aaaaaaaaaaaaaaaa",
+    ]);
+    assert!(missing_id.contains("--delegate-id"), "{missing_id}");
+    let missing_prompt = sentence(&[
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--parent",
+        "s_aaaaaaaaaaaaaaaa",
+        "--delegate-id",
+        "j_bbbbbbbbbbbbbbbb",
+    ]);
+    assert!(missing_prompt.contains("--prompt"), "{missing_prompt}");
+    let missing_parent = sentence(&[
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--prompt",
+        "hi",
+        "--delegate-id",
+        "j_bbbbbbbbbbbbbbbb",
+    ]);
+    assert!(missing_parent.contains("--parent"), "{missing_parent}");
+}
+
+#[test]
+fn session_parent_conflicts_with_resume_and_worktree() {
+    let resumed = sentence(&[
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--prompt",
+        "hi",
+        "--parent",
+        "s_aaaaaaaaaaaaaaaa",
+        "--delegate-id",
+        "j_bbbbbbbbbbbbbbbb",
+        "--resume",
+    ]);
+    // `--prompt`'s own `--resume` conflict fires first; either way the
+    // combination is a usage error naming `--resume`.
+    assert!(resumed.contains("--resume"), "{resumed}");
+    let isolated = sentence(&[
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--prompt",
+        "hi",
+        "--parent",
+        "s_aaaaaaaaaaaaaaaa",
+        "--delegate-id",
+        "j_bbbbbbbbbbbbbbbb",
+        "--worktree",
+    ]);
+    assert!(isolated.contains("--parent"), "{isolated}");
+    assert!(isolated.contains("--worktree"), "{isolated}");
+}
+
+#[test]
+fn session_rejects_ids_that_are_not_minted_parent_or_job_ids() {
+    for parent in ["s_ABCDEF0123456789", "s_short", "j_bbbbbbbbbbbbbbbb"] {
+        let said = sentence(&[
+            "fiber",
+            "session",
+            "--id",
+            "s_0123456789abcdef",
+            "--workspace",
+            "/w",
+            "--prompt",
+            "hi",
+            "--parent",
+            parent,
+            "--delegate-id",
+            "j_bbbbbbbbbbbbbbbb",
+        ]);
+        assert!(said.contains("session id"), "{parent}: {said}");
+    }
+    for job in ["j_ABCDEF0123456789", "j_short", "s_0123456789abcdef"] {
+        let said = sentence(&[
+            "fiber",
+            "session",
+            "--id",
+            "s_0123456789abcdef",
+            "--workspace",
+            "/w",
+            "--prompt",
+            "hi",
+            "--parent",
+            "s_aaaaaaaaaaaaaaaa",
+            "--delegate-id",
+            job,
+        ]);
+        assert!(said.contains("job id"), "{job}: {said}");
+    }
+}
+
+#[test]
 fn the_menu_and_top_level_help_name_no_session_command() {
     // A command line is two spaces, the name, then a space: `  session `.
     // `  sessions export` stays, as does prose such as "one session of".

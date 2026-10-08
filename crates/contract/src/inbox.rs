@@ -46,6 +46,10 @@ impl fmt::Debug for Ack {
 }
 
 /// What the loop's inbox carries (`docs/invocation.md`, "Driver commands").
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a delegate's finish rides its job's notice; boxing would allocate on every job end"
+)]
 #[derive(Debug)]
 pub enum Delivery {
     /// Starts a turn. Rejected `busy` while one is running, and `closing`
@@ -59,6 +63,9 @@ pub enum Delivery {
     SteerDrop(crate::CommandId, Ack),
     /// Switches model or thinking at the next turn boundary.
     Model(crate::commands::ModelArgs, Ack),
+    /// Starts a new session that continues this one from an earlier point
+    /// (`docs/events.md`, "Rewind").
+    Rewind(crate::commands::RewindArgs, Ack),
     /// A person's `handoff`. While a turn runs it is held until the next
     /// step boundary; while the loop is idle it starts a turn of its own
     /// (`docs/handoff.md`, "A person").
@@ -101,6 +108,10 @@ pub struct JobNotice {
     pub completed: crate::events::JobCompleted,
     /// Whether this notice is still the model's news to receive.
     pub claim: Claim,
+    /// A Fiber delegate's finish, written as `delegate_finished` before
+    /// `job_completed` when the loop admits the notice. The text is
+    /// unbounded; the loop cuts it once, at the write.
+    pub delegate: Option<crate::events::DelegateFinished>,
 }
 
 /// True for exactly one caller across this notice and the job's `wait` and

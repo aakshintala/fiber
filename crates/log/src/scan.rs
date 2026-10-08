@@ -118,7 +118,7 @@ const STEP: u64 = 64 * 1024;
 /// The last complete line in `file` of `len` bytes, without its trailing
 /// newline: read backwards in [`STEP`] steps, the offset strictly
 /// decreasing on every step, stopping at 0.
-fn last_complete_line(mut file: File, len: u64) -> Option<Vec<u8>> {
+pub(crate) fn last_complete_line(mut file: File, len: u64) -> Option<Vec<u8>> {
     let mut line_end = None;
     let mut bounds = None;
     let step_size = usize::try_from(STEP).ok()?;

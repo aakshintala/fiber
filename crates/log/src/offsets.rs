@@ -4,13 +4,13 @@
 //! written, and `seq` is contiguous from 0.
 
 use std::fs::File;
-use std::os::unix::fs::FileExt;
+use std::io::{self, Read as _, Seek as _};
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use contract::Envelope;
 
-use crate::read::{CAPACITY, PAGE_BYTES};
+use crate::read::{CAPACITY, PAGE_BYTES, complete_len};
 use crate::{Error, io_at};
 
 /// The table, shared by the log that extends it and every watcher that
@@ -27,6 +27,30 @@ struct Table {
     starts: Vec<u64>,
     /// The byte just past the last complete line.
     end: u64,
+}
+
+/// A watcher's page: the lines read, in order, and what follows them.
+pub(crate) struct Page {
+    pub(crate) lines: Vec<Envelope>,
+    pub(crate) after: After,
+}
+
+/// What follows a page's lines.
+pub(crate) enum After {
+    /// Nothing below the page's `end` bound remains.
+    Done,
+    /// Lines below `end` remain past the page.
+    More,
+    /// The line after `lines` could not be read: the first failure in
+    /// file order.
+    Failed(Error),
+}
+
+/// The whole lines of a window parsed before its first failure, and that
+/// failure.
+struct Partial {
+    lines: Vec<Envelope>,
+    error: Error,
 }
 
 impl Offsets {
@@ -58,48 +82,100 @@ impl Offsets {
 
     /// The lines at positions `from..from + max`, in order, fewer when the
     /// log ends first, none when `from` is past the last line. Reads and
-    /// parses only those lines.
+    /// parses only those lines. A window that cannot be read whole is an
+    /// error with no lines: a partial window would read as complete.
     pub(crate) fn range(&self, from: u64, max: usize) -> Result<Vec<Envelope>, Error> {
         match self.window(from, max, u64::MAX, u64::MAX) {
-            Some(window) => self.read(&window),
+            Some(window) => self.read(&window).map_err(|partial| partial.error),
             None => Ok(Vec::new()),
         }
     }
 
     /// A watcher's page: the lines from position `from` below `end`, in
     /// order, at most [`CAPACITY`] of them and at most [`PAGE_BYTES`] of
-    /// them but never fewer than one, and whether lines below `end` remain
-    /// past them. No lines and `false` when `from` is past the last line
-    /// below `end`. A backlog page passes the table's line count at
-    /// subscribe time as `end`, so a line appended later arrives through
-    /// the watcher's queue, in queue order; a catch-up passes `u64::MAX`
-    /// to read to the table's current end.
-    pub(crate) fn page(&self, from: u64, end: u64) -> Result<(Vec<Envelope>, bool), Error> {
+    /// them but never fewer than one, and what follows them. No lines and
+    /// done when `from` is past the last line below `end`. A page whose
+    /// line does not parse, or whose read fails partway, keeps every whole
+    /// line before the failure, then the failure. A backlog page passes
+    /// the table's line count at subscribe time as `end`, so a line
+    /// appended later arrives through the watcher's queue, in queue order;
+    /// a catch-up passes `u64::MAX` to read to the table's current end.
+    pub(crate) fn page(&self, from: u64, end: u64) -> Page {
         match self.window(from, CAPACITY, PAGE_BYTES, end) {
-            Some(window) => Ok((self.read(&window)?, window.more)),
-            None => Ok((Vec::new(), false)),
+            Some(window) => {
+                let more = window.more;
+                match self.read(&window) {
+                    Ok(lines) => Page {
+                        lines,
+                        after: if more { After::More } else { After::Done },
+                    },
+                    Err(partial) => Page {
+                        lines: partial.lines,
+                        after: After::Failed(partial.error),
+                    },
+                }
+            }
+            None => Page {
+                lines: Vec::new(),
+                after: After::Done,
+            },
         }
     }
 
-    /// Reads and parses the lines of `window`. A line that does not parse
-    /// fails the whole window, naming its line number.
-    fn read(&self, window: &Window) -> Result<Vec<Envelope>, Error> {
-        let len = usize::try_from(window.stop.saturating_sub(window.start)).unwrap_or(usize::MAX);
-        let mut bytes = vec![0; len];
-        File::open(&self.path)
-            .and_then(|file| file.read_exact_at(&mut bytes, window.start))
-            .map_err(io_at(&self.path))?;
-        bytes
-            .split_inclusive(|b| *b == b'\n')
-            .enumerate()
-            .map(|(i, line)| {
-                serde_json::from_slice(line).map_err(|source| Error::Unreadable {
-                    path: self.path.clone(),
-                    line: window.first.saturating_add(i).saturating_add(1),
-                    source,
-                })
-            })
-            .collect()
+    /// The whole lines of `window` parsed before its first failure, and
+    /// that failure: the first failure in file order, whether a line that
+    /// does not parse or a read that ends short of the window. A read that
+    /// ends short keeps only whole lines: the bytes read before the
+    /// failure are cut at their last newline, so a partial line is never
+    /// parsed or returned. The buffer is allocated once at the window's
+    /// length and never grows past it.
+    fn read(&self, window: &Window) -> Result<Vec<Envelope>, Partial> {
+        let len = window.stop.saturating_sub(window.start);
+        let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(usize::MAX));
+        let mut open = match File::open(&self.path) {
+            Ok(file) => file,
+            Err(error) => {
+                return Err(Partial {
+                    lines: Vec::new(),
+                    error: io_at(&self.path)(error),
+                });
+            }
+        };
+        let failure = match open.seek(io::SeekFrom::Start(window.start)) {
+            Ok(_) => match open.take(len).read_to_end(&mut bytes) {
+                Ok(read) if u64::try_from(read).unwrap_or(u64::MAX) >= len => None,
+                Ok(_) => Some(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "the log ends short of its offset table",
+                )),
+                Err(error) => Some(error),
+            },
+            Err(error) => Some(error),
+        };
+        bytes.truncate(complete_len(&bytes));
+        let mut lines = Vec::new();
+        for (i, line) in bytes.split_inclusive(|b| *b == b'\n').enumerate() {
+            match serde_json::from_slice(line) {
+                Ok(envelope) => lines.push(envelope),
+                Err(source) => {
+                    return Err(Partial {
+                        lines,
+                        error: Error::Unreadable {
+                            path: self.path.clone(),
+                            line: window.first.saturating_add(i).saturating_add(1),
+                            source,
+                        },
+                    });
+                }
+            }
+        }
+        match failure {
+            None => Ok(lines),
+            Some(error) => Err(Partial {
+                lines,
+                error: io_at(&self.path)(error),
+            }),
+        }
     }
 
     /// The window of at most `max` lines from position `from` below `end`,

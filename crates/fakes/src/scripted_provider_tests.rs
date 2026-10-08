@@ -15,6 +15,7 @@ fn request(text: &str) -> ModelRequest {
         cache_key: "s_1".into(),
         conversation: Vec::new(),
         previous_end: None,
+        sent_tools: None,
         max_output_tokens: None,
         session_dir: std::path::PathBuf::new(),
     }

@@ -116,13 +116,11 @@ pub(super) fn change(conn: &mut Conn, id: CommandId, level: SubscribeLevel) {
             prelude.extend([status, extensions].into_iter().flatten());
             (watcher, injector, cutoff, prelude)
         } else {
-            let watcher = match log.watch_all_seeded() {
-                Ok(watcher) => watcher,
-                Err(_) => {
-                    reject(conn, Some(id), ErrorCode::InvalidArguments, super::UNFIT);
-                    return;
-                }
-            };
+            // Raising folds the stream from the log as a first `full`
+            // subscribe does: over an unreadable page the new watcher
+            // keeps every line before the one that failed, then the
+            // connection closes at the failure.
+            let watcher = log.watch_all_seeded();
             drop(log);
             let injector = watcher.injector();
             let ack = crate::session::envelope(

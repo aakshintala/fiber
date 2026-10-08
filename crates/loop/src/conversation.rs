@@ -229,6 +229,7 @@ impl Rendered {
             Event::TurnStarted(_)
             | Event::SteeringApplied(_)
             | Event::OpeningMessage(_)
+            | Event::SessionStarted(_)
             | Event::InstructionFile(_)
             | Event::DateChanged(_)
             | Event::HandoffStarted(_)
@@ -244,7 +245,6 @@ impl Rendered {
             | Event::AssistantMessageCompleted(_)
             | Event::JobsPendingNotified(_)
             | Event::FiberExited(_)
-            | Event::SessionStarted(_)
             | Event::Rewound(_)
             | Event::StepStarted(_)
             | Event::TurnCompleted(_)
@@ -289,7 +289,6 @@ impl Rendered {
             | Event::JobStarted(_)
             | Event::DelegateStarted(_)
             | Event::JobDelta(_)
-            | Event::DelegateFinished(_)
             | Event::CommandAccepted(_)
             | Event::CommandRejected(_) => {
                 self.render(event, action, model);
@@ -309,7 +308,9 @@ impl Rendered {
             }
             // A job notice joins at a step boundary, as a steer does: it
             // starts a new batch. A `wait` or `stop` record, under its
-            // call's action, continues the batch.
+            // call's action, continues the batch. A delegate's finish
+            // rides with its job's notice, in log order, and is held with
+            // it.
             // A notice a resume logged while a suspended batch was open
             // waits for that batch's results.
             Event::JobCompleted(job) => {
@@ -320,6 +321,19 @@ impl Rendered {
                     self.carry.fold_jobs(event);
                     self.held.push(Input::User {
                         text: crate::jobs::notice_text(job),
+                        images: Vec::new(),
+                    });
+                } else {
+                    self.render(event, action, model);
+                }
+            }
+            Event::DelegateFinished(finished) => {
+                if action.is_none() {
+                    self.flush();
+                }
+                if action.is_none() && !self.outstanding.is_empty() {
+                    self.held.push(Input::User {
+                        text: crate::jobs::delegate_text(finished),
                         images: Vec::new(),
                     });
                 } else {
@@ -403,6 +417,13 @@ pub(crate) fn render(
             conversation.push(user(&steering.content));
             carry.input.push(user(&steering.content));
         }
+        // A rewind's note rides on its `session_started`: one user
+        // message, so a live start and a resume render it the same way.
+        Event::SessionStarted(started) => {
+            if let Some(rewind) = &started.rewind {
+                conversation.push(crate::rewind::note_input(rewind));
+            }
+        }
         // The window opens at the conversation's length; a completed handoff
         // replaces the conversation, and any other end truncates it back, so
         // the note request's own lines never stay.
@@ -432,6 +453,14 @@ pub(crate) fn render(
         Event::JobCompleted(completed) if action.is_none() => conversation.push(Input::User {
             text: crate::jobs::notice_text(completed),
          images: Vec::new(),}),
+        // A delegate's finish the model was not already given: its final
+        // message. A `wait` or `stop` record carries its call's action
+        // and renders nothing; that call's result already said it.
+        Event::DelegateFinished(finished) if action.is_none() => {
+            conversation.push(Input::User {
+            text: crate::jobs::delegate_text(finished),
+         images: Vec::new(),})
+        }
         // A monitor's batch: one message, rendered from the line alone.
         Event::JobLine(line) => conversation.push(Input::User {
             text: crate::jobs::line_text(line),
@@ -534,7 +563,6 @@ pub(crate) fn render(
         // records the jobs it named.
         | Event::JobsPendingNotified(_)
         | Event::FiberExited(_)
-        | Event::SessionStarted(_)
         | Event::Rewound(_)
         | Event::StepStarted(_)
         | Event::TurnCompleted(_)

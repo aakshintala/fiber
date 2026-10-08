@@ -7,24 +7,25 @@
 //! on its answer. Matches are anchored to their logical line, so a new
 //! width, an opened section or live output never invalidates them.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::ops::Range;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use super::{App, Effect, Link, Target, mint, session_command};
 use crate::keys::{Edit, Key};
 use crate::link::history_answer;
-use crate::logical::{self, Logical};
-use crate::window::Pages;
+use crate::logical;
+
+mod scan;
+mod state;
+
+pub(crate) use scan::Snippet;
+use scan::{Anchor, hit_chars, row_offsets};
+pub(super) use state::Find;
+use state::Match;
 
 /// How long after the last keystroke the scan starts (`docs/tui.md`,
 /// "History and paging").
 pub(in crate::app) const FIND_PAUSE: Duration = Duration::from_millis(250);
-
-/// How many matches a search keeps: past it the scan stops and the count
-/// shows `10000+` (`docs/tui.md`, "Search").
-pub(crate) const MAX_MATCHES: usize = 10_000;
 
 /// One `history` answer's lines at most (`docs/invocation.md`, "Driver
 /// commands").
@@ -43,580 +44,6 @@ pub(crate) struct FindBar {
     pub(crate) count: String,
 }
 
-/// A match's identity: its page, the sections around it, and its whole
-/// logical line's hash and length with its char range in it. The row is
-/// never compared: a rescan finds the match again wherever it moved
-/// (`docs/tui.md`, "History and paging": row counts are exact, but rows
-/// move).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Anchor {
-    /// The page holding the match.
-    pub(crate) page: usize,
-    /// The sections around its line, outermost first.
-    pub(crate) scopes: Vec<Target>,
-    /// Its whole logical line's hash.
-    pub(crate) line_hash: u64,
-    /// Its whole logical line's char length.
-    pub(crate) line_len: usize,
-    /// Its char range in that whole line.
-    pub(crate) at: Range<usize>,
-}
-
-impl Anchor {
-    /// A match's identity from its page, its whole logical line and its
-    /// char range in it: the row is never compared, so a new width never
-    /// invalidates it (`docs/tui.md`, "Search").
-    pub(crate) fn new(page: usize, line: &Logical, at: Range<usize>) -> Anchor {
-        Anchor {
-            page,
-            scopes: line.scopes.clone(),
-            line_hash: line_hash(&line.text),
-            line_len: line.text.chars().count(),
-            at,
-        }
-    }
-}
-
-/// How many characters of each snippet line the results view keeps:
-/// the view shows every match with the lines around it and needs no
-/// page (`docs/tui.md`, "Search").
-pub(crate) const SNIPPET: usize = 400;
-
-/// One match's display lines for the results view: its logical line cut
-/// to [`SNIPPET`] characters around the match, with its char range in the
-/// cut line, and one logical line each side, cut to [`SNIPPET`]
-/// characters. Display only, never compared: the anchor holds the whole
-/// line's hash and length (`docs/tui.md`, "Search").
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct Snippet {
-    /// The logical line before the match's, or none at a page's edge.
-    pub(crate) before: String,
-    /// The match's logical line, cut around the match.
-    pub(crate) line: String,
-    /// The match's char range in the cut line.
-    pub(crate) at: Range<usize>,
-    /// The logical line after the match's, or none at a page's edge.
-    pub(crate) after: String,
-}
-
-/// One match: its identity, and which of its page's matches with equal
-/// scopes it is, in order, which locates it on screen.
-#[derive(Debug, Clone)]
-pub(crate) struct Match {
-    /// Its identity.
-    pub(crate) anchor: Anchor,
-    /// Its ordinal among the page's matches with equal scopes.
-    pub(crate) nth: usize,
-    /// Its display lines for the results view.
-    pub(crate) snippet: Snippet,
-}
-
-impl PartialEq for Match {
-    /// Occurrence identity is the anchor and the ordinal: the display
-    /// snippet never compares (`docs/tui.md`, "Search").
-    fn eq(&self, other: &Self) -> bool {
-        self.anchor == other.anchor && self.nth == other.nth
-    }
-}
-
-impl Eq for Match {}
-
-/// The search's one `history` request on the wire, if any.
-#[derive(Debug)]
-struct Fetch {
-    /// The command's id: only its answer folds into the scan.
-    id: String,
-    /// The page it reads.
-    page: usize,
-    /// The generation it scans for: older than the current one is stale,
-    /// and its answer folds nothing.
-    generation: u64,
-    /// The page's lines read so far: a page over one answer folds whole
-    /// once its last chunk arrives, so a chunk never scans without the
-    /// lines that open its turns.
-    held: Vec<contract::Envelope>,
-}
-
-/// The search's state.
-#[derive(Debug, Default)]
-pub(super) struct Find {
-    /// Whether the bar is open.
-    open: bool,
-    /// What was typed into the bar.
-    query: String,
-    /// Bumped on every query change, never reset; a pause or an answer
-    /// tagged with another is stale.
-    generation: u64,
-    /// Whether the pause passed for the current generation and the scan
-    /// started.
-    due: bool,
-    /// The one `history` request on the wire, if any.
-    fetch: Option<Fetch>,
-    /// Command lines the pump made that no one sent yet.
-    pending_out: Vec<String>,
-    /// The matches kept, by page, each page's list in render order.
-    matches: BTreeMap<usize, Vec<Match>>,
-    /// Each scanned page's revision then: a page scans again when its
-    /// revision moved, and a page never scanned scans too.
-    scanned: HashMap<usize, u64>,
-    /// How many matches are kept, capped at [`MAX_MATCHES`].
-    total: usize,
-    /// The cap stopped the scan.
-    capped: bool,
-    /// The current match.
-    current: Option<Match>,
-    /// The current match is not shown yet: its sections open and the view
-    /// scrolls to it.
-    reveal: bool,
-    /// The results view, while open: the bar stays open under it
-    /// (`docs/tui.md`, "Search").
-    results: Option<super::results::Results>,
-    /// A page could not be read: the count gains ` · incomplete`.
-    incomplete: bool,
-    /// The page on screen when the scan started: the scan runs from it to
-    /// the end, then from page 0 back to it.
-    start_page: usize,
-    /// The pages in scan order.
-    order: Vec<usize>,
-}
-
-impl Find {
-    /// Closes the bar and drops the whole scan.
-    fn close(&mut self) {
-        *self = Self::default();
-    }
-
-    /// A new query: the generation bumps, and the marks and the count
-    /// clear; a fetch on the wire stays recorded and is now stale, so no
-    /// new request goes out for it, and its unsent lines go.
-    fn pause(&mut self) -> Effect {
-        self.generation = self.generation.saturating_add(1);
-        let fetch = self.fetch.take();
-        let open = self.open;
-        let query = std::mem::take(&mut self.query);
-        *self = Self {
-            open,
-            query,
-            generation: self.generation,
-            fetch,
-            ..Self::default()
-        };
-        Effect::FindPause {
-            generation: self.generation,
-            after: FIND_PAUSE,
-        }
-    }
-
-    /// Whether `envelope` answers the fetch: an accepted or rejected
-    /// answer with its command id, for the attached session.
-    fn answers(&self, envelope: &contract::Envelope, session: &contract::SessionId) -> bool {
-        let Some(fetch) = &self.fetch else {
-            return false;
-        };
-        matches!(
-            envelope.kind.as_str(),
-            "command_accepted" | "command_rejected"
-        ) && envelope.session_id == *session
-            && envelope
-                .payload
-                .get("command_id")
-                .and_then(serde_json::Value::as_str)
-                == Some(fetch.id.as_str())
-    }
-
-    /// Records page `at`'s matches, whole, in render order, stopping at
-    /// the cap: the flattened order stays page order, then render order.
-    /// Returns the kept matches with their rows.
-    fn record(
-        &mut self,
-        at: usize,
-        revision: u64,
-        found: Vec<(Anchor, usize, bool, Snippet)>,
-    ) -> Vec<(Match, usize, bool)> {
-        // A rescan replaces the page's list whole: its old matches go
-        // first, so the flattened order stays page order, then render
-        // order, and the total counts every kept match once.
-        let old = self.matches.get(&at).map(Vec::len).unwrap_or(0);
-        self.total = self.total.saturating_sub(old);
-        let left = MAX_MATCHES.saturating_sub(self.total);
-        if found.len() > left {
-            self.capped = true;
-        }
-        let mut matches = Vec::new();
-        let mut kept = Vec::new();
-        for (anchor, row, hidden, snippet) in found.into_iter().take(left) {
-            let nth = matches
-                .iter()
-                .filter(|kept: &&Match| kept.anchor.scopes == anchor.scopes)
-                .count();
-            let kept_match = Match {
-                anchor,
-                nth,
-                snippet,
-            };
-            kept.push((kept_match.clone(), row, hidden));
-            matches.push(kept_match);
-        }
-        self.total = self.total.saturating_add(matches.len());
-        self.matches.insert(at, matches);
-        self.scanned.insert(at, revision);
-        kept
-    }
-
-    /// Picks the current match from page `at`'s freshly kept matches, if
-    /// none is current yet: the first at or after the top row on the page
-    /// on screen, the first anywhere past it. Later finds never move it.
-    fn consider(&mut self, at: usize, found: &[(Match, usize, bool)], start: usize, top: usize) {
-        if self.current.is_some() {
-            return;
-        }
-        if let Some((kept, _, _)) = found.iter().find(|(_, row, _)| at != start || *row >= top) {
-            self.current = Some(kept.clone());
-            self.reveal = true;
-        }
-    }
-
-    /// Whether any page still wants scanning: never scanned, or scanned
-    /// at an older revision. A scanned page keeps its matches when it
-    /// drops; its revision moves only when its text does.
-    fn wants(&self, pages: &Pages) -> bool {
-        (0..pages.page_count()).any(|at| self.scanned.get(&at) != Some(&pages.index().revision(at)))
-    }
-
-    /// Whether the count shows it is still scanning: a fetch is on the
-    /// wire, or a page still wants scanning and the cap did not stop it.
-    fn scanning(&self, pages: &Pages) -> bool {
-        self.fetch.is_some() || (!self.capped && self.wants(pages))
-    }
-
-    /// The kept matches in page order, then render order.
-    pub(super) fn flat(&self) -> Vec<&Match> {
-        self.matches.values().flatten().collect()
-    }
-
-    /// The current match's place in page order, then render order.
-    pub(super) fn current_index(&self) -> Option<usize> {
-        let current = self.current.as_ref()?;
-        self.flat().iter().position(|kept| *kept == current)
-    }
-
-    /// The kept match at `at` in page order, then render order.
-    pub(super) fn match_at(&self, at: usize) -> Option<Match> {
-        self.flat().get(at).cloned().cloned()
-    }
-
-    /// The results view's selected entry's match, if any.
-    fn selected_match(&self) -> Option<Match> {
-        let selected = self.results.as_ref()?.selected;
-        self.match_at(selected)
-    }
-
-    /// Shows the results view, selecting the current match's entry or
-    /// the first one (`docs/tui.md`, "Search").
-    pub(super) fn show_results(&mut self, selected: usize) {
-        self.results = Some(super::results::Results {
-            selected,
-            top: selected,
-        });
-    }
-
-    /// Closes the results view; the bar stays open.
-    pub(super) fn hide_results(&mut self) {
-        self.results = None;
-    }
-
-    /// Whether the results view is open.
-    pub(super) fn has_results(&self) -> bool {
-        self.results.is_some()
-    }
-
-    /// What was typed into the bar.
-    pub(super) fn query(&self) -> &str {
-        &self.query
-    }
-
-    /// The results view, for moving its selection.
-    pub(super) fn results_mut(&mut self) -> Option<&mut super::results::Results> {
-        self.results.as_mut()
-    }
-
-    /// The results view's selected entry and its top row.
-    pub(super) fn results_at(&self) -> Option<(usize, usize)> {
-        self.results
-            .as_ref()
-            .map(|results| (results.selected, results.top))
-    }
-
-    /// Makes `next` current and shows it: its sections open and the view
-    /// scrolls to it (`docs/tui.md`, "Search").
-    pub(super) fn set_current(&mut self, next: Match) {
-        self.current = Some(next);
-        self.reveal = true;
-    }
-
-    /// Pulls pages cut since the query started into the scan order
-    /// behind the pages already in it: a page never scanned scans too
-    /// (`docs/tui.md`, "Search": search covers the whole session
-    /// log).
-    fn sync_order(&mut self, page_count: usize) {
-        for at in 0..page_count {
-            if !self.order.contains(&at) {
-                self.order.push(at);
-            }
-        }
-    }
-
-    /// Reconciles the current match with rescanned pages: an equal anchor
-    /// stays current and keeps a pending reveal, else the first match
-    /// after the old key's place in page order, wrapping, else none, and
-    /// nothing is revealed (`docs/tui.md`, "Search").
-    fn reconcile(&mut self, old: Match) {
-        let flat = self.flat();
-        let next = remapped(&flat, &old).and_then(|at| flat.get(at).cloned().cloned());
-        let equal = next.as_ref().is_some_and(|got| got.anchor == old.anchor);
-        self.current = next;
-        if !equal {
-            self.reveal = false;
-        }
-    }
-
-    /// Reconciles the results view's selected entry with rescanned pages
-    /// the same way: the same occurrence stays selected, else the
-    /// first match after the old one's place in page order, wrapping,
-    /// else the first one, and none with no matches (`docs/tui.md`,
-    /// "Search").
-    fn remap_selected(&mut self, old: Match, height: usize) {
-        let flat = self.flat();
-        let at = remapped(&flat, &old).unwrap_or(0);
-        let len = flat.len();
-        if let Some(results) = self.results.as_mut() {
-            results.go(at, len, height);
-        }
-    }
-
-    /// The count beside the query, as drawn.
-    fn count(&self, pages: &Pages) -> String {
-        // A new query clears the count until its pause passes.
-        if self.query.is_empty() || !self.due {
-            return String::new();
-        }
-        let mut count = if self.total == 0 {
-            if self.scanning(pages) {
-                "…".to_owned()
-            } else {
-                "no matches".to_owned()
-            }
-        } else {
-            let flat = self.flat();
-            let at = self
-                .current
-                .as_ref()
-                .and_then(|current| flat.iter().position(|kept| *kept == current))
-                .map_or(flat.len(), |at| at.saturating_add(1));
-            let total = if self.capped {
-                "10000+".to_owned()
-            } else {
-                self.total.to_string()
-            };
-            format!("{at} of {total}")
-        };
-        if self.total > 0 && self.scanning(pages) {
-            count.push('…');
-        }
-        if self.incomplete {
-            count.push_str(" · incomplete");
-        }
-        count
-    }
-}
-
-/// The kept match for `old` among rescanned pages, by index: the equal
-/// anchor whose ordinal is nearest the old one, else the first match
-/// after the old key's place in page order, wrapping, else the first
-/// one, and none with no matches. The anchor matches independently of
-/// the ordinal: `nth` only locates the match on screen, so matches
-/// appearing before it shift it without losing the occurrence
-/// (`docs/tui.md`, "Search").
-fn remapped(flat: &[&Match], old: &Match) -> Option<usize> {
-    if let Some((at, _)) = flat
-        .iter()
-        .enumerate()
-        .filter(|(_, kept)| kept.anchor == old.anchor)
-        .min_by_key(|(_, kept)| kept.nth.abs_diff(old.nth))
-    {
-        return Some(at);
-    }
-    flat.iter()
-        .position(|kept| (kept.anchor.page, kept.nth) > (old.anchor.page, old.nth))
-        .or_else(|| flat.first().map(|_| 0))
-}
-
-/// One logical line's hash: what identifies it across rescans.
-fn line_hash(text: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    text.hash(&mut hasher);
-    hasher.finish()
-}
-
-/// The chars a match covers: each one's page row and its byte offset in
-/// that row's drawn text. A char the draw dropped, like the space a soft
-/// wrap took, covers nothing.
-fn hit_chars(line: &Logical, hit: &Range<usize>) -> Vec<(usize, usize)> {
-    line.text
-        .chars()
-        .zip(&line.from)
-        .enumerate()
-        .filter(|(at, _)| hit.contains(at))
-        .filter_map(|(_, (_, from))| *from)
-        .collect()
-}
-
-/// A shown line's identity to its conversation rows, in order, and each
-/// drawn section target to its own line's row.
-type Placed = (
-    HashMap<(u64, usize, Vec<Target>), VecDeque<usize>>,
-    HashMap<Target, usize>,
-);
-
-/// Cuts `text` to [`SNIPPET`] characters around `hit`, its char range:
-/// the cut text with `hit` relative to it. A short line stays whole, so
-/// the results view needs no page (`docs/tui.md`, "Search").
-fn cut_around(text: &str, hit: &Range<usize>) -> (String, Range<usize>) {
-    let len = text.chars().count();
-    if len <= SNIPPET {
-        return (text.to_owned(), hit.clone());
-    }
-    let span = hit.end.saturating_sub(hit.start);
-    let start = hit
-        .start
-        .saturating_sub(SNIPPET.saturating_sub(span) / 2)
-        .min(len.saturating_sub(SNIPPET));
-    let cut: String = text.chars().skip(start).take(SNIPPET).collect();
-    (
-        cut,
-        hit.start.saturating_sub(start)..hit.end.saturating_sub(start),
-    )
-}
-
-/// Cuts `text` to [`SNIPPET`] characters from its start: a neighbour
-/// line has no match to centre on (`docs/tui.md`, "Search").
-fn cut_head(text: &str) -> String {
-    text.chars().take(SNIPPET).collect()
-}
-
-/// The display snippet for the match `hit` on `line`: its line cut
-/// around the match, one logical line each side cut from its start. A
-/// neighbour at a page's edge is none: the scan renders one page at a
-/// time and fetches nothing extra for a snippet (`docs/tui.md`,
-/// "Search").
-fn snippet_for(
-    line: &Logical,
-    hit: &Range<usize>,
-    before: Option<&str>,
-    after: Option<&str>,
-) -> Snippet {
-    let (cut, rel) = cut_around(&line.text, hit);
-    Snippet {
-        before: before.map(cut_head).unwrap_or_default(),
-        line: cut,
-        at: rel,
-        after: after.map(cut_head).unwrap_or_default(),
-    }
-}
-
-/// The neighbouring lines' text around `lines[at]`, or none at a page's
-/// edge: the scan renders one page at a time and fetches nothing extra
-/// for a snippet (`docs/tui.md`, "Search").
-fn sides(lines: &[Logical], at: usize) -> (Option<&str>, Option<&str>) {
-    (
-        at.checked_sub(1)
-            .and_then(|prev| lines.get(prev))
-            .map(|line| line.text.as_str()),
-        lines
-            .get(at.saturating_add(1))
-            .map(|line| line.text.as_str()),
-    )
-}
-
-/// Every match of `query` in the all-open `lines` of a resident page, each
-/// with its conversation row: a shown line maps to its row, and a line a
-/// closed section hides counts from its outermost closed scope's own line,
-/// the innermost drawn section around it.
-fn search_shown(
-    page: usize,
-    lines: &[Logical],
-    query: &str,
-    placed: &mut Placed,
-    start: usize,
-) -> Vec<(Anchor, usize, bool, Snippet)> {
-    let mut out = Vec::new();
-    for (at, line) in lines.iter().enumerate() {
-        let (before, after) = sides(lines, at);
-        let hash = line_hash(&line.text);
-        let len = line.text.chars().count();
-        for hit in logical::matches(&line.text, query) {
-            let snippet = snippet_for(line, &hit, before, after);
-            let anchor = Anchor::new(page, line, hit);
-            let (row, hidden) = match placed
-                .0
-                .get_mut(&(hash, len, line.scopes.clone()))
-                .and_then(VecDeque::pop_front)
-            {
-                Some(row) => (row, false),
-                None => (
-                    line.scopes
-                        .iter()
-                        .rev()
-                        .find_map(|scope| placed.1.get(scope))
-                        .copied()
-                        .unwrap_or(start),
-                    true,
-                ),
-            };
-            out.push((anchor, row, hidden, snippet));
-        }
-    }
-    out
-}
-
-/// Every match of `query` in the all-open `lines` folded for a dropped
-/// page, each with its row in the scratch draw and never hidden: the
-/// reveal expands and scrolls once the page loads.
-fn search_scratch(
-    page: usize,
-    lines: &[Logical],
-    offsets: &[usize],
-    query: &str,
-    start: usize,
-) -> Vec<(Anchor, usize, bool, Snippet)> {
-    let mut out = Vec::new();
-    for (at, line) in lines.iter().enumerate() {
-        let (before, after) = sides(lines, at);
-        for hit in logical::matches(&line.text, query) {
-            let snippet = snippet_for(line, &hit, before, after);
-            out.push((
-                Anchor::new(page, line, hit),
-                start.saturating_add(offsets.get(line.row).copied().unwrap_or(0)),
-                false,
-                snippet,
-            ));
-        }
-    }
-    out
-}
-
-/// A page's lines' conversation-row offsets: each line's rows from the
-/// page's first row, wrapping at `width`.
-fn row_offsets(rows: &[crate::turn::Row], width: u16) -> Vec<usize> {
-    let mut offsets = Vec::with_capacity(rows.len());
-    let mut row = 0usize;
-    for (line, _) in rows {
-        offsets.push(row);
-        row = row.saturating_add(crate::view::rows(line.clone(), width));
-    }
-    offsets
-}
-
 impl App {
     /// A key for the search bar, right after the Ctrl+R panel in
     /// [`App::route_key`], so an approval's typing and Esc, the offer's
@@ -625,7 +52,7 @@ impl App {
     /// it). `None` when the bar is closed and the key is not Ctrl+F, and
     /// for the keys the bar leaves to the handlers below it.
     pub(in crate::app) fn find_key(&mut self, key: &Key) -> Option<Effect> {
-        if !self.find.open {
+        if !self.find.is_open() {
             if *key != Key::CtrlF {
                 return None;
             }
@@ -635,19 +62,15 @@ impl App {
             if self.session().is_none() || self.home_screen().is_some() {
                 return None;
             }
-            self.find.open = true;
-            self.find.query.clear();
+            self.find.open();
             return Some(Effect::None);
         }
         match key {
             Key::Char(ch) => {
-                self.find.query.push(*ch);
-                Some(self.find.pause())
+                let mut text = [0; 4];
+                Some(self.find.type_query(ch.encode_utf8(&mut text)))
             }
-            Key::Backspace if !self.find.query.is_empty() => {
-                self.find.query.pop();
-                Some(self.find.pause())
-            }
+            Key::Backspace if !self.find.query().is_empty() => Some(self.find.pop_query()),
             // Esc with the notice overlay open closes it first, as the
             // overlay's own arm does (`docs/tui.md`, "Keys": Esc closes
             // whatever is on top).
@@ -683,11 +106,11 @@ impl App {
             // Between matches, wrapping at either end (`docs/tui.md`,
             // "Search").
             Key::Enter | Key::Down => {
-                self.step_find(true);
+                self.find.step(true);
                 Some(Effect::None)
             }
             Key::Up => {
-                self.step_find(false);
+                self.find.step(false);
                 Some(Effect::None)
             }
         }
@@ -701,7 +124,7 @@ impl App {
     /// open, so an approval's paste reaches its feedback and the Ctrl+R
     /// panel keeps its own (`docs/tui.md`, "Search").
     pub(in crate::app) fn find_edit(&mut self, edit: &Edit) -> Option<Effect> {
-        if !self.find.open || self.panel().is_some() || self.search_panel().is_some() {
+        if !self.find.is_open() || self.panel().is_some() || self.search_panel().is_some() {
             return None;
         }
         if let Edit::Paste(text) = edit {
@@ -712,11 +135,10 @@ impl App {
             if joined.is_empty() {
                 return Some(Effect::None);
             }
-            self.find.query.push_str(&joined);
-            return Some(self.find.pause());
+            return Some(self.find.type_query(&joined));
         }
         if *edit == Edit::ShiftEnter {
-            self.step_find(false);
+            self.find.step(false);
             return Some(Effect::None);
         }
         Some(Effect::None)
@@ -724,8 +146,8 @@ impl App {
 
     /// The bar as drawn, while it is open.
     pub(crate) fn find_bar(&self) -> Option<FindBar> {
-        self.find.open.then(|| FindBar {
-            query: self.find.query.clone(),
+        self.find.is_open().then(|| FindBar {
+            query: self.find.query().to_owned(),
             count: self.find.count(self.screen.pages()),
         })
     }
@@ -739,7 +161,11 @@ impl App {
         &self,
         area: ratatui::layout::Rect,
     ) -> Vec<(ratatui::layout::Rect, bool)> {
-        if !self.find.open || !self.find.due || self.find.query.is_empty() || self.find.total == 0 {
+        if !self.find.is_open()
+            || !self.find.due()
+            || self.find.query().is_empty()
+            || self.find.total() == 0
+        {
             return Vec::new();
         }
         let pages = self.screen.pages();
@@ -767,20 +193,14 @@ impl App {
             // is, in order: what locates the current match on screen.
             let mut seen: HashMap<Vec<Target>, usize> = HashMap::new();
             for line in logical::logical(&rows, &texts) {
-                for hit in logical::matches(&line.text, &self.find.query) {
+                for hit in logical::matches(&line.text, self.find.query()) {
                     let anchor = Anchor::new(at, &line, hit.clone());
                     let nth = seen.get(&anchor.scopes).copied().unwrap_or(0);
                     seen.insert(anchor.scopes.clone(), nth.saturating_add(1));
-                    let got = Match {
-                        anchor,
-                        nth,
-                        snippet: Snippet::default(),
-                    };
                     let current = self
                         .find
-                        .current
-                        .as_ref()
-                        .is_some_and(|current| *current == got);
+                        .current()
+                        .is_some_and(|c| c.anchor == anchor && c.nth == nth);
                     for (row, byte) in hit_chars(&line, &hit) {
                         let cells = placed.entry(row).or_insert_with(|| {
                             rows.get(row)
@@ -826,14 +246,20 @@ impl App {
     /// scan at once, and the first dropped page is fetched. A generation
     /// but the current one, a closed bar and an empty query start nothing.
     pub(crate) fn find_due(&mut self, generation: u64) -> Vec<String> {
-        if generation != self.find.generation || !self.find.open || self.find.query.is_empty() {
+        if generation != self.find.generation()
+            || !self.find.is_open()
+            || self.find.query().is_empty()
+        {
             return Vec::new();
         }
-        if self.find.due {
+        if self.find.due() {
             return self.find_outgoing();
         }
-        self.find.due = true;
-        self.start_scan();
+        let pages = self.screen.pages();
+        let (top, _) = self.scroll();
+        let start = pages.index().locate(top).map_or(0, |(at, _)| at);
+        let count = pages.page_count();
+        self.find.start(start, count);
         // Scans resident pages, fetches the first dropped one, and
         // reveals the current match in the same step: its sections open
         // and the view scrolls to it, and a dropped page it sits on
@@ -842,68 +268,15 @@ impl App {
         self.find_outgoing()
     }
 
-    /// (Re)starts the scan for the current query: the matches, the current
-    /// match and the count clear, and the scan runs from the page on
-    /// screen to the end, then from page 0 back to it.
-    fn start_scan(&mut self) {
-        let pages = self.screen.pages();
-        let (top, _) = self.scroll();
-        let start = pages.index().locate(top).map_or(0, |(at, _)| at);
-        let count = pages.page_count();
-        self.find.matches.clear();
-        self.find.scanned.clear();
-        self.find.total = 0;
-        self.find.capped = false;
-        self.find.current = None;
-        self.find.reveal = false;
-        self.find.incomplete = false;
-        self.find.start_page = start;
-        self.find.order = (start..count).chain(0..start).collect();
-    }
-
-    /// Page `at`'s shown lines' row map with its first conversation row:
-    /// each shown logical line's identity to its rows in order, and each
-    /// drawn section target to its own line's row. `None` when the page
-    /// is dropped (`docs/tui.md`, "Search": marks follow whatever is
-    /// drawn).
-    fn placed_for(&self, at: usize) -> Option<(Placed, usize)> {
-        let pages = self.screen.pages();
-        let width = pages.wrap_width();
-        let (rows, texts) = pages.page_text(at)?;
-        let start = pages.index().start(at);
-        let shown_offsets = row_offsets(&rows, width);
-        let mut placed: Placed = (HashMap::new(), HashMap::new());
-        for line in logical::logical(&rows, &texts) {
-            placed
-                .0
-                .entry((
-                    line_hash(&line.text),
-                    line.text.chars().count(),
-                    line.scopes.clone(),
-                ))
-                .or_default()
-                .push_back(start.saturating_add(shown_offsets.get(line.row).copied().unwrap_or(0)));
-        }
-        for (idx, (_, target)) in rows.iter().enumerate() {
-            if let Some(target) = target {
-                placed
-                    .1
-                    .entry(*target)
-                    .or_insert(start.saturating_add(shown_offsets.get(idx).copied().unwrap_or(0)));
-            }
-        }
-        Some((placed, start))
-    }
-
     /// Scans every resident page whose revision moved, in scan order.
     /// Whether any page scanned.
     fn scan_resident_all(&mut self) -> bool {
         let count = self.screen.pages().page_count();
-        self.find.sync_order(count);
+        let order = self.find.scan_order(count);
         let mut rescanned = false;
-        for at in self.find.order.clone() {
+        for at in order {
             let revision = self.screen.pages().index().revision(at);
-            if self.find.scanned.get(&at) == Some(&revision) {
+            if self.find.scanned(at) == Some(revision) {
                 continue;
             }
             if self.screen.pages().part(at).is_some() {
@@ -918,27 +291,16 @@ impl App {
     /// matches whole and picking the current match when it can become it.
     fn scan_resident(&mut self, at: usize) {
         let revision = self.screen.pages().index().revision(at);
-        if self.find.scanned.get(&at) == Some(&revision) {
+        if self.find.scanned(at) == Some(revision) {
             return;
         }
-        let query = self.find.query.clone();
-        let Some((open_rows, open_texts)) = self.screen.pages().page_text_open(at) else {
+        let query = self.find.query().to_owned();
+        let Some(found) = scan::resident(self.screen.pages(), at, &query) else {
             return;
         };
-        let Some((mut placed, start)) = self.placed_for(at) else {
-            return;
-        };
-        let found = search_shown(
-            at,
-            &logical::logical(&open_rows, &open_texts),
-            &query,
-            &mut placed,
-            start,
-        );
         let kept = self.find.record(at, revision, found);
-        let start_page = self.find.start_page;
         let (top, _) = self.scroll();
-        self.find.consider(at, &kept, start_page, top);
+        self.find.consider(at, &kept, top);
     }
 
     /// Scans the lines folded for dropped page `at`, recording its matches
@@ -950,15 +312,11 @@ impl App {
         rows: &[crate::turn::Row],
         texts: &[crate::rows::RowText],
     ) {
-        let query = self.find.query.clone();
-        let width = self.screen.pages().wrap_width();
-        let start = self.screen.pages().index().start(at);
-        let offsets = row_offsets(rows, width);
-        let found = search_scratch(at, &logical::logical(rows, texts), &offsets, &query, start);
+        let query = self.find.query().to_owned();
+        let found = scan::scratch(self.screen.pages(), at, rows, texts, &query);
         let kept = self.find.record(at, revision, found);
-        let start_page = self.find.start_page;
         let (top, _) = self.scroll();
-        self.find.consider(at, &kept, start_page, top);
+        self.find.consider(at, &kept, top);
     }
 
     /// Fetches the next dropped page the scan has not read, if any, then
@@ -966,39 +324,37 @@ impl App {
     /// none at or after the top row anywhere after it. At most one request
     /// is ever on the wire, whatever the generation.
     fn pump_find(&mut self) {
-        if !self.find.open || !self.find.due || self.find.query.is_empty() {
+        if !self.find.due() {
             return;
         }
         let count = self.screen.pages().page_count();
-        self.find.sync_order(count);
-        if !self.find.capped && self.find.fetch.is_none() {
+        let order = self.find.scan_order(count);
+        if !self.find.capped() && !self.find.fetching() {
             let mut next = None;
-            for at in self.find.order.clone() {
+            for at in order {
                 let revision = self.screen.pages().index().revision(at);
-                if self.find.scanned.get(&at) != Some(&revision)
-                    && self.screen.pages().part(at).is_none()
+                if self.find.scanned(at) != Some(revision) && self.screen.pages().part(at).is_none()
                 {
                     next = Some(at);
                     break;
                 }
             }
             if let Some(at) = next {
-                self.fetch_page(at, None);
+                self.fetch_page(at, None, Vec::new());
             }
         }
-        if self.find.fetch.is_none()
-            && self.find.current.is_none()
+        if !self.find.fetching()
+            && self.find.current().is_none()
             && !self.find.wants(self.screen.pages())
-            && let Some(first) = self.find.flat().first().cloned().cloned()
+            && let Some(first) = self.find.match_at(0)
         {
-            self.find.current = Some(first);
-            self.find.reveal = true;
+            self.find.set_current(first);
         }
     }
 
     /// Asks for `page`'s lines from `from`, or from its first line: one
     /// `history` command of at most [`HISTORY_LINES`] lines.
-    fn fetch_page(&mut self, page: usize, from: Option<u64>) {
+    fn fetch_page(&mut self, page: usize, from: Option<u64>, held: Vec<contract::Envelope>) {
         let (Some(session), true) = (self.session().cloned(), self.link == Link::Up) else {
             return;
         };
@@ -1020,18 +376,12 @@ impl App {
         let id = mint();
         let args = serde_json::json!({"from_seq": from, "to_seq": to});
         let line = session_command(&id, "history", &session, Some(args)).to_string();
-        self.find.fetch = Some(Fetch {
-            id,
-            page,
-            generation: self.find.generation,
-            held: Vec::new(),
-        });
-        self.find.pending_out.push(line);
+        self.find.send(id, page, held, line);
     }
 
     /// The search's unsent command lines.
     pub(in crate::app) fn find_outgoing(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.find.pending_out)
+        self.find.outgoing()
     }
 
     /// A session line that may answer the search's fetch: it folds into
@@ -1045,8 +395,8 @@ impl App {
         if !self.find.answers(envelope, &session) {
             return None;
         }
-        let mut fetch = self.find.fetch.take()?;
-        if fetch.generation != self.find.generation {
+        let mut fetch = self.find.take_fetch()?;
+        if fetch.generation != self.find.generation() {
             // A query change while it was in flight sends nothing: the
             // fetch stays recorded no more, its lines fold nowhere, and
             // the pump runs for the current generation.
@@ -1058,8 +408,7 @@ impl App {
                 // The page stays unscanned no more: it scans again when
                 // its revision moves, and the count gains ` · incomplete`.
                 let revision = self.screen.pages().index().revision(fetch.page);
-                self.find.record(fetch.page, revision, Vec::new());
-                self.find.incomplete = true;
+                self.find.unreadable(fetch.page, revision);
                 self.notices
                     .push(format!("Could not search all of history: {message}"));
             }
@@ -1091,10 +440,11 @@ impl App {
                             }
                         }
                     } else {
-                        self.fetch_page(fetch.page, last.map(|last| last.saturating_add(1)));
-                        if let Some(next) = &mut self.find.fetch {
-                            next.held = fetch.held;
-                        }
+                        self.fetch_page(
+                            fetch.page,
+                            last.map(|last| last.saturating_add(1)),
+                            fetch.held,
+                        );
                     }
                 }
             }
@@ -1106,24 +456,20 @@ impl App {
     /// The link went down: the fetch clears, and a running scan is
     /// incomplete with the notice that says why.
     pub(in crate::app) fn find_lost(&mut self) {
-        if self.find.fetch.is_none() || !self.find.open {
-            return;
+        if self.find.lose() {
+            self.notices
+                .push(format!("Could not search all of history: {LOST}"));
         }
-        self.find.fetch = None;
-        self.find.pending_out.clear();
-        self.find.incomplete = true;
-        self.notices
-            .push(format!("Could not search all of history: {LOST}"));
     }
 
     /// Runs after every settle while the bar is open: rescans the pages
     /// whose revision moved, reconciles the current match, fetches what
     /// dropped, and reveals the current match.
     pub(in crate::app) fn settle_find(&mut self) {
-        if !self.find.open || !self.find.due || self.find.query.is_empty() {
+        if !self.find.due() {
             return;
         }
-        let old = self.find.current.clone();
+        let old = self.find.current().cloned();
         let old_selected = self.find.selected_match();
         if self.scan_resident_all() {
             if let Some(old) = old {
@@ -1143,11 +489,11 @@ impl App {
     /// dropped page the view scrolls so it loads, and the reveal completes
     /// after.
     pub(super) fn reveal_current(&mut self) {
-        if !self.find.reveal {
+        if !self.find.revealing() {
             return;
         }
-        let Some(current) = self.find.current.clone() else {
-            self.find.reveal = false;
+        let Some(current) = self.find.current().cloned() else {
+            self.find.revealed();
             return;
         };
         if self.screen.pages().part(current.anchor.page).is_none() {
@@ -1169,10 +515,10 @@ impl App {
             // The rows moved, but no match did: the page scans again
             // only when its text moves next.
             let revision = self.screen.pages().index().revision(current.anchor.page);
-            self.find.scanned.insert(current.anchor.page, revision);
+            self.find.mark_scanned(current.anchor.page, revision);
         }
         let Some((row, _)) = self.current_place(&current) else {
-            self.find.reveal = false;
+            self.find.revealed();
             return;
         };
         let (top, _) = self.scroll();
@@ -1180,26 +526,18 @@ impl App {
         if !(top..top.saturating_add(height)).contains(&row) {
             self.screen.jump(row);
         }
-        self.find.reveal = false;
+        self.find.revealed();
     }
 
     /// The current match's conversation row and whether a closed section
     /// hides it, on its resident page.
     fn current_place(&self, current: &Match) -> Option<(usize, bool)> {
         let at = current.anchor.page;
-        let query = self.find.query.clone();
-        let (open_rows, open_texts) = self.screen.pages().page_text_open(at)?;
-        let (mut placed, start) = self.placed_for(at)?;
-        // Which of the page's matches with equal scopes each hit is,
+        let query = self.find.query().to_owned();
+        let found = scan::resident(self.screen.pages(), at, &query)?;
         // in order: what locates the current match on screen.
         let mut seen: HashMap<Vec<Target>, usize> = HashMap::new();
-        for (anchor, row, hidden, _) in search_shown(
-            at,
-            &logical::logical(&open_rows, &open_texts),
-            &query,
-            &mut placed,
-            start,
-        ) {
+        for (anchor, row, hidden, _) in found {
             let nth = seen.get(&anchor.scopes).copied().unwrap_or(0);
             seen.insert(anchor.scopes.clone(), nth.saturating_add(1));
             if current.anchor == anchor && current.nth == nth {
@@ -1209,32 +547,6 @@ impl App {
         None
     }
 
-    /// Moves `down` through the matches in page order, then render order,
-    /// wrapping at either end; nothing with no matches. The newly current
-    /// match is revealed (`docs/tui.md`, "Search": Enter or ↓ moves to
-    /// the next match, Shift+Enter or ↑ to the previous, both wrapping).
-    fn step_find(&mut self, down: bool) {
-        let flat = self.find.flat();
-        if flat.is_empty() {
-            return;
-        }
-        let at = self
-            .find
-            .current
-            .as_ref()
-            .and_then(|current| flat.iter().position(|kept| *kept == current))
-            .unwrap_or(0);
-        let next = if down {
-            at.saturating_add(1) % flat.len()
-        } else {
-            at.checked_sub(1).unwrap_or(flat.len().saturating_sub(1))
-        };
-        if let Some(kept) = flat.get(next) {
-            self.find.current = Some((*kept).clone());
-            self.find.reveal = true;
-        }
-    }
-
     /// Closes the bar, going home.
     pub(super) fn close_find(&mut self) {
         self.find.close();
@@ -1242,7 +554,7 @@ impl App {
 
     /// How many search matches are kept (the paging jig's report).
     pub(crate) fn find_matches(&self) -> usize {
-        self.find.total
+        self.find.total()
     }
 }
 

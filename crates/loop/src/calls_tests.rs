@@ -19,9 +19,9 @@ use contract::clock::Wake;
 use contract::commands::{Remember, RememberScope, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    DecidedBy, Decision, Grant, JobCompleted, JobStarted, McpServerFailed, McpServerReady, Outcome,
-    RuleOffer, ServerFailure, TextDelta, ToolCallArgumentsDelta, ToolCallRequested, ToolReplaced,
-    TurnOutcome,
+    DecidedBy, Decision, DelegateFinished, DelegateStarted, Grant, JobCompleted, JobStarted,
+    McpServerFailed, McpServerReady, Outcome, RuleOffer, ServerFailure, TextDelta,
+    ToolCallArgumentsDelta, ToolCallRequested, ToolReplaced, TurnOutcome,
 };
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, Input, ModelRequest, Provider, ReplyAction, ToolDefinition};
@@ -438,6 +438,7 @@ fn judged(subject: &str) -> Effects {
         },
         subject: Some(subject.into()),
         prefix: None,
+        always_reviewed: false,
     }
 }
 
@@ -688,6 +689,7 @@ fn reads() -> Effects {
         },
         subject: Some(String::new()),
         prefix: None,
+        always_reviewed: false,
     }
 }
 
@@ -724,6 +726,38 @@ fn started_line(id: &str) -> contract::jobs::JobRecord {
         extension: None,
         description: "npm test".into(),
         output_path: format!("artifacts/{id}.log"),
+    })
+}
+
+fn delegate_started_line(id: &str) -> contract::jobs::JobRecord {
+    contract::jobs::JobRecord::DelegateStarted(DelegateStarted {
+        job_id: JobId(id.into()),
+        delegate_session_id: SessionId("s_d000000000000001".into()),
+        harness: "fiber".into(),
+        model: "fiber:fake/m".into(),
+        workspace: "/w".into(),
+        worktree: None,
+        forked_from: None,
+    })
+}
+
+fn delegate_finished_line(id: &str) -> contract::jobs::JobRecord {
+    contract::jobs::JobRecord::DelegateFinished(DelegateFinished {
+        job_id: JobId(id.into()),
+        text: "Done.".into(),
+        artifact: None,
+        questions: None,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: std::collections::BTreeMap::new(),
+                output: 0,
+            },
+            cost: Some(0.0),
+            subscription_cost: 0.0,
+        },
+        worktree: None,
     })
 }
 
@@ -1022,6 +1056,62 @@ fn a_calls_job_lines_are_written_before_its_completion_and_render_nothing() {
         scrubbed(&with.requests[1], &with.homes),
         scrubbed(&without.requests[1], &without.homes)
     );
+}
+
+#[test]
+fn a_calls_delegate_records_are_written_in_order_under_its_action() {
+    let id = "j_de1e6a7e12345678";
+    let with = run_turn(
+        vec![Arc::new(Lines {
+            name: "jobber",
+            jobs: vec![
+                started_line(id),
+                delegate_started_line(id),
+                delegate_finished_line(id),
+                failed_line(id),
+            ],
+        })],
+        vec![
+            calls("Checking.", &["jobber"]),
+            fakes::Scripted::text("Done."),
+        ],
+        Arc::new(crate::TurnCancel::default()),
+    );
+    assert_eq!(with.outcome, Some(TurnOutcome::Completed));
+    let lines = durable(&with.lines);
+    let index = lines
+        .iter()
+        .position(|line| line.kind == "job_started")
+        .expect("a job_started line");
+    let five = &lines[index..index + 5];
+    assert_eq!(
+        [
+            five[0].kind.as_str(),
+            five[1].kind.as_str(),
+            five[2].kind.as_str(),
+            five[3].kind.as_str(),
+            five[4].kind.as_str()
+        ],
+        [
+            "job_started",
+            "delegate_started",
+            "delegate_finished",
+            "job_completed",
+            "tool_call_completed"
+        ]
+    );
+    let action = five[0].action_id.clone().unwrap();
+    assert!(action.0.starts_with("a_"));
+    for line in &five[..4] {
+        assert_eq!(line.action_id.as_ref(), Some(&action));
+    }
+    assert_eq!(five[1].payload["delegate_session_id"], "s_d000000000000001");
+    assert_eq!(five[1].payload["harness"], "fiber");
+    assert_eq!(five[1].payload["model"], "fiber:fake/m");
+    assert_eq!(five[2].payload["job_id"], id);
+    assert_eq!(five[2].payload["text"], "Done.");
+    assert!(five[2].payload.get("artifact").is_none());
+    assert_eq!(five[3].payload["status"], "failed");
 }
 
 #[test]

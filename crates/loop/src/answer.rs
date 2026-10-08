@@ -172,6 +172,7 @@ impl Loop {
             | Delivery::SteerDrop(..)
             | Delivery::Handoff(..)
             | Delivery::Model(..)
+            | Delivery::Rewind(..)
             | Delivery::Interaction(_)
             | Delivery::Resolved(..)
             | Delivery::Job(_)

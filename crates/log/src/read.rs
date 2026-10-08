@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use contract::Envelope;
 
-use crate::offsets::Offsets;
+use crate::offsets::{After, Offsets, Page};
 use crate::{EVENTS, Error, io_at};
 
 /// Every durable line in the session directory `dir`, in order, up to the
@@ -233,7 +233,9 @@ impl Injector {
 /// Receives a session's events, durable and ephemeral, as they are written,
 /// from the moment [`crate::Log::watch`] made it. It never slows the writer:
 /// a watcher that falls behind re-reads the durable lines it missed from the
-/// log by `seq`, and loses the ephemeral ones.
+/// log by `seq`, and loses the ephemeral ones. A watcher over a page that
+/// cannot be read returns every whole line before the failure, then the
+/// failure once, then nothing: it never reads the page or its queue again.
 pub struct Watcher {
     queue: Arc<Queue>,
     /// The log's offset table, which a catch-up reads by `seq` from.
@@ -248,10 +250,24 @@ pub struct Watcher {
     end: u64,
     /// Lines re-read from the log, not yet returned.
     backlog: VecDeque<Envelope>,
-    /// The log may hold durable lines from `next` on that the watcher has
-    /// not read: the last page read was full, or a catch-up is due. Read
-    /// before anything is taken from the queue.
-    more: bool,
+    /// What the watcher reads after its backlog: the queue alone, the next
+    /// page first, the failure after a failed page's prefix once, or
+    /// nothing.
+    reading: Reading,
+}
+
+/// What a watcher with an empty backlog reads next.
+enum Reading {
+    /// Only the queue: no page is due.
+    Live,
+    /// Read the next page from `next` below `end` before the queue.
+    Paging,
+    /// The backlog is the readable prefix of a failed page; this error
+    /// follows it once.
+    Failing(Error),
+    /// The error was returned; every later call returns `Ok(None)` without
+    /// reading the page or the queue.
+    Ended,
 }
 
 /// What the watcher takes from its queue.
@@ -281,31 +297,36 @@ impl Watcher {
             next,
             end: u64::MAX,
             backlog: VecDeque::new(),
-            more: false,
+            reading: Reading::Live,
         }
     }
 
-    /// A watcher from `seq` 0 whose first lines are `first`, the log's first
-    /// page, then the pages after it while `more` says lines below `end`
-    /// remain, then whatever arrives after it was registered. `end` is the
-    /// table's line count when the first page was read: later pages never
-    /// go past it, so a line appended after it was registered arrives
-    /// through the queue. `next` starts at 0 so a line already queued is
-    /// skipped once a page has returned it.
+    /// A watcher from `seq` 0 whose first lines are `first`'s, the log's
+    /// first page, then the pages after it while they hold more, then
+    /// whatever arrives after it was registered. When the first page
+    /// failed, its readable prefix comes first, then the failure once,
+    /// then nothing. `end` is the table's line count when the first page
+    /// was read: later pages never go past it, so a line appended after it
+    /// was registered arrives through the queue. `next` starts at 0 so a
+    /// line already queued is skipped once a page has returned it.
     pub(crate) fn starting(
         queue: Arc<Queue>,
         offsets: Arc<Offsets>,
-        first: Vec<Envelope>,
-        more: bool,
+        first: Page,
         end: u64,
     ) -> Self {
+        let reading = match first.after {
+            After::Done => Reading::Live,
+            After::More => Reading::Paging,
+            After::Failed(error) => Reading::Failing(error),
+        };
         Self {
             queue,
             offsets,
             next: 0,
             end,
-            more,
-            backlog: VecDeque::from(first),
+            reading,
+            backlog: VecDeque::from(first.lines),
         }
     }
 
@@ -319,7 +340,9 @@ impl Watcher {
 
     /// The next event, waiting for one to be written. `None` once the log is
     /// dropped and every event written before that has been returned; an
-    /// error, after those events, if the log stopped on a failed write.
+    /// error, after those events, if the log stopped on a failed write. A
+    /// page that cannot be read gives every whole line before the failure,
+    /// then the failure once, then `None` forever.
     pub fn recv(&mut self) -> Result<Option<Envelope>, Error> {
         // A wait without a deadline never gives up.
         self.next_line(Wait::Forever).unwrap_or(Ok(None))
@@ -328,13 +351,16 @@ impl Watcher {
     /// The next event if one is available now, without waiting: queued
     /// lines first, then, when the watcher fell behind, the durable lines
     /// it missed, re-read from the log. `None` when nothing is available.
+    /// A failed page's readable prefix is available, then its failure,
+    /// then nothing.
     pub fn try_recv(&mut self) -> Result<Option<Envelope>, Error> {
         self.next_line(Wait::Now).unwrap_or(Ok(None))
     }
 
     /// What [`Watcher::recv`] would return, if it returns before `timeout`
     /// passes with nothing arriving in this watcher's queue; `None` if it
-    /// does not. A timeout consumes nothing: the next call carries on.
+    /// does not. A timeout consumes nothing: the next call carries on. A
+    /// failed page's prefix and failure need no wait and return at once.
     pub fn recv_timeout(&mut self, timeout: Duration) -> Option<Result<Option<Envelope>, Error>> {
         self.next_line(Wait::For(timeout))
     }
@@ -345,11 +371,21 @@ impl Watcher {
         loop {
             let line = match self.backlog.pop_front() {
                 Some(line) => line,
-                None if self.more => match self.page() {
-                    Ok(()) => continue,
-                    Err(e) => return Some(Err(e)),
-                },
                 None => {
+                    if matches!(self.reading, Reading::Paging) {
+                        self.page();
+                        continue;
+                    }
+                    // The backlog was a failed page's readable prefix: its
+                    // error follows once, then the watcher reads as closed
+                    // without reading the page or the queue again.
+                    match std::mem::replace(&mut self.reading, Reading::Ended) {
+                        Reading::Failing(error) => return Some(Err(error)),
+                        Reading::Ended => return Some(Ok(None)),
+                        reading @ (Reading::Live | Reading::Paging) => {
+                            self.reading = reading;
+                        }
+                    }
                     let taken = match wait {
                         Wait::Forever => Some(self.take()),
                         Wait::Now => poll(&mut self.queue.lock()),
@@ -361,7 +397,7 @@ impl Watcher {
                         Some(Taken::Line(line)) => line,
                         Some(Taken::CatchUp) => {
                             self.end = u64::MAX;
-                            self.more = true;
+                            self.reading = Reading::Paging;
                             continue;
                         }
                         Some(Taken::End(End::Failed { session, cause })) => {
@@ -384,14 +420,18 @@ impl Watcher {
     }
 
     /// Reads the next page of durable lines the watcher has not returned,
-    /// from `next` below `end`. There may be more while lines below `end`
-    /// remain past the page. An error leaves `more` set, so the next call
-    /// reads the same page again.
-    fn page(&mut self) -> Result<(), Error> {
-        let (page, more) = self.offsets.page(self.next, self.end)?;
-        self.more = more;
-        self.backlog = page.into();
-        Ok(())
+    /// from `next` below `end`, and installs its lines and what follows
+    /// them: more pages, nothing, or the failure after the prefix, which
+    /// the watcher returns once the prefix is drained. There may be more
+    /// while lines below `end` remain past the page.
+    fn page(&mut self) {
+        let page = self.offsets.page(self.next, self.end);
+        self.reading = match page.after {
+            After::Done => Reading::Live,
+            After::More => Reading::Paging,
+            After::Failed(error) => Reading::Failing(error),
+        };
+        self.backlog = page.lines.into();
     }
 
     /// Waits for a queued line, for the need to catch up, or for the end,
@@ -419,8 +459,7 @@ impl Watcher {
     /// does not. Gives up when `timeout` passes with nothing arriving in
     /// its queue: the backlog drain and a catch-up re-read are not waits,
     /// and a wait after a catch-up that yielded nothing new gets the full
-    /// `timeout` again. A catch-up re-read error is returned at once by
-    /// the caller, as [`Watcher::recv`] does.
+    /// `timeout` again.
     fn take_timeout(&self, timeout: Duration) -> Option<Taken> {
         let state = self.queue.lock();
         let (mut state, _wait) = self

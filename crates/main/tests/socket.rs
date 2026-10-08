@@ -368,8 +368,9 @@ fn two_clients_see_the_log_while_ask_is_held() {
         &first,
         r#"{"id":"c_steer","command":"steer","args":{"content":[{"type":"text","text":"more"}]}}"#,
     );
-    // A missing `args` is read as `{}`: `rewind` takes it and is refused only
-    // as unbuilt, while `shell` has a required key.
+    // A missing `args` is read as `{}`: `rewind` is built, and the loop
+    // refuses it `closing` on a closing session, while `shell` has a
+    // required key.
     send(
         setup.deadline,
         &first,
@@ -416,7 +417,11 @@ fn two_clients_see_the_log_while_ask_is_held() {
     assert_eq!(answered(&own, "c_steer")["kind"], "command_accepted");
     let rewind = answered(&own, "c_rewind");
     assert_eq!(rewind["kind"], "command_rejected");
-    assert_eq!(rewind["payload"]["code"], "unknown_command");
+    assert_eq!(rewind["payload"]["code"], "closing");
+    assert_eq!(
+        rewind["payload"]["message"],
+        "The session is closing and takes no new turn."
+    );
     let shell = answered(&own, "c_shell");
     assert_eq!(shell["kind"], "command_rejected");
     assert_eq!(shell["payload"]["code"], "invalid_arguments");

@@ -535,6 +535,7 @@ impl Loop {
             cache_key: self.reviewer_key.clone(),
             conversation,
             previous_end,
+            sent_tools: None,
             max_output_tokens,
             session_dir: self.log.dir().to_path_buf(),
         };
@@ -726,6 +727,9 @@ fn resolved(
 /// when no rule can match the call (`docs/permissions.md`, "What a rule
 /// matches").
 fn rule_offer(effects: &Effects) -> Option<RuleOffer> {
+    if effects.always_reviewed {
+        return None;
+    }
     let subject = effects.subject.as_ref()?;
     Some(RuleOffer {
         subject: subject.clone(),

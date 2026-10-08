@@ -338,3 +338,53 @@ fn an_offer_an_earlier_process_left_is_not_suspended_on() {
     let (_, exited) = session.exit_on(None);
     assert!(exited.get("suspended_on").is_none());
 }
+
+fn rewound() -> Event {
+    Event::Rewound(contract::events::Rewound {
+        new_session_id: SessionId("s_9e2b0000000000b2".into()),
+        seq: contract::Seq(1),
+        from_session_id: None,
+        jobs: Vec::new(),
+    })
+}
+
+#[test]
+fn a_log_ending_in_rewound_writes_no_fiber_exited() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&asked("r_1"));
+    session.append(&rewound());
+    let before = session.kinds();
+    let exited = fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    assert_eq!(exited.code, 0);
+    assert!(exited.error.is_none());
+    // Nothing is written: no `fiber_exited`, and the open extension ask is
+    // left as it is, not declined.
+    assert_eq!(session.kinds(), before);
+    assert_eq!(session.kinds().last().map(String::as_str), Some("rewound"));
+    assert!(session.resolved().is_empty());
+}
+
+#[test]
+fn a_log_ending_in_rewound_reports_the_loops_error_without_writing() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&rewound());
+    let failure = contract::shapes::Failure {
+        code: contract::ErrorCode::IoFailed,
+        message: "the disk is gone".into(),
+        retry_after_ms: None,
+        provider: None,
+    };
+    let exited = fiber_exited(
+        &session.log,
+        &session.dir,
+        Err(failure.clone()),
+        false,
+        None,
+    )
+    .unwrap();
+    assert_eq!(exited.code, 1);
+    assert_eq!(exited.error, Some(failure));
+    assert_eq!(session.kinds().last().map(String::as_str), Some("rewound"));
+}

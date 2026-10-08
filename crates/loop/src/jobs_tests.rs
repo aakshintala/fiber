@@ -19,7 +19,8 @@ use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    Decision, JobCompleted, Outcome, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
+    Decision, DelegateFinished, JobCompleted, Outcome, Parent, ToolCallArgumentsDelta,
+    ToolCallRequested, TurnOutcome,
 };
 use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message};
 use contract::jobs::{Jobs, OpenError};
@@ -28,7 +29,7 @@ use contract::provider::{
 };
 use contract::rules::{Rule, RuleDecision, Rules, RulesError, StandingRules};
 use contract::shapes::{
-    ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender as From,
+    ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender as From, Tokens, Usage,
 };
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, ErrorCode, JobId, RequestId, SessionId};
@@ -71,6 +72,7 @@ fn read_until(
 }
 const JOB: &str = "j_5e10c0ffee123456";
 const OTHER: &str = "j_0ddba11cafe00000";
+const DELEGATE: &str = "j_de1e6a7e12345678";
 
 /// How a shell job that exited 1 ends.
 fn failed(id: &str) -> JobCompleted {
@@ -111,11 +113,48 @@ fn notice(id: &str, holds: bool, asked: &Asked) -> Delivery {
             asked.fetch_add(1, Ordering::SeqCst);
             holds
         })),
+        delegate: None,
     })
 }
 
 fn held(id: &str) -> Delivery {
     notice(id, true, &Asked::default())
+}
+
+/// A delegate's finish for `id` with `text`.
+fn delegate_finished(id: &str, text: String) -> DelegateFinished {
+    DelegateFinished {
+        job_id: JobId(id.into()),
+        text,
+        artifact: None,
+        questions: None,
+        usage: Usage {
+            tokens: Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: std::collections::BTreeMap::new(),
+                output: 0,
+            },
+            cost: Some(0.0),
+            subscription_cost: 0.0,
+        },
+        worktree: None,
+    }
+}
+
+/// `id`'s end as a delegate notice: its finish rides with its completion.
+fn delegate_held(id: &str, text: String) -> Delivery {
+    Delivery::Job(JobNotice {
+        completed: failed(id),
+        claim: Claim(Box::new(|| true)),
+        delegate: Some(delegate_finished(id, text)),
+    })
+}
+
+/// What a delegate notice for `id` with `text` renders as its first wake
+/// message.
+fn delegate_rendered(id: &str, text: &str) -> String {
+    format!("Fiber: delegate {id} finished. Its final message:\n{text}")
 }
 
 fn message(text: &str, command: &str) -> Message {
@@ -217,6 +256,7 @@ impl Tool for Sends {
             },
             subject: Some(String::new()),
             prefix: None,
+            always_reviewed: false,
         })
     }
 
@@ -256,6 +296,7 @@ impl Tool for Gated {
             },
             subject: Some("npm publish".into()),
             prefix: None,
+            always_reviewed: false,
         })
     }
 
@@ -511,6 +552,164 @@ fn a_notice_while_idle_starts_a_turn_named_by_its_job() {
             images: Vec::new()
         })
     );
+}
+
+#[test]
+fn a_delegate_notice_writes_its_finish_before_its_end() {
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    world.send(delegate_held(DELEGATE, "Done.".into()));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_eq!(
+        kinds(&lines),
+        one_step_with(&["delegate_finished", "job_completed"])
+    );
+    // The turn's input still names the job once, with no message item.
+    assert_eq!(
+        lines[0].payload["input"],
+        json!([{"type": "jobs", "job_ids": [DELEGATE]}])
+    );
+    assert_eq!(lines[2].kind, "delegate_finished");
+    assert_eq!(lines[2].action_id, None);
+    assert_eq!(lines[2].payload["job_id"], DELEGATE);
+    assert_eq!(lines[2].payload["text"], "Done.");
+    assert!(lines[2].payload.get("artifact").is_none());
+    assert_eq!(lines[2].turn_id, lines[0].turn_id);
+    assert_notice(&lines[3], DELEGATE);
+    // The wake renders the final message first, then the notice.
+    let seen = users(&world.requests()[0]);
+    assert_eq!(
+        seen[seen.len() - 2..],
+        [delegate_rendered(DELEGATE, "Done."), rendered(DELEGATE)]
+    );
+}
+
+#[test]
+fn a_20_kib_final_message_is_cut_with_its_full_text_in_an_artifact() {
+    let full = "z".repeat(20 * 1024);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    world.send(delegate_held(DELEGATE, full.clone()));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_eq!(
+        kinds(&lines),
+        one_step_with(&["delegate_finished", "job_completed"])
+    );
+    let text = lines[2].payload["text"].as_str().unwrap();
+    assert!(text.starts_with(&full[..16 * 1024]));
+    assert!(text.contains("[4096 bytes cut."));
+    assert_eq!(
+        lines[2].payload["artifact"],
+        format!("artifacts/{DELEGATE}.txt")
+    );
+    let kept =
+        std::fs::read_to_string(world.dir.join(format!("artifacts/{DELEGATE}.txt"))).unwrap();
+    assert_eq!(kept, full);
+    // The model reads the logged, already-bounded line, framed by the
+    // delegate-finished section.
+    let seen = users(&world.requests()[0]);
+    assert_eq!(seen[seen.len() - 2], delegate_rendered(DELEGATE, text));
+}
+
+#[test]
+fn exactly_16_kib_is_not_cut() {
+    let full = "z".repeat(16 * 1024);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    world.send(delegate_held(DELEGATE, full.clone()));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_eq!(lines[2].kind, "delegate_finished");
+    assert_eq!(lines[2].payload["text"], full.as_str());
+    assert!(lines[2].payload.get("artifact").is_none());
+}
+
+#[test]
+fn delegate_mode_writes_its_parent_and_no_worktree() {
+    fn opened(id: &str, parent: Option<Parent>) -> (fakes::TempDir, std::path::PathBuf) {
+        let home = fakes::TempDir::new("fiber-delegate-open");
+        let workspace = home.path().join("workspace");
+        let credentials = home.path().join("credentials");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&credentials).unwrap();
+        let fake = fakes::clock::FakeClock::new();
+        let clock: Arc<dyn contract::clock::Clock> = fake.clone();
+        let log =
+            Arc::new(Log::create(home.path(), SessionId(id.into()), Arc::clone(&clock)).unwrap());
+        let (_, rx) = mpsc::channel();
+        let permissions = crate::Permissions {
+            workspace: workspace.display().to_string(),
+            credentials,
+            credential_files: Vec::new(),
+            rules: Arc::new(AskGated),
+        };
+        let prompt = crate::prompt::PromptInputs::new(
+            home.path().to_path_buf(),
+            "/bin/sh".into(),
+            home.path()
+                .join(format!("{id}/events.jsonl"))
+                .display()
+                .to_string(),
+            clock,
+            fakes::CONTEXT_WINDOW,
+        );
+        let model = Model {
+            reference: "fake/model".into(),
+            cost: None,
+            subscription: false,
+        };
+        match parent {
+            Some(parent) => Loop::delegate(
+                log,
+                Arc::new(ScriptedProvider::new(Vec::new())),
+                model,
+                prompt,
+                rx,
+                Vec::new(),
+                permissions,
+                parent,
+            ),
+            None => Loop::start(
+                log,
+                Arc::new(ScriptedProvider::new(Vec::new())),
+                model,
+                prompt,
+                rx,
+                Vec::new(),
+                permissions,
+                None,
+            ),
+        }
+        .unwrap();
+        let dir = home.path().join(id);
+        (home, dir)
+    }
+    let parent = Parent {
+        session_id: SessionId("s_parent0000000001".into()),
+        delegate_id: JobId("j_de1e6a7e12345678".into()),
+    };
+    let (_home, dir) = opened("s_delegate00000001", Some(parent));
+    let lines: Vec<Envelope> = log::read(&dir)
+        .unwrap()
+        .into_iter()
+        .filter(Envelope::is_durable)
+        .collect();
+    assert_eq!(lines[0].kind, "session_started");
+    assert_eq!(
+        lines[0].payload["parent"],
+        json!({
+            "session_id": "s_parent0000000001",
+            "delegate_id": "j_de1e6a7e12345678",
+        })
+    );
+    assert!(lines[0].payload.get("worktree").is_none());
+    let (_home, dir) = opened("s_plain000000000001", None);
+    let lines: Vec<Envelope> = log::read(&dir)
+        .unwrap()
+        .into_iter()
+        .filter(Envelope::is_durable)
+        .collect();
+    assert_eq!(lines[0].kind, "session_started");
+    assert!(lines[0].payload.get("parent").is_none());
 }
 
 #[test]
@@ -1937,7 +2136,7 @@ fn after_close_a_kept_notice_starts_a_turn_and_a_kept_steer_does_not() {
             .push_back(crate::jobs::Queued::Steer(message("Kept.", "c_kept")));
         looped
             .queued
-            .push_back(crate::jobs::Queued::Job(failed(JOB)));
+            .push_back(crate::jobs::Queued::Job(failed(JOB), None));
     }
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     let lines = world.turn_lines();

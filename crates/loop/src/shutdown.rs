@@ -3,7 +3,7 @@
 //! written before `fiber_exited`. No model reads the session again, so
 //! nothing that would only be shown to one is written.
 
-use contract::events::Event;
+use contract::events::{DelegateFinished, Event, JobCompleted};
 use contract::inbox::Delivery;
 use contract::{ErrorCode, JobId};
 
@@ -29,10 +29,14 @@ impl Loop {
     /// that moved to the background after the first is stopped too. The
     /// wait has no deadline: the shutdown's bound limits it.
     fn settle(&mut self) -> Result<(), Error> {
-        for piece in std::mem::take(&mut self.queued) {
-            if let Queued::Job(completed) = piece {
-                self.log
-                    .append(&Event::JobCompleted(completed), None, None)?;
+        // After `rewound` the queued ends are dropped unwritten, with the
+        // rest refused in `settle_one`.
+        let queued = std::mem::take(&mut self.queued);
+        if !self.rewound {
+            for piece in queued {
+                if let Queued::Job(completed, delegate) = piece {
+                    self.write_job_end(completed, delegate)?;
+                }
             }
         }
         for delivery in std::mem::take(&mut self.deferred) {
@@ -65,13 +69,35 @@ impl Loop {
         }
     }
 
+    /// A job's end: its delegate's final message first, bounded as it is
+    /// written, then `job_completed`.
+    fn write_job_end(
+        &mut self,
+        completed: JobCompleted,
+        delegate: Option<DelegateFinished>,
+    ) -> Result<(), Error> {
+        if let Some(finished) = delegate {
+            let event = Event::DelegateFinished(crate::delegated::bounded(&self.log, finished));
+            self.log.append(&event, None, None)?;
+        }
+        self.log
+            .append(&Event::JobCompleted(completed), None, None)?;
+        Ok(())
+    }
+
     /// One delivery taken while the jobs settle.
     fn settle_one(&mut self, delivery: Delivery) -> Result<(), Error> {
+        // After `rewound` nothing is written: every acknowledgement still
+        // waiting is refused `closing`, the rest is dropped
+        // (`docs/events.md`, "Rewind").
+        if self.rewound {
+            crate::rewind::command::refuse_after_rewound(delivery);
+            return Ok(());
+        }
         match delivery {
             Delivery::Job(notice) => {
-                if let Some(completed) = claimed(notice) {
-                    self.log
-                        .append(&Event::JobCompleted(completed), None, None)?;
+                if let Some((completed, delegate)) = claimed(notice) {
+                    self.write_job_end(completed, delegate)?;
                 }
             }
             // Written like any line still written; unlike a monitor batch,
@@ -83,6 +109,9 @@ impl Loop {
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
             Delivery::Prompt(_, ack) | Delivery::Steer(_, ack) | Delivery::Handoff(_, _, ack) => {
+                reject(ack, ErrorCode::Closing, CLOSING);
+            }
+            Delivery::Rewind(_, ack) => {
                 reject(ack, ErrorCode::Closing, CLOSING);
             }
             Delivery::Model(_, ack) => {

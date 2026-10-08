@@ -109,6 +109,8 @@ impl Loop {
         self.preamble = Some(Preamble {
             system_prompt,
             tools,
+            // A fresh build sends what its own tools wire.
+            sent_tools: None,
             tool_choice: event.tool_choice,
             cache_lifetime: event.cache_lifetime,
             thinking: self.prompt.thinking,

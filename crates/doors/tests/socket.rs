@@ -22,9 +22,10 @@ use std::time::Duration;
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{
-    CacheLifetime, CommandInfo, Empty, Event, ExtensionsLoaded, FiberExited, InputItem,
-    LoadedExtension, Notice, PreambleBuilt, PreambleReason, QueuedMessage, SentTool, SessionState,
-    SessionStatus, SteeringQueue, ToolInfo, ToolSource, ToolState, TurnStarted, UsageRecorded,
+    CacheLifetime, CommandInfo, CommandResult, Empty, Event, ExtensionsLoaded, FiberExited,
+    InputItem, LoadedExtension, Notice, PreambleBuilt, PreambleReason, QueuedMessage, SentTool,
+    SessionState, SessionStatus, SteeringQueue, ToolInfo, ToolSource, ToolState, TurnStarted,
+    UsageRecorded,
 };
 use contract::inbox::{Delivery, Message, Rejection};
 use contract::jobs::{Foreground, Jobs, Opening, Stop};
@@ -380,6 +381,10 @@ fn take(inbox: &Receiver<Delivery>) -> String {
             ack.0(Ok(None));
             "close".to_owned()
         }
+        Delivery::Rewind(args, ack) => {
+            ack.0(Ok(None));
+            format!("rewind {:?}", args.seq)
+        }
         Delivery::Cancelled => panic!("a wake arrives as a delivery"),
         Delivery::Job(_)
         | Delivery::JobLine(_)
@@ -492,7 +497,6 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
                 "reload",
                 "credential",
                 "name",
-                "rewind",
             ] {
                 send(
                     &client,
@@ -1205,6 +1209,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::SteerDrop(..)
                 | Delivery::Handoff(..)
                 | Delivery::Reply(..)
+                | Delivery::Rewind(..)
                 | Delivery::Close(_)
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)
@@ -1237,6 +1242,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::SteerDrop(..)
                 | Delivery::Handoff(..)
                 | Delivery::Reply(..)
+                | Delivery::Rewind(..)
                 | Delivery::Close(_)
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)
@@ -1286,6 +1292,97 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 kinds(&settled(&other_stream)),
                 ["command_accepted", "clients", "command_accepted"]
             );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let sender = Client::connect(&socket).unwrap();
+            subscribe(&sender, "c_a", "full");
+            send(
+                &sender,
+                r#"{"id":"c_r1","command":"rewind","args":{"seq":5}}"#,
+            );
+            match inbox
+                .recv_timeout(DEADLINE)
+                .expect("the rewind is delivered")
+            {
+                Delivery::Rewind(args, ack) => {
+                    assert_eq!(args.seq, Some(contract::Seq(5)));
+                    assert_eq!(args.from_session_id, None);
+                    assert!(!args.summarise);
+                    assert!(args.adopt.is_empty());
+                    ack.0(Ok(Some(CommandResult::Rewind {
+                        new_session_id: SessionId("s_9e2b0000000000b2".into()),
+                    })));
+                }
+                Delivery::Prompt(..)
+                | Delivery::Steer(..)
+                | Delivery::SteerDrop(..)
+                | Delivery::Handoff(..)
+                | Delivery::Model(..)
+                | Delivery::Reply(..)
+                | Delivery::Close(_)
+                | Delivery::Job(_)
+                | Delivery::JobLine(_)
+                | Delivery::ExtensionExec(_)
+                | Delivery::Interaction(_)
+                | Delivery::Resolved(..)
+                | Delivery::ExtensionLog(_)
+                | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
+            }
+            let accepted = until(&sender, |line| command_id(line) == Some("c_r1"));
+            let last = accepted.last().unwrap();
+            assert_eq!(kind(last), "command_accepted");
+            assert_eq!(
+                last["payload"]["result"]["new_session_id"],
+                "s_9e2b0000000000b2"
+            );
+            // A rejection sends `command_rejected` and frees the id: it
+            // can be used again.
+            send(&sender, r#"{"id":"c_r2","command":"rewind"}"#);
+            match inbox
+                .recv_timeout(DEADLINE)
+                .expect("the second rewind is delivered")
+            {
+                Delivery::Rewind(args, ack) => {
+                    assert_eq!(args.seq, None);
+                    ack.0(Err(Rejection {
+                        code: ErrorCode::Busy,
+                        message: "a turn is running".into(),
+                    }));
+                }
+                Delivery::Prompt(..)
+                | Delivery::Steer(..)
+                | Delivery::SteerDrop(..)
+                | Delivery::Handoff(..)
+                | Delivery::Model(..)
+                | Delivery::Reply(..)
+                | Delivery::Close(_)
+                | Delivery::Job(_)
+                | Delivery::JobLine(_)
+                | Delivery::ExtensionExec(_)
+                | Delivery::Interaction(_)
+                | Delivery::Resolved(..)
+                | Delivery::ExtensionLog(_)
+                | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
+            }
+            let rejected_lines = until(&sender, |line| command_id(line) == Some("c_r2"));
+            assert_eq!(
+                rejection(rejected_lines.last().unwrap()),
+                ("busy", "a turn is running")
+            );
+            send(&sender, r#"{"id":"c_r2","command":"tools"}"#);
+            let reused = until(&sender, |line| command_id(line) == Some("c_r2"));
+            assert_eq!(kind(reused.last().unwrap()), "command_accepted");
             Ok(())
         })
         .unwrap();

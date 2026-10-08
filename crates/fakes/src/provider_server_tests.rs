@@ -431,3 +431,57 @@ fn stop_joins_an_accept_thread_that_sees_stopping() {
         "waited {STATUS_WITHIN:?} for the accept thread to stop"
     );
 }
+
+fn recorded(limit: Option<usize>, count: usize) -> Vec<Request> {
+    let mut state = State {
+        body_limit: limit,
+        ..State::default()
+    };
+    for n in 0..count {
+        let body = format!("body-{n}").into_bytes();
+        state.record(Request {
+            method: "POST".to_owned(),
+            path: "/".to_owned(),
+            headers: Vec::new(),
+            body_len: body.len(),
+            body,
+        });
+    }
+    state.requests
+}
+
+#[test]
+fn by_default_the_newest_64_bodies_are_kept() {
+    let requests = recorded(State::default().body_limit, 65);
+
+    assert!(requests[0].body.is_empty());
+    assert_eq!(requests[0].body_len, 6);
+    assert_eq!(requests[1].body, b"body-1");
+    assert_eq!(requests[64].body, b"body-64");
+}
+
+#[test]
+fn a_limit_of_zero_keeps_no_bodies() {
+    let requests = recorded(Some(0), 2);
+
+    assert!(
+        requests
+            .iter()
+            .all(|r| r.body.is_empty() && r.body_len == 6)
+    );
+}
+
+#[test]
+fn a_limit_past_the_request_count_drops_nothing_and_cannot_overflow() {
+    let requests = recorded(Some(usize::MAX), 3);
+
+    assert_eq!(requests[0].body, b"body-0");
+}
+
+#[test]
+fn no_limit_keeps_every_body() {
+    let requests = recorded(None, 70);
+
+    assert_eq!(requests[0].body, b"body-0");
+    assert_eq!(requests[69].body, b"body-69");
+}

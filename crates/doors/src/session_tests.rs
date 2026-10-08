@@ -892,7 +892,7 @@ fn a_full_subscribers_latest_status_survives_a_queue_saturated_after_registratio
     log.append(&status("latest"), None, None).unwrap();
     // Registration, as `subscribe` does it, then the queue saturates and lags
     // before the latest status is delivered.
-    let watcher = log.watch_all_seeded().unwrap();
+    let watcher = log.watch_all_seeded();
     for _ in 0..1_200 {
         log.append(&notice(), None, None).unwrap();
     }

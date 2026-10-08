@@ -89,6 +89,16 @@ pub fn fiber_exited(
     one_turn: bool,
     signal: Option<i32>,
 ) -> Result<Exited, Error> {
+    // A rewound session's last line is `rewound`, which closes the process
+    // boundary as `fiber_exited` does: nothing more is written, and open
+    // extension asks are left as they are (`docs/events.md`, "Rewind").
+    if log::last_line(dir).is_some_and(|line| line.kind == "rewound") {
+        let error = ran.err();
+        return Ok(Exited {
+            code: i32::from(error.is_some()),
+            error,
+        });
+    }
     let folded = log::lines(dir)
         .map_err(Error::from)
         .and_then(|lines| fold(lines, signal.is_some()));

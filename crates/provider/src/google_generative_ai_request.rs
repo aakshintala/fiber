@@ -37,8 +37,20 @@ pub(crate) fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
 /// "Bytes"). Gemini caches implicitly only, so the body carries no cache
 /// marker or key (`docs/prompt-cache.md`, "Cache markers and keys").
 pub(crate) fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
-    let mut tools: Vec<_> = request.tools.iter().collect();
-    tools.sort_by(|a, b| a.name.cmp(&b.name));
+    // A rewound session's first request sends its parent's logged build
+    // verbatim, so it matches the parent's bytes (`docs/events.md`,
+    // "Rewind"): the sent declarations decide the `toolConfig` the old
+    // session sent, and an empty sent list sends neither `tools` nor one.
+    let sent = request.sent_tools.as_ref();
+    let strict = match sent {
+        Some(sent) => sent
+            .iter()
+            .all(|tool| tool.get("parametersJsonSchema").is_some_and(strict::fits)),
+        None => request
+            .tools
+            .iter()
+            .all(|tool| strict::fits(&tool.input_schema)),
+    };
     let mut body = Map::new();
     if !request.system_prompt.is_empty() {
         // `role` left out: accepted and obeyed (`docs/model-routing.md`,
@@ -49,16 +61,18 @@ pub(crate) fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
         );
     }
     body.insert("contents".into(), Value::Array(contents(endpoint, request)));
-    if !tools.is_empty() {
-        let declarations: Vec<Value> = wire_tools(&request.tools)
-            .into_iter()
-            .map(Value::Object)
-            .collect();
+    if !sent.map_or(request.tools.is_empty(), |sent| sent.is_empty()) {
+        let declarations: Vec<Value> = match sent {
+            Some(sent) => sent.iter().cloned().map(Value::Object).collect(),
+            None => wire_tools(&request.tools)
+                .into_iter()
+                .map(Value::Object)
+                .collect(),
+        };
         body.insert(
             "tools".into(),
             json!([{ "functionDeclarations": declarations }]),
         );
-        let strict = tools.iter().all(|tool| strict::fits(&tool.input_schema));
         body.insert(
             "toolConfig".into(),
             json!({ "functionCallingConfig": function_calling(&request.tool_choice, strict) }),

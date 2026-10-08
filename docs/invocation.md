@@ -381,7 +381,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `credential` | Switches the session's credential label at the next turn boundary (`docs/model-routing.md`, "Which credential a session uses"). The switch rebuilds the prompt cache, as a model switch does. It changes this session only; the terminal's `/credential` also saves the label. Rejected `invalid_arguments` for a label the provider does not have. |
 | `name` | Sets the session's name, which pins it against the model's `name_session`. Takes the text; empty text clears the person's name and unpins it. Written as `session_named`. |
 | `handoff` | Starts a handoff: the model's context restarts from a note the model writes (`docs/handoff.md`). Takes optional instructions saying what the next stretch of work focuses on. During a turn it applies at the next step boundary, as a steering message does; between turns it is a turn of its own whose input is the command. |
-| `rewind` | Starts a new session process that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id. Takes an optional `from_session_id`, default this session; an optional `seq`, default the start of the latest turn; whether to summarise; and `adopt`, the `job_id`s of the jobs started after the point that the new session keeps, default none, so every other such job stops. Rejected `busy` if a turn is running, `stale_request` if `adopt` names a job that is not running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, `delegate_session` if it is a delegate, and `summary_failed` if it asked for a summary that could not be made. |
+| `rewind` | Starts a new session process that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id. Takes an optional `from_session_id`, default this session: this session or one its `forked_from` chain passes through, the session whose log `seq` counts in, and any other is rejected `invalid_arguments`, since it is rewound through the hub; an optional `seq`, default the start of the latest turn; whether to summarise; and `adopt`, the `job_id`s of the jobs started after the point that the new session keeps, default none, so every other such job stops. Rejected `busy` if a turn is running, `stale_request` if `adopt` names a job that is not running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, `delegate_session` if it is a delegate, and `summary_failed` if it asked for a summary that could not be made. |
 | `shell` | Runs a shell command the person typed, as `!` does in the terminal. Takes the command and `send`, default false. Answered when the command ends. Accepted during a turn. |
 | `command` | Runs an extension's command by name, with the text after it as arguments, as a person typing `/name args` does (`docs/extensions.md`, "Commands and screens"). Rejected `unknown_command` for a name no extension registered. |
 | `close` | Accept no more prompts; finish the turn in flight, then any running jobs (`docs/tools.md`, "Background jobs"), and exit. With `now`, it starts a shutdown instead ("Shutdown"): the turn in flight ends, every job and delegate stops, and the session exits 0. A `close` with `now` is accepted also after `close`. |
@@ -445,7 +445,7 @@ Settled by
 
 **`rewind` starts a new session process.** The session being rewound closes
 with `rewound` while it still holds its lock, and the hub starts the new one,
-whose `session_started` names the old session in `forked_from`. Each client
+whose `session_started` names, in `forked_from`, the old session or the ancestor whose log the point is in. Each client
 connected to the old session is sent the new session's id and subscribes to
 it. For a session no process holds, the hub starts a session process for it, and
 that process rewinds it.
@@ -1047,7 +1047,7 @@ delegate's `isolation: worktree` (`docs/delegates.md`), by the terminal's
 All three use the same rules (`docs/delegates.md`, "Worktrees"): a new branch
 from the workspace's HEAD in a worktree under
 `~/.fiber/projects/<key>/worktrees/<id>`, removed at the end when it holds
-nothing uncommitted and no commits beyond its base, kept otherwise. Outside a
+nothing uncommitted and no commits beyond its base, kept otherwise. A session that ends `rewound` keeps its worktree whatever it holds: the session that continues it runs there, records the same `worktree`, and never removes it either; `fiber sessions prune` removes it later. Outside a
 git repository a delegate's `isolation: worktree` fails with
 `invalid_arguments`, and `fiber ask --worktree` is a usage error. The session
 records the worktree on `session_started` (`docs/events.md`). The `worktree`

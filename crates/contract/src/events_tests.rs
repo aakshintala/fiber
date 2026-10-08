@@ -206,7 +206,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "rewound",
-            json!({"new_session_id": "s2", "seq": 4, "jobs": []}),
+            json!({"new_session_id": "s2", "seq": 4, "from_session_id": "s1", "jobs": []}),
         ),
         (
             "turn_started",

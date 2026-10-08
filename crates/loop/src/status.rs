@@ -271,7 +271,15 @@ impl Fold {
                 }
             }
             Event::HandoffCompleted(_) => self.context = None,
-            Event::JobStarted(_) | Event::JobCompleted(_) => self.refresh_running(),
+            Event::JobStarted(_) => self.refresh_running(),
+            // A delegate's end removes it from the status fold, whether
+            // its `delegate_finished` or only its `job_completed` was
+            // seen: an orphaned delegate resumed without its finish would
+            // otherwise stay listed forever.
+            Event::JobCompleted(completed) => {
+                self.delegates.remove(&completed.job_id);
+                self.refresh_running();
+            }
             Event::DelegateStarted(started) => {
                 self.delegates.insert(started.job_id.clone());
             }
@@ -482,8 +490,10 @@ fn control(kind: &str) -> Envelope {
 
 /// Starts the observer for `looped`'s session: it folds the log from the
 /// start, so a resumed session's history is one status, then follows it. A
-/// log that cannot be read, or a thread that cannot start, leaves the
-/// session with no status.
+/// thread that cannot start leaves the session with no status. A first page
+/// that does not parse folds the lines before the failure, then the follow
+/// loop ends at the failure as it does for a later page; only a line
+/// damaged after [`Log::open`] parsed it reaches this.
 pub(crate) fn spawn(looped: &Loop) -> Option<Status> {
     let jobs = looped.ending.jobs.clone();
     let workspace = looped.workspace.clone();
@@ -504,7 +514,7 @@ pub(crate) fn spawn(looped: &Loop) -> Option<Status> {
 /// Registers the watcher and starts the thread that folds it with `fold`.
 fn start(log: &Arc<Log>, fold: Fold) -> Option<Status> {
     let weak = Arc::downgrade(log);
-    let mut watcher = log.watch_all().ok()?;
+    let mut watcher = log.watch_all();
     let injector = watcher.injector();
     injector.push_kept(control(LIVE));
     let thread = Builder::new()

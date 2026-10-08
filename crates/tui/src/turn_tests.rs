@@ -1204,7 +1204,24 @@ fn an_interrupt_shows_only_on_the_closing_line_and_its_call_reads_cancelled() {
     assert!(lines.contains(&"  1 shell sleep 9 · cancelled".to_owned()));
 }
 
-/// A `retry_scheduled` for message `a_m`.
+/// An `assistant_message_started` for message `a_m`.
+fn started(app: &mut App) {
+    feed(app, "assistant_message_started", Some("a_m"), 0, json!({}));
+}
+
+/// An `assistant_message_completed` for message `a_m`.
+fn message_done(app: &mut App, outcome: &str) {
+    feed(
+        app,
+        "assistant_message_completed",
+        Some("a_m"),
+        0,
+        json!({"outcome": outcome}),
+    );
+}
+
+/// A `retry_scheduled` for message `a_m`. The payload's `attempt` is never
+/// read: the card counts the starts.
 fn retry(app: &mut App, attempt: u32, delay_ms: u64) {
     feed(
         app,
@@ -1298,12 +1315,100 @@ fn a_pending_retry_is_a_row_after_the_open_turn() {
     let mut app = app();
     start(&mut app, "go", 0);
     step(&mut app, 0);
-    retry(&mut app, 2, 3_001);
+    started(&mut app);
+    retry(&mut app, 9, 3_001);
     assert_eq!(last(&app), "↻ Retrying in 4s · rate_limited · attempt 2");
-    retry(&mut app, 3, 4_000);
+    started(&mut app);
+    retry(&mut app, 9, 4_000);
     assert_eq!(last(&app), "↻ Retrying in 4s · rate_limited · attempt 3");
-    retry(&mut app, 4, 0);
+    started(&mut app);
+    retry(&mut app, 9, 0);
     assert_eq!(last(&app), "↻ Retrying in 0s · rate_limited · attempt 4");
+}
+
+#[test]
+fn a_new_request_counts_its_attempts_from_one() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    started(&mut app);
+    message_done(&mut app, "failed");
+    retry(&mut app, 9, 1_000);
+    started(&mut app);
+    message_done(&mut app, "completed");
+    text(&mut app, "a_m", "Hi", 0);
+    // A request after one that got through starts over.
+    started(&mut app);
+    message_done(&mut app, "failed");
+    retry(&mut app, 9, 1_000);
+    assert_eq!(last(&app), "↻ Retrying in 1s · rate_limited · attempt 2");
+    // So does the next step's.
+    started(&mut app);
+    step(&mut app, 0);
+    started(&mut app);
+    message_done(&mut app, "failed");
+    retry(&mut app, 9, 1_000);
+    assert_eq!(last(&app), "↻ Retrying in 1s · rate_limited · attempt 2");
+}
+
+#[test]
+fn attempts_are_counted_from_lines_a_late_attach_replays() {
+    // Catching up carries the durable lines and not the `retry_scheduled`.
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    for _ in 0..2 {
+        started(&mut app);
+        message_done(&mut app, "failed");
+    }
+    started(&mut app);
+    message_done(&mut app, "failed");
+    retry(&mut app, 9, 1_000);
+    assert_eq!(last(&app), "↻ Retrying in 1s · rate_limited · attempt 4");
+}
+
+#[test]
+fn a_handoff_note_request_counts_its_own_attempts() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    started(&mut app);
+    message_done(&mut app, "failed");
+    retry(&mut app, 9, 1_000);
+    started(&mut app);
+    message_done(&mut app, "failed");
+    feed(
+        &mut app,
+        "handoff_started",
+        None,
+        0,
+        json!({"trigger": "overflow"}),
+    );
+    started(&mut app);
+    message_done(&mut app, "failed");
+    retry(&mut app, 9, 1_000);
+    assert_eq!(last(&app), "↻ Retrying in 1s · rate_limited · attempt 2");
+}
+
+#[test]
+fn a_cancelled_wait_keeps_the_failed_attempts() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    started(&mut app);
+    retry(&mut app, 9, 1_000);
+    started(&mut app);
+    retry(&mut app, 9, 1_000);
+    assert_eq!(last(&app), "↻ Retrying in 1s · rate_limited · attempt 3");
+    end(&mut app, "interrupted", 1);
+    ctrl_o(&mut app);
+    assert_eq!(
+        texts(&app)[2..4],
+        [
+            "  1 model call failed · rate_limited · attempt 1",
+            "    model call failed · rate_limited · attempt 2",
+        ]
+    );
 }
 
 #[test]
@@ -1349,6 +1454,7 @@ fn the_retry_row_clears_once_the_call_gets_through() {
     // Other lines leave it.
     let mut app = app();
     start(&mut app, "go", 0);
+    started(&mut app);
     retry(&mut app, 2, 1_000);
     step(&mut app, 0);
     assert!(last(&app).starts_with('↻'));
@@ -1359,8 +1465,11 @@ fn a_failed_model_call_is_counted_on_the_summary_and_in_the_ledger() {
     let mut app = app();
     start(&mut app, "go", 0);
     step(&mut app, 0);
+    started(&mut app);
     retry(&mut app, 2, 1_000);
+    message_done(&mut app, "completed");
     call(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
+    started(&mut app);
     retry(&mut app, 3, 1_000);
     text(&mut app, "a_m", "Done.", 0);
     assert_eq!(texts(&app)[1], "• Read 1 file · 2 failed model calls");
@@ -1369,7 +1478,7 @@ fn a_failed_model_call_is_counted_on_the_summary_and_in_the_ledger() {
         texts(&app)[2..5],
         [
             "  1 model call failed · rate_limited · attempt 1",
-            "    model call failed · rate_limited · attempt 2",
+            "    model call failed · rate_limited · attempt 1",
             "    read a.rs",
         ]
     );
@@ -1380,6 +1489,7 @@ fn a_group_with_only_a_failed_call_still_draws_its_summary() {
     let mut app = app();
     start(&mut app, "go", 0);
     step(&mut app, 0);
+    started(&mut app);
     retry(&mut app, 2, 1_000);
     text(&mut app, "a_m", "Done.", 0);
     assert_eq!(texts(&app), [" go ", "• 1 failed model call", "Done."]);

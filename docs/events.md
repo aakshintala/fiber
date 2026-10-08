@@ -326,7 +326,7 @@ the envelope's `ts`.
 | `parent` | object | no | for a delegate: `session_id`, its parent session, and `delegate_id`, the delegate's `job_id` there (`docs/delegates.md`) |
 | `forked_from` | object | no | for a fork or a rewind: `session_id` and `seq`, the point it continues from (`docs/delegates.md`, "Forks"; "Rewind" below) |
 | `rewind` | object | no | for a rewind: `summary` (string, optional), `note` (string) and `jobs` (array of strings, the `job_id`s adopted) |
-| `worktree` | object | no | when the session runs in a worktree Fiber created for it: `path` and `branch` (strings); `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
+| `worktree` | object | no | when the session runs in a worktree Fiber created for it, or for the session a rewind continues: `path` and `branch` (strings); `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
 
 #### `rewound`
 
@@ -336,6 +336,7 @@ Durable. The last line of a session that was rewound ("Rewind" below).
 |---|---|---|---|
 | `new_session_id` | string | yes | the session that continues this one |
 | `seq` | integer | yes | the point |
+| `from_session_id` | string | no | the session whose log `seq` counts in, when it is not this one: a session on this session's `forked_from` chain |
 | `jobs` | array of strings | yes | the `job_id`s handed to the new session; empty when none |
 
 #### `turn_started`
@@ -1358,7 +1359,9 @@ ephemeral. The log does not pay to store text a completion would supersede.
 An attempt count is derived by counting `assistant_message_started` lines, never
 from a stored counter, so it cannot drift from the record. A client that shows which attempt a model call is, such as the terminal's
 "attempt 2 of 4", counts the `assistant_message_started` lines of the request's
-retries in that step.
+retries in that step. The count starts again at each `step_started`, each
+`handoff_started`, whose note request is its own, and each
+`assistant_message_completed` whose outcome is `completed`.
 
 ## Rewind
 
@@ -1377,9 +1380,7 @@ earlier point. A person starts one from the terminal, a driver with the
   its history. The pointer is the record: nothing else stores the link, and
   whatever needs it reads B's first line, as deleting a session does to find
   its dependents (`docs/invocation.md`, "Deleting and pruning").
-- **The point is a step boundary:** the start of a turn, just after the
-  person's input, or just after a batch of tool results. Every tool call before
-  it has its result.
+- **The point is a step boundary:** a point the next line of which starts a turn or a step, with every tool call before it answered, such as the start of a turn, just after the person's input, or just after a batch of tool results.
 - **It rewinds the conversation only.** It never restores or touches files.
   Fiber lists, for the person and in a note to the model, the files its own
   tools wrote after the point and the shell calls after it that may have

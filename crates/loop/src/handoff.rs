@@ -176,6 +176,9 @@ impl Loop {
         Some(ModelRequest {
             system_prompt: built.system_prompt.clone(),
             tools: built.tools.clone(),
+            // A rewound session's first request sends its parent's logged
+            // build verbatim (`docs/events.md`, "Rewind").
+            sent_tools: built.sent_tools.clone(),
             thinking: built.thinking,
             tool_choice: built.tool_choice.clone(),
             cache_lifetime: built.cache_lifetime,

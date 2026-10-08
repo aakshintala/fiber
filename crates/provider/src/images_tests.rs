@@ -186,6 +186,7 @@ fn sized_request(conversation: Vec<Input>) -> ModelRequest {
         cache_key: String::new(),
         conversation,
         previous_end: None,
+        sent_tools: None,
         max_output_tokens: None,
         session_dir: std::path::PathBuf::new(),
     }

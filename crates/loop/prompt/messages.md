@@ -91,6 +91,16 @@ Fiber: monitor {job_id} printed:
 
 {suppressed} earlier deliveries were suppressed by the rate limit; restart the monitor with a more selective filter if you need them.
 
+## delegate-finished
+
+Fiber: delegate {job_id} finished. Its final message:
+{text}
+
+## delegate-questions
+
+It ended waiting for answers to these questions:
+{questions}
+
 ## jobs-pending
 
 Fiber: this session is about to end, and these background jobs are still running: {job_ids}. Stop any you do not need with `jobs stop`; the rest will be waited for.
@@ -154,3 +164,23 @@ Fiber: this result was moved out of your context. Its full text is at {path}.
 ## budget-line
 
 Fiber: these files are {size} bytes, over their budget of {budget} bytes. Prune them.
+
+## rewind-note
+
+Fiber: this conversation was rewound to this point. Nothing was undone on disk: what Fiber's tools did after this point is still in the workspace.
+
+{changes}
+
+## rewind-written
+
+Files written after this point:
+{paths}
+
+## rewind-ran
+
+Commands run after this point that may have changed files:
+{calls}
+
+## rewind-unchanged
+
+No file was written and no command was run after this point.

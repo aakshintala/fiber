@@ -181,7 +181,7 @@ fn a_line_written_between_registration_and_the_read_arrives_once() {
     let armed = log.arm(true);
     let between = log.append(&step(), None, None).unwrap();
     let ephemeral = log.append(&delta(), None, None).unwrap();
-    let watcher = log.finish(armed).unwrap();
+    let watcher = log.finish(armed);
     let later = log.append(&step(), None, None).unwrap();
     let rx = relay(watcher);
 
@@ -442,7 +442,7 @@ fn newer_status_replaces_older_and_a_clear_removes_it() {
         .unwrap();
     log.append(&ui_status("fiber.test/a", "two"), None, None)
         .unwrap();
-    let seeded = log.watch_all_seeded().unwrap();
+    let seeded = log.watch_all_seeded();
     let rx = relay(seeded);
     let first = rx
         .recv_timeout(DEADLINE)
@@ -452,7 +452,7 @@ fn newer_status_replaces_older_and_a_clear_removes_it() {
     log.append(&ui_status("fiber.test/a", ""), None, None)
         .unwrap();
     let log2 = log;
-    let seeded = log2.watch_all_seeded().unwrap();
+    let seeded = log2.watch_all_seeded();
     let rx = relay(seeded);
     // A clearing line removes its key: no `extension_ui` seed follows.
     let mut seen_ui = false;
@@ -469,7 +469,7 @@ fn newer_status_replaces_older_and_a_clear_removes_it() {
     assert!(!seen_ui, "a cleared status leaves no seed");
     log2.append(&ui_status("fiber.test/a", "back"), None, None)
         .unwrap();
-    let seeded = log2.watch_all_seeded().unwrap();
+    let seeded = log2.watch_all_seeded();
     let rx = relay(seeded);
     let line = rx
         .recv_timeout(DEADLINE)
@@ -496,7 +496,7 @@ fn widgets_are_kept_per_extension_and_id() {
     // Empty lines remove only that widget.
     log.append(&ui_widget("fiber.test/a", "m", &[]), None, None)
         .unwrap();
-    let seeded = log.watch_all_seeded().unwrap();
+    let seeded = log.watch_all_seeded();
     let rx = relay(seeded);
     let mut widgets = Vec::new();
     for _ in 0..8 {
@@ -526,7 +526,7 @@ fn watch_all_seeded_delivers_seeds_before_later_lines() {
     log.append(&status("idle"), None, None).unwrap();
     log.append(&ui_status("fiber.test/a", "syncing"), None, None)
         .unwrap();
-    let seeded = log.watch_all_seeded().unwrap();
+    let seeded = log.watch_all_seeded();
     let rx = relay(seeded);
     log.append(&ui_status("fiber.test/a", "later"), None, None)
         .unwrap();
@@ -577,7 +577,7 @@ fn watch_all_seeded_prunes_a_dropped_watcher_and_keeps_a_live_one() {
             .count(),
         1
     );
-    let seeded = log.watch_all_seeded().unwrap();
+    let seeded = log.watch_all_seeded();
     assert_eq!(
         log.lock().watchers.len(),
         2,

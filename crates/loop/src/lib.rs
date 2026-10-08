@@ -14,13 +14,16 @@ use std::sync::mpsc::Receiver;
 
 pub(crate) use completion::Step;
 use contract::ErrorCode;
-use contract::events::{CacheLifetime, Event, Grant, PreambleReason, SessionStarted, ToolReplaced};
+use contract::events::{
+    CacheLifetime, Event, Grant, Parent, PreambleReason, SessionStarted, ToolReplaced,
+};
 use contract::inbox::Delivery;
 use contract::provider::{Cost, Input, ModelRequest, Provider, ToolDefinition};
 use contract::shapes::Failure;
 use contract::shapes::Worktree;
 use contract::tool::Tool;
 use log::Log;
+use serde_json::{Map, Value};
 pub(crate) use util::{ended, mint, variables};
 
 mod answer;
@@ -32,9 +35,11 @@ mod changes;
 mod commands;
 mod completion;
 mod conversation;
+mod delegated;
 mod diag;
 mod error;
 mod handoff;
+mod history;
 mod hooks;
 mod hosted;
 mod inbox;
@@ -51,6 +56,7 @@ mod questions;
 mod resume;
 mod retry;
 mod reviewer;
+mod rewind;
 mod schema;
 mod shutdown;
 mod skill_header;
@@ -70,12 +76,14 @@ pub use commands::commands;
 pub use conversation::rebuild;
 pub use error::Error;
 pub use handoff::HandoffSettings;
+pub use history::forked;
 pub use permission::Permissions;
 pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
 pub use prompt::PromptInputs;
 pub use resume::{Resumed, resumed};
 pub use retry::Retry;
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
+pub use rewind::{Rewound, rewind_note};
 pub use switch::{Hosted, NO_SWITCH, Prepare, Prepared, Switchable};
 
 /// The model a session's calls reach, and the prices those calls are logged
@@ -120,6 +128,10 @@ pub struct Loop {
     /// `close` has been taken. No further turn starts
     /// (`docs/invocation.md`, "Lifecycle").
     closing: bool,
+    /// `rewound` has been written: the session takes no more commands and
+    /// the process ends once the drain is refused (`docs/events.md`,
+    /// "Rewind").
+    rewound: bool,
     /// A turn cut short on a pending approval, folded at resume: the next
     /// `turn` finishes it before starting any new one.
     pub(crate) suspended: Option<resume::Suspended>,
@@ -244,6 +256,11 @@ struct Preamble {
     system_prompt: String,
     /// The tools as sent, in name order.
     tools: Vec<ToolDefinition>,
+    /// The tools as the parent session sent them: a rewound session's
+    /// first request sends these verbatim, so it matches its parent's
+    /// bytes (`docs/events.md`, "Rewind"). `None` sends what `tools`
+    /// wires; any later build clears it back to `None`.
+    sent_tools: Option<Vec<Map<String, Value>>>,
     /// The tool choice as sent, and as `preamble_built` records it.
     tool_choice: String,
     /// The cache lifetime as sent, and as `preamble_built` records it.
@@ -260,7 +277,7 @@ impl Loop {
     /// worktree the session runs in, when Fiber created one for it.
     #[allow(
         clippy::too_many_arguments,
-        reason = "the session's whole start: its worktree rides last"
+        reason = "the session's whole start: its parent and worktree ride last"
     )]
     pub fn start(
         log: Arc<Log>,
@@ -272,6 +289,67 @@ impl Loop {
         permissions: Permissions,
         worktree: Option<Worktree>,
     ) -> Result<Self, Error> {
+        Self::open(
+            log,
+            provider,
+            model,
+            prompt,
+            inbox,
+            tools,
+            permissions,
+            None,
+            worktree,
+        )
+    }
+
+    /// A Fiber delegate's loop: as [`Loop::start`], but the session's
+    /// `session_started` names its parent (`docs/delegates.md`, "Events").
+    /// A delegate never runs in a worktree of its own.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the session's whole start: its parent rides last"
+    )]
+    pub fn delegate(
+        log: Arc<Log>,
+        provider: Arc<dyn Provider>,
+        model: Model,
+        prompt: prompt::PromptInputs,
+        inbox: Receiver<Delivery>,
+        tools: Vec<(String, Arc<dyn Tool>)>,
+        permissions: Permissions,
+        parent: Parent,
+    ) -> Result<Self, Error> {
+        Self::open(
+            log,
+            provider,
+            model,
+            prompt,
+            inbox,
+            tools,
+            permissions,
+            Some(parent),
+            None,
+        )
+    }
+
+    /// [`Loop::start`] and [`Loop::delegate`] through one writer: the
+    /// session's `session_started` carries `parent` (`None` for a plain
+    /// start) and `worktree` (`None` for a delegate).
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the session's whole start: its parent and worktree ride last"
+    )]
+    fn open(
+        log: Arc<Log>,
+        provider: Arc<dyn Provider>,
+        model: Model,
+        prompt: prompt::PromptInputs,
+        inbox: Receiver<Delivery>,
+        tools: Vec<(String, Arc<dyn Tool>)>,
+        permissions: Permissions,
+        parent: Option<Parent>,
+        worktree: Option<Worktree>,
+    ) -> Result<Self, Error> {
         let (tools, replaced) = calls::register(tools);
         let workspace = PathBuf::from(&permissions.workspace);
         let workspace = workspace.canonicalize().unwrap_or(workspace);
@@ -280,7 +358,7 @@ impl Loop {
             &Event::SessionStarted(SessionStarted {
                 workspace: permissions.workspace.clone(),
                 variables: variables(),
-                parent: None,
+                parent,
                 forked_from: None,
                 rewind: None,
                 worktree,
@@ -313,6 +391,7 @@ impl Loop {
             reviewer_key: format!("{}:reviewer", started.session_id.0),
             queued: VecDeque::new(),
             closing: false,
+            rewound: false,
             suspended: None,
             deferred: VecDeque::new(),
             held: Vec::new(),
