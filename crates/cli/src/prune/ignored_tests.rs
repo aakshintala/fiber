@@ -116,6 +116,33 @@ fn an_unreadable_directory_is_skipped_and_counted() {
 }
 
 #[test]
+fn sized_counts_bytes_and_unreadable_exactly() {
+    let home = fakes::TempDir::new("cli-ignored-sized");
+    let locked = home.path().join("target/locked");
+    fs::create_dir_all(&locked).unwrap();
+    fs::write(home.path().join("target/out.bin"), "12345").unwrap();
+    fs::write(locked.join("secret.bin"), "secret").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let result = sized(home.path().join("target"));
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(result, (5, 1));
+}
+
+#[test]
+fn push_children_pushes_readable_and_counts_each_unreadable() {
+    let mut stack = Vec::new();
+    let children = vec![
+        Ok(PathBuf::from("a")),
+        Err(std::io::Error::other("entry")),
+        Err(std::io::Error::other("entry")),
+        Ok(PathBuf::from("b")),
+    ];
+    let unreadable = push_children(children.into_iter(), &mut stack);
+    assert_eq!(unreadable, 2);
+    assert_eq!(stack, vec![PathBuf::from("a"), PathBuf::from("b")]);
+}
+
+#[test]
 fn a_missing_listed_path_counts_unreadable() {
     let home = fakes::TempDir::new("cli-ignored-missing");
     let summary = summarize(home.path(), &[entry("gone", false)]);

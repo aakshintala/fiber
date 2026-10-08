@@ -94,6 +94,22 @@ fn label(first: &std::ffi::OsStr) -> String {
     out
 }
 
+/// Pushes each readable child path onto `stack` and returns how many
+/// children could not be read.
+fn push_children(
+    children: impl Iterator<Item = std::io::Result<PathBuf>>,
+    stack: &mut Vec<PathBuf>,
+) -> u64 {
+    let mut unreadable = 0_u64;
+    for child in children {
+        match child {
+            Ok(path) => stack.push(path),
+            Err(_) => unreadable += 1,
+        }
+    }
+    unreadable
+}
+
 /// The bytes under `path` and how many entries could not be read: every
 /// entry is read with `symlink_metadata`, and a symbolic link counts its
 /// own length without ever descending into it.
@@ -114,12 +130,8 @@ fn sized(path: PathBuf) -> (u64, u64) {
         } else if meta.is_dir() {
             match std::fs::read_dir(&next) {
                 Ok(entries) => {
-                    for child in entries {
-                        match child {
-                            Ok(child) => stack.push(child.path()),
-                            Err(_) => unreadable += 1,
-                        }
-                    }
+                    unreadable +=
+                        push_children(entries.map(|child| child.map(|c| c.path())), &mut stack);
                 }
                 Err(_) => unreadable += 1,
             }
