@@ -572,7 +572,7 @@ fn a_repeated_subscribe_at_the_same_level_is_invalid_arguments() {
 }
 
 #[test]
-fn a_failed_upgrade_keeps_summary() {
+fn an_upgrade_over_an_unreadable_line_folds_the_lines_before_it_then_ends() {
     let opened = Opened::open(vec![]);
     let socket = opened.socket.clone();
     let log = Arc::clone(&opened.log);
@@ -583,36 +583,29 @@ fn a_failed_upgrade_keeps_summary() {
             for _ in 0..3 {
                 log.append(&step(), None, None).unwrap();
             }
-            corrupt(&dir, 0);
-            let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_a_sub", "summary");
-            log.append(&notice("n"), None, None).unwrap();
-            send(
-                &client,
+            corrupt(&dir, 1);
+            let raw = UnixStream::connect(&socket).unwrap();
+            raw.set_read_timeout(Some(DEADLINE)).unwrap();
+            let mut write = raw.try_clone().unwrap();
+            let mut read = BufReader::new(raw);
+            send_raw(
+                &mut write,
+                r#"{"id":"c_a_sub","command":"subscribe","args":{"level":"summary"}}"#,
+            );
+            assert_eq!(kind(&read_raw(&mut read).unwrap()), "command_accepted");
+            send_raw(
+                &mut write,
                 r#"{"id":"c_a_up","command":"subscribe","args":{"level":"full"}}"#,
             );
-            let failed = response(&client, "c_a_up");
-            assert_eq!(kinds(&failed), ["command_rejected"], "{failed:?}");
-            assert_eq!(
-                rejection(failed.last().unwrap()),
-                ("invalid_arguments", UNFIT)
-            );
-            log.append(&status("two"), None, None).unwrap();
-            // The level held: the status arrives, the notice does not.
-            assert_eq!(
-                kinds(&until(&client, |line| kind(line) == "session_status")),
-                ["session_status"]
-            );
-            send(
-                &client,
-                r#"{"id":"c_a_same","command":"subscribe","args":{"level":"summary"}}"#,
-            );
-            let same = response(&client, "c_a_same");
-            assert_eq!(kinds(&same), ["command_rejected"], "{same:?}");
-            assert_eq!(
-                rejection(same.last().unwrap()),
-                ("invalid_arguments", ALREADY)
-            );
+            let ack = read_raw(&mut read).unwrap();
+            assert_eq!(kind(&ack), "command_accepted", "{ack}");
+            assert_eq!(command_id(&ack), Some("c_a_up"));
+            let mut lines = Vec::new();
+            while let Some(line) = read_raw(&mut read) {
+                lines.push(line);
+            }
+            assert_eq!(seqs(&lines), vec![0]);
+            assert_eq!(lines.len(), 1);
             Ok(())
         })
         .unwrap();
@@ -895,8 +888,8 @@ fn a_writer_that_fails_on_a_later_page_ends_the_connection() {
             }
             assert_eq!(kinds(&lines)[0], "command_accepted");
             assert_eq!(command_id(&lines[0]), Some("c_a_up"));
-            assert_eq!(seqs(&lines[1..]), (0..1_024).collect::<Vec<_>>());
-            assert_eq!(lines.len(), 1_025);
+            assert_eq!(seqs(&lines[1..]), (0..1_027).collect::<Vec<_>>());
+            assert_eq!(lines.len(), 1_028);
             // The disconnect cleanup ran while the session runs.
             assert_eq!(count(&next(&observer)), 2);
             assert_eq!(count(&next(&observer)), 1);
@@ -915,8 +908,8 @@ fn a_writer_that_fails_on_a_later_page_ends_the_connection() {
             }
             assert_eq!(kinds(&lines)[0], "command_accepted");
             assert_eq!(command_id(&lines[0]), Some("c_c_sub"));
-            assert_eq!(seqs(&lines[1..]), (0..1_024).collect::<Vec<_>>());
-            assert_eq!(lines.len(), 1_025);
+            assert_eq!(seqs(&lines[1..]), (0..1_027).collect::<Vec<_>>());
+            assert_eq!(lines.len(), 1_028);
             assert_eq!(count(&next(&observer)), 2);
             assert_eq!(count(&next(&observer)), 1);
             Ok(())

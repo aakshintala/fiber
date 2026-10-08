@@ -649,3 +649,51 @@ fn a_watch_all_watcher_that_falls_behind_catches_up_past_its_end_bound() {
     let live = log.append(&empty("step_started"), None, None).unwrap();
     assert_eq!(next(&rx), Some(live));
 }
+
+#[test]
+fn a_catch_up_over_an_unreadable_line_returns_the_lines_before_it_then_the_error() {
+    let (tmp, log, _) = steps("watch-catchup-bad", 3);
+    let mut watcher = log.watch();
+    // Nobody drains while the flood is appended, so the queue holds its
+    // first `CAPACITY` lines and drops the rest; the catch-up re-reads the
+    // lines after them from the log.
+    let written: Vec<Envelope> = (0..CAPACITY + 100)
+        .map(|_| log.append(&empty("step_started"), None, None).unwrap())
+        .collect();
+    corrupt(&tmp.session(&id("s_1")), CAPACITY + 50);
+    // The corrupt line is at file index `CAPACITY + 50`; the watcher began
+    // at file index 3, so every line before it is `written[..CAPACITY + 47]`.
+    let mut got = Vec::new();
+    let err = loop {
+        match watcher.try_recv() {
+            Ok(Some(line)) => got.push(line),
+            Ok(None) => panic!("the catch-up ended before its read error"),
+            Err(err) => break err,
+        }
+    };
+    assert_eq!(got, written[..CAPACITY + 47]);
+    assert!(
+        err.to_string().contains(&format!("line {}", CAPACITY + 51)),
+        "{err}"
+    );
+    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
+    assert_eq!(watcher.try_recv().unwrap(), None);
+}
+
+#[test]
+fn a_range_over_a_log_cut_short_is_an_error_with_no_lines() {
+    let (tmp, log, written) = steps("range-cut", 6);
+    let dir = tmp.session(&id("s_1"));
+    let whole = fs::read(dir.join("events.jsonl")).unwrap();
+    let mut start = 0;
+    for line in whole.split_inclusive(|b| *b == b'\n').take(3) {
+        start += line.len();
+    }
+    let len = whole[start..].iter().position(|b| *b == b'\n').unwrap();
+    let _cut = truncate(&dir, 3, len / 2);
+    // A window holding the cut is an error with no lines; a window before
+    // it still reads.
+    let err = log.range(0, 6).unwrap_err();
+    assert_eq!(err.code(), contract::ErrorCode::IoFailed);
+    assert_eq!(log.range(0, 2).unwrap(), written[..2]);
+}

@@ -131,6 +131,28 @@ pub(crate) fn corrupt(dir: &Path, index: usize) {
         .unwrap();
 }
 
+/// Cuts the session's log inside line `index` (from 0) after `keep` bytes
+/// of that line, and returns the bytes cut off, so the test can write them
+/// back. `keep` is below the line's length, so the cut leaves a partial
+/// line, never a whole one.
+pub(crate) fn truncate(dir: &Path, index: usize, keep: usize) -> Vec<u8> {
+    let path = dir.join("events.jsonl");
+    let whole = fs::read(&path).unwrap();
+    let mut start = 0;
+    for line in whole.split_inclusive(|b| *b == b'\n').take(index) {
+        start += line.len();
+    }
+    let at = start + keep;
+    let cut = whole[at..].to_vec();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(u64::try_from(at).unwrap())
+        .unwrap();
+    cut
+}
+
 /// How many lines a watcher's queue holds, and a catch-up page's size: the
 /// log crate's `CAPACITY`.
 pub(crate) const CAPACITY: usize = 1024;

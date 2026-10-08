@@ -242,29 +242,120 @@ fn watch_all_on_a_log_of_whole_pages_carries_on_live() {
 }
 
 #[test]
-fn watch_all_refuses_an_unparseable_line_in_its_first_page() {
-    let (tmp, log, _) = steps("watch-all-bad", 3);
+fn watch_all_returns_the_lines_before_an_unparseable_line_in_its_first_page_then_the_error() {
+    let (tmp, log, written) = steps("watch-all-bad", 5);
     corrupt(&tmp.session(&id("s_1")), 2);
-    let Err(err) = log.watch_all() else {
-        panic!("watched a log whose first page does not parse");
-    };
+    let mut watcher = log.watch_all().unwrap();
+    assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[0]));
+    assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[1]));
+    let err = watcher.try_recv().unwrap_err();
     assert!(err.to_string().contains("line 3"), "{err}");
+    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
 }
 
 #[test]
 fn watch_all_meets_an_unparseable_line_in_a_later_page_when_it_gets_there() {
     let (tmp, log, written) = steps("watch-all-bad-later", CAPACITY + 10);
-    corrupt(&tmp.session(&id("s_1")), CAPACITY + 1);
+    corrupt(&tmp.session(&id("s_1")), CAPACITY + 5);
     let mut watcher = log.watch_all().unwrap();
-    for line in &written[..CAPACITY] {
+    // Five lines of the failed page come before the bad line, so they are
+    // returned before the error.
+    for line in &written[..CAPACITY + 5] {
         assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(line));
     }
-    // The second page holds the bad line, so none of it is returned.
     let err = watcher.try_recv().unwrap_err();
     assert!(
-        err.to_string().contains(&format!("line {}", CAPACITY + 2)),
+        err.to_string().contains(&format!("line {}", CAPACITY + 6)),
         "{err}"
     );
+    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
+}
+
+#[test]
+fn a_watcher_ends_after_a_read_error_and_never_reads_again() {
+    let (tmp, log, written) = steps("watch-all-ended", 5);
+    let dir = tmp.session(&id("s_1"));
+    let path = dir.join("events.jsonl");
+    let whole = fs::read(&path).unwrap();
+    corrupt(&dir, 2);
+    // Made before the corruption: the log keeps writing to it, and it
+    // receives the line appended after the restore.
+    let mut live = log.watch();
+    let mut watcher = log.watch_all().unwrap();
+    assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[0]));
+    assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[1]));
+    let err = watcher.try_recv().unwrap_err();
+    assert!(err.to_string().contains("line 3"), "{err}");
+    assert_eq!(watcher.try_recv().unwrap(), None);
+    // Calling code that blocks is a wait too (`docs/testing.md`, "Waits
+    // and timeouts"): both blocking calls run on the thread owning the
+    // watcher, and the test takes each result with its own named deadline.
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let first = watcher.recv();
+        let second = watcher.recv_timeout(DEADLINE);
+        tx.send((first, second, watcher)).unwrap_or(());
+    });
+    let (first, second, mut watcher) = rx
+        .recv_timeout(DEADLINE)
+        .expect("waited until the deadline for the ended watcher's recv");
+    assert_eq!(first.unwrap(), None);
+    assert_eq!(second.expect("the ended watcher's recv_timeout returns at once").unwrap(), None);
+    // Restoring the line and appending changes nothing for the ended
+    // watcher: it never reads again.
+    fs::write(&path, &whole).unwrap();
+    let appended = log.append(&empty("step_started"), None, None).unwrap();
+    assert_eq!(watcher.try_recv().unwrap(), None);
+    assert_eq!(live.try_recv().unwrap().as_ref(), Some(&appended));
+}
+
+#[test]
+fn a_seeded_watcher_ends_at_a_read_error_before_its_seeds() {
+    let (tmp, log, written) = steps("watch-all-seeded-bad", 3);
+    let tokens = serde_json::json!({"input": 1, "cache_read": 0, "cache_write": {"5m": 0, "1h": 0}, "output": 1});
+    let status = event(
+        "session_status",
+        serde_json::json!({"name": "n", "workspace": "/w", "model": "p/m",
+            "state": "idle", "since": 1,
+            "spend": {"tokens": tokens, "cost": 0.0, "subscription_cost": 0.0},
+            "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+    );
+    log.append(&status, None, None).unwrap();
+    corrupt(&tmp.session(&id("s_1")), 1);
+    let mut watcher = log.watch_all_seeded().unwrap();
+    assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[0]));
+    let err = watcher.try_recv().unwrap_err();
+    assert!(err.to_string().contains("line 2"), "{err}");
+    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
+    // The seed queued after the failure is never returned.
+    assert_eq!(watcher.try_recv().unwrap(), None);
+}
+
+#[test]
+fn watch_all_over_a_log_cut_short_returns_the_whole_lines_before_the_cut_then_an_io_error() {
+    let (tmp, log, written) = steps("watch-all-cut", 5);
+    let dir = tmp.session(&id("s_1"));
+    let whole = fs::read(dir.join("events.jsonl")).unwrap();
+    let mut start = 0;
+    for line in whole.split_inclusive(|b| *b == b'\n').take(2) {
+        start += line.len();
+    }
+    let len = whole[start..].iter().position(|b| *b == b'\n').unwrap();
+    let cut = truncate(&dir, 2, len / 2);
+    let mut watcher = log.watch_all().unwrap();
+    assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[0]));
+    assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[1]));
+    // The cut leaves a partial line: only whole lines come before the
+    // failure, and the failure is the short read.
+    let err = watcher.try_recv().unwrap_err();
+    assert_eq!(err.code(), contract::ErrorCode::IoFailed);
+    assert_eq!(watcher.try_recv().unwrap(), None);
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("events.jsonl"))
+        .unwrap();
+    std::io::Write::write_all(&mut file, &cut).unwrap();
+    assert_eq!(fs::read(dir.join("events.jsonl")).unwrap(), whole);
 }
 
 /// A log of small lines around three replies of 2 MiB, each larger than a
