@@ -383,8 +383,8 @@ impl Find {
     }
 
     /// The link went down: with no fetch on the wire nothing is lost,
-    /// else the fetch clears and a running scan is incomplete. Whether
-    /// anything was lost: the driver pushes the notice that says why.
+    /// else the fetch clears and a running scan is incomplete. Returns
+    /// whether a fetch was lost; the driver then pushes the notice.
     pub(super) fn lose(&mut self) -> bool {
         if self.fetch.is_none() {
             return false;
@@ -542,7 +542,7 @@ fn remapped(flat: &[&Match], old: &Match) -> Option<usize> {
     }
     flat.iter()
         .position(|kept| (kept.anchor.page, kept.nth) > (old.anchor.page, old.nth))
-        .or_else(|| flat.first().map(|_| 0))
+        .or((!flat.is_empty()).then_some(0))
 }
 
 #[cfg(test)]

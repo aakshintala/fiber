@@ -197,12 +197,10 @@ impl App {
                     let anchor = Anchor::new(at, &line, hit.clone());
                     let nth = seen.get(&anchor.scopes).copied().unwrap_or(0);
                     seen.insert(anchor.scopes.clone(), nth.saturating_add(1));
-                    let got = Match {
-                        anchor,
-                        nth,
-                        snippet: Snippet::default(),
-                    };
-                    let current = self.find.current().is_some_and(|current| *current == got);
+                    let current = self
+                        .find
+                        .current()
+                        .is_some_and(|c| c.anchor == anchor && c.nth == nth);
                     for (row, byte) in hit_chars(&line, &hit) {
                         let cells = placed.entry(row).or_insert_with(|| {
                             rows.get(row)
@@ -348,7 +346,7 @@ impl App {
         if !self.find.fetching()
             && self.find.current().is_none()
             && !self.find.wants(self.screen.pages())
-            && let Some(first) = self.find.flat().first().cloned().cloned()
+            && let Some(first) = self.find.match_at(0)
         {
             self.find.set_current(first);
         }
