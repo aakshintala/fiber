@@ -209,10 +209,10 @@ pub enum Error {
         /// Why, including what the step wrote.
         why: String,
     },
-    /// A binary could not be downloaded.
-    #[error("`{name}`: its binary could not be downloaded: {why}")]
+    /// A download failed: an extension's binary, or a release file.
+    #[error("`{name}`: a download failed: {why}")]
     Download {
-        /// The extension.
+        /// The extension, or the release file.
         name: String,
         /// Why.
         why: String,

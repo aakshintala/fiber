@@ -357,10 +357,11 @@ fn a_missing_release_file_changes_nothing() {
     ] {
         let mut files = Files::good();
         files.missing = Some(missing);
-        refused(
-            &files,
-            |e| matches!(e, Error::Download { name, .. } if name == missing),
-        );
+        refused(&files, |e| {
+            matches!(e, Error::Download { name, .. } if name == missing)
+                && e.to_string()
+                    .starts_with(&format!("`{missing}`: a download failed: "))
+        });
     }
 }
 
