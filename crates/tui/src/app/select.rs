@@ -118,8 +118,12 @@ impl App {
         match mouse.kind {
             MouseKind::Press(Button::Left) => {
                 self.clear_selection();
-                let target_ok = mouse::under(targets, mouse.col, mouse.row)
-                    .is_none_or(|target| matches!(target.id, TargetId::Line(_)));
+                // A press on a link still starts a selection: the release
+                // copies the text, and a click without a drag follows the
+                // link (`docs/tui.md`, "Selection and copy", "Links").
+                let target_ok = mouse::under(targets, mouse.col, mouse.row).is_none_or(|target| {
+                    matches!(target.id, TargetId::Line(_) | TargetId::Link { .. })
+                });
                 if let Some(point) = self.point_at(mouse.col, mouse.row)
                     && self.session().is_some()
                     && self.home_screen().is_none()
@@ -315,7 +319,7 @@ impl App {
     /// The top row shown, the screen row the first shown row draws on (the
     /// view bottom-aligns a short conversation) and how many rows show, in
     /// `area`, as the view draws them.
-    fn view_rows(&self, area: Rect) -> (usize, u16, usize) {
+    pub(in crate::app) fn view_rows(&self, area: Rect) -> (usize, u16, usize) {
         let (top, total) = self.scroll();
         let height = usize::from(area.height);
         let shown = total.min(top.saturating_add(height)).saturating_sub(top);
@@ -325,7 +329,7 @@ impl App {
 
     /// The last screen row a selection reaches in `area`: the last shown
     /// row, above "↓ New messages below" when it shows; `None` with no row.
-    fn last_row(&self, area: Rect, y0: u16, shown: usize) -> Option<u16> {
+    pub(in crate::app) fn last_row(&self, area: Rect, y0: u16, shown: usize) -> Option<u16> {
         let shown = u16::try_from(shown).unwrap_or(u16::MAX);
         let mut last = y0.saturating_add(shown).checked_sub(1)?;
         if self.has_new() {

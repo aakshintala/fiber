@@ -4,6 +4,8 @@
 //! here, row by row, how each row joins the one before and how many of its
 //! leading cells are decoration.
 
+use std::ops::Range;
+
 use crate::rows::{Join, RowText};
 
 /// The row texts of one render, one per line in the order the lines are
@@ -15,12 +17,21 @@ pub(super) struct Track {
 
 impl Track {
     /// The next row joins the one before by `join`, its first `skip` cells
-    /// are not text, and with `decoration` none of it is.
-    pub(super) fn row(&mut self, join: Join, skip: u16, decoration: bool) {
+    /// are not text, with `decoration` none of it is, and `links` are the
+    /// link destinations drawn on it with their cells in the line
+    /// (`docs/tui.md`, "Links": links are handled on click).
+    pub(super) fn row(
+        &mut self,
+        join: Join,
+        skip: u16,
+        decoration: bool,
+        links: Vec<(Range<u16>, String)>,
+    ) {
         self.texts.push(RowText {
             join,
             skip,
             decoration,
+            links,
         });
     }
 

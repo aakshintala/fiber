@@ -18,6 +18,7 @@ impl App {
         self.copied = false;
         let effect = match target {
             TargetId::Badge => self.open_first(),
+            TargetId::Link { .. } => self.follow_link(target),
             TargetId::Line(copy @ Target::Copy { .. }) => self.copy(copy),
             TargetId::Line(line) => {
                 self.open(line);

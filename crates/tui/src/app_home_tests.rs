@@ -438,7 +438,8 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
-        | Effect::Copy(_) => panic!("opening sends"),
+        | Effect::Copy(_)
+        | Effect::OpenLink(_) => panic!("opening sends"),
     }
 }
 
@@ -762,7 +763,8 @@ fn a_click_on_a_row_opens_it() {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
-        | Effect::Copy(_) => panic!("a click opens the row"),
+        | Effect::Copy(_)
+        | Effect::OpenLink(_) => panic!("a click opens the row"),
     }
     assert_eq!(
         app.session().map(|session| session.0.as_str()),
@@ -2406,7 +2408,8 @@ fn stop(app: &mut App) -> Vec<Value> {
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Exit(_)
-        | Effect::Copy(_) => panic!("the ✕ sends"),
+        | Effect::Copy(_)
+        | Effect::OpenLink(_) => panic!("the ✕ sends"),
     }
 }
 

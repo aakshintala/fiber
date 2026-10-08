@@ -31,6 +31,9 @@ fn style_at(line: &Line<'_>, col: usize) -> Style {
     panic!("no cell {col} on {:?}", text(line));
 }
 
+/// One row's link columns and destinations.
+type RowLinks = Vec<(std::ops::Range<u16>, String)>;
+
 fn fg(role: Role) -> Option<ratatui::style::Color> {
     Some(role.color())
 }
@@ -430,12 +433,12 @@ fn the_widest_of_unequal_columns_shrinks_first() {
     assert_eq!(lines[0], "aaaaaaaa  bbbbbbb");
 }
 
-/// `text` wrapped by [`super::wrap_cells`], each row as a string.
+/// `text` wrapped by [`super::wrap_joined`], each row as a string.
 fn wrapped(text: &str, first: usize, rest: usize, words: bool) -> Vec<String> {
     let cells: Vec<(char, Style)> = text.chars().map(|ch| (ch, Style::default())).collect();
-    super::wrap_cells(&cells, first, rest, words)
+    super::wrap_joined(&cells, first, rest, words)
         .iter()
-        .map(|row| row.iter().map(|(ch, _)| ch).collect())
+        .map(|(row, _)| row.iter().map(|(ch, _)| ch).collect())
         .collect()
 }
 
@@ -518,4 +521,55 @@ fn a_table_in_a_quote_keeps_the_bars_and_shrinks_inside_them() {
 fn a_rule_in_a_quote_fills_the_width_inside_the_bars() {
     assert_eq!(texts("> ***", 8), vec!["│ ──────"]);
     assert_eq!(texts("> > ***", 8), vec!["│ │ ────"]);
+}
+
+#[test]
+fn a_link_in_a_table_cell_is_a_link() {
+    let rendered = render("| a | b |\n|---|---|\n| [x](http://x.example) | y |", 40);
+    assert_eq!(rendered.text.len(), rendered.lines.len());
+    let links: RowLinks = rendered
+        .text
+        .iter()
+        .flat_map(|text| text.links.clone())
+        .collect();
+    assert_eq!(links.len(), 1, "{links:?}");
+    assert_eq!(links[0].1, "http://x.example");
+}
+
+#[test]
+fn a_link_in_a_wrapped_table_cell_covers_both_rows() {
+    let markdown = "| key | description |\n|---|---|\n| k | [a very long link text that wraps](http://example.com/long) |";
+    let rendered = render(markdown, 24);
+    assert_eq!(rendered.text.len(), rendered.lines.len());
+    let rows: Vec<(String, RowLinks)> = rendered
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
+        .zip(rendered.text.iter().map(|text| text.links.clone()))
+        .collect();
+    let hits: Vec<&(String, RowLinks)> = rows
+        .iter()
+        .filter(|(_, links)| {
+            links
+                .iter()
+                .any(|(_, url)| url == "http://example.com/long")
+        })
+        .collect();
+    assert!(hits.len() >= 2, "{rows:?}");
+}
+
+#[test]
+fn a_link_with_no_cells_to_draw_has_no_link_entry() {
+    // A zero-width character draws no cell, so the link has no columns.
+    let rendered = render("[\u{200b}](http://x.example)", 40);
+    assert!(
+        rendered.text.iter().all(|text| text.links.is_empty()),
+        "{:?}",
+        rendered.text
+    );
 }

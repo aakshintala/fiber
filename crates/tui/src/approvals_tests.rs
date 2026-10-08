@@ -535,7 +535,8 @@ mod through_the_app {
             | Effect::Search { .. }
             | Effect::Editor { .. }
             | Effect::Exit(_)
-            | Effect::Copy(_) => {
+            | Effect::Copy(_)
+            | Effect::OpenLink(_) => {
                 panic!("expected one line")
             }
         }

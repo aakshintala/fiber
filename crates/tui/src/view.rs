@@ -184,7 +184,7 @@ pub(crate) fn render(
                 Some((rows, top)) => offer::render(&rows, top, conversation, buf, &mut targets),
                 None => {
                     conversation_rows(app, conversation, buf, &mut targets);
-                    marks::draw(app, conversation, buf);
+                    marks::draw(app, conversation, buf, &mut targets);
                 }
             }
             notices(app, conversation, buf, &mut targets);
@@ -267,7 +267,11 @@ fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
         targets.retain(|target| {
             !matches!(
                 target.id,
-                TargetId::Line(_) | TargetId::NewBelow | TargetId::Turn(_) | TargetId::Offer(_)
+                TargetId::Line(_)
+                    | TargetId::Link { .. }
+                    | TargetId::NewBelow
+                    | TargetId::Turn(_)
+                    | TargetId::Offer(_)
             )
         });
         let rows: Vec<String> = texts

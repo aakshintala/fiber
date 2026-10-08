@@ -723,3 +723,63 @@ fn a_drag_over_a_target_does_not_click_it() {
     );
     assert!(lp.app.copied(), "the drag selected and copied");
 }
+
+/// One named wall-clock deadline for the opener's file wait.
+const LINK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[test]
+fn a_link_click_runs_the_opener() {
+    let dir = fakes::TempDir::new("tui-link");
+    let out = dir.path().join("opened").display().to_string();
+    let watchdog = fakes::Watchdog::matching(&out);
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.open_command = Some(
+        ["/bin/sh", "-c", "printf %s \"$1\" > \"$0\"", &out]
+            .map(str::to_owned)
+            .to_vec(),
+    );
+    lp.app.set_opener(true);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let started = serde_json::json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": " "}]}]});
+    feed(
+        &mut lp,
+        vec![
+            session("turn_started", started, None),
+            session(
+                "text_completed",
+                serde_json::json!({"text": "[docs](https://example.com/a)"}),
+                Some("a_1"),
+            ),
+        ],
+    );
+    let at = find_on(lp.screen.backend().buffer(), "docs");
+    feed(&mut lp, vec![click(at.0, at.1)]);
+    // The opener runs on its own thread: the file holds the URL within
+    // the deadline. The park between polls reads no clock.
+    let (done, finished) = std::sync::mpsc::channel();
+    let path = out.clone();
+    std::thread::Builder::new()
+        .name("link-wait".to_owned())
+        .spawn(move || {
+            let (_pace_tx, pace) = std::sync::mpsc::channel::<()>();
+            for _ in 0..LINK_DEADLINE.as_millis() {
+                if std::fs::read_to_string(&path).ok().as_deref() == Some("https://example.com/a") {
+                    done.send(()).unwrap_or(());
+                    return;
+                }
+                pace.recv_timeout(std::time::Duration::from_millis(1))
+                    .unwrap_or(());
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    if finished.recv_timeout(LINK_DEADLINE).is_err() {
+        panic!("waited {LINK_DEADLINE:?} for the opener to write its file");
+    }
+    assert_eq!(
+        std::fs::read_to_string(&out).ok().as_deref(),
+        Some("https://example.com/a")
+    );
+    watchdog.stand_down(LINK_DEADLINE);
+}

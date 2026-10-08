@@ -43,6 +43,7 @@ mod focus;
 mod history;
 #[path = "app_home.rs"]
 mod home;
+mod links;
 #[path = "app_mouse.rs"]
 mod mouse;
 mod offer;
@@ -115,6 +116,8 @@ pub(crate) enum Effect {
     },
     /// Copy this text to the clipboard.
     Copy(String),
+    /// Open this URL with the link opener (`docs/tui.md`, "Links").
+    OpenLink(String),
 }
 
 /// Which command the terminal sent and waits on.
@@ -214,6 +217,8 @@ pub(crate) struct App {
     /// The drag selecting conversation text, and a copy waiting on dropped
     /// pages (`docs/tui.md`, "Selection and copy").
     select: select::Selection,
+    /// Whether a link opener is on `PATH` (`docs/tui.md`, "Links").
+    opener: bool,
 }
 
 impl App {
@@ -244,6 +249,7 @@ impl App {
             regions: crate::focus::Regions::default(),
             chrome: chrome::Chrome::default(),
             select: select::Selection::default(),
+            opener: false,
         }
     }
 

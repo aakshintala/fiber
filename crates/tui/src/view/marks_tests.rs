@@ -155,3 +155,39 @@ fn copied_sits_above_the_notices() {
     assert!(app.copied());
     insta::assert_snapshot!("copied_sits_above_the_notices", shown(&app, 60, 10));
 }
+
+/// The screen with the pointer over the link, then a rule, then a mask:
+/// `#` where the hover tint is, `.` elsewhere.
+fn hover_shown(app: &App, width: u16, height: u16, at: (u16, u16)) -> String {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    super::super::render(app, area, &mut buf, Some(at));
+    let mut mask = String::new();
+    let tint = super::super::HOVER_TINT.bg.unwrap_or_default();
+    for y in 0..height {
+        for x in 0..width {
+            let lit = buf.cell((x, y)).is_some_and(|cell| cell.bg == tint);
+            mask.push(if lit { '#' } else { '.' });
+        }
+        mask.push('\n');
+    }
+    format!("{}\n---\n{mask}", super::super::text(&buf))
+}
+
+#[test]
+fn hover_tints_a_link() {
+    let mut app = replied(60, 10, "[docs](https://example.com/a) tail");
+    app.set_opener(true);
+    let (buf, targets) = draw(&app, 60, 10);
+    let link = targets
+        .iter()
+        .find(|target| matches!(target.id, crate::mouse::TargetId::Link { .. }))
+        .expect("a link target");
+    let at = (link.rect.x, link.rect.y);
+    // The link's cells draw underlined.
+    let underlined = buf
+        .cell(at)
+        .is_some_and(|cell| cell.modifier.contains(ratatui::style::Modifier::UNDERLINED));
+    assert!(underlined, "the link underlines");
+    insta::assert_snapshot!("hover_tints_a_link", hover_shown(&app, 60, 10, at));
+}

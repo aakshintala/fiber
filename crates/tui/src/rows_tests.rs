@@ -25,6 +25,7 @@ fn push_text_keeps_its_text() {
         join: Join::WrapSpace,
         skip: 3,
         decoration: true,
+        links: Vec::new(),
     };
     rows.push_text(row("a"), text.clone());
     assert_eq!(rows.len(), 1);
