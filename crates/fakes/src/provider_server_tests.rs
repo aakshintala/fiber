@@ -485,3 +485,91 @@ fn no_limit_keeps_every_body() {
     assert_eq!(requests[0].body, b"body-0");
     assert_eq!(requests[69].body, b"body-69");
 }
+
+/// Posts `body` and reads the whole response.
+fn post(addr: std::net::SocketAddr, body: &[u8]) -> Vec<u8> {
+    let mut stream = TcpStream::connect(addr).unwrap();
+    stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+    stream
+        .write_all(
+            format!(
+                "POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    stream.write_all(body).unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    response
+}
+
+#[test]
+fn a_responder_answers_each_request_from_its_body() {
+    let server = ProviderServer::start_responding(|request: &Request| {
+        Response::status(200, format!("saw {}", request.body.len()))
+    })
+    .unwrap();
+    let addr = server.addr;
+
+    let first = post(addr, b"one");
+    let second = post(addr, b"three");
+    assert!(first.ends_with(b"saw 3"), "{first:?}");
+    assert!(second.ends_with(b"saw 5"), "{second:?}");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].body, b"one");
+    assert_eq!(requests[1].body, b"three");
+}
+
+#[test]
+fn a_responder_builds_a_later_answer_from_an_earlier_request() {
+    let server = ProviderServer::start_responding(|request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if text.contains("Started thing t_1.") {
+            Response::status(
+                200,
+                format!("waits on {}", &text[text.find("t_").unwrap()..][..3]),
+            )
+        } else {
+            Response::status(200, "starts thing t_1.")
+        }
+    })
+    .unwrap();
+    let addr = server.addr;
+
+    let first = post(addr, b"begin");
+    assert!(first.ends_with(b"starts thing t_1."), "{first:?}");
+    let second = post(addr, b"answer: Started thing t_1.");
+    assert!(second.ends_with(b"waits on t_1"), "{second:?}");
+}
+
+#[test]
+fn hold_gates_a_responded_answer_as_it_does_a_scripted_one() {
+    let server = ProviderServer::start_responding(|request: &Request| {
+        Response::status(200, format!("saw {}", request.body.len()))
+    })
+    .unwrap();
+    server.hold();
+    let addr = server.addr;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(post(addr, b"held")).unwrap();
+    });
+
+    assert!(
+        server.await_requests(1, Duration::from_secs(2)),
+        "the request is recorded while the response is held"
+    );
+    assert!(
+        rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the client has no answer while the response is held"
+    );
+
+    server.release();
+    let response = rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap_or_else(|_| panic!("release sends the held answer within {READ_WITHIN:?}"));
+    assert!(response.ends_with(b"saw 4"), "{response:?}");
+}

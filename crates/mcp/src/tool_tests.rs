@@ -167,7 +167,10 @@ impl Live {
             &clock,
             "0.0.0",
             server,
-            listed,
+            crate::cache::Cached {
+                tools: listed,
+                prompts: Vec::new(),
+            },
         );
         Self {
             _dir: dir,

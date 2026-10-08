@@ -9,6 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use contract::ErrorCode;
 use contract::SessionId;
 use doors::Session;
 use log::Log;
@@ -97,6 +98,7 @@ pub(crate) fn ask_resume(
     resumed_session(
         log,
         &dir,
+        id,
         model,
         resuming.credential,
         Some(prompt),
@@ -138,7 +140,9 @@ pub(crate) fn session_resume(
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let dir = sessions.join(&id.0);
-    resumed_session(log, &dir, model, None, None, false, clock, signals, fiber)
+    resumed_session(
+        log, &dir, id, model, None, None, false, clock, signals, fiber,
+    )
 }
 
 /// One function builds and runs every resumed session, as `new_session`
@@ -149,11 +153,12 @@ pub(crate) fn session_resume(
 /// was.
 #[allow(
     clippy::too_many_arguments,
-    reason = "one resumed session needs its log, directory, mode, clock, signals and recorded executable"
+    reason = "one resumed session needs its log, directory, id, mode, clock, signals and recorded executable"
 )]
 fn resumed_session(
     log: Arc<Log>,
     dir: &Path,
+    id: SessionId,
     model: Option<String>,
     credential: Option<String>,
     prompt: Option<String>,
@@ -210,9 +215,10 @@ fn resumed_session(
         credential_files,
         extensions,
         locks,
-        mcp,
+        mut mcp,
         switching,
         switchable,
+        resolve,
         web_search,
         ..
     } = parts;
@@ -226,6 +232,27 @@ fn resumed_session(
         Arc::clone(&clock),
         Arc::clone(&log) as _,
     );
+    // A resumed session declares `delegate_spawn` too, parented to itself.
+    let fiber_path = match fiber.clone() {
+        Ok(fiber_path) => fiber_path,
+        Err(message) => return ask_failed(failed(ErrorCode::IoFailed, message)),
+    };
+    let Some(sessions) = dir.parent() else {
+        return ask_failed(failed(
+            ErrorCode::IoFailed,
+            "the session directory has no parent",
+        ));
+    };
+    let delegates = crate::delegates::Delegates::new(
+        fiber_path,
+        home.clone(),
+        id,
+        Path::new(&folded.workspace).to_path_buf(),
+        sessions.to_path_buf(),
+        Arc::clone(&jobs),
+        Arc::clone(&clock),
+        resolve,
+    );
     crate::shutdown::arm(signals);
     let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
         fiber,
@@ -237,6 +264,7 @@ fn resumed_session(
         &locks,
         mcp.specs,
         web_search.as_deref(),
+        &delegates,
     ) {
         Ok(built) => built,
         Err(e) => return ask_failed(e),
@@ -274,7 +302,15 @@ fn resumed_session(
     extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
     extensions.drive_to(session.driver());
     extensions.answerable(!one_turn);
-    let mut all_commands = r#loop::commands(&prompt_inputs, Path::new(&folded.workspace));
+    session.skills(r#loop::skills(&prompt_inputs, Path::new(&folded.workspace)));
+    // The session's MCP prompt rows, as a new session lists them: the
+    // `commands` answer lists them beside skills, and `/name` runs them
+    // through the fetch below (`docs/mcp.md`, "Prompts and resources").
+    // Shadowed prompts join the startup notices.
+    let prompt_rows = session_servers.prompts.commands();
+    let listed = r#loop::commands(&prompt_inputs, Path::new(&folded.workspace), &prompt_rows);
+    mcp.notices.extend(listed.notices);
+    let mut all_commands = listed.rows;
     all_commands.extend(extensions.commands());
     session.commands(all_commands);
     let door = crate::switch::Door {
@@ -298,6 +334,13 @@ fn resumed_session(
         return ask_failed(failed(e.code(), e));
     }
     let inbox_wake = session.inbox_wake();
+    // The fetch runs a prompt row through its server, starting a lazy
+    // one as a first tool call does (`docs/mcp.md`, "Prompts and
+    // resources"). No logic lives here beyond that call.
+    let fetch_prompts = session_servers.prompts.clone();
+    let fetch: r#loop::FetchPrompt = Arc::new(move |server, prompt, text, cancel| {
+        fetch_prompts.get(server, prompt, text, cancel)
+    });
     let code = run_turn(
         &session,
         &log,
@@ -325,6 +368,10 @@ fn resumed_session(
                         .on_handoff(forget)
                         .switcher(switching.closure(door), switchable)
                         .repository_code(offer)
+                        .server_prompts(r#loop::ServerPrompts {
+                            rows: prompt_rows,
+                            fetch,
+                        })
                         .inbox_wake(inbox_wake)
                 }),
                 budget,

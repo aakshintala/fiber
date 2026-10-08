@@ -1,6 +1,11 @@
 //! Tests for the window title's bytes.
 
-use super::{Title, title};
+use super::{Title, notify, title};
+
+#[test]
+fn notify_wraps_in_osc_9_and_drops_controls() {
+    assert_eq!(notify("a\x1bb\x07c"), b"\x1b]9;abc\x07".to_vec());
+}
 
 #[test]
 fn title_wraps_in_osc_2() {

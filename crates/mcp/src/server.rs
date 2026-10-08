@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 use contract::tool::Cancel;
 use rustix::process::Signal;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::effects::Hints;
 use crate::registry::{LIVE, Stopping, before_lock, before_signal, lock, signal};
@@ -61,6 +61,55 @@ fn shutting_down() -> StartError {
     StartError::StartFailed("Fiber is shutting down.".to_owned())
 }
 
+/// Pages `method` (`tools/list` or `prompts/list`) to its end under the
+/// handshake's shared startup `deadline`: the deadline is checked before
+/// every page request, so a server answering every page at once with a
+/// fresh cursor still ends at it (`docs/mcp.md`, "Starting servers"). A
+/// missed deadline fails the start; any other failure runs `fail`, which
+/// fails the start for tools and keeps no prompts for prompts.
+fn list_pages(
+    server: &Server,
+    clock: &Arc<dyn Clock>,
+    method: &str,
+    entry: &str,
+    deadline: Instant,
+    cancel: &dyn Cancel,
+    fail: impl Fn() -> Result<Vec<Value>, StartError>,
+) -> Result<Vec<Value>, StartError> {
+    let mut listed = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        if clock.now() >= deadline {
+            return Err(StartError::Deadline);
+        }
+        let params = match &cursor {
+            Some(cursor) => serde_json::json!({"cursor": cursor}),
+            None => serde_json::json!({}),
+        };
+        let page = match server.request(method, &params, deadline, cancel) {
+            Ok(value) => value,
+            Err(CallError::Timeout) => return Err(StartError::Deadline),
+            Err(_) => return fail(),
+        };
+        let object = match page.as_object() {
+            Some(object) => object,
+            None => return fail(),
+        };
+        match object.get(entry).and_then(Value::as_array) {
+            Some(entries) => listed.extend(entries.iter().cloned()),
+            None => return fail(),
+        }
+        cursor = object
+            .get("nextCursor")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    Ok(listed)
+}
+
 /// Why [`Server::call`] failed.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CallError {
@@ -99,21 +148,25 @@ struct Inner {
     clock: Arc<dyn Clock>,
 }
 
-/// A server [`Server::start`] opened, with the tools it listed.
+/// A server [`Server::start`] opened, with the tools and prompts it listed.
 pub(crate) struct OpenServer {
     /// The running server.
     pub server: Server,
-    /// Its raw `tools/list` entries, in the order listed.
+    /// Its raw `tools/list` entries, in the order listed; empty when
+    /// the server advertises no tools capability.
     pub tools: Vec<Value>,
+    /// Its raw `prompts/list` entries, in the order listed; empty when
+    /// the server advertises no prompts or its list failed.
+    pub prompts: Vec<Value>,
 }
 
 impl Server {
     /// Starts `command` with `args` in `workspace`, inheriting Fiber's
     /// environment with `env` overriding keys, and runs `initialize`,
-    /// `notifications/initialized` and `tools/list` under
-    /// `startup_timeout` on `clock`. `client_version` is Fiber's own
-    /// version, sent as `clientInfo`. A failure kills and reaps the child
-    /// exactly once.
+    /// `notifications/initialized`, `tools/list` when the server
+    /// advertises tools, and `prompts/list` when it advertises prompts,
+    /// under `startup_timeout` on `clock`. `client_version` is Fiber's own version, sent as
+    /// `clientInfo`. A failure kills and reaps the child exactly once.
     pub(crate) fn start(
         command: &str,
         args: &[String],
@@ -174,8 +227,8 @@ impl Server {
         // `Cancelled` is just another failed start, not a deadline.
         let not_a_list =
             || StartError::StartFailed("The server's tool list was not a result.".to_owned());
-        let handshake = |server: &Server| -> Result<Vec<Value>, StartError> {
-            match server.request(
+        let handshake = |server: &Server| -> Result<(Vec<Value>, Vec<Value>), StartError> {
+            let initialize = match server.request(
                 "initialize",
                 &serde_json::json!({
                     "protocolVersion": PROTOCOL_VERSION,
@@ -185,47 +238,67 @@ impl Server {
                 deadline,
                 &stopping,
             ) {
-                Ok(value) if value.is_object() => {}
+                Ok(value) if value.is_object() => value,
                 Err(CallError::Timeout) => return Err(StartError::Deadline),
                 Ok(_) | Err(_) => {
                     return Err(StartError::StartFailed(
                         "The server's `initialize` reply was not a result.".to_owned(),
                     ));
                 }
-            }
+            };
             server.notify("notifications/initialized", &serde_json::json!({}));
-            let mut tools = Vec::new();
-            let mut cursor: Option<String> = None;
-            loop {
-                let params = match &cursor {
-                    Some(cursor) => serde_json::json!({"cursor": cursor}),
-                    None => serde_json::json!({}),
-                };
-                let page = match server.request("tools/list", &params, deadline, &stopping) {
-                    Ok(value) => value,
-                    Err(CallError::Timeout) => return Err(StartError::Deadline),
-                    Err(_) => return Err(not_a_list()),
-                };
-                let object = match page.as_object() {
-                    Some(object) => object,
-                    None => return Err(not_a_list()),
-                };
-                match object.get("tools").and_then(Value::as_array) {
-                    Some(listed) => tools.extend(listed.iter().cloned()),
-                    None => return Err(not_a_list()),
-                }
-                cursor = object
-                    .get("nextCursor")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                if cursor.is_none() {
-                    break;
-                }
-            }
-            Ok(tools)
+            // `tools/list` runs only when `initialize` advertises the
+            // `tools` capability as an object: a server advertising only
+            // prompts may reject it, so without the capability the
+            // start goes on with no tools (`docs/mcp.md`, "Starting
+            // servers").
+            let advertises_tools = initialize
+                .get("capabilities")
+                .and_then(|capabilities| capabilities.get("tools"))
+                .is_some_and(Value::is_object);
+            let tools = if advertises_tools {
+                list_pages(
+                    server,
+                    clock,
+                    "tools/list",
+                    "tools",
+                    deadline,
+                    &stopping,
+                    || Err(not_a_list()),
+                )?
+            } else {
+                Vec::new()
+            };
+            // `prompts/list` runs only when `initialize` advertises the
+            // `prompts` capability as an object, and a list that errors
+            // or is not a result leaves the server with no prompts while
+            // the start goes on; only a missed deadline fails it
+            // (`docs/mcp.md`, "Prompts and resources").
+            let advertises = initialize
+                .get("capabilities")
+                .and_then(|capabilities| capabilities.get("prompts"))
+                .is_some_and(Value::is_object);
+            let prompts = if advertises {
+                list_pages(
+                    server,
+                    clock,
+                    "prompts/list",
+                    "prompts",
+                    deadline,
+                    &stopping,
+                    || Ok(Vec::new()),
+                )?
+            } else {
+                Vec::new()
+            };
+            Ok((tools, prompts))
         };
         match handshake(&server) {
-            Ok(tools) => Ok(OpenServer { server, tools }),
+            Ok((tools, prompts)) => Ok(OpenServer {
+                server,
+                tools,
+                prompts,
+            }),
             Err(error) => {
                 if stopping.is_cancelled() {
                     // The documented stop, then the failure the door never writes.
@@ -260,6 +333,33 @@ impl Server {
         self.request(
             "tools/call",
             &serde_json::json!({"name": tool, "arguments": arguments}),
+            deadline,
+            cancel,
+        )
+    }
+
+    /// Gets `prompt` with `arguments`, waiting until `timeout` passes on
+    /// the clock or `cancel` fires. Params encode with sorted keys, so the
+    /// top-level `name` follows `arguments` on the wire (`docs/mcp.md`,
+    /// "Prompts and resources").
+    pub(crate) fn get_prompt(
+        &self,
+        name: &str,
+        arguments: &Map<String, Value>,
+        timeout: Duration,
+        cancel: &dyn Cancel,
+    ) -> Result<Value, CallError> {
+        let Some(inner) = self.inner.as_ref() else {
+            return Err(CallError::Gone);
+        };
+        let deadline = inner
+            .clock
+            .now()
+            .checked_add(timeout)
+            .unwrap_or(inner.clock.now());
+        self.request(
+            "prompts/get",
+            &serde_json::json!({"name": name, "arguments": arguments}),
             deadline,
             cancel,
         )

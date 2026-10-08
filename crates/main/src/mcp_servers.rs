@@ -53,6 +53,9 @@ pub(crate) struct SessionServers {
     pub failed: Vec<McpServerFailed>,
     /// The running servers, stopped when the session ends.
     pub servers: mcp::Servers,
+    /// Every runnable prompt of every server that listed, tagged with its
+    /// server's name (`docs/mcp.md`, "Prompts and resources").
+    pub prompts: mcp::Prompts,
     /// Run on every completed handoff: clears what the file tools have seen.
     pub forget: Arc<dyn Fn() + Send + Sync>,
     /// The image child's driver, which pasted images are processed through.
@@ -80,6 +83,7 @@ pub(crate) fn session_tools(
     locks: &Arc<tools::PathLocks>,
     specs: Vec<mcp::ServerSpec>,
     web_search: Option<&str>,
+    delegates: &crate::delegates::Delegates,
 ) -> Result<
     (
         Vec<(String, Arc<dyn Tool>)>,
@@ -91,7 +95,7 @@ pub(crate) fn session_tools(
 > {
     let fiber = fiber.map_err(|message| crate::failed(ErrorCode::IoFailed, message))?;
     let (mut tools, mut infos, driver, forget, images) = crate::builtin::builtin(
-        fiber, home, workspace, artifacts, clock, jobs, locks, web_search,
+        fiber, home, workspace, artifacts, clock, jobs, locks, web_search, delegates,
     )?;
     // Every spec starts with the session, except a cached non-required
     // one, which is declared from its cache and starts on its first call;
@@ -120,6 +124,7 @@ pub(crate) fn session_tools(
     let servers = SessionServers {
         failed: started.failed,
         servers: started.servers,
+        prompts: started.prompts,
         forget,
         images,
     };

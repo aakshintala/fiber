@@ -25,8 +25,9 @@ use serde_json::{Value, json};
 use support::Deadline;
 
 /// The built-in tool order, when no MCP server declares anything.
-const TOOL_NAMES: [&str; 9] = [
+const TOOL_NAMES: [&str; 10] = [
     "ask_user",
+    "delegate_spawn",
     "edit",
     "handoff",
     "jobs",
@@ -410,6 +411,7 @@ fn a_configured_server_declares_and_runs_its_tools() {
         tool_names(&requests[0].body),
         [
             "ask_user",
+            "delegate_spawn",
             "edit",
             "handoff",
             "jobs",
@@ -629,6 +631,7 @@ fn disabled_hides_a_tool() {
         tool_names(&requests[0].body),
         [
             "ask_user",
+            "delegate_spawn",
             "edit",
             "handoff",
             "jobs",
@@ -1353,4 +1356,187 @@ fn a_list_changed_notice_changes_nothing_until_the_next_session() {
     assert!(declared.contains(&"mcp__fx__notify".to_owned()));
     assert!(!declared.contains(&"mcp__fx__extra".to_owned()));
     assert_eq!(tool_names(&requests[2].body), declared);
+}
+
+/// The fixture with an `echo` tool and a `greet` prompt taking `who`
+/// (required) and `tone`: `prompt` files hold one `prompts/get` result
+/// each, written as extra `(name, body)` pairs.
+fn prompt_fixture(extra: &[(&str, &str)]) -> (Setup, PathBuf) {
+    let setup = Setup::new();
+    let mut calls = vec![
+        (
+            "prompts.json",
+            r#"[{"name":"greet","description":"Greets someone.","arguments":[{"name":"who","required":true},{"name":"tone"}]}]"#,
+        ),
+        (
+            "prompt-greet.json",
+            r#"{"messages":[{"role":"user","content":{"type":"text","text":"Say hello to Ada, warmly."}}]}"#,
+        ),
+    ];
+    calls.extend(extra.iter().copied());
+    let dir = setup.fixture(&json!([{"name": "echo"}]), &calls);
+    (setup, dir)
+}
+
+#[test]
+fn fiber_ask_runs_a_servers_prompt_with_its_arguments() {
+    let (setup, dir) = prompt_fixture(&[]);
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+
+    let run = setup.run(&["ask", "/greet Ada warm"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), hello_kinds(&[]));
+    let started = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the prompt started a turn");
+    assert_eq!(
+        started["payload"]["input"][0]["content"][0]["text"],
+        "Say hello to Ada, warmly."
+    );
+    let log = fs::read_to_string(dir.join("requests.log")).unwrap();
+    assert!(log.contains(r#""method":"prompts/get""#), "log:\n{log}");
+    assert!(
+        log.contains(r#""arguments":{"tone":"warm","who":"Ada"}"#),
+        "the get sends the named arguments: {log}",
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        String::from_utf8_lossy(&requests[0].body).contains("Say hello to Ada, warmly."),
+        "the provider's request holds the prompt's text",
+    );
+}
+
+#[test]
+fn a_cached_servers_prompt_starts_it_when_run() {
+    let (setup, dir) = prompt_fixture(&[]);
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+
+    let first = setup.run(&["ask", "/greet Ada warm"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(first.kinds(), hello_kinds(&[]));
+    fs::remove_file(dir.join("pid.txt")).expect("pid.txt");
+    let run = setup.run(&["ask", "/greet Ada warm"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), hello_kinds(&[]));
+    assert!(
+        dir.join("pid.txt").exists(),
+        "running the prompt starts the cached server",
+    );
+    let log = fs::read_to_string(dir.join("requests.log")).unwrap();
+    assert_eq!(log.matches(r#""method":"initialize""#).count(), 2);
+    assert_eq!(log.matches(r#""method":"prompts/get""#).count(), 2);
+    let second_init = log.rfind(r#""method":"initialize""#).unwrap();
+    let second_get = log.rfind(r#""method":"prompts/get""#).unwrap();
+    assert!(
+        second_init < second_get,
+        "the second session starts before its get: {log}",
+    );
+    let cache = fs::read_to_string(setup.home().join("cache/mcp/fx.json")).unwrap();
+    assert!(
+        cache.contains(r#""prompts":[{"#) && cache.contains(r#""name":"greet""#),
+        "the cache holds the prompt list: {cache}",
+    );
+}
+
+#[test]
+fn fiber_ask_with_a_missing_required_argument_exits_1_without_calling_the_model() {
+    let (setup, dir) = prompt_fixture(&[]);
+    let server = ProviderServer::start(Vec::<Response>::new()).unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+
+    let run = setup.run(&["ask", "/greet"]);
+
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "fiber_exited",
+        ],
+    );
+    let exited = run.lines.last().expect("fiber_exited is last");
+    assert_eq!(exited["payload"]["error"]["code"], "invalid_arguments");
+    assert!(
+        run.stderr.contains("needs <who>"),
+        "stderr names what the prompt needs: {}",
+        run.stderr,
+    );
+    assert!(server.requests().is_empty(), "the model is never called",);
+    let log = fs::read_to_string(dir.join("requests.log")).unwrap();
+    assert!(
+        !log.contains("prompts/get"),
+        "the server is never asked: {log}",
+    );
+}
+
+#[test]
+fn fiber_ask_whose_prompt_the_server_refuses_exits_1() {
+    let setup = Setup::new();
+    let dir = setup.fixture(
+        &json!([{"name": "echo"}]),
+        &[(
+            "prompts.json",
+            r#"[{"name":"greet","description":"Greets someone.","arguments":[{"name":"who","required":true}]}]"#,
+        )],
+    );
+    // No `prompt-greet.json`: the fixture refuses with -32602.
+    let server = ProviderServer::start(Vec::<Response>::new()).unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+
+    let run = setup.run(&["ask", "/greet Ada"]);
+
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "fiber_exited",
+        ],
+    );
+    let exited = run.lines.last().expect("fiber_exited is last");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["error"]["code"], "mcp_prompt_failed");
+    assert!(
+        run.stderr.contains("refused the prompt `/greet`"),
+        "stderr names the refusal: {}",
+        run.stderr,
+    );
+    assert!(server.requests().is_empty(), "the model is never called",);
+}
+
+#[test]
+fn a_slash_name_neither_a_skill_nor_a_prompt_is_sent_as_written_with_a_server_configured() {
+    let (setup, dir) = prompt_fixture(&[]);
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+
+    let run = setup.run(&["ask", "/nope x"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), hello_kinds(&[]));
+    let started = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the prompt started a turn");
+    assert_eq!(
+        started["payload"]["input"][0]["content"][0]["text"],
+        "/nope x"
+    );
 }

@@ -76,7 +76,21 @@ pub(crate) fn launch(
             user: user_keys(config),
         },
         theme,
+        attention: tui::Attention {
+            notification: on(config, "tui.attention.notification"),
+            bell: on(config, "tui.attention.bell"),
+            title: on(config, "tui.attention.title"),
+        },
     }
+}
+
+/// The boolean at `key`, true when absent (`docs/configuration.md`,
+/// "Keys").
+fn on(config: &Config, key: &str) -> bool {
+    config
+        .get(key, None)
+        .and_then(|(value, _)| value.as_bool())
+        .unwrap_or(true)
 }
 
 /// A share of the screen's width, in percent, from `key`; `default` when

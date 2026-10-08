@@ -64,6 +64,9 @@ pub struct Launch {
     pub keys: crate::KeysSetup,
     /// `tui.theme`: the theme, or following the terminal's appearance.
     pub theme: crate::ThemeSetting,
+    /// `tui.attention.*`: the notification, the bell and the title
+    /// (`docs/tui.md`, "Getting the person's attention").
+    pub attention: crate::Attention,
 }
 
 /// What home draws, built by [`crate::app::App::home_screen`].

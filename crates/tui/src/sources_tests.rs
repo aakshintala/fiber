@@ -138,3 +138,15 @@ fn pause_on_a_reader_already_parked_returns_at_once() {
     let reader = paused(super::Reader { gate, wake });
     assert!(reader.gate.lock().paused);
 }
+
+/// A terminal thread's stack must be under a huge page, or the kernel can
+/// back its first touch with 2 MiB (`docs/architecture.md`, "The threads").
+#[test]
+fn a_terminal_thread_stack_is_under_a_huge_page() {
+    const HUGE_PAGE: usize = 2_097_152;
+    let stack = std::hint::black_box(super::STACK);
+    assert!(
+        stack < HUGE_PAGE,
+        "a {stack} byte stack can sit on a whole 2 MiB span"
+    );
+}

@@ -1930,3 +1930,30 @@ fn a_live_resume_with_an_absent_label_is_rejected() {
     socket.send(r#"{"id":"c_close","command":"close"}"#);
     finish(running);
 }
+
+#[test]
+fn a_resumed_session_declares_delegate_spawn() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+
+    let first = setup.fiber(&["ask", "one"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let id = first.session_id().to_owned();
+
+    let second = setup.fiber(&["ask", "--resume", &id, "two"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        let names: Vec<_> = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"delegate_spawn"), "{names:?}");
+    }
+}
