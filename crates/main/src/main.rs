@@ -80,7 +80,6 @@ struct Parts {
     /// The person's `reviewer.context` notes, rendered once from the
     /// session's configuration (`docs/permissions.md`, "What the person
     /// tells it").
-    #[allow(dead_code, reason = "read by the session and resume doors")]
     reviewer_notes: String,
     /// `budget.usd`, or none when the key is absent or not a number.
     budget: Option<f64>,
