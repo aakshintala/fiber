@@ -33,6 +33,8 @@ use super::{
 const TEST_WAIT: Duration = Duration::from_secs(15);
 const READY_WAIT: Duration = Duration::from_secs(5);
 const GROUP_EMPTY_WAIT: Duration = Duration::from_secs(5);
+const PID_EXIT_WAIT: Duration = Duration::from_secs(5);
+const PID_EXIT_POLL: Duration = Duration::from_millis(50);
 const MATCHING_EXIT_WAIT: Duration = Duration::from_secs(5);
 
 struct Setup {
@@ -485,6 +487,53 @@ fn wait_child(mut child: std::process::Child) -> ExitStatus {
         .unwrap()
 }
 
+fn pid_exits_or_is_zombie(pid: u32, deadline: Duration) -> bool {
+    let (exited, result) = mpsc::channel();
+    let (stop, stopped) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        while fakes::kill_pid(pid, "0").unwrap() && !pid_is_zombie(pid) {
+            if !matches!(
+                stopped.recv_timeout(PID_EXIT_POLL),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ) {
+                return;
+            }
+        }
+        match exited.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let finished = result.recv_timeout(deadline).is_ok();
+    drop(stop);
+    finished
+}
+
+#[cfg(target_os = "linux")]
+fn pid_is_zombie(pid: u32) -> bool {
+    fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| {
+            stat.rsplit_once(") ")
+                .map(|(_, fields)| fields.starts_with('Z'))
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn pid_is_zombie(pid: u32) -> bool {
+    Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .any(|state| state.starts_with('Z'))
+        })
+        .unwrap_or(false)
+}
+
 #[test]
 fn run_directory_cleanup_removes_it_and_reports_removal_errors() {
     let root = fakes::TempDir::new("fiber-extension-test-cleanup");
@@ -762,11 +811,11 @@ PERL
         "group {group} survived"
     );
     assert!(
-        !fakes::kill_pid(escaped_child, "0").unwrap(),
+        pid_exits_or_is_zombie(escaped_child, PID_EXIT_WAIT),
         "escaped child {escaped_child} survived"
     );
     assert!(
-        !fakes::kill_pid(same_group_child, "0").unwrap(),
+        pid_exits_or_is_zombie(same_group_child, PID_EXIT_WAIT),
         "same-group child {same_group_child} survived"
     );
     assert!(matching_exits(&tag, MATCHING_EXIT_WAIT), "{tag} survived");
