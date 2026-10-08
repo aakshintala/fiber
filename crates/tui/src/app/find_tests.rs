@@ -2164,6 +2164,20 @@ fn a_match_across_a_soft_wrap_marks_each_drawn_cell_once() {
 }
 
 #[test]
+fn a_zero_width_char_in_a_match_marks_only_the_cells_it_draws() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    text_turn(&mut log, &mut seq, &mut app, &["ab\u{200b}cd"]);
+    let ranges = search_all(&mut app, &log, "b\u{200b}c");
+    assert!(ranges.is_empty());
+    assert_eq!(count(&app), "1 of 1");
+    // The zero-width char draws no cell: the match marks `b` and `c` once.
+    let marks = app.find_marks(Rect::new(0, 0, 40, 10));
+    assert_eq!(marks.len(), 2, "{marks:?}");
+}
+
+#[test]
 fn find_lost_ends_only_a_running_scan_on_an_open_bar() {
     let mut app = attached(40, 10);
     // Open bar, no fetch on the wire: nothing is lost.
