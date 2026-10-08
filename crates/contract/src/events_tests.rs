@@ -1073,10 +1073,107 @@ fn an_empty_commands_result_reads_as_commands() {
 }
 
 #[test]
+fn a_skills_result_reads_and_writes_every_key() {
+    let result = result_of(json!({"command_id": "c_1", "result": {"skills": [
+        {"name": "review", "description": "Repository review.",
+         "path": "/w/.agents/skills/review/SKILL.md", "source": "repository",
+         "extension": null, "model_invocable": true, "disabled": false,
+         "shadows": ["/h/skills/review/SKILL.md"]},
+        {"name": "tidy", "description": "Tidies.",
+         "path": "/h/extensions/acme/skills/tidy/SKILL.md", "source": "extension",
+         "extension": "acme", "model_invocable": true, "disabled": true,
+         "shadows": [], "shadowed_by": "/w/skills/tidy/SKILL.md"}]}}));
+    assert_eq!(
+        result,
+        CommandResult::Skills {
+            skills: vec![
+                SkillInfo {
+                    name: "review".into(),
+                    description: "Repository review.".into(),
+                    path: "/w/.agents/skills/review/SKILL.md".into(),
+                    source: SkillSource::Repository,
+                    extension: None,
+                    model_invocable: true,
+                    disabled: false,
+                    shadows: vec!["/h/skills/review/SKILL.md".into()],
+                    shadowed_by: None,
+                },
+                SkillInfo {
+                    name: "tidy".into(),
+                    description: "Tidies.".into(),
+                    path: "/h/extensions/acme/skills/tidy/SKILL.md".into(),
+                    source: SkillSource::Extension,
+                    extension: Some("acme".into()),
+                    model_invocable: true,
+                    disabled: true,
+                    shadows: vec![],
+                    shadowed_by: Some("/w/skills/tidy/SKILL.md".into()),
+                },
+            ]
+        }
+    );
+    // An optional key is absent, never null: `null` reads as missing.
+    let accepted = CommandAccepted {
+        command_id: CommandId("c_1".into()),
+        result: Some(result),
+    };
+    assert_eq!(
+        serde_json::to_string(&accepted).unwrap(),
+        r#"{"command_id":"c_1","result":{"skills":[{"name":"review","description":"Repository review.","path":"/w/.agents/skills/review/SKILL.md","source":"repository","model_invocable":true,"disabled":false,"shadows":["/h/skills/review/SKILL.md"]},{"name":"tidy","description":"Tidies.","path":"/h/extensions/acme/skills/tidy/SKILL.md","source":"extension","extension":"acme","model_invocable":true,"disabled":true,"shadows":[],"shadowed_by":"/w/skills/tidy/SKILL.md"}]}}"#
+    );
+}
+
+#[test]
+fn a_skills_result_leaves_out_absent_keys() {
+    let written = serde_json::to_value(&CommandAccepted {
+        command_id: CommandId("c".into()),
+        result: Some(CommandResult::Skills {
+            skills: vec![SkillInfo {
+                name: "t".into(),
+                description: "Tidies.".into(),
+                path: "/p/SKILL.md".into(),
+                source: SkillSource::Personal,
+                extension: None,
+                model_invocable: false,
+                disabled: false,
+                shadows: vec![],
+                shadowed_by: None,
+            }],
+        }),
+    })
+    .unwrap();
+    assert_eq!(
+        written,
+        json!({"command_id": "c", "result": {"skills": [
+            {"name": "t", "description": "Tidies.", "path": "/p/SKILL.md",
+             "source": "personal", "model_invocable": false, "disabled": false,
+             "shadows": []}]}})
+    );
+    assert!(written["result"]["skills"][0].get("extension").is_none());
+    assert!(written["result"]["skills"][0].get("shadowed_by").is_none());
+}
+
+#[test]
+fn an_empty_skills_result_reads_as_skills() {
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"skills": []}})),
+        CommandResult::Skills { skills: vec![] }
+    );
+}
+
+#[test]
 fn every_other_result_still_reads_as_its_own_variant() {
     assert!(matches!(
         result_of(json!({"command_id": "c", "result": {"tools": []}})),
         CommandResult::Tools { .. }
+    ));
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"commands": []}})),
+        CommandResult::Commands { .. }
+    ));
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"skills": []}})),
+        CommandResult::Skills { .. }
     ));
     assert!(matches!(
         result_of(json!({"command_id": "c", "result": {"lines": []}})),

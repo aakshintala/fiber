@@ -351,6 +351,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `reload` | none |
 | `tools` | none |
 | `commands` | none |
+| `skills` | none |
 | `history` | `from_seq` (integer), `to_seq` (integer, optional) |
 | `model` | `model` (string), a model reference as a person types one (`docs/model-routing.md`, "Naming a model"); `thinking` (string, optional) |
 | `credential` | `label` (string), a credential label of the session model's provider |
