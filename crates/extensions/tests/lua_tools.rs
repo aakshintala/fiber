@@ -8,19 +8,24 @@
     reason = "test code"
 )]
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use common::{Setup, install, manifest, write};
+use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::hook::Hooks;
 use contract::inbox::Delivery;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Effects, EffectsError, Output, Tool};
-use extensions::{LuaExtension, LuaTool};
+use extensions::{LuaExtension, LuaTool, SessionExtensions};
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder};
 use serde_json::{Map, Value, json};
@@ -637,4 +642,172 @@ fiber.tool("refresh", {
         message.contains("a tool has no provider credential"),
         "{message}"
     );
+}
+
+// Settling names across a session's extensions (`docs/extensions.md`,
+// "What a package holds" and "Registering").
+
+struct NoLock;
+
+impl contract::files::PathLock for NoLock {
+    fn hold(&self, _path: &Path, run: &mut dyn FnMut()) {
+        run();
+    }
+
+    fn hold_all(&self, _paths: &[PathBuf], run: &mut dyn FnMut()) {
+        run();
+    }
+}
+
+/// Installs `fiber.test/<short>` with the entry script `init`, listing
+/// `replaces` in its manifest.
+fn installed(setup: &Setup, short: &str, replaces: &[&str], init: &str) {
+    let mut listed = manifest(&format!("fiber.test/{short}"));
+    if let Value::Object(fields) = &mut listed {
+        fields.insert("replaces".to_owned(), json!(replaces));
+    }
+    let source = setup.source(short, &listed, &[]);
+    write(&source.join("init.lua"), init);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+}
+
+/// The session's extensions, loaded on a thread under `WAIT`.
+fn session(setup: &Setup) -> Arc<SessionExtensions> {
+    let config = Config::load(Sources {
+        home: setup.home(),
+        workspace: setup.workspace(),
+        project: ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    })
+    .unwrap();
+    let home = setup.home();
+    let loaded = fakes::within("the extensions to load", WAIT, move || {
+        let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
+        SessionExtensions::load(&home, &config, FakeClock::new(), locks, None)
+    });
+    Arc::new(loaded)
+}
+
+/// Each declared tool as `(extension, tool)`.
+fn declared(session: &SessionExtensions) -> Vec<(String, String)> {
+    session
+        .tools()
+        .iter()
+        .map(|(extension, tool)| (extension.clone(), tool.definition().name))
+        .collect()
+}
+
+fn loaded(session: &SessionExtensions) -> Vec<String> {
+    session.loaded().into_iter().map(|ext| ext.name).collect()
+}
+
+/// A tool `name` returning `said`, as a line of Lua.
+fn tool_line(name: &str, said: &str) -> String {
+    format!(
+        r#"fiber.tool("{name}", {{ description = "d", input_schema = {{ type = "object" }}, effects = {{ effects = {{ "reads" }}, reversible = true }}, timeout = 1000, run = function() return "{said}" end }})
+"#
+    )
+}
+
+const HOOK_AND_COMMAND: &str = r#"
+fiber.hook("after_tool", { timeout = 1000, on_failure = "non-blocking", run = function() return nil end })
+fiber.command("mine", { timeout = 1000, run = function() return "" end })
+"#;
+
+#[test]
+fn a_declared_replacement_of_read_is_declared_with_its_extension() {
+    let setup = Setup::new();
+    installed(&setup, "myread", &["read"], &tool_line("read", "mine"));
+    let session = session(&setup);
+    assert_eq!(
+        declared(&session),
+        [("fiber.test/myread".to_owned(), "read".to_owned())]
+    );
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
+fn an_undeclared_replacement_of_read_unloads_the_extension_and_all_it_registered() {
+    let setup = Setup::new();
+    installed(
+        &setup,
+        "myread",
+        &[],
+        &format!("{}{HOOK_AND_COMMAND}", tool_line("read", "mine")),
+    );
+    let session = session(&setup);
+    assert!(declared(&session).is_empty());
+    assert!(loaded(&session).is_empty());
+    assert!(!session.has_hooks());
+    assert!(session.commands().is_empty());
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(
+        notices[0].message,
+        "Tool `read` replaces a built-in tool its manifest does not list in `replaces`; `fiber.test/myread` is not loaded."
+    );
+    assert_eq!(notices[0].extension.as_deref(), Some("fiber.test/myread"));
+}
+
+#[test]
+fn two_extensions_registering_one_tool_lose_it_and_keep_their_others() {
+    let setup = Setup::new();
+    installed(
+        &setup,
+        "a",
+        &[],
+        &format!("{}{}", tool_line("dup", "a"), tool_line("only_a", "a")),
+    );
+    installed(
+        &setup,
+        "b",
+        &[],
+        &format!("{}{}", tool_line("dup", "b"), tool_line("only_b", "b")),
+    );
+    let session = session(&setup);
+    assert_eq!(
+        declared(&session),
+        [
+            ("fiber.test/a".to_owned(), "only_a".to_owned()),
+            ("fiber.test/b".to_owned(), "only_b".to_owned())
+        ]
+    );
+    assert_eq!(loaded(&session), ["fiber.test/a", "fiber.test/b"]);
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(
+        notices[0].message,
+        "Extensions `fiber.test/a` and `fiber.test/b` both register the tool `dup`, so neither gets it."
+    );
+    assert_eq!(notices[0].extension, None);
+}
+
+#[test]
+fn an_extension_with_only_tools_stays_loaded_and_delivers() {
+    let setup = Setup::new();
+    installed(
+        &setup,
+        "only",
+        &[],
+        r#"
+fiber.tool("probe", {
+  description = "d", input_schema = { type = "object" }, timeout = 5000,
+  effects = function() host.exec("sh", { "-c", "exit 4" }) return { effects = { "reads" }, reversible = true } end,
+  run = function() return "" end,
+})
+"#,
+    );
+    let session = session(&setup);
+    let (tx, inbox) = mpsc::channel();
+    session.deliver_to(tx);
+    let tools = session.tools();
+    let (_, probe) = tools.first().expect("the tool is declared");
+    let probe = Arc::clone(probe);
+    fakes::within("the effects call", WAIT, move || probe.effects(&Map::new()))
+        .expect("the effects function ran");
+    match inbox.recv_timeout(WAIT) {
+        Ok(Delivery::ExtensionExec(exec)) => assert_eq!(exec.process.exit_code, Some(4)),
+        other => panic!("expected the effects function's extension_exec, got {other:?}"),
+    }
 }

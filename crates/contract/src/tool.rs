@@ -16,6 +16,24 @@ use crate::jobs::JobRecord;
 use crate::provider::ToolDefinition;
 use crate::shapes::{ContentPart, DeclaredEffects, Failure, Process};
 
+/// Every name a built-in tool can register under, `web_search` included
+/// whether or not the session's model hosts a search. An extension tool
+/// of one of these names replaces the built-in only when its manifest
+/// lists it in `replaces` (`docs/extensions.md`, "What a package holds").
+pub const BUILT_IN_TOOLS: &[&str] = &[
+    "ask_user",
+    "delegate_spawn",
+    "edit",
+    "handoff",
+    "jobs",
+    "read",
+    "session_search",
+    "shell",
+    "web_fetch",
+    "web_search",
+    "write",
+];
+
 /// What a tool may ask of the signal that cancels its call
 /// (`docs/tools.md`, "Cancellation"). The signal itself lives outside
 /// `contract`, which holds no behaviour.
