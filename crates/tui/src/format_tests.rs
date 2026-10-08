@@ -265,3 +265,35 @@ fn bubble_rows_skip_the_pad_and_join_their_continuations() {
         [(Break, 1), (WrapSpace, 1), (WrapSpace, 1), (Wrap, 1)]
     );
 }
+
+#[test]
+fn answer_rows_match_the_result_lines_ask_user_writes() {
+    use super::{answer_row, note_row};
+    let labels = ["main (Recommended)".to_owned(), "dev".to_owned()];
+    assert_eq!(
+        answer_row("Base", Some((&labels, Some("and tags")))),
+        r#"Base: main (Recommended), dev, "and tags""#
+    );
+    assert_eq!(
+        answer_row("Name", Some((&[], Some("fiber-cli")))),
+        r#"Name: "fiber-cli""#
+    );
+    assert_eq!(
+        answer_row("Name", Some((&labels, None))),
+        "Name: main (Recommended), dev"
+    );
+    assert_eq!(answer_row("Name", None), "Name: skipped");
+    assert_eq!(answer_row("Name", Some((&[], None))), "Name: ");
+    assert_eq!(note_row("by friday"), r#"note: "by friday""#);
+}
+
+#[test]
+fn answer_rows_escape_headers_and_labels_onto_one_line() {
+    use super::{answer_row, note_row};
+    let labels = ["a \"b\"".to_owned()];
+    assert_eq!(
+        answer_row("Pick\nnow", Some((&labels, Some("x\ny")))),
+        r#"Pick\nnow: a \"b\", "x\ny""#
+    );
+    assert_eq!(note_row("one\ntwo"), r#"note: "one\ntwo""#);
+}

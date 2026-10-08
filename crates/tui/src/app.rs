@@ -41,6 +41,7 @@ pub(crate) mod copy;
 mod find;
 #[path = "app_focus.rs"]
 mod focus;
+mod form;
 #[path = "history.rs"]
 mod history;
 #[path = "app_home.rs"]
@@ -299,6 +300,7 @@ impl App {
         match self.queue.on_key(&key) {
             Some(PanelKey::Handled) => return Effect::None,
             Some(PanelKey::Answer) => return self.answer(),
+            Some(PanelKey::Decline) => return self.decline(),
             None => {}
         }
         if let Some(effect) = self.offer_key(&key) {
@@ -709,20 +711,6 @@ impl App {
             self.queue.restore(id);
             self.offer.restore(id);
         }
-    }
-
-    /// Sends the shown request's answer. With the link down nothing goes
-    /// out and the request stays.
-    fn answer(&mut self) -> Effect {
-        if self.link != Link::Up {
-            return Effect::None;
-        }
-        let id = mint();
-        let Some(line) = self.queue.answer(&id) else {
-            return Effect::None;
-        };
-        self.pending.insert(id, (Kind::Reply, String::new()));
-        Effect::Send(vec![line])
     }
 
     /// `/approvals` and Alt+A with the panel closed: a put-aside offer
