@@ -128,7 +128,7 @@ fn layout(line: &Line<'_>, width: u16, steps: &mut usize) -> Vec<Placed> {
     while let (Some(cell), Some((bytes, symbol))) = (cells.get(i), graphemes.get(g)) {
         *steps = steps.saturating_add(1);
         let drawn = cell.symbol();
-        if drawn == SENTINEL || drawn.is_empty() {
+        if drawn == SENTINEL {
             // Nothing drawn here, or the second cell of a wide grapheme.
             i = i.saturating_add(1);
         } else if drawn == *symbol {

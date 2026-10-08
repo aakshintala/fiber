@@ -659,12 +659,11 @@ fn wrap_joined(cells: &[Cell], first: usize, rest: usize, words: bool) -> Vec<(V
             join = Join::WrapSpace;
             used = 0;
         }
-        // Spaces at the start of a wrapped row are dropped; the row then
-        // joins the one before with a space.
+        // Spaces at the start of a wrapped row are dropped. Only a break
+        // at a space, which joins with one, or a newline leaves a row
+        // empty: a break inside a word puts the cell that overflowed on the
+        // new row at once.
         if words && ch == ' ' && row.is_empty() && !rows.is_empty() {
-            if join == Join::Wrap {
-                join = Join::WrapSpace;
-            }
             continue;
         }
         // One pass per cell of the piece.

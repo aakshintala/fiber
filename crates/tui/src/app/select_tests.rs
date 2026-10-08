@@ -184,6 +184,12 @@ fn a_press_then_release_selects_nothing() {
     assert_eq!(app.select.span(), None);
     assert!(!app.copied());
     assert!(app.selection_cells(app.conversation_area()).is_empty());
+    // A drag reported on the press's own cell is still a click.
+    press(&mut app, at);
+    assert_eq!(drag(&mut app, at), Effect::None);
+    assert_eq!(app.select.span(), None);
+    assert_eq!(release(&mut app, at), Effect::None);
+    assert!(!app.copied());
 }
 
 #[test]

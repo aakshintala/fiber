@@ -66,9 +66,6 @@ impl Selection {
     /// released without a drag selects nothing.
     fn release(&mut self) -> Option<(Point, Point)> {
         self.held = false;
-        if self.head.is_none() {
-            self.anchor = None;
-        }
         self.span()
     }
 
@@ -362,11 +359,11 @@ impl App {
         let (top, y0, shown) = self.view_rows(area);
         let last = self.last_row(area, y0, shown)?;
         let right = area.right().checked_sub(1)?;
-        let col = col.clamp(area.x, right);
-        let row = row.clamp(y0, last);
+        // Past the right or bottom edge is its last cell; the subtractions
+        // saturate, so past the left or top edge is its first.
         Some(Point {
-            row: top.saturating_add(usize::from(row.saturating_sub(y0))),
-            col: col.saturating_sub(area.x),
+            row: top.saturating_add(usize::from(row.min(last).saturating_sub(y0))),
+            col: col.min(right).saturating_sub(area.x),
         })
     }
 
