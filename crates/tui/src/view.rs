@@ -354,7 +354,9 @@ fn input_box(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
 /// Where the terminal cursor shows: at the draft's cursor while the input
 /// box has focus, at a question form's text cursor while its words row has
 /// the cursor, `None` while navigating, any other panel or the repository
-/// offer is open, or the cursor's row is off a screen too short for it.
+/// offer is open, or the cursor's row is off a screen too short for it. A
+/// shown form's caret wins over an open repository offer, which already
+/// gives the panel its keys.
 pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     if app.chrome().floor_line().is_some() {
         return None;
@@ -366,11 +368,18 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
         .chrome()
         .layout()
         .map_or(area, |layout| chrome::body(&layout));
-    if app.focused().is_some() || app.offer_open() {
+    if app.focused().is_some() {
         return None;
     }
+    // A shown panel wins over the offer: the panel takes the keys, so a
+    // form's caret takes the cursor.
     if let Some(panel) = app.panel() {
         return request::caret(&panel, area, area.bottom());
+    }
+    // The offer hides the draft's cursor while it swaps in for the
+    // conversation.
+    if app.offer_open() {
+        return None;
     }
     // The search bar's cursor at its query's end, while it is open
     // (`docs/tui.md`, "Search").
