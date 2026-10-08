@@ -425,6 +425,7 @@ impl App {
             return;
         }
         self.phase = Phase::Starting;
+        self.clear_selection();
         self.screen.clear();
         self.offer = crate::offer::Offer::default();
         self.overlays.slash_rows = slash::rows(&[]);

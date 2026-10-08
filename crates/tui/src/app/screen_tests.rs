@@ -261,3 +261,13 @@ fn open_marks_new_while_scrolled_up_and_reports_whether_it_changed() {
     assert!(screen.open(target));
     assert!(screen.has_new());
 }
+
+#[test]
+fn wrap_at_reports_a_new_width() {
+    let mut screen = screen(1);
+    assert!(!screen.wrap_at(80), "80 is the width already");
+    assert!(screen.wrap_at(40));
+    assert!(!screen.wrap_at(40));
+    assert!(screen.wrap_at(0), "0 wraps at 1, a new width");
+    assert!(!screen.wrap_at(1));
+}

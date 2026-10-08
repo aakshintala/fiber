@@ -15,7 +15,8 @@ use ratatui::text::{Line, Span};
 use serde_json::Value;
 
 use crate::app::Target;
-use crate::turn::{Group, Row, Thought, target_id};
+use crate::rows::{Join, RowText, Rows};
+use crate::turn::{Group, Thought, target_id};
 
 /// A span of milliseconds, truncated to whole seconds: `38s` under a
 /// minute, `4m 05s` under an hour, else `1h 02m`.
@@ -182,14 +183,26 @@ pub(crate) fn cut(text: &str, max: usize) -> String {
 /// a word wider than a row is broken where it reaches the edge. Each line
 /// of `text` starts a row.
 pub(crate) fn wrap(text: &str, max: usize) -> Vec<String> {
+    wrap_joined(text, max)
+        .into_iter()
+        .map(|(row, _)| row)
+        .collect()
+}
+
+/// [`wrap`]'s rows, each with how it joins the row before: a row a line of
+/// `text` starts is a break, one broken at a space joins with that space,
+/// and one broken inside a word joins with nothing.
+pub(crate) fn wrap_joined(text: &str, max: usize) -> Vec<(String, Join)> {
     let max = max.max(1);
     let mut rows = Vec::new();
     for line in text.split('\n') {
         let mut row = String::new();
+        let mut join = Join::Break;
         for word in line.split(' ') {
             // The space before the word counts only after another word.
             if !row.is_empty() && width(&row) + 1 + width(word) > max {
-                rows.push(std::mem::take(&mut row));
+                rows.push((std::mem::take(&mut row), join));
+                join = Join::WrapSpace;
             } else if !row.is_empty() {
                 row.push(' ');
             }
@@ -197,12 +210,13 @@ pub(crate) fn wrap(text: &str, max: usize) -> Vec<String> {
                 let mut buf = [0u8; 4];
                 let cell = width(ch.encode_utf8(&mut buf));
                 if !row.is_empty() && width(&row) + cell > max {
-                    rows.push(std::mem::take(&mut row));
+                    rows.push((std::mem::take(&mut row), join));
+                    join = Join::Wrap;
                 }
                 row.push(ch);
             }
         }
-        rows.push(row);
+        rows.push((row, join));
     }
     rows
 }
@@ -304,21 +318,27 @@ pub(crate) fn dim(text: String) -> Line<'static> {
 }
 
 /// The prompt as a tinted block on the right, at most 70% of `width`, with
-/// a column of padding each side.
-pub(crate) fn bubble(text: &str, columns: u16, out: &mut Vec<Row>) {
+/// a column of padding each side. The left pad is not text, and a wrapped
+/// row joins the one before as the wrap broke it.
+pub(crate) fn bubble(text: &str, columns: u16, out: &mut Rows) {
     if text.trim().is_empty() {
         return;
     }
     let max = (usize::from(columns).saturating_mul(7) / 10).max(3);
-    let rows = wrap(text, max.saturating_sub(2));
-    let wide = rows.iter().map(|row| width(row)).max().unwrap_or(0);
+    let rows = wrap_joined(text, max.saturating_sub(2));
+    let wide = rows.iter().map(|(row, _)| width(row)).max().unwrap_or(0);
     // debt: a fixed tint until themes land (#685), when the theme's bubble
     // colour replaces it.
     let tint = Style::default().bg(Color::DarkGray);
-    for row in rows {
+    for (row, join) in rows {
         let pad = " ".repeat(wide.saturating_sub(width(&row)));
         let span = Span::styled(format!(" {row}{pad} "), tint);
-        out.push((Line::from(span).right_aligned(), None));
+        let text = RowText {
+            join,
+            skip: 1,
+            ..RowText::plain()
+        };
+        out.push_text((Line::from(span).right_aligned(), None), text);
     }
 }
 
@@ -421,7 +441,7 @@ pub(crate) fn code(code: &ErrorCode) -> String {
 /// A failed turn's lines before its ▣ line: "✗ <message> · <code>", then,
 /// when the provider said something, its words dim under it. A failed
 /// login offers "log in" on the ✗ line.
-pub(crate) fn failure(error: &Failure, out: &mut Vec<Row>) {
+pub(crate) fn failure(error: &Failure, out: &mut Rows) {
     // #678 builds the login view `Target::Login` opens.
     let login = (error.code == ErrorCode::AuthenticationFailed).then_some(Target::Login);
     let line = format!("✗ {} · {}", error.message, code(&error.code));
@@ -468,7 +488,7 @@ pub(crate) fn thought(gutter: &str, text: &str, span: Option<u64>) -> Line<'stat
 }
 
 /// An opened item's text under it, a dim line each.
-pub(crate) fn opened(text: &str, indent: &str, out: &mut Vec<Row>) {
+pub(crate) fn opened(text: &str, indent: &str, out: &mut Rows) {
     for line in text.split('\n') {
         out.push((dim(format!("{indent}{line}")), None));
     }
@@ -509,7 +529,7 @@ impl Group {
 
     /// Its lines. A finished group with no call is its thinking, one line
     /// a block; otherwise a summary line, and the ledger when open.
-    pub(crate) fn rows(&self, running: bool, out: &mut Vec<Row>) {
+    pub(crate) fn rows(&self, running: bool, out: &mut Rows) {
         if !running && !self.has_ledger() {
             for thought in self.thoughts() {
                 thought_rows(thought, "", out);
@@ -563,7 +583,7 @@ impl Group {
 
     /// One row per call, split by step: the step's number in the gutter on
     /// its first row, the model calls that failed first, then its thinking.
-    fn ledger(&self, out: &mut Vec<Row>) {
+    fn ledger(&self, out: &mut Rows) {
         for section in &self.sections {
             let mut gutter = format!("{:>3} ", section.step);
             for (code, attempt) in &section.failed {
@@ -618,7 +638,7 @@ impl Group {
 const GAP: &str = "    ";
 
 /// A thought's line after `gutter`, and its text when open.
-fn thought_rows(thought: &Thought, gutter: &str, out: &mut Vec<Row>) {
+fn thought_rows(thought: &Thought, gutter: &str, out: &mut Rows) {
     let span = thought
         .ended
         .map(|ended| ended.saturating_sub(thought.started));

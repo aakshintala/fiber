@@ -15,6 +15,7 @@ use super::{Folded, Pages, Part, fold};
 use crate::app::{App, Effect, Target};
 use crate::keys::Key;
 use crate::link::Line;
+use crate::rows::Rows;
 use crate::turn::{Row, Turn};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
@@ -238,9 +239,9 @@ fn whole(pages: &Pages, lines: &[Envelope]) -> Vec<Row> {
     for line in lines {
         fold(&mut part, line);
     }
-    let mut out = Vec::new();
+    let mut out = Rows::default();
     pages.draw(0, &part, &mut out);
-    out
+    out.into_parts().0
 }
 
 /// Every page's lines joined, loading each dropped page from `lines`, and
@@ -259,7 +260,7 @@ fn joined(pages: &mut Pages, lines: &[Envelope]) -> Vec<Row> {
             }
         }
         assert!(pages.part(at).is_some(), "page {at} did not load");
-        let mut rows = Vec::new();
+        let mut rows = Rows::default();
         if let Some(part) = pages.part(at) {
             pages.draw(at, part, &mut rows);
         }
@@ -269,7 +270,7 @@ fn joined(pages: &mut Pages, lines: &[Envelope]) -> Vec<Row> {
             .sum();
         let counted = pages.index().pages().get(at).map(|page| page.rows);
         assert_eq!(counted, Some(drawn), "page {at}");
-        out.extend(rows);
+        out.extend(rows.into_parts().0);
     }
     out
 }
@@ -611,7 +612,7 @@ fn first_group(app: &App) -> Option<Target> {
 
 /// The lines of resident page `at`.
 fn page_texts(app: &App, at: usize) -> Vec<String> {
-    let mut rows = Vec::new();
+    let mut rows = Rows::default();
     if let Some(part) = app.pages().part(at) {
         app.pages().draw(at, part, &mut rows);
     }
@@ -1533,8 +1534,9 @@ fn reloading_an_orphan_page_keeps_its_seeded_target_ids() {
     pages.load(&stream.lines);
 
     let part = pages.part(0).expect("reloaded first page");
-    let mut rows = Vec::new();
+    let mut rows = Rows::default();
     pages.draw(0, part, &mut rows);
+    let rows = rows.into_parts().0;
     let targets: Vec<Target> = rows.into_iter().filter_map(|(_, target)| target).collect();
     assert_eq!(targets, [Target::Orphans(40), Target::Orphans(41)]);
 }
@@ -1632,8 +1634,9 @@ fn the_open_page_caches_only_its_lines_too_wide_for_one_row() {
     let width = 20u16;
     let at = pages.closed.len();
     let part = pages.part(at).expect("open page");
-    let mut out = Vec::new();
+    let mut out = Rows::default();
     pages.draw(at, part, &mut out);
+    let out = out.into_parts().0;
     let mut expected = HashMap::new();
     for (line, _) in &out {
         if line.width() > usize::from(width) {
@@ -1668,8 +1671,9 @@ fn shell_output_draws_only_on_its_own_page_after_its_own_turn() {
     pages.shells.push((1, 0, "other page".to_owned()));
     pages.shells.push((0, 1, "later turn".to_owned()));
     let part = pages.part(0).expect("open page");
-    let mut out = Vec::new();
+    let mut out = Rows::default();
     pages.draw(0, part, &mut out);
+    let out = out.into_parts().0;
     let texts: Vec<String> = out.iter().map(|(line, _)| line.to_string()).collect();
     assert_eq!(texts, vec!["here".to_owned()]);
 }
@@ -1709,7 +1713,7 @@ fn draw_data_skips_a_turn_drawing_no_rows() {
     let pages = Pages::new(80);
     let mut empty = part();
     empty.turns.push(Turn::part(0));
-    let (rows, _, turns) = pages.draw_data(0, &empty);
+    let (rows, _, _, turns) = pages.draw_data(0, &empty);
     assert!(rows.is_empty());
     assert!(
         turns.is_empty(),
@@ -1725,4 +1729,28 @@ fn toggling_ledgers_clears_only_group_overrides() {
     pages.toggle_ledgers();
     assert!(!pages.overrides.contains_key(&Target::Group(1)));
     assert!(pages.overrides.contains_key(&Target::Thought(2)));
+}
+
+#[test]
+fn every_row_of_the_fixture_places_inside_the_rows_it_draws() {
+    let lines = session(3, false);
+    for width in [12, 40, 120] {
+        let mut pages = Pages::new(width);
+        for line in &lines {
+            pages.apply(line);
+        }
+        for (line, _) in joined(&mut pages, &lines) {
+            let rows = crate::view::rows(line.clone(), width);
+            for placed in crate::cells::place(&line, width) {
+                assert!(
+                    usize::from(placed.row) < rows,
+                    "{line:?} at {width}: {placed:?}"
+                );
+                assert!(
+                    placed.col.saturating_add(placed.width) <= width,
+                    "{line:?} at {width}: {placed:?}"
+                );
+            }
+        }
+    }
 }

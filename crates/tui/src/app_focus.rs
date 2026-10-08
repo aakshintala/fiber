@@ -281,17 +281,29 @@ impl App {
         {
             self.cancel_pending_turn();
         }
-        let missing = crate::turn_text::request_turn(self.screen.pages_mut(), at);
+        // A pending copy pins each page once: a second press pins only the
+        // pages it does not hold, and the copy unpins exactly its own.
+        let mut held = self
+            .pending_turn
+            .take()
+            .map(|pending| pending.pages)
+            .unwrap_or_default();
+        let missing = crate::turn_text::request_turn(self.screen.pages_mut(), at, &held);
+        for page in missing.iter().copied() {
+            if !held.contains(&page) {
+                held.push(page);
+            }
+        }
+        self.pending_turn = Some(crate::turn_text::PendingTurn {
+            turn: at,
+            pages: held,
+        });
         if !missing.is_empty() {
-            self.pending_turn = Some(crate::turn_text::PendingTurn {
-                turn: at,
-                pages: missing,
-            });
             self.notices.push("Loading history…".to_owned());
             return None;
         }
         let text = self.screen.pages().turn_text(at);
-        crate::turn_text::release_turn(self.screen.pages_mut(), at);
+        self.cancel_pending_turn();
         text
     }
 

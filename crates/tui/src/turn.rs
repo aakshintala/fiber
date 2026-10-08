@@ -22,6 +22,7 @@ use serde_json::Value;
 use crate::app::{Target, read, text_of};
 use crate::format;
 use crate::markdown;
+use crate::rows::Rows;
 
 pub(crate) mod crash;
 mod group;
@@ -526,7 +527,7 @@ impl Turn {
     }
 
     /// The card's lines at `width`.
-    pub(crate) fn rows(&self, width: u16, out: &mut Vec<Row>) {
+    pub(crate) fn rows(&self, width: u16, out: &mut Rows) {
         for prompt in &self.prompts {
             format::bubble(prompt, width, out);
         }

@@ -43,9 +43,12 @@ impl Screen {
     }
 
     /// Wraps the pages at `width` columns; a new width re-counts every
-    /// page.
-    pub(super) fn wrap_at(&mut self, width: u16) {
-        self.pages.set_width(width.max(1));
+    /// page. Returns whether the width changed.
+    pub(super) fn wrap_at(&mut self, width: u16) -> bool {
+        let width = width.max(1);
+        let changed = width != self.pages.wrap_width();
+        self.pages.set_width(width);
+        changed
     }
 
     /// The screen's columns.

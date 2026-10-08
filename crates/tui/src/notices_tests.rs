@@ -138,6 +138,33 @@ fn dismiss_and_the_overlays() {
     assert_eq!(empty.overlay(), None);
 }
 
+#[test]
+fn held_notices_wait_for_the_release() {
+    let mut notices = stack(&["one", "two", "three"]);
+    notices.hold();
+    notices.push("during".to_owned());
+    notices.push("later".to_owned());
+    // Held notices are not drawn, not listed by "+N more" and not in the
+    // overlay; the ones from before the hold still show.
+    let first = |notices: &Notices| -> Vec<String> {
+        trimmed(&notices.boxes(100))
+            .iter()
+            .map(|rows| rows[0].trim_end_matches(['✕', ' ']).to_owned())
+            .collect()
+    };
+    assert_eq!(first(&notices), ["three", "two", "one"]);
+    notices.open_all();
+    assert_eq!(
+        notices.overlay(),
+        Some(vec!["three".to_owned(), "two".to_owned(), "one".to_owned()])
+    );
+    notices.close();
+    // A second hold keeps where the first began.
+    notices.hold();
+    notices.release();
+    assert_eq!(first(&notices), ["later", "during", "three", "+2 more"]);
+}
+
 /// An app attached to [`S_A`], connected, 100 columns wide.
 fn attached() -> App {
     let mut app = App::new(PathBuf::from("/w"));

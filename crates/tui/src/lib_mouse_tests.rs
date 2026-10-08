@@ -606,3 +606,120 @@ fn hover_never_tints_a_turn() {
     assert!(bytes[2] > 0);
     assert_eq!(bytes[3], 0);
 }
+
+/// A tty that is a file in `dir`: what the loop writes to it, read back.
+fn tty_file(dir: &fakes::TempDir) -> (std::fs::File, std::path::PathBuf) {
+    let path = dir.path().join("tty");
+    let file = std::fs::File::create(&path).unwrap_or_else(|err| panic!("tty: {err}"));
+    (file, path)
+}
+
+/// A press at 0-based `from`, a drag to `to` and its release there, in one
+/// read.
+fn drag_select(from: (u16, u16), to: (u16, u16)) -> Input {
+    Input::Bytes(
+        format!(
+            "\x1b[<0;{};{}M\x1b[<32;{};{}M\x1b[<0;{};{}m",
+            from.0 + 1,
+            from.1 + 1,
+            to.0 + 1,
+            to.1 + 1,
+            to.0 + 1,
+            to.1 + 1
+        )
+        .into_bytes(),
+    )
+}
+
+/// The screen row whose text holds `needle`, and the column it starts at.
+fn find_on(buf: &ratatui::buffer::Buffer, needle: &str) -> (u16, u16) {
+    let text = crate::view::text(buf);
+    text.lines()
+        .enumerate()
+        .find_map(|(row, line)| {
+            let byte = line.find(needle)?;
+            let col = line.get(..byte)?.chars().count();
+            Some((u16::try_from(col).ok()?, u16::try_from(row).ok()?))
+        })
+        .unwrap_or_else(|| panic!("{needle:?} is not on\n{text}"))
+}
+
+#[test]
+fn a_drag_and_release_writes_osc_52() {
+    let dir = fakes::TempDir::new("tui-select");
+    let (tty, path) = tty_file(&dir);
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let started = serde_json::json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": " "}]}]});
+    feed(
+        &mut lp,
+        vec![
+            session("turn_started", started, None),
+            session(
+                "text_completed",
+                serde_json::json!({"text": "hello world"}),
+                Some("a_1"),
+            ),
+        ],
+    );
+    let at = find_on(lp.screen.backend().buffer(), "hello world");
+    feed(&mut lp, vec![drag_select(at, (at.0 + 10, at.1))]);
+    assert!(lp.app.copied());
+    let written = std::fs::read(&path).unwrap_or_else(|err| panic!("read tty: {err}"));
+    let osc = b"\x1b]52;c;aGVsbG8gd29ybGQ=\x07";
+    assert!(
+        written.windows(osc.len()).any(|window| window == osc),
+        "{:?}",
+        String::from_utf8_lossy(&written)
+    );
+}
+
+#[test]
+fn a_drag_over_a_target_does_not_click_it() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let started = serde_json::json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    feed(
+        &mut lp,
+        vec![
+            session("turn_started", started, None),
+            session("reasoning_started", serde_json::json!({}), Some("a_r")),
+            session(
+                "reasoning_completed",
+                serde_json::json!({"text": "weigh it"}),
+                Some("a_r"),
+            ),
+            session(
+                "text_completed",
+                serde_json::json!({"text": "done"}),
+                Some("a_m"),
+            ),
+        ],
+    );
+    let at = find_on(lp.screen.backend().buffer(), "+ Thought");
+    // Pressed on the thought's line, dragged off and back, released there.
+    let (col, row) = (at.0 + 1, at.1 + 1);
+    feed(
+        &mut lp,
+        vec![Input::Bytes(
+            format!(
+                "\x1b[<0;{col};{row}M\x1b[<32;{};{row}M\x1b[<32;{col};{row}M\x1b[<0;{col};{row}m",
+                col + 4
+            )
+            .into_bytes(),
+        )],
+    );
+    // Opened, the thought's text would show on a line of its own.
+    assert!(
+        !lp.app
+            .lines()
+            .iter()
+            .any(|line| line.to_string().trim() == "weigh it"),
+        "the thought opened"
+    );
+    assert!(lp.app.copied(), "the drag selected and copied");
+}
