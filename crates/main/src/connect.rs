@@ -21,7 +21,7 @@ use serde_json::Value;
 /// for the model `reference`: `bedrock-converse` fails as [`connect`] does.
 pub(crate) fn speaks(protocol: Protocol, reference: &str) -> Result<(), Failure> {
     match protocol {
-        Protocol::BedrockConverse => Err(unspoken(reference)),
+        Protocol::BedrockConverse | Protocol::Scripted => Err(unspoken(reference)),
         Protocol::OpenaiResponses
         | Protocol::OpenaiCompletions
         | Protocol::AnthropicMessages
@@ -108,7 +108,9 @@ pub(crate) fn connect(
                 None => gemini,
             })
         }
-        Protocol::BedrockConverse => return Err(unspoken(&model.reference())),
+        Protocol::BedrockConverse | Protocol::Scripted => {
+            return Err(unspoken(&model.reference()));
+        }
     };
     Ok(match lua {
         Some(lua) => lua

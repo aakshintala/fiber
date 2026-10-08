@@ -19,6 +19,7 @@ use crate::{API, Error, LuaProvider};
 use contract::ThinkingLevel;
 
 mod placeholders;
+mod scripted;
 
 /// Every provider the installed extensions register, by name.
 #[derive(Clone, Default)]
@@ -583,6 +584,7 @@ impl Providers {
             let matches: Vec<Found<'_>> =
                 self.by_name
                     .values()
+                    .filter(|provider| provider.name != scripted::SCRIPTED)
                     .flat_map(|provider| {
                         let configured = provider
                             .models
