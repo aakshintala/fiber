@@ -12,9 +12,9 @@ use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
-use contract::events::{JobCompleted, JobLine, JobStarted, Outcome};
+use contract::events::{DelegateFinished, JobCompleted, JobLine, JobStarted, Outcome};
 use contract::inbox::{Claim, Delivery, JobNotice};
-use contract::jobs::{End, Foreground, JobRecord, Lines, OpenError, Opened, Opening};
+use contract::jobs::{End, Foreground, JobRecord, Lines, OpenError, Opened, Opening, Stop};
 use contract::shapes::Failure;
 use contract::tool::Cancel;
 use contract::{ErrorCode, JobId};
@@ -24,26 +24,31 @@ mod park;
 
 use park::{Parked, bump};
 
-/// A job's end not yet reported, held by the closure in its [`End`].
-/// Reporting consumes it; dropped unreported, it records the job failed
-/// `indeterminate`, since a runner that returned without reporting would
-/// otherwise leave the job running. A panic aborts the process; this is
-/// not a panic handler.
+/// A job's end not yet reported, held by the closure in its [`End`] or
+/// [`Finish`]. Reporting consumes it; dropped unreported, it records the
+/// job failed `indeterminate`, since a runner that returned without
+/// reporting would otherwise leave the job running. A panic aborts the
+/// process; this is not a panic handler.
 struct Unreported {
     job_id: JobId,
     /// Taken by the one report.
     registry: Option<Arc<Registry>>,
+    /// Whether this is a delegate: its drop carries an empty finish.
+    delegate: bool,
 }
 
 impl Unreported {
     /// Records `completed` for this job, whatever id the payload names: a
     /// payload that names another id would record the wrong job, or none.
-    fn report(mut self, completed: JobCompleted) {
+    fn report(mut self, completed: JobCompleted, delegate: Option<DelegateFinished>) {
         if let Some(registry) = self.registry.take() {
-            registry.finish(JobCompleted {
-                job_id: self.job_id.clone(),
-                ..completed
-            });
+            registry.finish(
+                JobCompleted {
+                    job_id: self.job_id.clone(),
+                    ..completed
+                },
+                delegate,
+            );
         }
     }
 }
@@ -51,19 +56,60 @@ impl Unreported {
 impl Drop for Unreported {
     fn drop(&mut self) {
         if let Some(registry) = self.registry.take() {
-            registry.finish(JobCompleted {
-                job_id: self.job_id.clone(),
-                status: Outcome::Failed,
-                error: Some(Failure {
-                    code: ErrorCode::Indeterminate,
-                    message: "The job ended without a result.".to_owned(),
-                    retry_after_ms: None,
-                    provider: None,
-                }),
-                process: None,
-                output_tail: None,
-            });
+            let delegate = self.delegate.then(|| empty_finished(&self.job_id));
+            registry.finish(
+                JobCompleted {
+                    job_id: self.job_id.clone(),
+                    status: Outcome::Failed,
+                    error: Some(Failure {
+                        code: ErrorCode::Indeterminate,
+                        message: "The job ended without a result.".to_owned(),
+                        retry_after_ms: None,
+                        provider: None,
+                    }),
+                    process: None,
+                    output_tail: None,
+                },
+                delegate,
+            );
         }
+    }
+}
+
+/// Reports how a delegate ended, once: its completion and, when the run
+/// produced one, its finish. Dropped unreported, it records the job failed
+/// `indeterminate` with an empty finish, as [`End`] does for other jobs.
+/// The runner (task 3.3) is its only caller.
+#[allow(dead_code, reason = "the runner reports through it in task 3.3")]
+pub(crate) struct Finish(Unreported);
+
+impl Finish {
+    /// Records the delegate's end. The payload's id is replaced with the
+    /// recorded one, as [`Unreported::report`] does.
+    #[allow(dead_code, reason = "the runner reports through it in task 3.3")]
+    pub(crate) fn report(self, completed: JobCompleted, delegate: Option<DelegateFinished>) {
+        self.0.report(completed, delegate);
+    }
+}
+
+/// A delegate that ended without reporting one: empty text, zero usage.
+fn empty_finished(job_id: &JobId) -> DelegateFinished {
+    DelegateFinished {
+        job_id: job_id.clone(),
+        text: String::new(),
+        artifact: None,
+        questions: None,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: std::collections::BTreeMap::new(),
+                output: 0,
+            },
+            cost: Some(0.0),
+            subscription_cost: 0.0,
+        },
+        worktree: None,
     }
 }
 
@@ -102,6 +148,12 @@ struct Job {
     input: Option<Typer>,
     stop_sent: bool,
     claimed: bool,
+    /// Whether this is a Fiber delegate: only `delegate_spawn` opens one.
+    /// The runner marks it; `stop_delegates` reads it.
+    #[allow(dead_code, reason = "the delegate tool opens one in task 3.4")]
+    delegate: bool,
+    /// A delegate's finish, kept past the end for a later `wait`.
+    finished: Option<DelegateFinished>,
 }
 
 type Typer = Arc<dyn Fn(&[u8], &dyn Clock, &dyn Cancel) -> std::io::Result<usize> + Send + Sync>;
@@ -117,8 +169,9 @@ enum Phase {
 pub(crate) struct Answer {
     /// The lines the model sees.
     pub(crate) text: String,
-    /// The completion, the first time it is delivered.
-    pub(crate) record: Option<JobRecord>,
+    /// The records, the first time they are delivered: a delegate's
+    /// finish, when it has one, then its completion.
+    pub(crate) records: Vec<JobRecord>,
 }
 
 /// `write` could not reach the job.
@@ -200,8 +253,11 @@ impl Registry {
         let unreported = Unreported {
             job_id,
             registry: Some(registry),
+            delegate: false,
         };
-        let end = End(Box::new(move |completed| unreported.report(completed)));
+        let end = End(Box::new(move |completed| {
+            unreported.report(completed, None)
+        }));
         inner.jobs.push(Job {
             started: started.clone(),
             path: path.clone(),
@@ -210,6 +266,8 @@ impl Registry {
             input: opening.input.map(|input| Arc::from(input.0)),
             stop_sent: false,
             claimed: false,
+            delegate: false,
+            finished: None,
         });
         Ok(Opened {
             started,
@@ -219,6 +277,47 @@ impl Registry {
             emit: Arc::clone(&self.emit),
             lines,
         })
+    }
+
+    /// Records a running Fiber delegate under `job_id`, without creating
+    /// an output file: the child writes its own log at `output_path`.
+    /// Only `delegate_spawn` opens one. The id is minted up front with
+    /// [`mint_job_id`], so the spawn and the record name the same job.
+    #[allow(dead_code, reason = "the delegate tool opens one in task 3.4")]
+    pub(crate) fn open_started(
+        self: &Arc<Self>,
+        job_id: JobId,
+        tool: String,
+        description: String,
+        output_path: String,
+        stop: Stop,
+    ) -> (JobStarted, Finish) {
+        let started = JobStarted {
+            job_id: job_id.clone(),
+            tool: Some(tool),
+            extension: None,
+            description,
+            output_path: output_path.clone(),
+        };
+        let finish = Finish(Unreported {
+            job_id: job_id.clone(),
+            // The caller holds this `Arc`, so the job it records always
+            // has a registry to end in.
+            registry: Some(Arc::clone(self)),
+            delegate: true,
+        });
+        lock(&self.inner).jobs.push(Job {
+            started: started.clone(),
+            path: PathBuf::from(output_path),
+            phase: Phase::Running,
+            stop: Arc::from(stop.0),
+            input: None,
+            stop_sent: false,
+            claimed: false,
+            delegate: true,
+            finished: None,
+        });
+        (started, finish)
     }
 
     /// Sends a monitor's batch to the inbox, under the lock an end sends
@@ -346,7 +445,7 @@ impl Registry {
         text.push_str(&state.text);
         Ok(Answer {
             text,
-            record: state.record,
+            records: state.records,
         })
     }
 
@@ -394,11 +493,15 @@ impl Registry {
             Some(path) => running_text(id, &path),
             None => format!("Job {id} is still running.\n"),
         };
-        Answer { text, record: None }
+        Answer {
+            text,
+            records: Vec::new(),
+        }
     }
 
-    /// The final state, claiming its [`JobRecord::Completed`] the first
-    /// time. `None` when the job is still running.
+    /// The final state, claiming its records the first time: a delegate's
+    /// finish, when it has one, then its completion. `None` when the job
+    /// is still running.
     fn answer_if_ended(&self, id: &str) -> Option<Answer> {
         let mut inner = lock(&self.inner);
         let job = inner
@@ -409,17 +512,46 @@ impl Registry {
             Phase::Ended(completed) => (**completed).clone(),
             Phase::Running => return None,
         };
-        let text = final_text(&job.path, &completed);
-        let record = if job.claimed {
-            None
+        let text = final_text(&job.path, &completed, job.finished.as_ref());
+        let records = if job.claimed {
+            Vec::new()
         } else {
             job.claimed = true;
-            Some(JobRecord::Completed(completed))
+            let mut records = Vec::with_capacity(2);
+            if let Some(finished) = job.finished.clone() {
+                records.push(JobRecord::DelegateFinished(finished));
+            }
+            records.push(JobRecord::Completed(completed));
+            records
         };
-        Some(Answer { text, record })
+        Some(Answer { text, records })
     }
 
-    fn finish(&self, completed: JobCompleted) {
+    /// Sends each running delegate its stop, once, and returns how many
+    /// were sent one. Ordinary jobs keep running; ended delegates send
+    /// nothing.
+    #[allow(dead_code, reason = "the budget end stops them in task 3.5")]
+    pub(crate) fn stop_delegates(&self) -> usize {
+        let stops: Vec<Arc<dyn Fn() + Send + Sync>> = {
+            let mut inner = lock(&self.inner);
+            inner
+                .jobs
+                .iter_mut()
+                .filter(|job| job.delegate && !job.stop_sent)
+                .filter(|job| matches!(job.phase, Phase::Running))
+                .map(|job| {
+                    job.stop_sent = true;
+                    Arc::clone(&job.stop)
+                })
+                .collect()
+        };
+        for stop in &stops {
+            stop();
+        }
+        stops.len()
+    }
+
+    fn finish(&self, completed: JobCompleted, delegate: Option<DelegateFinished>) {
         let mut guard = lock(&self.inner);
         let inner = &mut *guard;
         if let Some(job) = inner
@@ -434,6 +566,9 @@ impl Registry {
                 job.phase = Phase::Ended(Box::new(completed.clone()));
                 // The terminal closes with the job.
                 job.input = None;
+                // A delegate's finish is kept past the end, for a later
+                // `wait` and its text.
+                job.finished = delegate.clone();
                 if let Some(inbox) = &inner.inbox {
                     let registry = Weak::clone(&self.me);
                     let id = completed.job_id.0.clone();
@@ -447,7 +582,7 @@ impl Registry {
                     let _sent = inbox.send(Delivery::Job(JobNotice {
                         completed,
                         claim,
-                        delegate: None,
+                        delegate,
                     }));
                 }
             }
@@ -470,6 +605,13 @@ impl Registry {
 /// as the loop's ids.
 fn mint_id() -> String {
     format!("j_{:016x}", RandomState::new().hash_one(()))
+}
+
+/// Mints the id before spawning, so the launch and the record name the
+/// same delegate job.
+#[allow(dead_code, reason = "the delegate tool mints one in task 3.4")]
+pub(crate) fn mint_job_id() -> JobId {
+    JobId(mint_id())
 }
 
 fn phase_word(phase: &Phase) -> &'static str {
@@ -517,7 +659,11 @@ fn running_text(id: &str, path: &Path) -> String {
     format!("Job {id} is still running.\nOutput: {}\n", path.display())
 }
 
-fn final_text(path: &Path, completed: &JobCompleted) -> String {
+fn final_text(
+    path: &Path,
+    completed: &JobCompleted,
+    finished: Option<&DelegateFinished>,
+) -> String {
     let mut text = format!(
         "Job {} {}.\n",
         completed.job_id.0,
@@ -540,6 +686,15 @@ fn final_text(path: &Path, completed: &JobCompleted) -> String {
     if let Some(error) = &completed.error {
         text.push_str(&error.message);
         if !error.message.ends_with('\n') {
+            text.push('\n');
+        }
+    }
+    if let Some(finished) = finished {
+        // A delegate's final message rides its `wait` answer, as it rides
+        // its wake.
+        text.push_str("Final message:\n");
+        text.push_str(&finished.text);
+        if !finished.text.ends_with('\n') {
             text.push('\n');
         }
     }

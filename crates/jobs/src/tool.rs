@@ -139,7 +139,7 @@ impl JobsTool {
             Err(message) => return failed(message),
         };
         match self.registry.wait(&id, timeout_ms, cancel) {
-            Ok(answer) => answered(answer.text, answer.record),
+            Ok(answer) => answered(answer.text, answer.records),
             Err(()) => failed(unknown_message(&id)),
         }
     }
@@ -159,7 +159,7 @@ impl JobsTool {
             Err(message) => return failed(message),
         };
         match self.registry.write(&id, input, wait_ms, cancel) {
-            Ok(answer) => answered(answer.text, answer.record),
+            Ok(answer) => answered(answer.text, answer.records),
             Err(WriteError::Unknown) => failed(unknown_message(&id)),
             Err(WriteError::NotTty) => failed(format!("Job {id} was not started with `tty`.")),
             Err(WriteError::Ended(status)) => failed(format!(
@@ -179,7 +179,7 @@ impl JobsTool {
             Err(message) => return failed(message),
         };
         match self.registry.stop(&id, cancel) {
-            Ok(answer) => answered(answer.text, answer.record),
+            Ok(answer) => answered(answer.text, answer.records),
             Err(StopError::Unknown) => failed(unknown_message(&id)),
             Err(StopError::Ended(status)) => failed(format!(
                 "Job `{id}` has ended: {}.",
@@ -257,10 +257,10 @@ fn text_only(text: String) -> Output {
     }
 }
 
-fn answered(text: String, record: Option<JobRecord>) -> Output {
+fn answered(text: String, records: Vec<JobRecord>) -> Output {
     Output {
         content: vec![ContentPart::Text { text }],
-        jobs: record.into_iter().collect(),
+        jobs: records,
         ..Output::default()
     }
 }
