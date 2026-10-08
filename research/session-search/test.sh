@@ -39,12 +39,10 @@ echo "residency ok"
 # (#1349): drive a copy of run.sh with a fake toolchain.
 FAKE=$(mktemp -d)
 cp run.sh residency.py "$FAKE/"
-mkdir -p "$FAKE/bin"
-cat > "$FAKE/bin/cargo" <<'CARGO_EOF'
-#!/usr/bin/env bash
-if [ "${1:-}" = build ]; then
-  mkdir -p target/release
-  cat > target/release/session-search <<'BIN_EOF'
+mkdir -p "$FAKE/bin" "$FAKE/target/release"
+printf '#!/bin/sh\nexit 0\n' > "$FAKE/bin/cargo"
+chmod +x "$FAKE/bin/cargo"
+cat > "$FAKE/target/release/session-search" <<'BIN_EOF'
 #!/usr/bin/env bash
 if [ "${1:-}" = gen ]; then
   mkdir -p "$2/projects"
@@ -55,13 +53,7 @@ if [ "${SCAN_GARBAGE:-}" != "" ]; then
 fi
 exit 0
 BIN_EOF
-  chmod +x target/release/session-search
-  exit 0
-fi
-echo "stub cargo only builds" >&2
-exit 1
-CARGO_EOF
-chmod +x "$FAKE/bin/cargo"
+chmod +x "$FAKE/target/release/session-search"
 
 run_copy() {
   if command -v timeout >/dev/null 2>&1; then
@@ -71,31 +63,35 @@ run_copy() {
   fi
 }
 
+check_malformed() {
+  want=$1
+  err=$2
+  what=$3
+  if [ "$status" -eq 0 ]; then
+    echo "run.sh exited 0 with ${what} (want non-zero)" >&2
+    exit 1
+  fi
+  if [ -f "$FAKE/results.tsv" ] && [ "$(wc -l < "$FAKE/results.tsv" | tr -d ' ')" -gt 1 ]; then
+    echo "run.sh appended a row with ${what} (want none)" >&2
+    exit 1
+  fi
+  if ! grep -Fq "$want" "$err"; then
+    echo "run.sh stderr missed '${want}' for ${what}" >&2
+    exit 1
+  fi
+}
+
 # The stub scan prints nothing: ms is empty on both platforms.
 status=0
 (cd "$FAKE" && export CORPUS="$FAKE/corpus" PATH="$FAKE/bin:$PATH" && run_copy >run.log 2>run.err) || status=$?
-if [ "$status" -eq 0 ]; then
-  echo "run.sh exited 0 with an empty scan timing (want non-zero)" >&2
-  exit 1
-fi
-if [ -f "$FAKE/results.tsv" ] && [ "$(wc -l < "$FAKE/results.tsv" | tr -d ' ')" -gt 1 ]; then
-  echo "run.sh appended a row with an empty scan timing (want none)" >&2
-  exit 1
-fi
+check_malformed "could not read ms" "$FAKE/run.err" "an empty scan timing"
 
 if [ "$(uname -s)" = Linux ]; then
   # The stub scan writes garbage to stderr, which reaches the TIMEFILE
   # through /usr/bin/time -f, so the gnu read sees a non-number.
   status=0
   (cd "$FAKE" && rm -f results.tsv && export CORPUS="$FAKE/corpus" SCAN_GARBAGE=garbage PATH="$FAKE/bin:$PATH" && run_copy >run2.log 2>run2.err) || status=$?
-  if [ "$status" -eq 0 ]; then
-    echo "run.sh exited 0 with a garbage time read (want non-zero)" >&2
-    exit 1
-  fi
-  if [ -f "$FAKE/results.tsv" ] && [ "$(wc -l < "$FAKE/results.tsv" | tr -d ' ')" -gt 1 ]; then
-    echo "run.sh appended a row with a garbage time read (want none)" >&2
-    exit 1
-  fi
+  check_malformed "could not read peak RSS" "$FAKE/run2.err" "a garbage time read"
 fi
 
 echo "malformed timing read fails the run"

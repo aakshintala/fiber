@@ -93,7 +93,6 @@ for corpus in 300:25 1300:25 4000:25 1300:0; do
     for cache in $caches; do
       times=()
       rss_values=()
-      hits=
       left=
       if [ "$cache" = warm ]; then "$BIN" scan "$home" "$query" >/dev/null; fi
       for _ in $(seq "$RUNS"); do
@@ -101,9 +100,6 @@ for corpus in 300:25 1300:25 4000:25 1300:0; do
           evict_confirmed "$home" || { echo "eviction not confirmed: $home" >&2; exit 1; }
           left=confirmed
         fi
-        ms=
-        hits=
-        rss=
         case "$rss_mode" in
           gnu)
             out=$(/usr/bin/time -f '%M' "$BIN" scan "$home" "$query" 2>"$TIMEFILE")
