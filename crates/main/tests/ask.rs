@@ -151,23 +151,8 @@ impl Setup {
     /// Copies the first-party package `providers/<name>` with every base
     /// URL's origin `origin` replaced by `url`, and returns the copy.
     fn package(&self, name: &str, origin: &str, url: &str) -> PathBuf {
-        let from = package(name);
         let to = self.root.path().join(format!("pkg-{name}"));
-        let mut files = vec!["extension.json".to_owned()];
-        for entry in fs::read_dir(from.join("providers")).unwrap() {
-            let file = entry.unwrap().file_name();
-            files.push(format!("providers/{}", file.to_str().unwrap()));
-        }
-        // A Lua package's entry script, such as `openrouter`'s `cost()`.
-        if from.join("init.lua").exists() {
-            files.push("init.lua".to_owned());
-        }
-        for file in files {
-            let text = fs::read_to_string(from.join(&file)).unwrap();
-            fs::create_dir_all(to.join(&file).parent().unwrap()).unwrap();
-            fs::write(to.join(&file), text.replace(origin, url)).unwrap();
-        }
-        to
+        support::package::copy_package(name, &to, origin, url)
     }
 
     /// Runs `fiber` with `args` and its stdin on a pseudo-terminal.
@@ -2307,8 +2292,11 @@ fn openai_installed_by_path_completes_a_turn_on_a_scripted_stream() {
 #[test]
 fn openrouter_installed_by_path_records_the_inline_cost_on_a_completed_turn() {
     let setup = Setup::new();
-    let server =
-        ProviderServer::start([completions_hello("gen-abc123", json!(0.0000072))]).unwrap();
+    let server = ProviderServer::start([
+        Response::status(200, support::package::openrouter_listing()),
+        completions_hello("gen-abc123", json!(0.0000072)),
+    ])
+    .unwrap();
     install(
         &setup,
         &setup.package("openrouter", "https://openrouter.ai", &server.url()),
@@ -2323,9 +2311,10 @@ fn openrouter_installed_by_path_records_the_inline_cost_on_a_completed_turn() {
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     let requests = server.requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path, "/api/v1/chat/completions");
-    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-openrouter");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].path, "/api/v1/models");
+    assert_eq!(requests[1].path, "/api/v1/chat/completions");
+    assert_fingerprint(&requests[1], "authorization", "Bearer sk-test-openrouter");
     // The stream's 15 prompt tokens hold 14 cached, so the declared
     // prices give about 0.0000051: the inline figure stands instead.
     let recorded: Vec<_> = run
@@ -2371,6 +2360,7 @@ fn an_openrouter_stream_closed_early_records_its_generation_at_once() {
     let early = json!({"id": "gen-early", "object": "chat.completion.chunk", "choices": [
         {"index": 0, "delta": {"role": "assistant", "content": "Hel"}}]});
     let server = ProviderServer::start([
+        Response::status(200, support::package::openrouter_listing()),
         Response::stream(format!("data: {early}\n\n")),
         completions_hello("gen-ok", json!(0.0000072)),
     ])
@@ -2437,7 +2427,11 @@ fn an_openrouter_stream_closed_early_records_its_generation_at_once() {
 #[test]
 fn openrouter_sends_the_cache_key_and_anthropic_markers_for_a_claude_model() {
     let setup = Setup::new();
-    let server = ProviderServer::start([completions_hello("gen-one", json!(0.0001))]).unwrap();
+    let server = ProviderServer::start([
+        Response::status(200, support::package::openrouter_listing()),
+        completions_hello("gen-one", json!(0.0001)),
+    ])
+    .unwrap();
     install(
         &setup,
         &setup.package("openrouter", "https://openrouter.ai", &server.url()),
@@ -2461,7 +2455,10 @@ fn openrouter_sends_the_cache_key_and_anthropic_markers_for_a_claude_model() {
         .find(|l| l["kind"] == "preamble_built")
         .unwrap();
     assert_eq!(built["payload"]["cache_lifetime"], "1h");
-    let body: Value = serde_json::from_slice(&server.requests()[0].body).unwrap();
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].path, "/api/v1/models");
+    let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
     assert_eq!(body["session_id"], run.session_id());
     assert_eq!(body["prompt_cache_key"], run.session_id());
     let hour = json!({"type": "ephemeral", "ttl": "1h"});
@@ -2506,7 +2503,10 @@ fn openrouter_claude_request(
         &[("OPENROUTER_API_KEY", "sk-test-openrouter")],
     );
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    let body: Value = serde_json::from_slice(&server.requests()[0].body).unwrap();
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].path, "/api/v1/models");
+    let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
     (run, body)
 }
 
@@ -2530,7 +2530,11 @@ fn assert_five_minute_markers(run: &Run, body: &Value) {
 #[test]
 fn a_per_model_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
     let setup = Setup::new();
-    let server = ProviderServer::start([completions_hello("gen-one", json!(0.0001))]).unwrap();
+    let server = ProviderServer::start([
+        Response::status(200, support::package::openrouter_listing()),
+        completions_hello("gen-one", json!(0.0001)),
+    ])
+    .unwrap();
     let (run, body) = openrouter_claude_request(
         &server,
         &setup,
@@ -2543,7 +2547,11 @@ fn a_per_model_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
 #[test]
 fn a_repository_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
     let setup = Setup::new();
-    let server = ProviderServer::start([completions_hello("gen-one", json!(0.0001))]).unwrap();
+    let server = ProviderServer::start([
+        Response::status(200, support::package::openrouter_listing()),
+        completions_hello("gen-one", json!(0.0001)),
+    ])
+    .unwrap();
     let (run, body) = openrouter_claude_request(
         &server,
         &setup,
@@ -2554,48 +2562,23 @@ fn a_repository_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
 }
 
 #[test]
-fn the_openrouter_package_declares_completions_models_with_the_cache_key() {
+fn the_openrouter_data_file_holds_no_models_for_models_to_supply() {
     let providers = config::read_providers(&package("openrouter")).unwrap();
     assert_eq!(providers.len(), 1);
     let provider = &providers[0];
     assert_eq!(provider.name, "openrouter");
+    assert!(
+        matches!(
+            &provider.credential,
+            Some(config::CredentialSource::Env(var)) if var == "OPENROUTER_API_KEY"
+        ),
+        "{provider:?}"
+    );
     assert_eq!(
         provider.reviewer_model.as_deref(),
         Some("anthropic/claude-sonnet-5.5")
     );
-    assert!(
-        provider
-            .models
-            .iter()
-            .any(|m| m.id == "anthropic/claude-sonnet-5.5")
-    );
-    for model in &provider.models {
-        assert_eq!(
-            model.protocol,
-            config::Protocol::OpenaiCompletions,
-            "{}",
-            model.id
-        );
-        assert_eq!(
-            model.base_url, "https://openrouter.ai/api/v1",
-            "{}",
-            model.id
-        );
-        assert_eq!(
-            model.compat["cache_key_field"], "session_id",
-            "{}",
-            model.id
-        );
-        assert_eq!(
-            model.compat.get("anthropic"),
-            model
-                .id
-                .starts_with("anthropic/")
-                .then_some(&Value::Bool(true)),
-            "{}",
-            model.id
-        );
-    }
+    assert!(provider.models.is_empty());
 }
 
 #[test]
@@ -2782,11 +2765,20 @@ fn first_party_reviewer_models_name_a_shipped_non_contributor_model() {
     let mut seen: Vec<String> = Vec::new();
     for dir in &packages {
         for provider in config::read_providers(dir).unwrap() {
+            // A provider whose `models()` lists live ships no static models, so
+            // its reviewer model can only be checked for not being a contributor.
+            let valid = if provider.models.is_empty() {
+                provider
+                    .reviewer_model
+                    .as_deref()
+                    .is_none_or(|m| !m.contains("contributor"))
+            } else {
+                reviewer_model_valid(&provider)
+            };
             assert!(
-                reviewer_model_valid(&provider),
+                valid,
                 "{} names {:?} outside its models or a contributor model",
-                provider.name,
-                provider.reviewer_model
+                provider.name, provider.reviewer_model
             );
             match provider.name.as_str() {
                 "muse" | "opencode-zen" => assert_eq!(

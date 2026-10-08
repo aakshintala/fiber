@@ -219,14 +219,42 @@ fn malformed_case_fields_name_the_field() {
 #[test]
 fn a_call_case_names_the_supported_provider_functions() {
     let value = json!({
-        "call": {"provider": "openrouter", "function": "models", "arg": {}},
+        "call": {"provider": "openrouter", "function": "quota", "arg": {}},
         "returns": 0.5
     });
     let error = case_error(&value);
     assert!(
-        error.contains("call.function") && error.contains("cost"),
+        error.contains("call.function") && error.contains("cost") && error.contains("models"),
         "{error}"
     );
+}
+
+#[test]
+fn a_models_call_case_parses_with_a_list_return() {
+    let value = json!({
+        "call": {"provider": "openrouter", "function": "models", "arg": {}},
+        "returns": [{"id": "m1"}]
+    });
+    let Case::Call(parsed) = parse(&value).expect("valid models call case") else {
+        panic!("call case parsed as a session case");
+    };
+    assert_eq!(parsed.call.function, "models");
+    assert!(matches!(
+        parsed.outcome,
+        CallOutcome::Returns(ref returns) if *returns == json!([{"id": "m1"}])
+    ));
+}
+
+#[test]
+fn a_models_call_case_rejects_a_non_list_return() {
+    for returns in [json!(0.5), json!(null)] {
+        let value = json!({
+            "call": {"provider": "openrouter", "function": "models", "arg": {}},
+            "returns": returns
+        });
+        let error = case_error(&value);
+        assert!(error.contains("returns"), "{returns}: {error}");
+    }
 }
 
 #[test]

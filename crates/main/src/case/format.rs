@@ -134,13 +134,21 @@ impl Case {
                     return Err("a call case needs exactly one of returns or error".to_owned());
                 }
             };
-            if let CallOutcome::Returns(value) = &outcome
-                && !value.is_null()
-                && value
-                    .as_f64()
-                    .is_none_or(|number| !number.is_finite() || number < 0.0)
+            if call.function == "cost" {
+                if let CallOutcome::Returns(value) = &outcome
+                    && !value.is_null()
+                    && value
+                        .as_f64()
+                        .is_none_or(|number| !number.is_finite() || number < 0.0)
+                {
+                    return Err(
+                        "returns: expected null or a finite number at or above 0".to_owned()
+                    );
+                }
+            } else if let CallOutcome::Returns(value) = &outcome
+                && !value.is_array()
             {
-                return Err("returns: expected null or a finite number at or above 0".to_owned());
+                return Err("returns: models expects a list of models".to_owned());
             }
             if let CallOutcome::Error(value) = &outcome {
                 validate_expected_error(value)?;
@@ -383,8 +391,8 @@ fn parse_call(value: &Value) -> Result<Call, String> {
     only(map, &["provider", "function", "arg"], "call")?;
     let provider = string(map, "provider", "call")?;
     let function = string(map, "function", "call")?;
-    if function != "cost" {
-        return Err("call.function: supported functions are `cost`".to_owned());
+    if function != "cost" && function != "models" {
+        return Err("call.function: supported functions are `cost` and `models`".to_owned());
     }
     let arg = map.get("arg").cloned().ok_or("call.arg: required")?;
     Ok(Call {
