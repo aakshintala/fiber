@@ -115,6 +115,32 @@ give. Medians of five runs, in seconds:
 A shared runner's timings vary more than a laptop's; read them as the order
 of magnitude.
 
+## Results: parallel scan, macOS arm64, warm
+
+The scan reads sessions on parallel threads since
+[#1282](https://github.com/aakshintala/fiber/issues/1282). Both runs below are
+on the same Apple M3 Pro (11 cores) on 2026-10-07, back to back, against the
+same corpora, while other builds ran on the machine (load average 19 at the
+start of the first run, 11 at the start of the second). In `results.tsv` they
+are the last 16 rows: the first 8 are commit `f06d6b52` (one thread), the last
+8 are commit `62f05a6e` (parallel). Medians of five runs, in seconds:
+
+| Logs | Artifacts | Query | One thread | Parallel |
+|---|---|---|---|---|
+| 304 MiB | 187 MiB | many hits | 1.04 | 0.15 |
+| 304 MiB | 187 MiB | no hits | 0.70 | 0.11 |
+| 1,308 MiB | 808 MiB | many hits | 4.42 | 1.09 |
+| 1,308 MiB | 808 MiB | no hits | 2.88 | 1.00 |
+| 4,011 MiB | 2,476 MiB | many hits | 22.2 | 3.08 |
+| 4,011 MiB | 2,476 MiB | no hits | 25.7 | 2.65 |
+| 1,304 MiB | none | many hits | 2.20 | 0.35 |
+| 1,304 MiB | none | no hits | 2.40 | 0.38 |
+
+The load spread the one-thread runs more than the parallel ones (the
+1,308 MiB many-hits runs range from 4.0 to 9.3 s). One scan of the 1,304 MiB
+corpus with no artifacts, `retry budget`, had a peak memory footprint
+(`/usr/bin/time -l`) of 4.7 MiB on one thread and 11.0 MiB in parallel.
+
 ## Reproducing
 
 ```sh
