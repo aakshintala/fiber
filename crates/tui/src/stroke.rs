@@ -40,9 +40,10 @@ impl std::ops::BitOr for Mods {
 /// One key without its modifiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Code {
-    /// A printable character: never a control character, never an uppercase
-    /// letter (that shift lives in [`Mods`]), and never `' '` (that is
-    /// [`Code::Space`]).
+    /// A printable character: never a control character, and never `' '`
+    /// (that is [`Code::Space`]). Usually never an uppercase letter (that
+    /// shift lives in [`Mods`]), except when case does not round-trip back
+    /// to the letter, so `ẞ` and `İ` stay uppercase.
     Char(char),
     /// Enter.
     Enter,
@@ -168,23 +169,11 @@ impl Stroke {
                     if ch == ' ' {
                         Code::Space
                     } else {
-                        let mut folded = ch.to_lowercase();
-                        match (folded.next(), folded.next()) {
-                            (Some(one), None) if one != ch => {
-                                // Fold only when shift round-trips: the
-                                // uppercase of the lowercase is the letter
-                                // again, so `name` and the shown form agree
-                                // on it (`ß` stays `ß`, `ẞ` stays `ẞ`).
-                                let mut back = one.to_uppercase();
-                                if (back.next(), back.next()) == (Some(ch), None) {
-                                    mods = mods | Mods::SHIFT;
-                                    Code::Char(one)
-                                } else {
-                                    Code::Char(ch)
-                                }
-                            }
-                            _ => Code::Char(ch),
+                        let (base, shifted) = fold_shift(ch);
+                        if shifted {
+                            mods = mods | Mods::SHIFT;
                         }
+                        Code::Char(base)
                     }
                 }
             }
@@ -198,15 +187,6 @@ impl Stroke {
         Ok(Stroke { code, mods })
     }
 
-    // debt: Part 1a tests only; Part 1b's keyset consumes key names.
-    // Upgrade trigger: Part 1b.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "debt: Part 1a tests only; Part 1b's keyset consumes key names."
-        )
-    )]
     /// The written form: lowercase, the modifiers in `ctrl`, `shift`, `alt`,
     /// `super` order, such as `ctrl+t`.
     pub(crate) fn name(&self) -> String {
@@ -325,6 +305,24 @@ fn function_key(name: &str) -> Option<u8> {
     }
     let n: u8 = digits.parse().ok()?;
     (1..=12).contains(&n).then_some(n)
+}
+
+/// Folds an uppercase letter to its lowercase form: the letter and whether
+/// shift is held. Shift folds only when it round-trips back to the letter,
+/// so `name` and the shown form agree on it (`ß` stays `ß`, `ẞ` stays `ẞ`).
+pub(crate) fn fold_shift(ch: char) -> (char, bool) {
+    let mut folded = ch.to_lowercase();
+    match (folded.next(), folded.next()) {
+        (Some(one), None) if one != ch => {
+            let mut back = one.to_uppercase();
+            if (back.next(), back.next()) == (Some(ch), None) {
+                (one, true)
+            } else {
+                (ch, false)
+            }
+        }
+        _ => (ch, false),
+    }
 }
 
 #[cfg(test)]

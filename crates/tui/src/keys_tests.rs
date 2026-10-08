@@ -285,6 +285,9 @@ fn delete_and_legacy_word_keys() {
     assert_eq!(feed_all(&[b"\x1bb"]), edit(Edit::WordLeft));
     assert_eq!(feed_all(&[b"\x1bf"]), edit(Edit::WordRight));
     assert_eq!(feed_all(&[b"\x1b\x7f"]), edit(Edit::DeleteWord));
+    // `ESC 0x08` is an unbound stroke, so it maps to nothing: the old
+    // parser dropped it.
+    assert!(feed_all(&[b"\x1b\x08"]).is_empty());
 }
 
 #[test]
@@ -806,6 +809,12 @@ fn esc_with_a_byte_names_alt_with_that_stroke() {
         (b"\x1ba", Some(modified(Code::Char('a'), alt))),
         (b"\x1bA", Some(modified(Code::Char('a'), alt | Mods::SHIFT))),
         (b"\x1b\x7f", Some(modified(Code::Backspace, alt))),
+        // `ESC 0x08` is Ctrl+H under ESC, not Alt+Backspace: the old parser
+        // dropped it, so it reads as an unbound Ctrl+Alt+H stroke.
+        (
+            b"\x1b\x08",
+            Some(modified(Code::Char('h'), alt | Mods::CTRL)),
+        ),
         (
             b"\x1b\x03",
             Some(modified(Code::Char('c'), alt | Mods::CTRL)),
@@ -866,10 +875,17 @@ fn csi_letters_name_strokes() {
         (b"\x1b[1;5C", Some(modified(Code::Right, ctrl))),
         (b"\x1b[1;9C", Some(modified(Code::Right, super_))),
         (b"\x1b[1;9D", Some(modified(Code::Left, super_))),
+        // A bare `1` is no modifiers, as the old `arrow` read it.
+        (b"\x1b[1A", Some(plain(Code::Up))),
+        (b"\x1b[1B", Some(plain(Code::Down))),
+        (b"\x1b[1C", Some(plain(Code::Right))),
+        (b"\x1b[1D", Some(plain(Code::Left))),
         (b"\x1b[1;5H", Some(modified(Code::Home, ctrl))),
         (b"\x1b[1;3F", Some(modified(Code::End, alt))),
         // Not `1` before the semicolon, or no digits at all, is nothing.
         (b"\x1b[2;3C", None),
+        // A bare parameter other than `1` is nothing, as before.
+        (b"\x1b[2C", None),
         (b"\x1b[1;+3C", None),
         (b"\x1b[5A", None),
         // A modified `CSI P` reads as nothing.
@@ -1120,6 +1136,8 @@ fn default_event_matches_the_parity_table() {
         // A shifted letter with no single uppercase reads as nothing.
         (modified(Code::Char('\u{149}'), shift), None),
         (modified(Code::Char('+'), ctrl), None),
+        // `ESC 0x08` reads as Ctrl+Alt+H, which no binding uses.
+        (modified(Code::Char('h'), ctrl | alt), None),
     ];
     for (stroke, want) in cases {
         assert_eq!(&default_event(stroke), want, "{stroke:?}");

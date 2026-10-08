@@ -2,7 +2,7 @@
 //! replies (`docs/tui.md`, "Keys", "Mouse and hover"). [`default_event`]
 //! maps a stroke to the key or edit the app's handlers match.
 
-use crate::stroke::{Code, Mods, Stroke};
+use crate::stroke::{Code, Mods, Stroke, fold_shift};
 
 /// One key this slice handles.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -401,9 +401,17 @@ fn control_stroke(byte: u8) -> Option<(Code, Mods)> {
 
 /// `ESC` with the byte after it in the same read: Alt with that key's
 /// stroke (`ESC 0x7f` is Alt+Backspace, `ESC` with a control byte Ctrl+Alt
-/// with that letter).
+/// with that letter). `0x08` is Ctrl+H, so `ESC 0x08` is Ctrl+Alt+H, which
+/// no binding uses; the old parser dropped it.
 fn alt_stroke(buf: &[u8]) -> Step {
     let tail = buf.get(1..)?;
+    if tail.first() == Some(&0x08) {
+        let unbound = Event::Stroke(Stroke {
+            code: Code::Char('h'),
+            mods: Mods::CTRL | Mods::ALT,
+        });
+        return Some((vec![unbound], 2));
+    }
     if let Some(byte) = tail.first()
         && let Some((code, mods)) = control_stroke(*byte)
     {
@@ -540,11 +548,22 @@ fn csi_letter(final_byte: u8, params: &[u8]) -> Option<Event> {
         Mods::NONE
     } else {
         let text = std::str::from_utf8(params).ok()?;
-        let (one, rest) = text.split_once(';')?;
-        if one.split(':').next() != Some("1") {
-            return None;
+        match text.split_once(';') {
+            Some((one, rest)) => {
+                if one.split(':').next() != Some("1") {
+                    return None;
+                }
+                modifiers(rest)?
+            }
+            // A bare `1` is no modifiers, as the old `arrow` read it;
+            // any other bare parameter is nothing.
+            None => {
+                if text.split(':').next() != Some("1") {
+                    return None;
+                }
+                Mods::NONE
+            }
         }
-        modifiers(rest)?
     };
     let code = match final_byte {
         0x41 => Code::Up,
@@ -707,17 +726,11 @@ fn char_stroke(ch: char, mods: Mods) -> (Code, Mods) {
     if ch == ' ' {
         return (Code::Space, mods);
     }
-    let mut folded = ch.to_lowercase();
-    match (folded.next(), folded.next()) {
-        (Some(one), None) if one != ch => {
-            let mut back = one.to_uppercase();
-            if (back.next(), back.next()) == (Some(ch), None) {
-                (Code::Char(one), mods | Mods::SHIFT)
-            } else {
-                (Code::Char(ch), mods)
-            }
-        }
-        (Some(_), _) | (None, _) => (Code::Char(ch), mods),
+    let (base, shifted) = fold_shift(ch);
+    if shifted {
+        (Code::Char(base), mods | Mods::SHIFT)
+    } else {
+        (Code::Char(base), mods)
     }
 }
 
