@@ -11,6 +11,7 @@
 
 use std::ffi::OsString;
 use std::fs;
+use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
@@ -18,12 +19,12 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock;
-use fakes::{TempDir, Watchdog, group_empties, matching_exits};
+use fakes::{Watchdog, group_empties, matching_exits};
 use serde_json::json;
 
 use super::{
-    ChildEnvironment, RunOptions, RunTimeouts, child_command, discover_cases, extension_test_with,
-    process_group_id, summary,
+    ChildEnvironment, MAX_SOCKET_PATH, RunOptions, RunTimeouts, child_command, discover_cases,
+    extension_test_with, longest_planned_socket, process_group_id, summary,
 };
 
 const TEST_WAIT: Duration = Duration::from_secs(15);
@@ -32,13 +33,45 @@ const GROUP_EMPTY_WAIT: Duration = Duration::from_secs(5);
 const MATCHING_EXIT_WAIT: Duration = Duration::from_secs(5);
 
 struct Setup {
-    root: TempDir,
+    root: TestRoot,
     package: PathBuf,
+}
+
+/// A short directory directly under `/tmp`, removed on drop. Case sockets
+/// bind under the runner's temp root, and every byte of that root counts
+/// against the 100-byte socket budget (`MAX_SOCKET_PATH`), so test roots
+/// stay out of a long `TMPDIR`.
+struct TestRoot {
+    path: PathBuf,
+}
+
+impl TestRoot {
+    fn new() -> Self {
+        for _ in 0..64 {
+            let path = PathBuf::from(format!("/tmp/fx{}", doors::mint("")));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self { path },
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("creating {}: {error}", path.display()),
+            }
+        }
+        panic!("no unique test directory under /tmp");
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TestRoot {
+    fn drop(&mut self) {
+        let _removed = fs::remove_dir_all(&self.path);
+    }
 }
 
 impl Setup {
     fn new() -> Self {
-        let root = TempDir::new("fiber-cli-extension-test");
+        let root = TestRoot::new();
         let package = root.path().join("package");
         fs::create_dir_all(package.join("tests")).unwrap();
         fs::write(
@@ -181,6 +214,44 @@ fn a_package_with_no_case_files_prints_the_no_cases_line_and_fails() {
 #[test]
 fn summary_reports_passes_and_failures() {
     assert_eq!(summary(2, 1), "2 passed, 1 failed\n");
+}
+
+#[test]
+fn planned_case_sockets_fit_a_fifty_byte_temp_root() {
+    let root = PathBuf::from("r".repeat(50));
+    let socket = longest_planned_socket(&root);
+    assert!(
+        socket.as_os_str().len() < MAX_SOCKET_PATH,
+        "{socket:?} leaves no room for a 50-byte temp root"
+    );
+}
+
+#[test]
+fn a_temp_root_without_room_for_sockets_is_a_usage_error() {
+    let setup = Setup::new();
+    let mut options = setup.options(fakes::clock::FakeClock::new(), Vec::new());
+    options.temp_root = PathBuf::from("r".repeat(60));
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = extension_test_with(
+        Some(&setup.package),
+        Path::new("/bin/false"),
+        &options,
+        &mut out,
+        &mut err,
+    );
+
+    assert_eq!(code, 2);
+    assert!(out.is_empty());
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        format!(
+            "fiber: {} would need a {}-byte session socket path, past the 100-byte limit; set TMPDIR to a shorter directory\n",
+            options.temp_root.display(),
+            longest_planned_socket(&options.temp_root).as_os_str().len(),
+        )
+    );
 }
 
 #[test]

@@ -34,6 +34,7 @@ const SESSION_KINDS: &[&str] = &[
     "fiber_exited",
 ];
 
+// Rooted at `/tmp` on purpose: case sockets bind under this root and must stay under 104 bytes on macOS, while `fakes::TempDir` follows a long `TMPDIR`.
 struct TempRoot(PathBuf);
 
 impl TempRoot {
@@ -53,6 +54,32 @@ impl TempRoot {
 }
 
 impl Drop for TempRoot {
+    fn drop(&mut self) {
+        let _removed = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A deliberately long `TMPDIR` under `/tmp`: long enough to overflow the
+/// old runner layout, short enough for the shortened one. Removed on drop.
+struct LongRoot(PathBuf);
+
+impl LongRoot {
+    fn new() -> Self {
+        let path = Path::new("/tmp").join(format!("long-tmp-dir-{}{}", mint(""), mint("")));
+        fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+
+    fn is_empty(&self) -> bool {
+        fs::read_dir(&self.0).unwrap().next().is_none()
+    }
+}
+
+impl Drop for LongRoot {
     fn drop(&mut self) {
         let _removed = fs::remove_dir_all(&self.0);
     }
@@ -94,9 +121,9 @@ fn package(setup: &Setup) -> PathBuf {
     package
 }
 
-fn run(setup: &Setup, package: &Path, temp_root: &TempRoot, args: &[&str]) -> Output {
+fn run(setup: &Setup, package: &Path, temp_root: &Path, args: &[&str]) -> Output {
     let mut command = setup.fiber(args);
-    command.current_dir(package).env("TMPDIR", temp_root.path());
+    command.current_dir(package).env("TMPDIR", temp_root);
     support::run_to_exit(setup.deadline, "fiber extension test", command)
 }
 
@@ -107,7 +134,7 @@ fn test_runs_cases_without_a_path_and_isolates_every_home() {
     let temp_root = TempRoot::new();
     fs::write(setup.home().join("owner.marker"), "leave this home alone").unwrap();
 
-    let failed = run(&setup, &package, &temp_root, &["extension", "test"]);
+    let failed = run(&setup, &package, temp_root.path(), &["extension", "test"]);
     assert_eq!(failed.status.code(), Some(1));
     assert_eq!(
         String::from_utf8_lossy(&failed.stdout),
@@ -133,7 +160,7 @@ fn test_runs_cases_without_a_path_and_isolates_every_home() {
     let passed = run(
         &setup,
         &package,
-        &temp_root,
+        temp_root.path(),
         &["extension", "test", package_arg],
     );
     assert_eq!(passed.status.code(), Some(0));
@@ -146,6 +173,36 @@ fn test_runs_cases_without_a_path_and_isolates_every_home() {
         fs::read_to_string(setup.home().join("owner.marker")).unwrap(),
         "leave this home alone"
     );
+    assert!(
+        temp_root.is_empty(),
+        "case homes remain in {}",
+        temp_root.path().display()
+    );
+}
+
+#[test]
+fn session_cases_pass_with_a_long_tmpdir() {
+    let setup = Setup::new();
+    let package = package(&setup);
+    fs::write(
+        package.join("tests/c.json"),
+        case(SESSION_KINDS).to_string(),
+    )
+    .unwrap();
+    let temp_root = LongRoot::new();
+    assert!(
+        temp_root.path().as_os_str().len() >= 50,
+        "{} is too short to cover the long-TMPDIR layout",
+        temp_root.path().display()
+    );
+
+    let passed = run(&setup, &package, temp_root.path(), &["extension", "test"]);
+    assert_eq!(passed.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&passed.stdout),
+        "ok a\nok b\nok c\n3 passed, 0 failed\n"
+    );
+    assert!(passed.stderr.is_empty());
     assert!(
         temp_root.is_empty(),
         "case homes remain in {}",

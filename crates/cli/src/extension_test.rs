@@ -101,6 +101,17 @@ fn extension_test_with(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> i32 {
+    let planned = longest_planned_socket(&options.temp_root);
+    if planned.as_os_str().len() >= MAX_SOCKET_PATH {
+        writeln!(
+            err,
+            "fiber: {} would need a {}-byte session socket path, past the {MAX_SOCKET_PATH}-byte limit; set TMPDIR to a shorter directory",
+            options.temp_root.display(),
+            planned.as_os_str().len(),
+        )
+        .unwrap_or(());
+        return 2;
+    }
     let typed_path = path.unwrap_or_else(|| Path::new("."));
     let package = match typed_path.canonicalize() {
         Ok(package) if package.join("extension.json").is_file() => package,
@@ -205,8 +216,9 @@ fn run_case(
         Err(error) => return outcome(format!("temporary case directory: {error}")),
     };
     let mut result = (|| {
-        let home = directory.path.join("home");
-        let workspace = directory.path.join("workspace");
+        // Short names: every byte of the case directory counts against MAX_SOCKET_PATH.
+        let home = directory.path.join("h");
+        let workspace = directory.path.join("w");
         if let Err(error) = fs::create_dir_all(&home).and_then(|()| fs::create_dir_all(&workspace))
         {
             return outcome(format!("temporary case files: {error}"));
@@ -224,7 +236,7 @@ fn run_case(
         if let Err(error) = plan.commit() {
             return outcome(format!("installing the package: {error}"));
         }
-        let stdout = directory.path.join("child.stdout");
+        let stdout = directory.path.join("o");
         let output = match run_child(fiber, case, &home, &workspace, &stdout, options) {
             Ok(output) => output,
             Err(error) => return outcome(error),
@@ -586,14 +598,33 @@ struct RunDirectory {
     path: PathBuf,
 }
 
+/// Bytes a case's session socket path must stay under. `docs/state.md`
+/// ("Sockets") gives the platform limits; `doors` refuses longer homes at
+/// bind time, so the runner plans the short names below and fails fast in
+/// `extension_test_with` instead of letting every case die in session setup.
+const MAX_SOCKET_PATH: usize = 100;
+
+/// The case directory's name: short, since every byte of the temp root
+/// counts against `MAX_SOCKET_PATH`, and unique per run from 64 mint bits.
+fn run_dir_name(mint: &str) -> String {
+    format!("fx{mint}")
+}
+
+/// The longest socket path a case can bind: `<temp>/fx<mint>/h/run/<id>`.
+/// The case session id is always `s_` plus sixteen hex digits (the
+/// `doors::mint` in the case child), so any mint measures the bound.
+fn longest_planned_socket(temp_root: &Path) -> PathBuf {
+    temp_root
+        .join(run_dir_name(&doors::mint("")))
+        .join("h")
+        .join("run")
+        .join(doors::mint("s_"))
+}
+
 impl RunDirectory {
     fn new(parent: &Path) -> io::Result<Self> {
         fs::create_dir_all(parent)?;
-        let path = parent.join(format!(
-            "fiber-extension-test-{}-{}",
-            std::process::id(),
-            doors::mint("")
-        ));
+        let path = parent.join(run_dir_name(&doors::mint("")));
         fs::create_dir(&path)?;
         // Fiber home is private machine state (`docs/state.md`, "Override").
         if let Err(error) = fs::set_permissions(&path, fs::Permissions::from_mode(0o700)) {
