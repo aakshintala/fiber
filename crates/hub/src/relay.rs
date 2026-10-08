@@ -177,8 +177,17 @@ fn route(
                 return;
             }
             held.entries.remove(at);
+            drop(held);
+            #[cfg(test)]
+            {
+                if let Some(before) = lock(&hub.before_join).take() {
+                    before();
+                }
+            }
+            lock(relays).subscription(session)
+        } else {
+            held.subscription(session)
         }
-        held.subscription(session)
     };
     let sid = SessionId(session.to_owned());
     let opened = if exited {
@@ -309,6 +318,12 @@ fn relay(
                         continue;
                     }
                     Some(Settled::Subscribed(line)) => {
+                        #[cfg(test)]
+                        {
+                            if let Some(before) = lock(&hub.before_accepted).take() {
+                                before(&buf, relays);
+                            }
+                        }
                         lock(relays).accepted(session, epoch, line);
                     }
                     None => {}

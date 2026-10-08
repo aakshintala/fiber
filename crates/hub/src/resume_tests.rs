@@ -1069,3 +1069,104 @@ fn a_command_for_an_exiting_delegate_is_refused_at_once() {
     assert_eq!(temp.clock.now(), temp.clock.origin());
     assert!(starter.resumed().is_empty());
 }
+
+#[test]
+fn a_subscribe_accepted_as_the_session_dies_is_replayed() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    // Parks the old relay thread after it reads the subscribe
+    // acknowledgement and before it keeps the level, so the reconnect
+    // below runs while the acceptance is still unrecorded.
+    *crate::connection::lock(&hub.before_accepted) = Some(Box::new(move |line: &[u8], _| {
+        assert!(crate::relay::acknowledges(line, "c_1"), "{line:?}");
+        parked_tx.send(()).unwrap_or(());
+        release_rx
+            .recv_timeout(DEADLINE)
+            .expect("the reconnect releases the parked acknowledgement");
+    }));
+    client.subscribe("c_1", "full");
+    parked_rx
+        .recv_timeout(DEADLINE)
+        .expect("the relay parks before keeping the subscribe");
+    assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
+    *crate::connection::lock(&hub.before_join) = Some(Box::new(move || {
+        release_tx.send(()).unwrap_or(());
+    }));
+    client.send("c_2", "reply");
+    let first = client.acknowledged("the first acknowledgement");
+    let second = client.acknowledged("the second acknowledgement");
+    let mut ids = [first, second];
+    ids.sort();
+    assert_eq!(ids, ["c_1".to_owned(), "c_2".to_owned()]);
+    assert_eq!(starter.resumed().len(), 2);
+    let got = received_levels(&starter);
+    assert_eq!(got.len(), 3, "{got:?}");
+    assert_eq!(
+        got[0],
+        ("c_1".into(), "subscribe".into(), Some("full".into()))
+    );
+    assert_eq!(got[1].1, "subscribe");
+    assert!(got[1].0.starts_with("c_"), "{got:?}");
+    assert_ne!(got[1].0, "c_1", "the replay carries an id of the hub's own");
+    assert_eq!(got[1].2, Some("full".into()), "{got:?}");
+    assert_eq!(got[2], ("c_2".into(), "reply".into(), Some("full".into())));
+}
+
+#[test]
+fn a_level_change_accepted_as_the_session_dies_is_replayed() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "summary");
+    assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    // Parks the old relay thread after it reads the change's
+    // acknowledgement and before it keeps the new level.
+    *crate::connection::lock(&hub.before_accepted) = Some(Box::new(move |line: &[u8], _| {
+        assert!(crate::relay::acknowledges(line, "c_2"), "{line:?}");
+        parked_tx.send(()).unwrap_or(());
+        release_rx
+            .recv_timeout(DEADLINE)
+            .expect("the reconnect releases the parked acknowledgement");
+    }));
+    client.subscribe("c_2", "full");
+    parked_rx
+        .recv_timeout(DEADLINE)
+        .expect("the relay parks before keeping the change");
+    assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
+    *crate::connection::lock(&hub.before_join) = Some(Box::new(move || {
+        release_tx.send(()).unwrap_or(());
+    }));
+    client.send("c_3", "reply");
+    let first = client.acknowledged("the first acknowledgement");
+    let second = client.acknowledged("the second acknowledgement");
+    let mut ids = [first, second];
+    ids.sort();
+    assert_eq!(ids, ["c_2".to_owned(), "c_3".to_owned()]);
+    assert_eq!(starter.resumed().len(), 2);
+    let got = received_levels(&starter);
+    assert_eq!(got.len(), 4, "{got:?}");
+    assert_eq!(
+        got[0],
+        ("c_1".into(), "subscribe".into(), Some("summary".into()))
+    );
+    assert_eq!(
+        got[1],
+        ("c_2".into(), "subscribe".into(), Some("full".into()))
+    );
+    assert_eq!(got[2].1, "subscribe");
+    assert!(got[2].0.starts_with("c_"), "{got:?}");
+    assert_ne!(got[2].0, "c_1", "the replay carries an id of the hub's own");
+    assert_ne!(got[2].0, "c_2", "the replay carries an id of the hub's own");
+    assert_eq!(got[2].2, Some("full".into()), "{got:?}");
+    assert_eq!(got[3].0, "c_3");
+    assert_eq!(got[3].1, "reply");
+}
