@@ -551,7 +551,7 @@ fn the_key_map_scrolls_and_takes_every_key_but_ctrl_c() {
         app.on_key(Key::PageDown, now());
     }
     let last = app.keymap_top();
-    let rows: usize = crate::keymap::lines()
+    let rows: usize = crate::keymap::lines(app.keys())
         .iter()
         .map(|line| crate::view::rows(ratatui::text::Line::raw(line.as_str()), 80))
         .sum();

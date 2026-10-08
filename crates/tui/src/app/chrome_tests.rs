@@ -25,6 +25,7 @@ fn launch() -> Launch {
         model: None,
         thinking: None,
         logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),

@@ -27,6 +27,7 @@ fn launch() -> super::Launch {
         model: None,
         thinking: None,
         logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),
@@ -346,6 +347,23 @@ fn ctrl_c_twice_quits_with_zero() {
     assert_eq!(lp.run(&rx), 0);
     assert_eq!(lp.wakeups, 2);
     drop(tx);
+}
+
+#[test]
+fn a_rebound_new_session_answers_its_new_key() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let mut user = serde_json::Map::new();
+    user.insert("new_session".to_owned(), serde_json::json!("ctrl+t"));
+    lp.app.set_keys(crate::KeysSetup { user });
+    let (_, rx) = mpsc::channel();
+    // `0x0e` is Ctrl+N: with `new_session` rebound it does nothing.
+    assert_eq!(lp.step(Input::Bytes(vec![0x0e]), &rx), None);
+    assert!(lp.app.session().is_some());
+    // `0x14` is Ctrl+T: it goes home.
+    assert_eq!(lp.step(Input::Bytes(vec![0x14]), &rx), None);
+    assert!(lp.app.session().is_none());
 }
 
 #[test]

@@ -58,6 +58,9 @@ pub struct Launch {
     /// `tui.panel.cards`: the panel's cards, in order (`docs/tui.md`,
     /// "The panel").
     pub panel_cards: Vec<String>,
+    /// The person's `keys` (`docs/configuration.md`, "Keys"): the
+    /// effective bindings overlay it onto the defaults at startup.
+    pub keys: crate::KeysSetup,
 }
 
 /// What home draws, built by [`crate::app::App::home_screen`].

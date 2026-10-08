@@ -496,7 +496,7 @@ impl App {
         let top = self.overlays.keymap?;
         let height = self.conversation_height();
         let page = height.saturating_sub(1).max(1);
-        let total: usize = keymap::lines()
+        let total: usize = keymap::lines(self.keys())
             .iter()
             .map(|line| {
                 crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.column_width())

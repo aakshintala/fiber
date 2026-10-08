@@ -173,7 +173,7 @@ pub(crate) fn render(
     let conversation = Rect::new(area.x, area.y, area.width, rows);
     match app.keymap_top() {
         Some(top) => {
-            Paragraph::new(crate::keymap::lines().join("\n"))
+            Paragraph::new(crate::keymap::lines(app.keys()).join("\n"))
                 .wrap(Wrap { trim: false })
                 .scroll((to_u16(top), 0))
                 .render(conversation, buf);

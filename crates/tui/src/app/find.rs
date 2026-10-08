@@ -152,6 +152,12 @@ impl App {
         })
     }
 
+    /// Whether the search bar is open: what `key_context` reads, without
+    /// building the drawn count `find_bar` computes on every key.
+    pub(in crate::app) fn find_open(&self) -> bool {
+        self.find.is_open()
+    }
+
     /// The match marks on screen, each with whether it is the current
     /// match: every occurrence of the query in every shown logical line
     /// as drawn, the current one brighter (`docs/tui.md`, "Search").

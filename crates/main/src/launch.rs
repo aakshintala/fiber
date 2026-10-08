@@ -57,6 +57,7 @@ pub(crate) fn launch(workspace: PathBuf, identity: &Path, config: &Config) -> tu
                     .map(str::to_owned)
                     .to_vec()
             }),
+        keys: tui::KeysSetup::default(),
     }
 }
 
