@@ -399,6 +399,13 @@ impl App {
         self.settle();
     }
 
+    /// Shows a notice over the conversation: a clipboard read that never
+    /// started says why, and the draft stays as it is.
+    pub(crate) fn push_notice(&mut self, notice: String) {
+        self.notices.push(notice);
+        self.settle();
+    }
+
     /// The hub connection ended. Reconnecting is a later ticket. A
     /// connection never connected, refused for its schema version, keeps
     /// the notice that says why.

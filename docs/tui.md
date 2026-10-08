@@ -754,7 +754,9 @@ keyboard's reach.
   Wayland, else `xclip -selection clipboard -t image/png -o`. No terminal
   protocol carries the read. Where that machine has no readable clipboard,
   such as an SSH login, Ctrl+V shows a notice saying so and leaves the draft
-  as it is.
+  as it is. An image over 50 megapixels (width × height, read from its PNG
+  header) or over 256 MiB is refused at the paste with a notice, and the
+  draft is left as it is.
 - `!cmd` runs a shell command and sends its output with the next prompt.
   `!!cmd` runs it and shows the output only to the person (`shell` with
   `send` false, `docs/invocation.md`).

@@ -98,6 +98,15 @@ pub(crate) enum Input {
     /// The search's pause after `generation`'s keystroke passed: a scan
     /// for another generation is stale (`docs/tui.md`, "Search").
     FindDue(u64),
+    /// A clipboard image read finished for `ticket`: the image's bytes in
+    /// base64, or the notice saying why there is no image. A result for a
+    /// ticket no longer running, or a draft that moved on, is dropped.
+    Image {
+        /// The read's ticket.
+        ticket: u64,
+        /// The image in base64, or the notice.
+        result: Result<String, String>,
+    },
 }
 
 /// Restores the terminal [`run`] set up: turns mouse reporting off, leaves

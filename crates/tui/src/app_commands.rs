@@ -717,7 +717,6 @@ impl App {
     /// A clipboard image read finished: its image lands at the cursor
     /// when its ticket is running and the box holds its draft, its notice
     /// shows, and anything else is dropped silently.
-    #[allow(dead_code, reason = "the loop lands reads in a later task")]
     pub(crate) fn on_image(&mut self, ticket: u64, result: Result<String, String>) {
         match self.paste.land(ticket, self.draft.serial(), result) {
             super::paste::Landed::Image(data) => {

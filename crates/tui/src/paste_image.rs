@@ -14,17 +14,19 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use contract::clock::{Clock, Wake};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
 
+use crate::Input;
+
 /// How long a clipboard read may take, on the injected clock.
-#[allow(dead_code, reason = "the starter uses the limit in a later task")]
 pub(crate) const READ_LIMIT: Duration = Duration::from_secs(10);
 
 /// How many image bytes a paste may hold: 256 MiB.
-#[allow(dead_code, reason = "the starter uses the cap in a later task")]
 pub(crate) const IMAGE_CAP: usize = 256 * 1024 * 1024;
 
 /// How many pixels a pasted image may hold
@@ -36,17 +38,14 @@ pub(crate) const MAX_PIXELS: u64 = 50_000_000;
 const FRAME: usize = 14;
 
 /// The MIME type of every pasted image: each clipboard command returns PNG.
-#[allow(dead_code, reason = "the prompt content names the type in a later task")]
 pub(crate) const MIME_TYPE: &str = "image/png";
 
 /// What Ctrl+V shows where no clipboard reads.
-#[allow(dead_code, reason = "the starter shows the notice in a later task")]
 pub(crate) const NO_CLIPBOARD: &str = "No clipboard to read on this machine.";
 
 /// How the command's standard output reads: raw PNG bytes, or
 /// `osascript`'s `«data PNGf<hex>»` frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code, reason = "the loop wires the reader in a later task")]
 pub(crate) enum Decode {
     /// `wl-paste` and `xclip` print the PNG byte for byte.
     Raw,
@@ -57,7 +56,6 @@ pub(crate) enum Decode {
 /// The clipboard command for this machine: its arguments and how its
 /// output decodes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code, reason = "the loop wires the reader in a later task")]
 pub(crate) struct Reader {
     /// The program and its arguments.
     pub(crate) argv: Vec<String>,
@@ -89,7 +87,6 @@ pub(crate) enum Failed {
 
 impl Failed {
     /// What Ctrl+V shows: the draft stays as it is.
-    #[allow(dead_code, reason = "the paste gate shows the notice in a later task")]
     pub(crate) fn notice(&self) -> String {
         match self {
             Failed::NoImage => "No image on the clipboard.".to_owned(),
@@ -109,7 +106,6 @@ impl Failed {
 }
 
 /// Whether an environment variable counts as set: present and not empty.
-#[allow(dead_code, reason = "the loop wires the reader in a later task")]
 fn is_set(env: &dyn Fn(&str) -> Option<OsString>, name: &str) -> bool {
     env(name).is_some_and(|value| !value.is_empty())
 }
@@ -119,7 +115,6 @@ fn is_set(env: &dyn Fn(&str) -> Option<OsString>, name: &str) -> bool {
 /// none; elsewhere `wl-paste --type image/png` under Wayland, else
 /// `xclip -selection clipboard -t image/png -o`, each when its display
 /// variable is set and its program is on `PATH`.
-#[allow(dead_code, reason = "the loop wires the reader in a later task")]
 pub(crate) fn command(
     macos: bool,
     env: impl Fn(&str) -> Option<OsString>,
@@ -173,7 +168,6 @@ pub(crate) fn command(
 /// included: SIGKILL to the command's process group, SIGKILL to the
 /// child's pid when it has not exited, the read end dropped, the watcher's
 /// word, then the reap, by this worker alone.
-#[allow(dead_code, reason = "the starter runs the read in a later task")]
 pub(crate) fn read(
     reader: &Reader,
     clock: &Arc<dyn Clock>,
@@ -462,6 +456,37 @@ fn finish(end: End, exited_zero: bool, out: Vec<u8>, decode: Decode) -> Result<V
         return Err(Failed::TooManyPixels { width, height });
     }
     Ok(bytes)
+}
+
+/// Starts the clipboard read for `ticket` on a worker thread of its own:
+/// the read, the decode, the pixel check and the base64 encode all run
+/// there, and the worker posts [`Input::Image`] with the base64 or the
+/// notice. `Some` notice when nothing started: no reader, no channel, or
+/// the thread could not spawn.
+pub(crate) fn start(
+    reader: Option<&Reader>,
+    clock: &Arc<dyn Clock>,
+    out: Option<&mpsc::Sender<Input>>,
+    ticket: u64,
+) -> Option<String> {
+    let (Some(reader), Some(out)) = (reader, out) else {
+        return Some(NO_CLIPBOARD.to_owned());
+    };
+    let (reader, clock, out) = (reader.clone(), Arc::clone(clock), out.clone());
+    match std::thread::Builder::new()
+        .name("tui-paste-read".to_owned())
+        .spawn(move || {
+            let result = match read(&reader, &clock, READ_LIMIT, IMAGE_CAP) {
+                Ok(bytes) => Ok(STANDARD.encode(bytes)),
+                Err(failed) => Err(failed.notice()),
+            };
+            match out.send(Input::Image { ticket, result }) {
+                Ok(()) | Err(_) => {}
+            }
+        }) {
+        Ok(_) => None,
+        Err(error) => Some(Failed::Spawn(error.to_string()).notice()),
+    }
 }
 
 /// `osascript`'s `«data PNGf<hex>»` and line break as PNG bytes: the hex of

@@ -12,7 +12,10 @@ use fakes::children;
 use fakes::clock::FakeClock;
 use fakes::{TempDir, Watchdog, group_empties, kill_pid, pids_exit};
 
-use super::{Decode, Failed, Reader, apple_script_png, command, png_size, read, refused};
+use super::{
+    Decode, Failed, NO_CLIPBOARD, Reader, apple_script_png, command, png_size, read, refused,
+    start,
+};
 
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -668,4 +671,91 @@ fn the_pixel_limit_is_the_sessions() {
         assert_eq!(answered(&rx, "the pixel limit"), want);
         reaped(watchdog, pgid, "the pixel limit");
     }
+}
+/// [`PIXEL`] as base64, what a finished read posts.
+const PIXEL_BASE64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+
+/// A reader running `sh -c` with `script`.
+fn start_reader(script: &str) -> Reader {
+    Reader {
+        argv: vec!["sh".to_owned(), "-c".to_owned(), script.to_owned()],
+        decode: Decode::Raw,
+    }
+}
+
+/// The worker's post within [`DEADLINE`], failing after it.
+fn posted(rx: &mpsc::Receiver<crate::Input>, what: &str) -> crate::Input {
+    rx.recv_timeout(DEADLINE)
+        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for {what}"))
+}
+
+#[test]
+fn start_without_a_reader_shows_why() {
+    // S1: nothing runs, and nothing is posted.
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (tx, rx) = mpsc::channel();
+    assert_eq!(
+        start(None, &clock, Some(&tx), 3),
+        Some(NO_CLIPBOARD.to_owned())
+    );
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}
+
+#[test]
+fn start_without_a_channel_shows_why() {
+    // S2.
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let reader = start_reader("exit 0");
+    assert_eq!(
+        start(Some(&reader), &clock, None, 3),
+        Some(NO_CLIPBOARD.to_owned())
+    );
+}
+
+#[test]
+fn start_posts_the_reads_image() {
+    // S3: the pixel as base64 under its ticket.
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let reader = start_reader(&format!("printf '{}'", octal(PIXEL)));
+    let (tx, rx) = mpsc::channel();
+    assert_eq!(start(Some(&reader), &clock, Some(&tx), 7), None);
+    let crate::Input::Image { ticket, result } = posted(&rx, "the started read") else {
+        panic!("the worker posted something else");
+    };
+    assert_eq!(ticket, 7);
+    assert_eq!(result.unwrap(), PIXEL_BASE64);
+}
+
+#[test]
+fn start_posts_a_failure_as_its_notice() {
+    // S4: a failing reader posts no image.
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let reader = start_reader("exit 1");
+    let (tx, rx) = mpsc::channel();
+    assert_eq!(start(Some(&reader), &clock, Some(&tx), 7), None);
+    let crate::Input::Image { ticket, result } = posted(&rx, "the failing read") else {
+        panic!("the worker posted something else");
+    };
+    assert_eq!(ticket, 7);
+    assert_eq!(result, Err("No image on the clipboard.".to_owned()));
+}
+
+#[test]
+fn start_posts_the_pixel_refusal_as_its_notice() {
+    // S5: past the pixel limit, in the session's own words.
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let reader = start_reader(&format!("printf '{}'", octal(&header(50_000_001, 1))));
+    let (tx, rx) = mpsc::channel();
+    assert_eq!(start(Some(&reader), &clock, Some(&tx), 7), None);
+    let crate::Input::Image { ticket, result } = posted(&rx, "the over-limit read") else {
+        panic!("the worker posted something else");
+    };
+    assert_eq!(ticket, 7);
+    assert_eq!(
+        result,
+        Err("The image on the clipboard cannot be read: 50000001x1 is 50000001 pixels; \
+             the limit is 50000000"
+            .to_owned())
+    );
 }

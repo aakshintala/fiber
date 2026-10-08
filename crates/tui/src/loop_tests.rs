@@ -145,6 +145,7 @@ fn opened() -> (
         files_out: None,
         search: None,
         reader: None,
+        paste_reader: None,
         pointer: crate::mouse::Pointer::default(),
         hover: true,
         var: Box::new(|_| None),
@@ -333,7 +334,8 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             | Input::ConnectFailed(_)
             | Input::Disconnected
             | Input::FindDue(_)
-            | Input::Files { .. } => "other".to_owned(),
+            | Input::Files { .. }
+            | Input::Image { .. } => "other".to_owned(),
             Input::Resize => "resize".to_owned(),
         })
         .collect();

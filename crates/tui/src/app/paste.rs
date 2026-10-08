@@ -11,7 +11,6 @@ use super::Effect;
 
 /// A read running, and the draft it started for.
 #[derive(Debug)]
-#[allow(dead_code, reason = "the loop lands reads in a later task")]
 struct Running {
     /// The read's ticket.
     ticket: u64,
@@ -30,7 +29,6 @@ pub(super) struct Paste {
 }
 
 /// What a read's result does.
-#[allow(dead_code, reason = "the loop lands reads in a later task")]
 pub(super) enum Landed {
     /// The image's base64, to insert at the cursor.
     Image(Arc<str>),
@@ -57,7 +55,6 @@ impl Paste {
     /// image, the notice, or nothing dropped. Only the running ticket's
     /// result clears the gate; a result for any other ticket changes
     /// nothing.
-    #[allow(dead_code, reason = "the loop lands reads in a later task")]
     pub(super) fn land(
         &mut self,
         ticket: u64,
