@@ -34,7 +34,13 @@ impl Loop {
         let queued = std::mem::take(&mut self.queued);
         if !self.rewound {
             for piece in queued {
-                if let Queued::Job(completed) = piece {
+                if let Queued::Job(completed, delegate) = piece {
+                    if let Some(finished) = delegate {
+                        let event = Event::DelegateFinished(crate::delegated::bounded(
+                            &self.log, finished,
+                        ));
+                        self.log.append(&event, None, None)?;
+                    }
                     self.log
                         .append(&Event::JobCompleted(completed), None, None)?;
                 }
@@ -81,7 +87,12 @@ impl Loop {
         }
         match delivery {
             Delivery::Job(notice) => {
-                if let Some(completed) = claimed(notice) {
+                if let Some((completed, delegate)) = claimed(notice) {
+                    if let Some(finished) = delegate {
+                        let event =
+                            Event::DelegateFinished(crate::delegated::bounded(&self.log, finished));
+                        self.log.append(&event, None, None)?;
+                    }
                     self.log
                         .append(&Event::JobCompleted(completed), None, None)?;
                 }

@@ -33,6 +33,7 @@ mod changes;
 mod commands;
 mod completion;
 mod conversation;
+mod delegated;
 mod diag;
 mod error;
 mod handoff;

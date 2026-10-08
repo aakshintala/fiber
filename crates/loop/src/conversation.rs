@@ -289,7 +289,6 @@ impl Rendered {
             | Event::JobStarted(_)
             | Event::DelegateStarted(_)
             | Event::JobDelta(_)
-            | Event::DelegateFinished(_)
             | Event::CommandAccepted(_)
             | Event::CommandRejected(_) => {
                 self.render(event, action, model);
@@ -309,7 +308,9 @@ impl Rendered {
             }
             // A job notice joins at a step boundary, as a steer does: it
             // starts a new batch. A `wait` or `stop` record, under its
-            // call's action, continues the batch.
+            // call's action, continues the batch. A delegate's finish
+            // rides with its job's notice, in log order, and is held with
+            // it.
             // A notice a resume logged while a suspended batch was open
             // waits for that batch's results.
             Event::JobCompleted(job) => {
@@ -320,6 +321,19 @@ impl Rendered {
                     self.carry.fold_jobs(event);
                     self.held.push(Input::User {
                         text: crate::jobs::notice_text(job),
+                        images: Vec::new(),
+                    });
+                } else {
+                    self.render(event, action, model);
+                }
+            }
+            Event::DelegateFinished(finished) => {
+                if action.is_none() {
+                    self.flush();
+                }
+                if action.is_none() && !self.outstanding.is_empty() {
+                    self.held.push(Input::User {
+                        text: crate::jobs::delegate_text(finished),
                         images: Vec::new(),
                     });
                 } else {
@@ -439,6 +453,14 @@ pub(crate) fn render(
         Event::JobCompleted(completed) if action.is_none() => conversation.push(Input::User {
             text: crate::jobs::notice_text(completed),
          images: Vec::new(),}),
+        // A delegate's finish the model was not already given: its final
+        // message. A `wait` or `stop` record carries its call's action
+        // and renders nothing; that call's result already said it.
+        Event::DelegateFinished(finished) if action.is_none() => {
+            conversation.push(Input::User {
+            text: crate::jobs::delegate_text(finished),
+         images: Vec::new(),})
+        }
         // A monitor's batch: one message, rendered from the line alone.
         Event::JobLine(line) => conversation.push(Input::User {
             text: crate::jobs::line_text(line),
