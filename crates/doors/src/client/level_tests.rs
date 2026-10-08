@@ -198,7 +198,7 @@ impl Write for HeldWrite {
 #[test]
 fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
     let (_temp, log, id, clock) = open_log();
-    let watcher = log.watch_all().unwrap();
+    let watcher = log.watch_all();
     let outbox = Outbox::new(watcher.injector());
     let held = Held::waiting();
     let (switch_tx, switches) = mpsc::channel();

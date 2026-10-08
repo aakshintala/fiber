@@ -227,10 +227,11 @@ impl Log {
     /// A watcher that receives every durable line from `seq` 0, then
     /// everything written after it was registered. The queue is registered
     /// before the log is read, so a line written between the two is queued
-    /// and also read; [`Watcher`] returns it once. The first page of lines
-    /// is read now, so a first page that does not parse refuses the watch;
-    /// later pages are read as the watcher reaches them.
-    pub fn watch_all(&self) -> Result<Watcher, Error> {
+    /// and also read; [`Watcher`] returns it once. A first page that does
+    /// not parse keeps every line before the failure: the watcher returns
+    /// them, then the failure once, then nothing; later pages are read as
+    /// the watcher reaches them.
+    pub fn watch_all(&self) -> Watcher {
         let armed = self.arm(true);
         self.finish(armed)
     }
@@ -241,7 +242,7 @@ impl Log {
     /// watcher is registered and its seed queued under the one log lock
     /// that `append` takes, so no later line can be queued before an older
     /// snapshot.
-    pub fn watch_all_seeded(&self) -> Result<Watcher, Error> {
+    pub fn watch_all_seeded(&self) -> Watcher {
         let armed = {
             let mut inner = self.lock();
             let queue = Arc::new(Queue::default());
@@ -304,16 +305,10 @@ impl Log {
     /// a line appended after it arrives through the watcher's queue, behind
     /// the kept lines already in it, and is deduplicated by `seq` when a
     /// page also holds it.
-    fn finish(&self, armed: Armed) -> Result<Watcher, Error> {
+    fn finish(&self, armed: Armed) -> Watcher {
         let end = armed.offsets.count();
-        let (first, more) = armed.offsets.page(0, end)?;
-        Ok(Watcher::starting(
-            armed.queue,
-            armed.offsets,
-            first,
-            more,
-            end,
-        ))
+        let first = armed.offsets.page(0, end);
+        Watcher::starting(armed.queue, armed.offsets, first, end)
     }
 
     /// `full` cut to `bound`, with a notice of how many bytes were cut and
