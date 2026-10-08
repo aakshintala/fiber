@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use contract::events::{Event, ModelSettings, Notice, SwitchSource};
+use contract::events::{Event, ModelChanged, ModelSettings, Notice, SwitchSource};
 use contract::inbox::{Ack, Rejection};
 use contract::tool::Tool;
 use contract::{ErrorCode, ThinkingLevel};
@@ -199,6 +199,40 @@ impl Loop {
         if idle {
             self.apply_switches()?;
         }
+        Ok(())
+    }
+
+    /// Called once by `Loop::resume`: writes `model_changed` with `before`
+    /// = `recorded` when `recorded` is `Some`, its `credential` is `Some`,
+    /// and that label differs from the session's label. A rewound loop
+    /// passes `None` and writes nothing (`docs/events.md`,
+    /// "`model_changed`").
+    pub(crate) fn resumed_label(&mut self, recorded: Option<ModelSettings>) -> Result<(), Error> {
+        let Some(recorded) = recorded else {
+            return Ok(());
+        };
+        // A `preamble_built` with no `credential` field folds to settings
+        // with `credential: None`, and records no label to switch from; the
+        // same label as the session's writes nothing either.
+        if recorded.credential.is_none() || recorded.credential == self.prompt.credential {
+            return Ok(());
+        }
+        let after = self.settings();
+        crate::util::write(
+            &self.log,
+            &mut self.conversation,
+            &mut self.reviewed,
+            &self.model.reference,
+            &Event::ModelChanged(ModelChanged {
+                before: recorded,
+                after,
+                source: SwitchSource::Driver,
+            }),
+            None,
+            None,
+            &mut self.changes.had,
+            &mut self.handoff.carry,
+        )?;
         Ok(())
     }
 

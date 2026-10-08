@@ -1708,3 +1708,213 @@ fn a_resumed_turn_reviews_with_the_notes_on_disk() {
         "{instructions:?}"
     );
 }
+
+/// A resume switching the label records `model_changed` with the recorded
+/// settings as `before`: the label and every setting the log last had.
+#[test]
+fn a_resume_with_a_new_label_records_model_changed() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    labels(&setup, "work", &["work", "home"]);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "providers": {"fake": {"credential": "work"}}, "cache": {"lifetime": "5m"}}),
+    );
+    let first = setup.fiber(&["ask", "one"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let id = first.session_id().to_owned();
+
+    // The configuration changes the cache lifetime; the resume switches
+    // the label.
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "providers": {"fake": {"credential": "work"}}}),
+    );
+    let second = setup.fiber(&["ask", "--resume", &id, "--credential", "home", "two"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    let mut expected = vec!["fiber_started", "extensions_loaded", "model_changed"];
+    expected.extend(ask_kinds(true)[2..].iter().copied());
+    assert_eq!(second.kinds(), expected);
+    let changed = second
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "model_changed")
+        .unwrap();
+    assert_eq!(
+        changed["payload"]["before"],
+        json!({"model": "fake/m", "cache_lifetime": "5m", "credential": "work"})
+    );
+    assert_eq!(
+        changed["payload"]["after"],
+        json!({"model": "fake/m", "cache_lifetime": "1h", "credential": "home"})
+    );
+    assert_eq!(changed["payload"]["source"], "driver");
+    let built = second
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["reason"], "resume");
+    assert_eq!(built["payload"]["credential"], "home");
+    let requests = server.requests();
+    assert_eq!(
+        requests[1].header("authorization"),
+        Some(fakes::fingerprint("Bearer home-key").as_str())
+    );
+}
+
+/// A resume with the recorded label records nothing.
+#[test]
+fn a_resume_with_the_same_label_records_nothing() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    labels(&setup, "work", &["work", "home"]);
+    let first = setup.fiber(&["ask", "one"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let id = first.session_id().to_owned();
+
+    let second = setup.fiber(&["ask", "--resume", &id, "--credential", "work", "two"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(second.kinds(), ask_kinds(true));
+}
+
+/// A resume with a label that names nothing fails before the session, and
+/// the log stays byte for byte as it was.
+#[test]
+fn a_resume_with_an_absent_label_fails_before_the_session() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    labels(&setup, "work", &["work", "home"]);
+    let first = setup.fiber(&["ask", "one"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let id = first.session_id().to_owned();
+    let events = setup.sessions().join(&id).join("events.jsonl");
+    let before = fs::read(&events).unwrap();
+
+    let run = setup.fiber(&["ask", "--resume", &id, "--credential", "nope", "two"]);
+    assert_pre_session(&run, 1, "credential_missing");
+    assert!(run.stderr.contains("home"), "stderr: {}", run.stderr);
+    assert!(run.stderr.contains("work"), "stderr: {}", run.stderr);
+    assert_eq!(fs::read(&events).unwrap(), before);
+}
+
+/// A live resume with a label switches before the prompt's turn: the
+/// request carries the new label's key, and the log holds `model_changed`
+/// then `preamble_built` before the turn.
+#[test]
+fn a_live_resume_with_a_new_label_switches_before_the_prompt() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    labels(&setup, "work", &["work", "home"]);
+    let id = doors::mint("s_");
+    let workspace = setup.workspace();
+    let running = start(
+        &setup,
+        &[
+            "session",
+            "--id",
+            &id,
+            "--workspace",
+            workspace.to_str().unwrap(),
+        ],
+    );
+    // The socket is bound before the session's first stdout line, so the
+    // line is the signal the socket accepts.
+    first_line(setup.deadline, &running.stdout);
+    let socket = support::Socket::connect(setup.deadline, &setup.home().join("run").join(&id));
+
+    let run = setup.fiber(&["ask", "--resume", &id, "--credential", "home", "hi"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(
+        requests[0].header("authorization"),
+        Some(fakes::fingerprint("Bearer home-key").as_str())
+    );
+    let kinds: Vec<String> = fs::read_to_string(setup.sessions().join(&id).join("events.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap()["kind"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    let changed = kinds
+        .iter()
+        .position(|kind| kind == "model_changed")
+        .unwrap();
+    let built = kinds
+        .iter()
+        .position(|kind| kind == "preamble_built")
+        .unwrap();
+    let started = kinds
+        .iter()
+        .position(|kind| kind == "turn_started")
+        .unwrap();
+    assert!(changed < built && built < started, "{kinds:?}");
+
+    socket.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
+    socket.send(r#"{"id":"c_close","command":"close"}"#);
+    finish(running);
+}
+
+/// A live resume with a label that names nothing is rejected, and no turn
+/// starts.
+#[test]
+fn a_live_resume_with_an_absent_label_is_rejected() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    labels(&setup, "work", &["work", "home"]);
+    let id = doors::mint("s_");
+    let workspace = setup.workspace();
+    let running = start(
+        &setup,
+        &[
+            "session",
+            "--id",
+            &id,
+            "--workspace",
+            workspace.to_str().unwrap(),
+        ],
+    );
+    // The socket is bound before the session's first stdout line, so the
+    // line is the signal the socket accepts.
+    first_line(setup.deadline, &running.stdout);
+    let socket = support::Socket::connect(setup.deadline, &setup.home().join("run").join(&id));
+
+    let run = setup.fiber(&["ask", "--resume", &id, "--credential", "nope", "hi"]);
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(run.lines.len(), 1, "{:?}", run.lines);
+    assert_eq!(
+        run.lines[0]["payload"]["error"]["code"],
+        "credential_missing"
+    );
+    let message = run.lines[0]["payload"]["error"]["message"]
+        .as_str()
+        .unwrap();
+    assert!(message.contains("home"), "{message}");
+    assert!(message.contains("work"), "{message}");
+    assert!(server.requests().is_empty(), "no turn started");
+    let kinds: Vec<String> = fs::read_to_string(setup.sessions().join(&id).join("events.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap()["kind"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert!(!kinds.contains(&"turn_started".to_owned()), "{kinds:?}");
+
+    socket.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
+    socket.send(r#"{"id":"c_close","command":"close"}"#);
+    finish(running);
+}

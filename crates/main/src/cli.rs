@@ -467,6 +467,10 @@ pub(crate) struct AskArgs {
     #[arg(long, value_name = "id")]
     pub(crate) resume: Option<String>,
 
+    /// On a resume, the credential label to switch the session to.
+    #[arg(long, value_name = "label", requires = "resume")]
+    pub(crate) credential: Option<String>,
+
     /// Run the session in a new worktree (`docs/invocation.md`,
     /// "Isolation").
     #[arg(long, conflicts_with = "resume")]

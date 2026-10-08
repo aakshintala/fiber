@@ -11,7 +11,8 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use contract::events::{
-    DecidedBy, Decision, Event, Grant, JobCompleted, ToolCallRequested, TurnCompleted, TurnOutcome,
+    DecidedBy, Decision, Event, Grant, JobCompleted, ModelSettings, ToolCallRequested,
+    TurnCompleted, TurnOutcome,
 };
 use contract::inbox::Delivery;
 use contract::provider::Provider;
@@ -58,7 +59,8 @@ pub struct Resumed {
     /// (`docs/model-routing.md`, "Choosing the model"). `None` when the log
     /// holds none.
     pub model: Option<String>,
-    /// The last `preamble_built`'s credential label: the label a resumed
+    /// The last `preamble_built`'s credential label, or the last
+    /// `model_changed`'s `after` one when it came later: the label a resumed
     /// session keeps, beating the configured one (`docs/model-routing.md`,
     /// "Which credential a session uses"). `None` when the log holds none.
     pub credential: Option<String>,
@@ -66,6 +68,10 @@ pub struct Resumed {
     /// treats it as its own choice (`docs/model-routing.md`, "Thinking").
     /// `None` when the log holds none.
     pub thinking: Option<String>,
+    /// The settings the log last recorded: the last `preamble_built`'s, or
+    /// the last `model_changed`'s `after` when it came later. `None` when
+    /// the log holds neither.
+    pub(crate) settings: Option<ModelSettings>,
     /// The window's start, as a position in the chain: the segment and
     /// the `seq` the window starts at: the latest `turn_started` of the
     /// latest completed handoff's turn, before that handoff; the chain's
@@ -254,6 +260,7 @@ impl Loop {
             orphans,
             thinking,
             offers,
+            settings,
             ..
         } = resumed;
         let lines = crate::history::read_window(&log, window, end)?;
@@ -383,6 +390,11 @@ impl Loop {
             late_cost: crate::late_cost::LateCost::default(),
         };
         resumed.mark_orphans(orphans)?;
+        // After any orphaned `job_completed` lines, before the first
+        // `preamble_built`: a resume that switches the credential label
+        // records it as a switch does (`docs/events.md`,
+        // "`model_changed`").
+        resumed.resumed_label(settings)?;
         Ok(resumed)
     }
 }

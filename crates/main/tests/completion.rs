@@ -102,7 +102,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
     (
         "ask",
         &[],
-        &["--model", "--resume", "--worktree", "-h", "--help"],
+        &["--model", "--resume", "--credential", "--worktree", "-h", "--help"],
     ),
     ("models", &[], &["--json", "-h", "--help"]),
     ("approve", &[], &["--yes", "-h", "--help"]),
