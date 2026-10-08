@@ -593,11 +593,17 @@ fn path_decls(path: &str, source: &str) -> Vec<PathDecl> {
 
 /// The module path a file's location under `src/` gives it: `lib.rs` and
 /// `main.rs` at the root are the crate root, `a/mod.rs` is `a`, `a/b.rs`
-/// is `a::b`. `None` when the file sits outside `src/`.
+/// is `a::b`. A file under `examples/<name>/` is placed the same way within
+/// that example. `None` when the file sits outside both.
 fn conventional_module(path: &str, members: &Members) -> Option<String> {
     let name = owner(path, members)?;
     let member = members.get(name)?;
-    let modules = path.get(member.dir.len() + 1..)?.strip_prefix("src/")?;
+    let rel = path.get(member.dir.len() + 1..)?;
+    // An example directory is its own crate root, `main.rs` its root file.
+    let modules = match rel.strip_prefix("examples/") {
+        Some(example) => example.split_once('/')?.1,
+        None => rel.strip_prefix("src/")?,
+    };
     let parts: Vec<&str> = modules.split('/').collect();
     match parts.as_slice() {
         [file] if *file == "lib.rs" || *file == "main.rs" => Some(String::new()),
@@ -648,6 +654,37 @@ fn module_path(
     result
 }
 
+/// The test-id prefix of the tests in the test file at `path`, whose
+/// directories under its binary's root are `modules` and whose name is
+/// `file`: the module a top-level `#[path]` declaration gives it, else the
+/// module its location gives it.
+fn test_prefix(
+    path: &str,
+    modules: &[&str],
+    file: &str,
+    members: &Members,
+    by_target: &BTreeMap<String, Vec<DeclarerIdent>>,
+) -> String {
+    let declared = match by_target.get(path).map(Vec::as_slice) {
+        Some([_]) => {
+            let mut stack = Vec::new();
+            module_path(path, members, by_target, &mut stack).map(|module| format!("{module}::"))
+        }
+        _ => None,
+    };
+    declared.unwrap_or_else(|| {
+        let stem = file.strip_suffix(".rs").unwrap_or(file);
+        let module = test_module(modules.is_empty(), stem);
+        modules
+            .iter()
+            .copied()
+            .chain(module)
+            .chain(["tests"])
+            .map(|m| format!("{m}::"))
+            .collect()
+    })
+}
+
 /// The nextest filter selecting every test in the test files among
 /// `files`, and the packages that own them. `sources` is every Rust file
 /// in the workspace: a `src/` test file a top-level `#[path]`
@@ -686,26 +723,14 @@ pub(crate) fn test_filter(
                 format!("binary_id({name}::{binary})")
             }
             ["src", modules @ .., file] => {
-                let declared = match by_target.get(path).map(Vec::as_slice) {
-                    Some([_]) => {
-                        let mut stack = Vec::new();
-                        module_path(path, members, &by_target, &mut stack)
-                            .map(|module| format!("{module}::"))
-                    }
-                    _ => None,
-                };
-                let prefix: String = declared.unwrap_or_else(|| {
-                    let stem = file.strip_suffix(".rs").unwrap_or(file);
-                    let module = test_module(modules.is_empty(), stem);
-                    modules
-                        .iter()
-                        .copied()
-                        .chain(module)
-                        .chain(["tests"])
-                        .map(|m| format!("{m}::"))
-                        .collect()
-                });
+                let prefix = test_prefix(path, modules, file, members, &by_target);
                 format!("(package({name}) & test(/^{prefix}/))")
+            }
+            // An example directory is a binary of its own, named
+            // `<package>::example/<name>`.
+            ["examples", example, modules @ .., file] => {
+                let prefix = test_prefix(path, modules, file, members, &by_target);
+                format!("(binary_id({name}::example/{example}) & test(/^{prefix}/))")
             }
             _ => continue,
         };
