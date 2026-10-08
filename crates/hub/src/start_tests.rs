@@ -17,8 +17,8 @@ use std::thread;
 use std::time::Duration;
 
 use contract::ErrorCode;
-use contract::SessionId;
 use contract::clock::Clock;
+use contract::{CommandId, SessionId};
 use serde_json::{Value, json};
 
 use super::*;
@@ -99,7 +99,13 @@ fn started_before(
     thread::Builder::new()
         .name("hub-test-start".to_owned())
         .spawn(move || {
-            let outcome = run(&hub, &workspace, model.as_deref(), content.as_ref());
+            let outcome = run(
+                &hub,
+                &CommandId("c_start".to_owned()),
+                &workspace,
+                model.as_deref(),
+                content.as_ref(),
+            );
             done_tx.send(outcome).unwrap_or(());
         })
         .unwrap();
@@ -146,9 +152,10 @@ fn an_accepted_start_mints_a_session_id_and_binds_its_socket() {
     let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
     let workspace = temp.workspace();
     let outcome = started(hub, workspace, None, None);
-    let Outcome::Accepted { session_id } = outcome else {
+    let Outcome::Accepted { session_id, first } = outcome else {
         panic!("the start is accepted");
     };
+    assert!(first.is_none(), "a start without content holds no prompt");
     assert!(is_hex_id(&session_id.0));
     assert!(temp.dir.join("run").join(&session_id.0).exists());
 }
@@ -348,35 +355,73 @@ fn session_started_keeps_workspace_and_model_out_of_the_log() {
     );
 }
 
-#[test]
-fn content_is_delivered_as_the_first_prompt_and_accepted() {
-    let temp = Temp::new();
-    let starter = FakeStarter::with_handshake(
-        &temp.dir,
-        Handshake {
-            accept: true,
-            code: String::new(),
-            message: String::new(),
-        },
-    );
-    let hub = temp.hub(starter.clone());
+fn accepting() -> Handshake {
+    Handshake {
+        accept: true,
+        code: String::new(),
+        message: String::new(),
+    }
+}
+
+/// Runs `start` with `content` on a thread and returns the hub and the
+/// held first prompt.
+fn held(temp: &Temp, starter: FakeStarter, content: &Value) -> (Arc<Hub>, Box<Held>) {
+    let hub = Arc::new(temp.hub(starter));
     let workspace = temp.workspace();
-    let content = json!([{"type": "text", "text": "hi"}]);
-    let outcome = started_before(
-        hub,
-        workspace,
-        None,
-        Some(content.clone()),
-        HANDSHAKE_DEADLINE,
-    );
-    let Outcome::Accepted { .. } = outcome else {
-        panic!("the start is accepted");
+    let (done_tx, done_rx) = mpsc::channel();
+    let running = Arc::clone(&hub);
+    let content = content.clone();
+    thread::Builder::new()
+        .name("hub-test-start".to_owned())
+        .spawn(move || {
+            let outcome = run(
+                &running,
+                &CommandId("c_start".to_owned()),
+                &workspace,
+                None,
+                Some(&content),
+            );
+            done_tx.send(outcome).unwrap_or(());
+        })
+        .unwrap();
+    let outcome = done_rx
+        .recv_timeout(HANDSHAKE_DEADLINE)
+        .expect("start answers before its deadline");
+    let Outcome::Accepted {
+        first: Some(held), ..
+    } = outcome
+    else {
+        panic!("the start is accepted with its prompt held");
     };
+    (hub, held)
+}
+
+/// Sends the held prompt on a thread, within the handshake deadline.
+fn prompted(hub: Arc<Hub>, held: Held) -> Result<(), Outcome> {
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-prompt".to_owned())
+        .spawn(move || done_tx.send(prompt(held, &hub)).unwrap_or(()))
+        .unwrap();
+    done_rx
+        .recv_timeout(HANDSHAKE_DEADLINE)
+        .expect("the prompt is answered before its deadline")
+}
+
+#[test]
+fn content_is_held_until_the_hub_sends_it() {
+    let temp = Temp::new();
+    let starter = FakeStarter::with_handshake(&temp.dir, accepting());
+    let content = json!([{"type": "text", "text": "hi"}]);
+    let (hub, held) = held(&temp, starter.clone(), &content);
     let received = starter.received();
-    assert_eq!(received.len(), 2);
+    assert_eq!(received.len(), 1, "only the subscription before the answer");
     let subscribe: Value = serde_json::from_str(&received[0]).unwrap();
     assert_eq!(subscribe.get("command"), Some(&json!("subscribe")));
     assert_eq!(subscribe.get("args"), Some(&json!({"level": "summary"})));
+    assert!(prompted(hub, *held).is_ok());
+    let received = starter.received();
+    assert_eq!(received.len(), 2);
     let prompt: Value = serde_json::from_str(&received[1]).unwrap();
     assert_eq!(prompt.get("command"), Some(&json!("prompt")));
     assert_eq!(
@@ -386,7 +431,7 @@ fn content_is_delivered_as_the_first_prompt_and_accepted() {
 }
 
 #[test]
-fn a_rejected_first_prompt_rejects_the_start_with_its_code() {
+fn a_rejected_first_prompt_returns_the_session_code() {
     let temp = Temp::new();
     let starter = FakeStarter::with_handshake(
         &temp.dir,
@@ -396,12 +441,10 @@ fn a_rejected_first_prompt_rejects_the_start_with_its_code() {
             message: "The prompt is empty.".to_owned(),
         },
     );
-    let hub = temp.hub(starter);
-    let workspace = temp.workspace();
     let content = json!([{"type": "text", "text": "hi"}]);
-    let outcome = started_before(hub, workspace, None, Some(content), HANDSHAKE_DEADLINE);
-    let Outcome::Rejected { code, message } = outcome else {
-        panic!("the start is rejected");
+    let (hub, held) = held(&temp, starter, &content);
+    let Err(Outcome::Rejected { code, message }) = prompted(hub, *held) else {
+        panic!("the prompt is rejected");
     };
     assert_eq!(code, ErrorCode::InvalidArguments);
     assert_eq!(message, "The prompt is empty.");
@@ -419,19 +462,45 @@ fn a_rejected_first_prompt_keeps_session_text_out_of_the_log() {
             message: format!("The prompt {SECRET} is empty."),
         },
     );
-    let hub = temp.hub(starter);
-    let workspace = temp.workspace();
     let content = json!([{"type": "text", "text": SECRET}]);
-    let outcome = started_before(hub, workspace, None, Some(content), HANDSHAKE_DEADLINE);
-    let Outcome::Rejected { code, message } = outcome else {
-        panic!("the start is rejected");
+    let (hub, held) = held(&temp, starter, &content);
+    let session = held.id.0.clone();
+    let Err(Outcome::Rejected { code, message }) = prompted(hub, *held) else {
+        panic!("the prompt is rejected");
     };
     assert_eq!(code, ErrorCode::InvalidArguments);
     assert!(
         message.contains(SECRET),
-        "the client keeps what the session said"
+        "the result keeps what the session said"
     );
     let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
     assert!(!log.contains(SECRET), "no prompt text in the log");
-    assert!(log.contains("\"code\":\"invalid_arguments\""));
+    let line = log
+        .lines()
+        .find(|line| line.contains("first prompt"))
+        .expect("the rejection is logged");
+    assert!(line.contains("\"code\":\"invalid_arguments\""));
+    assert!(line.contains(&session), "the line names the session");
+    assert!(line.contains("c_start"), "the line names the start command");
+}
+
+#[test]
+fn a_session_gone_before_the_first_prompt_logs_io_failed() {
+    let temp = Temp::new();
+    let starter = FakeStarter::with_handshake(&temp.dir, accepting());
+    let content = json!([{"type": "text", "text": "hi"}]);
+    let (hub, held) = held(&temp, starter.clone(), &content);
+    let session = held.id.clone();
+    assert!(starter.stop(&session, HANDSHAKE_DEADLINE));
+    let Err(Outcome::Rejected { code, .. }) = prompted(hub, *held) else {
+        panic!("the prompt is not taken");
+    };
+    assert_eq!(code, ErrorCode::IoFailed);
+    let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
+    let line = log
+        .lines()
+        .find(|line| line.contains("did not take the first prompt of command c_start."))
+        .expect("the lost prompt is logged");
+    assert!(line.contains("\"code\":\"io_failed\""));
+    assert!(line.contains(&session.0));
 }

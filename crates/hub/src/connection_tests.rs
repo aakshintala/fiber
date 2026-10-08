@@ -996,3 +996,259 @@ fn a_client_that_half_closes_without_reading_still_leaves() {
     until_clients(&hub, 0, "after D half-closed");
     stop_within(&hub);
 }
+
+/// A hub on a fake clock whose sessions accept the first prompt, with the
+/// clock and the starter.
+fn content_hub(temp: &Temp) -> (Arc<Hub>, Arc<fakes::clock::FakeClock>, FakeStarter) {
+    let clock = fakes::clock::FakeClock::new();
+    let starter = FakeStarter::with_handshake(
+        &temp.dir,
+        crate::fake::Handshake {
+            accept: true,
+            code: String::new(),
+            message: String::new(),
+        },
+    );
+    let timed: Arc<dyn Clock> = Arc::clone(&clock) as Arc<dyn Clock>;
+    let hub = Arc::new(Hub::new(
+        &temp.dir,
+        "0.0.0",
+        Arc::new(starter.clone()),
+        Arc::clone(&timed),
+        Diag::open(&temp.dir, timed),
+    ));
+    (hub, clock, starter)
+}
+
+fn content() -> Value {
+    json!([{"type": "text", "text": "hi"}])
+}
+
+/// Sends `start` with content on `client` and returns the session id and
+/// the instant the first prompt's bound is due: the clock does not move
+/// after the answer is written.
+fn start_with_content(
+    client: &mut Client,
+    temp: &Temp,
+    clock: &fakes::clock::FakeClock,
+) -> (String, std::time::Instant) {
+    let workspace = temp.workspace();
+    client.send(&command(
+        "c_start",
+        "start",
+        json!({"workspace": workspace, "content": content()}),
+    ));
+    let (id, result) = accepted(&client.next("the start answer"));
+    assert_eq!(id, "c_start");
+    let session = result["session_id"].as_str().unwrap().to_owned();
+    (session, clock.now() + FIRST_PROMPT_WAIT)
+}
+
+fn relayed_subscribe(id: &str, session: &str, level: &str) -> Value {
+    json!({"id": id, "session_id": session, "command": "subscribe", "args": {"level": level}})
+}
+
+/// The commands the fake sessions received, in order.
+fn commands(starter: &FakeStarter) -> Vec<Value> {
+    starter
+        .received()
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+fn prompts(starter: &FakeStarter) -> usize {
+    commands(starter)
+        .iter()
+        .filter(|line| line["command"] == "prompt")
+        .count()
+}
+
+/// The first-prompt thread re-checked after an advance of `by` and is
+/// still waiting for `due`.
+fn still_waiting(clock: &fakes::clock::FakeClock, due: std::time::Instant, by: Duration) {
+    let mark = clock.advance_marked(by);
+    assert!(
+        clock.await_parked_since(&mark, Some(due), DEADLINE),
+        "the first prompt re-checked and still waits"
+    );
+}
+
+#[test]
+fn start_with_content_answers_before_the_prompt() {
+    let temp = Temp::new();
+    let (hub, clock, starter) = content_hub(&temp);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let (_, due) = start_with_content(&mut client, &temp, &clock);
+    assert!(clock.await_parked(due, DEADLINE), "the bound is armed");
+    let received = commands(&starter);
+    assert_eq!(received.len(), 1, "only the hub's subscription so far");
+    assert_eq!(received[0]["args"]["level"], "summary");
+}
+
+#[test]
+fn a_full_subscribe_on_the_requesting_connection_releases_the_prompt() {
+    let temp = Temp::new();
+    let (hub, clock, starter) = content_hub(&temp);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let (session, _) = start_with_content(&mut client, &temp, &clock);
+    client.send(&relayed_subscribe("c_sub", &session, "full"));
+    // The clock never moves: only the subscription releases the prompt.
+    assert!(starter.await_received(3, DEADLINE));
+    let received = commands(&starter);
+    assert_eq!(received[0]["args"]["level"], "summary");
+    assert_eq!(received[1]["id"], "c_sub");
+    assert_eq!(received[2]["command"], "prompt");
+    assert_eq!(received[2]["args"]["content"], content());
+    let (id, _) = accepted(&client.next("the subscription's answer"));
+    assert_eq!(id, "c_sub");
+}
+
+#[test]
+fn a_raise_from_summary_to_full_releases_the_prompt() {
+    let temp = Temp::new();
+    let (hub, clock, starter) = content_hub(&temp);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let (session, due) = start_with_content(&mut client, &temp, &clock);
+    client.send(&relayed_subscribe("c_summary", &session, "summary"));
+    let (id, _) = accepted(&client.next("the summary answer"));
+    assert_eq!(id, "c_summary");
+    assert!(clock.await_parked(due, DEADLINE));
+    still_waiting(&clock, due, Duration::ZERO);
+    assert_eq!(prompts(&starter), 0);
+    client.send(&relayed_subscribe("c_full", &session, "full"));
+    assert!(starter.await_received(4, DEADLINE));
+    let received = commands(&starter);
+    assert_eq!(received[2]["id"], "c_full");
+    assert_eq!(received[3]["command"], "prompt");
+}
+
+#[test]
+fn a_summary_subscribe_waits_for_the_bound() {
+    let temp = Temp::new();
+    let (hub, clock, starter) = content_hub(&temp);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let (session, due) = start_with_content(&mut client, &temp, &clock);
+    client.send(&relayed_subscribe("c_summary", &session, "summary"));
+    let _answer = accepted(&client.next("the summary answer"));
+    assert!(clock.await_parked(due, DEADLINE));
+    still_waiting(&clock, due, Duration::ZERO);
+    assert_eq!(prompts(&starter), 0);
+    still_waiting(&clock, due, Duration::from_millis(999));
+    assert_eq!(prompts(&starter), 0, "one millisecond before the bound");
+    clock.advance(Duration::from_millis(1));
+    assert!(starter.await_received(3, DEADLINE));
+    assert_eq!(prompts(&starter), 1, "the prompt goes at the bound");
+}
+
+#[test]
+fn a_full_subscribe_on_another_connection_does_not_release() {
+    let temp = Temp::new();
+    let (hub, clock, starter) = content_hub(&temp);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let (session, due) = start_with_content(&mut client, &temp, &clock);
+    let mut other = Client::connect(&hub);
+    other.hello();
+    other.send(&relayed_subscribe("c_other", &session, "full"));
+    let (id, _) = accepted(&other.next("the other client's answer"));
+    assert_eq!(id, "c_other");
+    assert!(clock.await_parked(due, DEADLINE));
+    still_waiting(&clock, due, Duration::ZERO);
+    assert_eq!(prompts(&starter), 0);
+    clock.advance(FIRST_PROMPT_WAIT);
+    assert!(starter.await_received(3, DEADLINE));
+    assert_eq!(prompts(&starter), 1);
+}
+
+#[test]
+fn a_failed_answer_write_still_arms_the_bound() {
+    let temp = Temp::new();
+    let (hub, clock, starter) = content_hub(&temp);
+    // The requester is gone before the answer: its write fails.
+    let (dead, peer) = UnixStream::pair().unwrap();
+    drop(peer);
+    let dead = Arc::new(Mutex::new(dead));
+    let id = CommandId("c_1".to_owned());
+    let relays: Arc<Mutex<Relays>> = Arc::default();
+    let args = json!({"workspace": temp.workspace(), "content": content()});
+    let args = args.as_object().unwrap().clone();
+    let (done_tx, done) = mpsc::channel();
+    let started = Arc::clone(&hub);
+    thread::spawn(move || {
+        on_start(&id, &args, &started, &dead, &relays);
+        done_tx.send(()).unwrap_or(());
+    });
+    done.recv_timeout(DEADLINE).expect("start returned");
+    let due = clock.now() + FIRST_PROMPT_WAIT;
+    assert!(clock.await_parked(due, DEADLINE), "the bound is armed");
+    clock.advance(FIRST_PROMPT_WAIT);
+    assert!(starter.await_received(2, DEADLINE));
+    assert_eq!(prompts(&starter), 1);
+}
+
+#[test]
+fn a_requester_that_disconnects_releases_the_prompt_at_once() {
+    let temp = Temp::new();
+    let (hub, clock, starter) = content_hub(&temp);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let _started = start_with_content(&mut client, &temp, &clock);
+    drop(client);
+    // The clock never moves: the close releases the prompt.
+    assert!(starter.await_received(2, DEADLINE));
+    assert_eq!(prompts(&starter), 1);
+    until_clients(&hub, 0, "after the requester left");
+    assert_eq!(prompts(&starter), 1, "sent exactly once");
+}
+
+#[test]
+fn a_connection_that_never_subscribes_gets_the_prompt_at_the_bound() {
+    let temp = Temp::new();
+    let (hub, clock, starter) = content_hub(&temp);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let (session, due) = start_with_content(&mut client, &temp, &clock);
+    assert!(clock.await_parked(due, DEADLINE));
+    clock.advance(FIRST_PROMPT_WAIT);
+    assert!(starter.await_received(2, DEADLINE));
+    client.send(&relayed_subscribe("c_late", &session, "full"));
+    let (id, _) = accepted(&client.next("the late subscription's answer"));
+    assert_eq!(id, "c_late");
+    assert_eq!(commands(&starter).len(), 3);
+    assert_eq!(prompts(&starter), 1, "a later subscription sends nothing");
+}
+
+#[test]
+fn start_content_that_does_not_fit_a_prompt_is_invalid_arguments() {
+    let temp = Temp::new();
+    let (hub, _clock, starter) = content_hub(&temp);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    let rows = [
+        json!("hi"),
+        json!({}),
+        json!([{"type": "bogus"}]),
+        json!([{"type": "text"}]),
+        json!([{"type": "text", "text": "a", "extra": 1}]),
+    ];
+    for content in rows {
+        client.send(&command(
+            "c_bad",
+            "start",
+            json!({"workspace": workspace, "content": content}),
+        ));
+        let (code, id, message) = rejected(&client.next("the rejection"));
+        assert_eq!(code, "invalid_arguments", "{content}");
+        assert_eq!(id.as_deref(), Some("c_bad"));
+        assert_eq!(message, "The arguments do not fit this command.");
+    }
+    assert!(starter.received().is_empty());
+    let sockets = fs::read_dir(temp.dir.join("run")).map_or(0, Iterator::count);
+    assert_eq!(sockets, 0, "no session started");
+}

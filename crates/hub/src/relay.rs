@@ -31,6 +31,7 @@ use contract::{CommandId, SessionId};
 use serde_json::{Map, Value};
 
 use crate::connection::{Hub, lock, reject};
+use crate::first::First;
 
 /// The commands relayed on one session connection that the session has
 /// not acknowledged yet: each command id and its line without the
@@ -72,6 +73,9 @@ pub(crate) struct Relays {
     /// Per session, the last `subscribe` it accepted, without its
     /// `session_id`: what a reconnect sends again.
     pub(crate) subscribed: Vec<(String, Map<String, Value>)>,
+    /// Per session this connection started with `content`, the first
+    /// prompt that waits for its `full` subscription (`crate::first`).
+    pub(crate) awaiting: Vec<(String, Arc<First>)>,
 }
 
 impl Relays {
@@ -102,15 +106,33 @@ impl Relays {
     /// accepted `subscribe` from the relay still in the map: a stale
     /// relay thread's buffered acknowledgement never overwrites the
     /// replacement's level. Adds it when none is kept. Anything else
-    /// changes nothing.
-    fn accepted(&mut self, session: &str, epoch: u64, line: Map<String, Value>) {
-        if relay_slot(&self.entries, session, epoch).is_none() {
-            return;
-        }
+    /// changes nothing. When the level is `full`, removes and returns the
+    /// first prompt waiting for it, for the caller to release once the
+    /// relays lock is dropped.
+    fn accepted(
+        &mut self,
+        session: &str,
+        epoch: u64,
+        line: Map<String, Value>,
+    ) -> Option<Arc<First>> {
+        relay_slot(&self.entries, session, epoch)?;
         if line.get("command").and_then(Value::as_str) != Some("subscribe") {
-            return;
+            return None;
         }
+        let full = line
+            .get("args")
+            .and_then(|args| args.get("level"))
+            .and_then(Value::as_str)
+            == Some("full");
         keep_subscription(self, session, line);
+        if !full {
+            return None;
+        }
+        let at = self
+            .awaiting
+            .iter()
+            .position(|(waiting, _)| waiting == session)?;
+        Some(self.awaiting.remove(at).1)
     }
 
     /// Transfers the kept level `line` onto `session`'s existing relay:
@@ -479,7 +501,12 @@ fn relay(
                                 before(&buf, relays);
                             }
                         }
-                        lock(relays).accepted(session, epoch, line);
+                        let first = lock(relays).accepted(session, epoch, line);
+                        // The session counts this client before it
+                        // acknowledges, so the prompt finds it connected.
+                        if let Some(first) = first {
+                            first.release();
+                        }
                     }
                     None => {}
                 }
