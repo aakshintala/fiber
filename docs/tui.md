@@ -1220,7 +1220,7 @@ later release still applies.
 | `/model` | Opens the model picker. |
 | `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. With no level, opens the model picker on the model's chips: Enter saves the level, `s` applies it to this session only. |
 | `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
-| `/scoped-models` | Chooses which models the model picker shows, saved as `scoped_models`. |
+| `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`, Space or a click on the mark toggles it, Enter saves the marked list as `scoped_models`, and Esc saves nothing. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
 | `/context` | Opens the context breakdown. |
 | `/usage` | Opens the usage view. |
 | `/tools` | Opens the tools view. |
