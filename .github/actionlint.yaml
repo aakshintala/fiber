@@ -1,8 +1,0 @@
-# Findings actionlint reports on the workflows as they stand; every other
-# finding fails the lint job (docs/ci.md).
-paths:
-  .github/workflows/ci.yml:
-    ignore:
-      # The cache's save-if reads the build step's outcome from a step that runs
-      # before it, so it is always empty there. Tracked on #1611.
-      - 'property "build" is not defined'
