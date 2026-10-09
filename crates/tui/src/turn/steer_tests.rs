@@ -138,3 +138,15 @@ fn nothing_is_indented_and_nothing_is_striped() {
         assert!(!shown.contains('▌') && !shown.contains('▐'), "{shown:?}");
     }
 }
+
+#[test]
+fn a_rule_with_no_dashes_has_no_tail() {
+    // The label alone has nothing to leave out of a copy; past it the tail
+    // is the space and the dashes (`docs/tui.md`, "Selection and copy").
+    for (width, tail) in [(13, 0), (14, 0), (15, 2), (20, 7)] {
+        let mut out = Rows::default();
+        Steered::new("use x".to_owned(), 0).rows(width, &TimeZone::UTC, &mut out);
+        let (_, texts) = out.into_parts();
+        assert_eq!(texts[0].tail, tail, "width {width}");
+    }
+}
