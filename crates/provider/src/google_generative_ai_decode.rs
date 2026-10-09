@@ -5,10 +5,11 @@ use std::io::BufRead;
 
 use contract::ProviderCallId;
 use contract::events::{
-    ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
+    CallStatus, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
+    ToolCallRequested,
 };
-use contract::provider::{CallUsage, Delta, Finish, InputSize, Reply, ReplyAction};
-use contract::shapes::Tokens;
+use contract::provider::{CallUsage, Delta, Finish, HostedCall, InputSize, Reply, ReplyAction};
+use contract::shapes::{ContentPart, Tokens};
 use serde_json::{Value, json};
 
 use crate::google_generative_ai::str_at;
@@ -62,6 +63,12 @@ struct Decoder {
     run: String,
     actions: Vec<ReplyAction>,
     thought: Option<Thought>,
+    /// A `toolCall` part waiting for the `toolResponse` after it: at most
+    /// one waits, and only the part directly after it can pair with it.
+    waiting: Option<Value>,
+    /// The candidate's last `groundingMetadata`, placed on the reply's
+    /// last hosted completion at the end of the stream.
+    grounding: Option<Value>,
     calls: u32,
     finish_reason: Option<String>,
     finish_message: Option<String>,
@@ -115,6 +122,11 @@ impl Decoder {
         {
             self.part(part, sink);
         }
+        // The search's sources arrive only here, on the last chunk: the
+        // last one seen wins, and it is logged, never sent.
+        if let Some(grounding) = candidate.get("groundingMetadata") {
+            self.grounding = Some(grounding.clone());
+        }
         if let Some(reason) = candidate.get("finishReason").and_then(Value::as_str) {
             self.finish_reason = Some(reason.to_owned());
             self.finish_message = candidate
@@ -127,6 +139,24 @@ impl Decoder {
 
     /// One part of the candidate's content.
     fn part(&mut self, part: &Value, sink: &mut dyn FnMut(Delta)) {
+        // A hosted search's call waits for the part after it; its result
+        // pairs only with that part, when their ids match.
+        if part.get("toolCall").is_some() {
+            self.close_thought();
+            self.close_run();
+            self.flush_waiting();
+            self.waiting = Some(part.clone());
+            return;
+        }
+        if part.get("toolResponse").is_some() {
+            self.close_thought();
+            self.close_run();
+            self.respond(part);
+            return;
+        }
+        // Any other part first logs a waiting call as raw reasoning: the
+        // response that would pair with it did not come directly after.
+        self.flush_waiting();
         let signature = part
             .get("thoughtSignature")
             .map(|s| json!({ "thoughtSignature": s }));
@@ -191,6 +221,45 @@ impl Decoder {
             return;
         }
         self.text_fragment(part, sink);
+    }
+
+    /// Logs the waiting `toolCall` part as raw reasoning: the response
+    /// that would pair with it never came directly after it. A missing
+    /// part is not refused.
+    fn flush_waiting(&mut self) {
+        if let Some(call) = self.waiting.take() {
+            self.actions
+                .push(ReplyAction::Reasoning(ReasoningCompleted {
+                    text: String::new(),
+                    provider_item: Some(call),
+                }));
+        }
+    }
+
+    /// A `toolResponse` part: with the waiting `toolCall` of the same id,
+    /// the hosted search they are; otherwise each is raw reasoning, the
+    /// waiting call first. A hosted search streams no arguments.
+    fn respond(&mut self, part: &Value) {
+        match self.waiting.take() {
+            Some(call) if tool_id(&call) == response_id(part) => {
+                self.actions
+                    .push(ReplyAction::Hosted(hosted_pair(&call, part)));
+            }
+            waiting => {
+                if let Some(call) = waiting {
+                    self.actions
+                        .push(ReplyAction::Reasoning(ReasoningCompleted {
+                            text: String::new(),
+                            provider_item: Some(call),
+                        }));
+                }
+                self.actions
+                    .push(ReplyAction::Reasoning(ReasoningCompleted {
+                        text: String::new(),
+                        provider_item: Some(part.clone()),
+                    }));
+            }
+        }
     }
 
     /// A text fragment: no `thought: true` and no `functionCall`. Unsigned
@@ -264,6 +333,11 @@ impl Decoder {
     fn finish(mut self) -> Result<Reply, Error> {
         self.close_thought();
         self.close_run();
+        // A call at the end of the stream never met its response.
+        self.flush_waiting();
+        if let Some(grounding) = self.grounding.take() {
+            place_grounding(&mut self.actions, &grounding);
+        }
         let Some(reason) = self.finish_reason.take() else {
             return Err(Error::StreamIncomplete(
                 "it ended before a finishReason".into(),
@@ -319,6 +393,94 @@ impl Decoder {
     }
 }
 
+/// A hosted search from its `toolCall` and `toolResponse` parts: the
+/// call names `web_search`, with the call's `args` as its arguments (`{}`
+/// when absent or not an object); the result is completed with empty
+/// text, or failed when the response carries an `error`.
+fn hosted_pair(call: &Value, response: &Value) -> HostedCall {
+    let tool = call.get("toolCall").unwrap_or(&Value::Null);
+    let arguments = tool
+        .get("args")
+        .filter(|args| args.is_object())
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let completed = match tool_error(response) {
+        // The shape is unprobed: no probe produced a failed search.
+        Some(code) => crate::hosted::failed(response.clone(), code),
+        None => crate::hosted::completed(response.clone(), &[]),
+    };
+    HostedCall {
+        call: ToolCallRequested {
+            name: "web_search".to_owned(),
+            arguments,
+            provider_id: match str_at(tool, "id") {
+                "" => None,
+                id => Some(ProviderCallId(id.to_owned())),
+            },
+            repair: None,
+            ran_by: None,
+            provider_item: Some(call.clone()),
+        },
+        completed,
+    }
+}
+
+/// The `toolCall` part's id, read as `""` when absent.
+fn tool_id(call: &Value) -> &str {
+    call.get("toolCall")
+        .map(|tool| str_at(tool, "id"))
+        .unwrap_or("")
+}
+
+/// The `toolResponse` part's id, read as `""` when absent.
+fn response_id(part: &Value) -> &str {
+    part.get("toolResponse")
+        .map(|tool| str_at(tool, "id"))
+        .unwrap_or("")
+}
+
+/// A `toolResponse`'s error code: its `response.error.status` when a
+/// string, else `unknown`.
+fn tool_error(response: &Value) -> Option<&str> {
+    response
+        .get("toolResponse")
+        .and_then(|tool| tool.get("response"))
+        .and_then(|response| response.get("error"))
+        .map(|error| {
+            error
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        })
+}
+
+/// Logs the candidate's `groundingMetadata` on the reply's last hosted
+/// completion: its `details`, shown to clients and never sent to the
+/// model. A completed search carries the grounding's result URLs, one per
+/// line; earlier searches keep their empty text, and a failed search keeps
+/// its failure text. Grounding with no hosted pair logs nothing.
+fn place_grounding(actions: &mut [ReplyAction], grounding: &Value) {
+    let Some(hosted) = actions.iter_mut().rev().find_map(|action| match action {
+        ReplyAction::Hosted(hosted) => Some(hosted),
+        ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::ToolCall(_) => None,
+    }) else {
+        return;
+    };
+    hosted.completed.details = Some(grounding.clone());
+    if hosted.completed.status == CallStatus::Completed {
+        let urls: Vec<&str> = grounding
+            .get("groundingChunks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|chunk| chunk.pointer("/web/uri").and_then(Value::as_str))
+            .collect();
+        hosted.completed.content = vec![ContentPart::Text {
+            text: urls.join("\n"),
+        }];
+    }
+}
+
 /// `usageMetadata` as `tokens`. `promptTokenCount` includes the cached
 /// tokens, which `tokens.input` excludes (`docs/events.md`); output is the
 /// candidates' tokens plus the thoughts' (ai.google.dev/api/generate-content,
@@ -327,7 +489,7 @@ impl Decoder {
 /// (`docs/code-quality.md`, "Panics").
 ///
 /// debt: `toolUsePromptTokenCount` (a hosted tool's prompt) is not
-/// counted; Fiber sends no hosted tool on this protocol yet.
+/// counted; no probe's `usageMetadata` reported that field.
 fn tokens(usage: &Value) -> Result<Tokens, Error> {
     let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
     let cached = count("cachedContentTokenCount");
