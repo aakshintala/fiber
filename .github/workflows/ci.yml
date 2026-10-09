@@ -330,7 +330,18 @@ jobs:
         run: |
           commit=$(git merge-base "$BASE" HEAD)
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
-      # Exact key only: a prefix match would hand back another commit's binary.
+          # The base's nearest first-parent ancestors, nearest first: the
+          # stored binaries a base that does not build falls back to. The
+          # cache service takes 10 keys, so the base's own and 9 of these.
+          {
+            echo "ancestors<<EOF"
+            git rev-list --first-parent --skip=1 -n 9 "$commit" | sed 's/^/release-musl-/'
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      # The base's own key first, then its ancestors' in order, each a full
+      # commit hash, so a prefix match is an exact one and the nearest stored
+      # ancestor wins. cache-hit is true only for the base's own key;
+      # cache-matched-key names the key that matched.
       - name: Restore the base binary the backstop stored
         if: github.event_name == 'pull_request'
         id: stored
@@ -338,10 +349,12 @@ jobs:
         with:
           path: ${{ runner.temp }}/release/cache
           key: release-musl-${{ steps.base.outputs.commit }}
+          restore-keys: ${{ steps.base.outputs.ancestors }}
       - name: scripts/release-size
         env:
           BASE_COMMIT: ${{ steps.base.outputs.commit }}
           BASE_CACHED: ${{ steps.stored.outputs.cache-hit }}
+          BASE_MATCHED_KEY: ${{ steps.stored.outputs.cache-matched-key }}
         run: scripts/release-size "$BASE_COMMIT"
       # The paging rows' jig, built for the target that ships; a base without
       # one leaves its paging timings unavailable.
@@ -378,7 +391,10 @@ jobs:
           harness=target/debug/examples/bench
           "$harness" --fiber "$RUNNER_TEMP/release/head/fiber" --out "$out/head.json" --only all \
             --paging "$RUNNER_TEMP/release/head/paging"
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+          # A base that does not build and has no stored ancestor leaves no base
+          # binary (scripts/release-size): its timings are skipped, and
+          # bench-report shows the missing base file.
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -f "$RUNNER_TEMP/release/base/fiber" ]; then
             base_paging=()
             if [ -f "$RUNNER_TEMP/release/base/paging" ]; then
               base_paging=(--paging "$RUNNER_TEMP/release/base/paging")

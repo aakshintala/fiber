@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Stands in for cargo in the release-size test. A build run from a directory
+# whose path contains $FAKE_CARGO_FAIL_IN fails; any other writes a "binary"
+# naming the commit it was built at, where the script strips it from.
+case $PWD in
+  *"${FAKE_CARGO_FAIL_IN:?}"*) echo "error: could not compile fiber" >&2; exit 101 ;;
+esac
+dir="$CARGO_TARGET_DIR/x86_64-unknown-linux-musl/release"
+mkdir -p "$dir"
+echo "built at $(git rev-parse --short HEAD)" > "$dir/fiber"
