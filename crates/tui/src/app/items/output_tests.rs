@@ -225,6 +225,10 @@ fn deltas_feed_one_jobs_output_in_order_and_never_anothers() {
     opened(&mut app);
     start_job(&mut app, "j_1", "a_1");
     start_job(&mut app, "j_2", "a_2");
+    // A delta for a job never started, and one with no text, change
+    // nothing and panic nowhere.
+    delta(&mut app, "j_zzz", "lost");
+    app.on_line(line("job_delta", json!({"job_id": "j_1"}), None));
     delta(&mut app, "j_1", "hello ");
     delta(&mut app, "j_2", "other");
     delta(&mut app, "j_1", "world");

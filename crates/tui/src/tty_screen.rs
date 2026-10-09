@@ -276,21 +276,20 @@ impl Grid {
             self.row = target;
             return;
         }
-        let over = (target.saturating_sub(ROWS.saturating_sub(1))).min(ROWS);
+        let over = target.saturating_sub(ROWS.saturating_sub(1));
         for _ in 0..over {
-            if !self.cells.is_empty() {
-                self.cells.remove(0);
-            }
+            self.cells.remove(0);
             self.cells.push(vec![' '; COLUMNS]);
         }
         self.row = ROWS.saturating_sub(1);
     }
 
-    /// Clears one row's cells from `from` to `to`, both clamped.
+    /// Clears one row's cells from `from` to `to`: callers keep `from`
+    /// below `to` and both inside the row, and skipping past the end
+    /// clears nothing.
     fn clear_row(&mut self, row: usize, from: usize, to: usize) {
         if let Some(cells) = self.cells.get_mut(row) {
-            let end = to.min(cells.len());
-            for cell in cells.iter_mut().skip(from).take(end.saturating_sub(from)) {
+            for cell in cells.iter_mut().skip(from).take(to.saturating_sub(from)) {
                 *cell = ' ';
             }
         }
@@ -440,7 +439,6 @@ impl Sink for Lines {
             self.col = self.col.saturating_add(1);
             if line.len() > LINE_WIDTH {
                 line.truncate(LINE_WIDTH);
-                self.col = self.col.min(LINE_WIDTH);
             }
         }
     }

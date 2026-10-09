@@ -297,3 +297,74 @@ fn output_feeds_a_grid_or_lines_and_draws_rows() {
     let rows = plain.rows(80, 24);
     assert!(rows[0].starts_with("hiho"));
 }
+
+#[test]
+fn esc_aborts_a_pending_sequence() {
+    // An `ESC` inside a CSI drops it: the clear still dispatches.
+    let grid = fed_grid(&["hi\x1b[99\x1b[2J\x1b[Hbye"]);
+    assert_eq!(text(&grid)[0], "bye");
+    // A doubled `ESC` restarts the sequence instead of grounding it.
+    let grid = fed_grid(&["\x1b\x1b[2Jbye"]);
+    assert_eq!(text(&grid)[0], "bye");
+}
+
+#[test]
+fn private_mark_sequences_are_dropped_whole() {
+    // The `?` is not a parameter: the whole sequence drops and the next
+    // cell draws at the cursor, not at a parsed column.
+    let grid = fed_grid(&["\x1b[1;?HX"]);
+    assert_eq!(text(&grid)[0], "X");
+}
+
+#[test]
+fn unknown_erase_modes_leave_the_cells() {
+    let grid = fed_grid(&["hello\x1b[5J\x1b[5K"]);
+    assert_eq!(text(&grid)[0], "hello");
+}
+
+#[test]
+fn an_osc_backslash_without_esc_is_content() {
+    // Only `ESC \` ends the sequence: a bare backslash is dropped with it.
+    let grid = fed_grid(&["a\x1b]0;a\\b\x07c"]);
+    assert_eq!(text(&grid)[0], "ac");
+}
+
+#[test]
+fn an_osc_esc_followed_by_text_stays_inside() {
+    // The `ESC` only closes before a backslash: the text after it is
+    // still dropped with the sequence.
+    let grid = fed_grid(&["a\x1b]0\x1bX\\b"]);
+    assert_eq!(text(&grid)[0], "a");
+}
+
+#[test]
+fn control_bytes_are_dropped() {
+    let grid = fed_grid(&["a\x07\x7fb"]);
+    assert_eq!(text(&grid)[0], "ab");
+}
+
+#[test]
+fn lines_expand_tabs() {
+    let lines = fed_lines(&["a\tb"]);
+    assert_eq!(words(&lines), ["a       b"]);
+}
+
+#[test]
+fn an_over_long_osc_drops_and_draws_the_tail() {
+    let grid = fed_grid(&[format!("\x1b]{}Z", "x".repeat(65)).as_str()]);
+    let row = text(&grid)[0].clone();
+    assert!(row.starts_with('x'));
+    assert!(row.ends_with('Z'));
+}
+
+#[test]
+fn clearing_a_reversed_range_clears_nothing() {
+    let mut grid = Grid::new();
+    let mut parser = Parser::new();
+    parser.feed("hello", &mut grid);
+    grid.clear_row(0, 5, 2);
+    grid.clear_row(99, 0, 80);
+    let rows = text(&grid);
+    assert_eq!(rows[0], "hello");
+    assert!(rows[1..].iter().all(|row| row.is_empty()));
+}
