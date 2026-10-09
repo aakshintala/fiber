@@ -33,6 +33,7 @@ mod look;
 mod markdown;
 mod mouse;
 mod offer;
+mod open_at;
 mod opener;
 mod osc;
 mod pages;
@@ -62,6 +63,8 @@ use crate::link::Line;
 pub use attention::Attention;
 
 pub use home::Launch;
+
+pub use open_at::OpenAt;
 
 pub use look::ThemeSetting;
 

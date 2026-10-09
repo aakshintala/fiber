@@ -52,6 +52,7 @@ pub(crate) fn launch(
         workspace,
         project,
         git,
+        open_at: tui::OpenAt::Home,
         hover,
         version: env!("CARGO_PKG_VERSION").to_owned(),
         model,
