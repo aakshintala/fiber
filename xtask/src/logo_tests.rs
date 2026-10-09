@@ -1,4 +1,5 @@
 use super::*;
+use tiny_skia::PathSegment;
 
 fn flag(args: &[&str]) -> Vec<String> {
     args.iter().map(|arg| (*arg).to_owned()).collect()
@@ -222,6 +223,71 @@ fn rasterise_keeps_a_hairline_glyph() {
     let hairline = glyphs.get(2).unwrap();
     assert_eq!(hairline.width, 2);
     assert_eq!(hairline.height, 1);
+}
+
+#[test]
+fn pen_shifts_and_flips_a_quadratic_segment() {
+    let mut builder = PathBuilder::new();
+    {
+        let mut pen = Pen {
+            builder: &mut builder,
+            dx: 10.0,
+            dy: 100.0,
+        };
+        pen.move_to(1.0, 2.0);
+        pen.quad_to(3.0, 5.0, 7.0, 11.0);
+    }
+    let path = builder.finish().unwrap();
+    let mut segments = path.segments();
+    assert!(
+        matches!(segments.next(), Some(PathSegment::MoveTo(end))
+            if end.x == 11.0 && end.y == 98.0),
+        "the start moves past the caret and above the baseline"
+    );
+    assert!(
+        matches!(segments.next(), Some(PathSegment::QuadTo(control, end))
+            if control.x == 13.0
+                && control.y == 95.0
+                && end.x == 17.0
+                && end.y == 89.0),
+        "the control point and the end move with the start"
+    );
+    assert!(segments.next().is_none());
+}
+
+#[test]
+fn pen_shifts_and_flips_a_cubic_segment() {
+    let mut builder = PathBuilder::new();
+    {
+        let mut pen = Pen {
+            builder: &mut builder,
+            dx: 10.0,
+            dy: 100.0,
+        };
+        pen.move_to(1.0, 2.0);
+        pen.curve_to(3.0, 5.0, 7.0, 11.0, 13.0, 17.0);
+    }
+    let path = builder.finish().unwrap();
+    let mut segments = path.segments();
+    assert!(
+        matches!(segments.next(), Some(PathSegment::MoveTo(end))
+            if end.x == 11.0 && end.y == 98.0),
+        "the start moves past the caret and above the baseline"
+    );
+    assert!(
+        matches!(
+            segments.next(),
+            Some(PathSegment::CubicTo(first, second, end))
+                if first.x == 13.0
+                    && first.y == 95.0
+                    && second.x == 17.0
+                    && second.y == 89.0
+                    && end.x == 23.0
+                    && end.y == 83.0
+        ),
+        "both control points and the end move with the start"
+    );
+    assert!(segments.next().is_none());
 }
 
 #[test]
