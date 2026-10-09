@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use rustix::termios::{self, OptionalActions, Termios};
 
+use crate::appearance;
+
 /// Enters the alternate screen.
 const ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049h";
 /// Pushes the window title, so the restore puts the person's back
@@ -22,6 +24,8 @@ const MOUSE: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 /// Mouse reporting of every motion (1003), for hover.
 const MOTION: &[u8] = b"\x1b[?1003h";
 /// Kitty's keyboard flags query, then the primary device attributes query.
+/// The appearance queries go first, so the theme follows the terminal
+/// before detection ends (`docs/tui.md`, "Themes").
 const QUERIES: &[u8] = b"\x1b[?u\x1b[c";
 /// Pushes kitty's keyboard flag 1, disambiguate escape codes. The loop
 /// writes it when kitty's flags reply arrives.
@@ -31,7 +35,7 @@ pub(crate) const KITTY_PUSH: &[u8] = b"\x1b[>1u";
 /// pops the window title, then leaves the alternate screen and shows the
 /// cursor.
 const RESTORE: &[u8] =
-    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
 /// The tty `setup` changed and its modes from before. One terminal per
 /// process: the first `setup` records it.
@@ -60,6 +64,7 @@ pub(crate) fn setup(mut tty: &File, hover: bool) -> io::Result<(u16, u16)> {
     if hover {
         tty.write_all(MOTION)?;
     }
+    tty.write_all(appearance::QUERIES)?;
     tty.write_all(QUERIES)?;
     tty.flush()?;
     size(tty)
@@ -131,6 +136,9 @@ pub(crate) fn resume(kitty: bool, hover: bool) -> io::Result<()> {
     if kitty {
         out.write_all(KITTY_PUSH)?;
     }
+    // The appearance queries go last, after everything else resumed, so
+    // the theme follows the terminal again (`docs/tui.md`, "Themes").
+    out.write_all(appearance::QUERIES)?;
     out.flush()
 }
 

@@ -258,6 +258,10 @@ impl<B: Backend> Loop<B> {
                             self.kitty();
                             Effect::None
                         }
+                        Event::Reply(Reply::Appearance(appearance)) => {
+                            self.screen.appearance(appearance);
+                            Effect::None
+                        }
                         Event::Reply(Reply::DeviceAttributes) => Effect::None,
                     };
                     match effect {

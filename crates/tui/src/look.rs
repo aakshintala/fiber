@@ -112,19 +112,34 @@ fn squared(a: Rgb, b: Rgb) -> u32 {
     channel(a.0, b.0) + channel(a.1, b.1) + channel(a.2, b.2)
 }
 
+/// The terminal's light or dark appearance, as it last reported it
+/// (`docs/tui.md`, "Themes").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Appearance {
+    /// Dark: the appearance before any report.
+    #[default]
+    Dark,
+    /// Light.
+    Light,
+}
+
 /// The theme in use, resolved for the terminal's colour depth.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Look {
     depth: Depth,
     /// Each role's colour, by index.
     colours: [Color; ROLES],
+    /// Whether the theme follows the terminal's appearance.
+    follow: bool,
+    /// The terminal's appearance, as it last reported it.
+    appearance: Appearance,
 }
 
 impl Default for Look {
     /// The dark theme in truecolour: the theme followed before the terminal
     /// reports its appearance.
     fn default() -> Self {
-        Self::resolve(&Theme::DARK, Depth::True)
+        Self::resolve(&Theme::DARK, Depth::True, true, Appearance::Dark)
     }
 }
 
@@ -135,33 +150,69 @@ impl Look {
     /// Before the terminal reports its appearance, it is dark.
     pub(crate) fn new(setting: ThemeSetting, var: Var<'_>) -> (Look, Option<String>) {
         let depth = depth(var);
-        let (theme, notice) = match setting {
-            ThemeSetting::Follow | ThemeSetting::Dark => (Theme::DARK, None),
-            ThemeSetting::Light => (Theme::LIGHT, None),
+        let (theme, follow, notice) = match setting {
+            ThemeSetting::Follow => (Theme::DARK, true, None),
+            ThemeSetting::Dark => (Theme::DARK, false, None),
+            ThemeSetting::Light => (Theme::LIGHT, false, None),
             ThemeSetting::File { name, text } => match text.and_then(|text| Theme::parse(&text)) {
-                Ok(theme) => (theme, None),
+                Ok(theme) => (theme, false, None),
                 Err(reason) => (
                     Theme::DARK,
+                    true,
                     Some(format!(
                         "Theme \"{name}\": {reason}; following the terminal's appearance."
                     )),
                 ),
             },
         };
-        (Self::resolve(&theme, depth), notice)
+        (
+            Self::resolve(&theme, depth, follow, Appearance::Dark),
+            notice,
+        )
     }
 
-    /// `theme`'s colours at `depth`.
-    fn resolve(theme: &Theme, depth: Depth) -> Look {
-        let colours = Role::ALL.map(|role| {
+    /// Records the terminal's reported `appearance`, re-resolving the
+    /// theme while it is followed: whether the colours changed
+    /// (`docs/tui.md`, "Themes").
+    pub(crate) fn appearance(&mut self, appearance: Appearance) -> bool {
+        let changed = self.follow && appearance != self.appearance;
+        self.appearance = appearance;
+        if changed {
+            let theme = match appearance {
+                Appearance::Dark => Theme::DARK,
+                Appearance::Light => Theme::LIGHT,
+            };
+            self.colours = Self::colours(&theme, self.depth);
+        }
+        changed
+    }
+
+    /// The terminal's appearance, as it last reported it.
+    pub(crate) fn reported(&self) -> Appearance {
+        self.appearance
+    }
+
+    /// The look of `theme` at `depth`, following the terminal when
+    /// `follow`.
+    fn resolve(theme: &Theme, depth: Depth, follow: bool, appearance: Appearance) -> Look {
+        Look {
+            depth,
+            colours: Self::colours(theme, depth),
+            follow,
+            appearance,
+        }
+    }
+
+    /// Each role's colour in `theme` at `depth`.
+    fn colours(theme: &Theme, depth: Depth) -> [Color; ROLES] {
+        Role::ALL.map(|role| {
             let rgb = theme.rgb(role);
             match depth {
                 Depth::NoColour => Color::Reset,
                 Depth::True => Color::Rgb(rgb.0, rgb.1, rgb.2),
                 Depth::Ansi256 => Color::Indexed(ansi256(rgb, among(role))),
             }
-        });
-        Look { depth, colours }
+        })
     }
 
     /// The colour `role` resolves to.

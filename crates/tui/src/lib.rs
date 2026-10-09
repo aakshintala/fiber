@@ -8,6 +8,7 @@
 //! before it draws.
 
 mod app;
+mod appearance;
 mod approvals;
 mod attention;
 mod bindings;

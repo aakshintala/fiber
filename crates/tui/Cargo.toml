@@ -18,6 +18,7 @@ signal-hook = "0.3"
 [dev-dependencies]
 fakes = { path = "../fakes" }
 insta = "1"
+proptest.workspace = true
 
 [[example]]
 name = "draw"
