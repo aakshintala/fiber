@@ -134,3 +134,19 @@ pub trait Configure: Send + Sync {
     /// The theme `name` gives `tui.theme`, built as at start.
     fn theme(&self, name: &str) -> ThemeSetting;
 }
+
+#[cfg(test)]
+mod tests {
+    use contract::ErrorCode;
+
+    use super::ConfigureError;
+
+    #[test]
+    fn an_error_displays_the_message_the_view_shows() {
+        let error = ConfigureError {
+            code: ErrorCode::Usage,
+            message: "not a number".to_owned(),
+        };
+        assert_eq!(error.to_string(), "not a number");
+    }
+}
