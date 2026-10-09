@@ -1,7 +1,10 @@
 //! Tests for the session screen's layout: widths from the screen's width,
 //! shedding, and the floor.
 
-use super::{CONVERSATION_MIN, Shares, Want, floor_line, split};
+use super::{
+    CONVERSATION_MIN, PANEL_CEILING, PANEL_FLOOR, RAIL_CEILING, RAIL_FLOOR, Shares, Want, dragged,
+    edge_at, edge_rect, floor_line, share_for, share_of, split,
+};
 use ratatui::layout::Rect;
 
 /// The default shares: the rail 15%, the panel 21%.
@@ -315,6 +318,133 @@ fn regions_tile_the_screen_and_keep_the_conversations_minimum() {
                 );
             }
             assert!(layout.rail.is_none() || layout.grip.is_none());
+        }
+    }
+}
+
+/// A 200-column layout with the rail and the panel drawn.
+fn drawn() -> super::Layout {
+    split(200, 40, &DEFAULT, &BOTH)
+}
+
+/// A 200-column layout with the grip: the rail wanted by count, hidden.
+fn gripped() -> super::Layout {
+    split(200, 40, &DEFAULT, &GRIP)
+}
+
+#[test]
+fn edge_at_finds_each_edge_and_nothing_beside_it() {
+    let layout = drawn();
+    let rail = layout.rail.expect("a rail");
+    let edge = rail.right().saturating_sub(1);
+    assert_eq!(edge_at(&layout, edge), Some(super::Edge::Rail));
+    assert_eq!(edge_at(&layout, edge.saturating_sub(1)), None);
+    assert_eq!(edge_at(&layout, edge.saturating_add(1)), None);
+    let panel = layout.panel.expect("a panel");
+    assert_eq!(edge_at(&layout, panel.x), Some(super::Edge::Panel));
+    assert_eq!(edge_at(&layout, panel.x.saturating_sub(1)), None);
+    assert_eq!(edge_at(&layout, panel.x.saturating_add(1)), None);
+    let grip = gripped();
+    assert_eq!(edge_at(&grip, 0), Some(super::Edge::Grip));
+    assert_eq!(edge_at(&grip, 1), None);
+    let bare = split(200, 40, &DEFAULT, &Want::default());
+    assert_eq!(edge_at(&bare, 0), None);
+    assert_eq!(edge_at(&bare, 50), None);
+}
+
+#[test]
+fn edge_rect_is_the_edge_column_full_height() {
+    let layout = drawn();
+    let rail = layout.rail.expect("a rail");
+    assert_eq!(
+        edge_rect(&layout, super::Edge::Rail),
+        Some(Rect::new(
+            rail.right().saturating_sub(1),
+            rail.y,
+            1,
+            rail.height
+        ))
+    );
+    let panel = layout.panel.expect("a panel");
+    assert_eq!(
+        edge_rect(&layout, super::Edge::Panel),
+        Some(Rect::new(panel.x, panel.y, 1, panel.height))
+    );
+    let grip = gripped();
+    assert_eq!(edge_rect(&grip, super::Edge::Grip), grip.grip);
+    assert_eq!(edge_rect(&grip, super::Edge::Rail), None);
+    let panel = grip.panel.expect("a panel beside the grip");
+    assert_eq!(
+        edge_rect(&grip, super::Edge::Panel),
+        Some(Rect::new(panel.x, panel.y, 1, panel.height))
+    );
+    let bare = split(200, 40, &DEFAULT, &Want::default());
+    assert_eq!(edge_rect(&bare, super::Edge::Rail), None);
+    assert_eq!(edge_rect(&bare, super::Edge::Grip), None);
+    assert_eq!(edge_rect(&bare, super::Edge::Panel), None);
+}
+
+#[test]
+fn rail_drag_widths() {
+    let plain = split(400, 40, &DEFAULT, &Want::default());
+    assert_eq!(dragged(super::Edge::Rail, 60, 400, &plain), 48);
+    let layout = split(160, 40, &DEFAULT, &BOTH);
+    assert_eq!(layout.panel.map(|panel| panel.width), Some(34));
+    assert_eq!(dragged(super::Edge::Rail, 40, 160, &layout), 41);
+    assert_eq!(dragged(super::Edge::Rail, 41, 160, &layout), 42);
+    assert_eq!(dragged(super::Edge::Rail, 42, 160, &layout), 42);
+    assert_eq!(dragged(super::Edge::Rail, 15, 160, &layout), 16);
+}
+
+#[test]
+fn grip_drag_widths() {
+    let layout = split(160, 40, &DEFAULT, &GRIP);
+    assert_eq!(dragged(super::Edge::Grip, 21, 160, &layout), 22);
+    assert_eq!(dragged(super::Edge::Grip, 70, 160, &layout), 48);
+    let narrow = split(105, 40, &DEFAULT, &GRIP);
+    assert_eq!(dragged(super::Edge::Grip, 30, 105, &narrow), 21);
+}
+
+#[test]
+fn panel_drag_widths() {
+    let layout = split(160, 40, &DEFAULT, &BOTH);
+    let rail = layout.rail.expect("a rail");
+    assert_eq!(rail.width, 24);
+    assert_eq!(dragged(super::Edge::Panel, 140, 160, &layout), 30);
+    assert_eq!(dragged(super::Edge::Panel, 129, 160, &layout), 31);
+    assert_eq!(dragged(super::Edge::Panel, 60, 160, &layout), 52);
+    let wide = split(400, 40, &DEFAULT, &BOTH);
+    assert_eq!(dragged(super::Edge::Panel, 300, 400, &wide), 60);
+    let gripped = split(160, 40, &DEFAULT, &GRIP);
+    assert_eq!(dragged(super::Edge::Panel, 60, 160, &gripped), 60);
+    let tight = split(140, 40, &DEFAULT, &GRIP);
+    assert_eq!(dragged(super::Edge::Panel, 70, 140, &tight), 55);
+}
+
+#[test]
+fn share_for_rounds_to_a_tenth() {
+    assert_eq!(share_for(25, 160), 15.6);
+    assert_eq!(share_for(31, 160), 19.4);
+    assert_eq!(share_for(32, 160), 20.0);
+    assert_eq!(share_for(48, 400), 12.0);
+}
+
+#[test]
+fn a_dragged_width_survives_the_share_round_trip() {
+    for screen in 40..=999 {
+        for width in 22..=48 {
+            assert_eq!(
+                share_of(screen, share_for(width, screen), RAIL_FLOOR, RAIL_CEILING),
+                width,
+                "rail {width} at {screen}"
+            );
+        }
+        for width in 30..=60 {
+            assert_eq!(
+                share_of(screen, share_for(width, screen), PANEL_FLOOR, PANEL_CEILING),
+                width,
+                "panel {width} at {screen}"
+            );
         }
     }
 }
