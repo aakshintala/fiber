@@ -113,19 +113,16 @@ fn session_segments(app: &App) -> Vec<(String, Option<Spot>)> {
         // the Session card does: a subscription bills nothing per call
         // (`docs/loop.md`, "Spending budget").
         match (
-            app.panel_state()
-                .status()
-                .map(|status| status.spend.cost),
+            app.panel_state().status().map(|status| status.spend.cost),
             app.panel_state().budget(),
         ) {
             (Some(Some(billed)), Some(budget)) => out.push((
                 format!("{} of {}", format::money(billed), format::money(budget)),
                 None,
             )),
-            (Some(None), Some(budget)) => out.push((
-                format!("unknown of {}", format::money(budget)),
-                None,
-            )),
+            (Some(None), Some(budget)) => {
+                out.push((format!("unknown of {}", format::money(budget)), None))
+            }
             _ => out.push((format::money(spend), None)),
         }
     }
