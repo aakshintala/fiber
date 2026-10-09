@@ -298,7 +298,7 @@ the lines that carry it.
 | `model_unconfigured` | exit, notice | a model's base URL names a per-account host whose setting has no value or a value that is not a host, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
 | `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
 | `no_match` | tool call | an edit block's text was not found in the file |
-| `no_model` | exit, notice | nothing chose a model, or an installed provider lacks the named model |
+| `no_model` | exit, notice | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id |
 | `nonzero_exit` | tool call, job | a process exited nonzero |
 | `not_found` | extension call, tool call, hub command | the path `read` or `edit` names does not exist, or `read_file` names no file (`docs/invocation.md`, "A session's files") |
 | `orphaned` | job | the process that ran the job died |
