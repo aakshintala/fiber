@@ -977,3 +977,40 @@ fn a_base_without_the_attach_metric_shows_unavailable() {
     let listing = row(&out.comment, "Listing 1,000 sessions");
     assert!(listing.contains("| 11.5 ms |"), "{listing}");
 }
+
+#[test]
+fn an_extra_attaching_fixture_fails() {
+    let mut entries = attach_entries("1 MiB", 1_048_576, &[10.0; 5]);
+    entries.extend(attach_entries("10 MiB", 10_485_760, &[20.0; 5]));
+    entries.extend(attach_entries("2 MiB", 2_097_152, &[15.0; 5]));
+    let results = with_metric(head(), "terminal_attach_ms", Value::Array(entries));
+    let failures = failures_of(&results);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(has(&failures, "terminal_attach_ms"), "{failures:?}");
+}
+
+#[test]
+fn a_base_with_the_attach_metric_shows_its_medians() {
+    let out = judge(&head(), Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    let attach = row(&out.comment, "Terminal to its first frame, attaching");
+    assert!(attach.contains("30.5 ms"), "{attach}");
+    assert!(attach.contains("87.0 ms"), "{attach}");
+    assert!(!attach.contains("unavailable"), "{attach}");
+}
+
+#[test]
+fn commas_places_the_first_comma_at_exactly_1000_and_never_leads() {
+    let metric = || {
+        let mut entries = attach_entries("1 MiB", 1_000, &[10.0; 5]);
+        entries.extend(attach_entries("10 MiB", 100_000, &[20.0; 5]));
+        with_metric(head(), "terminal_attach_ms", Value::Array(entries))
+    };
+    let out = judge(&metric(), Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    let line = row(&out.comment, "Terminal to its first frame, attaching");
+    assert!(line.contains("1 MiB (1,000 bytes)"), "{line}");
+    // Six digits take one comma, never a leading one.
+    assert!(line.contains("10 MiB (100,000 bytes)"), "{line}");
+    assert!(!line.contains("(,"), "{line}");
+}
