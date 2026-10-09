@@ -4,7 +4,7 @@
 //! keys). A `tty` job is the one whose record holds a screen grid
 //! ([`Output::tty`](crate::tty_screen::Output)).
 
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::tty_screen::Output;
 
 use super::JobRecord;
@@ -12,8 +12,8 @@ use super::JobRecord;
 /// The bytes `key` types into the job: the key as typed, escape sequences
 /// included. `None` for Esc, which closes the view, for Ctrl+C, which keeps
 /// the app's quit gesture, and for keys the [`Key`] enum cannot name, which
-/// are not sent. The terminal's Left, Right and Home never arrive as a
-/// [`Key`], so they fall through as today.
+/// are not sent. The keys that arrive as [`Edit`] go through
+/// [`encode_edit`].
 pub(super) fn encode(key: &Key) -> Option<String> {
     let text = match key {
         Key::Char(ch) => ch.to_string(),
@@ -42,6 +42,26 @@ pub(super) fn encode(key: &Key) -> Option<String> {
         | Key::AltP
         | Key::AltR
         | Key::AltDigit(_) => return None,
+    };
+    Some(text)
+}
+
+/// The bytes `edit` types into the job: the edit as typed, escape
+/// sequences included. Every variant sends; a pasted line break goes as a
+/// carriage return, as Enter does.
+pub(super) fn encode_edit(edit: &Edit) -> Option<String> {
+    let text = match edit {
+        Edit::Left => "\x1b[D".to_owned(),
+        Edit::Right => "\x1b[C".to_owned(),
+        Edit::WordLeft => "\x1b[1;5D".to_owned(),
+        Edit::WordRight => "\x1b[1;5C".to_owned(),
+        Edit::LineStart => "\x1b[H".to_owned(),
+        Edit::LineEnd => "\x1b[F".to_owned(),
+        Edit::Delete => "\x1b[3~".to_owned(),
+        Edit::ShiftEnter => "\r".to_owned(),
+        Edit::CtrlJ => "\n".to_owned(),
+        Edit::DeleteWord => "\x1b\x7f".to_owned(),
+        Edit::Paste(text) => text.replace('\n', "\r"),
     };
     Some(text)
 }

@@ -137,6 +137,11 @@ impl App {
         if self.panel().is_none() && (self.search_edit(&edit) || self.focus.is_some()) {
             return Effect::None;
         }
+        // A running `tty` job's view types into the job ahead of the
+        // input box, behind every overlay above.
+        if let Some(effect) = self.item_job_edit(&edit) {
+            return effect;
+        }
         crate::input::route(edit, &mut self.draft, &mut self.queue);
         self.overlays.selected = 0;
         let effect = self.query_changed();

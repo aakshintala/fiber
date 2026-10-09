@@ -10,7 +10,7 @@ use contract::{ActionId, Envelope, JobId, SessionId};
 
 use super::{App, Effect, Kind, Link, Phase, mint, session_command};
 use crate::home::Level;
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::tty_screen::Output;
 
 pub(crate) mod keys;
@@ -472,6 +472,21 @@ impl App {
     /// is down, or a key with no bytes, so each falls through as today.
     pub(super) fn item_job_key(&mut self, key: &Key) -> Option<Effect> {
         let text = keys::encode(key)?;
+        self.item_job_send(text)
+    }
+
+    /// One draft edit in a running `tty` job's view: every edit is sent as
+    /// `job_input` to the attached session, which owns the job. The same
+    /// fall-throughs as [`App::item_job_key`].
+    pub(super) fn item_job_edit(&mut self, edit: &Edit) -> Option<Effect> {
+        let text = keys::encode_edit(edit)?;
+        self.item_job_send(text)
+    }
+
+    /// Sends `text` as `job_input` for the open job: `None` for a finished
+    /// job, a non-`tty` job, a delegate, or a link that is down, so each
+    /// falls through as today.
+    fn item_job_send(&mut self, text: String) -> Option<Effect> {
         let open = self.items.open.as_ref()?;
         let record = self.items.jobs.get(&open.job_id)?;
         if record.delegate.is_some() || record.outcome.is_some() || !keys::is_tty(record) {

@@ -9,9 +9,9 @@ use contract::clock::Clock;
 use serde_json::{Value, json};
 
 use super::super::super::{App, Effect};
-use super::{encode, is_tty};
+use super::{encode, encode_edit, is_tty};
 use crate::home::Launch;
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::link::Line;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
@@ -323,6 +323,26 @@ fn esc_ctrl_c_and_keys_the_enum_cannot_name_send_nothing() {
 }
 
 #[test]
+fn every_edit_encodes_to_the_bytes_the_job_reads() {
+    let rows: Vec<(Edit, &str)> = vec![
+        (Edit::Left, "\x1b[D"),
+        (Edit::Right, "\x1b[C"),
+        (Edit::WordLeft, "\x1b[1;5D"),
+        (Edit::WordRight, "\x1b[1;5C"),
+        (Edit::LineStart, "\x1b[H"),
+        (Edit::LineEnd, "\x1b[F"),
+        (Edit::Delete, "\x1b[3~"),
+        (Edit::ShiftEnter, "\r"),
+        (Edit::CtrlJ, "\n"),
+        (Edit::DeleteWord, "\x1b\x7f"),
+        (Edit::Paste("a\nb".to_owned()), "a\rb"),
+    ];
+    for (edit, expected) in rows {
+        assert_eq!(encode_edit(&edit).as_deref(), Some(expected), "{edit:?}");
+    }
+}
+
+#[test]
 fn a_tty_job_is_the_one_holding_a_grid() {
     let mut app = home();
     opened(&mut app);
@@ -421,4 +441,61 @@ fn a_down_link_sends_nothing_in_a_tty_view() {
     app.connect_failed("down".to_owned());
     assert!(job_inputs(app.on_key(Key::Char('a'), clock.now())).is_empty());
     assert!(app.item_open());
+}
+
+#[test]
+fn edits_in_a_running_tty_job_view_send_job_input_and_leave_the_draft() {
+    let mut app = home();
+    opened(&mut app);
+    open_tty(&mut app, "j_9");
+    let left = job_inputs(app.on_edit(Edit::Left));
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0]["args"], json!({"job_id": "j_9", "text": "\x1b[D"}));
+    let pasted = job_inputs(app.on_edit(Edit::Paste("a\nb".to_owned())));
+    assert_eq!(pasted.len(), 1);
+    assert_eq!(pasted[0]["args"], json!({"job_id": "j_9", "text": "a\rb"}));
+    assert!(app.draft.is_empty());
+    assert!(app.item_open());
+}
+
+#[test]
+fn edits_fall_through_to_the_draft_outside_a_running_tty_job() {
+    let mut app = home();
+    opened(&mut app);
+    // A finished `tty` job: the edit moves in the draft, not the job.
+    open_tty(&mut app, "j_9");
+    complete(&mut app, "j_9");
+    app.draft.set("ab");
+    assert!(job_inputs(app.on_edit(Edit::Left)).is_empty());
+    assert_eq!(app.draft(), "ab");
+}
+
+#[test]
+fn edits_in_a_plain_job_view_edit_the_draft() {
+    let mut app = home();
+    opened(&mut app);
+    start_job(&mut app, "j_1");
+    opened_item(&mut app, "j_1");
+    assert!(job_inputs(app.on_edit(Edit::Paste("xy".to_owned()))).is_empty());
+    assert_eq!(app.draft(), "xy");
+}
+
+#[test]
+fn edits_in_a_delegate_view_edit_the_draft() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    opened_item(&mut app, "j_1");
+    assert!(job_inputs(app.on_edit(Edit::Paste("xy".to_owned()))).is_empty());
+    assert_eq!(app.draft(), "xy");
+}
+
+#[test]
+fn edits_with_the_link_down_edit_the_draft() {
+    let mut app = home();
+    opened(&mut app);
+    open_tty(&mut app, "j_9");
+    app.connect_failed("down".to_owned());
+    assert!(job_inputs(app.on_edit(Edit::Paste("xy".to_owned()))).is_empty());
+    assert_eq!(app.draft(), "xy");
 }
