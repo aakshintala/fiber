@@ -199,6 +199,49 @@ fn conversation_height_equals_the_drawn_rows_in_the_narrow_layout() {
 }
 
 #[test]
+fn conversation_height_equals_the_drawn_rows_with_delegates() {
+    let long: String = std::iter::repeat_n('w', 20_000).collect();
+    for height in [12, 16, 24, 40] {
+        for (name, setup) in [
+            ("plain", vec![]),
+            ("shut", vec!["abc"]),
+            ("open", vec!["abc", "def", "ghi"]),
+        ] {
+            let mut app = attached(100, height);
+            app.on_line(idle(SESSION, "one"));
+            app.on_line(session_line(
+                SESSION,
+                "job_started",
+                serde_json::json!({"job_id": "j_1", "description": "alpha",
+                    "output_path": "/tmp/out"}),
+            ));
+            app.on_line(session_line(
+                SESSION,
+                "delegate_started",
+                serde_json::json!({"job_id": "j_1",
+                    "delegate_session_id": "s_cccccccccccccccc",
+                    "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+            ));
+            if !setup.is_empty() {
+                app.on_line(widget("ex", "wid", &setup));
+            }
+            if name == "open" {
+                app.on_click(TargetId::Panel(Spot::Widget));
+            }
+            app.on_line(turn_started(&long));
+            let area = ratatui::layout::Rect::new(0, 0, 100, height);
+            let mut buf = ratatui::buffer::Buffer::empty(area);
+            crate::view::render(&app, area, &mut buf, None);
+            let drawn = crate::view::text(&buf)
+                .lines()
+                .filter(|row| row.contains("www") || row.contains("00:00"))
+                .count();
+            assert_eq!(drawn, app.conversation_height(), "{name} at 100x{height}");
+        }
+    }
+}
+
+#[test]
 fn the_widget_row_expands_and_collapses_on_click() {
     let mut app = attached(100, 30);
     app.on_line(widget("ex", "wid", &["abc", "def"]));

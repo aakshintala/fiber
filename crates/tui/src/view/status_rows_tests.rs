@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::text::Line as TextLine;
 
 use crate::app::App;
 use crate::app::panel::Spot;
@@ -400,4 +401,70 @@ fn narrow_short() {
     app.on_line(started("j_1", "build"));
     let (screen, _) = draw(&app, 100, 10);
     insta::assert_snapshot!("narrow_short", screen);
+}
+
+#[test]
+fn delegate_rows_show_only_while_the_conversation_keeps_half() {
+    // One delegate wants two rows; below the input box take two.
+    let setup = |height: u16| {
+        let mut app = attached(100, height);
+        app.on_line(idle(SESSION, "one"));
+        app.on_line(started("j_1", "alpha"));
+        app.on_line(delegated("j_1"));
+        app
+    };
+    // At 11 rows the conversation would keep 5 of 11: the rows drop.
+    let (screen, _) = draw(&setup(11), 100, 11);
+    assert!(!screen.contains("alpha"), "{screen}");
+    assert!(screen.contains("$1.50"), "{screen}");
+    assert!(screen.contains("1 delegate running"), "{screen}");
+    // At 12 rows it keeps half: the rows draw with both status rows.
+    let (screen, _) = draw(&setup(12), 100, 12);
+    assert!(screen.contains("alpha"), "{screen}");
+    assert!(screen.contains("$1.50"), "{screen}");
+    assert!(screen.contains("1 delegate running"), "{screen}");
+}
+
+#[test]
+fn delegate_rows_stop_at_four() {
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    for (id, description) in [("j_1", "alpha"), ("j_2", "beta"), ("j_3", "gamma")] {
+        app.on_line(started(id, description));
+        app.on_line(delegated(id));
+    }
+    let (screen, _) = draw(&app, 100, 30);
+    assert!(screen.contains("alpha"), "{screen}");
+    assert!(screen.contains("beta"), "{screen}");
+    assert!(!screen.contains("gamma"), "{screen}");
+    assert_eq!(crate::view::status_rows::delegates(&app, 100).len(), 4);
+}
+
+#[test]
+fn a_delegate_row_count_matches_the_card() {
+    let mut app = attached(200, 40);
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(started("j_1", "one"));
+    app.on_line(delegated("j_1"));
+    app.on_line(started("j_2", "two"));
+    app.on_line(delegated("j_2"));
+    // Short descriptions are cut nowhere, so the rows match exactly.
+    let card: Vec<TextLine> = crate::view::panel::delegates::rows(&app, 97)
+        .into_iter()
+        .map(|row| row.line)
+        .collect();
+    let status = crate::view::status_rows::delegates(&app, 100);
+    assert_eq!(status.len(), 4);
+    assert_eq!(status, card);
+}
+
+#[test]
+fn narrow_with_delegates_and_widget() {
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(started("j_1", "alpha"));
+    app.on_line(delegated("j_1"));
+    app.on_line(widget("ex", "wid", &["abc", "def"]));
+    let (screen, _) = draw(&app, 100, 30);
+    insta::assert_snapshot!("narrow_with_delegates_and_widget", screen);
 }

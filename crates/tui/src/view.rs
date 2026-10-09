@@ -148,6 +148,7 @@ pub(crate) fn render(
             });
         }
     }
+    status_rows::draw_delegates(app, area, buf, &mut bottom);
     banner::draw(app, area, buf, &mut bottom);
     if let Some(rect) = app
         .badge()

@@ -43,7 +43,7 @@ fn row_one(app: &App, width: usize) -> Option<StatusRow> {
         match card {
             Card::Session => push_segments(&mut text, &mut spots, session_segments(app)),
             Card::ChangedFiles => push_segments(&mut text, &mut spots, changed_files_segments(app)),
-            Card::Jobs => {}
+            Card::Jobs | Card::Delegates => {}
             Card::Widget(at) => push_segments(&mut text, &mut spots, widget_segment(app, at)),
         }
     }
@@ -157,11 +157,7 @@ fn widget_segment(app: &App, at: usize) -> Vec<(String, Option<Spot>)> {
 fn row_two(app: &App, width: usize) -> Option<StatusRow> {
     let listed = |name: &str| app.panel_cards().iter().any(|card| card == name);
     let panel = app.panel_state();
-    let delegates = panel
-        .jobs()
-        .iter()
-        .filter(|(id, _)| panel.delegate_jobs().contains(id))
-        .count();
+    let delegates = panel.running_delegates().len();
     let jobs = panel.jobs().len().saturating_sub(delegates);
     let mut segments = Vec::new();
     if listed("delegates") && delegates > 0 {
@@ -202,7 +198,7 @@ pub(crate) fn widget(app: &App, width: u16) -> Vec<Line<'static>> {
         .into_iter()
         .find_map(|card| match card {
             Card::Widget(at) => Some(at),
-            Card::Session | Card::ChangedFiles | Card::Jobs => None,
+            Card::Session | Card::ChangedFiles | Card::Jobs | Card::Delegates => None,
         });
     let Some(lines) = at
         .and_then(|at| widgets.get(at))
@@ -221,6 +217,16 @@ pub(crate) fn widget(app: &App, width: u16) -> Vec<Line<'static>> {
     } else {
         vec![Line::raw(format::cut(&format!("▸ {first}"), wide))]
     }
+}
+
+/// The running delegates' rows at `width`, at most 4: the Delegates
+/// card's rows at the column's width, the first four.
+pub(crate) fn delegates(app: &App, width: u16) -> Vec<Line<'static>> {
+    super::panel::delegates::rows(app, usize::from(width))
+        .into_iter()
+        .map(|row| row.line)
+        .take(4)
+        .collect()
 }
 
 /// Draws the status line at the bottom of the column: row 1 above row 2,
@@ -274,6 +280,19 @@ pub(super) fn draw_widget(
                 rect: Rect::new(area.x, y, wide, 1),
             });
         }
+    }
+}
+
+/// Draws the running delegates rows above the steering queue, keeping
+/// the narrow layout's fit of them.
+pub(super) fn draw_delegates(app: &App, area: Rect, buf: &mut Buffer, bottom: &mut u16) {
+    let keep = app.narrow_fit().map_or(0, |fit| fit.delegates);
+    for line in delegates(app, area.width).into_iter().take(keep).rev() {
+        let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) else {
+            continue;
+        };
+        buf.set_line(area.x, y, &line, area.width);
+        *bottom = y;
     }
 }
 
