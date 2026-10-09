@@ -622,10 +622,16 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
     let setup = Setup::new();
     let server = ProviderServer::start([calls_ask_then_echo_hi()]).unwrap();
     setup.provider(&server);
-    // A standing ask for this exact command: with the terminal connected
-    // the loop asks a person (`docs/permissions.md`, "Headless").
+    // A standing project ask for this exact command: with the terminal
+    // connected the loop asks a person (`docs/permissions.md`, "Headless").
+    // The project's rules live in Fiber home at `projects/<key>/rules`
+    // (`docs/state.md`, "Projects"), never in the workspace, so the harness
+    // places one through the canonical project key, as `Setup::sessions` does.
+    let key = log::project_key(&doors::project(&setup.workspace()));
+    let rule = setup.home().join("projects").join(key).join("rules");
+    fs::create_dir_all(rule.parent().unwrap()).unwrap();
     fs::write(
-        setup.home().join("rules"),
+        rule,
         format!(
             "{}\n",
             json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
@@ -651,15 +657,37 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
     // The collapsed group line counts the call's parsed form, before the
     // shell's approval panel opens below it.
     run.read_until("asked 4 questions");
-    run.read_until("asked by a global rule: echo hi");
+    run.read_until("asked by a project rule: echo hi");
     run.read_until("allow once");
     let output = run.output();
     let text = String::from_utf8_lossy(&output);
+    // The one-row rule cannot be read from this raw byte stream without a
+    // terminal emulator, so this test does not assert it here: it is
+    // asserted by the 160-column screen tests
+    // `group_line_and_ledger_show_parsed_arguments_never_json` and
+    // `ledger_rows_show_parsed_arguments_never_json` in
+    // crates/tui/src/view_tests.rs and
+    // `group_summary_lines_are_cut_to_one_row_at_the_width` in
+    // crates/tui/src/turn_tests.rs.
     // The approval panel shows the shell's arguments for review, so the
     // shell's JSON is expected there; the `ask_user` call's JSON must
     // never draw: neither on the group line nor in its ledger row.
-    assert!(!text.contains("{\"questions\"}"), "{text:?}");
+    assert!(!text.contains("{\"questions\""), "{text:?}");
     assert!(!text.contains("\"header\""), "{text:?}");
+    assert!(text.contains("asked 4 questions"), "{text:?}");
+    assert!(!text.contains("ask_user {"), "{text:?}");
+    // No row of the conversation holds `{"` except the shell approval
+    // panel's arguments (`{\"command\":\"echo hi\"}`): every occurrence
+    // in the captured output is immediately followed by `command"`.
+    let mut rest = text.as_ref();
+    let mut calls = 0;
+    while let Some(at) = rest.find("{\"") {
+        calls += 1;
+        let after = &rest[at + 2..];
+        assert!(after.starts_with("command\""), "{text:?}");
+        rest = &rest[at + 2..];
+    }
+    assert!(calls > 0, "{text:?}");
     // As above: quitting either exits at once or asks first.
     run.write(b"\x03\x03\r");
     run.read_until("fiber resume");
