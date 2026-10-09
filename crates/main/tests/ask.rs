@@ -1868,6 +1868,7 @@ fn the_configured_budget_reaches_preamble_built() {
     let run = setup.fiber(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     let built = run
         .lines
         .iter()

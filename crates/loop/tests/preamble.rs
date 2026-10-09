@@ -613,8 +613,9 @@ fn a_budget_reaches_preamble_built() {
     let mut session = Session::new(vec![Scripted::text("Done.")], None).budget(Some(2.5));
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
-    let built = session
-        .lines()
+    let lines = session.lines();
+    assert_eq!(kinds(&lines), TURN_KINDS);
+    let built = lines
         .into_iter()
         .find(|line| line.kind == "preamble_built")
         .unwrap();
@@ -626,8 +627,9 @@ fn budget_is_absent_when_none_is_set() {
     let mut session = Session::new(vec![Scripted::text("Done.")], None);
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
-    let built = session
-        .lines()
+    let lines = session.lines();
+    assert_eq!(kinds(&lines), TURN_KINDS);
+    let built = lines
         .into_iter()
         .find(|line| line.kind == "preamble_built")
         .unwrap();
