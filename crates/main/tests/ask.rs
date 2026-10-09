@@ -653,14 +653,21 @@ fn a_prompt_as_an_argument_runs_one_turn_and_stdout_is_the_log() {
 }
 
 /// Copies the repository's `docs/skills/` into Fiber home's `docs/skills/`,
-/// read at run time so the test checks what ships.
+/// compiled in so the test checks what ships.
 fn install_docs_skills(home: &Path) {
-    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/skills");
-    for entry in fs::read_dir(&from).unwrap() {
-        let entry = entry.unwrap();
-        let dir = home.join("docs/skills").join(entry.file_name());
+    for (name, skill) in [
+        (
+            "cache-warming",
+            include_str!("../../../docs/skills/cache-warming/SKILL.md"),
+        ),
+        (
+            "using-fiber",
+            include_str!("../../../docs/skills/using-fiber/SKILL.md"),
+        ),
+    ] {
+        let dir = home.join("docs/skills").join(name);
         fs::create_dir_all(&dir).unwrap();
-        fs::copy(entry.path().join("SKILL.md"), dir.join("SKILL.md")).unwrap();
+        fs::write(dir.join("SKILL.md"), skill).unwrap();
     }
 }
 
