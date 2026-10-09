@@ -86,6 +86,19 @@ impl Temp {
         fs::write(dir.join("events.jsonl"), format!("{first}\n{{}}\n")).unwrap();
     }
 
+    /// Writes `bytes` as the whole of `SID`'s log, with no newline added:
+    /// for a first line still being written or torn mid-character.
+    fn log_bytes(&self, bytes: &[u8]) {
+        let dir = self
+            .dir
+            .join("projects")
+            .join("-p")
+            .join("sessions")
+            .join(SID);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("events.jsonl"), bytes).unwrap();
+    }
+
     /// `SID`'s log recording [`Temp::workspace`].
     fn recorded(&self) -> PathBuf {
         let workspace = self.workspace();
@@ -267,6 +280,72 @@ fn a_log_whose_first_line_names_no_workspace_is_log_corrupt() {
         assert!(starter.resumed().is_empty(), "{first}");
         assert!(temp.hub_log().contains("\"code\":\"log_corrupt\""));
     }
+}
+
+#[test]
+fn a_log_with_no_complete_first_line_is_session_not_found() {
+    // A session's process creates its log before it binds its socket, so
+    // a client can open the session while the log is empty or its first
+    // line is still being written. Either way the hub answers as for a
+    // missing log, and writes no corrupt-log diagnostic.
+    for bytes in [Vec::new(), b"{\"kind\":\"session_started\"".to_vec()] {
+        let temp = Temp::new();
+        temp.log_bytes(&bytes);
+        let starter = FakeStarter::bind_and_hold(&temp.dir);
+        let hub = temp.hub(starter.clone());
+        let refused = refused(resumed(&hub));
+        assert_eq!(refused.code, ErrorCode::SessionNotFound, "{bytes:?}");
+        assert_eq!(refused.message, format!("No session `{SID}`."), "{bytes:?}");
+        assert!(starter.resumed().is_empty(), "{bytes:?}");
+        assert!(
+            !temp.hub_log().contains("log_corrupt"),
+            "{}",
+            temp.hub_log()
+        );
+    }
+}
+
+#[test]
+fn a_first_line_torn_inside_a_character_is_incomplete_until_its_newline() {
+    // Completeness is decided on bytes before any decoding: these bytes
+    // end inside a multi-byte character, so without a newline they answer
+    // as a missing log, while the same bytes with a newline form a
+    // complete line that is not UTF-8 and stay corrupt.
+    let mut torn = br#"{"kind":"session_started","payload":{"workspace":"/w"#.to_vec();
+    torn.extend_from_slice(&[0xC3]);
+    let temp = Temp::new();
+    temp.log_bytes(&torn);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let torn_refused = refused(resumed(&hub));
+    assert_eq!(torn_refused.code, ErrorCode::SessionNotFound);
+    assert_eq!(torn_refused.message, format!("No session `{SID}`."));
+    assert!(starter.resumed().is_empty());
+    assert!(!temp.hub_log().contains("log_corrupt"));
+
+    let mut complete = torn.clone();
+    complete.push(b'\n');
+    let temp = Temp::new();
+    temp.log_bytes(&complete);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let complete_refused = refused(resumed(&hub));
+    assert_eq!(complete_refused.code, ErrorCode::LogCorrupt);
+    assert!(starter.resumed().is_empty());
+    assert!(temp.hub_log().contains("\"code\":\"log_corrupt\""));
+}
+
+#[test]
+fn a_resume_exited_of_an_empty_log_is_session_not_found() {
+    let temp = Temp::new();
+    temp.log_bytes(&[]);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let refused = refused(resumed_exited(&hub));
+    assert_eq!(refused.code, ErrorCode::SessionNotFound);
+    assert_eq!(refused.message, format!("No session `{SID}`."));
+    assert!(starter.resumed().is_empty());
+    assert_eq!(temp.clock.now(), temp.clock.origin());
 }
 
 #[test]
