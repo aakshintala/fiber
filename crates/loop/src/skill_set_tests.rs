@@ -144,6 +144,16 @@ fn a_shared_name_returns_the_winners_file() {
 }
 
 #[test]
+fn adopting_a_set_into_itself_is_a_no_op() {
+    let tree = Tree::new();
+    let path = skill(&tree.top().join(".agents/skills"), "tdd", "tdd", "d");
+    let set = tree.set();
+    assert_eq!(set.command("tdd"), Some(path.clone()));
+    set.adopt(&set);
+    assert_eq!(set.command("tdd"), Some(path));
+}
+
+#[test]
 fn adopt_moves_the_state_so_a_reader_answers_from_it_not_disk() {
     let tree = Tree::new();
     let path = skill(&tree.top().join(".agents/skills"), "tdd", "tdd", "d");
