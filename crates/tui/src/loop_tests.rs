@@ -1303,3 +1303,164 @@ fn resume_open_replays_the_log_to_the_tail() {
     let screen = shown(&lp);
     assert!(screen.contains("quokkas"), "{screen}");
 }
+
+/// A left click at 0-based `col`, `row`: the press and the release.
+fn click(col: u16, row: u16) -> Input {
+    let (col, row) = (col + 1, row + 1);
+    Input::Bytes(format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m").into_bytes())
+}
+
+/// Ctrl+C twice, which quits the loop with code 0.
+fn quit() -> Input {
+    Input::Bytes(vec![0x03, 0x03])
+}
+
+/// A wide loop with the delegates card, attached, holding one running
+/// Fiber delegate: the first delegate spot's 0-based cell.
+fn delegate_spot() -> (Loop<TestBackend>, (u16, u16)) {
+    let (mut lp, _) = super::tests::new_loop(TestBackend::new(160, 40), None);
+    lp.app.set_size(160, 40);
+    lp.screen
+        .resize(160, 40)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
+    lp.app.set_home(crate::home::Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: ["session", "changed_files", "delegates", "jobs", "quota"]
+            .map(str::to_owned)
+            .to_vec(),
+        ..Default::default()
+    });
+    lp.app.attach(contract::SessionId(SESSION.to_owned()));
+    let hub =
+        |kind: &str, payload: Value| Input::Hub(Line::Session(line(kind, None, None, payload)));
+    let code = super::tests::feed(
+        &mut lp,
+        vec![
+            hub(
+                "job_started",
+                json!({"job_id": "j_1", "description": "task one", "output_path": "/tmp/out"}),
+            ),
+            hub(
+                "delegate_started",
+                json!({"job_id": "j_1", "delegate_session_id": "s_bbbbbbbbbbbbbbbb",
+                    "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+            ),
+        ],
+    );
+    assert_eq!(code, 0);
+    assert!(!lp.app.item_open());
+    // Either delegate row opens the delegate; the description names it.
+    let panel = lp
+        .app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.panel)
+        .unwrap_or_else(|| panic!("a panel"));
+    let row = shown(&lp)
+        .lines()
+        .position(|text| text.contains("task one"))
+        .unwrap_or_else(|| panic!("the delegate row"));
+    (lp, (panel.x + 2, u16::try_from(row).unwrap_or(u16::MAX)))
+}
+
+/// A key batch never holds: opening a delegate swaps the shown screen,
+/// and a hold would stick to the stashed parent past the batch's end.
+/// The click opens the delegate, and the quit ends the run: nothing is
+/// held after.
+#[test]
+fn a_key_that_opens_a_delegate_leaves_nothing_held() {
+    let (mut lp, (col, row)) = delegate_spot();
+    let (tx, rx) = mpsc::channel();
+    tx.send(click(col, row))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(quit()).unwrap_or_else(|err| panic!("send: {err}"));
+    drop(tx);
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("delegate-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done.send((code, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (code, lp) = finished
+        .recv_timeout(DRAIN)
+        .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to quit: {err}"));
+    assert_eq!(code, 0);
+    assert!(lp.app.item_open());
+    assert!(!lp.app.pages().holding());
+}
+
+/// Quitting ends the run through the batch's end, so a hold never
+/// outlives the loop: a quit in its own batch leaves nothing held.
+#[test]
+fn a_quit_in_its_own_batch_leaves_nothing_held() {
+    let (mut lp, _) = super::tests::new_loop(TestBackend::new(60, 12), None);
+    let (tx, rx) = mpsc::channel();
+    tx.send(quit()).unwrap_or_else(|err| panic!("send: {err}"));
+    drop(tx);
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("quit-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done.send((code, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (code, lp) = finished
+        .recv_timeout(DRAIN)
+        .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to quit: {err}"));
+    assert_eq!(code, 0);
+    assert!(!lp.app.pages().holding());
+}
+
+/// A hub batch holds while it folds and settles once at its end: two
+/// changed lines count the open page once, and the hold is released.
+#[test]
+fn a_hub_batch_holds_while_folding() {
+    let (mut lp, _) = super::tests::new_loop(TestBackend::new(60, 12), None);
+    lp.app.attach(contract::SessionId(SESSION.to_owned()));
+    let mut seq = 0u64;
+    let mut turn = |kind: &str, action: Option<&str>, payload: Value| {
+        let envelope = line(kind, Some(seq), action, payload);
+        seq += 1;
+        Input::Hub(Line::Session(envelope))
+    };
+    let (tx, rx) = mpsc::channel();
+    tx.send(turn(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    ))
+    .unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(turn(
+        "text_completed",
+        Some("a_m"),
+        json!({"text": "marker one"}),
+    ))
+    .unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(quit()).unwrap_or_else(|err| panic!("send: {err}"));
+    drop(tx);
+    let before = lp.app.pages().recounts;
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("hub-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done.send((code, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (code, lp) = finished
+        .recv_timeout(DRAIN)
+        .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to quit: {err}"));
+    assert_eq!(code, 0);
+    // Both lines folded before the count: one recount for the batch.
+    assert_eq!(lp.app.pages().recounts - before, 1);
+    assert!(!lp.app.pages().holding());
+    let screen = shown(&lp);
+    assert!(screen.contains("marker one"), "{screen}");
+}
