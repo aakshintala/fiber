@@ -22,6 +22,7 @@ use contract::SessionId;
 
 mod exit;
 mod open_at;
+mod reset;
 
 /// Home's state: the launch description, and whether a `start` went out in
 /// this run, which hides the input box's placeholder.
@@ -411,6 +412,15 @@ impl App {
                         }
                         return Some(Vec::new());
                     }
+                    if accepted {
+                        let result = hub.payload.get("result");
+                        let result = result.unwrap_or(&serde_json::Value::Null);
+                        if self.sessions_accepted(id, result) {
+                            return Some(Vec::new());
+                        }
+                    } else if self.sessions_rejected(id) {
+                        return Some(Vec::new());
+                    }
                     None
                 }
                 _ => None,
@@ -432,6 +442,7 @@ impl App {
                     if let Some(home) = self.home.as_mut() {
                         home.sessions.status(row);
                     }
+                    self.note_feed(&session);
                     if was_left {
                         self.reconcile(&session);
                     }

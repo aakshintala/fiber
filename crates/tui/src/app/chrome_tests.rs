@@ -14,6 +14,14 @@ use std::path::PathBuf;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
+/// A right-aligned prompt bubble edge, distinct from the column-wide input edge.
+fn prompt_edge(row: &str) -> bool {
+    row.chars()
+        .position(|cell| cell != ' ')
+        .is_some_and(|first| first > 0)
+        && row.chars().all(|cell| matches!(cell, ' ' | '▄' | '▀'))
+}
+
 /// The launch description: `/w`, outside git, default shares.
 fn launch() -> Launch {
     Launch {
@@ -248,7 +256,7 @@ fn conversation_height_equals_the_drawn_rows() {
         let (screen, _) = draw(&app, width, height);
         let drawn = screen
             .lines()
-            .filter(|row| row.contains("www") || row.contains("00:00"))
+            .filter(|row| row.contains("www") || row.contains("00:00") || prompt_edge(row))
             .count();
         assert_eq!(drawn, app.conversation_height(), "{width}x{height}");
         // The header holds row 0 and the input box the last row.
@@ -261,7 +269,7 @@ fn conversation_height_equals_the_drawn_rows() {
 fn content_rows(screen: &str) -> usize {
     screen
         .lines()
-        .filter(|row| row.contains("www") || row.contains("00:00"))
+        .filter(|row| row.contains("www") || row.contains("00:00") || prompt_edge(row))
         .count()
 }
 

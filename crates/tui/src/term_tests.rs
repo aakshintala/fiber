@@ -20,7 +20,7 @@ const START_NO_HOVER: &[u8] =
 /// mouse mode off, theme reporting off, the title popped, the alternate
 /// screen left, the cursor shown.
 const END: &[u8] =
-    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -225,9 +225,15 @@ fn the_restore_turns_scheme_reports_off_before_the_title_pops() {
     else {
         panic!("the restore turns scheme reports off");
     };
-    assert_eq!(
-        super::RESTORE.get(at + off.len()..at + off.len() + pop.len()),
-        Some(pop.as_slice())
+    let Some(title) = super::RESTORE
+        .windows(pop.len())
+        .position(|window| window == pop)
+    else {
+        panic!("the restore pops the title");
+    };
+    assert!(
+        at + off.len() <= title,
+        "scheme reports off before the title pops"
     );
 }
 
@@ -241,4 +247,18 @@ fn the_restore_bytes_pop_the_title_pushed_on_setup_and_resume() {
     assert_eq!(super::PUSH_TITLE, b"\x1b[22;2t");
     assert!(START_HOVER.starts_with(b"\x1b[?1049h\x1b[22;2t"));
     assert!(RESUME_NO_HOVER.starts_with(b"\x1b[?1049h\x1b[22;2t"));
+}
+
+#[test]
+fn restore_resets_the_pointer_shape() {
+    let pointer = crate::osc::pointer(false);
+    let pop = b"\x1b[23;2t";
+    let shape = super::RESTORE
+        .windows(pointer.len())
+        .position(|window| window == pointer);
+    let title = super::RESTORE
+        .windows(pop.len())
+        .position(|window| window == pop);
+    assert!(shape.is_some(), "the restore resets the pointer shape");
+    assert!(shape < title, "the shape resets before the title pops");
 }

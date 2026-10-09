@@ -85,6 +85,25 @@ fn run_set(
     config::set(home, workspace, &project, layer, key, parsed).map_err(|e| failed(e.code(), e))
 }
 
+/// `fiber config set` for another front end, such as the terminal's
+/// `/settings`: the same parsing, type check, layer refusal and `model`
+/// check, with each warning line `set` prints on standard error returned
+/// instead.
+pub fn config_set_text(
+    home: &Path,
+    workspace: &Path,
+    layer: Layer,
+    key: &str,
+    text: &str,
+) -> Result<Vec<String>, Failure> {
+    let mut err = Vec::new();
+    run_set(home, workspace, layer, key, text, &mut err)?;
+    Ok(String::from_utf8_lossy(&err)
+        .lines()
+        .map(str::to_owned)
+        .collect())
+}
+
 /// Runs `run` with Fiber home and the current directory, mapping any failure
 /// to its exit code.
 fn with_dirs(run: impl FnOnce(&Path, &Path) -> Result<(), Failure>) -> i32 {

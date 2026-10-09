@@ -24,6 +24,7 @@ use crate::keys::{Button, Event, MouseKind, Parser, Reply};
 use crate::link::{self, Line};
 use crate::look::Look;
 use crate::mouse::Pointer;
+use crate::retry::Retry;
 use crate::screen::Screen;
 use crate::sources::{Reader, spawn_hub, spawn_resize};
 use crate::{Connect, Input, OnAttach, clipboard, editor, files, osc, term};
@@ -68,8 +69,11 @@ pub fn run(
         app.push_notice(notice);
     }
     app.set_keys(std::mem::take(&mut launch.keys));
+    let save = launch.save.take();
+    app.set_configure(launch.configure.take());
     app.set_home(launch);
     app.set_size(width, height);
+    let retry = Retry::new(&clock);
     let mut terminal = Loop {
         app,
         parser: Parser::default(),
@@ -96,6 +100,9 @@ pub fn run(
         open_command: crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
             .map(|argv| argv.into_iter().map(str::to_owned).collect()),
         title: osc::Title::default(),
+        shape: osc::Shape::default(),
+        save,
+        retry: Some(Arc::clone(&retry)),
     };
     terminal.app.set_opener(terminal.open_command.is_some());
     terminal
@@ -115,7 +122,7 @@ pub fn run(
         .tty
         .as_ref()
         .and_then(|tty| Reader::spawn(tty, tx.clone()));
-    spawn_hub(connect, tx.clone());
+    spawn_hub(connect, tx.clone(), retry, Arc::clone(&terminal.clock));
     if let Some(signals) = signals {
         spawn_resize(signals, tx);
     }
@@ -191,6 +198,13 @@ struct Loop<B: Backend> {
     open_command: Option<Vec<String>>,
     /// The window title last written.
     title: osc::Title,
+    /// The pointer shape last written.
+    shape: osc::Shape,
+    /// Saves a dragged share to the global configuration, if any.
+    save: Option<crate::Save>,
+    /// The hub thread's permit to connect again (`docs/tui.md`, "A
+    /// dropped connection"); none in tests with no hub thread.
+    retry: Option<Arc<Retry>>,
 }
 
 /// The most lines one `history` answer holds (`docs/invocation.md`,
@@ -242,6 +256,7 @@ impl<B: Backend> Loop<B> {
                                 self.app.clear_copied();
                                 self.app.attention_seen();
                             }
+                            self.app.on_drag(&mouse);
                             self.app.on_wheel(&mouse);
                             let selected = self.app.on_select(&mouse, self.screen.targets());
                             let clicked =
@@ -324,6 +339,11 @@ impl<B: Backend> Loop<B> {
                                 return Some(code);
                             }
                         }
+                        Effect::OpenFile(file) => {
+                            if let Some(code) = self.open_file(&file) {
+                                return Some(code);
+                            }
+                        }
                     }
                 }
             }
@@ -344,11 +364,9 @@ impl<B: Backend> Loop<B> {
             Input::ConnectFailed(error) => {
                 self.app
                     .connect_failed(format!("Could not reach the hub: {error}"));
+                self.retry_later();
             }
-            Input::Disconnected => {
-                self.hub = None;
-                self.app.disconnected();
-            }
+            Input::Disconnected => self.on_disconnected(),
             Input::Files { generation, result } => self.app.on_files(generation, result),
             Input::Image { ticket, result } => self.app.on_image(ticket, result),
             Input::FindDue(generation) => {
@@ -375,7 +393,9 @@ impl<B: Backend> Loop<B> {
         if !self.app.files_open() {
             self.search = None;
         }
+        self.save_shares();
         self.page_in(rx);
+        self.apply_theme();
         // A selection's copy waiting on dropped pages runs once they load.
         if let Some(text) = self.app.take_copy() {
             clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
@@ -384,8 +404,23 @@ impl<B: Backend> Loop<B> {
             return Some(1);
         }
         self.write_title();
+        self.write_shape();
         self.write_alerts();
         None
+    }
+
+    /// Saves the shares a drag's release queued, in order. A failed
+    /// save is a notice, so it shows on the frame drawn next.
+    fn save_shares(&mut self) {
+        for (key, share) in self.app.take_saves() {
+            let Some(save) = &self.save else {
+                continue;
+            };
+            if let Err(message) = save(key, share) {
+                self.app
+                    .push_notice(format!("Could not save {key}: {message}"));
+            }
+        }
     }
 
     /// Writes the app's window title when it changed since the last write.
@@ -394,6 +429,20 @@ impl<B: Backend> Loop<B> {
             && let Some(mut tty) = self.tty.as_ref()
         {
             tty.write_all(&bytes).unwrap_or(());
+        }
+    }
+
+    /// Writes the pointer shape when it changed: the resize arrow over an
+    /// edge or while a drag runs, else the default. Nothing with hover
+    /// off, where the terminal never reports motion.
+    fn write_shape(&mut self) {
+        if !self.hover {
+            return;
+        }
+        if let Some(bytes) = self.shape.next(self.app.over_edge(self.pointer.at))
+            && let Some(mut tty) = self.tty.as_ref()
+        {
+            tty.write_all(bytes).unwrap_or(());
         }
     }
 
@@ -505,7 +554,7 @@ impl<B: Backend> Loop<B> {
                     return link::history_answer(&line);
                 }
                 Input::Disconnected => {
-                    self.lost();
+                    self.on_disconnected();
                     return Err(LOST.to_owned());
                 }
                 other @ (Input::Bytes(_)
@@ -520,15 +569,32 @@ impl<B: Backend> Loop<B> {
         }
     }
 
-    /// The connection ended during a fetch: nothing more is asked.
+    /// The hub connection ended: the reader sends this once per stream,
+    /// so each ended connection gives the hub thread one permit.
+    fn on_disconnected(&mut self) {
+        self.hub = None;
+        self.app.disconnected();
+        self.retry_later();
+    }
+
+    /// Gives the hub thread its permit for one failure, after the delay
+    /// the app names; none once the hub refused this terminal's schema.
+    fn retry_later(&mut self) {
+        if let (Some(delay), Some(retry)) = (self.app.next_retry(), &self.retry) {
+            retry.give(delay);
+        }
+    }
+
+    /// The connection ended during a fetch: nothing more is asked. The
+    /// reader's end of the stream gives the permit.
     fn lost(&mut self) {
         self.hang_up();
         self.app.disconnected();
     }
 
-    /// Writes command lines to the hub. A failed write hangs up: the
-    /// connection is lost, and the text of the lines not sent returns to
-    /// the draft.
+    /// Writes command lines to the hub, each one written kept for resending
+    /// until it is answered. A failed write hangs up: the connection is
+    /// lost, and the text of the lines not sent returns to the draft.
     fn send(&mut self, lines: &[String]) {
         for (at, line) in lines.iter().enumerate() {
             let Some(hub) = &mut self.hub else {
@@ -539,6 +605,7 @@ impl<B: Backend> Loop<B> {
                 self.app.write_failed(lines.get(at..).unwrap_or_default());
                 return;
             }
+            self.app.wrote(line);
         }
     }
 
@@ -559,6 +626,39 @@ impl<B: Backend> Loop<B> {
         code
     }
 
+    /// Ctrl+G on a configuration view: opens `file` in the editor
+    /// `$VISUAL` or `$EDITOR` names, with the terminal handed over, and
+    /// tells the app it returned. `Some(1)` when the terminal cannot be
+    /// taken back.
+    fn open_file(&mut self, file: &std::path::Path) -> Option<i32> {
+        let Some(command) = editor::command(&self.var) else {
+            self.app
+                .config_file_closed(Err(editor::NO_EDITOR_FILE.to_owned()));
+            return None;
+        };
+        let mut result = Err(String::new());
+        let code = self.hand_over(|| result = editor::open(&command, file));
+        if code.is_none() {
+            self.app.config_file_closed(result);
+        }
+        code
+    }
+
+    /// Applies a theme `/settings` chose, without a restart: the next
+    /// frame is painted whole in it, keeping the colour depth. A theme
+    /// file that cannot be read follows the terminal, with its notice
+    /// (`docs/tui.md`, "Themes").
+    fn apply_theme(&mut self) {
+        let Some(setting) = self.app.take_theme_choice() else {
+            return;
+        };
+        let (look, notice) = Look::new(setting, &|name| (self.var)(name));
+        self.screen.set_look(look);
+        if let Some(notice) = notice {
+            self.app.push_notice(notice);
+        }
+    }
+
     /// Hands the terminal to `program`, run in the foreground on this
     /// thread: the reader paused, the terminal restored, then both taken
     /// back and the whole screen repainted at the size read again. `Some(1)`
@@ -576,6 +676,9 @@ impl<B: Backend> Loop<B> {
         }
         // The restore popped the title: the next frame writes it again.
         self.title.forget();
+        // The restore put the default pointer back: the next frame writes
+        // the shape again.
+        self.shape.reset();
         if let Some(reader) = &self.reader {
             reader.resume();
         }
@@ -593,6 +696,17 @@ impl<B: Backend> Loop<B> {
         if let Some(hub) = self.hub.take() {
             hub.shutdown(std::net::Shutdown::Both).unwrap_or(());
         }
+    }
+}
+
+/// The loop is gone: the hub thread stops waiting for a permit, and a
+/// reader blocked on the stream sees its end.
+impl<B: Backend> Drop for Loop<B> {
+    fn drop(&mut self) {
+        if let Some(retry) = &self.retry {
+            retry.quit();
+        }
+        self.hang_up();
     }
 }
 
@@ -633,6 +747,10 @@ mod panel_tests;
 mod rail_tests;
 
 #[cfg(test)]
+#[path = "lib_drag_tests.rs"]
+mod drag_tests;
+
+#[cfg(test)]
 #[path = "lib_attention_tests.rs"]
 mod attention_tests;
 
@@ -641,5 +759,13 @@ mod attention_tests;
 mod look_tests;
 
 #[cfg(test)]
+#[path = "lib_settings_tests.rs"]
+mod settings_tests;
+
+#[cfg(test)]
 #[path = "lib_paste_tests.rs"]
 mod paste_tests;
+
+#[cfg(test)]
+#[path = "lib_reconnect_tests.rs"]
+mod reconnect_tests;

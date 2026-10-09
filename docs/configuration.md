@@ -321,6 +321,17 @@ Nothing watches the files, so an idle Fiber does no work. A value written with
 `host.config.set` is visible to that extension at once, and to other sessions
 at their next reload.
 
+So a key written while Fiber runs applies, and the terminal's `/settings` says
+when (`docs/tui.md`, "Swapped views"):
+
+- `tui.theme` at once: the terminal applies the theme it writes
+- any other `tui.*` key when the terminal starts again
+- `hub.*` and `hubs.*` when the hub starts again
+- `diagnostics.level` when each Fiber process starts again
+- `model` and `thinking` for sessions started after the write
+- `skills.disabled` at the next turn start
+- every other key on `/reload`, with the one prompt-cache miss it costs
+
 A problem in a file is reported by file and key:
 
 - An unknown key is a `notice` and is otherwise ignored. A repository written
@@ -337,6 +348,8 @@ Fiber writes configuration in these places:
 - the model picker saves the global `model`, and a thinking level as
   `models."<provider/model>".thinking`, unless the choice is marked as this
   session only (`docs/tui.md`, "Swapped views")
+- dragging the rail's or the panel's edge saves the global `tui.rail.width`
+  or `tui.panel.width` (`docs/tui.md`, "Layout")
 - `/credential` saves the global `providers."<name>".credential`, unless the
   switch is marked as this session only, and `fiber login` writes it when it
   stores a provider's first label (`docs/model-routing.md`, "Credentials")
@@ -350,6 +363,9 @@ Fiber writes configuration in these places:
 - `fiber config set <key> <value>` writes the global file, the per-project
   file with `--project`, or the repository's `.fiber/config.json` with
   `--repo`
+- the terminal's `/settings` writes a key through the same path as
+  `fiber config set`, in the layer the person picks among those the key
+  allows, and `tui.theme` to the global file (`docs/tui.md`, "Swapped views")
 - `fiber mcp add` and `fiber mcp remove` write an entry under `mcp.servers`,
   in the same three files (`docs/mcp.md`, "Configuration")
 - `fiber hub install --port` writes the global `hub.port`, and `fiber hub add`

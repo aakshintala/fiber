@@ -14,7 +14,9 @@ use crate::app::App;
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
+mod banner;
 pub(crate) mod chrome;
+mod drag;
 #[path = "home_view.rs"]
 mod home;
 mod input_box;
@@ -24,6 +26,7 @@ pub(crate) mod panel;
 pub(crate) mod rail;
 pub(crate) mod request;
 mod results;
+pub(crate) mod status_rows;
 mod steering_queue;
 
 pub(crate) use home::max_question_scroll;
@@ -68,14 +71,16 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
     paragraph(line).line_count(width).max(1)
 }
 
-/// Draws `app` into `area` of `buf`, from the bottom up: the input box
-/// on the last rows with a completion panel above it, or the approval panel
-/// in their place, then the steering queue, the badge and the quit hint
-/// when shown, and the conversation in the rows left with the notices
-/// floating over its top-right corner, or the key map over them while it
-/// is open. A screen too short for them all drops the hint first, then the
-/// badge. A panel taller than the screen keeps its top, except that a
-/// question form scrolls to keep its cursor's row shown.
+/// Draws `app` into `area` of `buf`, from the bottom up: the narrow
+/// layout's status rows on the last rows, then the input box with a
+/// completion panel above it, or the approval panel in their place, then
+/// the steering queue, the reconnect banner, the
+/// badge and the quit hint when shown, and the conversation in the rows
+/// left with the notices floating over its top-right corner, or the key
+/// map over them while it is open. A screen too short for them all drops
+/// the hint first, then the badge. A panel taller than the screen keeps
+/// its top, except that a question form scrolls to keep its cursor's row
+/// shown.
 ///
 /// Returns the click targets drawn, in draw order. Last, the target under
 /// `pointer`, if any, gets [`HOVER_TINT`] as its background.
@@ -92,6 +97,25 @@ pub(crate) fn render(
         chrome::floor(line, area, buf);
         return Vec::new();
     }
+    // A configuration view takes home's place (`docs/tui.md`, "Swapped
+    // views"). Notices float above it (`docs/tui.md`, "Notices"), as
+    // over the conversation.
+    if app.config_view_open() && app.on_home() {
+        let mut targets = Vec::new();
+        crate::swapped::draw(app, area, buf, &mut targets);
+        notices(app, area, buf, &mut targets);
+        if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
+            for target in targets.iter().filter(|target| target.id == id) {
+                buf.set_style(target.rect, HOVER_TINT);
+            }
+        }
+        if let Some(id) = app.focused() {
+            for target in targets.iter().filter(|target| target.id == id) {
+                buf.set_style(target.rect, FOCUS_STYLE);
+            }
+        }
+        return targets;
+    }
     if let Some(screen) = app.home_screen() {
         return home::render(app, &screen, area, buf, pointer);
     }
@@ -107,15 +131,19 @@ pub(crate) fn render(
         rail::draw(app, rect, buf, pointer, &mut targets);
     }
     let mut bottom = area.bottom();
+    status_rows::draw_status(app, area, buf, &mut bottom, &mut targets);
     if let Some(panel) = app.panel() {
         bottom = request::draw(&panel, area, bottom, buf, &mut targets);
     }
     if app.panel().is_none() {
         input_box::draw(app, area, &mut bottom, buf, &mut targets);
     }
+    status_rows::draw_widget(app, area, buf, &mut bottom, &mut targets);
     // The steering queue sits above the input box, its newest row lowest;
     // a row a `steer` sent ends in a ✕ that drops it.
     steering_queue::draw(app, area, &mut bottom, buf, &mut targets);
+    status_rows::draw_delegates(app, area, buf, &mut bottom);
+    banner::draw(app, area, buf, &mut bottom);
     if let Some(rect) = app
         .badge()
         .and_then(|badge| put(buf, area, &mut bottom, &badge, Style::default()))
@@ -137,6 +165,13 @@ pub(crate) fn render(
                 .scroll((to_u16(top), 0))
                 .render(conversation, buf);
             overlay_cross(buf, conversation, &mut targets);
+        }
+        // A configuration view swaps in for the conversation. Notices
+        // float above it (`docs/tui.md`, "Notices"), as over the
+        // conversation.
+        None if app.config_view_open() => {
+            crate::swapped::draw(app, conversation, buf, &mut targets);
+            notices(app, conversation, buf, &mut targets);
         }
         None => {
             // The repository offer swaps in for the conversation.
@@ -163,6 +198,7 @@ pub(crate) fn render(
             notices(app, conversation, buf, &mut targets);
         }
     }
+    drag::draw(app, buf, pointer);
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {
             buf.set_style(target.rect, HOVER_TINT);
@@ -282,7 +318,8 @@ fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
 /// shown form's caret wins over an open repository offer, which already
 /// gives the panel its keys.
 pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
-    if app.chrome().floor_line().is_some() {
+    // A configuration view draws its own caret.
+    if app.chrome().floor_line().is_some() || app.config_view_open() {
         return None;
     }
     if let Some(screen) = app.home_screen() {
@@ -298,7 +335,7 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     // A shown panel wins over the offer: the panel takes the keys, so a
     // form's caret takes the cursor.
     if let Some(panel) = app.panel() {
-        return request::caret(&panel, area, area.bottom());
+        return request::caret(&panel, area, status_rows::input_bottom(app, area));
     }
     // The offer hides the draft's cursor while it swaps in for the
     // conversation.
@@ -311,7 +348,9 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
         return marks::bar_cursor(&bar, area);
     }
     let (below, col) = input_box::cursor_row(app, area.width, usize::from(area.height));
-    let y = area.bottom().checked_sub(below).filter(|y| *y >= area.y)?;
+    let y = status_rows::input_bottom(app, area)
+        .checked_sub(below)
+        .filter(|y| *y >= area.y)?;
     let x = area.x.saturating_add(col.min(area.width.saturating_sub(1)));
     Some(Position::new(x, y))
 }

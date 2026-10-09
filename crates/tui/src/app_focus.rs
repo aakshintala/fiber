@@ -247,7 +247,8 @@ impl App {
             | TargetId::Offer(_)
             | TargetId::Panel(_)
             | TargetId::Rail(_)
-            | TargetId::Form(_) => None,
+            | TargetId::Form(_)
+            | TargetId::View(_) => None,
         }
     }
 

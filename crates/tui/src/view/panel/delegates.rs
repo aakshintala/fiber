@@ -16,7 +16,7 @@ pub(crate) const DELEGATES_SHOWN: usize = 3;
 /// The card's rows at `text` columns, in job start order from its scroll
 /// offset: `<glyph> <word>  <model>`, then the job's description. No
 /// delegate running draws no row.
-pub(super) fn rows(app: &App, text: usize) -> Vec<Row> {
+pub(crate) fn rows(app: &App, text: usize) -> Vec<Row> {
     let panel = app.panel_state();
     let running = panel.running_delegates();
     // A stored offset past the end clamps when drawn, as the panel's does.

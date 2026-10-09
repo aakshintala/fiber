@@ -15,6 +15,9 @@ mod bindings;
 mod bubble;
 mod cells;
 mod clipboard;
+mod configure;
+#[cfg(test)]
+mod configure_fake;
 mod editor;
 mod event_loop;
 mod files;
@@ -42,13 +45,16 @@ mod pages;
 mod paste_image;
 #[cfg(test)]
 mod results_support;
+mod retry;
 mod rows;
 mod screen;
+mod settings_view;
 mod shell;
 mod slash;
 mod sources;
 mod stroke;
 mod surface;
+mod swapped;
 mod term;
 mod theme;
 mod turn;
@@ -65,6 +71,8 @@ use crate::link::Line;
 
 pub use attention::Attention;
 
+pub use configure::{Configure, ConfigureError, Layer, Saved, SettingRow, Shown, WriteScope};
+
 pub use home::Launch;
 
 pub use open_at::OpenAt;
@@ -78,11 +86,15 @@ pub use jigs::{draw, hover_frames, measure_paging};
 pub use event_loop::run;
 
 /// Connects to the hub, starting one when none runs: the stream and the
-/// `hub_hello` it spoke first.
-pub type Connect = Box<dyn FnOnce() -> io::Result<(UnixStream, HubLine)> + Send>;
+/// `hub_hello` it spoke first. Called again for each reconnect.
+pub type Connect = Box<dyn FnMut() -> io::Result<(UnixStream, HubLine)> + Send>;
 
 /// Called once with the session id when `start` is accepted.
 pub type OnAttach = Box<dyn Fn(&SessionId) + Send>;
+
+/// Saves a dragged share to the global configuration: its key and its
+/// percent, or why it could not be saved.
+pub type Save = Box<dyn Fn(&str, f64) -> Result<(), String> + Send>;
 
 /// One thing the loop wakes for.
 pub(crate) enum Input {

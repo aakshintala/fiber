@@ -201,6 +201,9 @@ pub(super) fn new_loop<B: Backend>(
         copy_command: None,
         open_command: None,
         title: crate::osc::Title::default(),
+        save: None,
+        shape: crate::osc::Shape::default(),
+        retry: None,
     };
     (lp, attached)
 }
@@ -222,6 +225,15 @@ pub(super) fn hello() -> contract::HubLine {
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
     }
+}
+
+/// A connect that hands out `hub` and `hello` once, and fails after.
+pub(super) fn once(hub: UnixStream, hello: contract::HubLine) -> crate::Connect {
+    let mut held = Some((hub, hello));
+    Box::new(move || {
+        held.take()
+            .ok_or_else(|| io::Error::other("the test's one connection is used"))
+    })
 }
 
 /// Runs `work` on a thread and returns its result, failing after
@@ -502,7 +514,7 @@ fn restore_puts_back_what_setup_changed() {
         start.as_bytes()
     );
     crate::restore();
-    let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
     assert_eq!(
         read_exact(&pair.main, end.len(), "the restore bytes"),
         end.as_bytes()
@@ -563,13 +575,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     std::thread::Builder::new()
         .name("lib-run".to_owned())
         .spawn(move || {
-            let code = super::run(
-                slave,
-                launch(),
-                Box::new(move || Ok((hub, hello))),
-                Box::new(|_| {}),
-                clock,
-            );
+            let code = super::run(slave, launch(), once(hub, hello), Box::new(|_| {}), clock);
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
@@ -585,7 +591,11 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     assert_eq!(start, expected);
     // On home the input line is not on the last row: the first frame is
     // read through the placeholder, whose letters are written together.
-    read_until(&pair.main, b"shortcuts", "the first frame");
+    let frames = super::reconnect_tests::watch(&pair.main, vec![
+        b"shortcuts",
+        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h",
+    ]);
+    super::reconnect_tests::watched(&frames, "the first frame");
     // The slave is in raw mode while running.
     let raw = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&before));
@@ -606,8 +616,8 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     assert!(is_cooked(&after));
     // After the last frame the output holds the restore bytes.
     let marker =
-        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b[23;2t\x1b[?1049l\x1b[?25h";
-    let tail = read_until(&pair.main, marker, "the restore bytes");
+        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    let tail = super::reconnect_tests::watched(&frames, "the restore bytes");
     assert_eq!(
         tail.get(tail.len().saturating_sub(marker.len())..),
         Some(marker.as_slice())
@@ -646,7 +656,7 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
     assert_eq!(code, 0);
     read_until(
         &pair.main,
-        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b[23;2t\x1b[?1049l\x1b[?25h",
+        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h",
         "the restore bytes",
     );
     assert!(is_cooked(
@@ -883,7 +893,7 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     ));
     // The terminal was restored, then set up again with hover and kitty's
     // flags.
-    let restore = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    let restore = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
     let echoed = read_until(&pair.main, restore.as_bytes(), "the restore bytes");
     assert!(echoed.ends_with(restore.as_bytes()));
     // In between, the cooked terminal echoed the program's line.
@@ -1307,7 +1317,7 @@ fn hub_status(session: &str, state: &str) -> String {
 
 /// The terminal's restore bytes, after its last frame.
 const RESTORE: &[u8] =
-    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
 /// Runs the terminal on a pty with `hub` as its hub stream: the pty pair,
 /// and the exit code once it quits.
@@ -1325,7 +1335,7 @@ fn spawn_run(hub: UnixStream) -> (Pair, mpsc::Receiver<i32>) {
             let code = super::run(
                 slave,
                 launch(),
-                Box::new(move || Ok((hub, hello))),
+                once(hub, hello),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
             );
@@ -1571,6 +1581,9 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         copy_command: None,
         open_command: None,
         title: crate::osc::Title::default(),
+        save: None,
+        shape: crate::osc::Shape::default(),
+        retry: None,
     };
     // No hub: a frame fetches no history, so nothing arrives here.
     let (_hub, idle) = mpsc::channel();
