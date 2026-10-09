@@ -3,6 +3,7 @@
 
 use std::fs;
 use std::sync::Arc;
+use std::time::Duration;
 
 use fakes::clock::FakeClock;
 use serde_json::json;
@@ -104,7 +105,12 @@ fn login_provider_applies_the_manifest_memory_cap_in_mib() {
     )
     .unwrap();
 
-    assert_eq!(provider.functions().unwrap(), ["credential"]);
+    let functions = fakes::within(
+        "provider VM registration",
+        Duration::from_secs(5),
+        move || provider.functions(),
+    );
+    assert_eq!(functions.unwrap(), ["credential"]);
 }
 
 #[test]

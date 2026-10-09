@@ -702,25 +702,34 @@ fn login_with_runs_the_provider_and_prints_its_stored_result() {
     )
     .unwrap();
     let providers = setup.providers();
-    let mut output = Vec::new();
-    let mut stdin = Cursor::new(String::new());
-    let mut keys = Plain;
-
-    login_with(
-        &mut LoginIo {
-            home: &home,
-            providers: &providers,
-            terminal: false,
-            stdin: &mut stdin,
-            err: &mut output,
-            keys: &mut keys,
-            device: false,
-            clock: setup.clock(),
-        },
-        "acme",
-        None,
-    )
-    .unwrap();
+    let (worker_home, worker_providers, clock) = (home.clone(), providers.clone(), setup.clock());
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut stdin = Cursor::new(String::new());
+        let mut keys = Plain;
+        let result = login_with(
+            &mut LoginIo {
+                home: &worker_home,
+                providers: &worker_providers,
+                terminal: false,
+                stdin: &mut stdin,
+                err: &mut output,
+                keys: &mut keys,
+                device: false,
+                clock,
+            },
+            "acme",
+            None,
+        );
+        match done.send((result, output)) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let (result, output) = finished
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("login_with did not finish within {WAIT:?}"));
+    result.unwrap();
 
     assert_eq!(
         String::from_utf8(output).unwrap(),
