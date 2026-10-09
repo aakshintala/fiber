@@ -458,6 +458,9 @@ pub enum ToolSource {
     Mcp {
         /// The server.
         server: String,
+        /// The server's own name for the tool, which its `tools.enabled`
+        /// and `tools.disabled` name (`docs/mcp.md`, "Tools and their names").
+        tool: String,
     },
 }
 
