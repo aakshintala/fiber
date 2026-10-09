@@ -363,6 +363,84 @@ fn no_color_blanks_edges_but_not_text_half_blocks() {
 }
 
 #[test]
+fn paint_dims_a_dim_role_only() {
+    // Dark `muted` is the default foreground drawn dim: a cell it marks
+    // as a foreground gains DIM and keeps its other modifiers, while a
+    // background marker never adds DIM (`docs/tui.md`, "Themes").
+    let look = look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]);
+    let mut buf = row(&[
+        (
+            "m",
+            Style::new()
+                .fg(Role::Muted.color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        (
+            "a",
+            Style::new()
+                .fg(Role::Accent.color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        (
+            "b",
+            Style::new()
+                .bg(Role::Muted.color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        ("t", Style::new().fg(Role::Text.color())),
+    ]);
+    look.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].fg, Color::Reset);
+    assert_eq!(buf[(0, 0)].modifier, Modifier::BOLD | Modifier::DIM);
+    assert_eq!(buf[(1, 0)].modifier, Modifier::BOLD);
+    assert_eq!(buf[(2, 0)].modifier, Modifier::BOLD);
+    assert_eq!(buf[(3, 0)].modifier, Modifier::empty());
+}
+
+#[test]
+fn dim_follows_the_theme() {
+    // DIM follows the theme's shade for the role: light `muted` is a
+    // fixed colour, and a file that sets `muted` to a hex gets that colour
+    // with no dim. Under NO_COLOR `muted` keeps DIM over the default.
+    let truecolour = [("COLORTERM", "truecolor")];
+    let light = look(ThemeSetting::Light, &truecolour);
+    assert!(!light.dim(Role::Muted));
+    let mut buf = row(&[("m", Style::new().fg(Role::Muted.color()))]);
+    light.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].modifier, Modifier::empty());
+    let (solar, notice) = Look::new(
+        ThemeSetting::File {
+            name: "solar".to_owned(),
+            text: Ok(r##"{"base": "dark", "roles": {"muted": "#123456"}}"##.to_owned()),
+        },
+        &env(&truecolour),
+    );
+    assert_eq!(notice, None);
+    assert!(!solar.dim(Role::Muted));
+    let mut buf = row(&[("m", Style::new().fg(Role::Muted.color()))]);
+    solar.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].fg, Color::Rgb(0x12, 0x34, 0x56));
+    assert_eq!(buf[(0, 0)].modifier, Modifier::empty());
+    let dark = look(ThemeSetting::Dark, &[("NO_COLOR", "1")]);
+    assert!(dark.dim(Role::Muted));
+    let mut buf = row(&[("m", Style::new().fg(Role::Muted.color()))]);
+    dark.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].fg, Color::Reset);
+    assert_eq!(buf[(0, 0)].modifier, Modifier::DIM);
+}
+
+#[test]
+fn a_report_re_resolves_dim() {
+    use super::Appearance;
+    let mut followed = following(&[("COLORTERM", "truecolor")]);
+    assert!(followed.dim(Role::Muted));
+    assert!(followed.appearance(Appearance::Light));
+    assert!(!followed.dim(Role::Muted));
+    assert!(followed.appearance(Appearance::Dark));
+    assert!(followed.dim(Role::Muted));
+}
+
+#[test]
 fn new_with_a_bad_file_follows_and_says_why() {
     let vars = [("COLORTERM", "truecolor")];
     let cases = [
