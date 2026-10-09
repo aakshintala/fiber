@@ -66,9 +66,7 @@ impl List {
             return;
         }
         self.selected = at.min(rows - 1);
-        if self.selected < self.top {
-            self.top = self.selected;
-        }
+        self.top = self.top.min(self.selected);
         if self.selected >= self.top + height {
             self.top = self.selected + 1 - height;
         }
