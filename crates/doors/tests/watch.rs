@@ -25,6 +25,10 @@ use log::Log;
 /// A hang bound for one wait, as in the socket tests.
 const DEADLINE: Duration = Duration::from_secs(10);
 
+/// How long the live thread waits for the watch to attach, and then for
+/// its watcher to read the `clients` line that attach wrote.
+const ATTACH_DEADLINE: Duration = Duration::from_secs(5);
+
 struct Temp {
     home: std::path::PathBuf,
     _held: fakes::TempDir,
@@ -142,22 +146,31 @@ fn a_watch_folds_then_streams_then_returns_at_fiber_exited() {
     let home = opened.home.clone();
     let id = opened.id.clone();
     let log = Arc::clone(&opened.log);
+    // The watch's own `clients` line opens the gate, so the live thread
+    // reads its watcher only once the attach is already written: the
+    // latest a thread scheduled behind the watch could start.
+    let (attached_tx, attached_rx) = mpsc::channel::<()>();
     // Live lines go out only once the watch subscribed: its attach writes
-    // the `clients` line this watcher waits for.
+    // the `clients` line this watcher waits for. The lines go out either
+    // way, so a missed attach fails the test instead of hanging the watch.
     let live = thread::spawn(move || {
+        attached_rx
+            .recv_timeout(ATTACH_DEADLINE)
+            .expect("the watch attached");
         let mut watcher = log.watch();
-        loop {
-            match watcher.recv_timeout(DEADLINE) {
-                Some(Ok(Some(line))) if line.kind == "clients" => break,
+        let saw_clients = loop {
+            match watcher.recv_timeout(ATTACH_DEADLINE) {
+                Some(Ok(Some(line))) if line.kind == "clients" => break true,
                 Some(Ok(_)) => {}
                 Some(Err(error)) => panic!("the watcher failed: {error}"),
-                None => panic!("waited until the deadline for the watch to attach"),
+                None => break false,
             }
-        }
+        };
         log.append(&Event::StepStarted(Empty {}), None, None)
             .unwrap();
         log.append(&Event::FiberExited(exited()), None, None)
             .unwrap();
+        saw_clients
     });
     let mut seen = Vec::new();
     opened
@@ -167,6 +180,9 @@ fn a_watch_folds_then_streams_then_returns_at_fiber_exited() {
         .run(Vec::new(), Arc::new(|| false), |_inbox| {
             let mut lines = Vec::new();
             let watched = doors::watch(&home, &id, &mut |line: &Envelope| {
+                if line.kind == "clients" {
+                    let _sent = attached_tx.send(());
+                }
                 lines.push(line.clone());
             })
             .expect("the watch held to fiber_exited");
@@ -181,7 +197,11 @@ fn a_watch_folds_then_streams_then_returns_at_fiber_exited() {
             Ok(())
         })
         .unwrap();
-    live.join().expect("the live lines went out");
+    let saw_clients = live.join().expect("the live lines went out");
+    assert!(
+        saw_clients,
+        "the live watcher missed the `clients` line the watch's attach wrote"
+    );
     // Besides the four durable lines, the watch also sees the `clients`
     // line its own attach wrote.
     for line in &seen {
