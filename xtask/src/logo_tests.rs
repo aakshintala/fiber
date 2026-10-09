@@ -187,7 +187,10 @@ fn run_writes_a_sized_mask_with_ink_in_both_regions() {
     };
     assert!(inked(0, wave_px), "no ink in the wave region");
     assert!(inked(wave_px, stride), "no ink in the name region");
-    assert_eq!(bytes, std::fs::read(&second).unwrap());
+    let again = std::fs::read(&second).unwrap();
+    assert_eq!(bytes.len(), again.len());
+    let differs = bytes.iter().zip(&again).position(|(a, b)| a != b);
+    assert_eq!(differs, None, "first differing offset");
 }
 
 /// A minimal valid TrueType font with five filled-rectangle glyphs, one
