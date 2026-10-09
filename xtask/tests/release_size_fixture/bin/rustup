@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Stands in for rustup in the release-size test.
+exit 0
