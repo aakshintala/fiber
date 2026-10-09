@@ -156,7 +156,9 @@ fn without_a_seam_a_drag_saves_nothing_silently() {
     let mut lp = wide(None);
     lp.app.on_line(live(A));
     lp.app.on_line(live(B));
+    let before = shown(&lp);
     feed(&mut lp, drag());
+    assert_ne!(shown(&lp), before, "the drag moved the rail's edge");
     assert!(!shown(&lp).contains("Could not save"), "{}", shown(&lp));
 }
 
