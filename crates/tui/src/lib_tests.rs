@@ -148,7 +148,7 @@ fn read_until_with_timeout(main: &File, marker: &[u8], what: &str, timeout: Dura
     }
 }
 
-/// Watches `main` without stopping: sends the bytes through each marker,
+/// Watches `main` without stopping: sends cumulative bytes through each marker,
 /// then keeps reading and discarding so the terminal's output cannot fill.
 fn watch(main: &File, markers: Vec<&'static [u8]>) -> Receiver<Vec<u8>> {
     let mut dup = main.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
@@ -159,18 +159,18 @@ fn watch(main: &File, markers: Vec<&'static [u8]>) -> Receiver<Vec<u8>> {
             let mut buf = Vec::new();
             let mut at = 0usize;
             let mut byte = [0u8; 1];
-            while at < markers.len() {
+            'markers: while at < markers.len() {
                 match dup.read(&mut byte) {
                     Ok(0) | Err(_) => return,
                     Ok(_) => {
                         buf.push(byte[0]);
-                        let marker = markers[at];
-                        if buf.len() >= marker.len()
-                            && buf.get(buf.len() - marker.len()..) == Some(marker)
+                        while at < markers.len()
+                            && buf
+                                .windows(markers[at].len())
+                                .any(|window| window == markers[at])
                         {
-                            let chunk = std::mem::take(&mut buf);
-                            if done.send(chunk).is_err() {
-                                break;
+                            if done.send(buf.clone()).is_err() {
+                                break 'markers;
                             }
                             at += 1;
                         }
@@ -1946,15 +1946,27 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
     let mut pair = open();
     const START: &[u8] =
         b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
-    let frames = watch(&pair.main, vec![START, b"shortcuts", b"the lists are in"]);
+    let frames = watch(
+        &pair.main,
+        vec![START, b"shortcuts", b"the lists", b"are in"],
+    );
     let slave = pair
         .slave
         .try_clone()
         .unwrap_or_else(|err| panic!("dup: {err}"));
     let seen = Arc::new(Mutex::new(Vec::new()));
     let seen_in = Arc::clone(&seen);
-    // The cached lists answer with one model and one notice.
+    let (release, held) = mpsc::channel();
+    let held = Arc::new(Mutex::new(held));
+    let held_in = Arc::clone(&held);
+    // The cached lists answer with one model and one notice, only after
+    // the test releases the read following the first frame.
     let read: crate::ReadModels = Arc::new(move |refresh| {
+        held_in
+            .lock()
+            .unwrap()
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the cached read release: {err}"));
         seen_in.lock().unwrap().push(refresh);
         Ok(crate::Catalogue {
             models: vec![crate::ModelEntry {
@@ -1987,14 +1999,33 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    assert_eq!(
-        watched_with_timeout(&frames, "terminal start", DEADLINE),
-        START
+    let mut output = watched_with_timeout(&frames, "terminal start", DEADLINE);
+    assert_eq!(output, START);
+    output = watched_with_timeout(&frames, "the first frame", DEADLINE);
+    assert!(
+        output
+            .windows(b"shortcuts".len())
+            .any(|window| window == b"shortcuts")
     );
-    watched_with_timeout(&frames, "the first frame", DEADLINE);
-    // Asked after the first frame, the cached read answers: its notice
-    // draws, so the catalogue it came with is held.
-    watched_with_timeout(&frames, "the cached read's notice", DEADLINE);
+    // The cached read cannot answer until the first frame is seen. Its
+    // notice may already be in the cumulative output when this wait starts.
+    release
+        .send(())
+        .unwrap_or_else(|err| panic!("release the cached read: {err}"));
+    // The two text runs are separated by cursor and style controls in the
+    // terminal stream, so both are checked in the cumulative output.
+    output = watched_with_timeout(&frames, "the cached read's notice text", DEADLINE);
+    assert!(
+        output
+            .windows(b"the lists".len())
+            .any(|window| window == b"the lists")
+    );
+    output = watched_with_timeout(&frames, "the cached read's notice ending", DEADLINE);
+    assert!(
+        output
+            .windows(b"are in".len())
+            .any(|window| window == b"are in")
+    );
     assert_eq!(*seen.lock().unwrap(), [crate::Refresh::Cached]);
     pair.main
         .write_all(&[0x03, 0x03])
