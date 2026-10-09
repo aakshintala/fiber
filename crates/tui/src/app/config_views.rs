@@ -74,6 +74,7 @@ impl App {
     /// seam the view says it is not available.
     pub(crate) fn open_config_view(&mut self, view: ConfigView) -> Effect {
         self.draft.clear();
+        self.close_session_view();
         self.config_views.open = None;
         let open = match (self.config_views.seam.clone(), view) {
             (Some(seam), ConfigView::Settings) => {
@@ -111,6 +112,11 @@ impl App {
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
         self.config_views.open = Some(Open::Tools(Tools::open(id, &ctx)));
         Effect::Send(vec![line])
+    }
+
+    /// Closes any open configuration view.
+    pub(in crate::app) fn close_config_view(&mut self) {
+        self.config_views.open = None;
     }
 
     /// Whether a configuration view is open.

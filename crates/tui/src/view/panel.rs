@@ -272,47 +272,59 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             .input
             .saturating_add(tokens.cache_read)
             .saturating_add(written);
-        out.push(plain(format!(
-            "tokens in / out  {} / {}",
-            short_tokens(inside),
-            short_tokens(tokens.output)
-        )));
+        out.push(targeted(
+            format!(
+                "tokens in / out  {} / {}",
+                short_tokens(inside),
+                short_tokens(tokens.output)
+            ),
+            Spot::Usage,
+        ));
         if inside > 0 {
             let hits = tokens
                 .cache_read
                 .saturating_mul(100)
                 .checked_div(inside)
                 .unwrap_or(0);
-            out.push(plain(format!("cache hits  {hits}%")));
+            out.push(targeted(format!("cache hits  {hits}%"), Spot::Usage));
         }
         // With a budget the cost row always shows spend against it; a
         // cost still null counts as zero until it settles
         // (`docs/loop.md`, "Spending budget").
         match (status.spend.cost, panel.budget()) {
             (Some(cost), Some(budget)) => {
-                out.push(plain(format!(
-                    "cost billed  {} of {}",
-                    format::money(cost),
-                    format::money(budget)
-                )));
+                out.push(targeted(
+                    format!(
+                        "cost billed  {} of {}",
+                        format::money(cost),
+                        format::money(budget)
+                    ),
+                    Spot::Usage,
+                ));
             }
             (None, Some(budget)) => {
-                out.push(plain(format!(
-                    "cost billed  unknown of {}",
-                    format::money(budget)
-                )));
+                out.push(targeted(
+                    format!("cost billed  unknown of {}", format::money(budget)),
+                    Spot::Usage,
+                ));
             }
             (Some(cost), None) if cost > 0.0 => {
-                out.push(plain(format!("cost billed  {}", format::money(cost))));
+                out.push(targeted(
+                    format!("cost billed  {}", format::money(cost)),
+                    Spot::Usage,
+                ));
             }
-            (None, None) => out.push(plain("cost billed  unknown".to_owned())),
+            (None, None) => out.push(targeted("cost billed  unknown".to_owned(), Spot::Usage)),
             (Some(_), None) => {}
         }
         if status.spend.subscription_cost > 0.0 {
-            out.push(plain(format!(
-                "cost on subscription  {}",
-                format::money(status.spend.subscription_cost)
-            )));
+            out.push(targeted(
+                format!(
+                    "cost on subscription  {}",
+                    format::money(status.spend.subscription_cost)
+                ),
+                Spot::Usage,
+            ));
         }
     }
     if let Some(speed) = panel.speed() {
@@ -392,6 +404,16 @@ fn plain(text: String) -> Row {
     Row {
         line: Line::raw(text),
         spot: None,
+        tint: None,
+        edge: false,
+    }
+}
+
+/// A row that opens `spot` when clicked.
+fn targeted(text: String, spot: Spot) -> Row {
+    Row {
+        line: Line::raw(text),
+        spot: Some(spot),
         tint: None,
         edge: false,
     }

@@ -6,10 +6,10 @@ expression: "screen(&app, 80, 24)"
 /new  Goes home with the cursor in the input box.  command
 /resume  Opens home at the session list.  command
 /tools  Opens the tools view.  command▀█  █▀▀▀▀ █▀▀▀▄
-/panel  Shows or hides the panel.  command████  █▄▄▄▀
-/rules  Opens the standing rules.  command█▀▀▀▀ █ ▀▄
-/settings  Opens the configuration keys.  command   █ 0.0.1
-/handoff [instructions]  Starts a handoff.  command
+/usage  Opens the usage view.  command▀█  ████  █▄▄▄▀
+/panel  Shows or hides the panel.  command█▀▀▀▀ █ ▀▄
+/rules  Opens the standing rules.  command█▄▄▄▄ █   █ 0.0.1
+/settings  Opens the configuration keys.  command
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 > /
 

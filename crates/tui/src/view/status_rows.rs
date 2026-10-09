@@ -118,12 +118,13 @@ fn session_segments(app: &App) -> Vec<(String, Option<Spot>)> {
         ) {
             (Some(Some(billed)), Some(budget)) => out.push((
                 format!("{} of {}", format::money(billed), format::money(budget)),
-                None,
+                Some(Spot::Usage),
             )),
-            (Some(None), Some(budget)) => {
-                out.push((format!("unknown of {}", format::money(budget)), None))
-            }
-            _ => out.push((format::money(spend), None)),
+            (Some(None), Some(budget)) => out.push((
+                format!("unknown of {}", format::money(budget)),
+                Some(Spot::Usage),
+            )),
+            _ => out.push((format::money(spend), Some(Spot::Usage))),
         }
     }
     out

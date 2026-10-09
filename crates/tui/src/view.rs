@@ -166,10 +166,9 @@ pub(crate) fn render(
                 .render(conversation, buf);
             overlay_cross(buf, conversation, &mut targets);
         }
-        // A configuration view swaps in for the conversation. Notices
-        // float above it (`docs/tui.md`, "Notices"), as over the
-        // conversation.
-        None if app.config_view_open() => {
+        // A swapped view takes the conversation area. Notices float above
+        // it (`docs/tui.md`, "Notices"), as over the conversation.
+        None if app.config_view_open() || app.session_view_open() => {
             crate::swapped::draw(app, conversation, buf, &mut targets);
             notices(app, conversation, buf, &mut targets);
         }
@@ -318,8 +317,8 @@ fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
 /// shown form's caret wins over an open repository offer, which already
 /// gives the panel its keys.
 pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
-    // A configuration view draws its own caret.
-    if app.chrome().floor_line().is_some() || app.config_view_open() {
+    // A swapped view has no input caret.
+    if app.chrome().floor_line().is_some() || app.config_view_open() || app.session_view_open() {
         return None;
     }
     if let Some(screen) = app.home_screen() {
