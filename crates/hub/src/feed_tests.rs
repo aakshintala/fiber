@@ -204,10 +204,47 @@ fn args(value: Value) -> Map<String, Value> {
 
 #[test]
 fn the_summary_subscribe_is_the_documented_line() {
-    assert_eq!(
-        serde_json::from_slice::<Value>(SUBSCRIBE).unwrap(),
-        json!({"id": "c_hub_feed", "command": "subscribe", "args": {"level": "summary"}})
-    );
+    use std::os::unix::net::UnixListener;
+
+    let temp = Temp::new();
+    let (feed, _) = new_feed(&temp);
+    let socket = temp.dir.join("run").join(id(1));
+    let listener = UnixListener::bind(&socket).unwrap();
+    // The receive runs on a thread: a follow that never connects or
+    // sends leaves the bounded wait below to fail, not a blocked test.
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut texts = Vec::new();
+        for _ in 0..2 {
+            let Ok((stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut read = BufReader::new(stream);
+            let mut text = String::new();
+            if read.read_line(&mut text).is_err() {
+                return;
+            }
+            texts.push(text);
+        }
+        tx.send(texts).unwrap_or(());
+    });
+    feed.follow(id(1));
+    feed.follow(id(1));
+    let texts = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the hub to send two subscribes");
+    assert_eq!(texts.len(), 2);
+    let mut got = Vec::new();
+    for text in &texts {
+        let line: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(line["command"], "subscribe");
+        assert_eq!(line["args"], json!({"level": "summary"}));
+        let sub = line["id"].as_str().unwrap().to_owned();
+        assert!(sub.starts_with("c_hub_feed_"), "{line}");
+        got.push(sub);
+    }
+    assert_ne!(got[0], got[1], "two follows use different command ids");
+    stop_within(&feed);
 }
 
 #[test]
