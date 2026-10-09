@@ -720,14 +720,35 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
     let quote =
         |path: &std::path::Path| format!("'{}'", path.display().to_string().replace('\'', "'\\''"));
     // Never answers `initialize`. The trap is set before the pid line,
-    // so the ready wait proves SIGTERM will be caught. Builtins only:
-    // no `exec sleep` to drop the trap, no background child to outlive
-    // the group. On the base commit the server gets only the bound's
-    // SIGKILL, so the marker is never written and this fails there.
+    // so the ready wait proves SIGTERM will be caught. The `read`
+    // blocks on a FIFO the test holds open for writing, so the parked
+    // server burns no CPU. Builtins only: no `exec sleep` to drop the
+    // trap, no background child to outlive the group. Dropping the
+    // write end at the test's end (even on panic) releases the read.
+    // On the base commit the server gets only the bound's SIGKILL, so
+    // the marker is never written and this fails there.
+    let hold = setup.root.path().join("hold.fifo");
+    mkfifo(&setup, &hold);
+    // The server's `read` opens the FIFO, and this write-end open
+    // blocks until it does: it runs on a thread, and the receive
+    // below carries the deadline. The binding holds the write end
+    // until the test ends.
+    let (held, writing) = mpsc::channel();
+    thread::spawn({
+        let hold = hold.clone();
+        move || {
+            if let Ok(file) = fs::OpenOptions::new().write(true).open(&hold) {
+                match held.send(file) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+        }
+    });
     let script = format!(
-        "trap 'echo term > {}; exit 0' TERM\necho $$ > {}\nwhile :; do :; done\n",
+        "trap 'echo term > {}; exit 0' TERM\necho $$ > {}\nread -r _ < {}\n",
         quote(&marker),
         quote(ready.path()),
+        quote(&hold),
     );
     write(
         &setup.home().join("config.json"),
@@ -741,6 +762,11 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
     // The server runs past its trap, so the signals were armed before
     // it started.
     let _pid = ready.wait(setup.deadline.left())[0];
+    // The server's `read` opened the FIFO, so the write end is open:
+    // holding it parks the server until the signal or the test's end.
+    let _writer = writing
+        .recv_timeout(setup.deadline.left())
+        .expect("the hold FIFO opened for writing");
     fiber.signal("TERM");
     // The group check inside fails first when a server is left alive.
     let ended = fiber.end();
