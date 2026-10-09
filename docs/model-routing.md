@@ -149,6 +149,13 @@ Measured against `gemini-3.1-flash-lite` on the Gemini API:
   `[a-zA-Z0-9_-]{1,64}`, a 65-character id, and a `functionResponse` id that
   differs from the call's.
 - A `functionResponse` may carry an image in `parts`, and the model read it.
+- A request that declares function tools beside the hosted `google_search`
+  is refused with HTTP 400 unless `toolConfig` sets
+  `includeServerSideToolInvocations` to `true`. With the flag the search
+  arrives as `toolCall` and `toolResponse` content parts, each signed with
+  its own `thoughtSignature`, before the answer text; the candidate's
+  `groundingMetadata` on the last chunk carries the result URLs. Measured
+  October 9, 2026 on `gemini-3-flash-preview`.
 - Function-calling mode `VALIDATED` returned schema-valid arguments where
   `AUTO` returned arguments that broke an enum and an integer type. In the
   sample it did not force a call.

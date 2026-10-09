@@ -17,12 +17,14 @@ ureq.workspace = true
 [dev-dependencies]
 fakes = { path = "../fakes" }
 
-# The jigs (docs/testing.md, "Jigs").
+# The jigs (docs/testing.md, "Jigs"). `test = true` runs the record jig's own tests.
 [[example]]
 name = "decode"
 
 [[example]]
 name = "record"
+path = "examples/record/main.rs"
+test = true
 
 [lints]
 workspace = true
