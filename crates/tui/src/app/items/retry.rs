@@ -26,26 +26,17 @@ pub(in crate::app) struct Want {
     /// When a refused subscribe goes out again; `None` sends on the next
     /// reconciliation.
     pub(in crate::app) retry_at: Option<Instant>,
-    /// Lowering past leaving the parent: it skips the running check, so
-    /// it waits behind a `full` still in flight.
-    pub(in crate::app) detached: bool,
 }
 
 impl Want {
     /// A wish for an open view.
     pub(in crate::app) fn full() -> Self {
-        Self {
-            retry_at: None,
-            detached: false,
-        }
+        Self { retry_at: None }
     }
 
     /// A wish for a closed view.
     pub(in crate::app) fn summary() -> Self {
-        Self {
-            retry_at: None,
-            detached: false,
-        }
+        Self { retry_at: None }
     }
 }
 
@@ -101,11 +92,11 @@ impl App {
             .map(|delegate| delegate.session.clone())
     }
 
-    /// Reconciles every wish on this loop step, in order: the delegate no
-    /// longer running or the link not up drops it; a subscribe in flight
-    /// waits; the held level equalling the wanted one drops it; a later
-    /// `retry_at` waits; otherwise one subscribe goes out and its
-    /// `retry_at` clears.
+    /// Reconciles every wish on this loop step, in order: a down link
+    /// drops the entry; a subscribe in flight waits; the held level
+    /// equalling the wanted one drops it; a later `retry_at` waits;
+    /// otherwise one subscribe goes out and its `retry_at` clears. A
+    /// completed job drops its wish in `items_line`.
     pub(crate) fn items_due(&mut self, now: Instant) -> Vec<String> {
         self.items.last_due = Some(now);
         let sessions: Vec<SessionId> = self.items.wants.keys().cloned().collect();
@@ -119,10 +110,6 @@ impl App {
             } else {
                 Level::Summary
             };
-            if !want.detached && (!self.delegate_running(&session) || !self.connected()) {
-                self.items.wants.remove(&session);
-                continue;
-            }
             if !self.connected() {
                 self.items.wants.remove(&session);
                 continue;

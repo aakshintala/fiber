@@ -626,15 +626,13 @@ impl App {
         self.open_item(&job)
     }
 
-    /// Leaves the attached session: closes the item view first, then
-    /// marks every outstanding `summary` wish as detached, so its
-    /// lowering waits behind a `full` still in flight without a running
-    /// check.
+    /// Leaves the attached session: closes the item view, drops retry
+    /// wishes tied to that attachment and clears its item fold. A pending
+    /// `summary` lowering stays until it is sent or the link drops.
     pub(super) fn leave_item(&mut self) {
         self.close_item();
-        // A retry waits on this attachment's running check, so it goes
-        // with the attachment; a plain `summary` lowering survives as
-        // detached, waiting behind a `full` still in flight.
+        // Retry wishes belong to this attachment; summary lowerings remain
+        // until the hub acknowledges the in-flight `full`.
         let retries: Vec<SessionId> = self
             .items
             .wants
@@ -644,9 +642,6 @@ impl App {
             .collect();
         for session in retries {
             self.items.wants.remove(&session);
-        }
-        for want in self.items.wants.values_mut() {
-            want.detached = true;
         }
         self.items.jobs.clear();
         self.items.by_serial.clear();

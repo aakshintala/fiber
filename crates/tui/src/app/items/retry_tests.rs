@@ -178,6 +178,23 @@ fn session_refused(session: &str, id: &str, code: &str) -> Line {
     })
 }
 
+/// A hub refusal for an in-flight subscribe.
+fn hub_refused(id: &str, code: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: json!({
+            "command_id": id,
+            "code": code,
+            "message": "no such session",
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
 /// Folds a Fiber delegate as job `job` with session `delegate`.
 fn start_delegate(app: &mut App, job: &str, delegate: &str) {
     app.on_line(session_line(
@@ -236,6 +253,61 @@ fn retry_due_fires_at_its_moment() {
     assert!(!retry_due(before, moment));
     assert!(retry_due(moment, moment));
     assert!(retry_due(moment + Duration::from_millis(1), moment));
+}
+
+#[test]
+fn hub_session_not_found_refusal_retries_the_open_delegate_subscribe() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    let out = open(&mut app, "j_1");
+    let id = subscribes(&out)
+        .into_iter()
+        .next()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| panic!("an id"));
+    let refused_at = clock.now();
+    app.on_line(hub_refused(&id, "session_not_found"));
+    assert_eq!(app.items_wake(), Some(refused_at + RETRY));
+    clock.advance(RETRY);
+    tick(&mut app, &clock);
+    let retry = subscribes(&commands(app.items_due(clock.now())));
+    assert_eq!(retry.len(), 1);
+    assert_eq!(retry[0]["session_id"], DELEGATE_A);
+    assert_eq!(retry[0]["args"]["level"], "full");
+}
+
+#[test]
+fn items_wake_stops_asking_once_the_retry_is_due() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    let out = open(&mut app, "j_1");
+    let id = subscribes(&out)
+        .into_iter()
+        .next()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| panic!("an id"));
+    let refused_at = clock.now();
+    app.on_line(hub_refused(&id, "session_not_found"));
+    let retry_at = refused_at + RETRY;
+    for (last_due, expected) in [
+        (
+            retry_at
+                .checked_sub(Duration::from_millis(1))
+                .expect("one millisecond before retry"),
+            Some(retry_at),
+        ),
+        (retry_at, None),
+        (retry_at + Duration::from_millis(1), None),
+    ] {
+        app.items.last_due = Some(last_due);
+        assert_eq!(app.items_wake(), expected, "last due {last_due:?}");
+    }
 }
 
 #[test]

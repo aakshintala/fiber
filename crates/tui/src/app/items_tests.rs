@@ -924,6 +924,49 @@ fn opening_a_completed_delegate_swaps_but_sends_nothing() {
 }
 
 #[test]
+fn an_accepted_delegate_steer_closes_its_pending_entry() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    opened_item(&mut app, "j_1");
+    app.draft.set("focus on the tests");
+    let out = match app.on_key(Key::Enter, clock.now()) {
+        Effect::Send(lines) => commands(lines),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
+        | Effect::ReadImage(_) => panic!("Enter sends"),
+    };
+    let id = out[0]["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    assert!(app.pending.contains_key(id));
+    app.on_line(session_accepted(DELEGATE_A, id));
+    assert!(!app.pending.contains_key(id));
+}
+
+#[test]
+fn a_cancelled_item_keeps_the_cancelled_status_glyph() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    opened_item(&mut app, "j_1");
+    app.on_line(session_line(
+        "job_completed",
+        json!({"job_id": "j_1", "status": "cancelled"}),
+    ));
+    let view = app.item_view().unwrap_or_else(|| panic!("a view"));
+    assert_eq!(view.word, "cancelled");
+    assert_eq!(view.glyph, "■");
+}
+
+#[test]
 fn the_delegate_call_count_counts_its_tool_calls() {
     let mut app = home();
     opened(&mut app);
@@ -1154,13 +1197,23 @@ fn another_harness_delegate_opens_without_a_subscribe() {
 }
 
 #[test]
-fn reopening_the_same_item_sends_nothing() {
+fn reopening_the_same_item_keeps_its_replayed_transcript() {
     let mut app = home();
     opened(&mut app);
     start_delegate(&mut app, "j_1", DELEGATE_A);
     let first = open(&mut app, "j_1");
     assert_eq!(subscribes(&first).len(), 1);
+    ack_all(&mut app, &first);
+    app.on_line(other_line(DELEGATE_A, "tool_call_completed", json!({})));
+    assert_eq!(
+        app.item_view().unwrap_or_else(|| panic!("a view")).calls,
+        Some(1)
+    );
     assert!(open(&mut app, "j_1").is_empty());
+    assert_eq!(
+        app.item_view().unwrap_or_else(|| panic!("a view")).calls,
+        Some(1)
+    );
 }
 
 #[test]
