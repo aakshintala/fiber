@@ -155,8 +155,8 @@ impl OneQuestion {
             return PanelKey::Handled;
         }
         self.at = row;
-        match spot {
-            Spot::Option(_) => match self.kind {
+        match row {
+            Row::Option(_) => match self.kind {
                 Kind::Confirm | Kind::Select => self.enter(),
                 Kind::MultiSelect => {
                     self.toggle();
@@ -164,13 +164,11 @@ impl OneQuestion {
                 }
                 Kind::TextInput => PanelKey::Handled,
             },
-            Spot::Words => {
+            Row::Words => {
                 self.caret = self.words.chars().count();
                 PanelKey::Handled
             }
-            Spot::Send => self.enter(),
-            Spot::Chat => self.enter(),
-            Spot::Tab(_) | Spot::Next | Spot::Note => PanelKey::Handled,
+            Row::Submit | Row::Chat => self.enter(),
         }
     }
 
@@ -193,7 +191,7 @@ impl OneQuestion {
                         continue;
                     };
                     let tick = match self.kind {
-                        Kind::Confirm | Kind::Select => "( )",
+                        Kind::Confirm | Kind::Select | Kind::TextInput => "( )",
                         Kind::MultiSelect => {
                             if self.toggled.get(option).copied().unwrap_or_default() {
                                 "[x]"
@@ -201,7 +199,6 @@ impl OneQuestion {
                                 "[ ]"
                             }
                         }
-                        Kind::TextInput => "( )",
                     };
                     form::push(
                         &mut panel,
@@ -257,28 +254,21 @@ impl OneQuestion {
 
     /// Creates a request with its first actionable row selected.
     fn new(kind: Kind, prompt: String, options: Vec<Choice>) -> Self {
+        let at = match kind {
+            Kind::Confirm | Kind::Select => options.first().map_or(Row::Chat, |_| Row::Option(0)),
+            Kind::MultiSelect => options.first().map_or(Row::Submit, |_| Row::Option(0)),
+            Kind::TextInput => Row::Words,
+        };
         let toggled = vec![false; options.len()];
-        let mut question = Self {
+        Self {
             kind,
             prompt,
             options,
             toggled,
             words: String::new(),
             caret: 0,
-            at: Row::Chat,
-        };
-        question.at = match kind {
-            Kind::Confirm | Kind::Select => question
-                .options
-                .first()
-                .map_or(Row::Chat, |_| Row::Option(0)),
-            Kind::MultiSelect => question
-                .options
-                .first()
-                .map_or(Row::Submit, |_| Row::Option(0)),
-            Kind::TextInput => Row::Words,
-        };
-        question
+            at,
+        }
     }
 
     /// The rows this kind draws, top to bottom.
@@ -297,7 +287,9 @@ impl OneQuestion {
             (Kind::Confirm | Kind::Select, Row::Option(_))
             | (Kind::MultiSelect, Row::Option(_) | Row::Submit)
             | (Kind::TextInput, Row::Words | Row::Submit) => PanelKey::Answer,
-            (_, Row::Chat) => PanelKey::Decline,
+            (Kind::Confirm | Kind::Select | Kind::MultiSelect | Kind::TextInput, Row::Chat) => {
+                PanelKey::Decline
+            }
             (Kind::Confirm | Kind::Select, Row::Words | Row::Submit)
             | (Kind::MultiSelect, Row::Words)
             | (Kind::TextInput, Row::Option(_)) => PanelKey::Handled,
