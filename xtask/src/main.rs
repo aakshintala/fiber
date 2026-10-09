@@ -12,7 +12,7 @@
 //!   `library_specs` are `name@version` (for `cargo -p`, which resolves a
 //!   bare name against the whole dependency graph and can be ambiguous), and
 //!   `extension_packages` are first-party package directories with cases
-//! - `plan --mode M --packages "A B" --event E --bug true|false --mutants true|false`:
+//! - `plan --mode M --packages "A B" --event E --bug true|false --mutants true|false --mutant-count N`:
 //!   which CI jobs run, as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
 //!   if every selected job passed and every other job was skipped
@@ -113,6 +113,9 @@ fn run(args: &[String]) -> Result<bool, String> {
                 &flag(rest, "--event")?,
                 bug,
                 mutants,
+                flag(rest, "--mutant-count")?
+                    .parse()
+                    .map_err(|e| format!("--mutant-count: {e}"))?,
             );
             let shards: Vec<u64> = (0..plan.shards).collect();
             println!(

@@ -250,7 +250,7 @@ fn jobs(
 
 #[test]
 fn a_docs_only_pull_request_runs_no_job_after_the_selection() {
-    let plan = plan("docs", &[], "pull_request", true, true);
+    let plan = plan("docs", &[], "pull_request", true, true, 100);
     assert_eq!(
         plan,
         Plan {
@@ -262,31 +262,45 @@ fn a_docs_only_pull_request_runs_no_job_after_the_selection() {
 
 #[test]
 fn a_code_pull_request_runs_what_it_selected() {
-    let plan = plan("crates", &strings(&["log"]), "pull_request", true, true);
+    let plan = plan(
+        "crates",
+        &strings(&["log"]),
+        "pull_request",
+        true,
+        true,
+        100,
+    );
     assert_eq!(
         plan,
         Plan {
             jobs: jobs(true, true, true, true, false),
-            shards: 6
+            shards: 7
         }
     );
 }
 
 #[test]
 fn a_pull_request_without_a_bug_label_skips_the_bug_check() {
-    let plan = plan("all", &strings(&["log"]), "pull_request", false, true);
+    let plan = plan("all", &strings(&["log"]), "pull_request", false, true, 100);
     assert_eq!(plan.jobs, jobs(true, true, true, false, false));
 }
 
 #[test]
 fn a_pull_request_that_selects_no_crate_skips_the_tests() {
-    let plan = plan("crates", &[], "pull_request", false, true);
+    let plan = plan("crates", &[], "pull_request", false, true, 100);
     assert_eq!(plan.jobs, jobs(true, false, true, false, false));
 }
 
 #[test]
 fn an_unlabelled_draft_skips_mutants_and_runs_the_rest() {
-    let plan = plan("crates", &strings(&["log"]), "pull_request", false, false);
+    let plan = plan(
+        "crates",
+        &strings(&["log"]),
+        "pull_request",
+        false,
+        false,
+        100,
+    );
     assert!(!plan.jobs["mutants"]);
     assert_eq!(plan.shards, 0);
     assert!(plan.jobs["lint"] && plan.jobs["test"]);
@@ -294,7 +308,7 @@ fn an_unlabelled_draft_skips_mutants_and_runs_the_rest() {
 
 #[test]
 fn a_docs_push_runs_lint_and_tests_but_no_mutants() {
-    let plan = plan("docs", &[], "push", true, true);
+    let plan = plan("docs", &[], "push", true, true, 100);
     assert_eq!(
         plan,
         Plan {
@@ -306,12 +320,12 @@ fn a_docs_push_runs_lint_and_tests_but_no_mutants() {
 
 #[test]
 fn a_code_push_runs_lint_tests_and_mutants_but_no_bug_check() {
-    let plan = plan("all", &strings(&["log"]), "push", true, true);
+    let plan = plan("all", &strings(&["log"]), "push", true, true, 1000);
     assert_eq!(
         plan,
         Plan {
             jobs: jobs(true, true, true, false, true),
-            shards: MUTANT_SHARDS
+            shards: MAX_MUTANT_SHARDS
         }
     );
 }
@@ -324,6 +338,7 @@ fn a_pull_request_that_selects_the_binary_runs_the_release_job() {
         "pull_request",
         false,
         true,
+        100,
     );
     assert_eq!(plan.jobs, jobs(true, true, true, false, true));
 }
@@ -331,7 +346,7 @@ fn a_pull_request_that_selects_the_binary_runs_the_release_job() {
 #[test]
 fn a_pull_request_that_runs_everything_runs_the_release_job() {
     let packages = strings(&["config", "log", "main", "xtask"]);
-    let plan = plan("all", &packages, "pull_request", false, true);
+    let plan = plan("all", &packages, "pull_request", false, true, 100);
     assert_eq!(plan.jobs, jobs(true, true, true, false, true));
 }
 
@@ -343,6 +358,7 @@ fn a_pull_request_without_the_binary_skips_the_release_job() {
         "pull_request",
         false,
         true,
+        100,
     );
     assert_eq!(plan.jobs, jobs(true, true, true, false, false));
 }
@@ -1676,4 +1692,32 @@ fn a_missing_package_root_group_is_empty() {
         extension_packages(&selection, root.path()).unwrap(),
         Some(strings(&["providers/acme"]))
     );
+}
+
+#[test]
+fn shards_grow_with_the_mutant_count_between_one_and_the_cap() {
+    // (mutants, shards): each boundary of MUTANTS_PER_SHARD and the cap.
+    let table = [
+        (0, 0),
+        (1, 1),
+        (15, 1),
+        (16, 2),
+        (30, 2),
+        (31, 3),
+        (240, 16),
+        (319, 22),
+        (480, 32),
+        (481, 32),
+        (100_000, 32),
+    ];
+    for (count, shards) in table {
+        assert_eq!(mutant_shards(count), shards, "{count} mutants");
+    }
+}
+
+#[test]
+fn a_selected_run_with_no_mutants_starts_no_shard() {
+    let plan = plan("crates", &strings(&["log"]), "pull_request", false, true, 0);
+    assert!(!plan.jobs["mutants"]);
+    assert_eq!(plan.shards, 0);
 }
