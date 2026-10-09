@@ -750,9 +750,11 @@ pub(crate) fn shown_in(
     if mode == Mode::Thinking
         && let Some((model, _)) = target
         && let Some(at) = models.iter().position(|entry| &entry.reference == model)
-        && !rows.contains(&at)
     {
-        rows.insert(rows.partition_point(|index| *index < at), at);
+        let insertion = rows.partition_point(|index| *index < at);
+        if rows.get(insertion) != Some(&at) {
+            rows.insert(insertion, at);
+        }
     }
     (rows, line)
 }

@@ -1344,6 +1344,47 @@ fn choosing_on_home_writes_at_once_and_sets_the_chips() {
 }
 
 #[test]
+fn a_home_choice_that_needs_saving_reports_when_the_configure_seam_is_missing() {
+    let mut app = home();
+    app.on_models(Ok(three()));
+    open(&mut app);
+
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+
+    assert_eq!(
+        app.notice(),
+        Some("Saving is not available; the switch is for this session only.")
+    );
+    assert!(!app.model_picker_open());
+    assert!(app.model_picker.awaiting.is_empty());
+    assert!(app.model_picker.start_model.is_none());
+    let launch = &app.home.as_ref().expect("home").launch;
+    assert_eq!(launch.model, None);
+    assert_eq!(launch.thinking, None);
+}
+
+#[test]
+fn a_home_choice_with_nothing_to_save_needs_no_configure_seam() {
+    let mut app = home();
+    app.home.as_mut().expect("home").launch.model = Some("acme/m2".to_owned());
+    app.on_models(Ok(three()));
+
+    assert_eq!(
+        app.open_model_picker(crate::model_picker::Mode::Thinking),
+        Effect::None
+    );
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+
+    assert!(app.notices().is_empty());
+    assert!(!app.model_picker_open());
+    assert!(app.model_picker.awaiting.is_empty());
+    assert!(app.model_picker.start_model.is_none());
+    let launch = &app.home.as_ref().expect("home").launch;
+    assert_eq!(launch.model.as_deref(), Some("acme/m2"));
+    assert_eq!(launch.thinking, None);
+}
+
+#[test]
 fn s_chooses_for_this_session_only_and_writes_nothing() {
     let (mut app, seam) = choosing_app();
     open(&mut app);

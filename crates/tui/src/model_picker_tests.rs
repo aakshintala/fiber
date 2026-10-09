@@ -1,7 +1,9 @@
 //! Tests for the model picker's state: the rows in scope, the preselected
 //! chips, and the movement clamps. The app's keys are tested beside them.
 
-use super::{Choice, Mode, ModelPicker, command_args, preselect, saves, start_args, visible};
+use super::{
+    Choice, Mode, ModelPicker, command_args, preselect, saves, shown_in, start_args, visible,
+};
 use crate::catalogue::{Catalogue, ModelEntry};
 use crate::keys::Key;
 
@@ -86,6 +88,44 @@ fn a_scoped_list_with_nothing_installed_lists_no_rows_until_show_all() {
     );
     let (rows, _) = visible(&models, &scoped, true);
     assert_eq!(rows, [0, 1, 2, 3, 4]);
+}
+
+#[test]
+fn thinking_inserts_the_current_model_in_catalogue_order_without_duplicates() {
+    let models = catalogue();
+    let scoped = ["acme/m1".to_owned(), "zeta/z2".to_owned()];
+    let (rows, _) = shown_in(
+        &models,
+        &scoped,
+        false,
+        Mode::Thinking,
+        Some(&("zeta/z1".to_owned(), None)),
+    );
+    assert_eq!(rows, [0, 2, 3]);
+
+    let scoped = ["acme/m1".to_owned(), "acme/m2".to_owned()];
+    let (rows, _) = shown_in(
+        &models,
+        &scoped,
+        false,
+        Mode::Thinking,
+        Some(&("zeta/z3".to_owned(), None)),
+    );
+    assert_eq!(rows, [0, 1, 4]);
+
+    let scoped = [
+        "acme/m1".to_owned(),
+        "zeta/z1".to_owned(),
+        "zeta/z2".to_owned(),
+    ];
+    let (rows, _) = shown_in(
+        &models,
+        &scoped,
+        false,
+        Mode::Thinking,
+        Some(&("zeta/z1".to_owned(), None)),
+    );
+    assert_eq!(rows, [0, 2, 3]);
 }
 
 #[test]
