@@ -360,3 +360,70 @@ fn revoke_maps_global_and_project_to_their_files() {
             .is_empty()
     );
 }
+
+#[test]
+fn save_keys_writes_only_the_edits_to_the_global_keys() {
+    use tui::KeyEdit;
+    let dirs = Dirs::new();
+    write(&dirs.home().join("config.json"), r#"{"model": "acme/m1"}"#);
+    let seam = Seam::new(dirs.home());
+    seam.save_keys(&[KeyEdit {
+        id: "new_session".to_owned(),
+        keys: Some(vec!["ctrl+t".to_owned()]),
+    }])
+    .unwrap_or_else(|e| panic!("save: {e}"));
+    assert_eq!(
+        fs::read_to_string(dirs.home().join("config.json")).unwrap_or_else(|e| panic!("read: {e}")),
+        concat!(
+            "{\n",
+            "  \"keys\": {\n",
+            "    \"new_session\": [\n",
+            "      \"ctrl+t\"\n",
+            "    ]\n",
+            "  },\n",
+            "  \"model\": \"acme/m1\"\n",
+            "}\n"
+        )
+    );
+}
+
+#[test]
+fn save_keys_with_no_entry_removes_it() {
+    use tui::KeyEdit;
+    let dirs = Dirs::new();
+    write(
+        &dirs.home().join("config.json"),
+        r#"{"keys": {"new_session": ["ctrl+t"], "copy_focused": "y"}}"#,
+    );
+    let seam = Seam::new(dirs.home());
+    seam.save_keys(&[KeyEdit {
+        id: "new_session".to_owned(),
+        keys: None,
+    }])
+    .unwrap_or_else(|e| panic!("save: {e}"));
+    assert_eq!(
+        fs::read_to_string(dirs.home().join("config.json")).unwrap_or_else(|e| panic!("read: {e}")),
+        "{\n  \"keys\": {\n    \"copy_focused\": \"y\"\n  }\n}\n"
+    );
+}
+
+#[test]
+fn save_keys_refuses_a_keys_that_is_no_object_leaving_the_file() {
+    use tui::KeyEdit;
+    let dirs = Dirs::new();
+    let text = r#"{"keys": "x"}"#;
+    write(&dirs.home().join("config.json"), text);
+    let seam = Seam::new(dirs.home());
+    let error = match seam.save_keys(&[KeyEdit {
+        id: "new_session".to_owned(),
+        keys: Some(vec!["ctrl+t".to_owned()]),
+    }]) {
+        Ok(()) => panic!("a string is no object, but the save succeeded"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("keys"), "{error}");
+    assert_eq!(
+        fs::read_to_string(dirs.home().join("config.json")).unwrap_or_else(|e| panic!("read: {e}")),
+        text
+    );
+}

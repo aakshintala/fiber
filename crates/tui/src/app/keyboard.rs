@@ -5,12 +5,33 @@ use std::time::Instant;
 
 use super::{App, Effect};
 use crate::keyset::{Context, KeysSetup, Keyset, Resolved, load};
-use crate::stroke::Stroke;
+use crate::rebind::{KeysScreen, Outcome};
+use crate::stroke::{Code, Mods, Stroke};
+use crate::swapped::{Frame, Spot};
 
-/// The app's effective bindings.
+/// The plain Esc stroke: with the notice overlay open over the screen it
+/// closes the overlay, ahead of the screen.
+fn esc() -> Stroke {
+    Stroke {
+        code: Code::Esc,
+        mods: Mods::NONE,
+    }
+}
+
+/// The Ctrl+C stroke: through the bindings in every screen mode, because
+/// the second Ctrl+C always quits (`docs/tui.md`, "Input and focus").
+fn ctrl_c() -> Stroke {
+    Stroke {
+        code: Code::Char('c'),
+        mods: Mods::CTRL,
+    }
+}
+
+/// The app's effective bindings, and the `/keys` screen while it is open.
 #[derive(Default)]
 pub(super) struct Keyboard {
     keys: Keyset,
+    screen: Option<KeysScreen>,
 }
 
 impl App {
@@ -30,18 +51,138 @@ impl App {
         &self.keyboard.keys
     }
 
-    /// Handles one stroke at `now`, read from the injected clock: through
-    /// the effective bindings in the context on screen. A stroke ends a
-    /// finished attention title (`docs/tui.md`, "Getting the person's
-    /// attention").
+    /// Handles one stroke at `now`, read from the injected clock: the
+    /// `/keys` screen first while it is open, else through the effective
+    /// bindings in the context on screen. A stroke ends a finished
+    /// attention title (`docs/tui.md`, "Getting the person's attention").
     pub(crate) fn on_press(&mut self, stroke: Stroke, now: Instant) -> Effect {
         self.attention_seen();
+        if self.keys_screen_open() && !self.quit_open() {
+            if self.notice_overlay().is_none() {
+                let height = self.keys_height();
+                let outcome = match self.keyboard.screen.as_mut() {
+                    Some(screen) => screen.press(&stroke, &self.keyboard.keys, height),
+                    None => Outcome::Nothing,
+                };
+                let effect = match outcome {
+                    Outcome::Nothing => Effect::None,
+                    Outcome::Close => {
+                        self.keyboard.screen = None;
+                        Effect::None
+                    }
+                    Outcome::Apply(next) => self.apply_keys(next),
+                    // Ctrl+C goes through the bindings below, clearing
+                    // then quitting as on any screen.
+                    Outcome::Pass => return self.bindings_press(stroke, now),
+                };
+                self.edited();
+                self.settle();
+                return effect;
+            }
+            // The notice overlay hides the screen: Esc closes the
+            // overlay, Ctrl+C goes through the bindings, and every other
+            // stroke reaches neither the screen nor the draft.
+            if stroke == esc() {
+                self.notices.close();
+                self.edited();
+                self.settle();
+                return Effect::None;
+            }
+            if stroke != ctrl_c() {
+                return Effect::None;
+            }
+        }
+        self.bindings_press(stroke, now)
+    }
+
+    /// One stroke through the effective bindings in the context on screen.
+    fn bindings_press(&mut self, stroke: Stroke, now: Instant) -> Effect {
         match self.keys().resolve(&stroke, self.key_context()) {
             Resolved::Key(key) => self.on_key(key, now),
             Resolved::Edit(edit) => self.on_edit(edit),
             Resolved::Action(id) => self.on_action(id),
             Resolved::Nothing => Effect::None,
         }
+    }
+
+    /// Opens the `/keys` screen: the draft cleared, and the key map, the
+    /// model picker, a configuration view and a session view closed, as
+    /// opening the model picker closes the other views. One swapped view
+    /// shows at a time.
+    pub(crate) fn open_keys(&mut self) -> Effect {
+        self.draft.clear();
+        self.close_keymap();
+        self.model_picker.close();
+        self.close_config_view();
+        self.close_session_view();
+        self.keyboard.screen = Some(KeysScreen::default());
+        Effect::None
+    }
+
+    /// Whether the `/keys` screen is open.
+    pub(crate) fn keys_screen_open(&self) -> bool {
+        self.keyboard.screen.is_some()
+    }
+
+    /// The screen's frame at `height`; `None` while it is closed.
+    pub(crate) fn keys_frame(&self, height: usize) -> Option<Frame> {
+        self.keyboard
+            .screen
+            .as_ref()
+            .map(|screen| screen.frame(&self.keyboard.keys, height))
+    }
+
+    /// A click on the screen's `spot`: the ✕ closes it, a row selects
+    /// while browsing.
+    pub(crate) fn keys_screen_click(&mut self, spot: Spot) -> Effect {
+        let height = self.keys_height();
+        let close = self
+            .keyboard
+            .screen
+            .as_mut()
+            .is_some_and(|screen| matches!(screen.click(spot, height), Outcome::Close));
+        if close {
+            self.keyboard.screen = None;
+        }
+        self.edited();
+        self.settle();
+        Effect::None
+    }
+
+    /// The screen's height in rows: the attached conversation's, or the
+    /// screen's on home, as the model picker computes its own.
+    fn keys_height(&self) -> usize {
+        if self.on_home() {
+            usize::from(self.screen.height())
+        } else {
+            self.conversation_height()
+        }
+    }
+
+    /// Saves one confirmed screen change: the edits against the old
+    /// keyset, in one call. No edits saves nothing; a refused save keeps
+    /// the old keyset on screen with the failure's message. With no seam
+    /// the change applies for this run only.
+    fn apply_keys(&mut self, next: Keyset) -> Effect {
+        let edits = next.edits(&self.keyboard.keys);
+        if edits.is_empty() {
+            return Effect::None;
+        }
+        let saved = match self.configure_seam() {
+            Some(seam) => seam.save_keys(&edits).map_err(|error| error.message),
+            None => Ok(()),
+        };
+        match saved {
+            Ok(()) => {
+                self.keyboard.keys = next;
+            }
+            Err(message) => {
+                if let Some(screen) = self.keyboard.screen.as_mut() {
+                    screen.failed(message);
+                }
+            }
+        }
+        Effect::None
     }
 
     /// The context a stroke arrives in, first match wins, mirroring
@@ -92,6 +233,10 @@ impl App {
         effect
     }
 }
+
+#[cfg(test)]
+#[path = "keyboard_screen_tests.rs"]
+mod screen_tests;
 
 #[cfg(test)]
 #[path = "keyboard_tests.rs"]

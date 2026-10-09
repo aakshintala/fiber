@@ -92,6 +92,7 @@ pub(crate) enum Resolved {
 
 /// One action's keys: its defaults parsed, its current keys, and whether
 /// the person set them. An entry equal to the defaults counts as not set.
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Row {
     /// The action's default keys, parsed.
     defaults: Vec<Stroke>,
@@ -102,9 +103,12 @@ struct Row {
 }
 
 /// The effective bindings, in the table's order.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Keyset {
     rows: Vec<Row>,
 }
+
+pub(crate) mod edit;
 
 /// The defaults parsed: every default key name parses, so an entry that
 /// fails to parse is the person's, never a default's.

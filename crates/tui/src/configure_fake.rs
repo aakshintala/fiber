@@ -8,9 +8,9 @@ use contract::{ErrorCode, Secret};
 
 use crate::ThemeSetting;
 use crate::configure::{
-    Configure, ConfigureError, Layer, LoginTarget, Revoked, RulesScope, RulesSection, Saved,
-    SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists, ToolSwitches,
-    WriteScope,
+    Configure, ConfigureError, KeyEdit, Layer, LoginTarget, Revoked, RulesScope, RulesSection,
+    Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists,
+    ToolSwitches, WriteScope,
 };
 
 /// One revoke the view asked for: the workspace, scope, line and text.
@@ -48,6 +48,8 @@ pub(crate) struct Fake {
     pub(crate) skill_switched: Mutex<Vec<SkillSwitched>>,
     /// What `skill_text` answers.
     pub(crate) texts: Mutex<Result<String, ConfigureError>>,
+    /// Every `/keys` save asked for, in order.
+    pub(crate) keys_saved: Mutex<Vec<Vec<KeyEdit>>>,
     /// The theme files `themes` lists.
     pub(crate) themes: Vec<String>,
     /// What `global_file` answers.
@@ -80,6 +82,7 @@ impl Fake {
             skills_off: Mutex::new(Ok(SkillsDisabled::default())),
             skill_switched: Mutex::new(Vec::new()),
             texts: Mutex::new(Ok(String::new())),
+            keys_saved: Mutex::new(Vec::new()),
             themes: Vec::new(),
             global: file(Layer::Global),
             rules: Mutex::new(Ok((
@@ -137,6 +140,14 @@ impl Fake {
             .lock()
             .ok()
             .and_then(|stores| stores.get(n).map(|(_, _, key)| key.expose().to_owned()))
+            .unwrap_or_default()
+    }
+
+    /// The `/keys` saves asked for so far.
+    pub(crate) fn keys_saved(&self) -> Vec<Vec<KeyEdit>> {
+        self.keys_saved
+            .lock()
+            .map(|saved| saved.clone())
             .unwrap_or_default()
     }
 }
@@ -375,6 +386,19 @@ impl Configure for Fake {
             },
             |texts| texts.clone(),
         )
+    }
+
+    fn save_keys(&self, edits: &[KeyEdit]) -> Result<(), ConfigureError> {
+        if let Ok(mut saved) = self.keys_saved.lock() {
+            saved.push(edits.to_vec());
+        }
+        match self.refuse.lock().ok().and_then(|refuse| refuse.clone()) {
+            Some(message) => Err(ConfigureError {
+                code: ErrorCode::Usage,
+                message,
+            }),
+            None => Ok(()),
+        }
     }
 
     fn switch_tool(

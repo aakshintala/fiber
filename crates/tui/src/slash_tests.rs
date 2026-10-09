@@ -34,6 +34,7 @@ fn built_ins_come_in_table_order_then_the_answer_rows() {
             "panel",
             "rules",
             "settings",
+            "keys",
             "skills",
             "handoff",
             "name",
@@ -48,8 +49,8 @@ fn built_ins_come_in_table_order_then_the_answer_rows() {
             "review"
         ]
     );
-    assert!(all.iter().take(20).all(|row| row.tag == "command"));
-    assert!(all.iter().skip(20).all(|row| row.tag == "skill"));
+    assert!(all.iter().take(21).all(|row| row.tag == "command"));
+    assert!(all.iter().skip(21).all(|row| row.tag == "skill"));
     assert_eq!(
         all.iter()
             .find(|row| row.name == "tdd")
