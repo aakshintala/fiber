@@ -961,3 +961,52 @@ fn a_read_leaves_a_choose_open_without_marks() {
         Some(Vec::new())
     );
 }
+
+#[test]
+fn a_read_through_an_empty_catalogue_marks_from_the_list_again() {
+    let mut picker = ModelPicker {
+        scoped: vec!["acme/m1".to_owned(), "gone/x".to_owned()],
+        ..ModelPicker::default()
+    };
+    picker.catalogue = Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+    };
+    picker.open(Mode::Scope, None);
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, false, false, false, false])
+    );
+    // A refresh that briefly empties the catalogue leaves no rows, so
+    // no marks either.
+    picker.store(Ok(Catalogue {
+        models: Vec::new(),
+        notices: Vec::new(),
+    }));
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(Vec::new())
+    );
+    // The next answer marks every row from the saved list again, so
+    // toggling and saving work.
+    picker.store(Ok(Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+    }));
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, false, false, false, false])
+    );
+    picker.move_row(1);
+    picker.toggle_mark();
+    let marks = picker.open.as_ref().expect("open").marks.clone();
+    assert_eq!(marks, vec![true, true, false, false, false]);
+    assert_eq!(
+        scoped_save(&picker.catalogue.models, &marks, &picker.scoped),
+        vec![
+            "acme/m1".to_owned(),
+            "acme/m2".to_owned(),
+            "gone/x".to_owned()
+        ]
+    );
+}

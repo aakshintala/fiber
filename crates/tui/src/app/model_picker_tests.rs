@@ -2502,3 +2502,41 @@ fn saving_without_a_seam_says_nothing_changed() {
     assert!(app.model_picker.scoped.is_empty());
     assert!(!app.model_picker_open());
 }
+
+#[test]
+fn opening_before_the_first_read_marks_toggles_and_saves() {
+    let mut app = attached();
+    app.on_line(hello());
+    let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
+    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.model_picker.scoped = vec!["acme/m1".to_owned(), "gone/x".to_owned()];
+    // Opening before any catalogue arrives shows no rows yet, and the
+    // draft is cleared.
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert!(app.model_picker_open());
+    assert!(app.input().expand().is_empty());
+    assert_eq!(marks(&app), Some(Vec::new()));
+    // The first read marks the rows from the saved list.
+    app.on_models(Ok(three()));
+    assert_eq!(marks(&app), Some(vec![true, false, false]));
+    // Space toggles the selected row; Enter saves the marked list,
+    // keeping the old list's uninstalled entries.
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(marks(&app), Some(vec![false, false, false]));
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(!app.model_picker_open());
+    assert_eq!(
+        seam.writes(),
+        vec![(
+            PathBuf::from("/w"),
+            crate::configure::Layer::Global,
+            "scoped_models".to_owned(),
+            "[\"acme/m1\",\"gone/x\"]".to_owned()
+        )]
+    );
+    assert_eq!(
+        app.model_picker.scoped,
+        vec!["acme/m1".to_owned(), "gone/x".to_owned()]
+    );
+}
