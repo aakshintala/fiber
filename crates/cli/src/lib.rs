@@ -39,7 +39,7 @@ pub use extension_test::extension_test;
 pub use hub_service::{hub_install, hub_restart, hub_uninstall};
 pub use hub_status::hub_status;
 pub use login::{LogoutTarget, run_login, run_logout};
-pub use models::{models, refresh_model_lists};
+pub use models::{models, providers_and_config, refresh_model_lists};
 pub use prune::{PruneArgs, prune};
 pub use release::release_install;
 pub use sessions::{delete, export};

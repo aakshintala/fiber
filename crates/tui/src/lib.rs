@@ -11,6 +11,7 @@ mod app;
 mod approvals;
 mod attention;
 mod bindings;
+mod catalogue;
 mod cells;
 mod clipboard;
 mod editor;
@@ -31,6 +32,7 @@ mod local_time;
 mod logical;
 mod look;
 mod markdown;
+mod model_picker;
 mod mouse;
 mod offer;
 mod opener;
@@ -60,6 +62,8 @@ use contract::{HubLine, SessionId};
 use crate::link::Line;
 
 pub use attention::Attention;
+
+pub use catalogue::{Catalogue, ModelEntry, ReadModels, Refresh};
 
 pub use home::Launch;
 
@@ -114,6 +118,9 @@ pub(crate) enum Input {
         /// The image in base64, or the notice.
         result: Result<String, String>,
     },
+    /// A model-list read answered: the installed models, or why they
+    /// could not be read. An answer for a closed loop is dropped.
+    Models(Result<Catalogue, String>),
 }
 
 /// Restores the terminal [`run`] set up: turns mouse reporting off, leaves

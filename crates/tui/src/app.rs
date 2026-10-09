@@ -49,6 +49,7 @@ mod history;
 mod home;
 mod keyboard;
 mod links;
+mod model_picker;
 #[path = "app_mouse.rs"]
 mod mouse;
 mod offer;
@@ -243,6 +244,8 @@ pub(crate) struct App {
     find: find::Find,
     /// The effective bindings (`docs/tui.md`, "Bindings").
     keyboard: keyboard::Keyboard,
+    /// The model picker: the installed models and the reads it owes.
+    model_picker: crate::model_picker::ModelPicker,
     /// Whether a link opener is on `PATH` (`docs/tui.md`, "Links").
     opener: bool,
     /// What the hub's `attention` lines queued (`docs/tui.md`, "Getting
@@ -281,6 +284,7 @@ impl App {
             select: select::Selection::default(),
             find: find::Find::default(),
             keyboard: keyboard::Keyboard::default(),
+            model_picker: crate::model_picker::ModelPicker::default(),
             opener: false,
             attention: attention::State::default(),
         }

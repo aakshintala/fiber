@@ -128,6 +128,9 @@ impl App {
     /// the jigs and every existing app test stay byte-identical.
     pub(crate) fn set_home(&mut self, launch: Launch) {
         self.set_project(launch.project.clone());
+        // The picker's scope starts from launch, then from what
+        // `/scoped-models` saves.
+        self.model_picker.scoped = launch.scoped_models.clone();
         self.home = Some(Home {
             launch,
             prompted: false,

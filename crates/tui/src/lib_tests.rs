@@ -194,6 +194,7 @@ pub(super) fn new_loop<B: Backend>(
         search: None,
         stash: std::collections::VecDeque::new(),
         reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
         paste_reader: None,
         pointer: crate::mouse::Pointer::default(),
         hover: true,
@@ -1560,6 +1561,7 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         search: None,
         stash: std::collections::VecDeque::new(),
         reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
         paste_reader: None,
         pointer: crate::mouse::Pointer::default(),
         hover: true,
@@ -1676,6 +1678,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
             | Input::Disconnected
             | Input::Resize
             | Input::Files { .. }
+            | Input::Models(_)
             | Input::Image { .. } => panic!("a pause sent something else"),
         }
     }
@@ -1858,4 +1861,61 @@ fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
         lp.app.find_bar().map(|bar| bar.query).unwrap_or_default(),
         "xyzab"
     );
+}
+
+#[test]
+fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
+    let mut pair = open();
+    let slave = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_in = Arc::clone(&seen);
+    // The cached lists answer with one model and one notice.
+    let read: crate::ReadModels = Arc::new(move |refresh| {
+        seen_in.lock().unwrap().push(refresh);
+        Ok(crate::Catalogue {
+            models: vec![crate::ModelEntry {
+                reference: "acme/m1".to_owned(),
+                provider: "acme".to_owned(),
+                id: "m1".to_owned(),
+                levels: Vec::new(),
+                default_level: None,
+                configured: None,
+                roles: Vec::new(),
+            }],
+            notices: vec!["the lists are in".to_owned()],
+        })
+    });
+    let mut started = launch();
+    started.models = Some(read);
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-run".to_owned())
+        .spawn(move || {
+            let code = super::run(
+                slave,
+                started,
+                Box::new(|| Err(io::Error::other("refused"))),
+                Box::new(|_| {}),
+                fakes::clock::FakeClock::new(),
+            );
+            match done.send(code) {
+                Ok(()) | Err(_) => {}
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    first_frame(&pair);
+    // Asked after the first frame, the cached read answers: its notice
+    // draws, so the catalogue it came with is held.
+    read_until(&pair.main, b"the lists are in", "the cached read's notice");
+    assert_eq!(*seen.lock().unwrap(), [crate::Refresh::Cached]);
+    pair.main
+        .write_all(&[0x03, 0x03])
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let code = finished
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
+    assert_eq!(code, 0);
 }
