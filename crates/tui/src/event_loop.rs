@@ -240,6 +240,7 @@ impl<B: Backend> Loop<B> {
                                 self.app.clear_copied();
                                 self.app.attention_seen();
                             }
+                            self.app.on_drag(&mouse);
                             self.app.on_wheel(&mouse);
                             let selected = self.app.on_select(&mouse, self.screen.targets());
                             let clicked =

@@ -15,6 +15,7 @@ use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
 pub(crate) mod chrome;
+mod drag;
 #[path = "home_view.rs"]
 mod home;
 mod marks;
@@ -189,6 +190,7 @@ pub(crate) fn render(
             notices(app, conversation, buf, &mut targets);
         }
     }
+    drag::draw(app, buf, pointer);
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {
             buf.set_style(target.rect, HOVER_TINT);

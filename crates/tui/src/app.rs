@@ -39,6 +39,7 @@ mod chrome;
 mod commands;
 #[path = "copy.rs"]
 pub(crate) mod copy;
+mod drag;
 mod find;
 #[path = "app_focus.rs"]
 mod focus;
@@ -237,6 +238,9 @@ pub(crate) struct App {
     regions: crate::focus::Regions,
     /// What the person chose to show: the panel's hide.
     chrome: chrome::Chrome,
+    /// The drag resizing the rail or the panel, and the shares waiting
+    /// to be saved.
+    drag: drag::DragState,
     /// The attached session's folded panel data (`docs/tui.md`, "The panel").
     panel_state: panel::PanelState,
     /// The session rail's numbers and wall time (`docs/tui.md`, "The rail").
@@ -283,6 +287,7 @@ impl App {
             stops: Vec::new(),
             regions: crate::focus::Regions::default(),
             chrome: chrome::Chrome::default(),
+            drag: drag::DragState::default(),
             panel_state: panel::PanelState::default(),
             rail_state: rail::RailState::default(),
             select: select::Selection::default(),
