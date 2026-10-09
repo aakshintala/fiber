@@ -124,20 +124,36 @@ pub(crate) fn anthropic_content(prepared: Prepared) -> Value {
 
 /// The file `path` names on disk, or `None` when it must not be read. A
 /// relative path stays under `session_dir`; an absolute path is read only
-/// for a session's own `artifacts/`, which is how a rewound child names
-/// its parent's files.
+/// when it names a session's stored artifacts, `<sessions>/<one>/artifacts/`
+/// plus the file, which is how a rewound child names its parent's files:
+/// the parent lives beside the child in the same `sessions/` directory.
 pub(crate) fn media_path(path: &str, session_dir: &Path) -> Option<PathBuf> {
-    let relative = Path::new(path);
-    if relative.is_absolute() {
-        return None;
+    let candidate = Path::new(path);
+    if !candidate.is_absolute() {
+        if !candidate
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+        {
+            return None;
+        }
+        return Some(session_dir.join(candidate));
     }
-    if !relative
+    if !candidate
         .components()
-        .all(|part| matches!(part, Component::Normal(_)))
+        .all(|part| matches!(part, Component::Normal(_) | Component::RootDir))
     {
         return None;
     }
-    Some(session_dir.join(relative))
+    let rest = candidate.strip_prefix(session_dir.parent()?).ok()?;
+    let mut parts = rest.components();
+    if !matches!(parts.next(), Some(Component::Normal(_))) {
+        return None;
+    }
+    if !matches!(parts.next(), Some(Component::Normal(name)) if name == "artifacts") {
+        return None;
+    }
+    parts.next()?;
+    Some(candidate.to_path_buf())
 }
 
 /// The file's bytes as base64, or `None` when its path must not be read
