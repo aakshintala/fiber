@@ -583,6 +583,162 @@ fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
     assert_eq!(result["output"], "hi\nExit code 0.\n");
 }
 
+/// A script step that calls `ask_user` with four questions, then the shell.
+fn ask_then_echo_hi_script() -> Value {
+    let questions = json!([
+        {"header": "Timeout", "question": "How long?",
+         "options": [{"label": "1m"}, {"label": "5m"}]},
+        {"header": "Scope", "question": "Which scope?",
+         "options": [{"label": "a"}, {"label": "b"}]},
+        {"header": "Name", "question": "What name?"},
+        {"header": "Pick", "question": "Which one?",
+         "options": [{"label": "x"}, {"label": "y"}]},
+    ]);
+    json!({"steps": [{"tool_calls": [
+        {"name": "ask_user", "arguments": {"questions": questions}},
+        {"name": "shell", "arguments": {"command": "echo hi"}},
+    ]}]})
+}
+
+#[test]
+fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
+    let setup = Setup::new();
+    // The built-in `scripted` provider answers from a script in the
+    // workspace, named as an ordinary model (`docs/model-routing.md`,
+    // "The scripted provider"): one step carries both tool calls.
+    write(
+        &setup.workspace().join("s.json"),
+        &ask_then_echo_hi_script(),
+    );
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+    );
+    // A standing project ask for this exact command: with the terminal
+    // connected the loop asks a person (`docs/permissions.md`, "Headless").
+    // The project's rules live in Fiber home at `projects/<key>/rules`
+    // (`docs/state.md`, "Projects"), never in the workspace, so the harness
+    // places one through the canonical project key, as `Setup::sessions` does.
+    let key = log::project_key(&doors::project(&setup.workspace()));
+    let rule = setup.home().join("projects").join(key).join("rules");
+    fs::create_dir_all(rule.parent().unwrap()).unwrap();
+    fs::write(
+        rule,
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    let mut run = Run::terminal(&setup);
+    // A 160x48 pty, as the ticket's screen: the resize lands before the
+    // first prompt, so every frame draws at the ticket's width.
+    rustix::termios::tcsetwinsize(
+        &run.main,
+        rustix::termios::Winsize {
+            ws_col: 160,
+            ws_row: 48,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+    .unwrap();
+    support::kill_pid(setup.deadline, run.child.id(), "WINCH").unwrap();
+    run.read_until(">");
+    run.write(b"run it\r");
+    // The collapsed group line counts the call's parsed form, before the
+    // shell's approval panel opens below it.
+    run.read_until("asked 4 questions");
+    run.read_until("asked by a project rule: echo hi");
+    run.read_until("allow once");
+    let output = run.output();
+    let text = String::from_utf8_lossy(&output);
+    // The one-row rule cannot be read from this raw byte stream without a
+    // terminal emulator, so this test does not assert it here: it is
+    // asserted by the 160-column screen tests
+    // `group_line_and_ledger_show_parsed_arguments_never_json` and
+    // `ledger_rows_show_parsed_arguments_never_json` in
+    // crates/tui/src/view_tests.rs and
+    // `group_summary_lines_are_cut_to_one_row_at_the_width` in
+    // crates/tui/src/turn_tests.rs.
+    // The approval panel shows the shell's arguments for review, so the
+    // shell's JSON is expected there; the `ask_user` call's JSON must
+    // never draw: neither on the group line nor in its ledger row.
+    assert!(!text.contains("{\"questions\""), "{text:?}");
+    assert!(!text.contains("\"header\""), "{text:?}");
+    assert!(text.contains("asked 4 questions"), "{text:?}");
+    assert!(!text.contains("ask_user {"), "{text:?}");
+    // No row of the conversation holds `{"` except the shell approval
+    // panel's arguments (`{\"command\":\"echo hi\"}`): every occurrence
+    // in the captured output is immediately followed by `command"`.
+    let mut rest = text.as_ref();
+    let mut calls = 0;
+    while let Some(at) = rest.find("{\"") {
+        calls += 1;
+        let after = &rest[at + 2..];
+        assert!(after.starts_with("command\""), "{text:?}");
+        rest = &rest[at + 2..];
+    }
+    assert!(calls > 0, "{text:?}");
+    // As above: quitting either exits at once or asks first.
+    run.write(b"\x03\x03\r");
+    run.read_until("fiber resume");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
+/// An `ask_user` call stalled mid-arguments: the added event names the
+/// call, then one arguments delta carries the first part of its JSON and
+/// the body stalls, so the raw text stays on the group line.
+fn streaming_ask_stalls() -> Response {
+    let added = json!({"type": "response.output_item.added", "item": {
+        "type": "function_call", "id": "fc_ask", "name": "ask_user"
+    }});
+    let delta = json!({"type": "response.function_call_arguments.delta",
+        "item_id": "fc_ask", "delta": "{\"questions\""});
+    let prefix: String = [added, delta]
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stall(200, prefix.clone(), prefix.len() + 100000)
+        .header("content-type", "text/event-stream")
+}
+
+#[test]
+fn a_streaming_ask_shows_its_raw_arguments_until_requested() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([streaming_ask_stalls()]).unwrap();
+    setup.provider(&server);
+    let mut run = Run::terminal(&setup);
+    // A 160x48 pty, as the ticket's screen: the resize lands before the
+    // first prompt, so every frame draws at the ticket's width.
+    rustix::termios::tcsetwinsize(
+        &run.main,
+        rustix::termios::Winsize {
+            ws_col: 160,
+            ws_row: 48,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+    .unwrap();
+    support::kill_pid(setup.deadline, run.child.id(), "WINCH").unwrap();
+    run.read_until(">");
+    run.write(b"run it\r");
+    // The call is still streaming its arguments, so the group line shows
+    // the raw text; the scripted test above shows it gone once requested.
+    run.read_until("{\"questions\"");
+    // The turn stalls mid-arguments: Esc interrupts it, as the stalled
+    // turn test interrupts its stalled reply.
+    run.write(b"\x1b");
+    run.read_until("interrupted");
+    // As above: quitting either exits at once or asks first.
+    run.write(b"\x03\x03\r");
+    run.read_until("fiber resume");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
 #[test]
 fn a_repository_offer_swaps_in_and_approve_lets_the_turn_run() {
     let setup = Setup::new();
