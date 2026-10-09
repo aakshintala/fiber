@@ -233,10 +233,14 @@ path's directory, ending in `/`.
   `openai-completions`, because nothing may come between the tool messages
   that answer one assistant turn.
 - A PDF comes back as a PDF part. One of more than 10 pages needs `pages`,
-  and a request takes at most 20 pages. A
+  and a request takes at most 20 pages. `pages` is a page or a range such
+  as `3` or `1-5`, counted from 1. A
   PDF of more than 10 pages without `pages`, a range of more than 20 pages,
   and `pages` on a file that is not a PDF each fail with `invalid_arguments`,
-  the message saying which. The
+  the message saying which. A range past the end fails with
+  `invalid_arguments` and names the page count, and an unreadable PDF fails
+  with `unsupported_file` and the message. When rendering fails for another
+  reason the part has no `pages` and the result says why. The
   provider module sends the PDF natively where its protocol accepts a PDF in a
   tool result, and otherwise sends the pages rendered as images, which go
   through the same limits (`docs/model-routing.md`, "Image limits").
