@@ -12,17 +12,17 @@
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::Path;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use fakes::{ProviderServer, Request, Response, fingerprint};
 
-/// The deadline on each wait: connecting, writing the whole request, and
-/// reading the whole reply. A stall fails naming the wait. A test makes at
-/// most 3 exchanges of 3 waits and an `await_requests` test adds one wait: a
-/// hung test fails at 100 s, under nextest's 120 s (`docs/testing.md`, "Waits
-/// and timeouts").
+/// The deadline on each wait: one exchange (connecting, writing the whole
+/// request, reading the whole reply) is one wait, and a stall fails naming the
+/// step. A test makes at most 3 exchanges and an `await_requests` test adds one
+/// wait: 40 s, at most half of nextest's 120 s kill (`docs/testing.md`,
+/// "Waits and timeouts").
 const DEADLINE: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 fn addr(server: &ProviderServer) -> SocketAddr {
@@ -54,30 +54,28 @@ fn post(server: &ProviderServer, path: &str, headers: &[(&str, &str)], body: &[u
 fn exchange(server: &ProviderServer, request: &[u8]) -> Reply {
     let (addr, request) = (addr(server), request.to_vec());
     let (tx, rx) = mpsc::channel();
+    let step = Arc::new(Mutex::new("connecting to the fake provider"));
+    let client_step = Arc::clone(&step);
     thread::spawn(move || {
-        let steps = || -> io::Result<()> {
+        let enter = |name: &'static str| *client_step.lock().unwrap() = name;
+        let steps = || -> io::Result<Vec<u8>> {
             let mut stream = TcpStream::connect(addr)?;
-            tx.send(Ok(Vec::new())).unwrap();
+            enter("writing the request to the fake provider");
             stream.write_all(&request)?;
             stream.shutdown(Shutdown::Write)?;
-            tx.send(Ok(Vec::new())).unwrap();
+            enter("reading the fake provider's whole reply");
             let mut raw = Vec::new();
             stream.read_to_end(&mut raw)?;
-            tx.send(Ok(raw)).unwrap();
-            Ok(())
+            Ok(raw)
         };
-        if let Err(e) = steps() {
-            tx.send(Err(e)).unwrap();
-        }
+        tx.send(steps()).unwrap();
     });
-    let wait = |step: &str| match rx.recv_timeout(DEADLINE) {
+    // One deadline for the whole exchange; the step names where it stalled.
+    let raw = match rx.recv_timeout(DEADLINE) {
         Ok(Ok(bytes)) => bytes,
-        Ok(Err(e)) => panic!("{step}: {e}"),
-        Err(_) => panic!("{step}: not done within {DEADLINE:?}"),
+        Ok(Err(e)) => panic!("{}: {e}", step.lock().unwrap()),
+        Err(_) => panic!("{}: not done within {DEADLINE:?}", step.lock().unwrap()),
     };
-    wait("connecting to the fake provider");
-    wait("writing the request to the fake provider");
-    let raw = wait("reading the fake provider's whole reply");
     let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
     let head = String::from_utf8(raw[..split].to_vec()).unwrap();
     let mut lines = head.split("\r\n");

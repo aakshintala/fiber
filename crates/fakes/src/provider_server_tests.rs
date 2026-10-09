@@ -349,7 +349,9 @@ fn a_stall_sends_its_head_and_prefix_then_holds_until_the_client_closes() {
     assert_eq!(server.requests().len(), 1);
     // The rest of the declared body never arrives while the client holds.
     // Nothing arrives, so the read runs out its bound: a short one.
-    stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
     let mut one = [0u8; 1];
     let held = reader.read_exact(&mut one);
     assert!(held.is_err(), "the connection is held past its prefix");
