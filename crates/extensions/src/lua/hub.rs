@@ -104,6 +104,18 @@ impl Hub {
         self.shared.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// The hub lock when nothing holds it: a test's pause point learns
+    /// whether an OAuth start runs under the admission lock. None while
+    /// the admission lock is held, including on this thread.
+    #[cfg(test)]
+    pub(super) fn try_lock(&self) -> Option<MutexGuard<'_, Shared>> {
+        match self.shared.try_lock() {
+            Ok(guard) => Some(guard),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+            Err(std::sync::TryLockError::Poisoned(error)) => Some(error.into_inner()),
+        }
+    }
+
     /// Wakes every waiter to look at the state again.
     pub(super) fn notify(&self) {
         self.changed.notify_all();
