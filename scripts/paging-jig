@@ -4,8 +4,10 @@
 # benchmark job's paging rows (docs/performance.md) measure the shipped
 # allocator and code generation. The checkout's HEAD is the head.
 #
-# Usage: scripts/paging-jig [BASE_COMMIT]
-# With a base commit (a pull request), the base jig is also built, in a git
+# Usage: scripts/paging-jig
+# When scripts/release-size left $RUNNER_TEMP/release/base/commit (a pull
+# request whose base comparison is not skipped), the base jig is also built
+# at that commit, the base or the ancestor standing in for it, in a git
 # worktree reusing this checkout's target directory. A base with no jig, or
 # whose jig does not build, has none: the script says so, exits 0, and the
 # base's paging timings are reported unavailable. Only a failed head build
@@ -14,13 +16,16 @@
 # Outputs: $RUNNER_TEMP/release/head/paging, and $RUNNER_TEMP/release/base/paging
 # when the base has a jig that builds. Runs on Linux.
 set -euo pipefail
-shopt -s inherit_errexit
+shopt -s inherit_errexit 2> /dev/null || true # bash 4.4; macOS ships 3.2
 cd "$(git rev-parse --show-toplevel)"
 
 readonly target=x86_64-unknown-linux-musl
 readonly source=crates/tui/examples/paging.rs
-base_commit=${1:-}
 out="${RUNNER_TEMP:?}/release"
+base_commit=
+if [ -f "$out/base/commit" ]; then
+  base_commit=$(cat "$out/base/commit")
+fi
 top=$PWD
 
 # Builds the jig of the checkout in the current directory into the shared
