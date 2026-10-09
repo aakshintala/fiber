@@ -295,9 +295,9 @@ fn no_colour_outside_the_theme() {
     assert!(found.is_empty(), "{found:#?}");
 }
 
-/// The first column of the first table under `### Themes` in `doc`, each
-/// cell with its backticks taken off.
-fn doc_roles(doc: &str) -> Vec<String> {
+/// The `index`-th `|`-separated column of the first table under
+/// `### Themes` in `doc`, trimmed.
+fn doc_column(doc: &str, index: usize) -> Vec<String> {
     doc.lines()
         .skip_while(|line| *line != "### Themes")
         .skip(1)
@@ -305,8 +305,17 @@ fn doc_roles(doc: &str) -> Vec<String> {
         .skip_while(|line| !line.starts_with('|'))
         .take_while(|line| line.starts_with('|'))
         .skip(2)
-        .filter_map(|line| line.split('|').nth(1))
-        .map(|cell| cell.trim().trim_matches('`').to_owned())
+        .filter_map(|line| line.split('|').nth(index))
+        .map(|cell| cell.trim().to_owned())
+        .collect()
+}
+
+/// The first column of the first table under `### Themes` in `doc`, each
+/// cell with its backticks taken off.
+fn doc_roles(doc: &str) -> Vec<String> {
+    doc_column(doc, 1)
+        .into_iter()
+        .map(|cell| cell.trim_matches('`').to_owned())
         .collect()
 }
 
@@ -330,16 +339,7 @@ fn the_doc_lists_every_role() {
 /// The third column of the first table under `### Themes` in `doc`, one
 /// cell per role, in order, backticks kept.
 fn doc_dark(doc: &str) -> Vec<String> {
-    doc.lines()
-        .skip_while(|line| *line != "### Themes")
-        .skip(1)
-        .take_while(|line| !line.starts_with('#'))
-        .skip_while(|line| !line.starts_with('|'))
-        .take_while(|line| line.starts_with('|'))
-        .skip(2)
-        .filter_map(|line| line.split('|').nth(3))
-        .map(|cell| cell.trim().to_owned())
-        .collect()
+    doc_column(doc, 3)
 }
 
 #[test]
@@ -356,17 +356,10 @@ fn dark_cell(cell: &str, role: Role) -> Shade {
         "the terminal's foreground" | "the terminal's background" => Shade::Terminal,
         "`text`, dim" => Shade::Dim,
         hex => {
-            let digits = hex.strip_prefix("`#").and_then(|hex| hex.strip_suffix('`'));
-            let rgb = digits.and_then(|digits| {
-                if digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                    let channel =
-                        |at: usize| u8::from_str_radix(&digits[at..at.saturating_add(2)], 16).ok();
-                    Some(Shade::Rgb((channel(0)?, channel(2)?, channel(4)?)))
-                } else {
-                    None
-                }
-            });
-            rgb.unwrap_or_else(|| panic!("{}: unknown dark cell {cell:?}", role.name()))
+            let text = hex.strip_prefix('`').and_then(|hex| hex.strip_suffix('`'));
+            text.and_then(super::hex)
+                .map(|(r, g, b)| Shade::Rgb((r, g, b)))
+                .unwrap_or_else(|| panic!("{}: unknown dark cell {cell:?}", role.name()))
         }
     }
 }

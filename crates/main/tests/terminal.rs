@@ -327,36 +327,20 @@ impl Run {
     /// Reads until the output after the last match holds `needle`, under
     /// one named deadline for the whole wait, however much other output
     /// arrives. On expiry the panic names what it waited for and shows the
-    /// output, so a stall says how far the journey got. A needle with
-    /// spaces waits for each word in order: unchanged cells are never
-    /// rewritten, so a space can arrive as a cursor move rather than a
-    /// byte, and a style change can split words with SGR.
+    /// output, so a stall says how far the journey got. A needle with a
+    /// space matches its words in order with only a terminal frame's gap
+    /// between them: spaces, cursor moves (`\x1b[<r>;<c>H`) and SGR
+    /// (`\x1b[...m`); unchanged cells are never rewritten, so a space can
+    /// arrive as a cursor move rather than a byte, and a style change can
+    /// split words with SGR.
     fn read_until(&mut self, needle: &str) {
-        let mut words = needle.split_whitespace();
-        match words.next() {
-            Some(first) => {
-                self.read_word(first, needle);
-                for word in words {
-                    self.read_word(word, needle);
-                }
-            }
-            None => self.read_word(needle, needle),
-        }
-    }
-
-    /// Reads until the output after the last match holds `word`.
-    fn read_word(&mut self, word: &str, needle: &str) {
         let (output, wakes, seen) = (Arc::clone(&self.output), Arc::clone(&self.wakes), self.seen);
-        let wanted = word.as_bytes().to_vec();
+        let wanted = needle.to_owned();
         let (done, found) = mpsc::channel();
         thread::spawn(move || {
             let wakes = wakes.lock().unwrap();
             loop {
-                let end = output.lock().unwrap()[seen..]
-                    .windows(wanted.len())
-                    .position(|window| window == wanted)
-                    .map(|at| seen + at + wanted.len());
-                if let Some(end) = end {
+                if let Some(end) = phrase_end(&output.lock().unwrap(), seen, &wanted) {
                     done.send(end).unwrap_or(());
                     return;
                 }
@@ -426,6 +410,163 @@ fn contains(haystack: &[u8], needle: &str) -> bool {
     haystack
         .windows(needle.len())
         .any(|window| window == needle.as_bytes())
+}
+
+/// Where `needle` ends in `haystack` at or after `from`: an exact byte
+/// match, unless `needle` holds a space and starts with a non-escape
+/// byte, when each single space may instead be spaces, cursor moves and
+/// SGR in any mix, and nothing else.
+fn phrase_end(haystack: &[u8], from: usize, needle: &str) -> Option<usize> {
+    let wanted = needle.as_bytes();
+    if wanted.is_empty() {
+        return Some(from.min(haystack.len()));
+    }
+    if !needle.contains(' ') || wanted[0] == 0x1b {
+        return exact_end(haystack, from, wanted);
+    }
+    let words: Vec<&[u8]> = needle.split_whitespace().map(str::as_bytes).collect();
+    if words.len() < 2 {
+        return exact_end(haystack, from, wanted);
+    }
+    let mut cursor = from;
+    while cursor + words[0].len() <= haystack.len() {
+        let at = haystack[cursor..]
+            .windows(words[0].len())
+            .position(|window| window == words[0])?;
+        let mut pos = cursor + at + words[0].len();
+        let mut matched = true;
+        for word in &words[1..] {
+            let Some(gap) = frame_gap_end(haystack, pos) else {
+                matched = false;
+                break;
+            };
+            pos = gap;
+            if haystack[pos..].starts_with(word) {
+                pos += word.len();
+            } else {
+                matched = false;
+                break;
+            }
+        }
+        if matched {
+            return Some(pos);
+        }
+        cursor += at + 1;
+    }
+    None
+}
+
+/// Where `needle` ends in `haystack` at or after `from`, as exact bytes.
+fn exact_end(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+    if from > haystack.len() {
+        return None;
+    }
+    haystack[from..]
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|at| from + at + needle.len())
+}
+
+/// Where the terminal frame's gap starting at `pos` ends: one or more
+/// spaces, cursor moves and SGR sequences, and nothing else.
+fn frame_gap_end(haystack: &[u8], mut pos: usize) -> Option<usize> {
+    let start = pos;
+    loop {
+        if haystack.get(pos) == Some(&b' ') {
+            pos += 1;
+        } else if let Some(end) = cursor_move_end(haystack, pos).or_else(|| sgr_end(haystack, pos))
+        {
+            pos = end;
+        } else {
+            break;
+        }
+    }
+    (pos > start).then_some(pos)
+}
+
+/// Where the cursor move at `pos` ends: `\x1b[<row>;<col>H`.
+fn cursor_move_end(haystack: &[u8], pos: usize) -> Option<usize> {
+    if haystack.get(pos) != Some(&0x1b) || haystack.get(pos + 1) != Some(&b'[') {
+        return None;
+    }
+    let mut end = pos + 2;
+    let row = end;
+    while haystack.get(end).is_some_and(|byte| byte.is_ascii_digit()) {
+        end += 1;
+    }
+    if end == row || haystack.get(end) != Some(&b';') {
+        return None;
+    }
+    end += 1;
+    let col = end;
+    while haystack.get(end).is_some_and(|byte| byte.is_ascii_digit()) {
+        end += 1;
+    }
+    if end == col || haystack.get(end) != Some(&b'H') {
+        return None;
+    }
+    Some(end + 1)
+}
+
+/// Where the SGR sequence at `pos` ends: `\x1b[...m`.
+fn sgr_end(haystack: &[u8], pos: usize) -> Option<usize> {
+    if haystack.get(pos) != Some(&0x1b) || haystack.get(pos + 1) != Some(&b'[') {
+        return None;
+    }
+    let mut end = pos + 2;
+    while haystack
+        .get(end)
+        .is_some_and(|byte| byte.is_ascii_digit() || *byte == b';')
+    {
+        end += 1;
+    }
+    (haystack.get(end) == Some(&b'm')).then_some(end + 1)
+}
+
+#[test]
+fn phrase_end_matches_a_single_word_exactly() {
+    assert_eq!(phrase_end(b"completed ok", 0, "completed"), Some(9));
+}
+
+#[test]
+fn phrase_end_matches_one_space_gap() {
+    assert_eq!(phrase_end(b"fiber resume", 0, "fiber resume"), Some(12));
+}
+
+#[test]
+fn phrase_end_matches_a_cursor_move_gap() {
+    assert_eq!(
+        phrase_end(b"fiber\x1b[10;1Hresume", 0, "fiber resume"),
+        Some(18)
+    );
+}
+
+#[test]
+fn phrase_end_matches_an_sgr_gap() {
+    assert_eq!(
+        phrase_end(b"fiber\x1b[0mresume", 0, "fiber resume"),
+        Some(15)
+    );
+}
+
+#[test]
+fn phrase_end_rejects_a_letter_gap() {
+    assert_eq!(phrase_end(b"fiberXresume", 0, "fiber resume"), None);
+}
+
+#[test]
+fn phrase_end_rejects_an_erase_display_gap() {
+    assert_eq!(phrase_end(b"fiber\x1b[2Jresume", 0, "fiber resume"), None);
+}
+
+#[test]
+fn phrase_end_ignores_a_phrase_starting_before_from() {
+    assert_eq!(phrase_end(b"fiber resume", 1, "fiber resume"), None);
+}
+
+#[test]
+fn phrase_end_rejects_an_empty_gap() {
+    assert_eq!(phrase_end(b"fiberresume", 0, "fiber resume"), None);
 }
 
 /// "Hello." in two deltas.
