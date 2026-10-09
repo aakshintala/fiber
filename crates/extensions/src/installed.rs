@@ -188,17 +188,16 @@ pub fn package_dirs(home: &Path) -> Vec<PathBuf> {
     };
     let mut dirs = Vec::new();
     for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
+        if entry.file_name().to_string_lossy().starts_with('.') {
             continue;
         }
-        let dir = root.join(&name);
+        let dir = entry.path();
         if Record::read(&dir).is_err() {
             continue;
         }
         dirs.push(dir);
     }
-    dirs.sort();
+    dirs.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
     dirs
 }
 
