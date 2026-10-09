@@ -200,6 +200,7 @@ const SIGNAL_ALLOWLIST: &[&str] = &[
     "crates/jobs/src/delegate/group.rs",
     "crates/main/src/switch/read.rs",
     "crates/mcp/src/registry.rs",
+    "crates/tui/src/paste_image.rs",
     "crates/tools/src/shell/process_group.rs",
 ];
 

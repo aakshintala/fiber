@@ -3,6 +3,9 @@
 
 use ratatui::text::Span;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::approvals::Queue;
 use crate::keys::Edit;
 
@@ -29,16 +32,39 @@ enum Piece {
         /// What is sent.
         text: String,
     },
+    /// A pasted image, shown as its positional label.
+    Image {
+        /// The image's bytes, in base64.
+        data: Arc<str>,
+    },
 }
 
 /// The draft: pieces with the cursor between two of them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct Draft {
     pieces: Vec<Piece>,
     /// The cursor: the number of pieces before it.
     cursor: usize,
     /// The next paste token's number.
     next: usize,
+    /// The draft's serial: a read's result lands only while the box holds
+    /// the draft it started for.
+    serial: u64,
+}
+
+/// The next draft serial: every draft, and every renewal, takes a fresh
+/// one, so no two drafts share a serial.
+static NEXT_SERIAL: AtomicU64 = AtomicU64::new(0);
+
+/// A serial no draft holds yet.
+fn next_serial() -> u64 {
+    NEXT_SERIAL.fetch_add(1, Ordering::Relaxed)
+}
+
+/// An image's label: images count in draft order from 1, separately from
+/// paste tokens, computed when drawn.
+fn image_label(number: usize) -> String {
+    format!("[Image #{number}]")
 }
 
 impl Default for Draft {
@@ -47,6 +73,7 @@ impl Default for Draft {
             pieces: Vec::new(),
             cursor: 0,
             next: 1,
+            serial: next_serial(),
         }
     }
 }
@@ -135,13 +162,13 @@ impl Draft {
     }
 
     /// The number of the paste token directly before the cursor, else of
-    /// the one directly after it.
+    /// the one directly after it. An image beside the cursor is no token.
     pub(crate) fn token_at_cursor(&self) -> Option<usize> {
         [self.before(self.cursor), self.pieces.get(self.cursor)]
             .into_iter()
             .find_map(|piece| match piece {
                 Some(Piece::Paste { number, .. }) => Some(*number),
-                Some(Piece::Char(_)) | None => None,
+                Some(Piece::Char(_) | Piece::Image { .. }) | None => None,
             })
     }
 
@@ -153,7 +180,7 @@ impl Draft {
                 text,
                 ..
             } if *found == number => Some(text.as_str()),
-            Piece::Paste { .. } | Piece::Char(_) => None,
+            Piece::Paste { .. } | Piece::Char(_) | Piece::Image { .. } => None,
         })
     }
 
@@ -219,18 +246,20 @@ impl Draft {
         self.cursor = self.cursor.saturating_add(1).min(self.pieces.len());
     }
 
-    /// Moves to the start of the previous word. A token is a word alone.
+    /// Moves to the start of the previous word. A token or an image is a
+    /// word alone.
     pub(crate) fn word_left(&mut self) {
         self.cursor = self.word_left_at();
     }
 
-    /// Moves to the end of the next word. A token is a word alone.
+    /// Moves to the end of the next word. A token or an image is a word
+    /// alone.
     pub(crate) fn word_right(&mut self) {
         let mut at = self.cursor;
         while self.pieces.get(at).is_some_and(Piece::is_gap) {
             at = at.saturating_add(1);
         }
-        if let Some(Piece::Paste { .. }) = self.pieces.get(at) {
+        if let Some(Piece::Paste { .. } | Piece::Image { .. }) = self.pieces.get(at) {
             self.cursor = at.saturating_add(1);
             return;
         }
@@ -297,17 +326,120 @@ impl Draft {
         }
     }
 
+    /// Inserts the pasted image's base64 at the cursor, as one piece.
+    pub(crate) fn insert_image(&mut self, data: Arc<str>) {
+        self.put(Piece::Image { data });
+    }
+
+    /// Whether the draft holds an image.
+    pub(crate) fn has_image(&self) -> bool {
+        self.pieces
+            .iter()
+            .any(|piece| matches!(piece, Piece::Image { .. }))
+    }
+
+    /// The draft's serial.
+    pub(crate) fn serial(&self) -> u64 {
+        self.serial
+    }
+
+    /// The draft's parts in order: each run of characters and paste-token
+    /// text is one text part, each image one image part; an empty text
+    /// part is left out. A draft without images sends exactly one text
+    /// part, or none when empty.
+    pub(crate) fn content(&self) -> Vec<contract::commands::SentPart> {
+        use contract::commands::SentPart;
+        let mut parts = Vec::new();
+        let mut text = String::new();
+        for piece in &self.pieces {
+            match piece {
+                Piece::Char(ch) => text.push(*ch),
+                Piece::Paste { text: pasted, .. } => text.push_str(pasted),
+                Piece::Image { data } => {
+                    if !text.is_empty() {
+                        parts.push(SentPart::Text {
+                            text: std::mem::take(&mut text),
+                        });
+                    }
+                    parts.push(SentPart::Image {
+                        data: data.to_string(),
+                        mime_type: crate::paste_image::MIME_TYPE.to_owned(),
+                    });
+                }
+            }
+        }
+        if !text.is_empty() {
+            parts.push(SentPart::Text { text });
+        }
+        parts
+    }
+
+    /// The editor returned `text` for the whole draft: each `[Image #N]`
+    /// naming one of the draft's images, 1 to its count, becomes that
+    /// image again, first occurrence only; an image whose label is gone is
+    /// dropped, and other text stays text. Line breaks read as a paste's
+    /// do, and control characters but tabs go, as in [`Draft::set`]. The
+    /// cursor ends at the end, under a fresh serial.
+    pub(crate) fn edited(&mut self, text: &str) {
+        let images: Vec<Arc<str>> = self
+            .pieces
+            .iter()
+            .filter_map(|piece| match piece {
+                Piece::Image { data } => Some(Arc::clone(data)),
+                Piece::Char(_) | Piece::Paste { .. } => None,
+            })
+            .collect();
+        let mut used = vec![false; images.len()];
+        let mut pieces = Vec::new();
+        let cleaned = clean(text);
+        let mut rest = cleaned.as_str();
+        while let Some(ch) = rest.chars().next() {
+            if ch == '['
+                && let Some((image, tail)) = take_label(rest, &images, &mut used)
+            {
+                pieces.push(image);
+                rest = tail;
+                continue;
+            }
+            pieces.push(Piece::Char(ch));
+            rest = rest.get(ch.len_utf8()..).unwrap_or_default();
+        }
+        let next = self.next;
+        let cursor = pieces.len();
+        *self = Self {
+            pieces,
+            cursor,
+            next,
+            serial: next_serial(),
+        };
+    }
+
+    /// Puts the moved draft `back` in the box: its pieces under a fresh
+    /// serial, the cursor at its end.
+    pub(crate) fn put_back(&mut self, back: Draft) {
+        let len = back.pieces.len();
+        let next = self.next.max(back.next);
+        *self = Self {
+            pieces: back.pieces,
+            cursor: len,
+            next,
+            serial: next_serial(),
+        };
+    }
+
     /// The cursor: the number of pieces before it.
     pub(crate) fn position(&self) -> usize {
         self.cursor
     }
 
-    /// Whether the cursor is at the draft's start or after whitespace.
+    /// Whether the cursor is at the draft's start or after whitespace. An
+    /// image before the cursor is no space, so `@` typed after one opens
+    /// no file panel.
     pub(crate) fn after_space(&self) -> bool {
         match self.before(self.cursor) {
             None => true,
             Some(Piece::Char(ch)) => ch.is_whitespace(),
-            Some(Piece::Paste { .. }) => false,
+            Some(Piece::Paste { .. } | Piece::Image { .. }) => false,
         }
     }
 
@@ -343,13 +475,19 @@ impl Draft {
         }
     }
 
-    /// The text to send: every token as its full text.
+    /// The text to send: every token as its full text, every image as its
+    /// label, which the editor shows and [`Draft::edited`] reads back.
     pub(crate) fn expand(&self) -> String {
         let mut out = String::new();
+        let mut image = 0usize;
         for piece in &self.pieces {
             match piece {
                 Piece::Char(ch) => out.push(*ch),
                 Piece::Paste { text, .. } => out.push_str(text),
+                Piece::Image { .. } => {
+                    image = image.saturating_add(1);
+                    out.push_str(&image_label(image));
+                }
             }
         }
         out
@@ -383,13 +521,13 @@ impl Draft {
     }
 
     /// Where the previous word starts: back over gaps, then over one
-    /// token or a run of word characters.
+    /// token, one image, or a run of word characters.
     fn word_left_at(&self) -> usize {
         let mut at = self.cursor;
         while self.before(at).is_some_and(Piece::is_gap) {
             at = at.saturating_sub(1);
         }
-        if let Some(Piece::Paste { .. }) = self.before(at) {
+        if let Some(Piece::Paste { .. } | Piece::Image { .. }) = self.before(at) {
             return at.saturating_sub(1);
         }
         while self.before(at).is_some_and(Piece::is_word) {
@@ -449,6 +587,7 @@ impl Draft {
         let mut at = Vec::with_capacity(self.pieces.len().saturating_add(1));
         let mut tokens: Vec<TokenSpan> = Vec::new();
         let mut col = 0usize;
+        let mut image = 0usize;
         // Starts a new row when `need` columns do not fit after `col`.
         let wrap = |rows: &mut Vec<String>, col: &mut usize, need: usize| {
             if *col > 0 && col.saturating_add(need) > inner {
@@ -501,6 +640,21 @@ impl Draft {
                         }
                     }
                 }
+                // An image draws as its positional label, with no click
+                // target: `token_spans` leaves it out.
+                Piece::Image { .. } => {
+                    image = image.saturating_add(1);
+                    for (index, ch) in image_label(image).chars().enumerate() {
+                        let w = char_width(ch);
+                        wrap(&mut rows, &mut col, w);
+                        let (row, start) = place(&rows, col);
+                        if index == 0 {
+                            at.push((row, start));
+                        }
+                        push(&mut rows, ch);
+                        col = col.saturating_add(w);
+                    }
+                }
             }
         }
         wrap(&mut rows, &mut col, 1);
@@ -549,6 +703,32 @@ fn token(number: usize, text: String) -> Piece {
         label,
         text,
     }
+}
+
+/// The image `text` names at its start: `[Image #N]` for one of `images`,
+/// 1 to their count, each relinking once through `used`. `None` for any
+/// other text, which stays text.
+fn take_label<'a>(
+    text: &'a str,
+    images: &[Arc<str>],
+    used: &mut [bool],
+) -> Option<(Piece, &'a str)> {
+    let tail = text.strip_prefix("[Image #")?;
+    let digits = tail
+        .bytes()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    let (number, rest) = tail.split_at(digits);
+    let rest = rest.strip_prefix(']')?;
+    let at = number.parse::<usize>().ok()?.checked_sub(1)?;
+    let data = Arc::clone(images.get(at)?);
+    if used.get(at) == Some(&true) {
+        return None;
+    }
+    if let Some(slot) = used.get_mut(at) {
+        *slot = true;
+    }
+    Some((Piece::Image { data }, rest))
 }
 
 /// Appends `ch` to the last row.

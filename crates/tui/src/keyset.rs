@@ -75,8 +75,7 @@ pub(crate) enum Canon {
     Edit(Edit),
     /// An action with no key of its own: `new_session` and `go_home`.
     Action,
-    /// Nothing yet: `paste_image` and `model_picker`, until their tickets
-    /// give them keys.
+    /// Nothing yet: `model_picker`, until its ticket gives it a key.
     None,
 }
 

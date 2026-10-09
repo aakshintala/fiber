@@ -563,6 +563,7 @@ fn refolding_leaves_session_state_alone() {
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
+        | Effect::ReadImage(_)
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
@@ -1567,6 +1568,7 @@ fn a_resumed_crash_leaves_the_session_idle() {
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
+        | Effect::ReadImage(_)
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }

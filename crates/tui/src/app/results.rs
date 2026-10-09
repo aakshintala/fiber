@@ -171,6 +171,7 @@ impl App {
             | Key::CtrlO
             | Key::CtrlG
             | Key::CtrlR
+            | Key::CtrlV
             | Key::AltA
             | Key::AltUp
             | Key::AltDown

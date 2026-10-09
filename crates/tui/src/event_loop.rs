@@ -89,6 +89,11 @@ pub fn run(
         var: Box::new(|name| std::env::var(name).ok()),
         copy_command: clipboard::command(|name| std::env::var_os(name), clipboard::on_path)
             .map(|argv| argv.into_iter().map(str::to_owned).collect()),
+        paste_reader: crate::paste_image::command(
+            cfg!(target_os = "macos"),
+            |name| std::env::var_os(name),
+            clipboard::on_path,
+        ),
         open_command: crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
             .map(|argv| argv.into_iter().map(str::to_owned).collect()),
         title: osc::Title::default(),
@@ -160,10 +165,13 @@ struct Loop<B: Backend> {
     clock: Arc<dyn Clock>,
     /// Inputs handled, for the idle test.
     wakeups: u64,
-    /// Where a file search worker posts its results.
+    /// Where workers post their results.
     files_out: Option<Sender<Input>>,
     /// The `@` panel's search worker, while the panel is open.
     search: Option<files::Search>,
+    /// The clipboard image command for this machine, chosen once at
+    /// startup, or none where no clipboard reads.
+    paste_reader: Option<crate::paste_image::Reader>,
     /// Inputs that arrived while a frame waited for history, handled next
     /// in arrival order.
     stash: VecDeque<Input>,
@@ -272,6 +280,20 @@ impl<B: Backend> Loop<B> {
                             return Some(0);
                         }
                         Effect::ListFiles => self.list_files(),
+                        Effect::ReadImage(ticket) => {
+                            if let Some(notice) = crate::paste_image::start(
+                                self.paste_reader.as_ref(),
+                                &self.clock,
+                                self.files_out.as_ref(),
+                                ticket,
+                            ) {
+                                // Nothing started, so the running ticket's
+                                // result can never arrive: landing the
+                                // failure shows the notice and clears the
+                                // gate for the next press.
+                                self.app.on_image(ticket, Err(notice));
+                            }
+                        }
                         Effect::FindPause { generation, after } => {
                             if let Some(out) = &self.files_out {
                                 let clock = Arc::clone(&self.clock);
@@ -325,6 +347,7 @@ impl<B: Backend> Loop<B> {
                 self.app.disconnected();
             }
             Input::Files { generation, result } => self.app.on_files(generation, result),
+            Input::Image { ticket, result } => self.app.on_image(ticket, result),
             Input::FindDue(generation) => {
                 let lines = self.app.find_due(generation);
                 self.send(&lines);
@@ -489,6 +512,7 @@ impl<B: Backend> Loop<B> {
                 | Input::ConnectFailed(_)
                 | Input::Resize
                 | Input::FindDue(_)
+                | Input::Image { .. }
                 | Input::Files { .. }) => self.stash.push_back(other),
             }
         }
@@ -640,3 +664,7 @@ mod look_tests;
 #[cfg(test)]
 #[path = "lib_settings_tests.rs"]
 mod settings_tests;
+
+#[cfg(test)]
+#[path = "lib_paste_tests.rs"]
+mod paste_tests;

@@ -1785,3 +1785,21 @@ fn a_turn_past_the_last_row_is_clipped_to_it() {
         .expect("turn 0 is drawn");
     assert_eq!(turn.rect, Rect::new(0, 0, WIDTH, 1));
 }
+
+#[test]
+fn input_with_an_image_token() {
+    let mut app = empty();
+    type_draft(&mut app, "look ");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(
+        app.on_key(Key::CtrlV, now),
+        crate::app::Effect::ReadImage(0)
+    );
+    app.on_image(0, Ok("AAA".to_owned()));
+    type_draft(&mut app, " here");
+    for _ in 0..5 {
+        app.on_edit(Edit::Left);
+    }
+    insta::assert_snapshot!("input_with_an_image_token", screen(&app));
+    assert_eq!(cursor_at(&app), Some(Position::new(17, 11)));
+}

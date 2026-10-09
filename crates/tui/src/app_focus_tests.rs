@@ -1340,6 +1340,7 @@ fn whole_turn_zero(lines: &[Line], envelopes: &[contract::Envelope]) -> String {
         | Effect::Quit
         | Effect::Exit(_)
         | Effect::ListFiles
+        | Effect::ReadImage(_)
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }

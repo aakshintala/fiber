@@ -53,6 +53,7 @@ fn one_line(effect: Effect) -> String {
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
+        | Effect::ReadImage(_)
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
@@ -234,6 +235,7 @@ fn esc_busy_sends_cancel() {
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
+        | Effect::ReadImage(_)
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
@@ -469,6 +471,7 @@ fn rejected_cancel_shows_nothing() {
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
+        | Effect::ReadImage(_)
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
@@ -998,6 +1001,7 @@ fn sent(effect: Effect) -> Vec<serde_json::Value> {
         | Effect::OpenFile(_)
         | Effect::Quit
         | Effect::ListFiles
+        | Effect::ReadImage(_)
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. } => Vec::new(),
