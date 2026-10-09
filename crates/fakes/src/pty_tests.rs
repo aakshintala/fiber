@@ -4,9 +4,8 @@
 
 use std::collections::VecDeque;
 use std::io::{ErrorKind, Read};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 use super::read_to_eof;
@@ -66,12 +65,15 @@ fn delivers_every_chunk_in_order_up_to_eof() {
     read_to_eof(script, move |bytes: &[u8]| {
         tx.send(bytes.to_vec()).unwrap();
     });
-    let mut got = Vec::new();
-    for _ in 0..3 {
-        got.push(rx.recv_timeout(WAIT).unwrap());
-    }
-    assert_eq!(got.concat(), b"foobarbaz");
-    disconnected(rx.recv_timeout(WAIT), "end of file");
+    // The collector ends only when the reader thread drops the callback at
+    // end of file, so the chunks and the end of file share one deadline.
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let chunks: Vec<Vec<u8>> = rx.iter().collect();
+        done_tx.send(chunks).unwrap();
+    });
+    let got = done_rx.recv_timeout(WAIT).unwrap();
+    assert_eq!(got, vec![b"foo".to_vec(), b"bar".to_vec(), b"baz".to_vec()]);
 }
 
 #[test]
@@ -79,20 +81,16 @@ fn keeps_reading_after_the_consumer_is_gone() {
     let script = Script::of(vec![Step::Data(b"abc"), Step::Data(b"def")]);
     let (gone_tx, gone_rx) = mpsc::channel::<Vec<u8>>();
     drop(gone_rx);
-    let (done_tx, done_rx) = mpsc::channel::<()>();
-    let read = Arc::new(AtomicUsize::new(0));
-    let reading = Arc::clone(&read);
+    let (read_tx, read_rx) = mpsc::channel::<usize>();
     read_to_eof(script, move |bytes: &[u8]| {
         // The consumer is gone; the failed send is ignored and reading
         // goes on.
         gone_tx.send(bytes.to_vec()).unwrap_or(());
-        let total = reading.fetch_add(bytes.len(), Ordering::SeqCst) + bytes.len();
-        if total == 6 {
-            done_tx.send(()).unwrap_or(());
-        }
+        read_tx.send(bytes.len()).unwrap_or(());
     });
-    done_rx.recv_timeout(WAIT).unwrap();
-    assert_eq!(read.load(Ordering::SeqCst), 6);
+    let first = read_rx.recv_timeout(WAIT).unwrap();
+    let second = read_rx.recv_timeout(WAIT).unwrap();
+    assert_eq!(first + second, 6);
 }
 
 #[test]
