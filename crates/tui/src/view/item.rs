@@ -74,7 +74,7 @@ pub(crate) fn draw_header(app: &App, area: Rect, buf: &mut Buffer, targets: &mut
         let start =
             u16::try_from(format::width(&status_cut) + format::width(" · ")).unwrap_or(u16::MAX);
         let wide = u16::try_from(format::width(stop)).unwrap_or(u16::MAX);
-        if wide > 0 && area.x.saturating_add(start) < area.right() {
+        if area.x.saturating_add(start) < area.right() {
             targets.push(Target {
                 id: TargetId::Item(Spot::Stop),
                 rect: Rect::new(

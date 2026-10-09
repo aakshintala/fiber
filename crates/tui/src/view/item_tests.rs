@@ -584,6 +584,13 @@ fn a_drag_selection_starts_at_the_transcript_first_row() {
         json!({"text": "looks good"}),
     ));
     let (_, targets) = rendered(&app, 80, 24);
+    let body_y = app
+        .chrome()
+        .layout()
+        .map(|layout| crate::view::chrome::body(&layout).y)
+        .unwrap_or(0);
+    assert_eq!(app.conversation_area().y, body_y.saturating_add(2));
+    assert!(!app.conversation_covered());
     // The view bottom-aligns a short transcript: the press goes on its
     // last drawn row, the drag to the area's top clamps to its first.
     let area = app.conversation_area();
@@ -639,6 +646,125 @@ fn elapsed_counts_whole_seconds_at_each_side_of_the_minute() {
             .unwrap_or_default();
         assert!(status.contains(text), "{text} in {status}");
     }
+}
+
+#[test]
+fn header_guard_rejects_either_zero_dimension() {
+    let mut app = home(80, 24);
+    opened(&mut app);
+    start_delegate(&mut app, 0);
+    open_item(&mut app);
+    for area in [Rect::new(0, 0, 20, 0), Rect::new(0, 0, 0, 2)] {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 3));
+        let mut targets = Vec::new();
+        super::draw_header(&app, area, &mut buf, &mut targets);
+        assert!(targets.is_empty(), "zero-sized header area {area:?}");
+        assert_eq!(buf.cell((0, 0)).map(|cell| cell.symbol()), Some(" "));
+    }
+}
+
+#[test]
+fn header_draws_the_status_at_two_rows_and_only_the_breadcrumb_at_one() {
+    let mut app = home(80, 24);
+    opened(&mut app);
+    start_delegate(&mut app, 0);
+    open_item(&mut app);
+    for (height, has_stop) in [(1, false), (2, true), (3, true)] {
+        let area = Rect::new(0, 0, 80, height);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
+        let mut targets = Vec::new();
+        super::draw_header(&app, area, &mut buf, &mut targets);
+        assert_eq!(
+            targets
+                .iter()
+                .any(|target| target.id == TargetId::Item(Spot::Stop)),
+            has_stop,
+            "height {height}"
+        );
+    }
+}
+
+#[test]
+fn stop_target_starts_on_the_drawn_stop_label() {
+    let mut app = home(80, 24);
+    opened(&mut app);
+    start_delegate(&mut app, 0);
+    open_item(&mut app);
+    let area = Rect::new(0, 0, 80, 2);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::draw_header(&app, area, &mut buf, &mut targets);
+    let stop = targets
+        .iter()
+        .find(|target| target.id == TargetId::Item(Spot::Stop))
+        .unwrap_or_else(|| panic!("stop target"));
+    assert_eq!(
+        buf.cell((stop.rect.x, stop.rect.y))
+            .map(|cell| cell.symbol()),
+        Some("■")
+    );
+}
+
+#[test]
+fn stop_target_is_omitted_when_the_label_starts_at_the_right_edge() {
+    let mut app = home(80, 24);
+    opened(&mut app);
+    start_delegate(&mut app, 0);
+    open_item(&mut app);
+    let area = Rect::new(0, 0, 3, 2);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::draw_header(&app, area, &mut buf, &mut targets);
+    assert!(
+        targets
+            .iter()
+            .all(|target| target.id != TargetId::Item(Spot::Stop))
+    );
+}
+
+#[test]
+fn body_guard_rejects_a_zero_height_area() {
+    let mut app = home(80, 24);
+    opened(&mut app);
+    app.on_line(session_line(
+        "job_started",
+        0,
+        json!({"job_id": "j_1", "description": "job", "output_path": "/tmp/out"}),
+    ));
+    app.on_line(session_line(
+        "delegate_started",
+        0,
+        json!({"job_id": "j_1",
+            "delegate_session_id": DELEGATE,
+            "harness": "claude", "model": "other/model", "workspace": "/w"}),
+    ));
+    let serial = app
+        .serial_of_job(&contract::JobId("j_1".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    app.on_click(TargetId::Panel(crate::app::panel::Spot::Delegate(serial)));
+    let mut buf = Buffer::empty(Rect::new(0, 0, 20, 2));
+    super::draw_body(&app, Rect::new(0, 0, 20, 0), &mut buf);
+    assert_eq!(buf.cell((0, 0)).map(|cell| cell.symbol()), Some(" "));
+}
+
+#[test]
+fn elapsed_asks_for_the_next_whole_second_using_milliseconds() {
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.now();
+    let mut app = home(80, 24);
+    opened(&mut app);
+    app.set_now(now, 10_500);
+    start_delegate(&mut app, 1_500);
+    open_item(&mut app);
+    app.motion().clear_wake();
+    let area = Rect::new(0, 0, 80, 2);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::draw_header(&app, area, &mut buf, &mut targets);
+    assert_eq!(
+        app.motion().take_wake(),
+        Some(now + std::time::Duration::from_secs(1))
+    );
 }
 
 #[test]
@@ -703,6 +829,7 @@ fn no_selection_starts_in_a_view_without_a_transcript() {
         .unwrap_or_else(|| panic!("a serial"));
     app.on_click(TargetId::Panel(crate::app::panel::Spot::Delegate(serial)));
     let (_, targets) = rendered(&app, 80, 24);
+    assert!(app.conversation_covered());
     // The conversation is covered: a press starts no selection.
     let area = app.conversation_area();
     assert_eq!(
