@@ -41,9 +41,10 @@ fn install_switch_provider(setup: &Setup, server: &ProviderServer) {
     );
 }
 
-/// Installs a provider `fake` with `m` on `openai-responses` and `w` on
-/// `anthropic-messages` with the hosted search `web_search_20250305`, both
-/// at the fake server, and makes `configured` the configured model.
+/// Installs a provider `fake` with `m` on `openai-responses`, `w` on
+/// `anthropic-messages` with the hosted search `web_search_20250305`, and
+/// `r` on `openai-responses` with the hosted search `web_search`, all at
+/// the fake server, and makes `configured` the configured model.
 fn install_hosted_provider(setup: &Setup, server: &ProviderServer, configured: &str) {
     install_models(
         setup,
@@ -53,6 +54,9 @@ fn install_hosted_provider(setup: &Setup, server: &ProviderServer, configured: &
             {"id": "w", "protocol": "anthropic-messages",
              "base_url": format!("{}/v1", server.url()), "context_window": 100000,
              "web_search": "web_search_20250305"},
+            {"id": "r", "protocol": "openai-responses",
+             "base_url": format!("{}/v1", server.url()), "context_window": 100000,
+             "web_search": "web_search"},
         ]),
         configured,
     );
@@ -1288,6 +1292,48 @@ fn a_switch_to_a_model_with_hosted_search_declares_it() {
     assert_eq!(
         searches(&seen[1].1),
         vec![json!({"type": "web_search_20250305", "name": "web_search"})]
+    );
+}
+
+#[test]
+fn a_switch_from_anthropic_to_responses_declares_the_responses_type() {
+    let (stream, [before, after], seen) =
+        switch_and_list("fake/w", "fake/r", [anthropic_hello(), hello()]);
+    assert_eq!(before.len(), 1, "{before:?}");
+    assert_eq!(before[0]["source"], "builtin");
+    assert_eq!(after.len(), 1, "{after:?}");
+    assert_eq!(after[0]["source"], "builtin");
+    let built = stream
+        .iter()
+        .rev()
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    let declared: Vec<&Value> = built["payload"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|tool| tool["name"] == "web_search")
+        .collect();
+    assert_eq!(declared.len(), 1, "{built}");
+    assert_eq!(declared[0]["definition"], json!({"type": "web_search"}));
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[0].0, "/v1/messages");
+    assert_eq!(
+        searches(&seen[0].1),
+        vec![json!({"type": "web_search_20250305", "name": "web_search"})]
+    );
+    assert_eq!(seen[1].0, "/v1/responses");
+    let tools = seen[1].1["tools"].as_array().unwrap().clone();
+    let hosted: Vec<&Value> = tools
+        .iter()
+        .filter(|tool| tool["type"] != "function")
+        .collect();
+    assert_eq!(hosted, [&json!({"type": "web_search"})]);
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool["type"] != "web_search_20250305"),
+        "{tools:?}"
     );
 }
 
