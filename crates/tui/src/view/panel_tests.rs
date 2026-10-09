@@ -1089,3 +1089,18 @@ fn a_row_of_spans_is_cut_in_the_overflowing_span() {
     assert_eq!(cut[0].line.to_string(), "run  clau\u{2026}");
     assert_eq!(cut[0].line.spans.len(), 2);
 }
+
+/// The bar fills in `info`, rests in `rule`, and ends in `attention`'s
+/// marker (`docs/tui.md`, "The panel").
+#[test]
+fn the_context_bar_is_drawn_in_its_roles() {
+    use crate::markdown::{Role, style};
+    let spans = super::bar_spans(500, 1000, Some(800));
+    assert_eq!(spans.len(), 18);
+    assert_eq!(spans[0].style, style(Role::Info));
+    assert_eq!(spans[9].style, style(Role::Info));
+    assert_eq!(spans[10].style, style(Role::Rule));
+    assert_eq!(spans[16].style, style(Role::Rule));
+    assert_eq!(spans[17].content, "│");
+    assert_eq!(spans[17].style, style(Role::Attention));
+}

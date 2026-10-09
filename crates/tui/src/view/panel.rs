@@ -436,10 +436,10 @@ fn bar_spans(tokens: u64, window: u64, trigger: Option<u64>) -> Vec<Span<'static
     let fill = bar_fill(tokens, window, trigger);
     let mut spans = Vec::with_capacity(18);
     for _ in 0..fill {
-        spans.push(Span::styled("▆", style(Role::Accent)));
+        spans.push(Span::styled("▆", style(Role::Info)));
     }
     for _ in fill..17 {
-        spans.push(Span::styled("░", style(Role::Muted)));
+        spans.push(Span::styled("░", style(Role::Rule)));
     }
     if trigger.is_some() {
         spans.push(Span::styled("│", style(Role::Attention)));
