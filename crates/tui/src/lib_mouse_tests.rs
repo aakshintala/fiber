@@ -25,6 +25,380 @@ fn esc() -> Input {
     Input::Bytes(b"\x1b".to_vec())
 }
 
+/// A wheel-up report at 0-based `col`, `row`.
+fn wheel_up(col: u16, row: u16) -> Input {
+    Input::Bytes(format!("\x1b[<64;{};{}M", col + 1, row + 1).into_bytes())
+}
+
+/// A wheel-down report at 0-based `col`, `row`.
+fn wheel_down(col: u16, row: u16) -> Input {
+    Input::Bytes(format!("\x1b[<65;{};{}M", col + 1, row + 1).into_bytes())
+}
+
+/// PageUp, as the terminal sends it.
+fn page_up() -> Input {
+    Input::Bytes(b"\x1b[5~".to_vec())
+}
+
+/// A session of `turns` short turns with durable seqs: a prompt, a
+/// one-line reply and its close each, enough rows to page past the
+/// window (`docs/tui.md`, "History and paging").
+fn long_session(turns: usize) -> Vec<Input> {
+    let mut inputs = Vec::new();
+    let mut seq = 0u64;
+    let mut push = |kind: &str, action: Option<String>, payload: serde_json::Value| {
+        inputs.push(Input::Hub(Line::Session(contract::Envelope {
+            kind: kind.to_owned(),
+            session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: action.map(contract::ActionId),
+            seq: Some(contract::Seq(seq)),
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        })));
+        seq += 1;
+    };
+    for turn in 0..turns {
+        let message = format!("a_m{turn}");
+        push(
+            "turn_started",
+            None,
+            serde_json::json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": format!("prompt {turn}")}]}]}),
+        );
+        push(
+            "text_completed",
+            Some(message),
+            serde_json::json!({"text": "a one-line reply"}),
+        );
+        push(
+            "turn_completed",
+            None,
+            serde_json::json!({"outcome": "completed"}),
+        );
+    }
+    inputs
+}
+
+/// An attached 60x12 loop showing [`long_session`] of 80 turns,
+/// following new output.
+fn following() -> super::Loop<TestBackend> {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(&mut lp, long_session(80));
+    assert_eq!(lp.app.top(), None);
+    lp
+}
+
+#[test]
+fn the_wheel_over_the_conversation_scrolls_it_three_rows() {
+    let mut lp = following();
+    let bottom = lp.app.scroll().0;
+    assert!(bottom > 3);
+    feed(&mut lp, vec![wheel_up(10, 5)]);
+    assert_eq!(lp.app.top(), Some(bottom - 3));
+    // The wheel-up paused following; new output while scrolled up then
+    // raises the overlay, as after PageUp (`docs/tui.md`, "Turns").
+    feed(&mut lp, long_session(1));
+    assert!(lp.app.has_new());
+    assert!(
+        shown(&lp).contains("\u{2193} New messages below"),
+        "{}",
+        shown(&lp)
+    );
+}
+
+#[test]
+fn wheeling_down_three_rows_from_three_above_the_bottom_follows_again() {
+    let mut lp = following();
+    let bottom = lp.app.scroll().0;
+    feed(&mut lp, vec![wheel_up(10, 5)]);
+    assert_eq!(lp.app.top(), Some(bottom - 3));
+    feed(&mut lp, vec![wheel_down(10, 5)]);
+    assert_eq!(lp.app.top(), None);
+}
+
+#[test]
+fn wheeling_up_pages_history_like_page_up() {
+    let mut wheeled = following();
+    feed(&mut wheeled, (0..120).map(|_| wheel_up(10, 5)).collect());
+    let mut paged = following();
+    feed(&mut paged, (0..80).map(|_| page_up()).collect());
+    assert_eq!(wheeled.app.top(), Some(0));
+    assert_eq!(paged.app.top(), Some(0));
+    // Past the top both ask history for the same dropped pages
+    // (`docs/tui.md`, "History and paging").
+    assert!(!wheeled.app.needs().is_empty());
+    assert_eq!(wheeled.app.needs(), paged.app.needs());
+}
+
+/// A `session_status` hub line for `session` named `name`: what feeds
+/// the rail's live rows (`docs/tui.md`, "The rail").
+fn status(session: &str, name: &str) -> Input {
+    Input::Hub(Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({
+            "name": name, "workspace": "/w", "project": "-w", "state": "idle",
+            "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }))
+}
+
+/// An attached 160x40 loop with home state, a rail of two live sessions
+/// and a panel tall enough to scroll, following new output.
+fn wide() -> super::Loop<TestBackend> {
+    use std::path::PathBuf;
+    let (mut lp, _) = new_loop(TestBackend::new(160, 40), None);
+    lp.app.set_size(160, 40);
+    lp.screen
+        .resize(160, 40)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
+    lp.app.set_home(crate::home::Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: ["session", "changed_files", "delegates", "jobs", "quota"]
+            .map(str::to_owned)
+            .to_vec(),
+        ..Default::default()
+    });
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let lines: Vec<String> = (0..60).map(|n| format!("line {n:02}")).collect();
+    feed(
+        &mut lp,
+        vec![
+            status("s_aaaaaaaaaaaaaaaa", "one"),
+            status("s_bbbbbbbbbbbbbbbb", "two"),
+            Input::Hub(Line::Session(contract::Envelope {
+                kind: "extension_ui".to_owned(),
+                session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: Some(contract::ActionId("a_1".to_owned())),
+                seq: None,
+                payload: serde_json::json!({"extension": "plan",
+                    "widget": "tasks", "lines": lines})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            })),
+        ],
+    );
+    feed(&mut lp, long_session(80));
+    assert!(
+        lp.app
+            .chrome()
+            .layout()
+            .and_then(|layout| layout.rail)
+            .is_some(),
+        "a rail"
+    );
+    assert_eq!(lp.app.top(), None);
+    lp
+}
+
+#[test]
+fn the_wheel_over_the_rail_scrolls_neither_conversation_nor_panel() {
+    let mut lp = wide();
+    let rail = lp
+        .app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.rail)
+        .expect("a rail");
+    feed(&mut lp, vec![wheel_down(rail.x + 5, rail.y + 10)]);
+    assert_eq!(lp.app.top(), None);
+    assert_eq!(lp.app.panel_state().scroll(), 0);
+}
+
+#[test]
+fn the_wheel_over_the_panel_scrolls_only_the_panel() {
+    let mut lp = wide();
+    let panel = lp
+        .app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.panel)
+        .expect("a panel");
+    feed(&mut lp, vec![wheel_down(panel.x + 5, panel.y + 10)]);
+    assert_eq!(lp.app.panel_state().scroll(), 3);
+    assert_eq!(lp.app.top(), None);
+}
+
+/// The conversation's visible rows in a [`wide`] loop: the column's left
+/// and width, and the top past the header with the conversation's height,
+/// the rows the draw keeps for the conversation.
+fn conversation_rect(lp: &super::Loop<TestBackend>) -> (u16, u16, u16, u16) {
+    let layout = lp.app.chrome().layout().expect("a layout");
+    let top = layout
+        .column
+        .y
+        .saturating_add(u16::try_from(lp.app.chrome().header_rows()).unwrap_or(u16::MAX));
+    let height = u16::try_from(lp.app.conversation_height()).unwrap_or(u16::MAX);
+    (layout.column.x, layout.column.width, top, height)
+}
+
+#[test]
+fn the_wheel_on_the_first_conversation_row_scrolls_it() {
+    let mut lp = wide();
+    let (left, _, top, height) = conversation_rect(&lp);
+    assert!(height > 3);
+    let bottom = lp.app.scroll().0;
+    feed(&mut lp, vec![wheel_up(left, top)]);
+    assert_eq!(lp.app.top(), Some(bottom - 3));
+}
+
+#[test]
+fn the_wheel_on_the_last_conversation_row_scrolls_it() {
+    let mut lp = wide();
+    let (left, _, top, height) = conversation_rect(&lp);
+    assert!(height > 3);
+    let bottom = lp.app.scroll().0;
+    feed(&mut lp, vec![wheel_up(left, top + height - 1)]);
+    assert_eq!(lp.app.top(), Some(bottom - 3));
+}
+
+#[test]
+fn the_wheel_on_the_header_row_scrolls_nothing() {
+    let mut lp = wide();
+    let (left, _, top, _) = conversation_rect(&lp);
+    assert!(top > 0, "a header row above the conversation");
+    feed(&mut lp, vec![wheel_up(left, top - 1)]);
+    assert_eq!(lp.app.top(), None);
+    assert_eq!(lp.app.panel_state().scroll(), 0);
+}
+
+#[test]
+fn the_wheel_on_the_row_below_the_conversation_scrolls_nothing() {
+    let mut lp = wide();
+    let (left, _, top, height) = conversation_rect(&lp);
+    feed(&mut lp, vec![page_up()]);
+    let scrolled = lp.app.top();
+    assert!(scrolled.is_some_and(|top| top > 3));
+    feed(&mut lp, vec![wheel_up(left, top + height)]);
+    assert_eq!(lp.app.top(), scrolled);
+    assert_eq!(lp.app.panel_state().scroll(), 0);
+}
+
+#[test]
+fn the_wheel_beside_the_conversation_column_scrolls_nothing() {
+    let mut lp = wide();
+    let (left, _, top, _) = conversation_rect(&lp);
+    assert!(left > 0, "a rail beside the conversation column");
+    feed(&mut lp, vec![wheel_up(left - 1, top)]);
+    assert_eq!(lp.app.top(), None);
+    assert_eq!(lp.app.panel_state().scroll(), 0);
+}
+
+#[test]
+fn the_wheel_one_column_past_the_conversation_scrolls_nothing() {
+    let mut lp = wide();
+    feed(&mut lp, vec![Input::Bytes(b"\x1bp".to_vec())]);
+    assert!(
+        lp.app
+            .chrome()
+            .layout()
+            .is_some_and(|layout| layout.panel.is_none())
+    );
+    feed(&mut lp, vec![page_up()]);
+    let scrolled = lp.app.top();
+    assert!(scrolled.is_some_and(|top| top > 3));
+    let (left, width, top, _) = conversation_rect(&lp);
+    assert_eq!(left + width, 160, "the column reaches the screen edge");
+    feed(&mut lp, vec![wheel_up(left + width, top)]);
+    assert_eq!(lp.app.top(), scrolled);
+    assert_eq!(lp.app.panel_state().scroll(), 0);
+}
+
+#[test]
+fn the_wheel_on_home_scrolls_nothing() {
+    use std::path::PathBuf;
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app.set_home(crate::home::Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        ..Default::default()
+    });
+    assert!(lp.app.on_home());
+    feed(&mut lp, vec![wheel_up(10, 5)]);
+    assert_eq!(lp.app.top(), None);
+}
+
+/// An attached 60x12 loop showing [`long_session`], scrolled up one
+/// wheel step... by PageUp, which the wheel must leave alone under an
+/// overlay: the top it pages to.
+fn scrolled_up() -> (super::Loop<TestBackend>, Option<usize>) {
+    let mut lp = following();
+    feed(&mut lp, vec![page_up()]);
+    let top = lp.app.top();
+    assert!(top.is_some());
+    (lp, top)
+}
+
+#[test]
+fn the_wheel_under_the_key_map_leaves_the_conversation() {
+    let (mut lp, top) = scrolled_up();
+    feed(&mut lp, vec![Input::Bytes(b"\x1bOP".to_vec())]);
+    assert!(lp.app.keymap_top().is_some());
+    feed(&mut lp, vec![wheel_up(10, 5), wheel_down(10, 5)]);
+    assert_eq!(lp.app.top(), top);
+}
+
+#[test]
+fn the_wheel_under_the_offer_leaves_the_conversation() {
+    let (mut lp, top) = scrolled_up();
+    feed(
+        &mut lp,
+        vec![Input::Hub(Line::Session(contract::Envelope {
+            kind: "repository_code_offered".to_owned(),
+            session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload: serde_json::json!({"request_id": "r_1", "items": [
+                {"kind": "mcp_server", "name": "a", "hash": "h",
+                    "required": false, "summary": "MCP server: a"}]})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        }))],
+    );
+    assert!(lp.app.offer_open());
+    feed(&mut lp, vec![wheel_up(10, 5), wheel_down(10, 5)]);
+    assert_eq!(lp.app.top(), top);
+}
+
+#[test]
+fn the_wheel_under_the_search_results_leaves_the_conversation() {
+    let (mut lp, top) = scrolled_up();
+    feed(&mut lp, vec![Input::Bytes(b"\x06".to_vec())]);
+    feed(&mut lp, vec![Input::Bytes(b"prompt".to_vec())]);
+    feed(&mut lp, vec![Input::Bytes(b"\x06".to_vec())]);
+    assert!(lp.app.results_open());
+    feed(&mut lp, vec![wheel_up(10, 5), wheel_down(10, 5)]);
+    assert_eq!(lp.app.top(), top);
+}
+
 #[test]
 fn a_click_on_the_badge_reopens_the_approval_queue() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);

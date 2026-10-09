@@ -425,8 +425,11 @@ draft stay.
   throughout, the dot and the +/− counts included. Replies carry the full text
   colour.
 - **A streaming reply renders in place,** formatted as it arrives. The
-  conversation follows new output and pauses when the person scrolls up. While
-  scrolled up, a small overlay centred at the bottom of the conversation reads
+  conversation follows new output and pauses when the person scrolls up. The
+  mouse wheel over the conversation scrolls it 3 rows a step, a starting
+  point, not a measurement; PageUp and PageDown scroll a screen. Either
+  pauses following when it scrolls up. While scrolled up, a small overlay
+  centred at the bottom of the conversation reads
   "↓ New messages below" and jumps to the end on a click or End. It gives no
   count, so it needs no row count. Nothing is added to the input box.
 
