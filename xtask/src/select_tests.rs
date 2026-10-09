@@ -967,6 +967,15 @@ fn xtask_src(source: &str) -> RustFile {
     }
 }
 
+fn main_src(source: &str) -> RustFile {
+    RustFile {
+        krate: "main".to_owned(),
+        path: "crates/main/tests/ask.rs".to_owned(),
+        rel: "tests/ask.rs".to_owned(),
+        source: source.to_owned(),
+    }
+}
+
 /// `members()` with the `tools`, `tui` and `xtask` crates: only the
 /// compiled-in tests name them, so the selection tests keep the smaller
 /// fixture.
@@ -1019,6 +1028,7 @@ fn listed_files() -> Vec<RustFile> {
         tools_src(&listed_includes("tools")),
         tui_src(&listed_includes("tui")),
         xtask_src(&listed_includes("xtask")),
+        main_src(&listed_includes("main")),
     ]
 }
 
@@ -1043,6 +1053,7 @@ fn an_unlisted_outside_include_fails() {
         tools_src(&listed_includes("tools")),
         tui_src(&listed_includes("tui")),
         xtask_src(&listed_includes("xtask")),
+        main_src(&listed_includes("main")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1062,6 +1073,7 @@ fn an_unlisted_non_docs_outside_include_fails() {
         tools_src(&listed_includes("tools")),
         tui_src(&listed_includes("tui")),
         xtask_src(&listed_includes("xtask")),
+        main_src(&listed_includes("main")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1081,6 +1093,7 @@ fn an_unlisted_markdown_inside_the_crate_dir_fails() {
         tools_src(&listed_includes("tools")),
         tui_src(&listed_includes("tui")),
         xtask_src(&listed_includes("xtask")),
+        main_src(&listed_includes("main")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1116,6 +1129,7 @@ fn a_non_docs_include_inside_the_crate_dir_is_unlisted() {
         tools_src(&listed_includes("tools")),
         tui_src(&listed_includes("tui")),
         xtask_src(&listed_includes("xtask")),
+        main_src(&listed_includes("main")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1136,6 +1150,7 @@ fn a_raw_string_include_is_resolved() {
             tools_src(&listed_includes("tools")),
             tui_src(&listed_includes("tui")),
             xtask_src(&listed_includes("xtask")),
+            main_src(&listed_includes("main")),
         ];
         assert_eq!(
             compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1157,6 +1172,7 @@ fn an_unresolvable_include_argument_fails() {
         tools_src(&listed_includes("tools")),
         tui_src(&listed_includes("tui")),
         xtask_src(&listed_includes("xtask")),
+        main_src(&listed_includes("main")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1175,6 +1191,7 @@ fn another_macro_with_a_string_argument_yields_no_target() {
         tools_src(&listed_includes("tools")),
         tui_src(&listed_includes("tui")),
         xtask_src(&listed_includes("xtask")),
+        main_src(&listed_includes("main")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1194,6 +1211,7 @@ fn include_bytes_yields_its_target() {
         tools_src(&listed_includes("tools")),
         tui_src(&listed_includes("tui")),
         xtask_src(&listed_includes("xtask")),
+        main_src(&listed_includes("main")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1216,6 +1234,7 @@ fn a_trailing_comma_on_an_include_is_accepted() {
             tools_src(&listed_includes("tools")),
             tui_src(&listed_includes("tui")),
             xtask_src(&listed_includes("xtask")),
+            main_src(&listed_includes("main")),
         ];
         assert_eq!(
             compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1237,6 +1256,7 @@ fn an_include_with_tokens_after_the_literal_fails() {
         tools_src(&listed_includes("tools")),
         tui_src(&listed_includes("tui")),
         xtask_src(&listed_includes("xtask")),
+        main_src(&listed_includes("main")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1593,11 +1613,268 @@ fn an_include_str_in_a_comment_is_ignored() {
         tools_src(&listed_includes("tools")),
         tui_src(&listed_includes("tui")),
         xtask_src(&listed_includes("xtask")),
+        main_src(&listed_includes("main")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         Vec::<String>::new()
     );
+}
+
+fn runtime_src(krate: &str, path: &str, rel: &str, source: &str) -> RustFile {
+    RustFile {
+        krate: krate.to_owned(),
+        path: path.to_owned(),
+        rel: rel.to_owned(),
+        source: source.to_owned(),
+    }
+}
+
+#[test]
+fn a_read_to_string_of_a_docs_path_is_a_run_time_read() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "let doc = std::fs::read_to_string(\"../../docs/tui.md\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_fs_read_of_a_prompt_path_is_a_run_time_read() {
+    let files = [runtime_src(
+        "loop",
+        "crates/loop/src/reviewer.rs",
+        "src/reviewer.rs",
+        "let raw = std::fs::read(\"../prompt/system.md\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/loop/src/reviewer.rs: reads ../prompt/system.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_file_open_of_a_docs_path_is_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "let file = std::fs::File::open(\"../../docs/errors.md\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/contract/src/lib.rs: reads ../../docs/errors.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_concat_on_the_manifest_dir_is_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "let doc = read_to_string(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../docs/ci.md\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/contract/src/lib.rs: reads /../docs/ci.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_join_in_a_manifest_file_is_a_run_time_read() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../docs/tui.md\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_read_of_a_computed_path_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let doc = std::fs::read_to_string(home.join(\"docs/README.md\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_join_without_the_manifest_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let path = home.join(\"docs/README.md\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_join_onto_a_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/ask.rs",
+        "tests/ask.rs",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet doc = std::fs::read_to_string(home.join(\"docs/README.md\")).unwrap();\nlet dir = home.join(\"docs/skills\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_partial_segment_is_not_a_repository_path() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "let a = std::fs::read_to_string(\"mydocs/x.md\").unwrap();\nlet b = std::fs::read_to_string(\"docs.md\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_concat_without_the_manifest_dir_or_the_bang_is_not_a_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "let a = concat!(\"docs/tui.md\", \"b\");\nlet b = concat(\"docs/tui.md\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_xtask_command_read_is_not_a_test_read() {
+    let source = "let doc = std::fs::read_to_string(\"../../docs/ci.md\").unwrap();\n";
+    let files = [
+        runtime_src("xtask", "xtask/src/main.rs", "src/main.rs", source),
+        runtime_src(
+            "xtask",
+            "xtask/src/ci_needs_tests.rs",
+            "src/ci_needs_tests.rs",
+            source,
+        ),
+        runtime_src("xtask", "xtask/tests/cli.rs", "tests/cli.rs", source),
+    ];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "xtask/src/ci_needs_tests.rs: reads ../../docs/ci.md at run time; compile it in with include_str!",
+            "xtask/tests/cli.rs: reads ../../docs/ci.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_path_in_a_comment_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "// let doc = read_to_string(\"../../docs/tui.md\");\nlet x = 1;\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_include_str_of_the_same_path_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "let doc = include_str!(\"../../../docs/tui.md\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn no_files_give_no_run_time_reads() {
+    assert_eq!(
+        runtime_read_mismatches(&[], &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_file_outside_the_workspace_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "nope",
+        "elsewhere/src/lib.rs",
+        "src/lib.rs",
+        "let doc = std::fs::read_to_string(\"../../docs/tui.md\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_file_that_does_not_tokenise_fails_the_run_time_check() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "fn broken( {\n",
+    )];
+    let failure = runtime_read_mismatches(&files, &members_with_tools()).unwrap_err();
+    assert!(
+        failure.starts_with("crates/contract/src/lib.rs: does not tokenise as Rust: "),
+        "{failure}"
+    );
+}
+
+#[test]
+fn a_shared_compiled_in_skill_runs_every_crate_that_compiles_it_in() {
+    let selection = classify(
+        &strings(&["docs/skills/using-fiber/SKILL.md"]),
+        &members_with_tools(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["loop", "main"])));
+    assert_eq!(selection.mode(), "crates");
 }
 
 #[test]

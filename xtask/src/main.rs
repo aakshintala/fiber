@@ -231,6 +231,7 @@ fn run(args: &[String]) -> Result<bool, String> {
             let files = rust_files(&members)?;
             let mut failures = select::compiled_in_mismatches(&files, &members)?;
             failures.extend(select::package_reader_mismatches(&files, &members)?);
+            failures.extend(select::runtime_read_mismatches(&files, &members)?);
             report("compiled-in", &failures, "ok")
         }
         "dependency-list" => {
