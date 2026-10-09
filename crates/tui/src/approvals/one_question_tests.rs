@@ -753,7 +753,7 @@ fn a_one_question_waits_behind_a_put_aside_approval() {
     queue.fold(&confirm_request("r_c"));
     assert!(!queue.open());
     assert_eq!(
-        queue.badge(0).as_deref(),
+        queue.badge(0, Some("⌥A")).as_deref(),
         Some("! 2 waiting · /approvals or ⌥A")
     );
 }
@@ -883,7 +883,7 @@ fn an_interaction_resolved_by_fiber_removes_a_one_question() {
         json!({"request_id": "r_t", "by": "fiber", "declined": true}),
     ));
     assert!(!queue.open());
-    assert!(queue.badge(0).is_none());
+    assert!(queue.badge(0, Some("⌥A")).is_none());
 }
 
 #[test]

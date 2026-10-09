@@ -669,9 +669,12 @@ impl App {
         self.queue.panel(crate::surface::inset(self.column_width()))
     }
 
-    /// The badge line while the panel is closed and requests wait.
+    /// The badge line while the panel is closed and requests wait:
+    /// the `next_request` action's bound key, left out when unbound.
     pub(crate) fn badge(&self) -> Option<String> {
-        self.queue.badge(usize::from(self.offer.aside()))
+        let key = self.keys().first_label("next_request");
+        self.queue
+            .badge(usize::from(self.offer.aside()), key.as_deref())
     }
 
     /// The resident conversation's lines, before wrapping.
