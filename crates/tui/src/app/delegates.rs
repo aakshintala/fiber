@@ -105,8 +105,6 @@ impl App {
             }
             // A held or in-flight subscription is never sent again
             // (`docs/invocation.md`, `subscribe`).
-            // debt: a delegate's later run shows the parent's data, not its own status, because
-            // the hub does not restore the relay on resume; see #1476.
             if self.subscribed_level(&session).is_some() {
                 continue;
             }
