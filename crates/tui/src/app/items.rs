@@ -497,6 +497,11 @@ impl App {
                     record.description = started.description;
                     record.output_path = started.output_path;
                     record.started_ts = envelope.ts;
+                    // A delegate resumes under the same job id
+                    // (`docs/delegates.md`, "Identity and resume"), so a
+                    // new run clears the previous outcome: the row is
+                    // clickable again and an open view runs again.
+                    record.outcome = None;
                 }
             }
             "delegate_started" => {

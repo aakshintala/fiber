@@ -839,6 +839,85 @@ fn enter_on_a_completed_delegate_keeps_the_draft() {
 }
 
 #[test]
+fn a_resumed_job_opens_from_its_row_again() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    let serial = app
+        .serial_of_job(&JobId("j_1".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    let out = open(&mut app, "j_1");
+    ack_all(&mut app, &out);
+    app.close_item();
+    let lowered = commands(app.items_due(clock.now()));
+    ack_all(&mut app, &lowered);
+    complete(&mut app, "j_1");
+    // Completed: the row opens nothing.
+    assert_eq!(app.open_serial(serial), Effect::None);
+    // The same job id runs again: the row is clickable and opens.
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    let resumed = match app.open_serial(serial) {
+        Effect::Send(lines) => commands(lines),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
+        | Effect::ReadImage(_) => panic!("resuming opens"),
+    };
+    assert_eq!(subscribes(&resumed).len(), 1);
+    assert_eq!(resumed[0]["args"]["level"], "full");
+    let view = app.item_view().unwrap_or_else(|| panic!("a view"));
+    assert!(view.running);
+}
+
+#[test]
+fn an_open_view_runs_and_steers_again_after_its_job_restarts() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    opened_item(&mut app, "j_1");
+    complete(&mut app, "j_1");
+    assert!(!app
+        .item_view()
+        .unwrap_or_else(|| panic!("a view"))
+        .running);
+    // The same job id runs again: the open view returns to running.
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    assert!(app
+        .item_view()
+        .unwrap_or_else(|| panic!("a view"))
+        .running);
+    app.draft.set("focus on the tests");
+    let out = match app.on_key(Key::Enter, clock.now()) {
+        Effect::Send(lines) => commands(lines),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
+        | Effect::ReadImage(_) => panic!("Enter sends"),
+    };
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["command"], "steer");
+    assert_eq!(out[0]["session_id"], DELEGATE_A);
+}
+
+#[test]
 fn opening_a_completed_delegate_swaps_but_sends_nothing() {
     let mut app = home();
     opened(&mut app);
