@@ -52,3 +52,12 @@ The rail (#692), at a window of at least 150 columns so rail, conversation and p
 - Hidden: with the rail hidden, "N waiting" should join the status rows (narrow) or the panel's Session card (clicking it brings the rail back).
 - Scope: in A, click "+1 other · show all". The long-named pi-rig session should appear under an "other projects" divider, truncated with …, and the row should offer "show less". B shows every project with no scope line.
 - Hover: run with `--hover` and hover a B card. The whole card should brighten; in compact a dim footer at the rail's bottom should name the full session, workspace, model and spend. In A one tooltip line should show the full name, workspace and spend.
+
+The model picker (#1629), one run per case (`cargo run --release -- fixtures/idle.jsonl --static --picker CASE`):
+
+- list: three providers with a dozen models between them, roles on the rows, `● current` on claude-opus-5-5, its level chips on the row below.
+- levels: the current model's thinking chips focused (`[high]`), the rest dim.
+- scoped: five models only, a `scoped · 5 of 12` chip and a `[show all]` toggle.
+- scoped-all: all twelve models, the scoped five marked `· scoped`.
+- refreshing: openai-codex reads `⟳ refreshing` with a still spinner glyph, the other two `updated … ago`, and a `⟳ refresh all` button sits at the controls row's right end.
+- session-only: claude-sonnet-5-5 focused with `ⓢ this session only · nothing saved` under it and its rebuild cost on its row.
