@@ -4452,7 +4452,10 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     ui.ctx_view = true;
                     ui.vscroll = 0;
                 }
-                Act::Back => ui.ctx_view = false,
+                Act::Back => {
+                    ui.ctx_view = false;
+                    ui.picker = None;
+                }
                 Act::Ext(i) => {
                     let id = v.lua.as_ref().map(|x| x.clicks.borrow()[i].clone()).unwrap_or_default();
                     say(&mut ui, format!("extension click: {id}"));
