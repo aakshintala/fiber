@@ -54,6 +54,39 @@ pub(crate) fn notify(text: &str) -> Vec<u8> {
     out
 }
 
+/// OSC 22 setting the pointer to the resize arrow, or back to the
+/// default (`docs/tui.md`, "Layout").
+pub(crate) fn pointer(resize: bool) -> &'static [u8] {
+    if resize {
+        b"\x1b]22;col-resize\x1b\\"
+    } else {
+        b"\x1b]22;default\x1b\\"
+    }
+}
+
+/// The pointer shape as last written; it starts as the default.
+#[derive(Debug, Default)]
+pub(crate) struct Shape {
+    resize: bool,
+}
+
+impl Shape {
+    /// The bytes setting the shape, or `None` when it is the shape last
+    /// written.
+    pub(crate) fn next(&mut self, resize: bool) -> Option<&'static [u8]> {
+        if resize == self.resize {
+            return None;
+        }
+        self.resize = resize;
+        Some(pointer(resize))
+    }
+
+    /// The terminal shows the default shape again: after the restore.
+    pub(crate) fn reset(&mut self) {
+        self.resize = false;
+    }
+}
+
 #[cfg(test)]
 #[path = "osc_tests.rs"]
 mod tests;

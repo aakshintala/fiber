@@ -33,6 +33,8 @@ pub(crate) enum Spot {
     /// The Session card's tools line: opens the tools view (`docs/tui.md`,
     /// "The panel").
     Tools,
+    /// The narrow layout's widget row: expands or collapses it.
+    Widget,
 }
 
 /// What the branch query last answered.
@@ -522,6 +524,7 @@ impl App {
             }
             Spot::Waiting => self.show_rail(),
             Spot::Tools => self.open_config_view(super::ConfigView::Tools),
+            Spot::Widget => self.toggle_widget_row(),
         }
     }
 }

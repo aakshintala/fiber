@@ -1,6 +1,6 @@
 //! Tests for the window title's bytes.
 
-use super::{Title, notify, title};
+use super::{Shape, Title, notify, pointer, title};
 
 #[test]
 fn notify_wraps_in_osc_9_and_drops_controls() {
@@ -31,4 +31,30 @@ fn an_unchanged_title_writes_nothing_until_forgotten() {
     assert_eq!(last.next("x · fiber".to_owned()), Some(title("x · fiber")));
     last.forget();
     assert_eq!(last.next("x · fiber".to_owned()), Some(title("x · fiber")));
+}
+
+#[test]
+fn pointer_shapes() {
+    assert_eq!(pointer(true), b"\x1b]22;col-resize\x1b\\");
+    assert_eq!(pointer(false), b"\x1b]22;default\x1b\\");
+}
+
+#[test]
+fn shape_writes_only_on_change() {
+    let mut shape = Shape::default();
+    assert_eq!(shape.next(false), None);
+    assert_eq!(shape.next(true), Some(pointer(true)));
+    assert_eq!(shape.next(true), None);
+    assert_eq!(shape.next(false), Some(pointer(false)));
+    assert_eq!(shape.next(false), None);
+}
+
+#[test]
+fn reset_returns_to_default() {
+    let mut shape = Shape::default();
+    assert_eq!(shape.next(true), Some(pointer(true)));
+    shape.reset();
+    assert_eq!(shape.next(true), Some(pointer(true)));
+    shape.reset();
+    assert_eq!(shape.next(false), None);
 }
