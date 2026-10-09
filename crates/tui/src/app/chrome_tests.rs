@@ -17,7 +17,10 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 /// A right-aligned prompt bubble edge, distinct from the column-wide input edge.
 /// A bubble's edge row or a card's full-width edge row: the cells past
 /// any leading space are all half blocks (`docs/tui.md`, "Look").
+/// Whether `row` is a right-aligned prompt bubble edge: the bar's glyph
+/// may end it.
 fn prompt_edge(row: &str) -> bool {
+    let row = row.trim_end_matches(['█', '│']);
     row.chars()
         .position(|cell| cell != ' ')
         .is_some_and(|first| {
@@ -265,7 +268,7 @@ fn conversation_height_equals_the_drawn_rows() {
             .lines()
             .skip(1)
             .take(app.conversation_height())
-            .filter(|row| row.contains("www") || row.contains("00:00") || prompt_edge(row))
+            .filter(|row| row.contains("ww") || row.contains("00:00") || prompt_edge(row))
             .count();
         assert_eq!(drawn, app.conversation_height(), "{width}x{height}");
         // The header holds row 0 and the input box the last row.
@@ -281,7 +284,7 @@ fn content_rows(screen: &str, height: usize) -> usize {
         .lines()
         .skip(1)
         .take(height)
-        .filter(|row| row.contains("www") || row.contains("00:00") || prompt_edge(row))
+        .filter(|row| row.contains("ww") || row.contains("00:00") || prompt_edge(row))
         .count()
 }
 

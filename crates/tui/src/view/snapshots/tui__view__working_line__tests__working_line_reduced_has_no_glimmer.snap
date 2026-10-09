@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view/working_line_tests.rs
-assertion_line: 285
 expression: shown
 ---
 work
@@ -19,10 +18,10 @@ work
 
 
 
-                                                                           ▄▄▄▄▄
-                                                                            go ▐
-                                                                           ▀▀▀▀▀
-                                                                           17:02
+                                                                          ▄▄▄▄▄
+                                                                           go ▐
+                                                                          ▀▀▀▀▀
+                                                                          17:02
 Working 11m 14s · esc to interrupt
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 >

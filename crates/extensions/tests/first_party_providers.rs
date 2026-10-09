@@ -102,3 +102,72 @@ fn a_provider_no_first_party_package_serves_gets_the_generic_hint() {
         );
     }
 }
+
+/// The first-party models whose provider hosts a search (`docs/tools.md`,
+/// "Hosted by the provider"): every Anthropic model, both muse models on
+/// `/v1/responses`, and OpenCode's OpenAI pass-through.
+#[test]
+fn first_party_hosted_searches_are_the_marked_models() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers");
+    let mut packages: Vec<_> = std::fs::read_dir(&root)
+        .expect("providers directory reads")
+        .map(|entry| entry.expect("package entry reads").path())
+        .collect();
+    packages.sort();
+    let mut pairs = Vec::new();
+    for package_dir in packages {
+        if !package_dir.is_dir() {
+            continue;
+        }
+        let package = package_dir
+            .file_name()
+            .expect("package dir has a name")
+            .to_string_lossy()
+            .into_owned();
+        for data in config::read_providers(&package_dir).expect("provider data reads") {
+            let mut models = data.models.clone();
+            let notices = extensions::leave_out_invalid(&data.name, &package, &mut models);
+            assert!(notices.is_empty(), "{package}: {notices:?}");
+            for model in &models {
+                if let Some(kind) = &model.web_search {
+                    pairs.push((format!("{}/{}", data.name, model.id), kind.clone()));
+                }
+                if let Some(include) = model.extra_body.get("include") {
+                    assert_eq!(
+                        include.as_array().and_then(|items| items.first()),
+                        Some(&serde_json::Value::String(
+                            "reasoning.encrypted_content".into()
+                        )),
+                        "{}/{} keeps reasoning replay first",
+                        data.name,
+                        model.id
+                    );
+                }
+            }
+        }
+    }
+    pairs.sort();
+    let mut expected: Vec<(String, String)> = [
+        ("anthropic/claude-fable-5", "web_search_20250305"),
+        ("anthropic/claude-fable-5-1", "web_search_20250305"),
+        ("anthropic/claude-haiku-4-5", "web_search_20250305"),
+        ("anthropic/claude-opus-4-5", "web_search_20250305"),
+        ("anthropic/claude-opus-4-6", "web_search_20250305"),
+        ("anthropic/claude-opus-4-7", "web_search_20250305"),
+        ("anthropic/claude-opus-4-8", "web_search_20250305"),
+        ("anthropic/claude-opus-5", "web_search_20250305"),
+        ("anthropic/claude-opus-5-5", "web_search_20250305"),
+        ("anthropic/claude-sonnet-4-5", "web_search_20250305"),
+        ("anthropic/claude-sonnet-4-6", "web_search_20250305"),
+        ("anthropic/claude-sonnet-5", "web_search_20250305"),
+        ("anthropic/claude-sonnet-5-5", "web_search_20250305"),
+        ("muse/muse-spark-1.3", "web_search"),
+        ("muse/muse-spark-1.3-contributor", "web_search"),
+        ("opencode-zen/gpt-6.1-sol", "web_search"),
+    ]
+    .into_iter()
+    .map(|(model, kind)| (model.to_owned(), kind.to_owned()))
+    .collect();
+    expected.sort();
+    assert_eq!(pairs, expected);
+}

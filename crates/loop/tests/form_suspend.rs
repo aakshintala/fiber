@@ -425,16 +425,11 @@ fn idle_passes(session: &Session, tap: &Tap, finished: &Finished, at: Instant) {
 
 /// Whether the loop thread settles into a wait on the clock, rather than
 /// spinning: a park caught by a zero advance is followed by another park.
-/// Retried, with a short bound each, while the advance catches it between
-/// waits.
 fn settles(clock: &FakeClock) -> bool {
-    let short = Duration::from_millis(100);
-    (0..20).any(|_| {
-        clock.await_parked_unbounded(short) && {
-            let mark = clock.advance_marked(Duration::ZERO);
-            clock.await_parked_since(&mark, None, short)
-        }
-    })
+    clock.await_parked_unbounded(DEADLINE) && {
+        let mark = clock.advance_marked(Duration::ZERO);
+        clock.await_parked_since(&mark, None, DEADLINE)
+    }
 }
 
 #[test]

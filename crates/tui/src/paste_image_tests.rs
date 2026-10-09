@@ -528,20 +528,15 @@ fn waiting(
 
 /// Advances the clock to just before the limit and proves the worker
 /// parked again there; the answer channel is still empty. The child can
-/// wake the worker between its first park and the advance, so the park to
-/// wait out is one that is live after the advance; a zero advance then
-/// wakes the worker out of it.
+/// wake the worker between its first park and the advance; the mark
+/// holds its latest park, so the wait below sees its next park.
 fn advance_to_parked(
     rx: &mpsc::Receiver<Result<Vec<u8>, Failed>>,
     clock: &Arc<FakeClock>,
     end: std::time::Instant,
     what: &str,
 ) {
-    clock.advance(LIMIT.checked_sub(Duration::from_millis(1)).unwrap());
-    let mark = clock
-        .mark_parked(end, DEADLINE)
-        .unwrap_or_else(|| panic!("{what}: the read never parked after the advance"));
-    clock.advance(Duration::ZERO);
+    let mark = clock.advance_marked(LIMIT.checked_sub(Duration::from_millis(1)).unwrap());
     assert!(
         clock.await_parked_since(&mark, Some(end), DEADLINE),
         "{what}: the read never parked again before its deadline"

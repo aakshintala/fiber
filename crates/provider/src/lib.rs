@@ -12,6 +12,7 @@ mod error;
 pub mod google_generative_ai;
 mod google_generative_ai_decode;
 mod google_generative_ai_request;
+mod hosted;
 mod http;
 mod images;
 pub mod openai_completions;

@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/view/item_tests.rs
+expression: "rows.join(\"\\n\")"
+---
+fix the parser
+fix the parser › ◆ review the parser                                           ✕
+✗ failed · harness fiber · model test/model · 0 calls · 2m 00s · session s_ddddd
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+>
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+$0.00

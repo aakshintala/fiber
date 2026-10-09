@@ -18,8 +18,9 @@ use serde_json::{Map, Value, json};
 /// check, with no headroom.
 const BUDGET: usize = 8_881;
 
-/// The one hosted tool type a protocol reads back
-/// (`config::Protocol::reads_web_search`).
+/// The Anthropic hosted tool type the budget measures
+/// (`config::Protocol::reads_web_search`); `openai-responses` reads
+/// `web_search` instead.
 const HOSTED_SEARCH: &str = "web_search_20250305";
 
 /// Every wire protocol; `protocol_name`'s exhaustive match keeps this list

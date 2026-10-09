@@ -9,10 +9,11 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
-use super::tests::{DEADLINE, launch, open, read_until};
+use super::tests::{DEADLINE, launch, open};
 use crate::app::App;
 use crate::look::{Look, ThemeSetting};
 use crate::mouse::Target;
+use crate::pty_watch::{watch, watched};
 use crate::screen::Screen;
 use crate::theme::Role;
 
@@ -96,6 +97,10 @@ fn a_new_look_repaints_the_unchanged_frame() {
 #[test]
 fn run_shows_a_theme_files_notice() {
     let mut pair = open();
+    let frames = watch(
+        &pair.main,
+        vec![b"\"solar\":" as &[u8], b"\x1b[?1049l" as &[u8]],
+    );
     let slave = pair
         .slave
         .try_clone()
@@ -120,12 +125,12 @@ fn run_shows_a_theme_files_notice() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     // Unchanged cells are skipped, spaces included, so one word is matched.
-    read_until(&pair.main, b"\"solar\":", "the theme notice");
+    watched(&frames, "the theme notice");
     pair.main
         .write_all(&[0x03, 0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
     // The rest of what it writes is read, so no write blocks on a full pty.
-    read_until(&pair.main, b"\x1b[?1049l", "the restore bytes");
+    watched(&frames, "the restore bytes");
     let code = finished
         .recv_timeout(DEADLINE)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));

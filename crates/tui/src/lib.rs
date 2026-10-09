@@ -50,6 +50,8 @@ mod osc;
 mod pages;
 mod paste_image;
 #[cfg(test)]
+mod pty_watch;
+#[cfg(test)]
 mod results_support;
 mod retry;
 mod rows;

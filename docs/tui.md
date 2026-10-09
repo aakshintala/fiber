@@ -302,7 +302,9 @@ the conversation. The views are:
   ("main › ◆ review: …"). A status card gives harness, model, calls, elapsed
   time and session, with a stop target. The transcript uses the same turn
   cards as the conversation, and the input box sends steering messages to
-  that delegate.
+  that delegate. A delegate that has not bound its socket yet answers
+  `session_not_found`; while its parent lists it running, the terminal asks
+  again every 500 ms.
 - **A job running under a pseudo-terminal** has a live view of its screen. The
   input box types into it as raw keys, as `jobs write` does for the model, so
   the person can finish an interactive step the model started.
@@ -441,7 +443,10 @@ arrived after `sessions` was sent.
 - **A streaming reply renders in place,** formatted as it arrives. The
   conversation follows new output and pauses when the person scrolls up. The
   mouse wheel over the conversation scrolls it 3 rows a step, a starting
-  point, not a measurement; PageUp and PageDown scroll a screen. Either
+  point, not a measurement; PageUp and PageDown scroll a screen. The
+  conversation's last column is its scroll bar and never holds text:
+  while the conversation has more rows than it shows, a thumb (█) on a
+  track (│) shows where the rows on screen sit among all of them. Either
   pauses following when it scrolls up. When new output arrives while
   scrolled up, a small overlay centred at the bottom of the conversation reads
   "↓ New messages below" and jumps to the end on a click or End. It gives no
@@ -1068,7 +1073,7 @@ The roles, in order:
 | Role | What it colours |
 |---|---|
 | `text` | the full text colour: replies, the draft, anything with no role of its own |
-| `muted` | what the doc calls dim as a colour: READY, line numbers, rules, block quote bars, grips, the logo's counters |
+| `muted` | what the doc calls dim as a colour: READY, line numbers, rules, block quote bars, grips, the scroll bar, the logo's counters |
 | `accent` | bullets, the logo's mark, WORKING, the spinner while a turn works, a running job's stripe, the steering and prompt stripes |
 | `heading` | markdown headings |
 | `success` | a finished job's stripe when it succeeded |
@@ -1212,9 +1217,9 @@ Also measured in Fiber, on the same machine:
   loaded pages 0.62 ms, and counting every page again at a new width 133 ms.
   Peak footprint was 61.9 MiB, of which 46 MiB is the jig's copy of the
   session.
-- **Jumping the way dragging the scroll bar's thumb does.** No scroll bar is
-  built yet, so the jig moves the top row to 20 rows spread across the
-  session, one frame each. The slowest frame took 1.9 ms, and 1.1 ms on the
+- **Jumping the way dragging the scroll bar's thumb does.** The scroll bar's
+  thumb does not drag, so the jig moves the top row to 20 rows spread across
+  the session, one frame each. The slowest frame took 1.9 ms, and 1.1 ms on the
   larger session.
 
 On Linux x86_64 the benchmark job (`docs/performance.md`, "Measuring", the

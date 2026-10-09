@@ -3,8 +3,7 @@
 //! connection").
 
 use std::collections::VecDeque;
-use std::fs::File;
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -17,6 +16,7 @@ use ratatui::backend::TestBackend;
 
 use super::Input;
 use super::tests::{DEADLINE, Pair, command, hello, launch, new_loop, open};
+use crate::pty_watch::{watch, watched};
 use crate::retry::Retry;
 use crate::sources::spawn_hub;
 
@@ -93,50 +93,6 @@ fn spawn_run(connect: crate::Connect, clock: &Arc<FakeClock>) -> (Pair, Receiver
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     (pair, finished)
-}
-
-/// Watches the pty from now on without ever stopping: one thread reads
-/// the main side to EOF, sending the bytes since the previous match up
-/// to and including each marker in order, then keeps reading and
-/// discards. A test takes each marker with one `recv_timeout` so a full
-/// pty never blocks the terminal's frames.
-pub(super) fn watch(main: &File, markers: Vec<&'static [u8]>) -> Receiver<Vec<u8>> {
-    let mut dup = main.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
-    let (done, finished) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("lib-watch".to_owned())
-        .spawn(move || {
-            let mut buf = Vec::new();
-            let mut at = 0usize;
-            let mut byte = [0u8; 1];
-            while at < markers.len() {
-                match dup.read(&mut byte) {
-                    Ok(0) | Err(_) => return,
-                    Ok(_) => {
-                        buf.push(byte[0]);
-                        let marker = markers[at];
-                        if buf.len() >= marker.len() && buf[buf.len() - marker.len()..] == *marker {
-                            let chunk = std::mem::take(&mut buf);
-                            if done.send(chunk).is_err() {
-                                break;
-                            }
-                            at += 1;
-                        }
-                    }
-                }
-            }
-            let mut discard = [0u8; 4096];
-            while dup.read(&mut discard).is_ok_and(|read| read > 0) {}
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
-    finished
-}
-
-/// Takes one watched marker within [`DEADLINE`].
-pub(super) fn watched(frames: &Receiver<Vec<u8>>, what: &str) -> Vec<u8> {
-    frames
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for {what}: {err}"))
 }
 
 /// Ctrl+C twice, then the exit code within [`DEADLINE`].
@@ -387,4 +343,43 @@ fn watch_cuts_a_chunk_at_each_marker_in_one_write() {
         b" two",
         "the second chunk starts after the first marker"
     );
+}
+
+#[test]
+fn watch_keeps_draining_after_its_last_marker() {
+    let pair = open();
+    let frames = watch(&pair.main, vec![b"mark" as &[u8]]);
+    let mut slave = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (done, written) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("reconnect-write-past-marker".to_owned())
+        .spawn(move || {
+            slave
+                .write_all(b"mark")
+                .unwrap_or_else(|err| panic!("write: {err}"));
+            slave
+                .write_all(&vec![b'x'; 256 * 1024])
+                .unwrap_or_else(|err| panic!("write: {err}"));
+            done.send(()).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    assert_eq!(
+        watched(&frames, "the marker"),
+        b"mark",
+        "the chunk ends with the marker and starts at the first byte"
+    );
+    match written.recv_timeout(DEADLINE) {
+        Ok(()) => {}
+        Err(err) => panic!("waited {DEADLINE:?} for the writer past the last marker: {err}"),
+    }
+}
+
+#[test]
+#[should_panic(expected = "an empty marker")]
+fn watch_refuses_an_empty_marker() {
+    let pair = open();
+    let _ = watch(&pair.main, vec![b"ok" as &[u8], b"" as &[u8]]);
 }

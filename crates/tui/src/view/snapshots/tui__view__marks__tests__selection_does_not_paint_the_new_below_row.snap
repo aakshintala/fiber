@@ -2,15 +2,15 @@
 source: crates/tui/src/view/marks_tests.rs
 expression: "shown(&app, 40, 12)"
 ---
-                                  Copied
-paragraph 22
-
-paragraph 23
-
-paragraph 24
-
-paragraph 25
-          ↓ New messages below
+                                 Copied│
+paragraph 22                           │
+                                       │
+paragraph 23                           │
+                                       │
+paragraph 24                           │
+                                       █
+paragraph 25                           │
+         ↓ New messages below          │
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 >
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

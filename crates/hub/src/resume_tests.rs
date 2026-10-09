@@ -1683,3 +1683,48 @@ fn an_acknowledgement_is_forwarded_before_the_next_queued_command_passes_on() {
     assert_eq!(*log.lock().unwrap(), ["Forward(c_2)", "Popped(c_3)"]);
     assert_eq!(starter.resumed().len(), 1, "one resume");
 }
+
+#[test]
+fn a_command_routed_while_its_relay_drains_is_passed_on() {
+    let temp = Temp::new();
+    temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    // In the forward of c_1's acknowledgement, which runs on the relay
+    // thread: hand the test the relays and arm a signal for the top of
+    // the thread's next read, past every relays lock after a forward.
+    let (relays_tx, relays_rx) = mpsc::channel();
+    let (reading_tx, reading_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.before_forward) = Some(Box::new(move |_, relays| {
+        *crate::connection::lock(&crate::connection::lock(relays).order.before_read) =
+            Some(Box::new(move || reading_tx.send(()).unwrap_or(())));
+        relays_tx.send(Arc::clone(relays)).unwrap_or(());
+    }));
+    client.subscribe("c_1", "summary");
+    assert_eq!(client.acknowledged("the subscribe"), "c_1");
+    let relays = relays_rx.recv_timeout(DEADLINE).expect("the forward ran");
+    reading_rx
+        .recv_timeout(DEADLINE)
+        .expect("the relay thread waits on its next read");
+    let (draining_tx, draining_rx) = mpsc::channel();
+    let order = crate::connection::lock(&relays).order.clone();
+    *crate::connection::lock(&order.before_drain) =
+        Some(Box::new(move || draining_tx.send(()).unwrap_or(())));
+    // In route, with c_3 kept as sent and not yet written: end the
+    // session, then wait until the relay thread reaches its drain.
+    let stopping = starter.clone();
+    crate::connection::lock(&relays).before_command_write = Some(Box::new(move || {
+        assert!(stopping.stop(&sid(), DEADLINE), "the fake session ended");
+        draining_rx
+            .recv_timeout(DEADLINE)
+            .expect("the relay thread drains");
+    }));
+    client.send("c_3", "reply");
+    assert_eq!(client.acknowledged("the reply"), "c_3");
+    assert_eq!(starter.resumed().len(), 2);
+    assert_eq!(
+        received(&starter).last().unwrap(),
+        &("c_3".into(), "reply".into())
+    );
+}

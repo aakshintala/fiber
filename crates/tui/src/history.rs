@@ -459,12 +459,20 @@ impl App {
     /// whatever opened or closed a panel, the recall waits no more.
     pub(super) fn settle(&mut self) {
         self.relayout();
+        let height = self.conversation_height();
         // A batch settles once at its end: trimming mid-batch would drop
         // pages the batch's uncounted rows still hold in the window, and
         // the batch's end fetches them back.
         if !self.screen.pages().holding() {
-            let height = self.conversation_height();
             self.screen.settle(height);
+        }
+        // Lines folded into the attached screen while a transcript is
+        // swapped in settle it too, so its top never sits past the
+        // bottom when the view closes.
+        if let Some(open) = self.items.open.as_mut()
+            && let Some(stashed) = open.stashed.as_mut()
+        {
+            stashed.settle(height);
         }
         self.settle_pending_turn();
         self.settle_find();

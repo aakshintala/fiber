@@ -953,10 +953,10 @@ fn a_selection_over_a_dropped_page_copies_after_it_loads() {
     assert_eq!(app.pages().pinned(), pinned, "a waiting copy pins once");
     load_needed(&mut app, &lines);
     let text = app.take_copy().expect("the copy runs once the page loads");
-    assert!(
-        text.starts_with(top_row.trim()),
-        "{text:?} from {top_row:?}"
-    );
+    // The copy holds the rows' text: the bar's glyphs are chrome, never
+    // copied.
+    let top = top_row.trim().trim_end_matches(['█', '│']).trim_end();
+    assert!(text.starts_with(top), "{text:?} from {top_row:?}");
     assert!(text.lines().count() > 8, "{text:?}");
     assert!(app.copied());
     assert_eq!(app.pages().pinned(), prior, "its pages are unpinned");
@@ -1013,9 +1013,9 @@ fn overlapping_pending_copies_keep_each_others_pins() {
     app.focus = Some(TargetId::Turn(0));
     assert_eq!(app.on_key(Key::Char('y'), now()), Effect::None);
     load_needed(&mut app, &lines);
-    // The selection covers the bubble's rows, edges included; the copy
-    // holds only its text.
-    assert_eq!(shown, ["▄▄▄▄▄", "go ▐", "▀▀▀▀▀"]);
+    // The selection covers the bubble's rows, edges included, and the
+    // bar's cells show its glyphs; the copy holds only its text.
+    assert_eq!(shown, ["▄▄▄▄▄█", "go ▐│", "▀▀▀▀▀│"]);
     let text = app.take_copy().expect("the selection copies");
     assert_eq!(text, "go", "{text:?} from {shown:?}");
     // The turn copy still pins its pages: page 0 stays.
@@ -1143,7 +1143,8 @@ fn the_conversation_area_is_the_drawn_rect() {
             .cloned()
             .unwrap_or_default();
         assert!(before.contains("▣ completed"), "{name}: {before:?}");
-        let edge = last.trim();
+        // The card's bottom edge, with the bar's glyph after it.
+        let edge = last.trim().trim_end_matches(['█', '│']);
         assert!(
             !edge.is_empty() && edge.chars().all(|cell| cell == '▀'),
             "{name}: {last:?}"

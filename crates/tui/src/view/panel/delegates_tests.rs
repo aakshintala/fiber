@@ -235,11 +235,35 @@ fn the_description_is_cut_at_the_text_width() {
 }
 
 #[test]
-fn the_card_draws_no_targets() {
+fn both_rows_of_each_delegate_carry_its_serial_as_their_target() {
+    use crate::app::panel::Spot;
+    use crate::mouse::TargetId;
     let mut app = attached(160, 40);
     fold_delegates(&mut app, 2);
+    let rows = super::rows(&app, text_width(&app));
+    assert_eq!(rows.len(), 4);
+    let spots: Vec<_> = rows.iter().map(|row| row.spot).collect();
+    assert_eq!(
+        spots,
+        vec![
+            Some(Spot::Delegate(1)),
+            Some(Spot::Delegate(1)),
+            Some(Spot::Delegate(2)),
+            Some(Spot::Delegate(2)),
+        ]
+    );
     let (_, targets) = draw_targets(&app);
-    assert!(targets.is_empty());
+    let drawn: Vec<_> = targets
+        .iter()
+        .filter_map(|target| {
+            if let TargetId::Panel(Spot::Delegate(serial)) = target.id {
+                Some(serial)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(drawn, vec![1, 1, 2, 2]);
 }
 
 #[test]

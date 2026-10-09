@@ -24,9 +24,14 @@ impl App {
     }
 
     /// The earliest wake the frame asked for, leaving none behind: what
-    /// the loop arms the tick with after the draw.
+    /// the loop arms the tick with after the draw. The earlier of the
+    /// motion wake and the reconciler's retry wake.
     pub(crate) fn take_wake(&self) -> Option<Instant> {
-        self.motion.take_wake()
+        match (self.motion.take_wake(), self.items_wake()) {
+            (Some(motion), Some(items)) => Some(motion.min(items)),
+            (motion, None) => motion,
+            (None, items) => items,
+        }
     }
 
     /// Whether spinners, the glimmer and the pulse stay still. Home sets
@@ -56,7 +61,9 @@ impl App {
         if row.left.is_none() && row.state == State::Waiting {
             return None;
         }
-        let pages = self.pages();
+        // The working line follows the attached session, never the open
+        // delegate's transcript.
+        let pages = self.attached_screen().pages();
         Some(Working {
             started_ms: pages.running_started(),
             retry: pages.open_turn()?.pending_retry().cloned(),

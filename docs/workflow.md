@@ -113,10 +113,10 @@ A ticket too large for one implementer session is split by the orchestrator
 into pull requests that each leave `main` green. The ticket closes with the
 last one.
 
-A pull request whose change takes a source file over 800 lines files a
-`split` ticket for that file (`docs/code-quality.md`, "Size"). An
-orchestrator choosing its next ticket takes an open `split` ticket whose
-blockers are closed before any other.
+`split` tickets come from audit verdicts (`docs/code-quality.md`,
+"Size"). An orchestrator choosing its next ticket takes an open `split`
+ticket whose blockers are closed, and whose file no open pull request
+touches, before any other.
 
 ## The pull request
 

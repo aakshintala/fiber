@@ -6,7 +6,7 @@
 //! (`docs/model-routing.md`, "Image limits"), so a resume sends the same
 //! bytes.
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -122,17 +122,45 @@ pub(crate) fn anthropic_content(prepared: Prepared) -> Value {
     Value::Array(blocks)
 }
 
-/// The file's bytes as base64, or `None` when its path leaves the session
-/// directory or the file cannot be read.
-fn encoded_image(image: &ImageRef, session_dir: &Path) -> Option<String> {
-    let relative = Path::new(&image.path);
-    if !relative
+/// The file `path` names on disk, or `None` when it must not be read. A
+/// relative path stays under `session_dir`; an absolute path is read only
+/// when it names a session's stored artifacts, `<sessions>/<one>/artifacts/`
+/// plus the file, which is how a rewound child names its parent's files:
+/// the parent lives beside the child in the same `sessions/` directory.
+pub(crate) fn media_path(path: &str, session_dir: &Path) -> Option<PathBuf> {
+    let candidate = Path::new(path);
+    if !candidate.is_absolute() {
+        if !candidate
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+        {
+            return None;
+        }
+        return Some(session_dir.join(candidate));
+    }
+    if !candidate
         .components()
-        .all(|part| matches!(part, Component::Normal(_)))
+        .all(|part| matches!(part, Component::Normal(_) | Component::RootDir))
     {
         return None;
     }
-    let bytes = std::fs::read(session_dir.join(relative)).ok()?;
+    let rest = candidate.strip_prefix(session_dir.parent()?).ok()?;
+    let mut parts = rest.components();
+    if !matches!(parts.next(), Some(Component::Normal(_))) {
+        return None;
+    }
+    if !matches!(parts.next(), Some(Component::Normal(name)) if name == "artifacts") {
+        return None;
+    }
+    parts.next()?;
+    Some(candidate.to_path_buf())
+}
+
+/// The file's bytes as base64, or `None` when its path must not be read
+/// or the file cannot be read.
+fn encoded_image(image: &ImageRef, session_dir: &Path) -> Option<String> {
+    let resolved = media_path(&image.path, session_dir)?;
+    let bytes = std::fs::read(resolved).ok()?;
     Some(STANDARD.encode(bytes))
 }
 
