@@ -47,7 +47,6 @@ mod read_only;
 #[path = "shell/classify.rs"]
 mod classify;
 
-#[path = "shell/sed.rs"]
 mod sed;
 
 use classify::classify;
