@@ -194,7 +194,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         other_paths: "",
         contexts: Contexts::INPUT_STEERING,
         defaults: &["ctrl+v"],
-        events: &[Canon::None],
+        events: &[Canon::Key(Key::CtrlV)],
     },
     Binding {
         area: "The conversation",

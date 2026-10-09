@@ -146,7 +146,7 @@ impl Form {
             | Key::AltR
             | Key::AltDigit(_) => return None,
             // The input box's and the steering queue's keys do nothing.
-            Key::CtrlG | Key::CtrlR | Key::AltUp | Key::AltDown | Key::AltX => {}
+            Key::CtrlG | Key::CtrlR | Key::CtrlV | Key::AltUp | Key::AltDown | Key::AltX => {}
         }
         Some(PanelKey::Handled)
     }

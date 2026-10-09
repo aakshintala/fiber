@@ -25,6 +25,7 @@ mod prompt_history;
 mod recent;
 mod relay;
 mod resume;
+mod retire;
 mod rewind;
 mod sessions;
 mod start;

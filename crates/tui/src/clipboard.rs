@@ -28,6 +28,12 @@ pub(crate) fn osc52(text: &str) -> Vec<u8> {
     out
 }
 
+/// Whether the session runs over SSH: `SSH_CONNECTION` or `SSH_TTY` is
+/// present. No clipboard command runs there.
+pub(crate) fn over_ssh(env: impl Fn(&str) -> Option<OsString>) -> bool {
+    env("SSH_CONNECTION").is_some() || env("SSH_TTY").is_some()
+}
+
 /// The system clipboard command to pipe a copy to: the first of
 /// [`COMMANDS`] whose program `exists`, or none on a session over SSH,
 /// which `env` shows by `SSH_CONNECTION` or `SSH_TTY`.
@@ -35,7 +41,7 @@ pub(crate) fn command(
     env: impl Fn(&str) -> Option<OsString>,
     exists: impl Fn(&str) -> bool,
 ) -> Option<Vec<&'static str>> {
-    if env("SSH_CONNECTION").is_some() || env("SSH_TTY").is_some() {
+    if over_ssh(env) {
         return None;
     }
     COMMANDS

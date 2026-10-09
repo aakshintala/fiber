@@ -52,6 +52,7 @@ mod links;
 #[path = "app_mouse.rs"]
 mod mouse;
 mod offer;
+mod paste;
 pub(crate) mod results;
 mod screen;
 mod select;
@@ -134,6 +135,9 @@ pub(crate) enum Effect {
     },
     /// Open this URL with the link opener (`docs/tui.md`, "Links").
     OpenLink(String),
+    /// Read an image from the clipboard for this ticket, off the loop
+    /// thread: the worker posts the base64 or the notice to show.
+    ReadImage(u64),
 }
 
 /// Which command the terminal sent and waits on.
@@ -189,12 +193,14 @@ pub(crate) struct App {
     /// Home's state, once `run` sets it; `None` keeps today's screen.
     home: Option<home::Home>,
     draft: Draft,
+    /// The one clipboard image read at a time, and its ticket.
+    paste: paste::Paste,
     phase: Phase,
     link: Link,
     /// Lines held until the hub connects: the `start` of an early Enter.
     held: Vec<String>,
-    /// Commands waiting for their answer: kind and the text they carried.
-    pending: HashMap<String, (Kind, String)>,
+    /// Commands waiting for their answer: kind and the draft they carried.
+    pending: HashMap<String, (Kind, Draft)>,
     /// The notices floating over the conversation.
     notices: Notices,
     /// The conversation's size, scroll and pages (`docs/tui.md`, "History
@@ -251,6 +257,7 @@ impl App {
             workspace,
             home: None,
             draft: Draft::default(),
+            paste: paste::Paste::default(),
             phase: Phase::Starting,
             link: Link::Waiting,
             held: Vec::new(),
@@ -362,6 +369,7 @@ impl App {
             Key::AltP => self.toggle_panel(),
             Key::AltR | Key::AltDigit(_) => Effect::None,
             Key::CtrlR => self.open_search(),
+            Key::CtrlV => self.paste.press(self.draft.serial()),
             Key::CtrlF => Effect::None,
             Key::CtrlG => self.open_in_editor(),
             Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),
@@ -653,7 +661,7 @@ impl App {
                     .and_then(Value::as_str)
                     .map(|id| SessionId(id.to_owned()));
                 match (self.pending.remove(&id), session) {
-                    (Some((Kind::Start, text)), Some(session)) => self.started(session, text),
+                    (Some((Kind::Start, draft)), Some(session)) => self.started(session, draft),
                     _ => Vec::new(),
                 }
             }
@@ -675,19 +683,19 @@ impl App {
     }
 
     /// `start` was accepted: attach with a `full` connection, ask for the
-    /// session's `/` commands, then send `text` as its first prompt. A
+    /// session's `/` commands, then send `draft` as its first prompt. A
     /// started session is the attached one.
-    fn started(&mut self, session: SessionId, text: String) -> Vec<String> {
+    fn started(&mut self, session: SessionId, draft: Draft) -> Vec<String> {
         self.attach(session.clone());
         vec![
             self.subscribe(&session, Level::Full),
             self.ask_commands(&session),
-            self.first_prompt(&session, text),
+            self.first_prompt(&session, draft),
         ]
     }
 
-    /// A command the terminal sent was rejected: a notice, and its
-    /// text back in the draft when the draft is empty. A rejected `cancel`
+    /// A command the terminal sent was rejected: a notice, and its draft
+    /// back in the box when the box is empty. A rejected `cancel`
     /// shows nothing; after a rejected `start` the next Enter tries again.
     fn rejected(&mut self, id: &str, message: String) {
         match self.pending.get(id) {
@@ -711,13 +719,13 @@ impl App {
         }
     }
 
-    /// Drops a pending command, returning its text to an empty draft.
+    /// Drops a pending command, returning its draft to an empty box.
     fn fail(&mut self, id: &str) {
-        let Some((kind, text)) = self.pending.remove(id) else {
+        let Some((kind, draft)) = self.pending.remove(id) else {
             return;
         };
         if self.draft.is_empty() {
-            self.draft.paste(&text);
+            self.draft.put_back(draft);
         }
         if kind == Kind::Start {
             self.phase = Phase::Starting;
@@ -773,7 +781,8 @@ impl App {
                     let sent = self.pending.remove(&accepted.command_id.0);
                     self.commands_answered(&accepted);
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
-                    let item = shell.and_then(|(_, text)| shell::answered(&text, accepted.result));
+                    let item = shell
+                        .and_then(|(_, draft)| shell::answered(&draft.expand(), accepted.result));
                     changed |= self.screen.pages_mut().add_shell(item);
                 }
             }

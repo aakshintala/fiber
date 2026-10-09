@@ -3,6 +3,7 @@
 //! [`crate::offer`]; this module routes input to it and sends its answer.
 
 use super::{App, Effect, Kind, Link, mint};
+use crate::input::Draft;
 use crate::keys::{Edit, Key};
 use crate::offer::{OfferKey, Row, Spot};
 
@@ -55,7 +56,7 @@ impl App {
         let Some(line) = self.offer.answer(&id, &session) else {
             return Effect::None;
         };
-        self.pending.insert(id, (Kind::Reply, String::new()));
+        self.pending.insert(id, (Kind::Reply, Draft::default()));
         Effect::Send(vec![line])
     }
 

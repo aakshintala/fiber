@@ -58,6 +58,7 @@ fn sent(effect: Effect) -> Vec<Value> {
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
+        | Effect::ReadImage(_)
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
@@ -901,4 +902,129 @@ fn a_rejected_start_still_returns_its_text() {
     assert_eq!(app.notice(), Some("No."));
     assert_eq!(app.draft(), "hi");
     assert_eq!(app.session(), None);
+}
+
+/// Pastes an image into the draft: Ctrl+V reads, and its result lands.
+fn paste_image(app: &mut App) {
+    assert_eq!(app.on_key(Key::CtrlV, now()), Effect::ReadImage(0));
+    app.on_image(0, Ok("AAA".to_owned()));
+}
+
+/// The image part the tests paste.
+fn image_part() -> Value {
+    json!({"type": "image", "data": "AAA", "mime_type": "image/png"})
+}
+
+#[test]
+fn a_slash_draft_with_an_image_is_a_prompt() {
+    // E1: "/name x" would name the session, but an image makes it a prompt.
+    let mut app = attached();
+    type_text(&mut app, "/name x");
+    paste_image(&mut app);
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "prompt");
+    assert_eq!(
+        lines[0]["args"],
+        json!({"content": [{"type": "text", "text": "/name x"}, image_part()]})
+    );
+}
+
+#[test]
+fn a_bang_draft_with_an_image_is_a_prompt() {
+    // E2: "!echo hi" would run a shell command, but an image makes it a
+    // prompt.
+    let mut app = attached();
+    type_text(&mut app, "!echo hi");
+    paste_image(&mut app);
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "prompt");
+    assert_eq!(
+        lines[0]["args"],
+        json!({"content": [{"type": "text", "text": "!echo hi"}, image_part()]})
+    );
+}
+
+#[test]
+fn an_image_only_draft_sends_one_image_part() {
+    // E3.
+    let mut app = attached();
+    paste_image(&mut app);
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "prompt");
+    assert_eq!(lines[0]["args"], json!({"content": [image_part()]}));
+}
+
+#[test]
+fn a_first_prompt_carries_the_image() {
+    // E4: the draft sent before a session starts rides the first prompt.
+    let mut app = connected();
+    type_text(&mut app, "look");
+    paste_image(&mut app);
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "start");
+    let accepted = hub_line(
+        "command_accepted",
+        json!({"command_id": lines[0]["id"], "result": {"session_id": SESSION}}),
+    );
+    let out: Vec<Value> = app
+        .on_line(accepted)
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert_eq!(out.len(), 3);
+    assert_eq!(out[2]["command"], "prompt");
+    assert_eq!(
+        out[2]["args"],
+        json!({"content": [{"type": "text", "text": "look"}, image_part()]})
+    );
+}
+
+#[test]
+fn a_busy_session_gets_the_image_as_steer() {
+    // E5.
+    let mut app = attached();
+    turn_starts(&mut app);
+    type_text(&mut app, "look");
+    paste_image(&mut app);
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "steer");
+    assert_eq!(
+        lines[0]["args"],
+        json!({"content": [{"type": "text", "text": "look"}, image_part()]})
+    );
+}
+
+#[test]
+fn a_rejected_prompt_returns_its_image() {
+    // E6: the draft comes back with its image, the cursor at its end.
+    let mut app = attached();
+    type_text(&mut app, "look");
+    paste_image(&mut app);
+    let lines = sent(app.on_key(Key::Enter, now()));
+    let rejected = session_line(
+        "command_rejected",
+        json!({"command_id": lines[0]["id"], "code": "busy", "message": "Busy."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    assert_eq!(app.draft(), "look[Image #1]");
+    assert_eq!(app.on_key(Key::Char('!'), now()), Effect::None);
+    assert_eq!(app.draft(), "look[Image #1]!");
+}
+
+#[test]
+fn an_unwritten_prompt_returns_its_image() {
+    // E7: a prompt never written returns its image too.
+    let mut app = attached();
+    type_text(&mut app, "look");
+    paste_image(&mut app);
+    let Effect::Send(lines) = app.on_key(Key::Enter, now()) else {
+        panic!("Enter sends the prompt");
+    };
+    app.write_failed(&lines);
+    assert_eq!(app.draft(), "look[Image #1]");
 }
