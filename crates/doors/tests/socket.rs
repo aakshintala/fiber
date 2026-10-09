@@ -2555,10 +2555,7 @@ impl WritableJobs {
 }
 
 impl Jobs for WritableJobs {
-    fn open(
-        &self,
-        opening: Opening,
-    ) -> Result<contract::jobs::Opened, contract::jobs::OpenError> {
+    fn open(&self, opening: Opening) -> Result<contract::jobs::Opened, contract::jobs::OpenError> {
         self.inner.open(opening)
     }
 
@@ -2594,10 +2591,12 @@ impl Jobs for WritableJobs {
         if !self.inner.running().contains(job_id) {
             return Err(contract::jobs::WriteError::NotRunning);
         }
-        match self
-            .inner
-            .type_into(job_id, text.as_bytes(), self.clock.as_ref(), &fakes::CancelToken::new())
-        {
+        match self.inner.type_into(
+            job_id,
+            text.as_bytes(),
+            self.clock.as_ref(),
+            &fakes::CancelToken::new(),
+        ) {
             Some(Ok(_)) => Ok(()),
             Some(Err(error)) => Err(contract::jobs::WriteError::Io(error)),
             None => Err(contract::jobs::WriteError::NotTty),

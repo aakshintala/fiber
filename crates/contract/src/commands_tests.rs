@@ -293,10 +293,9 @@ fn args_that_are_present_are_never_replaced_by_an_empty_object() {
 
 #[test]
 fn job_input_reads_and_writes_back_unchanged() {
-    let line = parse(
-        r#"{"id":"c","command":"job_input","args":{"job_id":"j","text":"hi\u001b[A"}}"#,
-    )
-    .unwrap();
+    let line =
+        parse(r#"{"id":"c","command":"job_input","args":{"job_id":"j","text":"hi\u001b[A"}}"#)
+            .unwrap();
     assert_eq!(
         line.command,
         Command::JobInput(JobInput {
@@ -317,9 +316,7 @@ fn job_input_refuses_a_key_it_does_not_take_or_a_missing_one() {
         parse(r#"{"id":"c","command":"job_input","args":{"job_id":"j","text":"t","force":true}}"#)
             .is_err()
     );
-    assert!(
-        parse(r#"{"id":"c","command":"job_input","args":{"job_id":"j"}}"#).is_err()
-    );
+    assert!(parse(r#"{"id":"c","command":"job_input","args":{"job_id":"j"}}"#).is_err());
     assert!(parse(r#"{"id":"c","command":"job_input"}"#).is_err());
 }
 

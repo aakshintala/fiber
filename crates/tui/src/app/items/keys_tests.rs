@@ -4,8 +4,8 @@
 
 use std::path::PathBuf;
 
-use contract::clock::Clock;
 use contract::SessionId;
+use contract::clock::Clock;
 use serde_json::{Value, json};
 
 use super::super::super::{App, Effect};
