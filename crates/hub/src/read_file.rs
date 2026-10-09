@@ -125,8 +125,16 @@ fn resolve(home: &Path, session: &SessionId, path: &str) -> Result<File, Refusal
     if !placed {
         return Err(outside(path));
     }
-    let file_real = match fs::canonicalize(dir.join(path)) {
-        Ok(file) => file,
+    let meta = match fs::metadata(dir.join(path)) {
+        // The client's path is stated before it is resolved: stating it
+        // answers `not_found` for a missing file and for a file named as
+        // a directory (`a.png/`, which `canonicalize` resolves to the
+        // file on macOS while stating or opening it fails
+        // `NotADirectory` there as on Linux), on every platform
+        // (`docs/invocation.md`, "A session's files"). A later
+        // `canonicalize` or `open` of the same path can only fail on a
+        // rename in between, so every error from either is `io_failed`.
+        Ok(meta) => meta,
         Err(error)
             if error.kind() == io::ErrorKind::NotFound
                 || error.kind() == io::ErrorKind::NotADirectory =>
@@ -135,6 +143,7 @@ fn resolve(home: &Path, session: &SessionId, path: &str) -> Result<File, Refusal
         }
         Err(error) => return Err(unreadable(path, &error)),
     };
+    let file_real = fs::canonicalize(dir.join(path)).map_err(|error| unreadable(path, &error))?;
     // Resolving, checking and opening are separate steps, so a process on
     // the person's own account that renames files inside the session
     // between them can have a file outside `artifacts/` answered, or hold
@@ -144,29 +153,10 @@ fn resolve(home: &Path, session: &SessionId, path: &str) -> Result<File, Refusal
     if !file_real.starts_with(&root_real) {
         return Err(outside(path));
     }
-    let is_file = match fs::metadata(dir.join(path)) {
-        // The type is read from the client's path, not the canonical
-        // one: `canonicalize` resolves `a.png/` to the file on macOS,
-        // while stating or opening it fails `NotADirectory` there as on
-        // Linux, so only the client's path answers `not_found` for it on
-        // every platform (`docs/invocation.md`, "A session's files").
-        Ok(meta) => meta.is_file(),
-        Err(error)
-            if error.kind() == io::ErrorKind::NotFound
-                || error.kind() == io::ErrorKind::NotADirectory =>
-        {
-            return Err(missing(session, path));
-        }
-        Err(error) => return Err(unreadable(path, &error)),
-    };
-    if !is_file {
+    if !meta.is_file() {
         return Err(not_regular(path));
     }
-    match File::open(&file_real) {
-        Ok(file) => Ok(file),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(missing(session, path)),
-        Err(error) => Err(unreadable(path, &error)),
-    }
+    File::open(&file_real).map_err(|error| unreadable(path, &error))
 }
 
 /// At most `LIMIT` bytes of the opened file, or `too_large`. The file's
