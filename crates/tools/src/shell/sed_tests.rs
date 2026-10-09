@@ -106,6 +106,18 @@ fn hostile_scripts_do_not_print_only() {
 }
 
 #[test]
+fn malformed_regex_address_is_not_print_only() {
+    // A malformed regex address must fail the command, not read as an
+    // absent address leaving a bare `p` behind.
+    for script in ["/a\np", "/a", "/a,/b", "1,/a"] {
+        assert_closed_script(script);
+    }
+    assert_eq!(files(["-n", "/a\np", "f"].into_iter()), None);
+    // Boundary: a closed regex still prints.
+    assert_prints("/a/p");
+}
+
+#[test]
 fn flag_cases_declare_only_files() {
     let files_of = |words: &[&str]| files(words.iter().copied());
     for words in [

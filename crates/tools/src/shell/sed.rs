@@ -138,12 +138,15 @@ fn skip_blanks(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
 /// One command: up to two addresses, blanks, then `p`.
 fn command(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> bool {
     skip_blanks(chars);
-    let first = address(chars);
+    let first = match address(chars) {
+        Err(_) => return false,
+        Ok(first) => first,
+    };
     if let Some(zero) = first {
         if chars.peek() == Some(&',') {
             chars.next();
             // No blanks around `,`, and the second address is required.
-            if address(chars).is_none() {
+            if !matches!(address(chars), Ok(Some(_))) {
                 return false;
             }
             // A zero-start range is GNU's `0,/re/` form.
@@ -161,13 +164,14 @@ fn command(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> bool {
     true
 }
 
-/// One address. The boolean is whether it is a number of value zero. `None`
-/// is no address here.
-fn address(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<bool> {
+/// One address. The boolean is whether it is a number of value zero.
+/// `Ok(None)` is no address here; `Err(())` is a malformed address, which
+/// must fail the command rather than read as an absent address.
+fn address(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Result<Option<bool>, ()> {
     match chars.peek() {
         Some(&'$') => {
             chars.next();
-            Some(false)
+            Ok(Some(false))
         }
         Some(&ch) if ch.is_ascii_digit() => {
             let mut zero = true;
@@ -178,13 +182,15 @@ fn address(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<bool>
                 zero &= digit == '0';
                 chars.next();
             }
-            Some(zero)
+            Ok(Some(zero))
         }
         Some(&'/') => {
-            regex(chars)?;
-            Some(false)
+            if regex(chars).is_none() {
+                return Err(());
+            }
+            Ok(Some(false))
         }
-        _ => None,
+        _ => Ok(None),
     }
 }
 
