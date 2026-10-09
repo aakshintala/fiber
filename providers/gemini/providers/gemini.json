@@ -9,6 +9,7 @@
       "id": "gemini-3.1-pro-preview",
       "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "web_search": "google_search",
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "input": [
@@ -34,6 +35,7 @@
       "id": "gemini-3.8-flash",
       "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "web_search": "google_search",
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "input": [
@@ -50,6 +52,7 @@
       "id": "gemini-3.5-flash-lite",
       "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "web_search": "google_search",
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "input": [
@@ -66,6 +69,7 @@
       "id": "gemini-3.1-flash-lite",
       "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "web_search": "google_search",
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "input": [
@@ -82,6 +86,7 @@
       "id": "gemini-3-flash-preview",
       "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "web_search": "google_search",
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "input": [
@@ -98,6 +103,7 @@
       "id": "gemini-3.1-pro-preview-customtools",
       "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "web_search": "google_search",
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "input": [
@@ -123,6 +129,7 @@
       "id": "gemini-3.1-flash-lite-preview",
       "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "web_search": "google_search",
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "input": [
@@ -139,6 +146,7 @@
       "id": "gemini-3.5-flash",
       "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "web_search": "google_search",
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "input": [
@@ -155,6 +163,7 @@
       "id": "gemini-3.6-flash",
       "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "web_search": "google_search",
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "input": [
@@ -171,6 +180,7 @@
       "id": "gemini-3.7-flash",
       "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "web_search": "google_search",
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "input": [
