@@ -303,9 +303,10 @@ fn file_closed_rereads_the_lists_and_the_text() {
     app.config_file_closed(Ok(()));
     let frame = app.config_view_screen().expect("the view is open");
     assert!(
-        frame.rows.iter().any(|row| row
+        frame
+            .rows
             .iter()
-            .any(|(text, _)| text.contains("off"))),
+            .any(|row| row.iter().any(|(text, _)| text.contains("off"))),
         "{frame:?}"
     );
 }
