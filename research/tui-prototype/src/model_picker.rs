@@ -174,41 +174,26 @@ pub struct State {
 }
 
 /// Every `--picker` case.
-pub(crate) const CASES: &[Case] = &[
-    Case { name: "list", help: "providers and models, current marked", check: "three providers with a dozen models between them, roles on the rows, `● current` on claude-opus-5-5, its level chips on the row below." },
-    Case { name: "levels", help: "the current model's thinking chips focused", check: "the current model's thinking chips focused (`[high]`), the rest dim." },
-    Case { name: "scoped", help: "five scoped models only", check: "five models only, a `scoped · 5 of 12` chip and a `[show all]` toggle." },
-    Case { name: "scoped-all", help: "all models, scoped ones marked", check: "all twelve models, the scoped five marked `· scoped`." },
-    Case { name: "refreshing", help: "one provider refreshing", check: "openai-codex reads `⟳ refreshing` with a still spinner glyph, the other two `updated … ago`, and a `⟳ refresh all` button sits at the controls row's right end." },
-    Case { name: "session-only", help: "a model picked for this session only", check: "claude-sonnet-5-5 focused with `ⓢ this session only · nothing saved` under it and its rebuild cost on its row." },
+pub(crate) const CASES: &[Case<State>] = &[
+    Case { name: "list", help: "providers and models, current marked", check: "three providers with a dozen models between them, roles on the rows, `● current` on claude-opus-5-5, its level chips on the row below.", build: base },
+    // after a click on the thinking chip: the current level focused
+    Case { name: "levels", help: "the current model's thinking chips focused", check: "the current model's thinking chips focused (`[high]`), the rest dim.", build: || State { chip: Some(2), ..base() } },
+    Case { name: "scoped", help: "five scoped models only", check: "five models only, a `scoped · 5 of 12` chip and a `[show all]` toggle.", build: || State { scoped: SCOPED.to_vec(), ..base() } },
+    Case { name: "scoped-all", help: "all models, scoped ones marked", check: "all twelve models, the scoped five marked `· scoped`.", build: || State { scoped: SCOPED.to_vec(), show_all: true, ..base() } },
+    Case { name: "refreshing", help: "one provider refreshing", check: "openai-codex reads `⟳ refreshing` with a still spinner glyph, the other two `updated … ago`, and a `⟳ refresh all` button sits at the controls row's right end.", build: || State { refreshing: vec![1], ..base() } },
+    // a non-current model focused, the `s` mark applied
+    Case { name: "session-only", help: "a model picked for this session only", check: "claude-sonnet-5-5 focused with `ⓢ this session only · nothing saved` under it and its rebuild cost on its row.", build: || State { focus: 1, session_only: Some(1), ..base() } },
 ];
 
 /// `--picker`, for `--help` and `check/model-picker.md`.
-pub(crate) const SURFACE: Surface = Surface { flag: "--picker", file: "model-picker", title: "Model picker (#1629)", cases: CASES };
+pub(crate) const SURFACE: Surface = Surface { flag: "--picker", file: "model-picker", title: "Model picker (#1629)", docs: || crate::cases::docs(CASES) };
+
+fn base() -> State {
+    State { still: STILL.load(Relaxed), ..Default::default() }
+}
 
 pub fn for_case(case: &str) -> State {
-    let mut s = State {
-        still: STILL.load(Relaxed),
-        ..Default::default()
-    };
-    match case {
-        "list" => {}
-        // after a click on the thinking chip: the current level focused
-        "levels" => s.chip = Some(2),
-        "scoped" => s.scoped = SCOPED.to_vec(),
-        "scoped-all" => {
-            s.scoped = SCOPED.to_vec();
-            s.show_all = true;
-        }
-        "refreshing" => s.refreshing = vec![1],
-        // a non-current model focused, the `s` mark applied
-        "session-only" => {
-            s.focus = 1;
-            s.session_only = Some(1);
-        }
-        _ => panic!("--picker {}", crate::cases::names(CASES).replace(", ", "|")),
-    }
-    s
+    crate::cases::lookup(CASES, case).unwrap_or_else(|| panic!("--picker {}", crate::cases::names(CASES).replace(", ", "|")))
 }
 
 fn count() -> usize {

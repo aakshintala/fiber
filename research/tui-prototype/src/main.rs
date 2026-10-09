@@ -4592,7 +4592,7 @@ mod tests {
 
     #[test]
     fn the_case_names_are_pinned() {
-        let all: Vec<String> = SURFACES.iter().map(|s| format!("{} {}", s.flag, cases::names(s.cases))).collect();
+        let all: Vec<String> = SURFACES.iter().map(|s| format!("{} {}", s.flag, (s.docs)().iter().map(|d| d.name).collect::<Vec<_>>().join(", "))).collect();
         assert_eq!(
             all,
             [
@@ -4601,7 +4601,7 @@ mod tests {
             ]
         );
         let h = cases::help(SURFACES);
-        assert!(SURFACES.iter().flat_map(|s| s.cases).all(|c| h.contains(c.name)));
+        assert!(SURFACES.iter().flat_map(|s| (s.docs)()).all(|d| h.contains(d.name)));
     }
 
     /// `check/<surface>.md` is the slices' check lines; `UPDATE_CHECK=1 cargo test` rewrites them.
