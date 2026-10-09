@@ -72,7 +72,7 @@ for f in pdf-fixtures/scan-30p.pdf pdf-fixtures/scan-60p.pdf pdf-fixtures/scan-1
   unset PDF_FIXTURE
   echo "| lopdf $mib MiB, $pages pages | $kib | $((kib - base)) | $pdfsize |"
 done
-# The cap-sized scanned-like fixture: exactly 67,108,864 bytes, so its peak
+# The cap-sized scanned-like fixture: exactly 104,857,600 bytes, so its peak
 # says what a PDF at the cap costs. The many-small-objects fixture packs
 # ~200 annotation-like objects per page into Flate object streams with a
 # cross-reference stream, so its peak comes from object count and
@@ -80,7 +80,7 @@ done
 for f in pdf-fixtures/scan-cap.pdf pdf-fixtures/manyobjs-100p.pdf; do
   mib=$(awk "BEGIN {printf \"%.1f\", $(wc -c < "$f") / 1048576}")
   case "$f" in
-    *scan-cap.pdf) label="$mib MiB, 122 pages, cap-sized";;
+    *scan-cap.pdf) label="$mib MiB, 191 pages, cap-sized";;
     *manyobjs-100p.pdf) label="$mib MiB, 100 pages, many small objects";;
   esac
   export PDF_FIXTURE="$f"

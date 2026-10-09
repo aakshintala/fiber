@@ -7,8 +7,9 @@ use std::hint::black_box;
 mod image_timing;
 
 #[cfg(feature = "lopdf")]
-/// The image child's object-stream decompression limit, equal to its 64 MiB
-/// file cap (`docs/tools.md`, "read"): the probe loads with the same limit.
+/// The image child's per-stream object-stream decompression limit, separate
+/// from the 100 MiB file cap (`docs/tools.md`, "read"): the probe loads
+/// with the same limit.
 const MAX_DECOMPRESSED_BYTES: usize = 67_108_864;
 
 #[cfg(feature = "lopdf")]

@@ -8,21 +8,22 @@
 //! A page costs 546,560 bytes of image stream: 100 pages are ~52 MiB.
 //!
 //! `scan-cap.pdf` is the same kind of file topped up with an Info padding
-//! string to exactly the 64 MiB cap, and `manyobjs-100p.pdf` carries ~200
+//! string to exactly the 100 MiB cap, and `manyobjs-100p.pdf` carries ~200
 //! small annotation-like objects per page in Flate object streams with a
 //! cross-reference stream, so its peak comes from object count and
 //! decompression, not raw bytes.
 
 use lopdf::{Document, LoadOptions, Object, Stream, dictionary};
 
-/// The image child's object-stream decompression limit, equal to its 64 MiB
-/// file cap (`docs/tools.md`, "read"): the probe loads with the same limit.
+/// The image child's per-stream object-stream decompression limit, separate
+/// from the 100 MiB file cap (`docs/tools.md`, "read"): the probe loads
+/// with the same limit.
 const MAX_DECOMPRESSED_BYTES: usize = 67_108_864;
 /// The file cap in bytes: `scan-cap.pdf` is exactly this long.
-const CAP_BYTES: usize = 67_108_864;
+const CAP_BYTES: usize = 104_857_600;
 /// Pages for the cap-sized fixture: raw image bytes alone stay under the
 /// cap, leaving room for the padding string that tops the file up to it.
-const CAP_PAGES: u32 = 122;
+const CAP_PAGES: u32 = 191;
 /// Pages of the many-small-objects fixture and annots per page.
 const MANY_PAGES: u32 = 100;
 const MANY_PER_PAGE: u32 = 200;
