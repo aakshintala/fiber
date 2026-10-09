@@ -394,6 +394,8 @@ fn tabs_are_inert_and_typing_on_option_kinds_changes_nothing() {
             &mut question,
             &[Key::Char('x'), Key::Char(' '), Key::Backspace],
         );
+        question.on_edit(&Edit::Left);
+        question.on_edit(&Edit::Right);
         assert_eq!(lines(&question), before);
         assert_eq!(question.answer(), before_answer);
     }
@@ -406,6 +408,8 @@ fn tabs_are_inert_and_typing_on_option_kinds_changes_nothing() {
         &[Key::Tab, Key::BackTab, Key::Char('x'), Key::Backspace],
     );
     question.on_edit(&Edit::Paste("x\ny".to_owned()));
+    question.on_edit(&Edit::Left);
+    question.on_edit(&Edit::Right);
     assert_eq!(lines(&question), before);
     assert_eq!(question.answer(), before_answer);
 }
@@ -447,6 +451,7 @@ fn layout_keys_pass_through_and_do_nothing_keys_are_handled() {
         Key::CtrlR,
         Key::CtrlV,
         Key::CtrlL,
+        Key::AltA,
         Key::AltUp,
         Key::AltDown,
         Key::AltX,
