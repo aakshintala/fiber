@@ -199,7 +199,12 @@ fn bounded(
     let workspace = setup.workspace();
     let clock = Arc::clone(clock);
     fakes::within("the model list read", DEADLINE, move || {
-        read(&home, &workspace, refresh, &installed(home.as_path(), &clock))
+        read(
+            &home,
+            &workspace,
+            refresh,
+            &installed(home.as_path(), &clock),
+        )
     })
 }
 
