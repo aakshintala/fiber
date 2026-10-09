@@ -23,8 +23,7 @@ const LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 const PDF: &[u8] = b"%PDF-1.4 a test pdf";
 
-const IMAGE_BODY: &str =
-    r#"cat >/dev/null
+const IMAGE_BODY: &str = r#"cat >/dev/null
 printf '{"file":"%s.png","mime_type":"image/png","width":80,"height":60}\n' "$4""#;
 
 const PDF_TWO_PAGES: &str = r#"echo "$6" > "$(dirname "$0")/what"
@@ -62,21 +61,13 @@ fn workspace(name: &str) -> TempDir {
 fn arguments(value: Value) -> Map<String, Value> {
     match value {
         Value::Object(map) => map,
-        Value::Null
-        | Value::Bool(_)
-        | Value::Number(_)
-        | Value::String(_)
-        | Value::Array(_) => panic!("arguments are an object"),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            panic!("arguments are an object")
+        }
     }
 }
 
-fn run_with(
-    dir: &Path,
-    fiber: &Path,
-    ppm: &Path,
-    value: Value,
-    cancel: &dyn Cancel,
-) -> Output {
+fn run_with(dir: &Path, fiber: &Path, ppm: &Path, value: Value, cancel: &dyn Cancel) -> Output {
     let files = Files::new(dir.to_path_buf())
         .with_renderer(ppm.to_path_buf())
         .with_images(fiber.to_path_buf(), dir.join("artifacts"));
@@ -121,7 +112,11 @@ fn page_ranges_accept_a_page_and_a_range_up_to_20() {
         let range = page_range(&pages_argument(text)).unwrap().unwrap();
         assert_eq!((range.first, range.last), (first, last), "{text}");
     }
-    assert!(page_range(&arguments(json!({"path": "a.pdf"}))).unwrap().is_none());
+    assert!(
+        page_range(&arguments(json!({"path": "a.pdf"})))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -143,14 +138,12 @@ fn page_ranges_refuse_anything_else() {
         let error = page_range(&pages_argument(text)).unwrap_err();
         if text == "1-21" {
             assert_eq!(
-                error,
-                "`pages` 1-21 names 21 pages; a request takes at most 20.",
+                error, "`pages` 1-21 names 21 pages; a request takes at most 20.",
                 "{text}"
             );
         } else {
             assert_eq!(
-                error,
-                "`pages` must be a page or a range such as `3` or `1-5`, counted from 1.",
+                error, "`pages` must be a page or a range such as `3` or `1-5`, counted from 1.",
                 "{text}"
             );
         }
@@ -239,7 +232,10 @@ fn eleven_pages_without_pages_names_the_cap() {
         message(&output),
         format!(
             "`{}` has 11 pages. A PDF of more than 10 pages needs `pages`, such as `1-5`; a request takes at most 20 pages.\n",
-            fs::canonicalize(dir.path()).unwrap().join("a.pdf").display()
+            fs::canonicalize(dir.path())
+                .unwrap()
+                .join("a.pdf")
+                .display()
         )
     );
     assert!(pdf_part(&output).is_none());
@@ -262,13 +258,21 @@ fn a_range_past_the_end_names_the_page_count() {
         "{}",
         message(&output)
     );
-    assert!(message(&output).contains("has 11 pages"), "{}", message(&output));
+    assert!(
+        message(&output).contains("has 11 pages"),
+        "{}",
+        message(&output)
+    );
 }
 
 #[test]
 fn an_unreadable_pdf_is_unsupported_file_with_the_childs_message() {
     let dir = workspace("fiber-pdf-unreadable");
-    let fiber = fiber_stub(dir.path(), r#"echo 'failed to parse' >&2; exit 1"#, IMAGE_BODY);
+    let fiber = fiber_stub(
+        dir.path(),
+        r#"echo 'failed to parse' >&2; exit 1"#,
+        IMAGE_BODY,
+    );
     let ppm = ppm_stub(dir.path(), PPM_OK);
     let output = run(dir.path(), &fiber, &ppm, json!({"path": "a.pdf"}));
     assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile));
@@ -353,7 +357,11 @@ fn a_renderer_that_exits_1_keeps_the_pdf_with_the_reason() {
         "{}",
         message(&output)
     );
-    assert!(message(&output).contains("status 1"), "{}", message(&output));
+    assert!(
+        message(&output).contains("status 1"),
+        "{}",
+        message(&output)
+    );
     assert_eq!(pdf_part(&output).map(|part| part.2), Some(None));
 }
 
@@ -391,7 +399,11 @@ fn the_renderer_gets_one_argv_per_page() {
     let Some((path, _, _)) = pdf_part(&output) else {
         panic!("a PDF part");
     };
-    let stem = path.strip_prefix("artifacts/").unwrap().strip_suffix(".pdf").unwrap();
+    let stem = path
+        .strip_prefix("artifacts/")
+        .unwrap()
+        .strip_suffix(".pdf")
+        .unwrap();
     let log = fs::read_to_string(dir.path().join("ppm.log")).unwrap();
     let lines: Vec<&str> = log.lines().collect();
     assert_eq!(lines.len(), 2);
@@ -401,8 +413,14 @@ fn the_renderer_gets_one_argv_per_page() {
             *line,
             format!(
                 "-png -scale-to 2000 -f {n} -l {n} -singlefile {} {}",
-                dir.path().join("artifacts").join(format!("{stem}.pdf")).display(),
-                dir.path().join("artifacts").join(format!("{stem}-{n}")).display()
+                dir.path()
+                    .join("artifacts")
+                    .join(format!("{stem}.pdf"))
+                    .display(),
+                dir.path()
+                    .join("artifacts")
+                    .join(format!("{stem}-{n}"))
+                    .display()
             )
         );
     }
@@ -435,7 +453,12 @@ fn no_raw_page_file_is_left_after_success_or_failure() {
     let failing = workspace("fiber-pdf-noraw-fail");
     let fiber_fail = fiber_stub(dir.path(), PDF_TWO_PAGES, IMAGE_BODY);
     let ppm_fail = ppm_stub(failing.path(), "exit 1");
-    let output = run(failing.path(), &fiber_fail, &ppm_fail, json!({"path": "a.pdf"}));
+    let output = run(
+        failing.path(),
+        &fiber_fail,
+        &ppm_fail,
+        json!({"path": "a.pdf"}),
+    );
     assert_eq!(code(&output), None);
     if failing.path().join("artifacts").exists() {
         let left: Vec<_> = fs::read_dir(failing.path().join("artifacts"))
@@ -488,7 +511,13 @@ printf 'fakepng' > "$root.png""#,
     let ppm_path = ppm.clone();
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        drop(done_tx.send(run_with(&root, &fiber_path, &ppm_path, json!({"path": "a.pdf"}), &cancel)));
+        drop(done_tx.send(run_with(
+            &root,
+            &fiber_path,
+            &ppm_path,
+            json!({"path": "a.pdf"}),
+            &cancel,
+        )));
     });
     ready.wait(LIMIT);
     assert!(
@@ -532,10 +561,22 @@ fn offset_and_limit_are_ignored_for_a_pdf() {
 fn a_child_that_names_another_file_is_tool_error() {
     let dir = workspace("fiber-pdf-names");
     for (label, body) in [
-        ("upper", r#"printf '{"file":"%s.PDF","page_count":2,"total":2}\n' "$5""#),
-        ("png", r#"printf '{"file":"%s.png","page_count":2,"total":2}\n' "$5""#),
-        ("other", r#"printf '{"file":"other.pdf","page_count":2,"total":2}\n'"#),
-        ("suffix", r#"printf '{"file":"%s.pdf.x","page_count":2,"total":2}\n' "$5""#),
+        (
+            "upper",
+            r#"printf '{"file":"%s.PDF","page_count":2,"total":2}\n' "$5""#,
+        ),
+        (
+            "png",
+            r#"printf '{"file":"%s.png","page_count":2,"total":2}\n' "$5""#,
+        ),
+        (
+            "other",
+            r#"printf '{"file":"other.pdf","page_count":2,"total":2}\n'"#,
+        ),
+        (
+            "suffix",
+            r#"printf '{"file":"%s.pdf.x","page_count":2,"total":2}\n' "$5""#,
+        ),
     ] {
         let fiber = fiber_stub(dir.path(), body, IMAGE_BODY);
         let ppm = ppm_stub(dir.path(), PPM_OK);

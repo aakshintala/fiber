@@ -12,7 +12,10 @@ fn a_pdf_is_cut_and_the_entry_returns_0() {
     let dir = fakes::TempDir::new("fiber-picture-entry-pdf");
     let input = dir.path().join("in.pdf");
     std::fs::copy(
-        format!("{}/../../research/pdf-tool-results/text.pdf", env!("CARGO_MANIFEST_DIR")),
+        format!(
+            "{}/../../research/pdf-tool-results/text.pdf",
+            env!("CARGO_MANIFEST_DIR")
+        ),
         &input,
     )
     .unwrap();

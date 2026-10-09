@@ -54,7 +54,9 @@ fn pdf_bytes(pages: usize) -> Vec<u8> {
         "Resources" => resources_id,
         "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
     };
-    document.objects.insert(pages_id, Object::Dictionary(pages_dict));
+    document
+        .objects
+        .insert(pages_id, Object::Dictionary(pages_dict));
     let catalog_id = document.add_object(dictionary! {
         "Type" => "Catalog",
         "Pages" => pages_id,
@@ -114,10 +116,7 @@ fn whole_at_ten_pages_writes_the_input_bytes_unchanged() {
     let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(value.get("page_count"), Some(&serde_json::json!(10)));
     assert_eq!(value.get("total"), Some(&serde_json::json!(10)));
-    assert_eq!(
-        value.get("file"),
-        Some(&serde_json::json!("p_whole10.pdf"))
-    );
+    assert_eq!(value.get("file"), Some(&serde_json::json!("p_whole10.pdf")));
     assert_eq!(
         std::fs::read(dir.path().join("p_whole10.pdf")).unwrap(),
         bytes
@@ -176,7 +175,10 @@ fn pages_last_to_last_succeeds_and_past_the_end_exits_4() {
     ];
     assert_eq!(child(&ok).0, 0);
     let cut = std::fs::read(dir.path().join("p_last.pdf")).unwrap();
-    assert_eq!(lopdf::Document::load_mem(&cut).unwrap().get_pages().len(), 1);
+    assert_eq!(
+        lopdf::Document::load_mem(&cut).unwrap().get_pages().len(),
+        1
+    );
     for (n, what) in ["pages=5-6", "pages=6-6"].iter().enumerate() {
         let stem = format!("p_past{n}");
         let arguments = vec![
@@ -294,8 +296,11 @@ fn an_existing_target_is_never_overwritten() {
 
 #[test]
 fn the_fixture_pdf_counts_two_pages() {
-    let bytes =
-        std::fs::read(format!("{}/../../research/pdf-tool-results/text.pdf", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bytes = std::fs::read(format!(
+        "{}/../../research/pdf-tool-results/text.pdf",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
     let document = lopdf::Document::load_mem(&bytes).unwrap();
     assert_eq!(document.get_pages().len(), 2);
 }

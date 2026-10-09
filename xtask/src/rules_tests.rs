@@ -409,7 +409,7 @@ fn a_clean_tree_passes_and_picture_and_main_are_exempt() {
         (
             "picture".to_owned(),
             tree(&["picture", "image", "fast_image_resize", "lopdf"]),
-       ),
+        ),
         ("main".to_owned(), tree(&["main", "picture", "image"])),
     ];
     assert!(leaks(&trees, &IMAGE).is_empty());

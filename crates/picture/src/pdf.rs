@@ -26,10 +26,17 @@ enum What {
 
 /// Runs the PDF mode on the child's own streams and returns its exit code.
 /// `args` are the arguments after `image`, starting with `pdf`.
-pub(crate) fn run(args: &[std::ffi::OsString], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
+pub(crate) fn run(
+    args: &[std::ffi::OsString],
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> i32 {
     let [_, input, directory, stem, what] = args else {
-        writeln!(stderr, "usage: fiber image pdf <input> <artifacts_dir> <stem> <what>")
-            .unwrap_or(());
+        writeln!(
+            stderr,
+            "usage: fiber image pdf <input> <artifacts_dir> <stem> <what>"
+        )
+        .unwrap_or(());
         return USAGE;
     };
     let Some(stem) = stem.to_str().filter(|stem| super::valid_stem(stem)) else {
@@ -37,15 +44,21 @@ pub(crate) fn run(args: &[std::ffi::OsString], stdout: &mut dyn Write, stderr: &
         return USAGE;
     };
     let Some(what) = what.to_str() else {
-        writeln!(stderr, "the request must be `whole=<max>` or `pages=<first>-<last>`")
-            .unwrap_or(());
+        writeln!(
+            stderr,
+            "the request must be `whole=<max>` or `pages=<first>-<last>`"
+        )
+        .unwrap_or(());
         return USAGE;
     };
     let what = match parse_what(what) {
         Some(what) => what,
         None => {
-            writeln!(stderr, "the request must be `whole=<max>` or `pages=<first>-<last>`")
-                .unwrap_or(());
+            writeln!(
+                stderr,
+                "the request must be `whole=<max>` or `pages=<first>-<last>`"
+            )
+            .unwrap_or(());
             return USAGE;
         }
     };

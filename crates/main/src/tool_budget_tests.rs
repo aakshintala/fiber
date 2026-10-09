@@ -543,4 +543,3 @@ fn the_built_in_definitions_fit_their_budget() {
         panic!("{error}");
     }
 }
-

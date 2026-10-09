@@ -8,10 +8,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use contract::ErrorCode;
 use contract::images::Images as _;
 use contract::shapes::{ContentPart, ImagePart, PdfPart};
 use contract::tool::{Cancel, Output};
-use contract::ErrorCode;
 use serde_json::{Map, Value};
 
 use crate::files::{failed, text_output};
@@ -59,14 +59,19 @@ pub(crate) fn page_range(arguments: &Map<String, Value>) -> Result<Option<PageRa
             }
             Ok(Some(range))
         }
-        None => Err("`pages` must be a page or a range such as `3` or `1-5`, counted from 1."
-            .to_owned()),
+        None => Err(
+            "`pages` must be a page or a range such as `3` or `1-5`, counted from 1.".to_owned(),
+        ),
     }
 }
 
 /// Parses `N` or `N-M`: ASCII digits only, `1 <= N <= M`, each fitting `u32`.
 fn parse_range(text: &str) -> Option<PageRange> {
-    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit() || byte == b'-') {
+    if text.is_empty()
+        || !text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'-')
+    {
         return None;
     }
     let (first_text, last_text) = match text.split_once('-') {
@@ -179,9 +184,7 @@ pub(crate) fn read(
             match part {
                 Ok(part) => Output {
                     content: vec![
-                        ContentPart::Text {
-                            text: head.clone(),
-                        },
+                        ContentPart::Text { text: head.clone() },
                         ContentPart::Pdf(part),
                     ],
                     ..Output::default()
@@ -257,10 +260,7 @@ fn parse_child(stdout: &[u8], stem: &str) -> Result<(u32, u32), &'static str> {
             .and_then(Value::as_u64)
             .and_then(|n| u32::try_from(n).ok())
     };
-    let file = value
-        .get("file")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
+    let file = value.get("file").and_then(Value::as_str).map(str::to_owned);
     match (file, number("page_count"), number("total")) {
         (Some(file), Some(page_count), Some(total)) => {
             if !valid_pdf_file(stem, &file) {

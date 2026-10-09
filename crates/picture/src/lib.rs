@@ -33,8 +33,11 @@ pub fn main(args: Vec<OsString>) -> i32 {
 fn run(args: &[OsString], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
     if args.first().is_some_and(|first| first == "pdf") {
         if args.len() != 5 {
-            writeln!(stderr, "usage: fiber image pdf <input> <artifacts_dir> <stem> <what>")
-                .unwrap_or(());
+            writeln!(
+                stderr,
+                "usage: fiber image pdf <input> <artifacts_dir> <stem> <what>"
+            )
+            .unwrap_or(());
             return USAGE;
         }
         return pdf::run(args, stdout, stderr);

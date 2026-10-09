@@ -4,10 +4,10 @@
 mod ask_user;
 mod edit;
 mod files;
-mod pdf;
 mod guidelines;
 mod handoff;
 mod image;
+mod pdf;
 mod read;
 mod search;
 mod session_search;
