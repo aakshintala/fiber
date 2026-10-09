@@ -437,7 +437,7 @@ fn prompt_of(input: &[InputItem]) -> String {
         .flatten()
         .filter_map(|part| match part {
             ContentPart::Text { text } => Some(text.as_str()),
-            ContentPart::Image { .. } | ContentPart::Unknown => None,
+            ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown => None,
         })
         .collect()
 }

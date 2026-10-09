@@ -73,8 +73,14 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
         match input {
             Input::User { text, images } => {
                 flush_images(&mut out, &mut ends, &mut pending, last_tool);
-                let prepared =
-                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
+                let prepared = crate::images::prepare(
+                    text,
+                    images,
+                    &[],
+                    &request.session_dir,
+                    endpoint.text_only,
+                    crate::images::PdfForm::Pages,
+                );
                 out.push(message(user_content(prepared)));
             }
             // The flag is ignored: Chat Completions defines no error field
@@ -85,10 +91,17 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
                 action_id,
                 text,
                 images,
+                pdfs,
                 ..
             } => {
-                let prepared =
-                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
+                let prepared = crate::images::prepare(
+                    text,
+                    images,
+                    pdfs,
+                    &request.session_dir,
+                    endpoint.text_only,
+                    crate::images::PdfForm::Pages,
+                );
                 out.push(message(json!({
                     "role": "tool",
                     "tool_call_id": call_id(action_id),

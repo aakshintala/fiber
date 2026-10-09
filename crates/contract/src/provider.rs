@@ -132,6 +132,21 @@ pub struct ImageRef {
     pub height: u32,
 }
 
+/// A PDF a tool result carries: the log's `pdf` part (`docs/events.md`),
+/// without the bytes. The file is what every request sends
+/// (`docs/model-routing.md`, "Image limits").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PdfRef {
+    /// The file's path, relative to the session directory.
+    pub path: String,
+    /// The number of pages sent.
+    pub page_count: u32,
+    /// The pages rendered as image references, absent when they could not
+    /// be rendered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages: Option<Vec<ImageRef>>,
+}
+
 /// One tool as the model sees it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolDefinition {
@@ -219,6 +234,11 @@ pub enum Input {
         /// image inside a tool result sends each after the text.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<ImageRef>,
+        /// The result's PDF parts, in order. A protocol sends each natively
+        /// where it accepts a PDF in a tool result, and otherwise as its
+        /// pages rendered as images (`docs/tools.md`, "read").
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pdfs: Vec<PdfRef>,
     },
 }
 

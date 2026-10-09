@@ -543,6 +543,7 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
     assert_eq!(
         sent[3],
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: requested.action_id.clone().unwrap(),
             text: completed.payload["content"][0]["text"]
                 .as_str()

@@ -73,10 +73,186 @@ pub enum ContentPart {
         /// Its height in pixels.
         height: u32,
     },
+    /// A PDF file in the session's `artifacts/`, with its pages rendered
+    /// as image parts (`docs/tools.md`, "read"). The log never holds the
+    /// PDF's bytes.
+    Pdf(PdfPart),
     /// A part this build does not know.
     #[serde(other, skip_serializing)]
     Unknown,
 }
+
+/// An image part's data without its tag: image-only data serialised as an
+/// `image` part, so it is written as `{"type":"image",…}` and reading
+/// anything but an `image` part is an error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "ContentPart", try_from = "ContentPart")]
+pub struct ImagePart {
+    /// The file's path, relative to the session directory.
+    pub path: String,
+    /// Its type, such as `image/png`.
+    pub mime_type: String,
+    /// Its width in pixels.
+    pub width: u32,
+    /// Its height in pixels.
+    pub height: u32,
+}
+
+impl From<ImagePart> for ContentPart {
+    fn from(part: ImagePart) -> Self {
+        ContentPart::Image {
+            path: part.path,
+            mime_type: part.mime_type,
+            width: part.width,
+            height: part.height,
+        }
+    }
+}
+
+impl TryFrom<ContentPart> for ImagePart {
+    type Error = String;
+
+    fn try_from(part: ContentPart) -> Result<Self, Self::Error> {
+        match part {
+            ContentPart::Image {
+                path,
+                mime_type,
+                width,
+                height,
+            } => Ok(ImagePart {
+                path,
+                mime_type,
+                width,
+                height,
+            }),
+            ContentPart::Text { .. } => Err("expected an image part, found text".to_owned()),
+            ContentPart::Pdf(_) => Err("expected an image part, found pdf".to_owned()),
+            ContentPart::Unknown => Err("expected an image part, found unknown".to_owned()),
+        }
+    }
+}
+
+impl From<ImagePart> for crate::provider::ImageRef {
+    fn from(part: ImagePart) -> Self {
+        crate::provider::ImageRef {
+            path: part.path,
+            mime_type: part.mime_type,
+            width: part.width,
+            height: part.height,
+        }
+    }
+}
+
+/// A PDF part: the PDF in the session's `artifacts/`, the number of pages
+/// sent, and the pages rendered as image parts, absent when they could not
+/// be rendered (`docs/tools.md`, "read"). Two invariants hold:
+/// `page_count >= 1`, and when `pages` is present, `pages.len() ==
+/// page_count`. Both are checked in [`PdfPart::new`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PdfPart {
+    path: String,
+    page_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pages: Option<Vec<ImagePart>>,
+}
+
+impl PdfPart {
+    /// Builds a PDF part, refusing `page_count == 0` and `pages` whose
+    /// length is not `page_count`.
+    pub fn new(
+        path: String,
+        page_count: u32,
+        pages: Option<Vec<ImagePart>>,
+    ) -> Result<Self, PdfPartError> {
+        if page_count == 0 {
+            return Err(PdfPartError::NoPages);
+        }
+        if let Some(pages) = &pages
+            && pages.len() != usize::try_from(page_count).unwrap_or(usize::MAX)
+        {
+            return Err(PdfPartError::CountMismatch {
+                page_count,
+                pages: pages.len(),
+            });
+        }
+        Ok(PdfPart {
+            path,
+            page_count,
+            pages,
+        })
+    }
+
+    /// The file's path, relative to the session directory when written.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// The number of pages sent.
+    pub fn page_count(&self) -> u32 {
+        self.page_count
+    }
+
+    /// The pages rendered as image parts, absent when they could not be
+    /// rendered.
+    pub fn pages(&self) -> Option<&[ImagePart]> {
+        self.pages.as_deref()
+    }
+}
+
+/// The serialised form a log line reads through [`PdfPart::new`], so a
+/// line that breaks an invariant fails to read.
+#[derive(Debug, Deserialize)]
+struct RawPdfPart {
+    path: String,
+    page_count: u32,
+    #[serde(default)]
+    pages: Option<Vec<ContentPart>>,
+}
+
+impl<'de> Deserialize<'de> for PdfPart {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = RawPdfPart::deserialize(deserializer)?;
+        let pages = raw
+            .pages
+            .map(|parts| {
+                parts
+                    .into_iter()
+                    .map(ImagePart::try_from)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(D::Error::custom)
+            })
+            .transpose()?;
+        PdfPart::new(raw.path, raw.page_count, pages).map_err(D::Error::custom)
+    }
+}
+
+/// Why a PDF part could not be built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PdfPartError {
+    /// The page count is 0.
+    NoPages,
+    /// The rendered pages do not match the page count.
+    CountMismatch {
+        /// The page count the part claims.
+        page_count: u32,
+        /// The rendered pages it holds.
+        pages: usize,
+    },
+}
+
+impl std::fmt::Display for PdfPartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoPages => f.write_str("a PDF part holds at least one page"),
+            Self::CountMismatch { page_count, pages } => write!(
+                f,
+                "a PDF part of {page_count} pages holds {pages} rendered pages"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PdfPartError {}
 
 /// One effect a tool call declares (`docs/permissions.md`, "Effects").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

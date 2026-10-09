@@ -11,7 +11,7 @@ use contract::events::{
     CallStatus, Control, Event, InputItem, InstructionFile, InstructionReason, InstructionSent,
     Outcome, ToolCallCompleted, ToolCallRequested,
 };
-use contract::provider::{ImageRef, Input};
+use contract::provider::{ImageRef, Input, PdfRef};
 use contract::shapes::ContentPart;
 use contract::{ActionId, Envelope};
 
@@ -366,6 +366,7 @@ impl Rendered {
                 .to_owned(),
                 is_error: true,
                 images: Vec::new(),
+                pdfs: Vec::new(),
             });
         }
     }
@@ -620,6 +621,7 @@ fn result_of(action: &ActionId, completed: &ToolCallCompleted) -> Input {
         text: text(&completed.content),
         is_error: completed.status == CallStatus::Failed,
         images: images(&completed.content),
+        pdfs: pdfs(&completed.content),
     }
 }
 
@@ -712,7 +714,7 @@ pub(crate) fn text(content: &[ContentPart]) -> String {
         .iter()
         .filter_map(|part| match part {
             ContentPart::Text { text } => Some(text.as_str()),
-            ContentPart::Image { .. } | ContentPart::Unknown => None,
+            ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown => None,
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -735,7 +737,33 @@ pub(crate) fn images(content: &[ContentPart]) -> Vec<ImageRef> {
                 width: *width,
                 height: *height,
             }),
-            ContentPart::Text { .. } | ContentPart::Unknown => None,
+            ContentPart::Text { .. } | ContentPart::Pdf(_) | ContentPart::Unknown => None,
+        })
+        .collect()
+}
+
+/// The PDF parts of `content`, in order, as the references a request reads
+/// the stored files by.
+pub(crate) fn pdfs(content: &[ContentPart]) -> Vec<PdfRef> {
+    content
+        .iter()
+        .filter_map(|part| match part {
+            ContentPart::Pdf(part) => Some(PdfRef {
+                path: part.path().to_owned(),
+                page_count: part.page_count(),
+                pages: part.pages().map(|pages| {
+                    pages
+                        .iter()
+                        .map(|page| ImageRef {
+                            path: page.path.clone(),
+                            mime_type: page.mime_type.clone(),
+                            width: page.width,
+                            height: page.height,
+                        })
+                        .collect()
+                }),
+            }),
+            ContentPart::Text { .. } | ContentPart::Image { .. } | ContentPart::Unknown => None,
         })
         .collect()
 }

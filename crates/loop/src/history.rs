@@ -300,8 +300,9 @@ pub fn forked(dir: &Path, point: Seq) -> Result<Resumed, Error> {
 }
 
 /// The window's lines across the chain: parent segments through
-/// [`Segment::lines`], with every image part's `path` made absolute
-/// against that segment's directory in memory only, and the own log
+/// [`Segment::lines`], with every image and PDF part's `path` (and each
+/// PDF's pages) made absolute against that segment's directory in memory
+/// only, and the own log
 /// through [`Log::range`] as a plain resume reads it. The body carries an
 /// image's bytes, not its path, so byte identity holds.
 pub(crate) fn read_window(
@@ -336,8 +337,9 @@ pub(crate) fn read_window(
     Ok(lines)
 }
 
-/// Makes every image part's `path` in `line` absolute against `dir`: an
-/// image part's path is relative to the session directory that wrote it,
+/// Makes every image and PDF part's `path` in `line` absolute against
+/// `dir`: an image or PDF part's path is relative to the session directory
+/// that wrote it,
 /// and a request reads it under its own. Only the content parts a
 /// protocol reads as images: a person's message, a steering message and
 /// a tool result. Tool-call arguments are never rewritten, even when
@@ -367,24 +369,44 @@ fn rewrite_images(line: &mut Envelope, dir: &Path) {
     }
 }
 
-/// Makes every image part's `path` in `parts` absolute against `dir`.
+/// Makes every image and PDF part's `path` in `parts` absolute against
+/// `dir`, including each PDF part's rendered pages.
 fn rewrite_parts(parts: &mut [Value], dir: &Path) {
     for part in parts {
-        let path = part.as_object().and_then(|map| {
-            if map.get("type").and_then(Value::as_str) != Some("image") {
-                return None;
-            }
-            map.get("path")?.as_str().map(str::to_owned)
-        });
-        if let Some(path) = path
-            && std::path::Path::new(&path).is_relative()
-            && let Some(map) = part.as_object_mut()
-        {
-            map.insert(
-                "path".to_owned(),
-                Value::String(dir.join(path).display().to_string()),
-            );
+        let kind = part
+            .as_object()
+            .and_then(|map| map.get("type").and_then(Value::as_str))
+            .unwrap_or("")
+            .to_owned();
+        if kind != "image" && kind != "pdf" {
+            continue;
         }
+        make_absolute(part, dir);
+        if kind == "pdf"
+            && let Some(pages) = part
+                .as_object_mut()
+                .and_then(|map| map.get_mut("pages").and_then(Value::as_array_mut))
+        {
+            for page in pages.iter_mut() {
+                make_absolute(page, dir);
+            }
+        }
+    }
+}
+
+/// Makes the part's own `path` absolute against `dir` when it is relative.
+fn make_absolute(part: &mut Value, dir: &Path) {
+    let path = part
+        .as_object()
+        .and_then(|map| map.get("path")?.as_str().map(str::to_owned));
+    if let Some(path) = path
+        && std::path::Path::new(&path).is_relative()
+        && let Some(map) = part.as_object_mut()
+    {
+        map.insert(
+            "path".to_owned(),
+            Value::String(dir.join(path).display().to_string()),
+        );
     }
 }
 

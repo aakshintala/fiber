@@ -572,6 +572,7 @@ fn four_turn_conversation() -> Vec<Input> {
             model: "openrouter/z-ai/glm-5.3-flash".into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_1".into()),
             text: "18 C, clear".into(),
             is_error: false,
@@ -695,6 +696,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
             model: "openrouter/z-ai/glm-5.3-flash".into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_1".into()),
             text: "18 C, clear".into(),
             is_error: false,
@@ -984,6 +986,7 @@ fn an_assistants_calls_fold_into_one_message_and_reasoning_alone_keeps_a_content
         model: "openrouter/z-ai/glm-5.3-flash".into(),
     };
     let result = |id: &str| Input::ToolResult {
+        pdfs: Vec::new(),
         action_id: ActionId(id.into()),
         text: "ok".into(),
         is_error: false,
@@ -1329,6 +1332,7 @@ fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
                 model: "openrouter/z-ai/glm-5.3-flash".into(),
             },
             Input::ToolResult {
+                pdfs: Vec::new(),
                 action_id: ActionId("a_1".into()),
                 text: "boom".into(),
                 is_error,
@@ -1380,6 +1384,7 @@ fn image_turn(
             model: "openrouter/z-ai/glm-5.3-flash".into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId(action.into()),
             text: text.into(),
             is_error: false,
@@ -1445,6 +1450,209 @@ fn a_tool_results_image_goes_in_a_user_message_after_the_tool_message() {
             {"role": "user", "content": [image_url("YWJjZA==")]},
         ])
     );
+}
+
+/// A call and its result, the result carrying a PDF.
+fn pdf_turn(action: &str, call_id: &str, pdf: contract::provider::PdfRef) -> Vec<Input> {
+    vec![
+        Input::ToolCall {
+            action_id: ActionId(action.into()),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "a.pdf"}),
+                provider_id: Some(ProviderCallId(call_id.into())),
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+            model: "openrouter/z-ai/glm-5.3-flash".into(),
+        },
+        Input::ToolResult {
+            action_id: ActionId(action.into()),
+            text: "PDF: 2 pages.\n".into(),
+            is_error: false,
+            images: Vec::new(),
+            pdfs: vec![pdf],
+        },
+    ]
+}
+
+fn pdf_ref(
+    path: &str,
+    pages: Option<Vec<contract::provider::ImageRef>>,
+) -> contract::provider::PdfRef {
+    contract::provider::PdfRef {
+        path: path.into(),
+        page_count: 2,
+        pages,
+    }
+}
+
+#[test]
+fn a_tool_results_pdf_pages_go_in_a_user_message_after_the_tool_message() {
+    let session = image_session();
+    let conversation = pdf_turn(
+        "a_1",
+        "call_1",
+        pdf_ref(
+            "artifacts/p_1.pdf",
+            Some(vec![
+                png_ref("artifacts/i_1.png"),
+                png_ref("artifacts/i_2.png"),
+            ]),
+        ),
+    );
+    let request = ModelRequest {
+        conversation,
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let endpoint = endpoint(&server);
+    send(endpoint.clone(), &request);
+    send(endpoint, &request);
+    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
+    assert_eq!(bodies[0], bodies[1], "a resume sends the same bytes");
+    assert_eq!(
+        sent_body(&server, 0)["messages"],
+        json!([
+            {"role": "system", "content": "You are terse."},
+            {"role": "assistant", "tool_calls": [{"id": "call_1", "type": "function",
+                "function": {"name": "read", "arguments": "{\"path\":\"a.pdf\"}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "PDF: 2 pages.\n"},
+            {"role": "user", "content": [image_url("YWJjZA=="), image_url("d3h5eg==")]},
+        ])
+    );
+}
+
+#[test]
+fn a_pdf_without_pages_adds_no_user_message() {
+    let session = image_session();
+    let conversation = pdf_turn("a_1", "call_1", pdf_ref("artifacts/p_1.pdf", None));
+    let request = ModelRequest {
+        conversation,
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    send(endpoint(&server), &request);
+    assert_eq!(
+        sent_body(&server, 0)["messages"],
+        json!([
+            {"role": "system", "content": "You are terse."},
+            {"role": "assistant", "tool_calls": [{"id": "call_1", "type": "function",
+                "function": {"name": "read", "arguments": "{\"path\":\"a.pdf\"}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "PDF: 2 pages.\n"},
+        ])
+    );
+}
+
+#[test]
+fn pdf_pages_from_parallel_results_share_one_user_message_in_order() {
+    let session = image_session();
+    // Two parallel calls, then their results: one run of tool messages,
+    // the first carrying a PDF with two pages.
+    let (first, second) = (
+        pdf_turn(
+            "a_1",
+            "call_1",
+            pdf_ref(
+                "artifacts/p_1.pdf",
+                Some(vec![
+                    png_ref("artifacts/i_1.png"),
+                    png_ref("artifacts/i_2.png"),
+                ]),
+            ),
+        ),
+        image_turn(
+            "a_2",
+            "call_2",
+            "Image: 2x1 image/png.\n",
+            vec![png_ref("artifacts/i_1.png")],
+        ),
+    );
+    let conversation = vec![
+        first[0].clone(),
+        second[0].clone(),
+        first[1].clone(),
+        second[1].clone(),
+    ];
+    let request = ModelRequest {
+        conversation,
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    send(endpoint(&server), &request);
+    let messages = sent_body(&server, 0)["messages"].clone();
+    let roles: Vec<&str> = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(roles, ["system", "assistant", "tool", "tool", "user"]);
+    assert_eq!(
+        messages[4]["content"],
+        json!([
+            image_url("YWJjZA=="),
+            image_url("d3h5eg=="),
+            image_url("YWJjZA==")
+        ])
+    );
+}
+
+#[test]
+fn a_rewound_child_sends_its_parent_pdf_pages_as_the_same_bytes() {
+    let root = fakes::TempDir::new("fiber-completions-rewound-pdf");
+    let sessions = root.path().join("sessions");
+    let parent = sessions.join("s_parent");
+    let child = sessions.join("s_child");
+    std::fs::create_dir_all(parent.join("artifacts")).unwrap();
+    std::fs::create_dir_all(&child).unwrap();
+    std::fs::write(parent.join("artifacts/i_1.png"), b"abcd").unwrap();
+    std::fs::write(parent.join("artifacts/i_2.png"), b"wxyz").unwrap();
+    let absolute = |name: &str| parent.join(name).display().to_string();
+    let conversation = |relative: bool| {
+        let path = |name: &str| {
+            if relative {
+                name.to_owned()
+            } else {
+                absolute(name)
+            }
+        };
+        pdf_turn(
+            "a_1",
+            "call_1",
+            pdf_ref(
+                &path("artifacts/p_1.pdf"),
+                Some(vec![
+                    png_ref(&path("artifacts/i_1.png")),
+                    png_ref(&path("artifacts/i_2.png")),
+                ]),
+            ),
+        )
+    };
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let endpoint = endpoint(&server);
+    send(
+        endpoint.clone(),
+        &ModelRequest {
+            conversation: conversation(true),
+            session_dir: parent.clone(),
+            ..request()
+        },
+    );
+    send(
+        endpoint,
+        &ModelRequest {
+            conversation: conversation(false),
+            session_dir: child,
+            ..request()
+        },
+    );
+    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
+    assert_eq!(bodies[0], bodies[1]);
 }
 
 #[test]
