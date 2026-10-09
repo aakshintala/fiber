@@ -112,7 +112,6 @@ impl PanelState {
                     self.speed = self
                         .started_at
                         .and_then(|started| envelope.ts.checked_sub(started))
-                        .filter(|span| *span > 0)
                         .and_then(|span| {
                             usage
                                 .tokens

@@ -71,6 +71,31 @@ fn empty_lines_remove_a_widget() {
 }
 
 #[test]
+fn empty_lines_preserve_a_widget_with_the_same_extension() {
+    let mut app = attached();
+    app.on_line(widget("plan", "tasks", &["remove"]));
+    app.on_line(widget("plan", "other", &["keep"]));
+    app.on_line(widget("plan", "tasks", &[]));
+    let widgets = app.panel_state().widgets();
+    assert_eq!(widgets.len(), 1);
+    assert_eq!(widgets[0].widget, "other");
+    assert_eq!(widgets[0].lines, vec!["keep".to_owned()]);
+}
+
+#[test]
+fn widget_updates_match_both_extension_and_widget() {
+    let mut app = attached();
+    app.on_line(widget("other", "tasks", &["other"]));
+    app.on_line(widget("plan", "tasks", &["original"]));
+    app.on_line(widget("plan", "tasks", &["updated"]));
+    let widgets = app.panel_state().widgets();
+    assert_eq!(widgets.len(), 2);
+    assert_eq!(widgets[0].lines, vec!["other".to_owned()]);
+    assert_eq!(widgets[1].extension, "plan");
+    assert_eq!(widgets[1].lines, vec!["updated".to_owned()]);
+}
+
+#[test]
 fn a_status_line_is_not_a_widget() {
     let mut app = attached();
     app.on_line(session_line(
@@ -713,7 +738,7 @@ fn no_query_without_the_session_card() {
         .as_mut()
         .unwrap_or_else(|| panic!("home"))
         .launch
-        .panel_cards = Vec::new();
+        .panel_cards = vec!["jobs".to_owned()];
     let out = opened(&mut app);
     assert!(ack(&mut app, &out).is_empty());
 }
@@ -810,6 +835,24 @@ fn settled_after_settled_sends_none() {
     );
     assert!(
         app.on_line(live(SESSION, json!({"state": "jobs"})))
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_settled_status_does_not_end_an_already_settled_turn() {
+    let mut app = home();
+    let out = opened(&mut app);
+    let first = branch_query(&ack(&mut app, &out));
+    answer(&mut app, &first, "main\n");
+    assert!(
+        app.on_line(live(SESSION, json!({"state": "streaming"})))
+            .is_empty()
+    );
+    let ended = branch_query(&app.on_line(live(SESSION, json!({"state": "idle"}))));
+    answer(&mut app, &ended, "main\n");
+    assert!(
+        app.on_line(live(SESSION, json!({"state": "idle"})))
             .is_empty()
     );
 }
@@ -912,6 +955,16 @@ fn an_empty_answer_leaves_the_row_out() {
     let out = opened(&mut app);
     let id = branch_query(&ack(&mut app, &out));
     answer(&mut app, &id, "");
+    assert_eq!(app.panel_state().branch(), Some(&Branch::Absent));
+}
+
+#[test]
+fn a_blank_first_line_leaves_the_branch_row_out() {
+    use crate::app::panel::Branch;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    answer(&mut app, &id, "\nmain\n");
     assert_eq!(app.panel_state().branch(), Some(&Branch::Absent));
 }
 

@@ -155,6 +155,29 @@ fn context_rows_need_a_window_and_a_status() {
 }
 
 #[test]
+fn a_zero_context_window_has_no_context_rows() {
+    let mut app = attached(160, 40);
+    app.on_line(session_line(
+        "preamble_built",
+        serde_json::json!({
+            "reason": "start", "model": "test/model", "context_window": 0,
+            "thinking": "high", "tool_choice": "auto", "cache_lifetime": "5m",
+            "system_prompt": "", "tools": [],
+        }),
+    ));
+    app.on_line(status_line(
+        spend(1, 0, 0, 2, serde_json::json!(0.0), 0.0),
+        Some(serde_json::json!({"tokens": 1, "window": 1000})),
+    ));
+    let drawn = texts(&app, 40);
+    assert!(
+        drawn
+            .iter()
+            .all(|row| !row.starts_with("context") && !row.contains('▆'))
+    );
+}
+
+#[test]
 fn a_full_context_fills_every_cell() {
     let mut app = attached(160, 40);
     app.on_line(preamble_line(None));
