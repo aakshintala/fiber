@@ -257,11 +257,22 @@ impl<B: Backend> Loop<B> {
                     Err(_) => return 0,
                 },
             };
-            for input in batch(first, &mut self.stash, rx) {
+            let inputs = batch(first, &mut self.stash, rx);
+            // A batch of lines folds before it counts: the open page is
+            // counted once for the batch, not once per changed line. A
+            // batch of one holds nothing back.
+            let held = inputs.len() > 1;
+            if held {
+                self.app.begin_batch();
+            }
+            for input in inputs {
                 self.wakeups = self.wakeups.saturating_add(1);
                 if let Some(code) = self.handle(input) {
                     return code;
                 }
+            }
+            if held {
+                self.app.end_batch();
             }
             if let Some(code) = self.frame(rx) {
                 return code;
