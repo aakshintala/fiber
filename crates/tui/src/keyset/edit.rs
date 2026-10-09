@@ -93,32 +93,43 @@ struct Trade<'a> {
     keys: &'a [Stroke],
 }
 
-/// Swaps one captured key the other action holds at `place`: the give-back
-/// takes its place when one may go there, else the action loses the whole
-/// group holding it.
+/// Swaps every occurrence of one captured key the other action holds:
+/// the give-back takes each place when one may go there, else the action
+/// loses every group holding it.
 fn swap_key(trade: &mut Trade<'_>, other_at: usize, other: &Binding, got: usize, key: Stroke) {
-    let place = trade
+    let holds = trade
         .rows
         .get(other_at)
-        .and_then(|row| row.keys.iter().position(|held| *held == key));
-    let Some(place) = place else {
+        .is_some_and(|row| row.keys.contains(&key));
+    if !holds {
         return;
-    };
+    }
     let back = giveback(trade.rows, trade.at, trade.acted_variants, got)
         .filter(|back| giveable(trade.rows, trade.at, other_at, other, trade.keys, *back));
     if let Some(back) = back {
-        if let Some(row) = trade.rows.get_mut(other_at)
-            && let Some(slot) = row.keys.get_mut(place)
-        {
-            *slot = back;
+        if let Some(row) = trade.rows.get_mut(other_at) {
+            for slot in row.keys.iter_mut() {
+                if *slot == key {
+                    *slot = back;
+                }
+            }
         }
         return;
     }
     let variants = other.events.len().max(1);
-    if let Some(row) = trade.rows.get_mut(other_at) {
-        let start = place / variants * variants;
-        let end = start.saturating_add(variants).min(row.keys.len());
-        row.keys.drain(start..end);
+    loop {
+        let place = trade
+            .rows
+            .get(other_at)
+            .and_then(|row| row.keys.iter().position(|held| *held == key));
+        let Some(place) = place else {
+            return;
+        };
+        if let Some(row) = trade.rows.get_mut(other_at) {
+            let start = place / variants * variants;
+            let end = start.saturating_add(variants).min(row.keys.len());
+            row.keys.drain(start..end);
+        }
     }
 }
 

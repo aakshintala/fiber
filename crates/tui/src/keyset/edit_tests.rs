@@ -244,6 +244,45 @@ fn the_give_back_is_the_action_key_for_the_captured_variant() {
 }
 
 #[test]
+fn a_swap_hands_back_for_every_repeated_key() {
+    let before = holding("move_word", &["alt+left", "alt+right", "alt+left", "f5"]);
+    let next = before
+        .set("search_prompts", vec![stroke("alt+left")], &["move_word"])
+        .unwrap_or_else(|refused| panic!("swap refused: {refused:?}"));
+    assert_eq!(
+        next.current("move_word"),
+        [
+            stroke("ctrl+r"),
+            stroke("alt+right"),
+            stroke("ctrl+r"),
+            stroke("f5"),
+        ]
+    );
+    assert!(clash_free(&next));
+}
+
+#[test]
+fn without_a_give_back_a_repeated_key_loses_every_group() {
+    let Keyset { mut rows } = keyset(&[("delete_word", json!([]))]);
+    let at = BINDINGS
+        .iter()
+        .position(|binding| binding.id == "move_word")
+        .unwrap_or_else(|| panic!("no action move_word"));
+    if let Some(row) = rows.get_mut(at) {
+        row.keys = ["alt+left", "alt+right", "alt+left", "f5"]
+            .iter()
+            .map(|name| stroke(name))
+            .collect();
+    }
+    let before = Keyset { rows };
+    let next = before
+        .set("delete_word", vec![stroke("alt+left")], &["move_word"])
+        .unwrap_or_else(|refused| panic!("swap refused: {refused:?}"));
+    assert!(next.current("move_word").is_empty());
+    assert!(clash_free(&next));
+}
+
+#[test]
 fn without_a_give_back_the_other_action_loses_the_key_group() {
     let before = keyset(&[]);
     let next = before

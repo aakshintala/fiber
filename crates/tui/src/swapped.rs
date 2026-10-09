@@ -153,8 +153,6 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
         render(&frame, area, buf, targets);
     } else if let Some(frame) = app.session_view_screen(area.width) {
         render(&frame, area, buf, targets);
-    } else if let Some(frame) = app.session_view_screen(area.width) {
-        render(&frame, area, buf, targets);
     }
 }
 
