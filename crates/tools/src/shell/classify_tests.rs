@@ -362,9 +362,107 @@ fn assert_closed(command: &str) {
 }
 
 #[test]
+fn new_git_forms_read() {
+    for command in [
+        "git log --oneline -8",
+        "git log -1",
+        "git log -10",
+        "git log -p",
+        "git show --stat HEAD",
+        "git status",
+        "git diff",
+        "git rev-parse HEAD",
+        "git rev-parse --show-toplevel",
+        "git rev-parse --abbrev-ref HEAD",
+        "git ls-files src",
+        "git blame -L 10,20 f",
+        "git branch --show-current",
+        "git branch '--show-current'",
+    ] {
+        assert_reads(command);
+    }
+    assert!(classified("git rev-parse HEAD").declared.paths.is_none());
+    assert!(classified("git branch --show-current").declared.paths.is_none());
+    assert_eq!(
+        classified("git ls-files src").declared.paths,
+        Some(vec!["/work/src".to_owned()])
+    );
+    assert_eq!(
+        classified("git blame -L 10,20 f").declared.paths,
+        Some(vec!["/work/f".to_owned()])
+    );
+}
+
+#[test]
+fn hostile_git_forms_execute() {
+    for command in [
+        "git -c a=b log",
+        "git -c diff.external=x diff",
+        "git --exec-path=/x log",
+        "git --exec-path log",
+        "git -p log",
+        "git --paginate log",
+        "git --git-dir=/x log",
+        "git --git-dir /x status",
+        "git --work-tree=/x status",
+        "git log --ext-diff",
+        "git show --ext-diff",
+        "git diff --ext-diff",
+        "git blame --ext-diff",
+        "git log --textconv",
+        "git show --textconv",
+        "git log --output=f",
+        "git log --output f",
+        "git show --output=f",
+        "git log -",
+        "git log -8x",
+        "git log -x8",
+        "git show -8",
+        "git diff -8",
+        "git rev-parse --short=7",
+        "git rev-parse --git-dir",
+        "git ls-files --exclude-from=f",
+        "git blame --contents f x",
+        "git branch",
+        "git branch foo",
+        "git branch -D foo",
+        "git branch -a",
+        "git branch --list",
+        "git branch --show-current x",
+        "git branch --show-current --show-current",
+        "git checkout x",
+        "git stash",
+        "git config x",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn echo_reads_text_and_only_n_counts_as_a_flag() {
+    for command in [
+        "echo ---",
+        "echo -",
+        "echo -x",
+        "echo -nx",
+        "echo -n",
+        "echo -nn",
+        "echo --not-listed",
+    ] {
+        assert_reads(command);
+    }
+    for command in ["echo -e", "echo -E", "echo -ne"] {
+        assert_closed(command);
+    }
+    assert_closed("pwd ---");
+}
+
+#[test]
 fn only_echo_and_pwd_declare_no_paths() {
     for command in COMMANDS {
-        let declares = command.name != "echo" && command.name != "pwd";
+        let declares = command.name != "echo"
+            && command.name != "pwd"
+            && command.name != "git rev-parse";
         assert_eq!(command.paths, declares, "{}", command.name);
     }
 }
@@ -373,6 +471,8 @@ fn only_echo_and_pwd_declare_no_paths() {
 fn denied_flags_are_absent_from_every_allowed_list() {
     const DENIED: &[&str] = &[
         "--output",
+        "--ext-diff",
+        "--textconv",
         "--pre",
         "--compress-program",
         "-exec",
@@ -568,6 +668,11 @@ fn a_writing_or_executing_flag_is_not_read_only() {
 #[test]
 fn an_unlisted_flag_is_not_read_only() {
     for command in COMMANDS {
+        // bash's `echo` reads any other word as text, so it stays read-only.
+        if command.name == "echo" {
+            assert_reads("echo --not-listed");
+            continue;
+        }
         assert_closed(&format!("{} --not-listed", command.name));
         assert_closed(&format!("{} --not-listed=1", command.name));
     }
@@ -611,6 +716,9 @@ fn every_command_states_whether_double_dash_ends_flags() {
         ("git diff", true),
         ("git log", true),
         ("git show", true),
+        ("git rev-parse", true),
+        ("git ls-files", true),
+        ("git blame", true),
     ];
     assert_eq!(COMMANDS.len(), stated.len());
     for (command, (name, ends_flags)) in COMMANDS.iter().zip(stated) {

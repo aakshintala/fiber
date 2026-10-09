@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::tool::Effects;
 
-use super::read_only::{COMMANDS, Command};
+use super::read_only::{COMMANDS, Command, EXACT};
 
 /// Effects of `command` run in `workdir`. A command this classifier cannot
 /// read plainly, or any part not on the read-only list, is `executes` with
@@ -142,6 +142,10 @@ fn part_outcome(part: &Part, workdir: &Path) -> Outcome {
     if first.cooked.contains('=') {
         return Outcome::Executes;
     }
+    // An exact form reads with no paths: only `git branch --show-current`.
+    if EXACT.iter().any(|row| cooked_equals(&kept, row)) {
+        return Outcome::Reads(Vec::new());
+    }
     let Some(entry) = lookup(first, &mut words) else {
         return Outcome::Executes;
     };
@@ -149,7 +153,7 @@ fn part_outcome(part: &Part, workdir: &Path) -> Outcome {
     let mut ended = false;
     let mut pattern_given = false;
     while let Some(word) = words.next() {
-        match word_at(word, ended, entry.ends_flags) {
+        match word_at(word, ended, entry) {
             WordAt::Operand(cooked) => operands.push(cooked),
             WordAt::EndFlags => ended = true,
             WordAt::Flag => {
@@ -211,14 +215,26 @@ enum WordAt {
     Flag,
 }
 
-fn word_at(word: &Word, ended: bool, ends_flags: bool) -> WordAt {
+fn word_at(word: &Word, ended: bool, entry: &Command) -> WordAt {
     if ended || !word.cooked.starts_with('-') {
         WordAt::Operand(word.cooked.clone())
-    } else if ends_flags && word.cooked == "--" {
+    } else if entry.ends_flags && word.cooked == "--" {
         WordAt::EndFlags
+    } else if entry.prints && !is_option_word(&word.cooked) {
+        // bash's `echo` reads any other word as text.
+        WordAt::Operand(word.cooked.clone())
     } else {
         WordAt::Flag
     }
+}
+
+/// `-` followed by one or more of `n`, `e`, `E`: the only words bash's
+/// `echo` reads as options.
+fn is_option_word(cooked: &str) -> bool {
+    let Some(rest) = cooked.strip_prefix('-') else {
+        return false;
+    };
+    !rest.is_empty() && rest.chars().all(|ch| matches!(ch, 'n' | 'e' | 'E'))
 }
 
 fn lookup(first: &Word, words: &mut std::slice::Iter<'_, Word>) -> Option<&'static Command> {
@@ -252,6 +268,10 @@ fn accept_flag(
         }
         return Some(());
     }
+    // `git log -<digits>`, as in `git log -8`.
+    if entry.counts && is_count(cooked) {
+        return Some(());
+    }
     short_cluster(entry, cooked).then_some(())
 }
 
@@ -259,6 +279,22 @@ fn accept_flag(
 fn long_value_name(cooked: &str) -> Option<&str> {
     let (name, _) = cooked.split_once('=')?;
     name.starts_with("--").then_some(name)
+}
+
+/// `-<one or more ASCII digits>`, as in `git log -8`.
+fn is_count(cooked: &str) -> bool {
+    let Some(rest) = cooked.strip_prefix('-') else {
+        return false;
+    };
+    !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn cooked_equals(words: &[Word], row: &[&str]) -> bool {
+    words.len() == row.len()
+        && words
+            .iter()
+            .zip(row.iter())
+            .all(|(word, want)| word.cooked == *want)
 }
 
 fn short_cluster(entry: &Command, cooked: &str) -> bool {
