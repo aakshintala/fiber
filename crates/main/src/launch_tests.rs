@@ -2,7 +2,6 @@
 //! in a temporary directory, so no test runs a child process.
 
 use super::launch;
-use super::save;
 use config::{Config, Sources};
 
 /// Loads the configuration for `home` and `workspace`, with `overrides`
@@ -364,34 +363,4 @@ fn scoped_models_come_from_config() {
     assert!(unset.scoped_models.is_empty());
 }
 
-/// Reads the global `config.json` under `home`.
-fn global(home: &std::path::Path) -> serde_json::Value {
-    let text = std::fs::read_to_string(home.join("config.json"))
-        .unwrap_or_else(|err| panic!("read: {err}"));
-    serde_json::from_str(&text).unwrap_or_else(|err| panic!("parse: {err}: {text:?}"))
-}
 
-#[test]
-fn the_save_callback_writes_the_global_file() {
-    let dir = fakes::TempDir::new("fiber-launch-save");
-    let home = dir.path().to_path_buf();
-    let write = save(home.clone());
-    write("tui.rail.width", 18.4).unwrap_or_else(|err| panic!("save: {err}"));
-    assert_eq!(
-        global(&home),
-        serde_json::json!({"tui": {"rail": {"width": 18.4}}})
-    );
-    write("tui.panel.width", 25.0).unwrap_or_else(|err| panic!("save: {err}"));
-    assert_eq!(
-        global(&home),
-        serde_json::json!({"tui": {"rail": {"width": 18.4}, "panel": {"width": 25.0}}})
-    );
-}
-
-#[test]
-fn a_save_that_cannot_write_is_an_error() {
-    let dir = fakes::TempDir::new("fiber-launch-save-fails");
-    let home = dir.path().join("file");
-    std::fs::write(&home, "not a directory").unwrap_or_else(|err| panic!("write: {err}"));
-    assert!(save(home)("tui.rail.width", 18.4).is_err());
-}

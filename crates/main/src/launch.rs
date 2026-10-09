@@ -101,17 +101,9 @@ pub(crate) fn launch(
             bell: on(config, "tui.attention.bell"),
             title: on(config, "tui.attention.title"),
         },
-        save: None,
         // `main` gives the seam once it holds Fiber home.
         configure: None,
     }
-}
-
-/// Saves a dragged share to the global configuration file.
-pub(crate) fn save(home: PathBuf) -> tui::Save {
-    Box::new(move |key, share| {
-        config::set_global(&home, key, serde_json::json!(share)).map_err(|err| err.to_string())
-    })
 }
 
 /// The boolean at `key`, true when absent (`docs/configuration.md`,

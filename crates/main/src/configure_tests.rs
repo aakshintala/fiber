@@ -186,6 +186,51 @@ fn a_refused_write_writes_nothing_and_says_why() {
     assert!(!one.join(".fiber").join("config.json").exists());
 }
 
+/// Reads the global `config.json` under `home`.
+fn global(home: &Path) -> serde_json::Value {
+    let text =
+        fs::read_to_string(home.join("config.json")).unwrap_or_else(|e| panic!("read: {e}"));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("json: {e}"))
+}
+
+#[test]
+fn drag_widths_write_the_global_file() {
+    let dirs = Dirs::new();
+    let one = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    let saved = seam
+        .set(&one, Layer::Global, "tui.rail.width", "18.4")
+        .unwrap_or_else(|e| panic!("set: {e}"));
+    assert_eq!(saved.file, dirs.home().join("config.json"));
+    assert_eq!(
+        global(&dirs.home()),
+        serde_json::json!({"tui": {"rail": {"width": 18.4}}})
+    );
+    let saved = seam
+        .set(&one, Layer::Global, "tui.panel.width", "25")
+        .unwrap_or_else(|e| panic!("set: {e}"));
+    assert_eq!(saved.file, dirs.home().join("config.json"));
+    assert_eq!(
+        global(&dirs.home()),
+        serde_json::json!({"tui": {"rail": {"width": 18.4}, "panel": {"width": 25}}})
+    );
+}
+
+#[test]
+fn a_width_that_cannot_write_is_an_error() {
+    let root = fakes::TempDir::new("fiber-configure-width-fails");
+    let home = root.path().join("file");
+    write(&home, "not a directory");
+    let workspace = root.path().join("one");
+    fs::create_dir_all(&workspace).unwrap_or_else(|e| panic!("mkdir: {e}"));
+    let seam = Seam::new(home);
+    assert!(
+        seam
+            .set(&workspace, Layer::Global, "tui.rail.width", "18.4")
+            .is_err()
+    );
+}
+
 #[test]
 fn themes_lists_json_files_by_name_sorted() {
     let dirs = Dirs::new();
