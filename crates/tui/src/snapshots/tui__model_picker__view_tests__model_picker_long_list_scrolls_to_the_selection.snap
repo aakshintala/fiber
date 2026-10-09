@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/model_picker_view_tests.rs
+expression: text
+---
+
+Models                                                                         ✕
+zeta
+m16   low [high]
+apex
+m17   low [high]
+acme
+m18   low [high]
+zeta
+m19   low [high]
+apex
+m20   low [high]
+acme
+m21   low [high]
+zeta
+m22   low [high]
+apex
+m23   low [high]
+acme
+m24   low [high]
+zeta
+m25   low [high]
+↑↓ move · ←→ level · PageUp PageDown page · Tab scope · Ctrl+R refresh · Esc clo
+>

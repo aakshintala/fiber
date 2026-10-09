@@ -141,6 +141,9 @@ impl App {
                 }
             }
             (None, Spot::Row(_)) => Act::Stay,
+            // Only the model picker draws cells with targets of their
+            // own; here a cell is never pushed.
+            (_, Spot::Cell(_, _)) => Act::Stay,
         };
         self.config_act(act)
     }
@@ -159,6 +162,12 @@ impl App {
             }
             Act::Open(file) => Effect::OpenFile(file),
         }
+    }
+
+    /// Closes the open view, if one is open: one swapped view shows at
+    /// a time, so opening the model picker closes a configuration view.
+    pub(in crate::app) fn close_config_view(&mut self) {
+        self.config_views.open = None;
     }
 
     /// The open view's frame.
@@ -180,6 +189,17 @@ impl App {
                 footer: "Esc close".to_owned(),
             },
         })
+    }
+
+    /// The last call's prompt size on the session on screen, if its
+    /// call was the session's own: what a reload's cache rebuild costs.
+    /// A copied or extension call, or another session's, counts nothing.
+    pub(in crate::app) fn usage_on_screen(&self) -> Option<u64> {
+        self.config_views
+            .usage
+            .as_ref()
+            .filter(|(session, _)| self.session() == Some(session))
+            .map(|(_, tokens)| *tokens)
     }
 
     /// The theme a choice queued, once.

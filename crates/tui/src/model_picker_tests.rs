@@ -3,6 +3,7 @@
 
 use super::{Mode, ModelPicker, preselect, visible};
 use crate::catalogue::{Catalogue, ModelEntry};
+use crate::keys::Key;
 
 fn entry(
     reference: &str,
@@ -223,5 +224,206 @@ fn toggle_moves_the_selection_to_the_first_row_when_its_model_hides() {
     picker.move_row(2);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(2));
     picker.toggle_show_all();
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+}
+
+/// An open picker over `models`: the selection on the first row.
+fn open_over(models: Vec<ModelEntry>) -> ModelPicker {
+    let mut picker = ModelPicker {
+        catalogue: Catalogue {
+            models,
+            notices: Vec::new(),
+        },
+        ..ModelPicker::default()
+    };
+    picker.open(Mode::Choose, None);
+    picker
+}
+
+#[test]
+fn page_keys_move_by_the_height_less_one_clamped() {
+    let mut picker = open_over(catalogue());
+    // A page is the height less one, as the list moves.
+    picker.move_page(&Key::PageDown, 3);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(2));
+    picker.move_page(&Key::PageDown, 3);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(4));
+    picker.move_page(&Key::PageUp, 3);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(2));
+    picker.move_page(&Key::PageUp, 3);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    // A one-row page still moves by one.
+    picker.move_page(&Key::PageDown, 1);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(1));
+    // Any other key leaves the selection where it was.
+    picker.move_page(&Key::Enter, 3);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(1));
+}
+
+#[test]
+fn page_keys_do_nothing_closed_empty_or_without_height() {
+    let mut closed = ModelPicker {
+        catalogue: Catalogue {
+            models: catalogue(),
+            notices: Vec::new(),
+        },
+        ..ModelPicker::default()
+    };
+    closed.move_page(&Key::PageDown, 3);
+    assert!(closed.open.is_none());
+
+    // A scope matching nothing lists no rows to page over.
+    let mut picker = ModelPicker {
+        catalogue: Catalogue {
+            models: catalogue(),
+            notices: Vec::new(),
+        },
+        scoped: vec!["gone/x".to_owned()],
+        ..ModelPicker::default()
+    };
+    picker.open(Mode::Choose, None);
+    picker.move_page(&Key::PageDown, 3);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+
+    // With no height nothing moves.
+    let mut picker = open_over(catalogue());
+    picker.move_page(&Key::PageDown, 0);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+}
+
+#[test]
+fn the_status_says_reading_until_the_first_answer() {
+    let mut picker = open_over(Vec::new());
+    // Opening asks `Stale`, so a read is owed.
+    assert_eq!(
+        picker.frame(24, None).map(|frame| frame.below),
+        Some(vec!["Reading the model lists…".to_owned()])
+    );
+    // Taken but unanswered, a read is out: still reading.
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    assert_eq!(
+        picker.frame(24, None).map(|frame| frame.below),
+        Some(vec!["Reading the model lists…".to_owned()])
+    );
+    // A running refresh beside a catalogue shows on its own line.
+    picker.store(Ok(Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+    }));
+    assert_eq!(picker.take_read(), None);
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(
+        picker.frame(24, None).map(|frame| frame.below),
+        Some(vec!["refreshing…".to_owned()])
+    );
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(
+        picker.frame(24, None).map(|frame| frame.below),
+        Some(Vec::new())
+    );
+}
+
+#[test]
+fn a_read_error_with_no_catalogue_shows_the_error() {
+    let mut picker = open_over(Vec::new());
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    picker.store(Err("the lists could not be read".to_owned()));
+    assert_eq!(
+        picker.frame(24, None).map(|frame| frame.below),
+        Some(vec!["the lists could not be read".to_owned()])
+    );
+    // With a catalogue kept, the error shows as a notice instead: the
+    // app pushes it, so the frame says nothing.
+    let mut picker = open_over(catalogue());
+    picker.store(Err("the lists could not be read".to_owned()));
+    assert_eq!(
+        picker.frame(24, None).map(|frame| frame.below),
+        Some(Vec::new())
+    );
+}
+
+#[test]
+fn an_answered_empty_catalogue_names_the_install() {
+    let mut picker = open_over(Vec::new());
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    picker.store(Ok(Catalogue::default()));
+    assert_eq!(
+        picker.frame(24, None).map(|frame| frame.below),
+        Some(vec![
+            "No models. Install a provider: fiber extension install <name>.".to_owned()
+        ])
+    );
+}
+
+#[test]
+fn the_header_names_the_rebuild_size_only_with_a_usage() {
+    let picker = open_over(catalogue());
+    assert_eq!(
+        picker.frame(24, Some(180_412)).map(|frame| frame.title),
+        Some("Models · switching rebuilds the cache: about 180,412 tokens".to_owned())
+    );
+    assert_eq!(
+        picker.frame(24, None).map(|frame| frame.title),
+        Some("Models".to_owned())
+    );
+}
+
+#[test]
+fn clicks_select_rows_chips_and_buttons() {
+    let mut models = catalogue();
+    models[0].roles = vec!["review".to_owned()];
+    let mut picker = ModelPicker {
+        catalogue: Catalogue {
+            models,
+            notices: Vec::new(),
+        },
+        scoped: vec!["acme/m1".to_owned(), "zeta/z3".to_owned()],
+        ..ModelPicker::default()
+    };
+    picker.open(Mode::Choose, None);
+    // Frame rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1` with
+    // its roles cell, 3 the `zeta` heading, 4 `zeta/z3`.
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    // A heading selects nothing.
+    picker.select_frame_row(1);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    picker.click_cell(3, 0);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    // The buttons row selects nothing either.
+    picker.select_frame_row(0);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    // A name cell selects its row.
+    picker.click_cell(4, 0);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(4));
+    // A roles cell selects its row without touching its chip.
+    picker.click_cell(2, 1);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    assert!(
+        picker
+            .open
+            .as_ref()
+            .is_some_and(|open| open.touched.iter().all(|touched| !touched))
+    );
+    // A chip selects its row at that level, marking it touched:
+    // `acme/m1` declares `low` then `high`, past its roles cell.
+    picker.click_cell(2, 3);
+    let open = picker.open.as_ref().unwrap();
+    assert_eq!(open.selected, 0);
+    assert_eq!(open.chips.first().copied().flatten(), Some(1));
+    assert!(open.touched.first().copied().unwrap_or(false));
+    // Past the last chip, a click only selects.
+    picker.click_cell(2, 9);
+    let open = picker.open.as_ref().unwrap();
+    assert_eq!(open.selected, 0);
+    assert_eq!(open.chips.first().copied().flatten(), Some(1));
+    // The refresh button asks `Every`; the scope line toggles.
+    picker.click_cell(0, 0);
+    assert_eq!(picker.want, Some(crate::catalogue::Refresh::Every));
+    assert!(picker.open.as_ref().is_some_and(|open| !open.show_all));
+    picker.click_cell(0, 1);
+    assert!(picker.open.as_ref().is_some_and(|open| open.show_all));
+    // A row past the frame selects nothing.
+    picker.click_cell(40, 0);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
 }

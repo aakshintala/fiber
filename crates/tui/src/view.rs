@@ -88,10 +88,10 @@ pub(crate) fn render(
         chrome::floor(line, area, buf);
         return Vec::new();
     }
-    // A configuration view takes home's place (`docs/tui.md`, "Swapped
-    // views"). Notices float above it (`docs/tui.md`, "Notices"), as
+    // A swapped view takes home's place (`docs/tui.md`, "Swapped
+    // views"): the configuration view or the model picker. Notices float above it (`docs/tui.md`, "Notices"), as
     // over the conversation.
-    if app.config_view_open() && app.on_home() {
+    if (app.config_view_open() || app.model_picker_open()) && app.on_home() {
         let mut targets = Vec::new();
         crate::swapped::draw(app, area, buf, &mut targets);
         notices(app, area, buf, &mut targets);
@@ -186,10 +186,11 @@ pub(crate) fn render(
                 .render(conversation, buf);
             overlay_cross(buf, conversation, &mut targets);
         }
-        // A configuration view swaps in for the conversation. Notices
+        // A swapped view takes the conversation's place: the
+        // configuration view or the model picker. Notices
         // float above it (`docs/tui.md`, "Notices"), as over the
         // conversation.
-        None if app.config_view_open() => {
+        None if app.config_view_open() || app.model_picker_open() => {
             crate::swapped::draw(app, conversation, buf, &mut targets);
             notices(app, conversation, buf, &mut targets);
         }
@@ -386,8 +387,8 @@ fn input_box(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
 /// shown form's caret wins over an open repository offer, which already
 /// gives the panel its keys.
 pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
-    // A configuration view draws its own caret.
-    if app.chrome().floor_line().is_some() || app.config_view_open() {
+    // A swapped view draws its own caret, if it has one.
+    if app.chrome().floor_line().is_some() || app.config_view_open() || app.model_picker_open() {
         return None;
     }
     if let Some(screen) = app.home_screen() {

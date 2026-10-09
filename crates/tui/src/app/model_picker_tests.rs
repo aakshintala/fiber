@@ -560,3 +560,250 @@ fn open_starts_on_the_home_chips_model_and_level() {
     assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
     assert_eq!(chip(&app).as_deref(), Some("low"));
 }
+
+const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
+const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
+
+/// One envelope of `session`.
+fn session_line(session: &str, kind: &str, payload: serde_json::Value) -> crate::link::Line {
+    crate::link::Line::Session(contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+/// A `preamble_built` naming `model` with `thinking`.
+fn preamble_line(model: &str, thinking: Option<&str>) -> crate::link::Line {
+    session_line(
+        SESSION,
+        "preamble_built",
+        serde_json::json!({
+            "reason": "start", "model": model, "context_window": 200000,
+            "trigger_at": 150000, "thinking": thinking,
+            "tool_choice": "auto", "cache_lifetime": "5m",
+            "system_prompt": "", "tools": [],
+        }),
+    )
+}
+
+/// A `model_changed` to `model` with `thinking`.
+fn changed_line(model: &str, thinking: Option<&str>) -> crate::link::Line {
+    session_line(
+        SESSION,
+        "model_changed",
+        serde_json::json!({
+            "before": {"model": "old/model", "cache_lifetime": "5m"},
+            "after": {"model": model, "thinking": thinking, "cache_lifetime": "5m"},
+            "source": "driver",
+        }),
+    )
+}
+
+/// A `usage_recorded` of `input`, `cache_read` and `cache_write` tokens on
+/// `session`, with `extra` merged in: an origin or extension marker.
+fn usage_line(
+    session: &str,
+    input: u64,
+    cache_read: u64,
+    cache_write: serde_json::Value,
+    extra: serde_json::Value,
+) -> crate::link::Line {
+    let mut payload = serde_json::json!({
+        "generation_id": "g_1", "model": "acme/m1",
+        "tokens": {"input": input, "cache_read": cache_read,
+            "cache_write": cache_write, "output": 5},
+        "input_bytes": 1, "cost": null,
+    });
+    for (key, value) in extra.as_object().cloned().unwrap_or_default() {
+        payload[key] = value;
+    }
+    session_line(session, "usage_recorded", payload)
+}
+
+/// Thirty models on one provider, without levels.
+fn thirty() -> Catalogue {
+    Catalogue {
+        models: (0..30)
+            .map(|at| {
+                let reference = format!("acme/m{at:02}");
+                ModelEntry {
+                    reference: reference.clone(),
+                    provider: "acme".to_owned(),
+                    id: format!("m{at:02}"),
+                    levels: Vec::new(),
+                    default_level: None,
+                    configured: None,
+                    roles: Vec::new(),
+                }
+            })
+            .collect(),
+        notices: Vec::new(),
+    }
+}
+
+#[test]
+fn page_keys_move_by_a_page_clamped() {
+    let mut app = home();
+    app.on_models(Ok(thirty()));
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    // Home shows 24 rows less the header and footer: a page is 21.
+    assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m21"));
+    assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m29"));
+    assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m08"));
+    assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m00"));
+    assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m00"));
+}
+
+#[test]
+fn the_current_model_preselects_its_level_after_model_changed() {
+    let mut app = attached();
+    app.on_models(Ok(three()));
+    app.on_line(preamble_line("zeta/z1", Some("low")));
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    // The fold's model wins over catalogue order, and its level over the
+    // row's configured one.
+    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    app.on_line(changed_line("acme/m2", None));
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m2"));
+    assert_eq!(chip(&app), None);
+}
+
+#[test]
+fn the_cross_closes_it() {
+    let mut app = home();
+    app.on_models(Ok(three()));
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert!(app.model_picker_open());
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Close)),
+        Effect::None
+    );
+    assert!(!app.model_picker_open());
+}
+
+#[test]
+fn the_header_shows_the_rebuild_size_of_the_session_on_screen() {
+    let mut app = attached();
+    app.on_models(Ok(three()));
+    // Another session's call, a copy of this one's, and an extension's
+    // count nothing.
+    app.on_line(usage_line(
+        OTHER,
+        1000,
+        200000,
+        json!({"1h": 34}),
+        json!({}),
+    ));
+    app.on_line(usage_line(
+        SESSION,
+        1,
+        0,
+        json!({}),
+        json!({"origin_session_id": OTHER}),
+    ));
+    app.on_line(usage_line(
+        SESSION,
+        1,
+        0,
+        json!({}),
+        json!({"extension": "x"}),
+    ));
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert_eq!(
+        app.model_picker_frame(24).map(|frame| frame.title),
+        Some("Models".to_owned())
+    );
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    app.on_line(usage_line(
+        SESSION,
+        1000,
+        200000,
+        json!({"1h": 34}),
+        json!({}),
+    ));
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert_eq!(
+        app.model_picker_frame(24).map(|frame| frame.title),
+        Some("Models · switching rebuilds the cache: about 201,034 tokens".to_owned())
+    );
+    // On home no session is on screen, so no size shows.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    app.go_home();
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert_eq!(
+        app.model_picker_frame(24).map(|frame| frame.title),
+        Some("Models".to_owned())
+    );
+}
+
+#[test]
+fn clicks_on_refresh_and_the_scope_line_act_as_their_keys() {
+    use crate::catalogue::Refresh;
+
+    let mut app = scoped_home(&["acme/m1", "zeta/z1"]);
+    app.on_models(Ok(three()));
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert_eq!(app.take_reads(), Some(Refresh::Stale));
+    // The refresh button asks `Every`.
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
+            0, 0
+        ))),
+        Effect::None
+    );
+    assert_eq!(app.take_reads(), Some(Refresh::Every));
+    // The scope line toggles "show all", staying open either way.
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
+            0, 1
+        ))),
+        Effect::None
+    );
+    assert!(
+        app.model_picker
+            .open
+            .as_ref()
+            .is_some_and(|open| open.show_all)
+    );
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
+            0, 1
+        ))),
+        Effect::None
+    );
+    assert!(
+        app.model_picker
+            .open
+            .as_ref()
+            .is_some_and(|open| !open.show_all)
+    );
+    assert!(app.model_picker_open());
+}
+
+#[test]
+fn opening_the_picker_closes_a_config_view() {
+    use std::sync::Arc;
+
+    let mut app = home();
+    app.set_configure(Some(
+        Arc::new(crate::configure_fake::Fake::new(vec![])) as Arc<dyn crate::Configure>
+    ));
+    app.open_config_view(super::super::ConfigView::Settings);
+    assert!(app.config_view_open());
+    app.open_model_picker(crate::model_picker::Mode::Choose);
+    assert!(!app.config_view_open());
+    assert!(app.model_picker_open());
+}

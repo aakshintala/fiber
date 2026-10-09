@@ -5,9 +5,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 
-use super::{Frame, List, Spot, about, render, rows_height};
+use super::{Frame, Ink, List, Spot, about, render, rows_height};
 use crate::keys::Key;
 use crate::mouse::TargetId;
+use crate::theme::Role;
 
 /// A list after pressing `keys` over `rows` rows shown `height` at a time.
 fn pressed(keys: &[Key], rows: usize, height: usize) -> List {
@@ -112,7 +113,7 @@ fn frame(rows: usize) -> Frame {
     Frame {
         title: "Settings".to_owned(),
         rows: (0..rows)
-            .map(|at| vec![(format!("row {at}"), None)])
+            .map(|at| vec![(format!("row {at}"), None, Ink::Plain)])
             .collect(),
         list: List::default(),
         below: vec!["below".to_owned()],
@@ -155,6 +156,53 @@ fn the_frame_draws_the_header_rows_below_and_footer() {
             TargetId::View(Spot::Row(0)),
             TargetId::View(Spot::Row(1)),
             TargetId::View(Spot::Row(2)),
+        ]
+    );
+}
+
+#[test]
+fn a_heading_cell_is_bold_and_a_muted_cell_is_muted() {
+    let frame = Frame {
+        title: "Models".to_owned(),
+        rows: vec![
+            vec![("acme".to_owned(), None, Ink::Heading)],
+            vec![
+                ("m1  ".to_owned(), Some(Spot::Cell(1, 0)), Ink::Plain),
+                (
+                    " · review   ".to_owned(),
+                    Some(Spot::Cell(1, 1)),
+                    Ink::Muted,
+                ),
+            ],
+        ],
+        list: List::default(),
+        below: Vec::new(),
+        field: None,
+        footer: "keys".to_owned(),
+    };
+    let area = Rect::new(0, 0, 20, 4);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    render(&frame, area, &mut buf, &mut targets);
+    // The heading draws bold, the plain and muted cells do not.
+    assert!(buf[(0, 1)].modifier.contains(Modifier::BOLD));
+    assert!(!buf[(0, 2)].modifier.contains(Modifier::BOLD));
+    assert!(!buf[(5, 2)].modifier.contains(Modifier::BOLD));
+    // The muted cell draws in the muted role's colour; the plain cells
+    // keep the default colour.
+    assert_eq!(buf[(5, 2)].fg, Role::Muted.color());
+    assert_eq!(buf[(0, 1)].fg, ratatui::style::Color::Reset);
+    assert_eq!(buf[(0, 2)].fg, ratatui::style::Color::Reset);
+    // Each cell with a target of its own pushes it after its row's.
+    let ids: Vec<TargetId> = targets.iter().map(|target| target.id).collect();
+    assert_eq!(
+        ids,
+        [
+            TargetId::View(Spot::Close),
+            TargetId::View(Spot::Row(0)),
+            TargetId::View(Spot::Row(1)),
+            TargetId::View(Spot::Cell(1, 0)),
+            TargetId::View(Spot::Cell(1, 1)),
         ]
     );
 }

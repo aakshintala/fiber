@@ -6,6 +6,7 @@ use super::App;
 use crate::catalogue::{Catalogue, Refresh};
 use crate::keys::{Edit, Key};
 use crate::model_picker::Mode;
+use crate::swapped::{Frame, Spot, rows_height};
 
 impl App {
     /// Folds a model-list read's answer: each catalogue notice shows once,
@@ -30,25 +31,45 @@ impl App {
     }
 
     /// Opens the model picker: each open starts fresh, on the on-screen
-    /// model's row on home, else the first row. Each open asks `Stale`.
+    /// model's row, else the first row. On home the chips name it; attached,
+    /// the panel fold does. Each open asks `Stale`. One swapped view shows
+    /// at a time, so an open configuration view closes.
     pub(crate) fn open_model_picker(&mut self, mode: Mode) -> super::Effect {
-        // On home the selection starts on the home chips' model; attached,
-        // the panel fold names it once drawing lands, so until then the
-        // first row.
-        let on_screen = self
-            .home
-            .as_ref()
-            .filter(|_| self.on_home())
-            .and_then(|home| {
+        self.close_config_view();
+        let on_screen = if self.on_home() {
+            self.home.as_ref().and_then(|home| {
                 home.launch
                     .model
                     .as_deref()
                     .map(|model| (model, home.launch.thinking.as_deref()))
-            });
+            })
+        } else {
+            self.panel_state
+                .model()
+                .map(|model| (model, self.panel_state.thinking()))
+        };
         self.model_picker.open(mode, on_screen);
         super::Effect::None
     }
 
+    /// A click on the open picker's `spot`: the ✕ closes it, the buttons
+    /// act as their keys, and a row or chip selects. Choosing is the next
+    /// task's; here a click only selects, sending nothing.
+    pub(crate) fn model_picker_click(&mut self, spot: Spot) -> super::Effect {
+        match spot {
+            Spot::Close => self.model_picker.close(),
+            Spot::Row(at) => self.model_picker.select_frame_row(at),
+            Spot::Cell(row, cell) => self.model_picker.click_cell(row, cell),
+        }
+        super::Effect::None
+    }
+
+    /// The open picker's frame at `height`: the header names the rebuild
+    /// size of the session on screen, if its last call is known. `None`
+    /// while the picker is closed.
+    pub(crate) fn model_picker_frame(&self, height: usize) -> Option<Frame> {
+        self.model_picker.frame(height, self.usage_on_screen())
+    }
     /// Whether the model picker is open.
     pub(crate) fn model_picker_open(&self) -> bool {
         self.model_picker.is_open()
@@ -80,6 +101,22 @@ impl App {
                 self.model_picker.refresh();
                 Some(super::Effect::None)
             }
+            Key::PageUp | Key::PageDown => {
+                // A page is the rows the list shows: the view's height
+                // less its header, status and footer.
+                let height = usize::from(if self.on_home() {
+                    self.screen.height()
+                } else {
+                    u16::try_from(self.conversation_height()).unwrap_or(u16::MAX)
+                });
+                let shown = self
+                    .model_picker
+                    .frame(height, self.usage_on_screen())
+                    .map(|frame| rows_height(&frame, height))
+                    .unwrap_or(height);
+                self.model_picker.move_page(key, shown);
+                Some(super::Effect::None)
+            }
             Key::Esc => {
                 self.model_picker.close();
                 Some(super::Effect::None)
@@ -90,8 +127,6 @@ impl App {
             | Key::Backspace
             | Key::Enter
             | Key::CtrlO
-            | Key::PageUp
-            | Key::PageDown
             | Key::End
             | Key::AltA
             | Key::BackTab

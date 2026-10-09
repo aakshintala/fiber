@@ -205,14 +205,15 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
     for _ in 0..7 {
         app.on_key(Key::Down, now());
     }
-    // The eighth row, still in the first window.
+    // The eighth row, still in the first window: `/model` sits between
+    // `/resume` and `/panel`.
     assert_eq!(
         selected(&app).as_deref(),
-        Some("/reload  Reloads configuration, MCP servers and extensions.  command")
+        Some("/name <text>  Names the session.  command")
     );
     assert_eq!(app.completions().and_then(|c| c.selected), Some(7));
     app.on_key(Key::Down, now());
-    // The ninth row: the window moves down by one.
+    // The ninth row is `/reload`: the window moves down by one.
     let completions = app.completions();
     assert_eq!(completions.as_ref().and_then(|c| c.selected), Some(7));
     assert_eq!(
@@ -221,6 +222,7 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
             .as_deref(),
         Some("/new  Goes home with the cursor in the input box.  command")
     );
+    app.on_key(Key::Down, now());
     app.on_key(Key::Down, now());
     app.on_key(Key::Down, now());
     app.on_key(Key::Down, now());
