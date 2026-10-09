@@ -1032,6 +1032,17 @@ fn listed_files() -> Vec<RustFile> {
     ]
 }
 
+/// `listed_files()` with the `contract` source replaced by `source`.
+fn listed_files_with_contract(source: &str) -> Vec<RustFile> {
+    let mut files = listed_files();
+    for file in &mut files {
+        if file.krate == "contract" {
+            *file = contract_src(source);
+        }
+    }
+    files
+}
+
 #[test]
 fn a_listed_include_passes() {
     let files = listed_files();
@@ -1047,14 +1058,7 @@ fn an_unlisted_outside_include_fails() {
         "{}include_str!(\"../../../README.md\");",
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-        tui_src(&listed_includes("tui")),
-        xtask_src(&listed_includes("xtask")),
-        main_src(&listed_includes("main")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         ["README.md: contract compiles it in, but the compiled-in list does not list it"]
@@ -1067,14 +1071,7 @@ fn an_unlisted_non_docs_outside_include_fails() {
         "{}include_str!(\"../../../LICENSE\");",
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-        tui_src(&listed_includes("tui")),
-        xtask_src(&listed_includes("xtask")),
-        main_src(&listed_includes("main")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         ["LICENSE: contract compiles it in, but the compiled-in list does not list it"]
@@ -1087,14 +1084,7 @@ fn an_unlisted_markdown_inside_the_crate_dir_fails() {
         "{}include_str!(\"../prompt/system.md\");",
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-        tui_src(&listed_includes("tui")),
-        xtask_src(&listed_includes("xtask")),
-        main_src(&listed_includes("main")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         [
@@ -1123,14 +1113,7 @@ fn a_non_docs_include_inside_the_crate_dir_is_unlisted() {
         "{}include_str!(\"owned.bin\");",
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-        tui_src(&listed_includes("tui")),
-        xtask_src(&listed_includes("xtask")),
-        main_src(&listed_includes("main")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         Vec::<String>::new()
@@ -1144,14 +1127,7 @@ fn a_raw_string_include_is_resolved() {
         r##"include_str!(r#"../../../README.md"#);"##,
     ] {
         let source = format!("{}{extra}", listed_includes("contract"));
-        let files = [
-            contract_src(&source),
-            loop_src(&listed_includes("loop")),
-            tools_src(&listed_includes("tools")),
-            tui_src(&listed_includes("tui")),
-            xtask_src(&listed_includes("xtask")),
-            main_src(&listed_includes("main")),
-        ];
+        let files = listed_files_with_contract(&source);
         assert_eq!(
             compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
             ["README.md: contract compiles it in, but the compiled-in list does not list it"],
@@ -1166,14 +1142,7 @@ fn an_unresolvable_include_argument_fails() {
         "{}include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../README.md\"));",
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-        tui_src(&listed_includes("tui")),
-        xtask_src(&listed_includes("xtask")),
-        main_src(&listed_includes("main")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         [
@@ -1185,14 +1154,7 @@ fn an_unresolvable_include_argument_fails() {
 #[test]
 fn another_macro_with_a_string_argument_yields_no_target() {
     let source = format!("{}my_macro!(\"../x.md\");", listed_includes("contract"));
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-        tui_src(&listed_includes("tui")),
-        xtask_src(&listed_includes("xtask")),
-        main_src(&listed_includes("main")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         Vec::<String>::new()
@@ -1205,14 +1167,7 @@ fn include_bytes_yields_its_target() {
         "{}include_bytes!(\"../x.md\");",
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-        tui_src(&listed_includes("tui")),
-        xtask_src(&listed_includes("xtask")),
-        main_src(&listed_includes("main")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         [
@@ -1228,14 +1183,7 @@ fn a_trailing_comma_on_an_include_is_accepted() {
         r#"include_bytes!("../../../README.md",);"#,
     ] {
         let source = format!("{}{extra}", listed_includes("contract"));
-        let files = [
-            contract_src(&source),
-            loop_src(&listed_includes("loop")),
-            tools_src(&listed_includes("tools")),
-            tui_src(&listed_includes("tui")),
-            xtask_src(&listed_includes("xtask")),
-            main_src(&listed_includes("main")),
-        ];
+        let files = listed_files_with_contract(&source);
         assert_eq!(
             compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
             ["README.md: contract compiles it in, but the compiled-in list does not list it"],
@@ -1250,14 +1198,7 @@ fn an_include_with_tokens_after_the_literal_fails() {
         r#"{}include_str!("a.md", "b");"#,
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-        tui_src(&listed_includes("tui")),
-        xtask_src(&listed_includes("xtask")),
-        main_src(&listed_includes("main")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         [
@@ -1607,14 +1548,7 @@ fn an_include_str_in_a_comment_is_ignored() {
         "{}// include_str!(\"../../../README.md\");",
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-        tui_src(&listed_includes("tui")),
-        xtask_src(&listed_includes("xtask")),
-        main_src(&listed_includes("main")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         Vec::<String>::new()
@@ -1745,6 +1679,66 @@ fn a_join_onto_a_temp_dir_is_not_a_run_time_read() {
         "crates/main/tests/ask.rs",
         "tests/ask.rs",
         "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet doc = std::fs::read_to_string(home.join(\"docs/README.md\")).unwrap();\nlet dir = home.join(\"docs/skills\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_join_on_a_bound_manifest_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet doc = std::fs::read_to_string(base.join(\"../../docs/tui.md\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_chained_bound_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "let a = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet b = a.join(\"x\");\nlet doc = b.join(\"docs/y\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/tui/src/theme_tests.rs: reads docs/y at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_bound_temp_dir_base_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let dir = tempdir().unwrap();\nlet doc = std::fs::read_to_string(dir.join(\"docs/README.md\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_let_without_the_manifest_binds_nothing() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = home_dir();\nlet p = base.join(\"docs/x\");\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
