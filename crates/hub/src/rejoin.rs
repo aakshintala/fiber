@@ -27,7 +27,8 @@ use crate::relay::Relays;
 /// Per connection, in `Relays`: what the sweep needs.
 #[derive(Default)]
 pub(crate) struct Rejoin {
-    /// One occurrence per `Opening` guard holding `session` open.
+    /// One occurrence per `Opening` guard holding `session` open;
+    /// never zero: `Drop` removes the last, so presence means opening.
     opening: HashMap<String, usize>,
     /// Per session, the `Mark` of its last relay.
     marks: HashMap<String, Mark>,
@@ -112,11 +113,7 @@ pub(crate) fn admit(
     if exclusive
         && (held.rejoin.closed
             || held.entries.iter().any(|entry| entry.session == session)
-            || held
-                .rejoin
-                .opening
-                .get(session)
-                .is_some_and(|open| *open > 0))
+            || held.rejoin.opening.contains_key(session))
     {
         return false;
     }
@@ -197,12 +194,7 @@ pub(crate) fn candidates(
             if held.entries.iter().any(|entry| entry.session == *session) {
                 return None;
             }
-            if held
-                .rejoin
-                .opening
-                .get(session)
-                .is_some_and(|open| *open > 0)
-            {
+            if held.rejoin.opening.contains_key(session) {
                 return None;
             }
             let mark = held.rejoin.marks.get(session)?.clone();
