@@ -10,6 +10,7 @@
 
 mod commands;
 mod extension_tools;
+mod first_party;
 mod git;
 mod hooks;
 mod host;
@@ -257,7 +258,8 @@ pub enum Error {
     },
     /// A model reference whose provider is not installed.
     #[error(
-        "The provider `{provider}` is not installed. Run `fiber extension install {provider}`."
+        "The provider `{provider}` is not installed. {}",
+        first_party::install_hint(provider)
     )]
     ProviderMissing {
         /// The provider.

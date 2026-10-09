@@ -191,6 +191,16 @@ pub enum SwitchScope {
     Everywhere,
 }
 
+/// Each person file's own `skills.disabled` (`docs/configuration.md`,
+/// "Layers"): the global list and the project's list both apply.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SkillsDisabled {
+    /// The project's `config.json` list.
+    pub project: Vec<String>,
+    /// The global `config.json` list.
+    pub everywhere: Vec<String>,
+}
+
 /// A layer's `tools.enabled` and `tools.disabled`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolLists {
@@ -286,6 +296,26 @@ pub trait Configure: Send + Sync {
         scope: SwitchScope,
         on: bool,
     ) -> Result<(), ConfigureError>;
+
+    // `/skills`.
+
+    /// Each person file's own `skills.disabled`, for `workspace`'s
+    /// project: the repository layer is never read.
+    fn skills_disabled(&self, workspace: &Path) -> Result<SkillsDisabled, ConfigureError>;
+
+    /// Switches `name` off or on in `scope`'s own `skills.disabled`:
+    /// `on` false adds the name, `on` true removes it.
+    fn switch_skill(
+        &self,
+        workspace: &Path,
+        name: &str,
+        scope: SwitchScope,
+        on: bool,
+    ) -> Result<(), ConfigureError>;
+
+    /// The text of the `SKILL.md` at `path`: at most 64 KiB, with `…`
+    /// when cut.
+    fn skill_text(&self, path: &Path) -> Result<String, ConfigureError>;
 }
 
 #[cfg(test)]

@@ -97,7 +97,7 @@ const MAX_MUTANT_SHARDS: u64 = 32;
 /// Crates whose tests read a first-party package under `providers/` or
 /// `extensions/` (`docs/ci.md`, "Selection"); sorted. Checked against the
 /// sources by `package_reader_mismatches`.
-const PACKAGE_READERS: &[&str] = &["config", "main"];
+const PACKAGE_READERS: &[&str] = &["config", "extensions", "main"];
 /// The package whose tests are the binary-level tests (`docs/ci.md`,
 /// "Selection"): the `fiber` binary.
 const BINARY_TESTS: &str = "main";

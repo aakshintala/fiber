@@ -512,8 +512,7 @@ fn apple_script_past_its_frame_cap_is_too_large() {
     reaped(watchdog, pgid, "the over frame-cap read");
 }
 
-/// Advances the clock to just before the limit and proves the worker
-/// parked again there; the answer channel is still empty.
+/// Waits for the worker to park at `end`, then [`advance_to_parked`].
 fn waiting(
     rx: &mpsc::Receiver<Result<Vec<u8>, Failed>>,
     clock: &Arc<FakeClock>,
@@ -524,7 +523,25 @@ fn waiting(
         clock.await_parked(end, DEADLINE),
         "{what}: the read never parked at its deadline"
     );
-    let mark = clock.advance_marked(LIMIT.checked_sub(Duration::from_millis(1)).unwrap());
+    advance_to_parked(rx, clock, end, what);
+}
+
+/// Advances the clock to just before the limit and proves the worker
+/// parked again there; the answer channel is still empty. The child can
+/// wake the worker between its first park and the advance, so the park to
+/// wait out is one that is live after the advance; a zero advance then
+/// wakes the worker out of it.
+fn advance_to_parked(
+    rx: &mpsc::Receiver<Result<Vec<u8>, Failed>>,
+    clock: &Arc<FakeClock>,
+    end: std::time::Instant,
+    what: &str,
+) {
+    clock.advance(LIMIT.checked_sub(Duration::from_millis(1)).unwrap());
+    let mark = clock
+        .mark_parked(end, DEADLINE)
+        .unwrap_or_else(|| panic!("{what}: the read never parked after the advance"));
+    clock.advance(Duration::ZERO);
     assert!(
         clock.await_parked_since(&mark, Some(end), DEADLINE),
         "{what}: the read never parked again before its deadline"
@@ -532,6 +549,146 @@ fn waiting(
     assert!(
         matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "{what}: the read answered before its deadline"
+    );
+}
+
+/// A clock that forwards to a [`FakeClock`] and, once armed, holds the
+/// caller just after its next `wait_until` returns: the worker has left
+/// its park and not parked again. The hold lasts until the clock moves.
+struct HoldingClock {
+    inner: Arc<FakeClock>,
+    armed: std::sync::atomic::AtomicBool,
+    left: std::sync::Mutex<mpsc::Sender<()>>,
+    moved: std::sync::Mutex<mpsc::Receiver<()>>,
+}
+
+struct Moved(std::sync::Mutex<mpsc::Sender<()>>);
+
+impl contract::clock::Wake for Moved {
+    fn wake(&self) {
+        match self.0.lock().unwrap().send(()) {
+            Ok(_) | Err(_) => {}
+        }
+    }
+}
+
+impl HoldingClock {
+    fn new(inner: Arc<FakeClock>) -> (Arc<Self>, mpsc::Receiver<()>) {
+        let (left_tx, left) = mpsc::channel();
+        let (moved_tx, moved_rx) = mpsc::channel();
+        let waker: Arc<dyn contract::clock::Wake> =
+            Arc::new(Moved(std::sync::Mutex::new(moved_tx)));
+        inner.subscribe(Arc::downgrade(&waker));
+        // The subscription is weak: the clock keeps the waker alive for
+        // the test's length.
+        std::mem::forget(waker);
+        let clock = Arc::new(Self {
+            inner,
+            armed: std::sync::atomic::AtomicBool::new(false),
+            left: std::sync::Mutex::new(left_tx),
+            moved: std::sync::Mutex::new(moved_rx),
+        });
+        (clock, left)
+    }
+}
+
+impl Clock for HoldingClock {
+    fn now(&self) -> std::time::Instant {
+        self.inner.now()
+    }
+    fn wall(&self) -> std::time::SystemTime {
+        self.inner.wall()
+    }
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d);
+    }
+    fn wait_until(
+        &self,
+        until: Option<std::time::Instant>,
+        wait: &mut dyn FnMut(Option<Duration>),
+    ) {
+        self.inner.wait_until(until, wait);
+        if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            self.left.lock().unwrap().send(()).unwrap();
+            self.moved
+                .lock()
+                .unwrap()
+                .recv_timeout(DEADLINE)
+                .expect("the held worker was never released: the clock did not move");
+        }
+    }
+    fn subscribe(&self, waker: std::sync::Weak<dyn contract::clock::Wake>) {
+        self.inner.subscribe(waker);
+    }
+}
+
+/// Runs `script` (which blocks on the `go` FIFO before its event) under a
+/// read whose worker is held between parks when the event wakes it, and
+/// checks that `advance_to_parked` still sees the worker park again.
+fn event_wakes_the_worker_before_the_advance(
+    test: &ChildTest,
+    script: &str,
+    cap: usize,
+    what: &str,
+) {
+    let go = test.dir.path().join("go");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&go)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let fake = FakeClock::new();
+    let end = fake.now() + LIMIT;
+    let (held, left) = HoldingClock::new(Arc::clone(&fake));
+    let reader = test.reader(
+        &script.replace("GO", &go.display().to_string()),
+        Decode::Raw,
+    );
+    let (tx, rx) = mpsc::channel();
+    let clock: Arc<dyn Clock> = held.clone();
+    std::thread::spawn(move || {
+        tx.send(read(&reader, &clock, LIMIT, cap)).unwrap();
+    });
+    let (watchdog, pgid) = watch(test);
+    let _ = test.ready.wait(DEADLINE);
+    assert!(fake.await_parked(end, DEADLINE), "{what}: never parked");
+    held.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    std::thread::spawn(move || std::fs::write(go, "go\n").unwrap());
+    left.recv_timeout(DEADLINE)
+        .unwrap_or_else(|_| panic!("{what}: the worker never left its park"));
+    advance_to_parked(&rx, &fake, end, what);
+    fake.advance(Duration::from_millis(1));
+    assert_eq!(answered(&rx, what), Err(Failed::TimedOut));
+    reaped(watchdog, pgid, what);
+}
+
+#[test]
+fn the_exact_cap_bytes_waking_the_worker_before_the_advance_still_park_it() {
+    let test = ChildTest::new();
+    event_wakes_the_worker_before_the_advance(
+        &test,
+        &format!(
+            "sleep 3600 & echo $! >> '{}'; read line < 'GO'; printf '1234567890123456'; wait",
+            test.ready_path().display()
+        ),
+        16,
+        "the exact-cap live child",
+    );
+}
+
+#[test]
+fn the_shell_exit_waking_the_worker_before_the_advance_still_parks_it() {
+    let test = ChildTest::new();
+    event_wakes_the_worker_before_the_advance(
+        &test,
+        &format!(
+            "sleep 3600 & echo $! >> '{}'; read line < 'GO'; exit 0",
+            test.ready_path().display()
+        ),
+        1024,
+        "the exited shell",
     );
 }
 

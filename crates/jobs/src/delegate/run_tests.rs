@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -43,11 +43,12 @@ const BOUND: Duration = Duration::from_secs(5);
 struct Script {
     clock: Arc<FakeClock>,
     calls: Mutex<Vec<std::time::Instant>>,
+    /// Notified on every recorded call.
+    called: Condvar,
     replies: Mutex<VecDeque<WatchReply>>,
 }
 
 enum WatchReply {
-    Refused,
     Closed(Vec<Envelope>),
     Exited(Vec<Envelope>),
     /// Blocks until the test releases the gate, at most the wall bound:
@@ -61,6 +62,7 @@ impl Script {
         Arc::new(Self {
             clock: Arc::clone(clock),
             calls: Mutex::new(Vec::new()),
+            called: Condvar::new(),
             replies: Mutex::new(replies.into()),
         })
     }
@@ -71,8 +73,9 @@ impl Script {
         on_line: &mut dyn FnMut(&Envelope),
     ) -> io::Result<Watched> {
         self.calls.lock().unwrap().push(self.clock.now());
+        self.called.notify_all();
         match self.replies.lock().unwrap().pop_front() {
-            None | Some(WatchReply::Refused) => Err(io::Error::other("refused")),
+            None => Err(io::Error::other("refused")),
             Some(WatchReply::Closed(lines)) => {
                 for line in &lines {
                     on_line(line);
@@ -94,6 +97,16 @@ impl Script {
 
     fn calls(&self) -> Vec<std::time::Instant> {
         self.calls.lock().unwrap().clone()
+    }
+
+    /// Waits, at most `within` of real time, until the watch ran `n`
+    /// times. True once it has; false at the deadline.
+    fn await_calls(&self, n: usize, within: Duration) -> bool {
+        let (calls, _) = self
+            .called
+            .wait_timeout_while(self.calls.lock().unwrap(), within, |calls| calls.len() < n)
+            .unwrap();
+        calls.len() >= n
     }
 }
 
@@ -253,6 +266,33 @@ fn reported(rig: &Rig) -> contract::inbox::JobNotice {
     panic!("the runner did not report");
 }
 
+/// Wakes the runner by one poll interval at a time, each only once it is
+/// parked on the clock with every deadline ahead of `now()`: it has finished
+/// a pass and waits for the next wake. Stops when it parks `bound` ahead of
+/// `now()`, which only the wait for the drain does: the clock has not moved
+/// since the reap, and an ordinary poll parks at most one interval ahead.
+/// One wall-clock deadline covers the whole loop, so a runner that never
+/// reaches the drain fails the test instead of hanging it.
+fn wake_until_draining(clock: &Arc<FakeClock>, bound: Duration) {
+    within("the runner waits for the drain", DEADLINE, {
+        let clock = Arc::clone(clock);
+        move || {
+            loop {
+                let parked = clock.parked();
+                let now = clock.now();
+                if parked.iter().flatten().any(|until| *until >= now + bound) {
+                    return;
+                }
+                if !parked.is_empty() && parked.iter().flatten().all(|until| *until > now) {
+                    clock.advance(Duration::from_secs(1));
+                } else {
+                    thread::yield_now();
+                }
+            }
+        }
+    });
+}
+
 /// A FIFO `shell` blocks reading until the test writes. Short-lived and
 /// stdio-null, so it holds no harness pipe even briefly.
 fn fifo(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
@@ -318,25 +358,14 @@ fn pid_in_file(pid: &std::path::Path) -> u32 {
     })
 }
 
-/// Waits until the fake watch ran `n` times, driving the clock. Bounds the
-/// wait, so a runner that stops calling fails instead of hanging. Each
-/// step gives the runner wall time: advances alone cost it none. A report
-/// arriving here fails fast: swallowing it would hang the fifo write that
-/// follows on an exited child.
+/// Waits until the fake watch ran `n` times, under one wall-clock
+/// deadline that only guards against a hang. It never moves the clock:
+/// a caller that needs time to pass advances it itself.
 fn wait_calls(rig: &Rig, n: usize) {
-    for _ in 0..400 {
-        if rig.script.calls().len() >= n {
-            return;
-        }
-        rig.clock.advance(Duration::from_millis(50));
-        if rig.inbox.recv_timeout(Duration::from_millis(5)).is_ok() {
-            panic!("the runner reported before the child could exit");
-        }
-        if rig.script.calls().len() >= n {
-            return;
-        }
-    }
-    panic!("the watch was not called {n} times");
+    assert!(
+        rig.script.await_calls(n, DEADLINE),
+        "the watch was not called {n} times"
+    );
 }
 
 /// Waits until `shell` writes its readiness file: its traps are armed, so
@@ -500,35 +529,15 @@ fn a_delayed_drain_still_feeds_the_fold() {
     // The watch never connects: only the drain can carry the line.
     let rig = rig(vec![]);
     rig.start(&shell, Duration::from_secs(30), 1024);
-    // Three wakes give the runner its reap; nothing is reported yet,
-    // because the fold waits for the drain.
-    for _ in 0..3 {
-        rig.clock.advance(Duration::from_millis(50));
-        rig.inbox
-            .recv_timeout(Duration::from_millis(20))
-            .expect_err("the fold waits for the drain");
-    }
     // The runner is waiting for the drain once it is parked at the stop
-    // bound; the clock stays still from here, so only the drain's end can
-    // wake it.
-    let at_bound = rig.clock.origin() + Duration::from_secs(30);
-    let mut parked_at_bound = false;
-    for _ in 0..150 {
-        if rig
-            .clock
-            .parked()
-            .iter()
-            .flatten()
-            .any(|until| *until >= at_bound)
-        {
-            parked_at_bound = true;
-            break;
-        }
-        rig.inbox
-            .recv_timeout(Duration::from_millis(20))
-            .expect_err("the fold waits for the drain");
-    }
-    assert!(parked_at_bound, "the runner waits for the drain");
+    // bound. Each wake is given only after the runner has parked on the
+    // clock, so the reap lands on a wake it is waiting for; the clock stays
+    // still once the bound park is seen, so only the drain's end can wake it.
+    wake_until_draining(&rig.clock, Duration::from_secs(30));
+    assert!(
+        rig.inbox.try_recv().is_err(),
+        "the fold waits for the drain"
+    );
     release_fifo(&release, b"go\n");
     let Ok(Delivery::Job(notice)) = rig.inbox.recv_timeout(DEADLINE) else {
         panic!("the drain's end did not wake the runner");
@@ -611,44 +620,48 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
         pidfile.display(),
         fifo.display()
     );
-    let rig = rig(vec![
-        WatchReply::Refused,
-        WatchReply::Refused,
-        WatchReply::Refused,
-        WatchReply::Refused,
-        WatchReply::Refused,
-        WatchReply::Refused,
-        WatchReply::Refused,
-        WatchReply::Exited(vec![
-            envelope(9, "turn_completed", serde_json::json!({})),
-            exited_line(10, "Bound."),
-        ]),
-    ]);
+    // Each refused call is held until the test releases it, so the runner's
+    // park on the poll horizon while it runs is told apart from its park
+    // on the retry: once the backoff caps at the poll, both share a
+    // deadline.
+    let (gates, mut replies): (Vec<_>, Vec<_>) = (0..7)
+        .map(|_| {
+            let (gate, held) = mpsc::channel();
+            (gate, WatchReply::Block(held))
+        })
+        .unzip();
+    replies.push(WatchReply::Exited(vec![
+        envelope(9, "turn_completed", serde_json::json!({})),
+        exited_line(10, "Bound."),
+    ]));
+    let rig = rig(replies);
     rig.start(&shell, BOUND, 1024);
     let pgid = pid_in_file(&pidfile);
     let watchdog = Watchdog::group(pgid);
-    let first = within("the first watch call", DEADLINE, {
-        let script = Arc::clone(&rig.script);
-        move || loop {
-            if let Some(first) = script.calls().first() {
-                return *first;
-            }
-            thread::yield_now();
-        }
-    });
+    wait_calls(&rig, 1);
     // 50, 100, 200, 400, 800 ms, then capped at 1 s, never more often.
-    let mut at = first;
-    for gap in [50, 100, 200, 400, 800, 1000, 1000] {
+    let mut at = rig.script.calls()[0];
+    for (held, (gate, gap)) in gates
+        .iter()
+        .zip([50, 100, 200, 400, 800, 1000, 1000])
+        .enumerate()
+    {
+        // The call is held: the runner parks on the poll horizon. Its
+        // next park, once it has taken the refusal, is the retry.
+        let running = rig
+            .clock
+            .mark_parked(at + super::POLL, DEADLINE)
+            .expect("the runner parks while the watch runs");
+        gate.send(()).expect("the held watch takes its release");
         at += Duration::from_millis(gap);
         assert!(
-            rig.clock.await_parked(at, DEADLINE),
+            rig.clock.await_parked_since(&running, Some(at), DEADLINE),
             "the runner parks until {at:?}"
         );
         rig.clock.advance(Duration::from_millis(gap));
+        wait_calls(&rig, held + 2);
     }
-    // The eighth call succeeds; the child binds and its lines flow. It
-    // lands a wake after the seventh retry is consumed, so wait for it.
-    wait_calls(&rig, 8);
+    // The eighth call succeeds; the child binds and its lines flow.
     release_fifo(&fifo, b"go\n");
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Completed);
@@ -688,8 +701,19 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
     rig.start(&shell, BOUND, 1024);
     // The child waits for the third delivery before it may exit: the
-    // replay above cannot win the race with the reap.
-    wait_calls(&rig, 3);
+    // replay above cannot win the race with the reap. Each close backs
+    // the retry off 50 ms, then 100 ms, from the first call.
+    wait_calls(&rig, 1);
+    let mut at = rig.script.calls()[0];
+    for (gap, calls) in [(50, 2), (100, 3)] {
+        at += Duration::from_millis(gap);
+        assert!(
+            rig.clock.await_parked(at, DEADLINE),
+            "the runner parks until {at:?}"
+        );
+        rig.clock.advance(Duration::from_millis(gap));
+        wait_calls(&rig, calls);
+    }
     release_fifo(&fifo, b"go\n");
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Completed);

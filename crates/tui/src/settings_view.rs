@@ -138,12 +138,13 @@ pub(crate) enum Act {
 }
 
 /// What a view's call needs from the app: the seam, the workspace the
-/// view is about, the view's height in rows, and the last call's prompt
-/// size on the session on screen.
+/// view is about, the view's height in rows and its width in columns,
+/// and the last call's prompt size on the session on screen.
 pub(crate) struct Ctx<'a> {
     pub(crate) seam: &'a dyn Configure,
     pub(crate) workspace: &'a Path,
     pub(crate) height: usize,
+    pub(crate) width: usize,
     pub(crate) usage: Option<u64>,
 }
 
