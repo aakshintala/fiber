@@ -14,22 +14,26 @@ use super::{
 };
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
+use crate::cases::{Case, Surface};
 use std::io::{self, Write};
 use unicode_width::UnicodeWidthStr;
 
 /// Every `--home` case, named in README.md.
-pub(crate) const CASES: &[&str] = &[
-    "empty",
-    "sessions",
-    "hover-workspace",
-    "hover-worktree",
-    "hover-model",
-    "hover-thinking",
-    "worktree-on",
-    "worktree-off",
-    "picker-recent",
-    "picker-typed",
+const CASES: &[Case<Look>] = &[
+    Case { name: "empty", help: "no sessions yet: logo, input box, chips", check: "the logo should read as pixel letters four rows tall (⌇ in accent, the name in the accent gradient, `0.0.1` dim on the last row); under it the large input box with `/? for shortcuts`, the chip row and `enter starts a session`; under the box one dim `No sessions yet` line; the key hint at the foot.", build: || Look { sessions: false, ..base() } },
+    Case { name: "sessions", help: "six exited sessions listed", check: "six exited rows, each `○ name · spend`, the three outside the launch project with their workspace's last segment; the long pi-rig name should fit without pushing the spend off the row.", build: || base() },
+    Case { name: "hover-workspace", help: "the workspace chip hovered", check: "the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Workspace), ..base() } },
+    Case { name: "hover-worktree", help: "the worktree switch hovered", check: "the switch chip should sit lighter with its ● still blue.", build: || Look { hover: Some(Hover::Worktree), ..base() } },
+    Case { name: "hover-model", help: "the model chip hovered", check: "the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Model), ..base() } },
+    Case { name: "hover-thinking", help: "the thinking chip hovered", check: "the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Thinking), ..base() } },
+    Case { name: "worktree-on", help: "new worktree switched on", check: "the switch should read `[● new worktree]` in blue.", build: || base() },
+    Case { name: "worktree-off", help: "new worktree switched off", check: "the switch should read `[○ new worktree]` dim.", build: || Look { worktree: false, ..base() } },
+    Case { name: "picker-recent", help: "workspace picker over home, recents", check: "the picker should float over home with even ▄ ▀ edges, four recent workspaces, the first row marked with ▌ on the lighter tint.", build: || Look { picker: Some(Picker::Recent), ..base() } },
+    Case { name: "picker-typed", help: "workspace picker with a typed path", check: "the typed row should read `› ~/work/fi█` with `fiber` and `fiber-worktrees` under it, the first marked; the recents below dimmed.", build: || Look { picker: Some(Picker::Typed), ..base() } },
 ];
+
+/// `--home`, for `--help` and `check/home.md`.
+pub(crate) const SURFACE: Surface = Surface { flag: "--home", file: "home", title: "Home (#1628)", docs: || crate::cases::docs(CASES) };
 
 /// The home input box and session list width at 160 columns.
 const HOME_W: usize = 84;
@@ -52,57 +56,15 @@ enum Picker {
     Typed,
 }
 
-struct Case {
+struct Look {
     sessions: bool,
     hover: Option<Hover>,
     worktree: bool,
     picker: Option<Picker>,
 }
 
-fn parse(name: &str) -> Option<Case> {
-    let base = || Case {
-        sessions: true,
-        hover: None,
-        worktree: true,
-        picker: None,
-    };
-    match name {
-        "empty" => Some(Case {
-            sessions: false,
-            ..base()
-        }),
-        "sessions" => Some(base()),
-        "hover-workspace" => Some(Case {
-            hover: Some(Hover::Workspace),
-            ..base()
-        }),
-        "hover-worktree" => Some(Case {
-            hover: Some(Hover::Worktree),
-            ..base()
-        }),
-        "hover-model" => Some(Case {
-            hover: Some(Hover::Model),
-            ..base()
-        }),
-        "hover-thinking" => Some(Case {
-            hover: Some(Hover::Thinking),
-            ..base()
-        }),
-        "worktree-on" => Some(base()),
-        "worktree-off" => Some(Case {
-            worktree: false,
-            ..base()
-        }),
-        "picker-recent" => Some(Case {
-            picker: Some(Picker::Recent),
-            ..base()
-        }),
-        "picker-typed" => Some(Case {
-            picker: Some(Picker::Typed),
-            ..base()
-        }),
-        _ => None,
-    }
+fn base() -> Look {
+    Look { sessions: true, hover: None, worktree: true, picker: None }
 }
 
 /// An exited session: the name, or the first prompt when it has none; the
@@ -207,7 +169,7 @@ fn chip(text: &str, st: Style, hovered: bool) -> Span<'static> {
     sp(format!("[{text}]"), st.bg(bg))
 }
 
-fn chip_row(c: &Case) -> Vec<Span<'static>> {
+fn chip_row(c: &Look) -> Vec<Span<'static>> {
     let h = |k: Hover| c.hover == Some(k);
     let mut s = vec![sp("▌ ", fg(BLUE))];
     s.push(chip("▣ ~/work/fiber", Style::new(), h(Hover::Workspace)));
@@ -229,7 +191,7 @@ fn chip_row(c: &Case) -> Vec<Span<'static>> {
 
 /// The large input box: the `/? for shortcuts` placeholder over the chip row,
 /// with the prototype's ▌ stripe.
-fn input_box(c: &Case, w: usize) -> Vec<super::Row> {
+fn input_box(c: &Look, w: usize) -> Vec<super::Row> {
     let stripe = || sp("▌", fg(BLUE));
     let blank = || row(vec![stripe()]);
     slab(
@@ -352,7 +314,7 @@ fn put(
     }
 }
 
-fn frame(c: &Case, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
+fn frame(c: &Look, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
     let blank = || vec![Placed {
         x: 0,
         w: cols as u16,
@@ -419,7 +381,7 @@ fn frame(c: &Case, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
     screen
 }
 
-fn draw(term: &mut Term, c: &Case) -> io::Result<()> {
+fn draw(term: &mut Term, c: &Look) -> io::Result<()> {
     let size = term.size()?;
     let (cols, rows) = (size.width.max(1), size.height.max(1));
     term.backend_mut().write_all(b"\x1b[?2026h")?;
@@ -441,10 +403,10 @@ fn draw(term: &mut Term, c: &Case) -> io::Result<()> {
 /// conversation view: the fixture replay never draws.
 pub(crate) fn run_home(a: &Args, term: &mut Term) -> io::Result<String> {
     let name = a.home.clone().unwrap_or_default();
-    let Some(c) = parse(&name) else {
+    let Some(c) = crate::cases::lookup(CASES, &name) else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("unknown --home case {name:?}; one of: {}", CASES.join(", ")),
+            format!("unknown --home case {name:?}; one of: {}", crate::cases::names(CASES)),
         ));
     };
     draw(term, &c)?;
@@ -473,9 +435,9 @@ mod tests {
 
     #[test]
     fn every_case_parses_and_unknown_does_not() {
-        assert!(CASES.iter().all(|n| parse(n).is_some()));
+        assert!(CASES.iter().all(|c| crate::cases::lookup(CASES, c.name).is_some()));
         assert_eq!(CASES.len(), 10);
-        assert!(parse("nope").is_none());
+        assert!(crate::cases::lookup(CASES, "nope").is_none());
     }
 
     #[test]

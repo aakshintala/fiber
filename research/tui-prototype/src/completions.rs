@@ -2,6 +2,7 @@
 //! Fixture data only: the stream has no command list, so the entries, the
 //! file paths and the tags below are made up.
 
+use crate::cases::{Case, Surface};
 use crate::input::{Key, Mods};
 use crate::{bold, dim, fg, fit, left_cut, row, slab, sp, Row, Ui, BLUE, ORANGE};
 use ratatui::style::Style;
@@ -114,16 +115,33 @@ pub struct State {
     pub focus: usize,
 }
 
+/// Every `--completions` case.
+pub(crate) const CASES: &[Case<State>] = &[
+    Case { name: "slash", help: "the `/` list, eight of forty rows", check: "the panel sits above the input box, eight rows of name, dim description and right-aligned tag, with a `1–8 of 40 · ↓ 32 more` footer.", build: || State { focus: 0 } },
+    Case { name: "slash-filtered", help: "the `/` list filtered to `/re`", check: "the input reads `/re`, only matching rows show, matched letters bold.", build: || State { focus: 0 } },
+    // the skill with an argument-hint, focused so its row shows
+    Case { name: "slash-hint", help: "the `review` row with its argument hint", check: "the `review` row focused with its orange `<path>` hint, and the `login` description cut with … keeping its `command` tag.", build: || State { focus: entries().iter().position(|e| e.hint.is_some()).unwrap_or(0) } },
+    Case { name: "at", help: "the `@` file search with matches", check: "the input reads `@test`, two file rows (lock.rs, cancel.rs).", build: || State { focus: 0 } },
+    Case { name: "at-empty", help: "the `@` search with no match", check: "the input reads `@zzz`, one dim `no files match` row.", build: || State { focus: 0 } },
+    Case { name: "narrow-slash", help: "the `/` list in a narrow terminal", check: "the same `/` panel in a 100x40 terminal, above the input box with the narrow status rows below.", build: || State { focus: 0 } },
+    Case { name: "narrow-at", help: "the `@` search in a narrow terminal", check: "the same `@` panel in a 100x40 terminal, above the input box with the narrow status rows below.", build: || State { focus: 0 } },
+];
+
+/// `--completions`, for `--help` and `check/completions.md`.
+pub(crate) const SURFACE: Surface = Surface {
+    flag: "--completions",
+    file: "completions",
+    title: "Completions (#1631)",
+    docs: || crate::cases::docs(CASES),
+};
+
 pub fn for_case(case: &str) -> State {
-    let focus = match case {
-        "slash" | "slash-filtered" | "at" | "at-empty" | "narrow-slash" | "narrow-at" => 0,
-        // the skill with an argument-hint, focused so its row shows
-        "slash-hint" => entries().iter().position(|e| e.hint.is_some()).unwrap_or(0),
-        _ => panic!(
-            "--completions slash|slash-filtered|slash-hint|at|at-empty|narrow-slash|narrow-at"
-        ),
-    };
-    State { focus }
+    crate::cases::lookup(CASES, case).unwrap_or_else(|| {
+        panic!(
+            "--completions {}",
+            crate::cases::names(CASES).replace(", ", "|")
+        )
+    })
 }
 
 /// The input box's text for a static case: the query already typed.
@@ -134,7 +152,8 @@ pub fn input_for(case: &str) -> String {
         "at" | "narrow-at" => "@test".into(),
         "at-empty" => "@zzz".into(),
         _ => panic!(
-            "--completions slash|slash-filtered|slash-hint|at|at-empty|narrow-slash|narrow-at"
+            "--completions {}",
+            crate::cases::names(CASES).replace(", ", "|")
         ),
     }
 }

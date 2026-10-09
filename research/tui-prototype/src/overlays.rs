@@ -6,6 +6,7 @@
 //! overlay owns the keyboard while it is up, so the fixture replay never
 //! draws under it.
 
+use crate::cases::{Case, Surface};
 use super::input::{Ev, Key};
 use super::{Args, Term};
 use super::{bold, dim, fg, fit, lift, paint, row, slab, sp, t, wrap, BI, BLUE, CYAN, ORANGE, SEL};
@@ -15,7 +16,18 @@ use std::io::{self, Write};
 use unicode_width::UnicodeWidthStr;
 
 /// Every `--overlay` case, named in README.md.
-pub(crate) const CASES: &[&str] = &["keymap", "keymap-narrow", "quit", "delete", "history", "notice", "close-mouse"];
+const CASES: &[Case<Look>] = &[
+    Case { name: "keymap", help: "the key map, two columns", check: "the key map should float centred over the dimmed conversation with even ▄ ▀ edges, a bold `Key map` title with ✕ at its right end and a dim `esc closes` foot; every binding grouped by area in two aligned columns, each with its action, key, other paths and id, nothing clipped.", build: || Look { kind: Kind::Keymap, narrow: false } },
+    Case { name: "keymap-narrow", help: "the key map, one column, scrolled", check: "the same content in one column, opened scrolled, with an `↑ N more · ↓ M more` indicator on its last line.", build: || Look { kind: Kind::Keymap, narrow: true } },
+    Case { name: "quit", help: "the quit question", check: "the question should read `2 sessions working` with `enter`, `c` and `esc` naming the three ways out.", build: || Look { kind: Kind::Quit, narrow: false } },
+    Case { name: "delete", help: "the delete question", check: "the question should name `docs: rail spec` and its spend, and what `--cascade` would add.", build: || Look { kind: Kind::Delete, narrow: false } },
+    Case { name: "history", help: "the prompt-history panel", check: "the typed `back` should read bold after `›`, every hit in the three matches marked, the first row marked with ▌ on the lighter tint.", build: || Look { kind: Kind::History, narrow: false } },
+    Case { name: "notice", help: "a notice shown in full", check: "the whole `key_clash` text should read wrapped to the overlay, nothing clipped.", build: || Look { kind: Kind::Notice, narrow: false } },
+    Case { name: "close-mouse", help: "how an overlay closes by mouse", check: "the ✕ should read lighter than its neighbours, the foot should read `click ✕ or outside to close`, and a dim dotted outline should mark the click-outside target.", build: || Look { kind: Kind::CloseMouse, narrow: false } },
+];
+
+/// `--overlay`, for `--help` and `check/overlays.md`.
+pub(crate) const SURFACE: Surface = Surface { flag: "--overlay", file: "overlays", title: "Overlays (#1630)", docs: || crate::cases::docs(CASES) };
 
 /// Two side-by-side binding columns need at least this overlay width.
 const TWO_COL_MIN: usize = 100;
@@ -138,22 +150,9 @@ enum Kind {
     CloseMouse,
 }
 
-struct Case {
+struct Look {
     kind: Kind,
     narrow: bool,
-}
-
-fn parse(name: &str) -> Option<Case> {
-    match name {
-        "keymap" => Some(Case { kind: Kind::Keymap, narrow: false }),
-        "keymap-narrow" => Some(Case { kind: Kind::Keymap, narrow: true }),
-        "quit" => Some(Case { kind: Kind::Quit, narrow: false }),
-        "delete" => Some(Case { kind: Kind::Delete, narrow: false }),
-        "history" => Some(Case { kind: Kind::History, narrow: false }),
-        "notice" => Some(Case { kind: Kind::Notice, narrow: false }),
-        "close-mouse" => Some(Case { kind: Kind::CloseMouse, narrow: false }),
-        _ => None,
-    }
 }
 
 /// Two aligned binding columns fit at this overlay width and above.
@@ -291,7 +290,7 @@ fn close_mouse_body(ow: usize) -> Vec<super::Row> {
     [3, 5, 33].iter().flat_map(|&i| binding_lines(&BINDINGS[i], ow)).map(row).collect()
 }
 
-fn content(c: &Case, ow: usize, rows: usize) -> (&'static str, Vec<super::Row>, &'static str) {
+fn content(c: &Look, ow: usize, rows: usize) -> (&'static str, Vec<super::Row>, &'static str) {
     match c.kind {
         Kind::Keymap => ("Key map", keymap_body(c, ow, rows), "esc closes"),
         Kind::Quit => ("Quit", quit_body(ow), "enter leave them running · c close all · esc stay"),
@@ -363,14 +362,14 @@ struct Placed {
 /// The small overlays' width: room for a question and its answers.
 const SMALL_W: usize = 76;
 
-fn overlay_w(c: &Case, cols: usize) -> usize {
+fn overlay_w(c: &Look, cols: usize) -> usize {
     match c.kind {
         Kind::Keymap => cols.saturating_sub(10).min(150).max(40),
         _ => SMALL_W.min(cols.saturating_sub(4)),
     }
 }
 
-fn keymap_body(c: &Case, ow: usize, rows: usize) -> Vec<super::Row> {
+fn keymap_body(c: &Look, ow: usize, rows: usize) -> Vec<super::Row> {
     if two_col(ow) && !c.narrow {
         let colw = ow.saturating_sub(4) / 2;
         let mut left = keymap_column(LEFT_AREAS, colw);
@@ -402,7 +401,7 @@ fn keymap_body(c: &Case, ow: usize, rows: usize) -> Vec<super::Row> {
     out
 }
 
-fn frame(c: &Case, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
+fn frame(c: &Look, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
     let mut screen: Vec<Vec<Placed>> = backdrop(cols, rows)
         .into_iter()
         .map(|r| {
@@ -465,7 +464,7 @@ fn frame(c: &Case, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
     screen
 }
 
-fn draw(term: &mut Term, c: &Case) -> io::Result<()> {
+fn draw(term: &mut Term, c: &Look) -> io::Result<()> {
     let size = term.size()?;
     let (cols, rows) = (size.width.max(1), size.height.max(1));
     term.backend_mut().write_all(b"\x1b[?2026h")?;
@@ -487,10 +486,10 @@ fn draw(term: &mut Term, c: &Case) -> io::Result<()> {
 /// conversation view: the fixture replay never draws.
 pub(crate) fn run_overlay(a: &Args, term: &mut Term) -> io::Result<String> {
     let name = a.overlay.clone().unwrap_or_default();
-    let Some(c) = parse(&name) else {
+    let Some(c) = crate::cases::lookup(CASES, &name) else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("unknown --overlay case {name:?}; one of: {}", CASES.join(", ")),
+            format!("unknown --overlay case {name:?}; one of: {}", crate::cases::names(CASES)),
         ));
     };
     draw(term, &c)?;
@@ -517,7 +516,11 @@ pub(crate) fn run_overlay(a: &Args, term: &mut Term) -> io::Result<String> {
 mod tests {
     use super::*;
 
-    fn text(c: &Case, cols: usize, rows: usize) -> String {
+    fn parse(name: &str) -> Option<Look> {
+        crate::cases::lookup(CASES, name)
+    }
+
+    fn text(c: &Look, cols: usize, rows: usize) -> String {
         frame(c, cols, rows)
             .into_iter()
             .map(|ps| {
@@ -532,7 +535,7 @@ mod tests {
 
     #[test]
     fn every_case_parses_and_unknown_does_not() {
-        assert!(CASES.iter().all(|n| parse(n).is_some()));
+        assert!(CASES.iter().all(|c| crate::cases::lookup(CASES, c.name).is_some()));
         assert_eq!(CASES.len(), 7);
         assert!(parse("nope").is_none());
     }
@@ -634,8 +637,8 @@ mod tests {
     #[test]
     fn no_row_overflows_its_screen() {
         for (cols, rows) in [(160usize, 48usize), (100, 40)] {
-            for name in CASES {
-                let c = parse(name).unwrap();
+            for name in CASES.iter().map(|c| c.name) {
+                let c = crate::cases::lookup(CASES, name).unwrap();
                 for ps in frame(&c, cols, rows) {
                     for p in &ps {
                         assert!(crate::width(&p.row.spans) <= cols, "{name} overflows at {cols}x{rows}");

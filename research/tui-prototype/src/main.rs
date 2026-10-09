@@ -2,12 +2,13 @@
 //! `docs/events.md` lines in a real terminal. Throwaway code: the fold and the
 //! drawing side by side, the input parser in `input.rs`, a few tests.
 
+mod cases;
 mod completions;
 mod home;
-mod overlays;
 mod input;
 mod lua;
 mod model_picker;
+mod overlays;
 mod paged;
 
 use crossterm::{execute, terminal};
@@ -3097,6 +3098,9 @@ struct Audit {
     rows_hist: BTreeMap<usize, u64>,
 }
 
+/// Every surface that declares cases; `--help` and `check/` are built from them.
+const SURFACES: &[cases::Surface] = &[home::SURFACE, overlays::SURFACE, model_picker::SURFACE, completions::SURFACE];
+
 // ============================================================ main
 struct Args {
     path: String,
@@ -3214,7 +3218,7 @@ fn args() -> Args {
             "--picker" => a.picker = it.next(),
             "--completions" => a.completions = it.next(),
             "-h" | "--help" => {
-                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home CASE] [--overlay CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
+                print!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home CASE] [--overlay CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}", cases::help(SURFACES));
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -4622,6 +4626,36 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_case_names_are_pinned() {
+        let all: Vec<String> = SURFACES.iter().map(|s| format!("{} {}", s.flag, (s.docs)().iter().map(|d| d.name).collect::<Vec<_>>().join(", "))).collect();
+        assert_eq!(
+            all,
+            [
+                "--home empty, sessions, hover-workspace, hover-worktree, hover-model, hover-thinking, worktree-on, worktree-off, picker-recent, picker-typed",
+                "--overlay keymap, keymap-narrow, quit, delete, history, notice, close-mouse",
+                "--picker list, levels, scoped, scoped-all, refreshing, session-only",
+                "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",
+            ]
+        );
+        let h = cases::help(SURFACES);
+        assert!(SURFACES.iter().flat_map(|s| (s.docs)()).all(|d| h.contains(d.name)));
+    }
+
+    /// `check/<surface>.md` is the slices' check lines; `UPDATE_CHECK=1 cargo test` rewrites them.
+    #[test]
+    fn check_files_match_the_slices() {
+        for s in SURFACES {
+            let path = format!("{}/check/{}.md", env!("CARGO_MANIFEST_DIR"), s.file);
+            let want = cases::check_md(s);
+            if std::env::var_os("UPDATE_CHECK").is_some() {
+                std::fs::create_dir_all(format!("{}/check", env!("CARGO_MANIFEST_DIR"))).unwrap();
+                std::fs::write(&path, &want).unwrap();
+            }
+            assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), want, "{path} is stale: UPDATE_CHECK=1 cargo test");
+        }
+    }
 
     fn fold_with(prompt: &str, reply: &str) -> Fold {
         let mut f = Fold::default();
