@@ -559,16 +559,22 @@ fn the_credential_command_on_a_scripted_session_is_rejected() {
         &json!({"id": "c_cred", "session_id": id, "command": "credential", "args": {"label": "x"}})
             .to_string(),
     );
+    // Stop on any reply to `c_cred`, then assert it is the rejection:
+    // in red the reply is `command_accepted`, and failing on it at once
+    // keeps no run waiting the shared budget for a rejection that never
+    // arrives.
     let waited = until(&client, "the credential rejection", |line| {
-        line["kind"] == "command_rejected" && line["payload"]["command_id"] == "c_cred"
+        (line["kind"] == "command_accepted" || line["kind"] == "command_rejected")
+            && line["payload"]["command_id"] == "c_cred"
     });
     // `session_status` is an observer-thread line pinned nowhere (as
-    // `kinds` filters it): drop it, then exactly the rejection remains.
+    // `kinds` filters it): drop it, then exactly the reply remains.
     let rejected: Vec<Value> = waited
         .into_iter()
         .filter(|line| line["kind"] != "session_status")
         .collect();
     assert_eq!(rejected.len(), 1, "{rejected:?}");
+    assert_eq!(rejected[0]["kind"], "command_rejected", "{rejected:?}");
     assert_eq!(rejected[0]["payload"]["code"], "credential_missing");
     let message = rejected[0]["payload"]["message"].as_str().unwrap();
     assert!(message.ends_with("are: none"), "{message}");
