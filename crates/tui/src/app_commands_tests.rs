@@ -224,14 +224,15 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
     );
     assert_eq!(app.completions().and_then(|c| c.selected), Some(7));
     app.on_key(Key::Down, now());
-    // `/name` is next; the window moves down by one.
+    // `/name` is next; `/keys` sits one row above the window, so the
+    // window moves down by one and `/usage` leads it.
     let completions = app.completions();
     assert_eq!(completions.as_ref().and_then(|c| c.selected), Some(7));
     assert_eq!(
         completions
             .and_then(|c| c.lines.first().cloned())
             .as_deref(),
-        Some("/context  Opens the context breakdown.  command")
+        Some("/usage  Opens the usage view.  command")
     );
     app.on_key(Key::Down, now());
     app.on_key(Key::Down, now());
