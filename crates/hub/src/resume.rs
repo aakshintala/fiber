@@ -16,6 +16,9 @@
 //! (`docs/delegates.md`, "Talking to a delegate"). A command for one that
 //! is not running is refused `session_not_found`, at once when its process
 //! is still shutting down. A running delegate is attached to as any session.
+//!
+//! A log with no complete first line is not corrupt: the hub answers
+//! `session_not_found`, as for a missing log.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -140,19 +143,25 @@ fn attempt(hub: &Hub, session: &SessionId, socket: &Path, trusted: bool) -> Step
     let Some(log) = find_log(&hub.home, session) else {
         return Step::Done(Err(not_found(session)));
     };
-    let Some(recorded) = recorded(&log) else {
-        hub.diag.warn_session(
-            session,
-            "log_corrupt",
-            &format!("Session {} has an unreadable log.", session.0),
-        );
-        return Step::Done(Err(Refused {
-            code: ErrorCode::LogCorrupt,
-            message: format!(
-                "The log of session `{}` does not start with its workspace.",
-                session.0
-            ),
-        }));
+    let recorded = match first_line(&log) {
+        FirstLine::Recorded(recorded) => recorded,
+        // The session has not bound its socket yet: its log is empty or
+        // its first line is still being written.
+        FirstLine::Incomplete => return Step::Done(Err(not_found(session))),
+        FirstLine::Corrupt => {
+            hub.diag.warn_session(
+                session,
+                "log_corrupt",
+                &format!("Session {} has an unreadable log.", session.0),
+            );
+            return Step::Done(Err(Refused {
+                code: ErrorCode::LogCorrupt,
+                message: format!(
+                    "The log of session `{}` does not start with its workspace.",
+                    session.0
+                ),
+            }));
+        }
     };
     if recorded.delegate {
         return Step::Done(Err(delegate_refused()));
@@ -248,25 +257,68 @@ pub(crate) struct Recorded {
     delegate: bool,
 }
 
-/// What the log's first line recorded. `None` when that line cannot be
-/// read, is not `session_started` or holds no string workspace.
-pub(crate) fn recorded(log: &Path) -> Option<Recorded> {
-    let mut first = String::new();
-    BufReader::new(File::open(log).ok()?)
-        .read_line(&mut first)
-        .ok()?;
-    let line: Value = serde_json::from_str(&first).ok()?;
-    if line.get("kind")?.as_str()? != "session_started" {
-        return None;
+/// What the log's first line holds: a complete `session_started` with a
+/// workspace, no complete first line yet, or a corrupt line. Completeness
+/// is decided on bytes before any decoding, so a line still being written
+/// that ends inside a multi-byte character is incomplete, not corrupt.
+/// An I/O error opening or reading the file is corrupt, as is a complete
+/// line that does not decode, does not parse, is not `session_started`,
+/// or names no string workspace.
+enum FirstLine {
+    Recorded(Recorded),
+    Incomplete,
+    Corrupt,
+}
+
+/// Reads the log's first line as bytes with `read_until(b'\n')`.
+fn first_line(log: &Path) -> FirstLine {
+    let file = match File::open(log) {
+        Ok(file) => file,
+        Err(_) => return FirstLine::Corrupt,
+    };
+    let mut bytes = Vec::new();
+    match BufReader::new(file).read_until(b'\n', &mut bytes) {
+        Ok(_) => {}
+        Err(_) => return FirstLine::Corrupt,
     }
-    let payload = line.get("payload")?;
-    let workspace = payload.get("workspace")?.as_str()?;
-    Some(Recorded {
-        workspace: PathBuf::from(workspace),
-        delegate: payload
-            .get("parent")
-            .is_some_and(|parent| !parent.is_null()),
-    })
+    if bytes.is_empty() || bytes.last() != Some(&b'\n') {
+        return FirstLine::Incomplete;
+    }
+    let first = match String::from_utf8(bytes) {
+        Ok(first) => first,
+        Err(_) => return FirstLine::Corrupt,
+    };
+    let line: Value = match serde_json::from_str(&first) {
+        Ok(line) => line,
+        Err(_) => return FirstLine::Corrupt,
+    };
+    let kind = line.get("kind").and_then(Value::as_str);
+    if kind != Some("session_started") {
+        return FirstLine::Corrupt;
+    }
+    let payload = line.get("payload");
+    let workspace = payload
+        .and_then(|payload| payload.get("workspace"))
+        .and_then(Value::as_str);
+    match workspace {
+        Some(workspace) => FirstLine::Recorded(Recorded {
+            workspace: PathBuf::from(workspace),
+            delegate: payload
+                .and_then(|payload| payload.get("parent"))
+                .is_some_and(|parent| !parent.is_null()),
+        }),
+        None => FirstLine::Corrupt,
+    }
+}
+
+/// What the log's first line recorded. `None` when that line cannot be
+/// read, is incomplete, is not `session_started` or holds no string
+/// workspace.
+pub(crate) fn recorded(log: &Path) -> Option<Recorded> {
+    match first_line(log) {
+        FirstLine::Recorded(recorded) => Some(recorded),
+        FirstLine::Incomplete | FirstLine::Corrupt => None,
+    }
 }
 
 fn io_failed(hub: &Hub, session: &SessionId, detail: &str) -> Refused {
