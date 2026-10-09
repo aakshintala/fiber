@@ -3725,24 +3725,14 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     buf.set_string(x0 + pw - 1, y, "▌", fg(SEL));
                     hits.insert(0, (y, x0, x0 + pw, Act::End));
                 }
-                // search floats over the conversation's top-right corner, as an editor's find box does
+                // search floats over the conversation's top-right corner, as an editor's find box does.
+                // The box reuses the panel frame, so it keeps the stripe and edges.
                 if let Some(s) = search.filter(|_| vrows.is_none() && view_h >= 3) {
                     let bw = SBOX_W.min(cw.saturating_sub(2));
                     let x0 = rail_w + 1 + (cw - bw) as u16;
-                    for x in x0..x0 + bw as u16 {
-                        for (y, ch) in [(0, "▄"), (1, " "), (2, "▀")] {
-                            let under = buf[(x, y)].bg;
-                            let c = &mut buf[(x, y)];
-                            c.reset();
-                            c.set_symbol(ch);
-                            if y == 1 {
-                                c.set_bg(BI);
-                            } else {
-                                c.set_fg(BI).set_bg(under);
-                            }
-                        }
+                    for (y, r) in panel::slab_rows(vec![row(search_box(s))], bw).into_iter().enumerate() {
+                        paint(buf, x0, y as u16, bw as u16, &r);
                     }
-                    buf.set_line(x0, 1, &Line::from(tint(fit(&search_box(s), bw), BI)), bw as u16);
                 }
                 // the copy's confirmation: the top-right corner, below the search box when it is open
                 if let Some(m) = copied.filter(|_| vrows.is_none()) {

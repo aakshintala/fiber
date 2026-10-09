@@ -243,12 +243,6 @@ pub(crate) fn centre(rows: Vec<Row>, panel_w: usize, area_w: usize) -> Vec<Row> 
         .collect()
 }
 
-/// The search box's content row: the same striped surface in three rows
-/// instead of five, so it keeps floating over the conversation's corner.
-pub(crate) fn search_row(spans: Vec<Span<'static>>, panel_w: usize) -> Row {
-    stripe(row(spans), inner_w(panel_w))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
