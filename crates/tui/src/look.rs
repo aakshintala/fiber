@@ -7,7 +7,7 @@ use std::ops::RangeInclusive;
 use ratatui::buffer::Buffer;
 use ratatui::style::Color;
 
-use crate::theme::{ROLES, Rgb, Role, Theme};
+use crate::theme::{ROLES, Rgb, Role, Shade, Theme};
 
 /// The theme `tui.theme` names (`docs/configuration.md`, "Keys").
 #[derive(Debug, Default)]
@@ -203,14 +203,19 @@ impl Look {
         }
     }
 
-    /// Each role's colour in `theme` at `depth`.
+    /// Each role's colour in `theme` at `depth`. A role the terminal
+    /// draws itself stays the default at every depth (`docs/tui.md`,
+    /// "Themes").
     fn colours(theme: &Theme, depth: Depth) -> [Color; ROLES] {
         Role::ALL.map(|role| {
-            let rgb = theme.rgb(role);
-            match depth {
-                Depth::NoColour => Color::Reset,
-                Depth::True => Color::Rgb(rgb.0, rgb.1, rgb.2),
-                Depth::Ansi256 => Color::Indexed(ansi256(rgb, among(role))),
+            let shade = theme.shade(role);
+            match shade {
+                Shade::Terminal | Shade::Dim => Color::Reset,
+                Shade::Rgb(rgb) => match depth {
+                    Depth::NoColour => Color::Reset,
+                    Depth::True => Color::Rgb(rgb.0, rgb.1, rgb.2),
+                    Depth::Ansi256 => Color::Indexed(ansi256(rgb, among(role))),
+                },
             }
         })
     }

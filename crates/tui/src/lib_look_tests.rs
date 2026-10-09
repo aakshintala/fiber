@@ -54,9 +54,9 @@ fn drawn(look: Look) -> Screen<TestBackend> {
 fn the_frame_written_is_painted_and_the_kept_frame_is_not() {
     let screen = drawn(look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]));
     let written = screen.backend().buffer();
-    assert_eq!(written[(0, 0)].fg, Color::Rgb(86, 182, 194));
-    assert_eq!(written[(1, 0)].fg, Color::Rgb(0xdc, 0xdf, 0xe4));
-    assert_eq!(written[(3, 1)].bg, Color::Rgb(0x1e, 0x21, 0x27));
+    assert_eq!(written[(0, 0)].fg, Color::Rgb(0x6e, 0xaa, 0xfe));
+    assert_eq!(written[(1, 0)].fg, Color::Reset);
+    assert_eq!(written[(3, 1)].bg, Color::Reset);
     let (kept, _) = screen.last().expect("a kept frame");
     assert_eq!(kept[(0, 0)].fg, Role::Accent.color());
     assert_eq!(kept[(1, 0)].fg, Role::Text.color());
@@ -181,10 +181,7 @@ fn a_fixed_dark_theme_stays_dark_after_a_light_report() {
     screen.appearance(Appearance::Light);
     let mut app = App::new(std::path::PathBuf::from("/w"));
     screen.draw_with(&mut app, None, hi).expect("a draw");
-    assert_eq!(
-        screen.backend().buffer()[(3, 1)].bg,
-        Color::Rgb(0x1e, 0x21, 0x27)
-    );
+    assert_eq!(screen.backend().buffer()[(3, 1)].bg, Color::Reset);
 }
 
 #[test]
@@ -194,10 +191,7 @@ fn a_light_report_through_the_loop_repaints_light() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     let (_, step_rx) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(Vec::new()), &step_rx), None);
-    assert_eq!(
-        lp.screen.backend().buffer()[(0, 0)].bg,
-        Color::Rgb(0x1e, 0x21, 0x27)
-    );
+    assert_eq!(lp.screen.backend().buffer()[(0, 0)].bg, Color::Reset);
     assert_eq!(
         lp.step(Input::Bytes(b"\x1b[?997;2n".to_vec()), &step_rx),
         None
@@ -264,7 +258,7 @@ fn the_rail_and_panel_regions_paint_as_the_background() {
         .expect("a draw");
     let buf = screen.backend().buffer();
     // Dark `background` against dark `surface` (`docs/tui.md`, "Themes").
-    let background = Color::Rgb(0x1e, 0x21, 0x27);
+    let background = Color::Reset;
     assert_eq!(
         buf[(panel.right().saturating_sub(1), panel.y)].bg,
         background
