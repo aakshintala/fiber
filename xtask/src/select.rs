@@ -458,14 +458,11 @@ pub(crate) fn mutant_shards(count: u64) -> u64 {
 
 /// One shard's time limit for `count` mutants, in minutes: 20 minutes per
 /// 15 of the largest round-robin share, rounded up, never under 20 and
-/// never over 360. The share is clamped to 270, the share at which the
-/// bound reaches 360, before multiplying, so `20 * share` cannot overflow
-/// for any `u64` count.
+/// never over 360. The multiplication saturates, so no `u64` count overflows.
 pub(crate) fn shard_timeout_minutes(count: u64) -> u64 {
-    let share = count
-        .div_ceil(mutant_shards(count).max(1))
-        .min(SHARD_TIMEOUT_MAX_MINUTES * MUTANTS_PER_SHARD / SHARD_TIMEOUT_BASE_MINUTES);
-    (SHARD_TIMEOUT_BASE_MINUTES * share)
+    let share = count.div_ceil(mutant_shards(count).max(1));
+    SHARD_TIMEOUT_BASE_MINUTES
+        .saturating_mul(share)
         .div_ceil(MUTANTS_PER_SHARD)
         .clamp(SHARD_TIMEOUT_BASE_MINUTES, SHARD_TIMEOUT_MAX_MINUTES)
 }
