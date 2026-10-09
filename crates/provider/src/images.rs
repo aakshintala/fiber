@@ -6,7 +6,7 @@
 //! (`docs/model-routing.md`, "Image limits"), so a resume sends the same
 //! bytes.
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -122,17 +122,29 @@ pub(crate) fn anthropic_content(prepared: Prepared) -> Value {
     Value::Array(blocks)
 }
 
-/// The file's bytes as base64, or `None` when its path leaves the session
-/// directory or the file cannot be read.
-fn encoded_image(image: &ImageRef, session_dir: &Path) -> Option<String> {
-    let relative = Path::new(&image.path);
+/// The file `path` names on disk, or `None` when it must not be read. A
+/// relative path stays under `session_dir`; an absolute path is read only
+/// for a session's own `artifacts/`, which is how a rewound child names
+/// its parent's files.
+pub(crate) fn media_path(path: &str, session_dir: &Path) -> Option<PathBuf> {
+    let relative = Path::new(path);
+    if relative.is_absolute() {
+        return None;
+    }
     if !relative
         .components()
         .all(|part| matches!(part, Component::Normal(_)))
     {
         return None;
     }
-    let bytes = std::fs::read(session_dir.join(relative)).ok()?;
+    Some(session_dir.join(relative))
+}
+
+/// The file's bytes as base64, or `None` when its path must not be read
+/// or the file cannot be read.
+fn encoded_image(image: &ImageRef, session_dir: &Path) -> Option<String> {
+    let resolved = media_path(&image.path, session_dir)?;
+    let bytes = std::fs::read(resolved).ok()?;
     Some(STANDARD.encode(bytes))
 }
 

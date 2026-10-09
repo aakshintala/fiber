@@ -5,7 +5,7 @@ use contract::events::CacheLifetime;
 use contract::provider::{ImageRef, Input, InputSize, ModelRequest};
 use serde_json::json;
 
-use super::{anthropic_content, data_url, input_size, prepare};
+use super::{anthropic_content, data_url, input_size, media_path, prepare};
 
 fn image(path: &str) -> ImageRef {
     ImageRef {
@@ -161,6 +161,62 @@ fn text_only_leaves_out_each_image_in_order() {
     assert_eq!(
         prepared.text,
         "t\n[Image gone.png left out: this model does not take images.]\n[Image ok.png left out: this model does not take images.]"
+    );
+}
+
+#[test]
+fn media_path_resolves_relative_paths_under_the_session_dir() {
+    let root = fakes::TempDir::new("fiber-media-path");
+    let sessions = root.path().join("sessions");
+    let parent = sessions.join("s_parent");
+    let child = sessions.join("s_child");
+    let resolved = media_path("artifacts/i.png", &child).unwrap();
+    assert_eq!(resolved, child.join("artifacts/i.png"));
+    assert_eq!(media_path("../x", &child), None);
+    assert_eq!(media_path("./x", &child), None);
+    let nested = parent.join("artifacts/sub/i.png").display().to_string();
+    assert_eq!(
+        media_path(&nested, &child),
+        Some(parent.join("artifacts/sub/i.png"))
+    );
+    let stored = parent.join("artifacts/i.png").display().to_string();
+    assert_eq!(
+        media_path(&stored, &child),
+        Some(parent.join("artifacts/i.png"))
+    );
+    let log = parent.join("events.jsonl").display().to_string();
+    assert_eq!(media_path(&log, &child), None);
+    let bare = parent.join("artifacts").display().to_string();
+    assert_eq!(media_path(&bare, &child), None);
+    let escaped = parent
+        .join("artifacts/../events.jsonl")
+        .display()
+        .to_string();
+    assert_eq!(media_path(&escaped, &child), None);
+    let outside = root.path().join("elsewhere/i.png").display().to_string();
+    assert_eq!(media_path(&outside, &child), None);
+    let no_session = sessions.join("artifacts/i.png").display().to_string();
+    assert_eq!(media_path(&no_session, &child), None);
+}
+
+#[test]
+fn prepare_sends_a_parent_image_named_by_its_absolute_path() {
+    let root = fakes::TempDir::new("fiber-media-path-parent");
+    let sessions = root.path().join("sessions");
+    let parent = sessions.join("s_parent");
+    let child = sessions.join("s_child");
+    std::fs::create_dir_all(parent.join("artifacts")).unwrap();
+    std::fs::create_dir_all(&child).unwrap();
+    // "abcd" is `YWJjZA==`.
+    std::fs::write(parent.join("artifacts/i.png"), b"abcd").unwrap();
+    let absolute = parent.join("artifacts/i.png").display().to_string();
+    assert_eq!(
+        content("t\n", &[image(&absolute)], &child),
+        json!([
+            {"type": "text", "text": "t\n"},
+            {"type": "image", "source": {
+                "type": "base64", "media_type": "image/png", "data": "YWJjZA=="}},
+        ])
     );
 }
 
