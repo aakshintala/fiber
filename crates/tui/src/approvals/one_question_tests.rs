@@ -68,7 +68,10 @@ fn each_kind_draws_one_question_without_a_tab_row() {
 
     let select = OneQuestion::select(
         "Pick\none?".to_owned(),
-        vec![choice("alpha\nversion", Some("first\nchoice")), choice("beta", None)],
+        vec![
+            choice("alpha\nversion", Some("first\nchoice")),
+            choice("beta", None),
+        ],
     );
     assert_eq!(
         lines(&select),
@@ -126,7 +129,9 @@ fn initial_cursor_is_on_the_first_actionable_row() {
         Some(2)
     );
     assert_eq!(
-        OneQuestion::select("None?".to_owned(), Vec::new()).panel("h".to_owned(), 80).cursor,
+        OneQuestion::select("None?".to_owned(), Vec::new())
+            .panel("h".to_owned(), 80)
+            .cursor,
         Some(2)
     );
     assert_eq!(
@@ -172,12 +177,7 @@ fn multi_select_toggles_and_sends_labels_in_option_order() {
     let mut question = multi_select();
     press(
         &mut question,
-        &[
-            Key::Char(' '),
-            Key::Down,
-            Key::Down,
-            Key::Char(' '),
-        ],
+        &[Key::Char(' '), Key::Down, Key::Down, Key::Char(' ')],
     );
     assert_eq!(question.on_key(&Key::Enter), Some(PanelKey::Answer));
     assert_eq!(answer(&question), json!({"labels": ["alpha", "gamma"]}));
@@ -219,7 +219,10 @@ fn multi_select_deduplicates_repeated_labels_in_option_order() {
 fn multi_select_enter_on_submit_sends_the_answer() {
     let mut question = multi_select();
     press(&mut question, &[Key::Down, Key::Down, Key::Down]);
-    assert_eq!(lines(&question).get(5).map(String::as_str), Some("› Submit"));
+    assert_eq!(
+        lines(&question).get(5).map(String::as_str),
+        Some("› Submit")
+    );
     assert_eq!(question.on_key(&Key::Enter), Some(PanelKey::Answer));
     assert_eq!(answer(&question), json!({"labels": []}));
 }
@@ -254,20 +257,11 @@ fn text_input_edits_at_a_character_cursor_and_clamps_at_both_ends() {
     assert_eq!(lines(&question).get(2).map(String::as_str), Some("› ✎ xa"));
     question.on_edit(&Edit::Right);
     question.on_edit(&Edit::Right);
-    assert_eq!(
-        question.panel("h".to_owned(), 80).caret,
-        Some((2, 6))
-    );
+    assert_eq!(question.panel("h".to_owned(), 80).caret, Some((2, 6)));
     question.on_edit(&Edit::Left);
-    assert_eq!(
-        question.panel("h".to_owned(), 80).caret,
-        Some((2, 5))
-    );
+    assert_eq!(question.panel("h".to_owned(), 80).caret, Some((2, 5)));
     question.on_edit(&Edit::Left);
-    assert_eq!(
-        question.panel("h".to_owned(), 80).caret,
-        Some((2, 4))
-    );
+    assert_eq!(question.panel("h".to_owned(), 80).caret, Some((2, 4)));
 }
 
 #[test]
@@ -292,16 +286,25 @@ fn text_cursor_edits_do_nothing_off_the_words_row() {
 fn text_input_paste_turns_control_characters_into_spaces() {
     let mut question = OneQuestion::text_input("Words?".to_owned());
     question.on_edit(&Edit::Paste("a\nb\tc".to_owned()));
-    assert_eq!(lines(&question).get(2).map(String::as_str), Some("› ✎ a b c"));
+    assert_eq!(
+        lines(&question).get(2).map(String::as_str),
+        Some("› ✎ a b c")
+    );
     press(&mut question, &[Key::Char(' ')]);
-    assert_eq!(lines(&question).get(2).map(String::as_str), Some("› ✎ a b c "));
+    assert_eq!(
+        lines(&question).get(2).map(String::as_str),
+        Some("› ✎ a b c ")
+    );
 }
 
 #[test]
 fn text_input_enter_on_submit_sends_the_answer() {
     let mut question = OneQuestion::text_input("Words?".to_owned());
     press(&mut question, &[Key::Down]);
-    assert_eq!(lines(&question).get(3).map(String::as_str), Some("› Submit"));
+    assert_eq!(
+        lines(&question).get(3).map(String::as_str),
+        Some("› Submit")
+    );
     assert_eq!(question.on_key(&Key::Enter), Some(PanelKey::Answer));
 }
 
@@ -322,7 +325,10 @@ fn esc_and_chat_decline_each_kind() {
         for _ in 0..last {
             press(&mut question, &[Key::Down]);
         }
-        assert_eq!(lines(&question).last().map(String::as_str), Some("› Chat about this"));
+        assert_eq!(
+            lines(&question).last().map(String::as_str),
+            Some("› Chat about this")
+        );
         assert_eq!(question.on_key(&Key::Enter), Some(PanelKey::Decline));
     }
 }
@@ -357,7 +363,10 @@ fn tabs_are_inert_and_typing_on_option_kinds_changes_nothing() {
         press(&mut question, &[Key::Tab, Key::BackTab]);
         assert_eq!(lines(&question), before);
         question.on_edit(&Edit::Paste("x\ny".to_owned()));
-        press(&mut question, &[Key::Char('x'), Key::Char(' '), Key::Backspace]);
+        press(
+            &mut question,
+            &[Key::Char('x'), Key::Char(' '), Key::Backspace],
+        );
         assert_eq!(lines(&question), before);
         assert_eq!(question.answer(), before_answer);
     }
@@ -365,7 +374,10 @@ fn tabs_are_inert_and_typing_on_option_kinds_changes_nothing() {
     let mut question = multi_select();
     let before = lines(&question);
     let before_answer = question.answer();
-    press(&mut question, &[Key::Tab, Key::BackTab, Key::Char('x'), Key::Backspace]);
+    press(
+        &mut question,
+        &[Key::Tab, Key::BackTab, Key::Char('x'), Key::Backspace],
+    );
     question.on_edit(&Edit::Paste("x\ny".to_owned()));
     assert_eq!(lines(&question), before);
     assert_eq!(question.answer(), before_answer);
@@ -425,7 +437,11 @@ fn clicks_match_the_rows_and_actions() {
 
     let mut question = multi_select();
     assert_eq!(question.click(Spot::Option(1)), PanelKey::Handled);
-    assert!(lines(&question).get(3).is_some_and(|line| line.starts_with("› [x] beta")));
+    assert!(
+        lines(&question)
+            .get(3)
+            .is_some_and(|line| line.starts_with("› [x] beta"))
+    );
     assert_eq!(question.click(Spot::Send), PanelKey::Answer);
     assert_eq!(answer(&question), json!({"labels": ["beta"]}));
 
@@ -467,7 +483,13 @@ fn spots_without_a_row_for_the_kind_do_nothing() {
     }
 
     let mut multi = multi_select();
-    for spot in [Spot::Tab(0), Spot::Next, Spot::Note, Spot::Words, Spot::Option(9)] {
+    for spot in [
+        Spot::Tab(0),
+        Spot::Next,
+        Spot::Note,
+        Spot::Words,
+        Spot::Option(9),
+    ] {
         let before = multi.panel("h".to_owned(), 80);
         let before_answer = multi.answer();
         assert_eq!(multi.click(spot), PanelKey::Handled, "{spot:?}");
@@ -576,7 +598,10 @@ fn panel_cursor_caret_and_spots_follow_the_selected_row() {
 #[test]
 fn answer_variant_types_match_the_kind() {
     let confirm = OneQuestion::confirm("Continue?".to_owned());
-    assert!(matches!(confirm.answer(), Some(ReplyAnswer::Confirmed { .. })));
+    assert!(matches!(
+        confirm.answer(),
+        Some(ReplyAnswer::Confirmed { .. })
+    ));
     let select = select();
     assert!(matches!(select.answer(), Some(ReplyAnswer::Labels { .. })));
     let multi = multi_select();
@@ -759,7 +784,10 @@ fn decline_sends_declined_and_records_each_one_question_session_once() {
             json!({"id": "c_1", "command": "reply", "session_id": S_A,
                 "args": {"request_id": request_id, "declined": true}})
         );
-        assert_eq!(queue.declined("c_1"), Some(contract::SessionId(S_A.to_owned())));
+        assert_eq!(
+            queue.declined("c_1"),
+            Some(contract::SessionId(S_A.to_owned()))
+        );
         assert_eq!(queue.declined("c_1"), None);
     }
 }
@@ -771,9 +799,11 @@ fn restoring_a_text_input_reply_keeps_its_words() {
     assert!(queue.answer("c_t").is_some());
     queue.restore("c_t");
     assert!(queue.open());
-    assert!(queue
-        .panel(80)
-        .is_some_and(|panel| panel.lines.contains(&"› ✎ hi".to_owned())));
+    assert!(
+        queue
+            .panel(80)
+            .is_some_and(|panel| panel.lines.contains(&"› ✎ hi".to_owned()))
+    );
 }
 
 #[test]
@@ -785,9 +815,11 @@ fn a_raised_again_text_input_keeps_its_words() {
         .payload
         .insert("resumes".to_owned(), Value::Bool(true));
     queue.fold(&raised);
-    assert!(queue
-        .panel(80)
-        .is_some_and(|panel| panel.lines.contains(&"› ✎ hi".to_owned())));
+    assert!(
+        queue
+            .panel(80)
+            .is_some_and(|panel| panel.lines.contains(&"› ✎ hi".to_owned()))
+    );
 }
 
 #[test]
