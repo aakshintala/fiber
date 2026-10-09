@@ -277,6 +277,16 @@ fn a_rewritten_tty_marks_its_job() {
 }
 
 #[test]
+fn a_rewritten_non_tty_keeps_lines() {
+    let mut app = home();
+    opened(&mut app);
+    request(&mut app, "a_9", "shell", json!({"tty": false}));
+    rewrite(&mut app, "a_9", json!({"tty": false}));
+    start_job(&mut app, "j_9", "a_9");
+    assert!(!is_tty(&mut app, "j_9"));
+}
+
+#[test]
 fn without_tty_the_job_gets_lines() {
     for (name, arguments) in [
         ("shell", json!({"tty": false})),
