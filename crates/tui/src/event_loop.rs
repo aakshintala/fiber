@@ -259,7 +259,7 @@ impl<B: Backend> Loop<B> {
             };
             for input in batch(first, &mut self.stash, rx) {
                 self.wakeups = self.wakeups.saturating_add(1);
-                if let Some(code) = self.handle(input, rx) {
+                if let Some(code) = self.handle(input) {
                     return code;
                 }
             }
@@ -272,7 +272,7 @@ impl<B: Backend> Loop<B> {
     /// Handles one input: the time, what it does to the app, and what it
     /// sends. Returns the exit code when the terminal quits, before any
     /// frame, as handling every input in `step` did.
-    fn handle(&mut self, input: Input, _rx: &Receiver<Input>) -> Option<i32> {
+    fn handle(&mut self, input: Input) -> Option<i32> {
         self.app.set_now(
             self.clock.now(),
             contract::clock::wall_ms(self.clock.wall()),
@@ -476,7 +476,7 @@ impl<B: Backend> Loop<B> {
     /// code draws once per batch through `run`.
     #[cfg(test)]
     fn step(&mut self, input: Input, rx: &Receiver<Input>) -> Option<i32> {
-        if let Some(code) = self.handle(input, rx) {
+        if let Some(code) = self.handle(input) {
             return Some(code);
         }
         self.frame(rx)
