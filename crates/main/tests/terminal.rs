@@ -583,8 +583,8 @@ fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
     assert_eq!(result["output"], "hi\nExit code 0.\n");
 }
 
-/// A turn that calls `ask_user` with four questions, then the shell.
-fn calls_ask_then_echo_hi() -> Response {
+/// A script step that calls `ask_user` with four questions, then the shell.
+fn ask_then_echo_hi_script() -> Value {
     let questions = json!([
         {"header": "Timeout", "question": "How long?",
          "options": [{"label": "1m"}, {"label": "5m"}]},
@@ -594,34 +594,26 @@ fn calls_ask_then_echo_hi() -> Response {
         {"header": "Pick", "question": "Which one?",
          "options": [{"label": "x"}, {"label": "y"}]},
     ]);
-    let events = [
-        json!({"type": "response.output_item.done", "item": {
-            "type": "function_call", "id": "fc_call_ask", "call_id": "call_ask",
-            "name": "ask_user",
-            "arguments": json!({"questions": questions}).to_string()
-        }}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "function_call", "id": "fc_call_1", "call_id": "call_1",
-            "name": "shell",
-            "arguments": json!({"command": "echo hi"}).to_string()
-        }}),
-        json!({"type": "response.completed", "response": {
-            "id": "resp_1", "status": "completed",
-            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-        }}),
-    ];
-    let body: String = events
-        .iter()
-        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
-        .collect();
-    Response::stream(body)
+    json!({"steps": [{"tool_calls": [
+        {"name": "ask_user", "arguments": {"questions": questions}},
+        {"name": "shell", "arguments": {"command": "echo hi"}},
+    ]}]})
 }
 
 #[test]
 fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
     let setup = Setup::new();
-    let server = ProviderServer::start([calls_ask_then_echo_hi()]).unwrap();
-    setup.provider(&server);
+    // The built-in `scripted` provider answers from a script in the
+    // workspace, named as an ordinary model (`docs/model-routing.md`,
+    // "The scripted provider"): one step carries both tool calls.
+    write(
+        &setup.workspace().join("s.json"),
+        &ask_then_echo_hi_script(),
+    );
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+    );
     // A standing project ask for this exact command: with the terminal
     // connected the loop asks a person (`docs/permissions.md`, "Headless").
     // The project's rules live in Fiber home at `projects/<key>/rules`
@@ -688,6 +680,58 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
         rest = &rest[at + 2..];
     }
     assert!(calls > 0, "{text:?}");
+    // As above: quitting either exits at once or asks first.
+    run.write(b"\x03\x03\r");
+    run.read_until("fiber resume");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
+/// An `ask_user` call stalled mid-arguments: the added event names the
+/// call, then one arguments delta carries the first part of its JSON and
+/// the body stalls, so the raw text stays on the group line.
+fn streaming_ask_stalls() -> Response {
+    let added = json!({"type": "response.output_item.added", "item": {
+        "type": "function_call", "id": "fc_ask", "name": "ask_user"
+    }});
+    let delta = json!({"type": "response.function_call_arguments.delta",
+        "item_id": "fc_ask", "delta": "{\"questions\""});
+    let prefix: String = [added, delta]
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stall(200, prefix.clone(), prefix.len() + 100000)
+        .header("content-type", "text/event-stream")
+}
+
+#[test]
+fn a_streaming_ask_shows_its_raw_arguments_until_requested() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([streaming_ask_stalls()]).unwrap();
+    setup.provider(&server);
+    let mut run = Run::terminal(&setup);
+    // A 160x48 pty, as the ticket's screen: the resize lands before the
+    // first prompt, so every frame draws at the ticket's width.
+    rustix::termios::tcsetwinsize(
+        &run.main,
+        rustix::termios::Winsize {
+            ws_col: 160,
+            ws_row: 48,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+    .unwrap();
+    support::kill_pid(setup.deadline, run.child.id(), "WINCH").unwrap();
+    run.read_until(">");
+    run.write(b"run it\r");
+    // The call is still streaming its arguments, so the group line shows
+    // the raw text; the scripted test above shows it gone once requested.
+    run.read_until("{\"questions\"");
+    // The turn stalls mid-arguments: Esc interrupts it, as the stalled
+    // turn test interrupts its stalled reply.
+    run.write(b"\x1b");
+    run.read_until("interrupted");
     // As above: quitting either exits at once or asks first.
     run.write(b"\x03\x03\r");
     run.read_until("fiber resume");
