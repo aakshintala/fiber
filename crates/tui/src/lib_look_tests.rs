@@ -260,7 +260,6 @@ fn the_rail_and_panel_regions_paint_as_the_background() {
     let buf = screen.backend().buffer();
     // Dark `background` against dark `surface` (`docs/tui.md`, "Themes").
     let background = Color::Rgb(0x1e, 0x21, 0x27);
-    let surface = Color::Rgb(0x28, 0x2c, 0x34);
     assert_eq!(
         buf[(panel.right().saturating_sub(1), panel.y)].bg,
         background
@@ -269,6 +268,4 @@ fn the_rail_and_panel_regions_paint_as_the_background() {
         buf[(rail.x, rail.bottom().saturating_sub(1))].bg,
         background
     );
-    assert_ne!(buf[(panel.right().saturating_sub(1), panel.y)].bg, surface);
-    assert_ne!(buf[(rail.x, rail.bottom().saturating_sub(1))].bg, surface);
 }

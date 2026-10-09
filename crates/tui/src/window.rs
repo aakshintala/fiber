@@ -536,10 +536,8 @@ impl Pages {
         if let Some(seed) = self.seeds.get_mut(before) {
             seed.joins_next = true;
         }
-        if self.closed.get(before).is_some_and(|part| part.is_some()) {
-            if let Some(part) = self.closed.get_mut(before).and_then(Option::as_mut) {
-                part.joins_next = true;
-            }
+        if let Some(Some(part)) = self.closed.get_mut(before) {
+            part.joins_next = true;
             self.count(before);
         } else if let Some(rows) = self.index.pages().get(before).map(|page| page.rows) {
             self.index.set_rows(before, rows.saturating_sub(1));
