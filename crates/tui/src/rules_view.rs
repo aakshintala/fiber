@@ -205,7 +205,7 @@ impl Rules {
                     .section(scope)
                     .map(|section| section.file.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                vec![(format!("{name} rules  {file}"), None, Ink::Plain)]
+                vec![(format!("{name} rules  {file}"), None, Ink::Heading)]
             }
             Item::Rule(_, _) => {
                 let row = self.rule_row(item);
@@ -214,10 +214,10 @@ impl Rules {
                         ("✕ ".to_owned(), Some(Spot::Revoke(at)), Ink::Plain),
                         (fields(row), None, Ink::Plain),
                     ],
-                    None => vec![("No rules.".to_owned(), None, Ink::Plain)],
+                    None => vec![("No rules.".to_owned(), None, Ink::Muted)],
                 }
             }
-            Item::Note(scope) => vec![(note(self.section(scope)), None, Ink::Plain)],
+            Item::Note(scope) => vec![(note(self.section(scope)), None, Ink::Muted)],
         }
     }
 

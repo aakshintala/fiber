@@ -206,14 +206,14 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
         app.on_key(Key::Down, now());
     }
     // The eighth row, still in the first window: `/model` sits between
-    // `/resume` and `/panel`.
+    // `/resume` and `/panel`, so the eighth row is `/handoff`.
     assert_eq!(
         selected(&app).as_deref(),
-        Some("/name <text>  Names the session.  command")
+        Some("/handoff [instructions]  Starts a handoff.  command")
     );
     assert_eq!(app.completions().and_then(|c| c.selected), Some(7));
     app.on_key(Key::Down, now());
-    // The ninth row is `/reload`: the window moves down by one.
+    // The ninth row is `/name`: the window moves down by one.
     let completions = app.completions();
     assert_eq!(completions.as_ref().and_then(|c| c.selected), Some(7));
     assert_eq!(
