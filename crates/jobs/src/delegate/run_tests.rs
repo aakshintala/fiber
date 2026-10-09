@@ -12,7 +12,11 @@ use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::sync::{
+    Arc, Condvar, Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 use std::thread;
 use std::time::Duration;
 
@@ -248,22 +252,89 @@ impl Rig {
     }
 }
 
-/// The first notice the runner sends, driving the fake clock in small
-/// steps. Panics after a bounded number of steps, so a runner that never
-/// reports fails the test instead of hanging it. Healthy runs report
-/// within a handful of steps; the bound is wall-clock short so a broken
-/// runner fails in seconds, not minutes.
-fn reported(rig: &Rig) -> contract::inbox::JobNotice {
-    for _ in 0..150 {
-        if let Ok(Delivery::Job(notice)) = rig.inbox.try_recv() {
-            return notice;
-        }
-        rig.clock.advance(Duration::from_millis(50));
-        if let Ok(Delivery::Job(notice)) = rig.inbox.recv_timeout(Duration::from_millis(20)) {
-            return notice;
+/// The runner's park when it lies ahead of `now()`, otherwise `None`.
+/// Never blocks and never moves the clock: the caller advances only from
+/// the returned `until` (docs/testing.md, "Waits and timeouts": a test
+/// advances a fake clock only after a signal that the code under test is
+/// waiting on that clock). Panics naming `parked()` when more than one
+/// thread is parked or a park has no deadline: the runner is the only
+/// thread that parks on the rig's clock in these tests.
+fn park_ahead(clock: &FakeClock) -> Option<std::time::Instant> {
+    let parked = clock.parked();
+    if parked.len() > 1 {
+        panic!("expected the runner's single park, saw parked={parked:?}");
+    }
+    match parked.into_iter().next() {
+        None => None,
+        Some(None) => panic!("the runner parked with no deadline; parked=[None]"),
+        Some(Some(until)) => {
+            let now = clock.now();
+            (until > now).then_some(until)
         }
     }
-    panic!("the runner did not report");
+}
+
+/// The first notice the runner sends. A scoped driver thread advances the
+/// fake clock only from the runner's own park (docs/testing.md, "Waits
+/// and timeouts"): a park at most one poll ahead moves time to its
+/// `until`; a park further ahead is the drain wait and is never advanced,
+/// because the drain's end wakes the runner itself; with no park ahead
+/// the driver yields. The test thread's single `recv_timeout(DEADLINE)`
+/// is the wall-clock deadline for the whole wait, driver included
+/// (docs/testing.md, "Waits and timeouts": every wait has a deadline on
+/// the wall clock). The stop flag is set on every outcome of that
+/// receive, before the result is inspected, so the driver always ends
+/// within `DEADLINE` and the scope never outlives the wait.
+fn reported(rig: &Rig) -> contract::inbox::JobNotice {
+    reported_before(rig, None)
+}
+
+/// `reported` with a horizon: fake time never reaches `horizon`. A park
+/// at or past it wakes the runner with a zero advance, which moves no
+/// time but wakes every subscriber, so a leader whose stdout EOF beat its
+/// zombie state is still reaped on a later pass (docs/testing.md,
+/// "Waits and timeouts": deadlines are hang guards, never timing
+/// assertions; no timing is asserted here).
+fn reported_before(rig: &Rig, horizon: Option<std::time::Instant>) -> contract::inbox::JobNotice {
+    let stop = Arc::new(AtomicBool::new(false));
+    let driver_stop = Arc::clone(&stop);
+    let clock = Arc::clone(&rig.clock);
+    thread::scope(|scope| {
+        scope.spawn(move || {
+            loop {
+                if driver_stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                match park_ahead(&clock) {
+                    Some(until) => {
+                        if horizon.is_some_and(|horizon| until >= horizon) {
+                            clock.advance(Duration::ZERO);
+                        } else {
+                            let now = clock.now();
+                            match until.checked_duration_since(now) {
+                                Some(gap) if gap <= super::POLL => {
+                                    clock.advance(gap);
+                                }
+                                _ => thread::yield_now(),
+                            }
+                        }
+                    }
+                    None => thread::yield_now(),
+                }
+            }
+        });
+        let result = rig.inbox.recv_timeout(DEADLINE);
+        stop.store(true, Ordering::Relaxed);
+        match result {
+            Ok(Delivery::Job(notice)) => notice,
+            Ok(other) => panic!("expected the runner's report, got {other:?}"),
+            Err(_) => panic!(
+                "the runner did not report; now={:?} parked={:?}",
+                rig.clock.now(),
+                rig.clock.parked()
+            ),
+        }
+    })
 }
 
 /// Wakes the runner by one poll interval at a time, each only once it is
@@ -569,7 +640,36 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
     let watchdog = Watchdog::matching("fiber-delegate-held-stdout");
     rig.start(&shell, BOUND, 1024);
     let member = pid_in_file(&member_pid);
-    let notice = reported(&rig);
+    // The runner waits for the drain past the poll horizon: the only
+    // test that needs fake time past the drain wait. One advance to the
+    // drain park's own `until`, then one bounded receive for the notice
+    // (docs/testing.md, "Waits and timeouts": one deadline for the
+    // whole wait).
+    wake_until_draining(&rig.clock, BOUND);
+    let drain_until = {
+        let parked = rig.clock.parked();
+        let now = rig.clock.now();
+        let ahead: Vec<std::time::Instant> = parked
+            .iter()
+            .flatten()
+            .filter(|until| **until > now + super::POLL)
+            .copied()
+            .collect();
+        assert_eq!(
+            ahead.len(),
+            1,
+            "the runner waits for the drain past the poll; parked={parked:?}"
+        );
+        ahead[0]
+    };
+    rig.clock.advance(drain_until - rig.clock.now());
+    let Ok(Delivery::Job(notice)) = rig.inbox.recv_timeout(DEADLINE) else {
+        panic!(
+            "the drain's end did not report; now={:?} parked={:?}",
+            rig.clock.now(),
+            rig.clock.parked()
+        );
+    };
     assert_eq!(notice.completed.status, Outcome::Failed);
     assert_eq!(
         notice
@@ -760,12 +860,16 @@ fn a_stop_on_a_term_trap_cancels_without_sigkill() {
         fifo.display()
     );
     let rig = rig(vec![]);
-    rig.start(&shell, BOUND, 1024);
+    let done = rig.start(&shell, BOUND, 1024);
     let pgid = pid_in_file(&pidfile);
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
+    // Fake time never reaches the stop bound, so the trap's own exit
+    // cannot race the timer's SIGKILL (docs/testing.md, "Waits and
+    // timeouts": deadlines are hang guards, never timing assertions).
+    let kill_at = rig.clock.now() + BOUND;
     assert_eq!(rig.registry.stop_delegates(), 1);
-    let notice = reported(&rig);
+    let notice = reported_before(&rig, Some(kill_at));
     assert_eq!(notice.completed.status, Outcome::Cancelled);
     assert_eq!(
         notice
@@ -775,7 +879,11 @@ fn a_stop_on_a_term_trap_cancels_without_sigkill() {
             .and_then(|process| process.exit_code),
         Some(143)
     );
-    rig.clock.advance(BOUND + Duration::from_secs(1));
+    // The report is sent from `retire`: waiting on the runner's return
+    // proves no timer can still fire (docs/testing.md, "Waits and
+    // timeouts": every wait has a deadline on the wall clock).
+    done.recv_timeout(DEADLINE)
+        .expect("the runner returns after the trap's exit");
     assert!(
         !crate::delegate::group::sent_signals()
             .iter()
@@ -946,14 +1054,22 @@ fn a_child_that_exits_in_the_stop_timer_sends_no_kill() {
         fifo.display()
     );
     let rig = rig(vec![]);
-    rig.start(&shell, BOUND, 1024);
+    let done = rig.start(&shell, BOUND, 1024);
     let pgid = pid_in_file(&pidfile);
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
+    // Fake time never reaches the stop bound, so the quick exit cannot
+    // race the timer's SIGKILL (docs/testing.md, "Waits and timeouts":
+    // deadlines are hang guards, never timing assertions).
+    let kill_at = rig.clock.now() + BOUND;
     assert_eq!(rig.registry.stop_delegates(), 1);
-    let notice = reported(&rig);
+    let notice = reported_before(&rig, Some(kill_at));
     assert_eq!(notice.completed.status, Outcome::Cancelled);
-    rig.clock.advance(BOUND + Duration::from_secs(1));
+    // The report is sent from `retire`: waiting on the runner's return
+    // proves no timer can still fire (docs/testing.md, "Waits and
+    // timeouts": every wait has a deadline on the wall clock).
+    done.recv_timeout(DEADLINE)
+        .expect("the runner returns after the quick exit");
     assert!(
         !crate::delegate::group::sent_signals()
             .iter()
