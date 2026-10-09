@@ -293,6 +293,7 @@ fn read_stdout(stdout: &mut impl std::io::Read, out: &mut Vec<u8>, eof: &mut boo
             Ok(read) => {
                 out.extend_from_slice(buf.get(..read).unwrap_or_default());
             }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return,
             Err(_) => {
                 *eof = true;
