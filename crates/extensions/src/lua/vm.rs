@@ -302,6 +302,21 @@ impl Vm {
                     .unwrap_or_default()
                     .unwrap_or_default(),
             )),
+            Target::Provider { function, .. } if *function == "credential" => {
+                // A numeric `headers` key would not survive JSON conversion:
+                // `to_json` turns `{[42] = "v"}` into `{"42": "v"}` and
+                // `{[1] = "v"}` into an array, hiding the shape. Checked
+                // here, before conversion (`docs/extensions.md`, "What
+                // writing a provider looks like").
+                if !credential_headers_are_strings(&value) {
+                    return Err(Error::BadReturn {
+                        extension: self.name.clone(),
+                        callback: target.to_string(),
+                        why: "`headers` is not a table of header names to values".to_owned(),
+                    });
+                }
+                host::to_json(&value).map_err(fail)
+            }
             Target::Provider { .. }
             | Target::Hook { .. }
             | Target::Timer { .. }
@@ -456,6 +471,37 @@ impl Vm {
             extension: self.name.clone(),
             message: "a callback yielded to the host".to_owned(),
         }
+    }
+}
+
+/// Whether a `credential()` return's `headers`, when present, is a table
+/// whose every name and value is a string. A return that is not a table is
+/// another check's problem: `fetch_token` reports the missing `token`.
+/// Absent and null mean no headers, as an empty table does for `sign()`
+/// (`docs/extensions.md`, "What writing a provider looks like").
+pub(super) fn credential_headers_are_strings(value: &mlua::Value) -> bool {
+    let mlua::Value::Table(returned) = value else {
+        return true;
+    };
+    let Ok(headers) = returned.get::<mlua::Value>("headers") else {
+        return false;
+    };
+    match headers {
+        mlua::Value::Nil => true,
+        mlua::Value::Table(headers) => headers
+            .pairs::<mlua::Value, mlua::Value>()
+            .all(|pair| matches!(pair, Ok((mlua::Value::String(_), mlua::Value::String(_))))),
+        headers if headers.is_null() => true,
+        mlua::Value::Boolean(_)
+        | mlua::Value::LightUserData(_)
+        | mlua::Value::Integer(_)
+        | mlua::Value::Number(_)
+        | mlua::Value::String(_)
+        | mlua::Value::Function(_)
+        | mlua::Value::Thread(_)
+        | mlua::Value::UserData(_)
+        | mlua::Value::Error(_)
+        | mlua::Value::Other(_) => false,
     }
 }
 
