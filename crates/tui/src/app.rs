@@ -595,15 +595,14 @@ impl App {
     /// the header, the input box or the panel in its place, the steering
     /// queue, the banner, the badge and the hint.
     pub(crate) fn below_rows(&self) -> usize {
-        let input = self.panel().map_or(self.input_height(), |panel| {
-            panel
-                .lines
-                .iter()
-                .map(|line| {
-                    crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.column_width())
-                })
-                .sum()
-        });
+        // The same room the view draws the box and the panel in: the body
+        // height, so the rows counted are the rows drawn
+        // (`docs/tui.md`, "Layout").
+        let room = usize::from(self.screen.height()).saturating_sub(self.chrome.header_rows());
+        let input = self.panel().map_or_else(
+            || crate::surface::edged(self.input_height(), room),
+            |panel| crate::view::request::height(&panel, self.column_width(), room),
+        );
         self.chrome.header_rows()
             + input
             + self.completion_rows()
@@ -613,9 +612,11 @@ impl App {
             + usize::from(self.hint())
     }
 
-    /// The approval panel, while it is open.
+    /// The approval panel, while it is open: its form laid out at the
+    /// inset width, past the panel's stripe and gap (`docs/tui.md`,
+    /// "Look").
     pub(crate) fn panel(&self) -> Option<Panel> {
-        self.queue.panel(self.column_width())
+        self.queue.panel(crate::surface::inset(self.column_width()))
     }
 
     /// The badge line while the panel is closed and requests wait.

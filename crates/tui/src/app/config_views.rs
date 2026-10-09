@@ -13,6 +13,7 @@ use super::{App, Effect};
 use crate::ThemeSetting;
 use crate::configure::Configure;
 use crate::keys::{Edit, Key};
+use crate::login_view::Login;
 use crate::rules_view::Rules;
 use crate::settings_view::{Act, Ctx, Settings};
 use crate::swapped::{Frame, List, Spot};
@@ -27,6 +28,8 @@ pub(crate) enum ConfigView {
     Settings,
     /// `/rules`.
     Rules,
+    /// `/login`.
+    Login,
 }
 
 /// The open view.
@@ -36,6 +39,8 @@ enum Open {
     Settings(Settings),
     /// `/rules`.
     Rules(Rules),
+    /// `/login`.
+    Login(Login),
     /// A view with no seam to read through, by its title.
     Unavailable(&'static str),
 }
@@ -73,8 +78,13 @@ impl App {
                 let workspace = self.workspace();
                 Open::Rules(Rules::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
+            (Some(seam), ConfigView::Login) => {
+                let workspace = self.workspace();
+                Open::Login(Login::open(&self.config_ctx(seam.as_ref(), &workspace)))
+            }
             (None, ConfigView::Settings) => Open::Unavailable("Settings"),
             (None, ConfigView::Rules) => Open::Unavailable("Rules"),
+            (None, ConfigView::Login) => Open::Unavailable("Log in"),
         };
         self.config_views.open = Some(open);
         Effect::None
@@ -121,6 +131,7 @@ impl App {
                 match &mut self.config_views.open {
                     Some(Open::Settings(settings)) => settings.key(key, &ctx),
                     Some(Open::Rules(rules)) => rules.key(key, &ctx),
+                    Some(Open::Login(login)) => login.key(key, &ctx),
                     Some(Open::Unavailable(_)) | None => esc(key),
                 }
             }
@@ -143,6 +154,10 @@ impl App {
                         Act::Stay
                     }
                     Some(Open::Rules(rules)) => rules.edit_key(edit, &ctx),
+                    Some(Open::Login(login)) => {
+                        login.edit_key(edit);
+                        Act::Stay
+                    }
                     Some(Open::Unavailable(_)) | None => Act::Stay,
                 }
             }
@@ -161,6 +176,7 @@ impl App {
                 match &mut self.config_views.open {
                     Some(Open::Settings(settings)) => settings.click(spot, &ctx),
                     Some(Open::Rules(rules)) => rules.click(spot, &ctx),
+                    Some(Open::Login(login)) => login.click(spot, &ctx),
                     Some(Open::Unavailable(_)) | None => Act::Stay,
                 }
             }
@@ -205,6 +221,7 @@ impl App {
         Some(match self.config_views.open.as_ref()? {
             Open::Settings(settings) => settings.frame(usage),
             Open::Rules(rules) => rules.frame(),
+            Open::Login(login) => login.frame(),
             Open::Unavailable(title) => Frame {
                 title: (*title).to_owned(),
                 rows: Vec::new(),
@@ -244,7 +261,7 @@ impl App {
             match &mut self.config_views.open {
                 Some(Open::Settings(settings)) => settings.reread(&ctx),
                 Some(Open::Rules(rules)) => rules.reread(&ctx),
-                Some(Open::Unavailable(_)) | None => {}
+                Some(Open::Login(_) | Open::Unavailable(_)) | None => {}
             }
         }
     }
@@ -279,3 +296,7 @@ fn esc(key: &Key) -> Act {
 #[cfg(test)]
 #[path = "config_views_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_login_tests.rs"]
+mod login_tests;

@@ -1,9 +1,8 @@
 ---
 source: crates/tui/src/view/results_tests.rs
-assertion_line: 150
 expression: "screen(&app, 80, 24)"
 ---
-40 matches for “match”                                    find: match · 18 of 4✕
+40 matches for “match”                                    find: match · 20 of 4✕
 match number 0 match number 1 match number 2
 match number 1 match number 2 match number 3
 match number 2 match number 3 match number 4
@@ -24,9 +23,9 @@ match number 16 match number 17 match number 18
 match number 17 match number 18 match number 19
 match number 18 match number 19 match number 20
 match number 19 match number 20 match number 21
-match number 20 match number 21 match number 22
-match number 21 match number 22 match number 23
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 >
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 ---
 ................................................................................
@@ -49,7 +48,7 @@ match number 21 match number 22 match number 23
 ................HHHHH...........................................................
 ................HHHHH...........................................................
 ................HHHHH...........................................................
-................HHHHH...........................................................
-................HHHHH...........................................................
 SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
+................................................................................
+................................................................................
 ................................................................................

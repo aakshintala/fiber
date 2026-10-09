@@ -33,6 +33,7 @@ fn built_ins_come_in_table_order_then_the_answer_rows() {
             "settings",
             "handoff",
             "name",
+            "login",
             "reload",
             "close",
             "quit",

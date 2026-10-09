@@ -24,6 +24,7 @@ fn push_text_keeps_its_text() {
     let text = RowText {
         join: Join::WrapSpace,
         skip: 3,
+        tail: 0,
         decoration: true,
         links: Vec::new(),
         scopes: Vec::new(),
@@ -105,4 +106,10 @@ fn end_scope_without_a_scope_does_nothing() {
     rows.push(row("a"));
     let (_, texts) = rows.into_parts();
     assert_eq!(texts, vec![RowText::plain()]);
+}
+
+#[test]
+fn tail_cells_are_not_text() {
+    let plain = RowText::plain();
+    assert_eq!(plain.tail, 0);
 }

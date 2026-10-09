@@ -114,7 +114,10 @@ fn a_theme_choice_repaints_the_next_frame() {
     });
     let written = lp.screen.backend().buffer();
     for cell in &written.content {
-        assert_eq!(cell.bg, Color::Rgb(0xfa, 0xfa, 0xfa));
+        assert!(matches!(
+            cell.bg,
+            Color::Rgb(0xfa, 0xfa, 0xfa) | Color::Rgb(0xf0, 0xf0, 0xf1)
+        ));
     }
     assert_eq!(
         seam.writes()

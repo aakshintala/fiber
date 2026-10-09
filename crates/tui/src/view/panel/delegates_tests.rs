@@ -261,13 +261,19 @@ fn the_card_takes_its_listed_place() {
     let mut app = attached_with(160, 40, &["jobs", "delegates"]);
     fold_job(&mut app, "j_0", "build");
     fold_delegates(&mut app, 1);
+    let edge = "▄".repeat(usize::from(panel_width(&app).saturating_sub(1)));
+    let edge_bottom = "▀".repeat(usize::from(panel_width(&app).saturating_sub(1)));
     assert_eq!(
         texts(&app),
         vec![
+            edge.clone(),
             "1 job running".to_owned(),
+            edge_bottom.clone(),
             String::new(),
+            edge,
             "● fiber  test/model".to_owned(),
             "  task 1".to_owned(),
+            edge_bottom,
         ]
     );
 }
@@ -276,7 +282,12 @@ fn the_card_takes_its_listed_place() {
 fn no_delegates_draws_no_card_and_no_blank_row() {
     let mut app = attached_with(160, 40, &["delegates", "jobs"]);
     fold_job(&mut app, "j_0", "build");
-    assert_eq!(texts(&app), vec!["1 job running".to_owned()]);
+    let edge = "▄".repeat(usize::from(panel_width(&app).saturating_sub(1)));
+    let edge_bottom = "▀".repeat(usize::from(panel_width(&app).saturating_sub(1)));
+    assert_eq!(
+        texts(&app),
+        vec![edge, "1 job running".to_owned(), edge_bottom]
+    );
 }
 
 #[test]
@@ -368,11 +379,15 @@ fn the_span_covers_only_the_card_rows() {
         .position(|row| row == "● fiber  test/model")
         .unwrap_or_else(|| panic!("the card's first row"));
     assert!(start > 1);
-    assert_eq!(span, Some(start..start + 4));
-    assert_eq!(texts.get(start - 1).map(String::as_str), Some(""));
-    assert_eq!(texts.get(start + 4).map(String::as_str), Some(""));
+    assert_eq!(span, Some(start - 1..start + 5));
+    assert_eq!(texts.get(start - 2).map(String::as_str), Some(""));
+    assert_eq!(texts.get(start + 5).map(String::as_str), Some(""));
+    assert!(
+        texts.get(start + 6).is_some_and(|row| row.starts_with('▄')),
+        "{texts:?}"
+    );
     assert_eq!(
-        texts.get(start + 5).map(String::as_str),
+        texts.get(start + 7).map(String::as_str),
         Some("1 job running")
     );
 }

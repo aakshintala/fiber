@@ -3,6 +3,8 @@ source: crates/tui/src/view/panel_tests.rs
 expression: "super::super::text(&draw_panel(&app))"
 ---
 
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
   …path/to/the/parser.rs +120 −15
   src/a.rs                  +3 −3
   2 files changed  +123 −18
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -187,18 +187,17 @@ fn up_down_and_page_keys_move_the_selection() {
     assert_eq!(cursor(&app), (0, 0));
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
     assert_eq!(cursor(&app), (0, 0));
-    // A screen is the view's entry rows: the conversation's nine less
-    // the header.
+    // A screen is the view's entry rows: the conversation's six.
     assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
-    assert_eq!(cursor(&app), (8, 1));
+    assert_eq!(cursor(&app), (6, 1));
     assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
-    assert_eq!(cursor(&app), (11, 4));
+    assert_eq!(cursor(&app), (11, 6));
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(cursor(&app), (11, 4));
+    assert_eq!(cursor(&app), (11, 6));
     assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
-    assert_eq!(cursor(&app), (11, 4));
+    assert_eq!(cursor(&app), (11, 6));
     assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
-    assert_eq!(cursor(&app), (3, 3));
+    assert_eq!(cursor(&app), (5, 5));
     assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
     assert_eq!(cursor(&app), (0, 0));
     assert!(app.results_open(), "moving never closes the view");

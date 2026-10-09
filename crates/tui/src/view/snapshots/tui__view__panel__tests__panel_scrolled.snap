@@ -3,6 +3,7 @@ source: crates/tui/src/view/panel_tests.rs
 expression: "super::super::text(&buf)"
 ---
 
+  line 04
   line 05
   line 06
   line 07
@@ -41,4 +42,3 @@ expression: "super::super::text(&buf)"
   line 40
   line 41
   line 42
-  line 43

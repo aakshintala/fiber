@@ -255,7 +255,7 @@ fn an_empty_row_two_takes_no_row() {
     let rows: Vec<&str> = screen.lines().collect();
     let bottom = rows.len() - 1;
     assert!(rows[bottom].contains("$1.50"), "{}", screen);
-    assert_eq!(rows[bottom - 1], ">", "{}", screen);
+    assert_eq!(rows[bottom - 2], ">", "{}", screen);
 }
 
 #[test]
@@ -347,7 +347,7 @@ fn no_narrow_rows_drawn_outside_the_narrow_layout() {
     let screen = crate::view::text(&buf);
     assert!(!screen.contains('▸'), "{screen}");
     assert!(!screen.contains('▾'), "{screen}");
-    assert_eq!(screen.lines().next_back(), Some(">"));
+    assert_eq!(screen.lines().rev().nth(1), Some(">"));
     // The row above the input box is blank inside the column.
     assert_eq!(
         buf.cell((2, 38))
@@ -373,10 +373,11 @@ fn short_screens_shed_row_two_then_row_one() {
     assert!(!screen.contains("job running"), "{screen}");
     assert!(!screen.contains("$1.50"), "{screen}");
     assert!(screen.contains("l5"), "{screen}");
-    // Four widget rows keep row 1 alone.
-    let mut app = setup(10);
+    // Four widget rows keep row 1 alone at twelve rows, allowing for the
+    // input box's two surface edges.
+    let mut app = setup(12);
     app.on_line(widget("ex", "wid", &["l1", "l2", "l3", "l4"]));
-    let (screen, _) = draw(&app, 100, 10);
+    let (screen, _) = draw(&app, 100, 12);
     assert!(!screen.contains("job running"), "{screen}");
     assert!(screen.contains("$1.50"), "{screen}");
 }
@@ -438,13 +439,13 @@ fn delegate_rows_show_only_while_the_conversation_keeps_half() {
         app.on_line(delegated("j_1"));
         app
     };
-    // At 11 rows the conversation would keep 5 of 11: the rows drop.
+    // At 11 rows the conversation would keep 5 of 11, so the rows drop.
     let (screen, _) = draw(&setup(11), 100, 11);
     assert!(!screen.contains("alpha"), "{screen}");
     assert!(screen.contains("$1.50"), "{screen}");
     assert!(screen.contains("1 delegate running"), "{screen}");
-    // At 12 rows it keeps half: the rows draw with both status rows.
-    let (screen, _) = draw(&setup(12), 100, 12);
+    // At 16 rows it keeps half with the input box's two surface edges.
+    let (screen, _) = draw(&setup(16), 100, 16);
     assert!(screen.contains("alpha"), "{screen}");
     assert!(screen.contains("$1.50"), "{screen}");
     assert!(screen.contains("1 delegate running"), "{screen}");
@@ -528,8 +529,8 @@ fn the_draft_cursor_sits_above_one_status_row() {
     let (rows, cursor, _) = rendered(&app, 100, 30);
     assert_eq!(app.narrow_fit().map(|fit| fit.status), Some(1));
     let at = cursor.expect("a cursor on the input row");
-    // The input row, then the one status row.
-    assert_eq!(usize::from(at.y), rows.len() - 2);
+    // The input row, its lower surface edge, then the one status row.
+    assert_eq!(usize::from(at.y), rows.len() - 3);
     assert!(rows[usize::from(at.y)].contains('>'), "{rows:?}");
     assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
 }
@@ -540,8 +541,8 @@ fn the_draft_cursor_sits_above_two_status_rows() {
     let (rows, cursor, _) = rendered(&app, 100, 30);
     assert_eq!(app.narrow_fit().map(|fit| fit.status), Some(2));
     let at = cursor.expect("a cursor on the input row");
-    // The input row, then row 1, then row 2.
-    assert_eq!(usize::from(at.y), rows.len() - 3);
+    // The input row, its lower surface edge, then row 1 and row 2.
+    assert_eq!(usize::from(at.y), rows.len() - 4);
     assert!(rows[usize::from(at.y)].contains('>'), "{rows:?}");
     assert!(rows[rows.len() - 2].contains("$1.50"), "{rows:?}");
     assert!(rows[rows.len() - 1].contains("1 job running"), "{rows:?}");
@@ -564,17 +565,21 @@ fn the_draft_cursor_tracks_the_kept_status_rows_on_short_screens() {
         let keep = app.narrow_fit().map(|fit| fit.status).unwrap_or(0);
         kept.insert(keep);
         let at = cursor.expect("a cursor on the input row");
-        // The cursor stays on the input row while the kept rows change
-        // beneath it.
-        assert_eq!(usize::from(at.y), usize::from(height) - keep - 1);
+        // The cursor stays on the input row while the lower surface edge
+        // and kept status rows move beneath it.
+        assert_eq!(usize::from(at.y), usize::from(height) - keep - 2);
         assert!(rows[usize::from(at.y)].contains('>'), "{height}: {rows:?}");
         let below = &rows[usize::from(at.y) + 1..];
-        assert_eq!(below.len(), keep, "{height}: {rows:?}");
+        assert_eq!(below.len(), keep + 1, "{height}: {rows:?}");
+        assert!(
+            below[0].chars().all(|cell| cell == '▀'),
+            "{height}: {rows:?}"
+        );
         if keep >= 1 {
-            assert!(below[0].contains("$1.50"), "{height}: {rows:?}");
+            assert!(below[1].contains("$1.50"), "{height}: {rows:?}");
         }
         if keep >= 2 {
-            assert!(below[1].contains("1 job running"), "{height}: {rows:?}");
+            assert!(below[2].contains("1 job running"), "{height}: {rows:?}");
         }
     }
     // The sweep covers each side of both shedding boundaries.
@@ -663,10 +668,14 @@ fn the_approval_panel_draws_above_the_status_row() {
     let (rows, cursor, _) = rendered(&app, 100, 30);
     // An approval has no text cursor.
     assert!(cursor.is_none());
-    // The panel's last row sits directly above the status row.
+    // The panel's bottom edge sits above the status row.
     assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
     assert!(
-        rows[rows.len() - 2].contains("deny · type to add feedback"),
+        rows[rows.len() - 2].chars().all(|cell| cell == '▀'),
+        "{rows:?}"
+    );
+    assert!(
+        rows[rows.len() - 3].contains("deny · type to add feedback"),
         "{rows:?}"
     );
 }
@@ -686,10 +695,14 @@ fn the_approval_panel_takes_the_bottom_row_once_the_status_sheds() {
     assert_eq!(setup().narrow_fit().map(|fit| fit.status), Some(0));
     let (rows, cursor, _) = rendered(&setup(), 100, 10);
     assert!(cursor.is_none());
-    // No status row survives, so the panel ends on the last row.
+    // No status row survives, so the panel's bottom edge ends on the last row.
     assert!(!rows.iter().any(|row| row.contains("$1.50")), "{rows:?}");
     assert!(
-        rows[rows.len() - 1].contains("deny · type to add feedback"),
+        rows[rows.len() - 1].chars().all(|cell| cell == '▀'),
+        "{rows:?}"
+    );
+    assert!(
+        rows[rows.len() - 2].contains("deny · type to add feedback"),
         "{rows:?}"
     );
 }
@@ -722,10 +735,14 @@ fn the_question_caret_sits_inside_the_panel_above_the_status_row() {
     let (rows, cursor, _) = rendered(&app, 100, 30);
     assert_eq!(app.narrow_fit().map(|fit| fit.status), Some(1));
     let at = cursor.expect("a caret in the words row");
-    // The caret's row holds the typed words, above the panel's last row
-    // and the status row beneath it.
+    // The caret's row holds the typed words, above the panel's last row,
+    // its bottom edge, and the status row beneath it.
     assert!(rows[usize::from(at.y)].contains("qx"), "{rows:?}");
-    assert!(usize::from(at.y) < rows.len() - 2, "{rows:?}");
-    assert!(rows[rows.len() - 2].contains("Chat about this"), "{rows:?}");
+    assert!(usize::from(at.y) < rows.len() - 3, "{rows:?}");
+    assert!(
+        rows[rows.len() - 2].chars().all(|cell| cell == '▀'),
+        "{rows:?}"
+    );
+    assert!(rows[rows.len() - 3].contains("Chat about this"), "{rows:?}");
     assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
 }

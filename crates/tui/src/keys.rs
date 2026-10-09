@@ -2,6 +2,8 @@
 //! replies (`docs/tui.md`, "Keys", "Mouse and hover"). [`default_event`]
 //! maps a stroke to the key or edit the app's handlers match.
 
+use crate::appearance::{self, Osc};
+use crate::look::Appearance;
 use crate::stroke::{Code, Mods, Stroke, fold_shift};
 
 /// One key this slice handles.
@@ -102,6 +104,8 @@ pub(crate) enum Reply {
     KittyFlags(u8),
     /// Primary device attributes (`CSI ? ... c`).
     DeviceAttributes,
+    /// A theme-report reply: the terminal's light or dark appearance.
+    Appearance(Appearance),
 }
 
 /// A mouse button.
@@ -359,6 +363,13 @@ fn step(buf: &[u8]) -> Step {
             None => stroke(Code::Esc, Mods::NONE),
             Some(b'[') => parse_csi(buf),
             Some(b'O') => parse_ss3(buf),
+            // An OSC reply starts here; anything off its grammar stays
+            // keys, so a typed Alt+] never swallows text.
+            Some(b']') => match appearance::osc11(buf) {
+                Osc::Hold => None,
+                Osc::Done(events, used) => Some((events, used)),
+                Osc::Off => alt_stroke(buf),
+            },
             // ESC before an arrow's CSI is the legacy Alt arrow.
             Some(0x1b) if buf.get(2) == Some(&b'[') => {
                 let (events, used) = parse_csi(buf.get(1..)?)?;
@@ -476,6 +487,9 @@ fn parse_csi(buf: &[u8]) -> Step {
             // DA1: `CSI ? ... c` ends detection.
             vec![Event::Reply(Reply::DeviceAttributes)]
         }
+        // The theme report: `CSI ? 997 ; 1 n` dark, `; 2` light. `scheme`
+        // takes only those two, so anything else is nothing.
+        0x6e => appearance::scheme(params),
         0x75 => kitty_key(params).into_iter().collect(),
         0x7e => tilde_key(params).into_iter().collect(),
         b'M' | b'm' if params.first() == Some(&b'<') => {

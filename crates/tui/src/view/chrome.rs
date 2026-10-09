@@ -11,7 +11,7 @@ use crate::app::App;
 use crate::layout::Layout;
 use crate::markdown::{Role, style};
 
-/// The rail's and the panel's background.
+/// The rail's and the panel's background (`docs/tui.md`, "Themes").
 const REGION_TINT: Style = Style::new().bg(Role::Surface.color());
 
 /// The draggable edge's grip, drawn on three rows at mid-height.

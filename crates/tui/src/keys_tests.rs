@@ -1185,3 +1185,183 @@ fn default_event_matches_the_parity_table() {
         assert_eq!(&default_event(stroke), want, "{stroke:?}");
     }
 }
+
+/// The appearance replies read as events.
+#[test]
+fn appearance_replies_become_events() {
+    use crate::look::Appearance;
+    assert_eq!(
+        feed_all(&[b"\x1b[?997;2n"]),
+        vec![Event::Reply(Reply::Appearance(Appearance::Light))]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b[?997;1n"]),
+        vec![Event::Reply(Reply::Appearance(Appearance::Dark))]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b]11;rgb:0/0/0\x07"]),
+        vec![Event::Reply(Reply::Appearance(Appearance::Dark))]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b]11;rgb:ff/ff/ff\x1b\\"]),
+        vec![Event::Reply(Reply::Appearance(Appearance::Light))]
+    );
+}
+
+/// An appearance reply split across reads is one event, wherever the cut
+/// lands inside the reply.
+#[test]
+fn an_appearance_reply_split_across_reads() {
+    use crate::look::Appearance;
+    let reply = b"\x1b]11;rgb:1e1e/1e1e/2e2e\x07";
+    let want = vec![Event::Reply(Reply::Appearance(Appearance::Dark))];
+    // After `]`, inside a hex field, and between the `ESC` and `\` of an
+    // `ESC \` end: every byte so far fits the grammar, so each is held.
+    for cut in [3, 12, reply.len() - 1] {
+        let mut parser = Parser::default();
+        let (head, tail) = reply.split_at(cut);
+        assert!(parser.feed(head).is_empty(), "cut at {cut}");
+        assert_eq!(parser.feed(tail), want, "cut at {cut}");
+    }
+    // A lone `ESC` ending a read is Esc until kitty's flags are pushed, so
+    // the cut after it needs kitty: then it is held too.
+    let mut parser = Parser::default();
+    parser.set_kitty();
+    assert!(parser.feed(&reply[..1]).is_empty());
+    assert_eq!(parser.feed(&reply[1..]), want);
+}
+
+/// A typed Alt+] followed by text types that text: the candidate ends at
+/// the first byte off the grammar and parsing goes on after `]`.
+#[test]
+fn alt_right_bracket_then_typing_still_types() {
+    let typed = [
+        Event::Key(Key::Char('1')),
+        Event::Key(Key::Char('1')),
+        Event::Key(Key::Char(';')),
+        Event::Key(Key::Char('h')),
+        Event::Key(Key::Char('e')),
+        Event::Key(Key::Char('l')),
+        Event::Key(Key::Char('l')),
+        Event::Key(Key::Char('o')),
+    ];
+    assert_eq!(feed_all(&[b"\x1b]11;hello"]), typed);
+    assert_eq!(feed_all(&[b"\x1b]11;", b"hello"]), typed);
+}
+
+/// A grammar prefix cut off by the next key types, then the key: the
+/// held candidate ends where the key cannot continue it.
+#[test]
+fn alt_right_bracket_then_a_grammar_prefix_types_on_the_next_key() {
+    let mut want = vec![
+        Event::Key(Key::Char('1')),
+        Event::Key(Key::Char('1')),
+        Event::Key(Key::Char(';')),
+        Event::Key(Key::Char('r')),
+        Event::Key(Key::Char('g')),
+        Event::Key(Key::Char('b')),
+        Event::Key(Key::Char(':')),
+        Event::Key(Key::Char('1')),
+    ];
+    want.push(Event::Key(Key::Enter));
+    assert_eq!(feed_all(&[b"\x1b]11;rgb:1\r"]), want);
+}
+
+/// `ESC ]` with no candidate behind it is still the Alt+] stroke.
+#[test]
+fn alt_right_bracket_is_still_the_alt_stroke() {
+    assert_eq!(
+        feed_strokes(&[b"\x1b]x"]),
+        vec![modified(Code::Char(']'), Mods::ALT), plain(Code::Char('x')),]
+    );
+}
+
+/// A theme report between keys reports without swallowing them.
+#[test]
+fn a_scheme_reply_between_keys() {
+    use crate::look::Appearance;
+    assert_eq!(
+        feed_all(&[b"a\x1b[?997;1nb"]),
+        vec![
+            Event::Key(Key::Char('a')),
+            Event::Reply(Reply::Appearance(Appearance::Dark)),
+            Event::Key(Key::Char('b')),
+        ]
+    );
+}
+
+/// A bracketed paste holding `ESC ]` is text: the paste is checked before
+/// the candidate, so no reply escapes it.
+#[test]
+fn a_paste_holding_esc_bracket_is_text() {
+    assert_eq!(
+        feed_all(&[b"\x1b[200~\x1b]11;rgb:0/0/0\x07\x1b[201~"]),
+        vec![Event::Edit(Edit::Paste("]11;rgb:0/0/0".to_owned()))]
+    );
+}
+
+// `ESC ]` plus arbitrary bytes, in one read and split: the candidate
+// never swallows or reorders a key, every step takes a byte, and a held
+// candidate is at most 32 bytes.
+proptest::proptest! {
+    #[test]
+    fn an_osc_candidate_never_holds_more_than_32_bytes(
+        suffix in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..40usize),
+        cuts in proptest::collection::vec(0..42usize, 0..4usize),
+    ) {
+        use proptest::prelude::*;
+        let mut full = vec![0x1bu8, b']'];
+        full.extend_from_slice(&suffix);
+        // By hand: every step takes at least one byte, and the walk reads
+        // what one feed reads, unless a paste start hides keys from the
+        // steps (the feed checks the paste first).
+        let mut walked = Vec::new();
+        let mut rest = full.as_slice();
+        while !rest.is_empty() {
+            let Some((events, used)) = super::step(rest) else {
+                break;
+            };
+            prop_assert!(used >= 1, "a step takes no byte at {rest:?}");
+            walked.extend(events);
+            rest = rest.get(used.max(1)..).unwrap_or_default();
+        }
+        let mut parser = Parser::default();
+        let one = parser.feed(&full);
+        if !full
+            .windows(super::PASTE_START.len())
+            .any(|window| window == super::PASTE_START)
+        {
+            prop_assert_eq!(&walked, &one);
+        }
+        // The candidate holds only a grammar prefix: at most 32 bytes.
+        if parser.pending.starts_with(b"\x1b]") {
+            prop_assert!(parser.pending.len() <= 32, "held {:?}", parser.pending);
+        }
+        // Split reads agree with one read. Both parsers have kitty's flags
+        // pushed, so a chunk ending in a bare `ESC` is held, as the
+        // pushed flags read it; without them it would be Esc.
+        let mut whole = Parser::default();
+        whole.set_kitty();
+        let expected = whole.feed(&full);
+        let mut parser = Parser::default();
+        parser.set_kitty();
+        let mut split = Vec::new();
+        let mut cuts: Vec<usize> = cuts.into_iter().filter(|at| *at <= full.len()).collect();
+        cuts.sort_unstable();
+        let mut at = 0;
+        for cut in cuts {
+            split.extend(parser.feed(&full[at..cut]));
+            at = cut;
+        }
+        split.extend(parser.feed(&full[at..]));
+        prop_assert_eq!(&split, &expected);
+    }
+}
+
+/// A CSI `n` reply without the `?` is no appearance reply: it parses as
+/// before (dropped, like any other unhandled report).
+#[test]
+fn a_csi_n_without_the_question_mark_is_no_reply() {
+    assert!(feed_all(&[b"\x1b[997;1n"]).is_empty());
+    assert!(feed_all(&[b"\x1b[5n"]).is_empty());
+}
