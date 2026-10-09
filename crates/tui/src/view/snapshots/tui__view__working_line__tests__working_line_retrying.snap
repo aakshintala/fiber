@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/view/working_line_tests.rs
+assertion_line: 317
 expression: shown
 ---
 work
@@ -17,12 +18,12 @@ work
 
 
 
-
-
-
-
-                                                                             go
+                                                                           ▄▄▄▄▄
+                                                                            go ▐
+                                                                           ▀▀▀▀▀
                                                                            17:13
 ⠋ 1 failed model call
 ↻ Retrying in 4s · rate_limited · attempt 2 of 4
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 >
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
