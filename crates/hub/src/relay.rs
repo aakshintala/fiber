@@ -23,6 +23,9 @@
 //! relay that saw the exited window, or whose write failed, is retiring:
 //! commands routed to it queue unsent, and its thread passes them on in
 //! the order they were read (`crate::retire`).
+//!
+//! A session that resumes is subscribed again at the level the connection
+//! last held, with no client command (`crate::rejoin`).
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
@@ -92,6 +95,8 @@ pub(crate) struct Relays {
     /// Per session this connection started with `content`, the first
     /// prompt that waits for its `full` subscription (`crate::first`).
     pub(crate) awaiting: Vec<(String, Arc<First>)>,
+    /// What the rejoin sweep needs: each session's opening marks and marks.
+    pub(crate) rejoin: crate::rejoin::Rejoin,
 }
 
 impl Relays {
@@ -111,6 +116,7 @@ impl Relays {
 
     /// Shuts down every relay stream: each session sees this client leave.
     pub(crate) fn close_all(&mut self) {
+        self.rejoin.close();
         for entry in self.entries.drain(..) {
             match entry.writer.shutdown(Shutdown::Both) {
                 Ok(()) | Err(_) => {}
@@ -313,7 +319,7 @@ pub(crate) fn route(
         return;
     };
     let order = lock(relays).order.clone();
-    let kept = {
+    let (kept, _opening) = {
         let mut held = lock(relays);
         if let Some(at) = held.entries.iter().position(|entry| {
             entry.session == session && from.is_none_or(|from| entry.epoch > from)
@@ -383,8 +389,14 @@ pub(crate) fn route(
             }
             return;
         }
-        held.subscription(session)
+        let kept = held.subscription(session);
+        let opening = crate::rejoin::Opening::mark(&mut held, relays, session);
+        (kept, opening)
     };
+    #[cfg(test)]
+    if let Some(before_open) = lock(&hub.before_open).take() {
+        before_open();
+    }
     if from.is_none() {
         crate::retire::enqueue_new(&order, session, id, &stripped);
     }
@@ -420,6 +432,7 @@ pub(crate) fn route(
         relays,
         kept,
         Some((id.clone(), bytes, stripped)),
+        false,
     );
 }
 
@@ -429,7 +442,9 @@ pub(crate) fn route(
 /// rewind redirect, which sends only the subscription (its caller keeps
 /// the level first). A write that fails answers the client's command
 /// `session_not_found` when there is one, in command order; without one
-/// the connection is gone, so nothing is answered.
+/// the connection is gone, so nothing is answered. Exclusive gives up when
+/// the connection already relays the session or is opening it: the sweep's
+/// rejoin, never a client command.
 pub(crate) fn attach(
     session: &str,
     stream: UnixStream,
@@ -438,6 +453,7 @@ pub(crate) fn attach(
     relays: &Arc<Mutex<Relays>>,
     replay: Option<Map<String, Value>>,
     command: Option<(CommandId, Vec<u8>, Map<String, Value>)>,
+    exclusive: bool,
 ) {
     let mut replay = replay;
     let replayed: Replayed = Arc::new(Mutex::new(Vec::new()));
@@ -476,8 +492,14 @@ pub(crate) fn attach(
         }
     };
     let order = lock(relays).order.clone();
+    let mark = crate::rejoin::Mark::now(&hub.home, session);
     let mut held = lock(relays);
     let epoch = held.mint();
+    if !crate::rejoin::admit(&mut held, session, exclusive, mark, epoch) {
+        drop(held);
+        stream.shutdown(Shutdown::Both).unwrap_or(());
+        return;
+    }
     // The thread may run before its entry is pushed: on session EOF it
     // only removes an entry it finds.
     let relayed = thread::Builder::new().name("hub-relay".to_owned()).spawn({
@@ -790,6 +812,20 @@ fn write_all(stream: &UnixStream, bytes: &[u8]) -> std::io::Result<()> {
     let mut stream = stream;
     stream.write_all(bytes)?;
     stream.flush()
+}
+
+/// Rejoins only if the candidate's mark is still current. Inert until the
+/// sweep checks epochs: the stream is dropped unwritten.
+#[allow(dead_code, reason = "inert until the sweep checks epochs")]
+pub(crate) fn attach_rejoin(
+    session: &str,
+    stream: UnixStream,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+    candidate_epoch: u64,
+) {
+    let _ = (session, stream, hub, writer, relays, candidate_epoch);
 }
 
 #[cfg(test)]

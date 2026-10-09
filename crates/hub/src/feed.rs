@@ -74,6 +74,10 @@ pub(crate) struct Feed {
     /// Starts the session a `rewound` last line names, set once by the hub
     /// serving it, so a rewind no client relays still starts it.
     pub(crate) on_rewound: OnceLock<Box<dyn Fn(SessionId, SessionId) + Send + Sync>>,
+    /// Called at the end of every scan of `run/` with the names it found,
+    /// set once by the hub serving it: the rejoin sweep collects resumed
+    /// sessions there. Never under the state lock.
+    pub(crate) on_scan: OnceLock<Box<dyn Fn(&BTreeSet<String>) + Send + Sync>>,
     #[cfg(test)]
     settle_pause: Mutex<Option<SettlePause>>,
 }
@@ -150,6 +154,7 @@ impl Feed {
             _wake: wake,
             scanner: Mutex::new(None),
             on_rewound: OnceLock::new(),
+            on_scan: OnceLock::new(),
             #[cfg(test)]
             settle_pause: Mutex::new(None),
         }
@@ -376,6 +381,9 @@ impl Feed {
             self.follow(id);
         }
         self.scanned();
+        if let Some(on_scan) = self.on_scan.get() {
+            on_scan(&names);
+        }
     }
 
     /// Subscribes `summary` to session `id` and follows it on a thread. A

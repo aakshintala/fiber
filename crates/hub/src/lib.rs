@@ -23,6 +23,7 @@ mod idle;
 mod listen;
 mod prompt_history;
 mod recent;
+mod rejoin;
 mod relay;
 mod resume;
 mod retire;
@@ -196,6 +197,7 @@ pub fn serve(
         })
     });
     hub.diag.info("hub_started", "The hub started.");
+    crate::rejoin::wire(&hub);
     let got = Arc::new(AtomicI32::new(0));
     arm(&got, hub.waker());
     hub.feed.start();
