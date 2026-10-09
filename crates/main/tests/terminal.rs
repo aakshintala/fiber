@@ -583,6 +583,90 @@ fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
     assert_eq!(result["output"], "hi\nExit code 0.\n");
 }
 
+/// A turn that calls `ask_user` with four questions, then the shell.
+fn calls_ask_then_echo_hi() -> Response {
+    let questions = json!([
+        {"header": "Timeout", "question": "How long?",
+         "options": [{"label": "1m"}, {"label": "5m"}]},
+        {"header": "Scope", "question": "Which scope?",
+         "options": [{"label": "a"}, {"label": "b"}]},
+        {"header": "Name", "question": "What name?"},
+        {"header": "Pick", "question": "Which one?",
+         "options": [{"label": "x"}, {"label": "y"}]},
+    ]);
+    let events = [
+        json!({"type": "response.output_item.done", "item": {
+            "type": "function_call", "id": "fc_call_ask", "call_id": "call_ask",
+            "name": "ask_user",
+            "arguments": json!({"questions": questions}).to_string()
+        }}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "function_call", "id": "fc_call_1", "call_id": "call_1",
+            "name": "shell",
+            "arguments": json!({"command": "echo hi"}).to_string()
+        }}),
+        json!({"type": "response.completed", "response": {
+            "id": "resp_1", "status": "completed",
+            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
+        }}),
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+#[test]
+fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([calls_ask_then_echo_hi()]).unwrap();
+    setup.provider(&server);
+    // A standing ask for this exact command: with the terminal connected
+    // the loop asks a person (`docs/permissions.md`, "Headless").
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    let mut run = Run::terminal(&setup);
+    // A 160x48 pty, as the ticket's screen: the resize lands before the
+    // first prompt, so every frame draws at the ticket's width.
+    rustix::termios::tcsetwinsize(
+        &run.main,
+        rustix::termios::Winsize {
+            ws_col: 160,
+            ws_row: 48,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+    .unwrap();
+    support::kill_pid(setup.deadline, run.child.id(), "WINCH").unwrap();
+    run.read_until(">");
+    run.write(b"run it\r");
+    // The collapsed group line counts the call's parsed form, before the
+    // shell's approval panel opens below it.
+    run.read_until("asked 4 questions");
+    run.read_until("asked by a global rule: echo hi");
+    run.read_until("allow once");
+    let output = run.output();
+    let text = String::from_utf8_lossy(&output);
+    // The approval panel shows the shell's arguments for review, so the
+    // shell's JSON is expected there; the `ask_user` call's JSON must
+    // never draw: neither on the group line nor in its ledger row.
+    assert!(!text.contains("{\"questions\"}"), "{text:?}");
+    assert!(!text.contains("\"header\""), "{text:?}");
+    // As above: quitting either exits at once or asks first.
+    run.write(b"\x03\x03\r");
+    run.read_until("fiber resume");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
 #[test]
 fn a_repository_offer_swaps_in_and_approve_lets_the_turn_run() {
     let setup = Setup::new();

@@ -659,12 +659,12 @@ fn a_scrolled_off_group_line_asks_nothing() {
 }
 
 #[test]
-fn a_group_line_whose_first_row_is_hidden_asks_nothing() {
+fn a_clipped_group_line_off_screen_asks_nothing() {
     let clock = FakeClock::new();
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(WIDTH, HEIGHT);
     app.attach(contract::SessionId(SESSION.to_owned()));
-    // Ten calls in flight: the summary wraps over four rows.
+    // Ten calls in flight: the summary is one row, cut with "…".
     app.on_line(prompt("go".to_owned()));
     app.on_line(session_line("step_started", serde_json::json!({}), None));
     for n in 0..10 {
@@ -674,8 +674,8 @@ fn a_group_line_whose_first_row_is_hidden_asks_nothing() {
             Some(format!("a_{n}").as_str()),
         ));
     }
-    // Two prompts make the summary scrollable. Find its first drawn row so
-    // this keeps testing the partial-line case when card edges add rows.
+    // Two prompts make the summary scrollable. Find its drawn row so
+    // this keeps testing the hidden-line case when card edges add rows.
     for n in 1..=2 {
         app.on_line(prompt(format!("prompt {n}")));
     }
@@ -685,6 +685,14 @@ fn a_group_line_whose_first_row_is_hidden_asks_nothing() {
         .iter()
         .position(|(line, _, _)| line.to_string().starts_with("• Read"))
         .expect("a group summary");
+    // One row, cut with "…": the tail never draws.
+    let text = all
+        .lines
+        .get(summary)
+        .map(|(line, _, _)| line.to_string())
+        .expect("a group summary");
+    assert!(text.ends_with('…'), "{text}");
+    assert!(!text.contains("file09.rs"), "{text}");
     let top = all.first.saturating_add(
         all.lines
             .iter()
@@ -695,10 +703,14 @@ fn a_group_line_whose_first_row_is_hidden_asks_nothing() {
     app.jump(top.saturating_add(1));
     app.set_now(clock.origin(), 0);
     let shown = screen(&app);
-    // The later rows still show, without the spinner.
-    assert!(shown.contains("file09.rs"), "{shown}");
+    // The one row scrolled wholly above: nothing spins, nothing asks.
     assert!(!shown.contains(SPINNER[0]), "{shown}");
     assert_eq!(app.take_wake(), None);
+    // Following again shows the one row, spinning.
+    app.on_key(Key::End, clock.now());
+    let followed = screen(&app);
+    assert!(followed.contains(SPINNER[0]), "{followed}");
+    assert!(app.take_wake().is_some());
 }
 
 #[test]
