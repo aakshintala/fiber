@@ -2208,7 +2208,7 @@ fn with_no_model_the_picker_opens_at_start() {
     // The watcher drains the terminal past its markers, so later frames
     // never fill the pty: the picker at start, its answered row, then
     // the home chips naming the chosen model.
-    let frames = super::reconnect_tests::watch(&pair.main, vec![b"Models", b"qq", b"[zz/qq]"]);
+    let frames = watch(&pair.main, vec![b"Models", b"qq", b"[zz/qq]"]);
     let slave = pair
         .slave
         .try_clone()
@@ -2250,7 +2250,7 @@ fn with_no_model_the_picker_opens_at_start() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     // The first frame shows the picker, which opened with no keypress.
-    super::reconnect_tests::watched(&frames, "the picker at start");
+    watched(&frames, "the picker at start");
     // Opening saves nothing: the choice does, once Enter chooses it.
     assert!(seam.writes().is_empty());
     release
@@ -2259,7 +2259,7 @@ fn with_no_model_the_picker_opens_at_start() {
     // The cached read answers, and its frame lists the one model: only
     // then does one Enter choose, as an Enter before the folded answer
     // keeps the picker open, sending nothing.
-    super::reconnect_tests::watched(&frames, "the answered catalogue");
+    watched(&frames, "the answered catalogue");
     pair.main
         .write_all(b"\r")
         .unwrap_or_else(|err| panic!("write: {err}"));
@@ -2269,7 +2269,7 @@ fn with_no_model_the_picker_opens_at_start() {
     // Choosing writes through the seam before the home chips name the
     // model, so their frame proves the write went out: one named
     // deadline for it.
-    super::reconnect_tests::watched(&frames, "the chosen home chips");
+    watched(&frames, "the chosen home chips");
     assert_eq!(
         seam.writes(),
         vec![(
@@ -2304,6 +2304,7 @@ fn with_a_model_home_opens_as_before() {
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     // Home draws with no picker over it: the first frame names the
     // shortcuts the picker would cover.
-    read_until(&pair.main, b"shortcuts", "home at start");
+    let frames = watch(&pair.main, vec![b"shortcuts" as &[u8]]);
+    watched(&frames, "home at start");
     quit(&mut pair, &finished);
 }
