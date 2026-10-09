@@ -504,6 +504,7 @@ fn attach_inner(
     exclusive: bool,
     candidate_epoch: Option<u64>,
 ) {
+    let mark = crate::rejoin::Mark::now(&hub.home, session);
     let mut replay = replay;
     let admission = candidate_epoch.map(|_| lock(relays));
     if let Some(candidate_epoch) = candidate_epoch {
@@ -556,7 +557,6 @@ fn attach_inner(
     let order = admission
         .as_ref()
         .map_or_else(|| lock(relays).order.clone(), |held| held.order.clone());
-    let mark = crate::rejoin::Mark::now(&hub.home, session);
     let mut held = match admission {
         Some(held) => held,
         None => lock(relays),
