@@ -346,10 +346,16 @@ impl App {
         self.panel_state.attached();
     }
 
-    /// Hands one key to what is on top: the model picker, the key map,
-    /// the approval panel, a completion panel, then the input box.
+    /// Hands one key to what is on top: the key map above the model
+    /// picker, the picker, the approval panel, a completion panel,
+    /// then the input box.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         self.copied = false;
+        // The key map opens above the picker: Esc closes whatever is
+        // on top, so its keys never reach the picker underneath.
+        if let Some(effect) = self.keymap_key(&key) {
+            return effect;
+        }
         if let Some(effect) = self.model_picker_key(&key) {
             return effect;
         }
@@ -372,9 +378,6 @@ impl App {
         }
         self.armed_at = None;
         if let Some(effect) = self.rail_key(&key) {
-            return effect;
-        }
-        if let Some(effect) = self.keymap_key(&key) {
             return effect;
         }
         match self.queue.on_key(&key) {

@@ -462,10 +462,11 @@ impl App {
     }
 
     /// An edit for the open picker: the arrows move the selected row's
-    /// chip, and every other edit does nothing. `None` while it is closed
-    /// and while the quit question is up.
+    /// chip, and every other edit does nothing. `None` while it is closed,
+    /// while the quit question is up, and while the key map is open above
+    /// it, so nothing reaches the picker underneath.
     pub(in crate::app) fn model_picker_edit(&mut self, edit: &Edit) -> Option<super::Effect> {
-        if !self.model_picker_open() || self.quit_open() {
+        if !self.model_picker_open() || self.quit_open() || self.keymap_top().is_some() {
             return None;
         }
         match edit {

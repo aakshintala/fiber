@@ -1466,7 +1466,7 @@ fn typing_s_in_an_overlay_is_unaffected_by_rebinding_session_only() {
 }
 
 #[test]
-fn global_action_keys_pass_through_the_picker() {
+fn esc_closes_the_topmost_overlay_first() {
     let (mut app, _) = choosing_app();
     open(&mut app);
     // F1 opens the key map above the open picker: the picker's own key
@@ -1474,10 +1474,28 @@ fn global_action_keys_pass_through_the_picker() {
     assert_eq!(app.on_key(Key::F1, now()), Effect::None);
     assert!(app.keymap_top().is_some());
     assert!(app.model_picker_open());
-    // Esc reaches the picker first, as `route_key` orders it.
+    // Esc closes whatever is on top: the key map first, leaving the
+    // picker open.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.keymap_top().is_none());
+    assert!(app.model_picker_open());
+    // The next Esc closes the picker underneath.
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert!(!app.model_picker_open());
+}
+
+#[test]
+fn edits_reach_nothing_under_the_key_map() {
+    let (mut app, _) = choosing_app();
+    open(&mut app);
+    assert_eq!(app.on_key(Key::F1, now()), Effect::None);
     assert!(app.keymap_top().is_some());
+    // The arrows would move the selected row's chip: above it, the key
+    // map takes every edit, and the chip stays where it was.
+    assert_eq!(chip(&app).as_deref(), Some("high"));
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    assert_eq!(chip(&app).as_deref(), Some("high"));
+    assert!(app.model_picker_open());
 }
 
 /// Types `text` into the draft.
