@@ -1,0 +1,11 @@
+---
+source: crates/tui/src/view/panel/delegates_tests.rs
+expression: "crate::view::text(&buf)"
+---
+
+  ● fiber  test/model
+    task 2
+  ● fiber  test/model
+    task 3
+  ● fiber  test/model
+    task 4

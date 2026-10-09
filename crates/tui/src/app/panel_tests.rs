@@ -428,7 +428,7 @@ fn a_delegate_is_not_a_job() {
     assert!(
         app.panel_state()
             .delegate_jobs()
-            .contains(&contract::JobId("j_1".to_owned()))
+            .contains_key(&contract::JobId("j_1".to_owned()))
     );
 }
 

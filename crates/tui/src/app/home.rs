@@ -417,6 +417,11 @@ impl App {
             },
             Line::Session(envelope) => {
                 if envelope.kind == "session_status" {
+                    // A delegate's own summary is for its parent's panel,
+                    // never the session list (`docs/tui.md`, "The panel").
+                    if self.delegate_status(envelope) {
+                        return Some(Vec::new());
+                    }
                     let session = envelope.session_id.clone();
                     let was_left = self
                         .home
@@ -493,6 +498,15 @@ impl App {
             home.subs.sent(id, session.clone(), level);
         }
         line
+    }
+
+    /// The level this connection holds or asks for `session` at, if any:
+    /// a delegate is subscribed once per attachment (`docs/invocation.md`,
+    /// `subscribe`).
+    pub(super) fn subscribed_level(&self, session: &SessionId) -> Option<Level> {
+        self.home
+            .as_ref()
+            .and_then(|home| home.subs.expected(session))
     }
 
     /// Leaves the session on screen for home: the conversation cleared

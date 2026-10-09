@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use contract::Envelope;
 use contract::JobId;
+use contract::SessionId;
 use contract::events::{
     CommandAccepted, CommandRejected, CommandResult, DelegateStarted, ExtensionUi, FileChange,
     JobCompleted, JobStarted, McpServerFailed, McpServerReady, ModelChanged, PreambleBuilt,
@@ -17,6 +18,7 @@ use contract::events::{
 use super::{App, Effect, Kind, Link, mint};
 use crate::input::Draft;
 use crate::shell;
+use crate::view::panel::delegates::DELEGATES_SHOWN;
 
 /// A panel item that does something when clicked (`docs/tui.md`, "The panel", "Git").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +69,7 @@ pub(crate) struct PanelState {
     down: BTreeSet<String>,
     changes: BTreeMap<String, (u64, u64)>,
     jobs: Vec<(JobId, String)>,
-    delegate_jobs: BTreeSet<JobId>,
+    delegates: BTreeMap<JobId, DelegateStarted>,
     jobs_open: bool,
     due: bool,
     asked: Option<String>,
@@ -75,6 +77,11 @@ pub(crate) struct PanelState {
     baseline: Option<bool>,
     branch: Option<Branch>,
     scroll: usize,
+    delegate_scroll: usize,
+    /// The delegate sessions this attachment already tried to subscribe,
+    /// so a refused subscribe goes out once per attachment
+    /// (`docs/invocation.md`, `subscribe`).
+    tried: BTreeSet<SessionId>,
 }
 
 impl PanelState {
@@ -156,7 +163,7 @@ impl PanelState {
             }
             "delegate_started" => {
                 if let Some(started) = super::read!(envelope, DelegateStarted) {
-                    self.delegate_jobs.insert(started.job_id);
+                    self.delegates.insert(started.job_id.clone(), started);
                 }
             }
             "job_completed" => {
@@ -259,8 +266,22 @@ impl PanelState {
 
     /// The delegates' jobs: a delegate is a job with a `delegate_started`
     /// (`docs/events.md`, "`delegate_started`").
-    pub(crate) fn delegate_jobs(&self) -> &BTreeSet<JobId> {
-        &self.delegate_jobs
+    pub(crate) fn delegate_jobs(&self) -> &BTreeMap<JobId, DelegateStarted> {
+        &self.delegates
+    }
+
+    /// Running delegates in job start order, each with its job's
+    /// description: a job with a `delegate_started` and no `job_completed`
+    /// yet (`docs/events.md`, "`delegate_started`").
+    pub(crate) fn running_delegates(&self) -> Vec<(&DelegateStarted, &str)> {
+        self.jobs
+            .iter()
+            .filter_map(|(id, description)| {
+                self.delegates
+                    .get(id)
+                    .map(|started| (started, description.as_str()))
+            })
+            .collect()
     }
 
     /// Whether the Jobs card lists its jobs.
@@ -281,6 +302,34 @@ impl PanelState {
     /// How many rows the panel has scrolled.
     pub(crate) fn scroll(&self) -> usize {
         self.scroll
+    }
+
+    /// How many delegates the Delegates card has scrolled.
+    pub(crate) fn delegate_scroll(&self) -> usize {
+        self.delegate_scroll
+    }
+
+    /// Records `session` as tried on this attachment; true the first time.
+    /// A refused subscribe is not sent again until the panel resets
+    /// (`docs/invocation.md`, `subscribe`).
+    pub(super) fn try_delegate(&mut self, session: &SessionId) -> bool {
+        self.tried.insert(session.clone())
+    }
+
+    /// Clamps the Delegates card's offset to the running delegates less
+    /// [`DELEGATES_SHOWN`], then moves it one delegate: down to the clamp,
+    /// up saturating at 0 (`docs/tui.md`, "The panel").
+    pub(super) fn scroll_delegates(&mut self, up: bool) {
+        let max = self
+            .running_delegates()
+            .len()
+            .saturating_sub(DELEGATES_SHOWN);
+        let clamped = self.delegate_scroll.min(max);
+        self.delegate_scroll = if up {
+            clamped.saturating_sub(1)
+        } else {
+            clamped.saturating_add(1).min(max)
+        };
     }
 
     /// Folds the branch query's answer: the first line trimmed is the
@@ -339,10 +388,13 @@ impl App {
             .unwrap_or(&[])
     }
 
-    /// Folds one attached-session envelope into the panel's data.
+    /// Folds one attached-session envelope into the panel's data, with the
+    /// Delegates card's subscribes (`docs/tui.md`, "The panel").
     pub(super) fn panel_line(&mut self, envelope: &Envelope) -> Vec<String> {
         self.panel_state.fold(envelope);
-        self.panel_branch(envelope)
+        let mut send = self.panel_branch(envelope);
+        send.extend(self.delegate_line(envelope));
+        send
     }
 
     /// The branch query's answers and triggers (`docs/tui.md`, "Git"): a
