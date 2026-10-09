@@ -12,6 +12,7 @@ const BUILT_INS: &[(&str, &str, Option<&str>)] = &[
     ("home", "Goes home.", None),
     ("new", "Goes home with the cursor in the input box.", None),
     ("resume", "Opens home at the session list.", None),
+    ("tools", "Opens the tools view.", None),
     ("panel", "Shows or hides the panel.", None),
     ("settings", "Opens the configuration keys.", None),
     ("handoff", "Starts a handoff.", Some("[instructions]")),

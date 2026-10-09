@@ -54,6 +54,7 @@ mod stroke;
 mod swapped;
 mod term;
 mod theme;
+mod tools_view;
 mod turn;
 mod turn_text;
 mod view;
@@ -68,7 +69,10 @@ use crate::link::Line;
 
 pub use attention::Attention;
 
-pub use configure::{Configure, ConfigureError, Layer, Saved, SettingRow, Shown, WriteScope};
+pub use configure::{
+    Configure, ConfigureError, Layer, Saved, SettingRow, Shown, SwitchScope, ToolGroup, ToolLists,
+    ToolSwitches, WriteScope,
+};
 
 pub use home::Launch;
 

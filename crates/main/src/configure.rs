@@ -4,11 +4,16 @@
 //! view is about, and lists the themes in Fiber home's `themes/`. The
 //! terminal loads configuration with no `-c`, so no row comes from one.
 
+mod tools;
+
 use std::path::{Path, PathBuf};
 
 use config::{Config, SettingValue, Source, Sources};
 use contract::shapes::Failure;
-use tui::{ConfigureError, Layer, Saved, SettingRow, Shown, WriteScope};
+use tui::{
+    ConfigureError, Layer, Saved, SettingRow, Shown, SwitchScope, ToolGroup, ToolSwitches,
+    WriteScope,
+};
 
 /// The seam over Fiber home.
 pub(crate) struct Seam {
@@ -30,10 +35,15 @@ impl Seam {
             project,
             overrides: Vec::new(),
         })
-        .map_err(|e| ConfigureError {
-            code: e.code(),
-            message: e.to_string(),
-        })
+        .map_err(from_config)
+    }
+}
+
+/// A `config` failure as the views show it.
+fn from_config(error: config::ConfigError) -> ConfigureError {
+    ConfigureError {
+        code: error.code(),
+        message: error.to_string(),
     }
 }
 
@@ -182,6 +192,21 @@ impl tui::Configure for Seam {
         crate::theme_setting::named(&self.home, Some(name), &|path| {
             std::fs::read_to_string(path)
         })
+    }
+
+    fn tool_switches(&self, workspace: &Path) -> Result<Vec<ToolSwitches>, ConfigureError> {
+        self.read_switches(workspace)
+    }
+
+    fn switch_tool(
+        &self,
+        workspace: &Path,
+        group: &ToolGroup,
+        tool: &str,
+        scope: SwitchScope,
+        on: bool,
+    ) -> Result<(), ConfigureError> {
+        self.write_switch(workspace, group, tool, scope, on)
     }
 }
 

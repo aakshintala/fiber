@@ -65,6 +65,20 @@ pub(crate) fn applies(key: &str) -> Applies {
     }
 }
 
+/// What a view says a `/reload` costs: its cache rebuild in tokens, or
+/// that each session pays it at its next `/reload` (`docs/tui.md`,
+/// "Swapped views"). `usage` is the last call's prompt size on the
+/// session on screen.
+pub(crate) fn reload_text(usage: Option<u64>) -> String {
+    match usage {
+        Some(tokens) => format!(
+            "Applies on /reload, which rebuilds the cache: about {} tokens.",
+            about(tokens)
+        ),
+        None => "Applies on each session's next /reload.".to_owned(),
+    }
+}
+
 /// What the view says about when `key` applies. `usage` is the last
 /// call's prompt size on the session on screen, which a reload's cache
 /// rebuild costs; without it the view names no number.
@@ -76,13 +90,7 @@ pub(crate) fn applies_text(key: &str, usage: Option<u64>) -> String {
         Applies::ProcessStart => "Applies when each Fiber process starts again.".to_owned(),
         Applies::NewSessions => "Applies to new sessions.".to_owned(),
         Applies::NextTurn => "Reaches the model at the next turn start.".to_owned(),
-        Applies::Reload => match usage {
-            Some(tokens) => format!(
-                "Applies on /reload, which rebuilds the cache: about {} tokens.",
-                about(tokens)
-            ),
-            None => "Applies on each session's next /reload.".to_owned(),
-        },
+        Applies::Reload => reload_text(usage),
     }
 }
 
@@ -433,6 +441,7 @@ impl Settings {
         let shown = self.shown(ctx);
         match (spot, &mut self.mode) {
             (Spot::Close, _) => Act::Close,
+            (Spot::Switch { .. }, _) => Act::Stay,
             (Spot::Row(at), Mode::Choices { names, .. }) => match names.get(at).cloned() {
                 Some(name) => self.choose(&name, ctx),
                 None => Act::Stay,
