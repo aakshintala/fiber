@@ -8,14 +8,14 @@
 
 use super::input::{Ev, Key};
 use super::{Args, Term};
-use super::{bold, dim, fg, fit, paint, row, slab, sp, t, wrap, BI, CYAN, ORANGE, SEL};
+use super::{bold, dim, fg, fit, lift, paint, row, slab, sp, t, wrap, BI, BLUE, CYAN, ORANGE, SEL};
 use ratatui::style::Style;
 use ratatui::text::Span;
 use std::io::{self, Write};
 use unicode_width::UnicodeWidthStr;
 
 /// Every `--overlay` case, named in README.md.
-pub(crate) const CASES: &[&str] = &["keymap", "keymap-narrow"];
+pub(crate) const CASES: &[&str] = &["keymap", "keymap-narrow", "quit", "delete", "history", "notice", "close-mouse"];
 
 /// Two side-by-side binding columns need at least this overlay width.
 const TWO_COL_MIN: usize = 100;
@@ -128,14 +128,30 @@ const LEFT_AREAS: &[&str] = &["Session", "Input", "Panels", "Requests"];
 const RIGHT_AREAS: &[&str] = &["Conversation", "Search", "Steering", "Model"];
 const ALL_AREAS: &[&str] = &["Session", "Input", "Conversation", "Panels", "Search", "Steering", "Requests", "Model"];
 
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Keymap,
+    Quit,
+    Delete,
+    History,
+    Notice,
+    CloseMouse,
+}
+
 struct Case {
+    kind: Kind,
     narrow: bool,
 }
 
 fn parse(name: &str) -> Option<Case> {
     match name {
-        "keymap" => Some(Case { narrow: false }),
-        "keymap-narrow" => Some(Case { narrow: true }),
+        "keymap" => Some(Case { kind: Kind::Keymap, narrow: false }),
+        "keymap-narrow" => Some(Case { kind: Kind::Keymap, narrow: true }),
+        "quit" => Some(Case { kind: Kind::Quit, narrow: false }),
+        "delete" => Some(Case { kind: Kind::Delete, narrow: false }),
+        "history" => Some(Case { kind: Kind::History, narrow: false }),
+        "notice" => Some(Case { kind: Kind::Notice, narrow: false }),
+        "close-mouse" => Some(Case { kind: Kind::CloseMouse, narrow: false }),
         _ => None,
     }
 }
@@ -181,14 +197,121 @@ fn keymap_column(areas: &[&str], w: usize) -> Vec<Vec<Span<'static>>> {
     out
 }
 
+/// One choice row: the key bold, what it does dim.
+fn choice(key: &str, what: &str, w: usize) -> super::Row {
+    row(fit(&[sp(key, bold()), sp(format!("  {what}"), dim())], w))
+}
+
+/// The quit question: who is working and the three ways out.
+fn quit_body(ow: usize) -> Vec<super::Row> {
+    vec![
+        row(fit(&[sp("2 sessions working", bold())], ow)),
+        row(vec![]),
+        choice("enter", "leave them running · default", ow),
+        choice("c", "close all", ow),
+        choice("esc", "stay", ow),
+    ]
+}
+
+/// Home's delete question for an exited session: it names the session and
+/// any session `--cascade` would add.
+fn delete_body(ow: usize) -> Vec<super::Row> {
+    vec![
+        row(fit(&[sp("Delete \"docs: rail spec\" ($1.10)?", bold())], ow)),
+        row(vec![]),
+        row(fit(&[sp("It deletes the session through the hub, after asking.", Style::new())], ow)),
+        row(fit(&[sp("--cascade would add no other session.", dim())], ow)),
+    ]
+}
+
+/// The typed Ctrl+R query; every fixture prompt holds it.
+const QUERY: &str = "back";
+/// Prompt history, newest first: the prompt and where it was recalled from.
+const PROMPTS: &[(&str, &str)] = &[
+    ("how do I backfill embeddings for old sessions?", "this session"),
+    ("back up the state file before the migration", "project"),
+    ("roll back the handoff note", "project"),
+];
+
+/// The query's every occurrence marked, the rest in the base style. The
+/// fixtures are ASCII, so byte offsets from the lowercased copy hold.
+fn hl(text: &str, q: &str, base: Style, mark: Style) -> Vec<Span<'static>> {
+    if q.is_empty() {
+        return vec![sp(text, base)];
+    }
+    let lower = text.to_lowercase();
+    let q = q.to_lowercase();
+    let mut out = vec![];
+    let mut i = 0;
+    while let Some(j) = lower[i..].find(&q) {
+        let (a, b) = (i + j, i + j + q.len());
+        if a > i {
+            out.push(sp(text[i..a].to_string(), base));
+        }
+        out.push(sp(text[a..b].to_string(), mark));
+        i = b;
+    }
+    if i < text.len() {
+        out.push(sp(text[i..].to_string(), base));
+    }
+    out
+}
+
+/// The Ctrl+R prompt-history panel: the typed query, how many match, and the
+/// matches with every hit marked, the first one selected.
+fn history_body(ow: usize) -> Vec<super::Row> {
+    let mut out = vec![
+        row(fit(&[sp("› ", fg(CYAN)), sp(QUERY, bold()), sp("█", dim())], ow)),
+        row(fit(&[sp(format!("{} matches · newest first", PROMPTS.len()), dim())], ow)),
+    ];
+    for (i, (prompt, from)) in PROMPTS.iter().enumerate() {
+        let mut spans = if i == 0 { vec![sp("▌ ", fg(BLUE))] } else { vec![sp("  ", Style::new())] };
+        spans.extend(hl(prompt, QUERY, Style::new(), bold()));
+        spans.push(sp(format!(" · {from}"), dim()));
+        let line = fit(&spans, ow);
+        if i == 0 {
+            out.push(super::Row { spans: line, bg: Some(lift(SEL)), ..Default::default() });
+        } else {
+            out.push(row(line));
+        }
+    }
+    out
+}
+
+/// A notice's whole text, wrapped to the overlay width.
+const NOTICE_TEXT: &str = "Two actions share the key Ctrl+F: `search` and `search_results` act in a context they share, so both entries reverted to their defaults. Rebind one of them with /keys. An entry equal to the defaults counts as unset.";
+
+fn notice_body(ow: usize) -> Vec<super::Row> {
+    wrap(vec![sp(NOTICE_TEXT, Style::new())], ow, vec![], vec![]).into_iter().map(row).collect()
+}
+
+/// The mouse-closing case: a small keymap sample, with the other path naming
+/// the ✕ and the click outside.
+fn close_mouse_body(ow: usize) -> Vec<super::Row> {
+    [3, 5, 33].iter().flat_map(|&i| binding_lines(&BINDINGS[i], ow)).map(row).collect()
+}
+
+fn content(c: &Case, ow: usize, rows: usize) -> (&'static str, Vec<super::Row>, &'static str) {
+    match c.kind {
+        Kind::Keymap => ("Key map", keymap_body(c, ow, rows), "esc closes"),
+        Kind::Quit => ("Quit", quit_body(ow), "enter leave them running · c close all · esc stay"),
+        Kind::Delete => ("Delete session", delete_body(ow), "enter deletes · esc keeps it"),
+        Kind::History => ("Prompt history", history_body(ow), "enter recalls · esc closes"),
+        Kind::Notice => ("Notice · key_clash", notice_body(ow), "esc closes"),
+        Kind::CloseMouse => ("Key map", close_mouse_body(ow), "click ✕ or outside to close"),
+    }
+}
+
 /// A centred slab with a bold title row, a ✕ at its right end, and a dim foot
 /// line naming the close keys.
-fn overlay(title: &str, body: Vec<Vec<Span<'static>>>, foot: &str, ow: usize) -> Vec<super::Row> {
-    let mut inner = vec![vec![sp(title, bold()), t(), sp("✕", dim())]];
+fn overlay(title: &str, body: Vec<super::Row>, foot: &str, ow: usize, hover_x: bool) -> Vec<super::Row> {
+    // The ✕ reads dim, and lighter under the pointer, as `--hover` tints it.
+    let x = if hover_x { sp("✕", dim().bg(lift(SEL))) } else { sp("✕", dim()) };
+    let mut inner = vec![row(vec![sp(title, bold()), t(), x])];
     inner.extend(body);
     let pad = ow.saturating_sub(foot.width()) / 2;
-    inner.push(fit(&[sp(" ".repeat(pad), Style::new()), sp(foot, dim())], ow));
-    slab(inner.into_iter().map(row).collect(), SEL, None, ow)
+    inner.push(row(fit(&[sp(" ".repeat(pad), Style::new()), sp(foot, dim())], ow)));
+    slab(inner, SEL, None, ow)
 }
 
 /// The dimmed conversation under an overlay: static dim rows and the input
@@ -237,11 +360,17 @@ struct Placed {
     row: super::Row,
 }
 
-fn overlay_w(_c: &Case, cols: usize) -> usize {
-    cols.saturating_sub(10).min(150).max(40)
+/// The small overlays' width: room for a question and its answers.
+const SMALL_W: usize = 76;
+
+fn overlay_w(c: &Case, cols: usize) -> usize {
+    match c.kind {
+        Kind::Keymap => cols.saturating_sub(10).min(150).max(40),
+        _ => SMALL_W.min(cols.saturating_sub(4)),
+    }
 }
 
-fn body_lines(c: &Case, ow: usize, rows: usize) -> Vec<Vec<Span<'static>>> {
+fn keymap_body(c: &Case, ow: usize, rows: usize) -> Vec<super::Row> {
     if two_col(ow) && !c.narrow {
         let colw = ow.saturating_sub(4) / 2;
         let mut left = keymap_column(LEFT_AREAS, colw);
@@ -256,7 +385,7 @@ fn body_lines(c: &Case, ow: usize, rows: usize) -> Vec<Vec<Span<'static>>> {
                 let mut s = fit(&l, colw);
                 s.push(sp("    ", Style::new()));
                 s.extend(fit(&r, colw));
-                s
+                row(s)
             })
             .collect();
     }
@@ -268,8 +397,8 @@ fn body_lines(c: &Case, ow: usize, rows: usize) -> Vec<Vec<Span<'static>>> {
     let vis = oh.saturating_sub(5);
     let off = clamp_scroll(NARROW_SCROLL, total, vis);
     let rest = total.saturating_sub(off + vis);
-    let mut out: Vec<Vec<Span>> = all.into_iter().skip(off).take(vis).collect();
-    out.push(fit(&[sp(format!("↑ {off} more · ↓ {rest} more"), dim())], ow));
+    let mut out: Vec<super::Row> = all.into_iter().skip(off).take(vis).map(row).collect();
+    out.push(row(fit(&[sp(format!("↑ {off} more · ↓ {rest} more"), dim())], ow)));
     out
 }
 
@@ -285,7 +414,11 @@ fn frame(c: &Case, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
         })
         .collect();
     let ow = overlay_w(c, cols);
-    let ov = overlay("Key map", body_lines(c, ow, rows), "esc closes", ow);
+    let close = c.kind == Kind::CloseMouse;
+    let (title, body, foot) = content(c, ow, rows);
+    let ov = overlay(title, body, foot, ow, close);
+    let oh = ov.len();
+    let side = if close { 2 } else { 0 };
     let x0 = cols.saturating_sub(ow) / 2;
     let y0 = rows.saturating_sub(ov.len()) / 2;
     for (k, r) in ov.into_iter().enumerate() {
@@ -294,8 +427,15 @@ fn frame(c: &Case, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
         }
         // The overlay covers the backdrop's middle cells; its side margins
         // stay blank, and the dimmed conversation reads above and below it.
-        let mut spans = vec![sp(" ".repeat(x0), Style::new())];
+        // The mouse case marks its click-outside target with dim dots.
+        let mut spans = vec![sp(" ".repeat(x0.saturating_sub(side)), Style::new())];
+        if close {
+            spans.push(sp("· ", dim()));
+        }
         spans.extend(r.spans);
+        if close {
+            spans.push(sp(" ·", dim()));
+        }
         screen[y0 + k] = vec![Placed {
             x: 0,
             w: cols as u16,
@@ -304,6 +444,23 @@ fn frame(c: &Case, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
                 ..Default::default()
             },
         }];
+    }
+    // The click-outside target's outline, two cells out from the edges.
+    if close && y0 >= 2 && y0 + oh + 1 < rows {
+        for y in [y0 - 2, y0 + oh + 1] {
+            let spans = vec![
+                sp(" ".repeat(x0.saturating_sub(2)), Style::new()),
+                sp("·".repeat(ow + 4), dim()),
+            ];
+            screen[y] = vec![Placed {
+                x: 0,
+                w: cols as u16,
+                row: super::Row {
+                    spans: fit(&spans, cols),
+                    ..Default::default()
+                },
+            }];
+        }
     }
     screen
 }
@@ -376,7 +533,7 @@ mod tests {
     #[test]
     fn every_case_parses_and_unknown_does_not() {
         assert!(CASES.iter().all(|n| parse(n).is_some()));
-        assert_eq!(CASES.len(), 2);
+        assert_eq!(CASES.len(), 7);
         assert!(parse("nope").is_none());
     }
 
@@ -415,6 +572,63 @@ mod tests {
         assert!(t.contains("↑ 10 more"), "scroll offset");
         assert!(t.contains("↓ "), "scroll indicator");
         assert!(!t.contains("↓ 0 more"), "bottom hidden");
+    }
+
+    #[test]
+    fn quit_asks_with_the_doc_line() {
+        let t = text(&parse("quit").unwrap(), 160, 48);
+        assert!(t.contains("2 sessions working"));
+        assert!(t.contains("enter leave them running · c close all · esc stay"));
+    }
+
+    #[test]
+    fn delete_names_the_session_and_its_cascade() {
+        let t = text(&parse("delete").unwrap(), 160, 48);
+        assert!(t.contains("docs: rail spec"));
+        assert!(t.contains("$1.10"));
+        assert!(t.contains("--cascade"));
+    }
+
+    #[test]
+    fn history_selects_its_first_match() {
+        let t = text(&parse("history").unwrap(), 160, 48);
+        assert!(t.contains("Prompt history"));
+        assert!(t.contains("▌"));
+        assert!(t.contains("3 matches"));
+    }
+
+    #[test]
+    fn query_hits_read_marked() {
+        let base = ratatui::style::Style::new();
+        let mark = super::bold();
+        let spans = super::hl("back up", "back", base, mark);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].content, "back");
+        let spans = super::hl("Backfill", "back", base, mark);
+        assert_eq!(spans[0].content, "Back");
+        let spans = super::hl("nothing here", "back", base, mark);
+        assert_eq!(spans.len(), 1);
+        let spans = super::hl("back", "", base, mark);
+        assert_eq!(spans.len(), 1);
+        let spans = super::hl("back and back", "back", base, mark);
+        assert_eq!(spans.len(), 3);
+    }
+
+    #[test]
+    fn notice_shows_the_whole_text() {
+        let t = text(&parse("notice").unwrap(), 160, 48);
+        assert!(t.contains("key_clash"));
+        // Wrapping splits at spaces only, so every word reads whole.
+        for w in super::NOTICE_TEXT.split(' ') {
+            assert!(t.contains(w), "missing {w}");
+        }
+    }
+
+    #[test]
+    fn mouse_close_names_its_two_targets() {
+        let t = text(&parse("close-mouse").unwrap(), 160, 48);
+        assert!(t.contains("click ✕ or outside to close"));
+        assert!(t.contains("click the overlay's ✕ or outside it"));
     }
 
     #[test]
