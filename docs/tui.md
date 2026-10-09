@@ -323,9 +323,10 @@ the conversation. The views are:
 - **Changed files:** a file list with the chosen file's hunks.
 - **Search results:** every match with its surrounding lines ("Search").
 - **The tools view,** `/tools` (`docs/tools.md`, "Seeing the tools"): every
-  tool by source, full or deferred, and its approximate size. An MCP server or
-  an extension has an on/off switch that writes its `tools.enabled` and
-  `tools.disabled` (`docs/configuration.md`). A change takes effect on
+  tool by source, full or deferred, and its approximate size. Each MCP
+  server's or extension's tool has two on/off switches, this project and
+  everywhere, that write that source's `tools.enabled` and `tools.disabled`
+  in the project's or the global file (`docs/configuration.md`). A change takes effect on
   reload, and the view says what the reload's cache rebuild costs. Built-in
   tools have no switch: they are always declared, so every session sends the
   same tool list, and the view shows them as rows without a switch.

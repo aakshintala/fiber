@@ -364,6 +364,10 @@ Fiber writes configuration in these places:
 - the terminal's `/settings` writes a key through the same path as
   `fiber config set`, in the layer the person picks among those the key
   allows, and `tui.theme` to the global file (`docs/tui.md`, "Swapped views")
+- the terminal's `/tools` switches write an MCP server's or an extension's
+  `tools.enabled` and `tools.disabled` in the project's file or the global
+  file, never a repository's; a file that holds no list starts from the one
+  it inherits (`docs/tui.md`, "Swapped views")
 - `fiber mcp add` and `fiber mcp remove` write an entry under `mcp.servers`,
   in the same three files (`docs/mcp.md`, "Configuration")
 - `fiber hub install --port` writes the global `hub.port`, and `fiber hub add`
