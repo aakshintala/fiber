@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::app::panel::Spot as PanelSpot;
 use crate::app::{App, Effect, SessionView};
+use crate::changed_files_view::{diff_command, ranked};
 use crate::home::Launch;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -740,4 +741,352 @@ fn the_narrow_context_segment_opens_the_view_and_keeps_the_draft() {
     assert!(app.session_view_open());
     assert_eq!(app.input().expand(), "keep this draft");
     assert!(screen(&app, 100, 30).0.contains("Context"));
+}
+
+fn files_attached(width: u16, height: u16) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        panel_cards: vec!["changed_files".to_owned()],
+        ..Default::default()
+    });
+    app.attach(SessionId(SESSION.to_owned()));
+    app.set_size(width, height);
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app
+}
+
+fn changes_line(entries: &[(&str, u64, u64)]) -> Line {
+    session_line(
+        SESSION,
+        "tool_call_completed",
+        None,
+        json!({
+            "status": "completed", "content": [],
+            "changes": entries.iter().map(|(path, added, removed)| json!({
+                "path": path, "added": added, "removed": removed,
+            })).collect::<Vec<_>>(),
+        }),
+    )
+}
+
+fn many_changes(app: &mut App, count: usize) {
+    let entries: Vec<(String, u64, u64)> = (0..count)
+        .map(|at| {
+            (
+                format!("src/file-{at}.rs"),
+                u64::try_from(count - at).unwrap_or(u64::MAX),
+                0,
+            )
+        })
+        .collect();
+    let borrowed: Vec<(&str, u64, u64)> = entries
+        .iter()
+        .map(|(path, added, removed)| (path.as_str(), *added, *removed))
+        .collect();
+    app.on_line(changes_line(&borrowed));
+}
+
+fn command(effect: Effect) -> Value {
+    let Effect::Send(lines) = effect else {
+        panic!("expected one shell command, got {effect:?}");
+    };
+    assert_eq!(lines.len(), 1);
+    serde_json::from_str(&lines[0]).unwrap_or_else(|error| panic!("command JSON: {error}"))
+}
+
+fn accepted_diff(id: &str, text: &str) -> Line {
+    session_line(
+        SESSION,
+        "command_accepted",
+        None,
+        json!({
+            "command_id": id,
+            "result": {"output": text, "process": {"exit_code": 1, "timed_out": false}},
+        }),
+    )
+}
+
+fn rejected_diff(session: &str, id: &str, message: &str) -> Line {
+    session_line(
+        session,
+        "command_rejected",
+        None,
+        json!({"command_id": id, "code": "duplicate_command", "message": message}),
+    )
+}
+
+fn hub_rejected(id: &str, message: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: json!({"command_id": id, "message": message})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+fn open_files_from_totals(app: &mut App, width: u16, height: u16) {
+    let (_, targets) = screen(app, width, height);
+    assert!(
+        targets
+            .iter()
+            .any(|target| { target.id == TargetId::Panel(PanelSpot::ChangedFiles) })
+    );
+    assert_eq!(
+        app.on_click(TargetId::Panel(PanelSpot::ChangedFiles)),
+        Effect::None
+    );
+}
+
+#[test]
+fn the_totals_row_opens_every_changed_file_in_ranked_order() {
+    let mut app = files_attached(160, 40);
+    many_changes(&mut app, 7);
+    open_files_from_totals(&mut app, 160, 40);
+    let shown = screen(&app, 160, 40).0;
+    assert!(shown.contains("Changed files"), "{shown}");
+    let frame = app.session_view_screen(0).expect("changed-files frame");
+    assert_eq!(frame.rows.len(), 7);
+    let paths: Vec<String> = frame.rows.iter().map(|row| row[0].0.clone()).collect();
+    let expected: Vec<String> = ranked(app.panel_state().changes())
+        .into_iter()
+        .map(|(path, added, removed)| format!("{path}  +{added} −{removed}"))
+        .collect();
+    assert_eq!(paths, expected);
+}
+
+#[test]
+fn enter_sends_one_unsent_shell_command_for_the_selected_file() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    open_files_from_totals(&mut app, 120, 35);
+    let expected_path = ranked(app.panel_state().changes())[0].0.to_owned();
+    let value = command(app.on_key(Key::Enter, now()));
+    assert_eq!(value["command"], "shell");
+    assert_eq!(value["session_id"], SESSION);
+    assert_eq!(value["args"]["command"], diff_command(&expected_path));
+    assert_eq!(value["args"]["send"], false);
+    assert!(screen(&app, 120, 35).0.contains("Reading the diff…"));
+}
+
+#[test]
+fn the_matching_shell_answer_fills_the_diff_without_a_conversation_item() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    let request = command(app.on_key(Key::Enter, now()));
+    let before = app.lines();
+    app.on_line(accepted_diff(
+        request["id"].as_str().unwrap_or_default(),
+        "diff line\n",
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("diff line"), "{shown}");
+    assert_eq!(app.lines(), before);
+}
+
+#[test]
+fn an_answer_for_another_request_id_does_not_fill_the_diff() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    let request = command(app.on_key(Key::Enter, now()));
+    app.on_line(accepted_diff("c_stale", "stale diff\n"));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("Reading the diff…"), "{shown}");
+    assert!(!shown.contains("stale diff"), "{shown}");
+    assert_ne!(request["id"], "c_stale");
+}
+
+#[test]
+fn choosing_a_second_file_makes_the_first_answer_stale() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    open_files_from_totals(&mut app, 120, 35);
+    let first = command(app.on_key(Key::Enter, now()));
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    app.on_key(Key::Down, now());
+    let second = command(app.on_key(Key::Enter, now()));
+    assert_ne!(first["id"], second["id"]);
+    app.on_line(accepted_diff(
+        first["id"].as_str().unwrap_or_default(),
+        "stale first diff\n",
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("Reading the diff…"), "{shown}");
+    assert!(!shown.contains("stale first diff"), "{shown}");
+}
+
+#[test]
+fn a_matching_session_rejection_shows_its_message_and_another_id_does_not() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    let request = command(app.on_key(Key::Enter, now()));
+    app.on_line(rejected_diff(SESSION, "c_other", "wrong rejection"));
+    assert!(screen(&app, 120, 35).0.contains("Reading the diff…"));
+    app.on_line(rejected_diff(
+        SESSION,
+        request["id"].as_str().unwrap_or_default(),
+        "session refused",
+    ));
+    assert!(screen(&app, 120, 35).0.contains("session refused"));
+}
+
+#[test]
+fn a_matching_hub_rejection_shows_its_message_and_another_id_does_not() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    let request = command(app.on_key(Key::Enter, now()));
+    app.on_line(hub_rejected("c_other", "wrong hub rejection"));
+    assert!(screen(&app, 120, 35).0.contains("Reading the diff…"));
+    app.on_line(hub_rejected(
+        request["id"].as_str().unwrap_or_default(),
+        "hub refused",
+    ));
+    assert!(screen(&app, 120, 35).0.contains("hub refused"));
+}
+
+#[test]
+fn left_returns_to_the_same_file_selection_and_drops_a_late_answer() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    open_files_from_totals(&mut app, 120, 35);
+    app.on_key(Key::Down, now());
+    let request = command(app.on_key(Key::Enter, now()));
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    assert_eq!(app.session_view_screen(0).unwrap().list.selected(), 1);
+    assert!(screen(&app, 120, 35).0.contains("Changed files"));
+    app.on_line(accepted_diff(
+        request["id"].as_str().unwrap_or_default(),
+        "late diff\n",
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(!shown.contains("late diff"), "{shown}");
+    assert!(shown.contains("src/file-1.rs"), "{shown}");
+}
+
+#[test]
+fn escape_in_the_diff_closes_it_and_drops_a_late_answer() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    let request = command(app.on_key(Key::Enter, now()));
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.session_view_open());
+    app.on_line(accepted_diff(
+        request["id"].as_str().unwrap_or_default(),
+        "late diff\n",
+    ));
+    assert!(!screen(&app, 120, 35).0.contains("late diff"));
+}
+
+#[test]
+fn escape_in_the_file_list_closes_it() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.session_view_open());
+}
+
+#[test]
+fn choosing_a_file_while_disconnected_says_not_connected_and_sends_nothing() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        panel_cards: vec!["changed_files".to_owned()],
+        ..Default::default()
+    });
+    app.attach(SessionId(SESSION.to_owned()));
+    app.set_size(120, 35);
+    many_changes(&mut app, 1);
+    // The panel click opens the list even while the link is down.
+    app.on_click(TargetId::Panel(PanelSpot::ChangedFiles));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(screen(&app, 120, 35).0.contains("Not connected."));
+}
+
+#[test]
+fn clicking_a_panel_file_row_opens_its_diff_and_sends_the_request() {
+    let mut app = files_attached(160, 40);
+    many_changes(&mut app, 2);
+    let (_, targets) = screen(&app, 160, 40);
+    assert!(
+        targets
+            .iter()
+            .any(|target| { target.id == TargetId::Panel(PanelSpot::File(0)) })
+    );
+    let expected = ranked(app.panel_state().changes())[0].0.to_owned();
+    let value = command(app.on_click(TargetId::Panel(PanelSpot::File(0))));
+    assert!(app.session_view_open());
+    assert_eq!(value["args"]["command"], diff_command(&expected));
+    assert!(
+        screen(&app, 160, 40)
+            .0
+            .contains(&format!("Changed files › {expected}"))
+    );
+}
+
+#[test]
+fn a_panel_file_rank_past_the_end_opens_the_list_without_sending() {
+    let mut app = files_attached(160, 40);
+    many_changes(&mut app, 1);
+    assert_eq!(
+        app.on_click(TargetId::Panel(PanelSpot::File(5))),
+        Effect::None
+    );
+    assert!(app.session_view_open());
+    assert!(screen(&app, 160, 40).0.contains("Changed files"));
+    assert!(!screen(&app, 160, 40).0.contains("Reading the diff…"));
+}
+
+#[test]
+fn the_narrow_changed_files_segment_opens_the_file_list() {
+    let mut app = files_attached(100, 30);
+    many_changes(&mut app, 2);
+    let (shown, targets) = screen(&app, 100, 30);
+    assert!(shown.contains("2 files +3 −0"), "{shown}");
+    assert!(
+        targets
+            .iter()
+            .any(|target| { target.id == TargetId::Panel(PanelSpot::ChangedFiles) })
+    );
+    assert_eq!(
+        app.on_click(TargetId::Panel(PanelSpot::ChangedFiles)),
+        Effect::None
+    );
+    assert!(screen(&app, 100, 30).0.contains("Changed files"));
+}
+
+#[test]
+fn clicking_a_file_list_row_chooses_that_file() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    open_files_from_totals(&mut app, 120, 35);
+    let expected = ranked(app.panel_state().changes())[1].0.to_owned();
+    let (_, targets) = screen(&app, 120, 35);
+    assert!(
+        targets
+            .iter()
+            .any(|target| { target.id == TargetId::View(ViewSpot::Row(1)) })
+    );
+    let value = command(app.on_click(TargetId::View(ViewSpot::Row(1))));
+    assert_eq!(value["args"]["command"], diff_command(&expected));
+    assert!(
+        screen(&app, 120, 35)
+            .0
+            .contains(&format!("Changed files › {expected}"))
+    );
 }

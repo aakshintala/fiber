@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/changed_files_view_tests.rs
-expression: "screen(&frame(&changes, Some((\"src/a.rs\", &diff)), List::default()))"
+expression: screen(&app_with_diff())
 ---
 Changed files › src/a.rs · diff against HEAD                                   ✕
 diff --git a/src/a.rs b/src/a.rs
@@ -22,7 +22,7 @@ diff --git a/src/a.rs b/src/a.rs
 
 
 
-
-
-
 ↑↓ scroll · ← files · Esc close
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+>
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

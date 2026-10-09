@@ -2,18 +2,23 @@
 //! (`docs/tui.md`, "Swapped views").
 
 use std::collections::BTreeMap;
-use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
+use contract::clock::Clock;
 use contract::events::CommandResult;
 use contract::shapes::Process;
+use contract::{ActionId, Envelope, SCHEMA_VERSION, SessionId};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::{Diff, answer, diff_command, frame, ranked};
-use crate::swapped::{List, render};
+use crate::app::{App, Effect, SessionView};
+use crate::keys::Key;
+use crate::link::Line;
+use crate::swapped::List;
 
 fn changes(entries: &[(&str, u64, u64)]) -> BTreeMap<String, (u64, u64)> {
     entries
@@ -44,11 +49,74 @@ fn row(frame: &crate::swapped::Frame, at: usize) -> String {
         .collect()
 }
 
-fn screen(frame: &crate::swapped::Frame) -> String {
+fn screen(app: &App) -> String {
     let area = Rect::new(0, 0, 80, 24);
     let mut buffer = Buffer::empty(area);
-    render(frame, area, &mut buffer, &mut Vec::new());
+    crate::view::render(app, area, &mut buffer, None);
     crate::view::text(&buffer)
+}
+
+fn app_with_files() -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.set_size(80, 24);
+    app.on_line(Line::Session(Envelope {
+        kind: "tool_call_completed".to_owned(),
+        session_id: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(ActionId("a_1".to_owned())),
+        seq: None,
+        payload: serde_json::json!({
+            "status": "completed", "content": [],
+            "changes": [
+                {"path": "src/a.rs", "added": 4, "removed": 2},
+                {"path": "src/b.rs", "added": 1, "removed": 0},
+            ],
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }));
+    assert_eq!(
+        app.open_session_view(SessionView::ChangedFiles),
+        Effect::None
+    );
+    app
+}
+
+fn app_with_diff() -> App {
+    let mut app = app_with_files();
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    let Effect::Send(lines) = app.on_key(Key::Enter, fakes::clock::FakeClock::new().now()) else {
+        panic!("choosing a file sends its shell request");
+    };
+    let request: serde_json::Value = serde_json::from_str(&lines[0])
+        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    app.on_line(Line::Session(Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(ActionId("a_1".to_owned())),
+        seq: None,
+        payload: serde_json::json!({
+            "command_id": request["id"],
+            "result": {"output": "diff --git a/src/a.rs b/src/a.rs\n@@ -1 +1 @@\n-old\n+new\n",
+                "process": {"exit_code": 1, "timed_out": false}},
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }));
+    app
 }
 
 #[test]
@@ -155,12 +223,11 @@ fn diff_command_under_sh_reads_only_a_literal_untracked_star_path() {
         .args(["-c", command.as_str()])
         .current_dir(root)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .stderr(Stdio::piped());
     let child = child
         .spawn()
         .unwrap_or_else(|error| panic!("spawn diff command: {error}"));
-    let watchdog = fakes::Watchdog::group(child.id());
+    let watchdog = fakes::Watchdog::matching(&command);
     let (done, finished) = mpsc::channel();
     std::thread::spawn(move || {
         let output = child
@@ -309,22 +376,6 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
 
 #[test]
 fn list_and_diff_screens_render_as_whole_80_by_24_frames() {
-    let changes = changes(&[("src/a.rs", 4, 2), ("src/b.rs", 1, 0)]);
-    insta::assert_snapshot!(
-        "changed_files_80x24",
-        screen(&frame(&changes, None, List::default()))
-    );
-    let diff = Diff::Lines {
-        lines: vec![
-            "diff --git a/src/a.rs b/src/a.rs".to_owned(),
-            "@@ -1 +1 @@".to_owned(),
-            "-old".to_owned(),
-            "+new".to_owned(),
-        ],
-        cut: None,
-    };
-    insta::assert_snapshot!(
-        "changed_files_diff_80x24",
-        screen(&frame(&changes, Some(("src/a.rs", &diff)), List::default()))
-    );
+    insta::assert_snapshot!("changed_files_80x24", screen(&app_with_files()));
+    insta::assert_snapshot!("changed_files_diff_80x24", screen(&app_with_diff()));
 }

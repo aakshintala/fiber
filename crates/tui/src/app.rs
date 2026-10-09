@@ -753,6 +753,7 @@ impl App {
                 if let Some(id) = command_id {
                     let message = hub_string(&hub.payload, "message").unwrap_or_default();
                     self.config_views_refused(&id, &message);
+                    self.session_views_refused(&id, &message);
                     if !self.history_rejected(&id, &message) {
                         self.rejected(&id, message);
                     }

@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/changed_files_view_tests.rs
-expression: "screen(&frame(&changes, None, List::default()))"
+expression: screen(&app_with_files())
 ---
 Changed files                                                                  ✕
 src/a.rs  +4 −2
@@ -21,8 +21,8 @@ src/b.rs  +1 −0
 
 
 
-
-
-
 2 files changed  +5 −2
 ↑↓ move · Enter show diff · Esc close
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+>
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

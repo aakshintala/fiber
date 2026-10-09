@@ -111,8 +111,8 @@ impl App {
         if let Some(effect) = self.config_view_edit(&edit) {
             return effect;
         }
-        if self.session_view_open() {
-            return Effect::None;
+        if let Some(effect) = self.session_view_edit(&edit) {
+            return effect;
         }
         // Delete on a focused home row asks to delete it when it
         // exited, ahead of the focus early return below.
