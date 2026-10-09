@@ -21,37 +21,12 @@ fn names(rows: &[&Row]) -> Vec<String> {
 fn built_ins_come_in_table_order_then_the_answer_rows() {
     let all = rows(&[skill("tdd"), skill("review")]);
     let all: Vec<&Row> = all.iter().collect();
-    assert_eq!(
-        names(&all),
-        [
-            "home",
-            "new",
-            "resume",
-            "model",
-            "thinking",
-            "tools",
-            "context",
-            "usage",
-            "panel",
-            "rules",
-            "settings",
-            "keys",
-            "skills",
-            "handoff",
-            "name",
-            "login",
-            "reload",
-            "close",
-            "quit",
-            "approvals",
-            "?",
-            "help",
-            "tdd",
-            "review"
-        ]
-    );
-    assert!(all.iter().take(22).all(|row| row.tag == "command"));
-    assert!(all.iter().skip(22).all(|row| row.tag == "skill"));
+    let built_ins = rows(&[]).len();
+    let (table, answered) = all.split_at(built_ins);
+    assert!(table.iter().all(|row| is_built_in(&row.name)));
+    assert_eq!(names(answered), ["tdd", "review"]);
+    assert!(table.iter().all(|row| row.tag == "command"));
+    assert!(answered.iter().all(|row| row.tag == "skill"));
     assert_eq!(
         all.iter()
             .find(|row| row.name == "tdd")

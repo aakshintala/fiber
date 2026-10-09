@@ -143,7 +143,7 @@ fn slash_alone_shows_every_row_from_the_top() {
     assert_eq!(app.completions(), None);
     type_text(&mut app, "/");
     let rows = shown(&app);
-    assert_eq!(rows.len(), 8);
+    assert_eq!(rows.len(), crate::slash::SHOWN);
     assert_eq!(
         rows.first().map(String::as_str),
         Some("/home  Goes home.  command")
@@ -193,64 +193,55 @@ fn reloaded_with_the_link_down_asks_nothing() {
     assert!(app.on_line(reloaded(SESSION)).is_empty());
 }
 
+/// The built-in rows as drawn, in table order.
+fn table_lines() -> Vec<String> {
+    crate::slash::rows(&[])
+        .iter()
+        .map(crate::slash::Row::line)
+        .collect()
+}
+
 #[test]
 fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
+    let table = table_lines();
+    let shown_rows = crate::slash::SHOWN;
+    assert!(
+        table.len() > shown_rows + 1,
+        "the table outgrows the window"
+    );
     let mut app = connected();
     type_text(&mut app, "/");
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
-    assert_eq!(
-        selected(&app).as_deref(),
-        Some("/home  Goes home.  command")
-    );
-    // One Down from `/home` selects `/new`.
+    assert_eq!(selected(&app), table.first().cloned());
     app.on_key(Key::Down, now());
-    assert_eq!(
-        selected(&app).as_deref(),
-        Some("/new  Goes home with the cursor in the input box.  command")
-    );
+    assert_eq!(selected(&app), table.get(1).cloned());
     app.on_key(Key::Up, now());
-    assert_eq!(
-        selected(&app).as_deref(),
-        Some("/home  Goes home.  command")
-    );
-    for _ in 0..13 {
+    assert_eq!(selected(&app), table.first().cloned());
+    // Down to the last row in view: the window has not moved.
+    for _ in 1..shown_rows {
         app.on_key(Key::Down, now());
     }
-    // Thirteen rows from `/home` through `/handoff`, including `/model`,
-    // `/thinking`, `/context`, `/usage`, `/keys` and `/skills`.
+    assert_eq!(selected(&app), table.get(shown_rows - 1).cloned());
     assert_eq!(
-        selected(&app).as_deref(),
-        Some("/handoff [instructions]  Starts a handoff.  command")
+        app.completions().and_then(|c| c.selected),
+        Some(shown_rows - 1)
     );
-    assert_eq!(app.completions().and_then(|c| c.selected), Some(7));
+    assert_eq!(shown(&app).first(), table.first());
+    // One more selects the first row past the window: it scrolls by one.
     app.on_key(Key::Down, now());
-    // `/name` is next; `/keys` sits one row above the window, so the
-    // window moves down by one and `/usage` leads it.
-    let completions = app.completions();
-    assert_eq!(completions.as_ref().and_then(|c| c.selected), Some(7));
+    assert_eq!(selected(&app), table.get(shown_rows).cloned());
     assert_eq!(
-        completions
-            .and_then(|c| c.lines.first().cloned())
-            .as_deref(),
-        Some("/usage  Opens the usage view.  command")
+        app.completions().and_then(|c| c.selected),
+        Some(shown_rows - 1)
     );
-    app.on_key(Key::Down, now());
-    app.on_key(Key::Down, now());
-    app.on_key(Key::Down, now());
-    for _ in 0..16 {
-        if selected(&app).as_deref() == Some("/quit  Quits.  command") {
-            break;
-        }
+    assert_eq!(shown(&app).first(), table.get(1));
+    // Down clamps at the last row.
+    for _ in 0..table.len() {
         app.on_key(Key::Down, now());
     }
-    assert_eq!(selected(&app).as_deref(), Some("/quit  Quits.  command"));
-    app.on_key(Key::Down, now());
-    assert_eq!(
-        selected(&app).as_deref(),
-        Some("/approvals  Reopens the waiting approvals and questions.  command")
-    );
+    assert_eq!(selected(&app), table.last().cloned());
     app.on_key(Key::Up, now());
-    assert_eq!(selected(&app).as_deref(), Some("/quit  Quits.  command"));
+    assert_eq!(selected(&app), table.get(table.len() - 2).cloned());
     // The draft is untouched by moving.
     assert_eq!(app.draft(), "/");
 }
