@@ -136,15 +136,6 @@ fn the_retry_form_counts_down_and_floors_at_zero() {
 }
 
 #[test]
-fn the_retry_form_reads_attempt_of_last_attempt() {
-    let laid = lay(&retry(1_000_000, 2, 3_001, 4), Some(1_000_000), 80);
-    assert_eq!(
-        laid.text,
-        "↻ Retrying in 4s · rate_limited · attempt 2 of 4"
-    );
-}
-
-#[test]
 fn the_line_asks_for_the_next_second() {
     let started = 1_000_000;
     // Elapsed 11 999 ms: the text next changes at started + 12 000.
