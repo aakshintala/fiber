@@ -337,6 +337,8 @@ Fiber writes configuration in these places:
 - the model picker saves the global `model`, and a thinking level as
   `models."<provider/model>".thinking`, unless the choice is marked as this
   session only (`docs/tui.md`, "Swapped views")
+- dragging the rail's or the panel's edge saves the global `tui.rail.width`
+  or `tui.panel.width` (`docs/tui.md`, "Layout")
 - `/credential` saves the global `providers."<name>".credential`, unless the
   switch is marked as this session only, and `fiber login` writes it when it
   stores a provider's first label (`docs/model-routing.md`, "Credentials")

@@ -201,6 +201,7 @@ pub(super) fn new_loop<B: Backend>(
         copy_command: None,
         open_command: None,
         title: crate::osc::Title::default(),
+        save: None,
     };
     (lp, attached)
 }
@@ -1567,6 +1568,7 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         copy_command: None,
         open_command: None,
         title: crate::osc::Title::default(),
+        save: None,
     };
     // No hub: a frame fetches no history, so nothing arrives here.
     let (_hub, idle) = mpsc::channel();

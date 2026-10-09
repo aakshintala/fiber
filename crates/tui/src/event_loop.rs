@@ -68,6 +68,7 @@ pub fn run(
         app.push_notice(notice);
     }
     app.set_keys(std::mem::take(&mut launch.keys));
+    let save = launch.save.take();
     app.set_home(launch);
     app.set_size(width, height);
     let mut terminal = Loop {
@@ -96,6 +97,7 @@ pub fn run(
         open_command: crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
             .map(|argv| argv.into_iter().map(str::to_owned).collect()),
         title: osc::Title::default(),
+        save,
     };
     terminal.app.set_opener(terminal.open_command.is_some());
     terminal
@@ -189,6 +191,8 @@ struct Loop<B: Backend> {
     open_command: Option<Vec<String>>,
     /// The window title last written.
     title: osc::Title,
+    /// Saves a dragged share to the global configuration, if any.
+    save: Option<crate::Save>,
 }
 
 /// The most lines one `history` answer holds (`docs/invocation.md`,
@@ -370,6 +374,7 @@ impl<B: Backend> Loop<B> {
         if !self.app.files_open() {
             self.search = None;
         }
+        self.save_shares();
         self.page_in(rx);
         // A selection's copy waiting on dropped pages runs once they load.
         if let Some(text) = self.app.take_copy() {
@@ -381,6 +386,20 @@ impl<B: Backend> Loop<B> {
         self.write_title();
         self.write_alerts();
         None
+    }
+
+    /// Saves the shares a drag's release queued, in order. A failed
+    /// save is a notice, so it shows on the frame drawn next.
+    fn save_shares(&mut self) {
+        for (key, share) in self.app.take_saves() {
+            let Some(save) = &self.save else {
+                continue;
+            };
+            if let Err(message) = save(key, share) {
+                self.app
+                    .push_notice(format!("Could not save {key}: {message}"));
+            }
+        }
     }
 
     /// Writes the app's window title when it changed since the last write.
@@ -623,6 +642,10 @@ mod panel_tests;
 #[cfg(test)]
 #[path = "lib_rail_tests.rs"]
 mod rail_tests;
+
+#[cfg(test)]
+#[path = "lib_drag_tests.rs"]
+mod drag_tests;
 
 #[cfg(test)]
 #[path = "lib_attention_tests.rs"]
