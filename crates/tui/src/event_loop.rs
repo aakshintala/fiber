@@ -539,9 +539,9 @@ impl<B: Backend> Loop<B> {
         self.app.disconnected();
     }
 
-    /// Writes command lines to the hub. A failed write hangs up: the
-    /// connection is lost, and the text of the lines not sent returns to
-    /// the draft.
+    /// Writes command lines to the hub, each one written kept for resending
+    /// until it is answered. A failed write hangs up: the connection is
+    /// lost, and the text of the lines not sent returns to the draft.
     fn send(&mut self, lines: &[String]) {
         for (at, line) in lines.iter().enumerate() {
             let Some(hub) = &mut self.hub else {
@@ -552,6 +552,7 @@ impl<B: Backend> Loop<B> {
                 self.app.write_failed(lines.get(at..).unwrap_or_default());
                 return;
             }
+            self.app.wrote(line);
         }
     }
 

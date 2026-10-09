@@ -22,6 +22,7 @@ use contract::SessionId;
 
 mod exit;
 mod open_at;
+mod reset;
 
 /// Home's state: the launch description, and whether a `start` went out in
 /// this run, which hides the input box's placeholder.

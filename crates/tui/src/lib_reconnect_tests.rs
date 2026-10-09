@@ -121,7 +121,7 @@ fn quit(pair: &mut Pair, finished: &Receiver<i32>) -> i32 {
 #[test]
 fn run_reconnects_after_a_drop_with_backoff_on_the_fake_clock() {
     let (ours, theirs) = pair();
-    let (again, _theirs_again) = pair();
+    let (again, theirs_again) = pair();
     let clock = FakeClock::new();
     let (connect, called, _gone) = dial(vec![(ours, hello()), (again, hello())]);
     let (mut pair, finished) = spawn_run(connect, &clock);
@@ -146,6 +146,76 @@ fn run_reconnects_after_a_drop_with_backoff_on_the_fake_clock() {
     assert!(called.try_recv().is_err());
     clock.advance(HALF);
     signalled(&called, "the reconnect");
+    let (_, feed) = command(BufReader::new(theirs_again), "the feed after reconnecting");
+    assert_eq!(feed["command"], "feed");
+    assert_eq!(quit(&mut pair, &finished), 0);
+}
+
+/// A hub `command_accepted` for `id` starting `session`, as a line.
+fn started(id: &serde_json::Value, session: &str) -> String {
+    let line = HubLine {
+        kind: "command_accepted".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"command_id": id, "result": {"session_id": session}})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    };
+    format!(
+        "{}\n",
+        serde_json::to_string(&line).unwrap_or_else(|err| panic!("line: {err}"))
+    )
+}
+
+#[test]
+fn a_prompt_in_flight_is_resent_after_reconnecting() {
+    let (ours, mut theirs) = pair();
+    let (again, theirs_again) = pair();
+    let clock = FakeClock::new();
+    let (connect, called, _gone) = dial(vec![(ours, hello()), (again, hello())]);
+    let (mut pair, finished) = spawn_run(connect, &clock);
+    read_until(&pair.main, b"shortcuts", "the first frame");
+    drain(&pair.main);
+    signalled(&called, "the first connect");
+    let reader = BufReader::new(
+        theirs
+            .try_clone()
+            .unwrap_or_else(|err| panic!("dup: {err}")),
+    );
+    let (reader, feed) = command(reader, "the first feed");
+    assert_eq!(feed["command"], "feed");
+    let (reader, _) = command(reader, "the first recent");
+    pair.main
+        .write_all(b"hi\r")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let (reader, start) = command(reader, "the start");
+    assert_eq!(start["command"], "start");
+    theirs
+        .write_all(started(&start["id"], "s_aaaaaaaaaaaaaaaa").as_bytes())
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let (reader, _) = command(reader, "the subscribe");
+    let (reader, _) = command(reader, "the commands");
+    let (reader, prompt) = command(reader, "the prompt");
+    assert_eq!(prompt["command"], "prompt");
+    // The hub hangs up before it answers the prompt.
+    drop(reader);
+    drop(theirs);
+    assert!(
+        clock.await_parked(clock.origin() + HALF, DEADLINE),
+        "waited {DEADLINE:?} for the backoff to park on the clock"
+    );
+    clock.advance(HALF);
+    signalled(&called, "the reconnect");
+    let reader = BufReader::new(theirs_again);
+    let (reader, subscribe) = command(reader, "the subscribe after reconnecting");
+    assert_eq!(subscribe["command"], "subscribe");
+    assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(subscribe["args"]["level"], "full");
+    let (reader, commands) = command(reader, "the commands after reconnecting");
+    assert_eq!(commands["command"], "commands");
+    let (_, resent) = command(reader, "the resent prompt");
+    assert_eq!(resent, prompt);
     assert_eq!(quit(&mut pair, &finished), 0);
 }
 

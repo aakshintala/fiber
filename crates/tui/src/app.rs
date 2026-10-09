@@ -387,8 +387,10 @@ impl App {
         }
     }
 
-    /// Folds one line from the hub, returning command lines to send.
+    /// Folds one line from the hub, returning command lines to send. An
+    /// answer first releases the line kept for resending.
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
+        self.answered_line(&line);
         let mut lines = match self.home_line(&line) {
             Some(consumed) => consumed,
             None => match line {
@@ -651,9 +653,9 @@ impl App {
         let command_id = hub_string(&hub.payload, "command_id");
         match hub.kind.as_str() {
             "hub_hello" if hub.schema_version == contract::SCHEMA_VERSION => {
-                self.link = Link::Up;
                 let mut lines = std::mem::take(&mut self.held);
                 lines.extend(self.reconnected());
+                self.link = Link::Up;
                 lines
             }
             "hub_hello" => {
@@ -818,7 +820,7 @@ impl App {
                 if let Some(rejected) = read!(envelope, CommandRejected)
                     && let Some(id) = rejected.command_id
                 {
-                    self.rejected(&id.0, rejected.message);
+                    self.refused(&id.0, &rejected.code, rejected.message);
                 }
             }
             "reloaded" => {
