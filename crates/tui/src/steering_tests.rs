@@ -285,7 +285,8 @@ fn an_amend_sends_the_drafts_images() {
         | Effect::Editor { .. }
         | Effect::Exit(_)
         | Effect::Copy(_)
-        | Effect::OpenLink(_) => panic!("Enter amends"),
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => panic!("Enter amends"),
     };
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["command"], "steer_drop");

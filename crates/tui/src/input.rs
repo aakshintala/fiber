@@ -3,6 +3,7 @@
 
 use ratatui::text::Span;
 
+use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -19,7 +20,7 @@ const PROMPT: &str = "> ";
 const INDENT: &str = "  ";
 
 /// One unit the cursor steps over.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum Piece {
     /// A character; `\n` is a line break.
     Char(char),
@@ -40,7 +41,7 @@ enum Piece {
 }
 
 /// The draft: pieces with the cursor between two of them.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct Draft {
     pieces: Vec<Piece>,
     /// The cursor: the number of pieces before it.
@@ -50,6 +51,22 @@ pub(crate) struct Draft {
     /// The draft's serial: a read's result lands only while the box holds
     /// the draft it started for.
     serial: u64,
+}
+
+/// A piece may hold typed text, so it prints redacted
+/// (`docs/code-quality.md`, "Errors").
+impl fmt::Debug for Piece {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Piece(redacted)")
+    }
+}
+
+/// The draft may hold a typed secret, so it prints redacted
+/// (`docs/code-quality.md`, "Errors").
+impl fmt::Debug for Draft {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Draft(redacted)")
+    }
 }
 
 /// The next draft serial: every draft, and every renewal, takes a fresh

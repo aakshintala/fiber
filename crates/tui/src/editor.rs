@@ -12,6 +12,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// The notice when neither variable names an editor.
 pub(crate) const NO_EDITOR: &str = "Set $VISUAL or $EDITOR to edit the draft.";
 
+/// The notice when neither variable names an editor for a file.
+pub(crate) const NO_EDITOR_FILE: &str = "Set $VISUAL or $EDITOR to open the file.";
+
 /// How many names [`TempFile::create`] tries before giving up.
 const ATTEMPTS: usize = 16;
 
@@ -84,6 +87,28 @@ fn run_in(dir: &Path, command: &str, text: &str) -> Result<String, String> {
         edited.pop();
     }
     Ok(edited)
+}
+
+/// Runs `command` on `path`, in the foreground with this process's stdio:
+/// Ctrl+G on a configuration view's file (`docs/tui.md`, "Swapped
+/// views"). The file need not exist; the editor creates it. An error is
+/// the notice naming the cause.
+pub(crate) fn open(command: &str, path: &Path) -> Result<(), String> {
+    let status = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("{command} \"$1\""))
+        .arg("sh")
+        .arg(path)
+        .status()
+        .map_err(|err| format!("Could not start the editor: {err}"))?;
+    if let Some(signal) = status.signal() {
+        return Err(format!("The editor was ended by signal {signal}."));
+    }
+    if !status.success() {
+        let code = status.code().unwrap_or_default();
+        return Err(format!("The editor exited with status {code}."));
+    }
+    Ok(())
 }
 
 /// The temporary file the editor opens, removed when dropped.

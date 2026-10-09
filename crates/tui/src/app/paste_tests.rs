@@ -636,7 +636,8 @@ fn sent_id(effect: Effect) -> String {
         | Effect::Editor { .. }
         | Effect::Exit(_)
         | Effect::Copy(_)
-        | Effect::OpenLink(_) => panic!("nothing sent"),
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => panic!("nothing sent"),
     }
 }
 

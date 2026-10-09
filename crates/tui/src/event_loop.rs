@@ -70,6 +70,7 @@ pub fn run(
     }
     app.set_keys(std::mem::take(&mut launch.keys));
     let save = launch.save.take();
+    app.set_configure(launch.configure.take());
     app.set_home(launch);
     app.set_size(width, height);
     let retry = Retry::new(&clock);
@@ -332,6 +333,11 @@ impl<B: Backend> Loop<B> {
                                 return Some(code);
                             }
                         }
+                        Effect::OpenFile(file) => {
+                            if let Some(code) = self.open_file(&file) {
+                                return Some(code);
+                            }
+                        }
                     }
                 }
             }
@@ -383,6 +389,7 @@ impl<B: Backend> Loop<B> {
         }
         self.save_shares();
         self.page_in(rx);
+        self.apply_theme();
         // A selection's copy waiting on dropped pages runs once they load.
         if let Some(text) = self.app.take_copy() {
             clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
@@ -613,6 +620,39 @@ impl<B: Backend> Loop<B> {
         code
     }
 
+    /// Ctrl+G on a configuration view: opens `file` in the editor
+    /// `$VISUAL` or `$EDITOR` names, with the terminal handed over, and
+    /// tells the app it returned. `Some(1)` when the terminal cannot be
+    /// taken back.
+    fn open_file(&mut self, file: &std::path::Path) -> Option<i32> {
+        let Some(command) = editor::command(&self.var) else {
+            self.app
+                .config_file_closed(Err(editor::NO_EDITOR_FILE.to_owned()));
+            return None;
+        };
+        let mut result = Err(String::new());
+        let code = self.hand_over(|| result = editor::open(&command, file));
+        if code.is_none() {
+            self.app.config_file_closed(result);
+        }
+        code
+    }
+
+    /// Applies a theme `/settings` chose, without a restart: the next
+    /// frame is painted whole in it, keeping the colour depth. A theme
+    /// file that cannot be read follows the terminal, with its notice
+    /// (`docs/tui.md`, "Themes").
+    fn apply_theme(&mut self) {
+        let Some(setting) = self.app.take_theme_choice() else {
+            return;
+        };
+        let (look, notice) = Look::new(setting, &|name| (self.var)(name));
+        self.screen.set_look(look);
+        if let Some(notice) = notice {
+            self.app.push_notice(notice);
+        }
+    }
+
     /// Hands the terminal to `program`, run in the foreground on this
     /// thread: the reader paused, the terminal restored, then both taken
     /// back and the whole screen repainted at the size read again. `Some(1)`
@@ -711,6 +751,10 @@ mod attention_tests;
 #[cfg(test)]
 #[path = "lib_look_tests.rs"]
 mod look_tests;
+
+#[cfg(test)]
+#[path = "lib_settings_tests.rs"]
+mod settings_tests;
 
 #[cfg(test)]
 #[path = "lib_paste_tests.rs"]

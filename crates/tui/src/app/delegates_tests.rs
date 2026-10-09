@@ -339,6 +339,7 @@ fn open_first(app: &mut App) -> Vec<Value> {
         | Effect::Exit(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
         | Effect::ReadImage(_) => panic!("opening sends"),
     }
 }

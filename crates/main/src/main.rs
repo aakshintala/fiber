@@ -13,6 +13,7 @@ mod case;
 mod cli;
 mod clock;
 mod completion;
+mod configure;
 mod connect;
 mod cost;
 mod crash;
@@ -834,6 +835,7 @@ fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
     };
     let theme = theme_setting::setting(&home, &config, &|path| std::fs::read_to_string(path));
     let save = launch::save(home.clone());
+    let seam: Arc<dyn tui::Configure> = Arc::new(configure::Seam::new(home.clone()));
     let hub_clock = Arc::clone(&clock);
     let connect: tui::Connect = Box::new(move || {
         let mut start = || start_hub(fiber.clone());
@@ -841,6 +843,7 @@ fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
     });
     let identity = doors::project(&workspace);
     let mut launch = launch::launch(workspace, &identity, &config, theme);
+    launch.configure = Some(seam);
     launch.open_at = open_at;
     launch.save = Some(save);
     tui::run(tty, launch, connect, Box::new(crash::attach), clock)

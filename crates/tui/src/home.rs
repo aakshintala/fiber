@@ -74,6 +74,10 @@ pub struct Launch {
     /// Saves a share the person dragged to the global configuration;
     /// `None` saves nothing.
     pub save: Option<crate::Save>,
+    /// The seam the configuration views read and write through
+    /// (`docs/tui.md`, "Swapped views"); with none, each says it is not
+    /// available.
+    pub configure: Option<std::sync::Arc<dyn crate::Configure>>,
 }
 
 /// What home draws, built by [`crate::app::App::home_screen`].

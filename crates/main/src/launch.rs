@@ -83,6 +83,8 @@ pub(crate) fn launch(
             title: on(config, "tui.attention.title"),
         },
         save: None,
+        // `main` gives the seam once it holds Fiber home.
+        configure: None,
     }
 }
 
