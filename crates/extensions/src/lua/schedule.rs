@@ -523,10 +523,14 @@ fn settle(
             (None, None)
         }
         Request::Callback { port } => {
-            drop(shared);
+            // The listener starts under the admission lock, so no cancel
+            // or stop lands between admission and the bind; a failure is
+            // delivered after releasing it.
             #[cfg(test)]
             settle_hook(&target, Pause::Start);
-            let cancel = match oauth::listen(port, &deliver) {
+            let started = oauth::listen(port, &deliver);
+            drop(shared);
+            let cancel = match started {
                 Ok(cancel) => Some(cancel),
                 Err(reply) => {
                     deliver(reply);
@@ -622,7 +626,6 @@ fn settle(
             }
         }
         Request::Lock => {
-            drop(shared);
             // A command, hook, timer or tool holds no provider credential: calling
             // `refresh` there is an error in the calling code, raised as
             // a string.
@@ -631,6 +634,10 @@ fn settle(
                     "host.oauth.refresh: a {what} has no provider credential to refresh"
                 ))
             };
+            // Only a provider credential starts a wait, under the admission
+            // lock below, so no cancel or stop lands between admission and
+            // the start. Every other target releases the lock first and
+            // delivers its error after.
             let cancel = match &target {
                 Target::Provider {
                     credential: Some(pair),
@@ -638,7 +645,9 @@ fn settle(
                 } => {
                     #[cfg(test)]
                     settle_hook(&target, Pause::Start);
-                    match oauth::lock(home, pair, &deliver) {
+                    let started = oauth::lock(home, pair, &deliver);
+                    drop(shared);
+                    match started {
                         Ok(cancel) => Some(cancel),
                         Err(reply) => {
                             deliver(reply);
@@ -651,24 +660,29 @@ fn settle(
                     function,
                     credential: None,
                 } => {
+                    drop(shared);
                     deliver(Reply::Lock(Err(crate::host::LockError::Arg(format!(
                         "host.oauth.refresh: {name}.{function} has no credential to refresh; only credential() refreshes"
                     )))));
                     None
                 }
                 Target::Command(_) => {
+                    drop(shared);
                     deliver(Reply::Lock(Err(no_credential("command"))));
                     None
                 }
                 Target::Hook { .. } => {
+                    drop(shared);
                     deliver(Reply::Lock(Err(no_credential("hook"))));
                     None
                 }
                 Target::Timer { .. } => {
+                    drop(shared);
                     deliver(Reply::Lock(Err(no_credential("timer"))));
                     None
                 }
                 Target::Tool(_) | Target::Effects(_) => {
+                    drop(shared);
                     deliver(Reply::Lock(Err(no_credential("tool"))));
                     None
                 }
