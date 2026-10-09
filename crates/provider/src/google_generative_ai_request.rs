@@ -9,7 +9,9 @@ use serde_json::{Map, Value, json};
 
 use crate::{Endpoint, strict};
 
-/// Each tool in Gemini's shape, in name order.
+/// Each tool in Gemini's shape, in name order. A hosted definition's
+/// wire entry is its kind alone, with no name (`docs/tools.md`, "Hosted
+/// by the provider"): the loop zips the wire list with the tool map.
 /// `parametersJsonSchema` takes the schema as written, `$ref` and
 /// `anyOf` included; `parameters` rejects `$ref`
 /// (`docs/model-routing.md`, "Google Generative AI wire facts").
@@ -20,6 +22,11 @@ pub(crate) fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
     sorted
         .into_iter()
         .map(|tool| {
+            if let Some(kind) = &tool.hosted {
+                let mut entry = Map::new();
+                entry.insert(kind.clone(), json!({}));
+                return entry;
+            }
             json!({
                 "name": tool.name,
                 "description": tool.description,
@@ -41,14 +48,18 @@ pub(crate) fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     // verbatim, so it matches the parent's bytes (`docs/events.md`,
     // "Rewind"): the sent declarations decide the `toolConfig` the old
     // session sent, and an empty sent list sends neither `tools` nor one.
+    // `VALIDATED` is chosen from the function declarations alone: a
+    // hosted entry (no `name`) never turns it off.
     let sent = request.sent_tools.as_ref();
     let strict = match sent {
         Some(sent) => sent
             .iter()
+            .filter(|tool| tool.contains_key("name"))
             .all(|tool| tool.get("parametersJsonSchema").is_some_and(strict::fits)),
         None => request
             .tools
             .iter()
+            .filter(|tool| tool.hosted.is_none())
             .all(|tool| strict::fits(&tool.input_schema)),
     };
     let mut body = Map::new();
@@ -62,21 +73,44 @@ pub(crate) fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     }
     body.insert("contents".into(), Value::Array(contents(endpoint, request)));
     if !sent.map_or(request.tools.is_empty(), |sent| sent.is_empty()) {
-        let declarations: Vec<Value> = match sent {
+        let wired: Vec<Value> = match sent {
             Some(sent) => sent.iter().cloned().map(Value::Object).collect(),
             None => wire_tools(&request.tools)
                 .into_iter()
                 .map(Value::Object)
                 .collect(),
         };
-        body.insert(
-            "tools".into(),
-            json!([{ "functionDeclarations": declarations }]),
-        );
-        body.insert(
-            "toolConfig".into(),
-            json!({ "functionCallingConfig": function_calling(&request.tool_choice, strict) }),
-        );
+        // Entries with a `name` are function declarations, sent in one
+        // Tool; every other entry is a hosted search, its own Tool after
+        // it (measured in `docs/model-routing.md`, "Google Generative AI
+        // wire facts"). `functionDeclarations` is sent only when there
+        // is at least one.
+        let mut declarations = Vec::new();
+        let mut tools = Vec::new();
+        for tool in wired {
+            if tool.get("name").is_some() {
+                declarations.push(tool);
+            } else {
+                tools.push(tool);
+            }
+        }
+        if !declarations.is_empty() {
+            tools.insert(0, json!({ "functionDeclarations": declarations }));
+        }
+        let hosted = tools.iter().any(|tool| {
+            tool.as_object()
+                .is_some_and(|map| !map.contains_key("functionDeclarations"))
+        });
+        body.insert("tools".into(), Value::Array(tools));
+        let mut config =
+            json!({ "functionCallingConfig": function_calling(&request.tool_choice, strict) });
+        // A hosted search beside function tools is refused without this
+        // flag (`docs/model-routing.md`, "Google Generative AI wire
+        // facts"). Without a hosted entry the key is absent.
+        if hosted && let Some(map) = config.as_object_mut() {
+            map.insert("includeServerSideToolInvocations".into(), json!(true));
+        }
+        body.insert("toolConfig".into(), config);
     }
     let mut generation = Map::new();
     let mut thinking = Map::new();

@@ -2139,6 +2139,168 @@ fn sent_tools_are_sent_verbatim_and_set_the_strictness() {
     assert_eq!(empty.get("toolConfig"), None);
 }
 
+fn hosted_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "web_search".into(),
+        description: String::new(),
+        input_schema: json!({}),
+        deferred: false,
+        hosted: Some("google_search".into()),
+    }
+}
+
+fn loose_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "a_loose".into(),
+        description: "Loose.".into(),
+        input_schema: json!({"type": "object", "properties": {"a": {"type": "string"}}}),
+        deferred: false,
+        hosted: None,
+    }
+}
+
+#[test]
+fn a_hosted_search_is_its_own_tool_and_turns_on_server_side_invocations() {
+    // A hosted definition's wire entry is its kind alone, with no name:
+    // the loop zips the wire list with the tool map in name order.
+    let wired: Vec<Value> = Gemini::new(Endpoint::default())
+        .wire_tools(&[weather_tool(), hosted_tool()])
+        .into_iter()
+        .map(Value::Object)
+        .collect();
+    assert_eq!(
+        wired,
+        vec![
+            json!({"name": "get_weather", "description": "Weather for a city.",
+                "parametersJsonSchema": weather_tool().input_schema}),
+            json!({"google_search": {}}),
+        ]
+    );
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut sent = request();
+    sent.tools = vec![weather_tool(), hosted_tool()];
+    run(Box::new(Gemini::new(endpoint(&server)).request(&sent)))
+        .0
+        .unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(
+        body["tools"],
+        json!([{"functionDeclarations": [wired[0].clone()]}, {"google_search": {}}])
+    );
+    // The hosted `{}` schema does not turn off strict: the request stays
+    // `VALIDATED`, with the flag the search needs beside function tools.
+    assert_eq!(
+        body["toolConfig"],
+        json!({"functionCallingConfig": {"mode": "VALIDATED"},
+            "includeServerSideToolInvocations": true})
+    );
+}
+
+#[test]
+fn a_hosted_search_alone_sends_no_function_declarations() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut sent = request();
+    sent.tools = vec![hosted_tool()];
+    run(Box::new(Gemini::new(endpoint(&server)).request(&sent)))
+        .0
+        .unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(body["tools"], json!([{"google_search": {}}]));
+    assert_eq!(
+        body["toolConfig"],
+        json!({"functionCallingConfig": {"mode": "VALIDATED"},
+            "includeServerSideToolInvocations": true})
+    );
+}
+
+#[test]
+fn a_non_strict_function_beside_a_hosted_search_sends_auto() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut sent = request();
+    sent.tools = vec![loose_tool(), hosted_tool()];
+    run(Box::new(Gemini::new(endpoint(&server)).request(&sent)))
+        .0
+        .unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(
+        body["toolConfig"],
+        json!({"functionCallingConfig": {"mode": "AUTO"},
+            "includeServerSideToolInvocations": true})
+    );
+    assert_eq!(body["tools"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn a_rewound_build_with_a_hosted_entry_is_split_the_same_way() {
+    // A rewound session's logged build splits like a fresh one: the
+    // declaration goes in `functionDeclarations`, the hosted entry
+    // after it, with the same `toolConfig`.
+    let declaration = json!({"name": "get_weather", "description": "Weather for a city.",
+        "parametersJsonSchema": weather_tool().input_schema});
+    let sent = || {
+        vec![declaration.clone(), json!({"google_search": {}})]
+            .into_iter()
+            .map(|tool| tool.as_object().unwrap().clone())
+            .collect::<Vec<_>>()
+    };
+    let server =
+        ProviderServer::start([completed_reply(), completed_reply(), completed_reply()]).unwrap();
+    let gemini = Gemini::new(endpoint(&server));
+    let mut fresh = request();
+    fresh.tools = vec![weather_tool(), hosted_tool()];
+    run(Box::new(gemini.request(&fresh))).0.unwrap();
+    let mut rewound = request();
+    rewound.sent_tools = Some(sent());
+    run(Box::new(gemini.request(&rewound))).0.unwrap();
+    assert_eq!(sent_body(&server, 1), sent_body(&server, 0));
+    // A non-strict sent declaration beside the hosted entry sends `AUTO`
+    // with the flag, the strict filter on the sent path.
+    let mut loose = request();
+    loose.sent_tools = Some(vec![
+        json!({"name": "a_loose", "description": "Loose.",
+            "parametersJsonSchema": loose_tool().input_schema})
+        .as_object()
+        .unwrap()
+        .clone(),
+        json!({"google_search": {}}).as_object().unwrap().clone(),
+    ]);
+    run(Box::new(gemini.request(&loose))).0.unwrap();
+    assert_eq!(
+        sent_body(&server, 2)["toolConfig"],
+        json!({"functionCallingConfig": {"mode": "AUTO"},
+            "includeServerSideToolInvocations": true})
+    );
+}
+
+#[test]
+fn without_a_hosted_search_the_tool_config_has_no_flag() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Gemini::new(endpoint(&server)).request(&request())))
+        .0
+        .unwrap();
+    let config = sent_body(&server, 0)["toolConfig"].clone();
+    assert_eq!(config.as_object().unwrap().len(), 1);
+    assert_eq!(
+        config,
+        json!({"functionCallingConfig": {"mode": "VALIDATED"}})
+    );
+}
+
+#[test]
+fn open_returns_the_reply_bytes_unread() {
+    use std::io::Read;
+    let bytes = recording("sse2-stream-ok.json");
+    let server = ProviderServer::start([Response::stream(bytes.clone())]).unwrap();
+    let mut out = Vec::new();
+    Gemini::new(endpoint(&server))
+        .request(&request())
+        .open()
+        .unwrap()
+        .read_to_end(&mut out)
+        .unwrap();
+    assert_eq!(out, bytes);
+}
+
 #[test]
 fn a_sent_declaration_without_a_schema_is_not_strict() {
     // The strictness comes from each sent declaration's
