@@ -50,10 +50,6 @@ pub(crate) const RUN_SCAN: Duration = Duration::from_millis(500);
 /// `rewound` are far shorter, so a longer last line is neither.
 pub(crate) const TAIL: u64 = 64 * 1024;
 
-/// What the hub sends on each session's socket.
-const SUBSCRIBE: &[u8] =
-    b"{\"id\":\"c_hub_feed\",\"command\":\"subscribe\",\"args\":{\"level\":\"summary\"}}\n";
-
 /// One line queued for a subscriber.
 pub(crate) type Line = Arc<[u8]>;
 
@@ -405,7 +401,15 @@ impl Feed {
         let Ok(shutdown) = stream.try_clone() else {
             return;
         };
-        if (&stream).write_all(SUBSCRIBE).is_err() {
+        // A fresh id per subscribe: a session keeps every accepted
+        // command id, so a repeated id is rejected `duplicate_command`.
+        // The `c_hub_feed_` prefix keeps the feed's own connection
+        // distinct from a relay rejoin.
+        let subscribe = format!(
+            "{{\"id\":\"{}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"summary\"}}}}\n",
+            crate::start::mint("c_hub_feed_")
+        );
+        if (&stream).write_all(subscribe.as_bytes()).is_err() {
             return;
         }
         let mut state = lock(&self.state);
