@@ -584,6 +584,25 @@ fn a_running_calls_values_survive_the_bound() {
         Some("Bearer tok-1".to_owned())
     );
     assert_eq!(header(&headers, "x-h"), Some("hv-1".to_owned()));
+    // Once no call runs, the history is bounded to sixteen again without
+    // another sign, and the call that just returned stays listed for the
+    // credentials() read that follows its sign return (`docs/errors.md`,
+    // "The shape").
+    let mut values: Vec<String> = signer
+        .credentials()
+        .iter()
+        .map(|secret| secret.expose().to_owned())
+        .collect();
+    values.sort();
+    assert_eq!(values.len(), 16, "bounded once quiescent: {values:?}");
+    assert!(
+        values.contains(&"tok-1".to_owned()) && values.contains(&"hv-1".to_owned()),
+        "the returned call stays listed: {values:?}"
+    );
+    assert!(
+        !values.contains(&"tok-2".to_owned()) && !values.contains(&"hv-2".to_owned()),
+        "the oldest idle values are dropped: {values:?}"
+    );
 }
 
 #[test]
@@ -731,4 +750,98 @@ fn a_sign_error_naming_a_credential_header_value_lists_it_for_redaction() {
         .collect();
     values.sort();
     assert_eq!(values, ["acct_secret", "tok-1"]);
+}
+
+#[test]
+fn concurrent_calls_bound_the_history_once_all_complete() {
+    // Each row: how many blocking signs share one pair, and the reported
+    // retention after every call completes, with no sign in between. Every
+    // fetch returns a new token, so every in-flight call holds a distinct
+    // value past the bound; completing them all bounds the history again.
+    for (calls, want) in [(16_usize, 16_usize), (17, 16), (20, 16)] {
+        let setup = Setup::new();
+        let clock = FakeClock::new();
+        let blocking = ProviderServer::start([Response::status(200, "{}")]).unwrap();
+        blocking.hold();
+        let block_url = blocking.url();
+        // An expiry 301 seconds past each fetch's own wall stays past the
+        // refresh window, so no background refresh steals a fetch, and each
+        // advance of 301 seconds expires it, so the next sign fetches
+        // synchronously. The advances total far less than each sign's own
+        // timeout, so every call stays parked while they happen
+        // (`docs/testing.md`, "Waits and timeouts").
+        let dir = setup.home().join("ext");
+        write(
+            &dir.join("init.lua"),
+            &format!(
+                "calls_c = 0\n\
+                 fiber.provider(\"p\", {{\n\
+                 credential = {{ timeout = 60000, run = function()\n\
+                 calls_c = calls_c + 1\n\
+                 return {{ token = \"tok-\" .. calls_c, \
+                 expires_at = 1700000000 + (calls_c - 1) * 301 + 301 }}\n\
+                 end }},\n\
+                 sign = {{ timeout = 36000000, run = function(request)\n\
+                 host.http({{ url = \"{block_url}/s\", method = \"POST\" }})\n\
+                 return {{}}\n\
+                 end }},\n\
+                 }})\n"
+            ),
+        );
+        let extension = Arc::new(LuaExtension::new("ext", dir, setup.home(), clock.clone()));
+        let provider = LuaProvider::new(extension, "p");
+        let signer = signer_of(&provider);
+        let (done, finished) = mpsc::channel();
+        for round in 1..=calls {
+            // The advance comes before the spawn: a clock move between a
+            // thread's spawn and its call's start would end that call at
+            // its deadline before it runs (`docs/testing.md`, "Waits and
+            // timeouts").
+            if round > 1 {
+                clock.advance(Duration::from_secs(301));
+            }
+            let signing = Arc::clone(&signer);
+            let completed = done.clone();
+            std::thread::spawn(move || {
+                let url = "http://127.0.0.1:1/v1/responses".to_owned();
+                completed
+                    .send(signing.sign(&SignRequest {
+                        method: "POST",
+                        url: &url,
+                        headers: &[],
+                        body: b"{}",
+                    }))
+                    .unwrap_or(());
+            });
+            // The new call fetches its own token and blocks before the next
+            // round, so every call is in flight at once.
+            assert!(
+                blocking.await_requests(round, WAIT),
+                "calls {calls}: waited for sign {round} to block on the held server"
+            );
+        }
+        blocking.release();
+        for _ in 0..calls {
+            finished
+                .recv_timeout(WAIT)
+                .unwrap_or_else(|_| panic!("calls {calls}: every sign returns within {WAIT:?}"))
+                .unwrap();
+        }
+        let mut values: Vec<String> = signer
+            .credentials()
+            .iter()
+            .map(|secret| secret.expose().to_owned())
+            .collect();
+        values.sort();
+        assert_eq!(
+            values.len(),
+            want,
+            "calls {calls}: bounded once quiescent: {values:?}"
+        );
+        if calls == 16 {
+            let mut expected: Vec<String> = (1..=16_u32).map(|n| format!("tok-{n}")).collect();
+            expected.sort();
+            assert_eq!(values, expected, "exactly sixteen keeps every value");
+        }
+    }
 }

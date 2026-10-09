@@ -115,7 +115,11 @@ impl UsedState {
         }
     }
 
-    /// Forgets one running call's `values`.
+    /// Forgets one running call's `values`. When no call remains in flight,
+    /// bounds the history to the last `USED_BOUND` distinct values, keeping
+    /// this returning call's own: `http.rs` reads `credentials()` right
+    /// after `sign` returns, and a value dropped here would miss redaction
+    /// (`docs/errors.md`, "The shape").
     fn finish(&mut self, values: &[Secret]) {
         for value in values {
             if let Some(held) = self
@@ -126,6 +130,25 @@ impl UsedState {
                 self.active.remove(held);
             }
         }
+        if !self.active.is_empty() || self.values.len() <= USED_BOUND {
+            return;
+        }
+        let mut kept = Vec::new();
+        for known in self.values.iter().rev() {
+            if values.iter().any(|value| value.expose() == known.expose()) {
+                kept.push(known.clone());
+            }
+        }
+        for known in self.values.iter().rev() {
+            if kept.len() >= USED_BOUND {
+                break;
+            }
+            if !kept.iter().any(|kept| kept.expose() == known.expose()) {
+                kept.push(known.clone());
+            }
+        }
+        kept.reverse();
+        self.values = kept;
     }
 }
 
