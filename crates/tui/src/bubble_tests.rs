@@ -77,10 +77,11 @@ fn bubble_at_narrow_widths() {
     assert!(bubbled("hi", 0).0.is_empty());
     assert!(bubbled("", 80).0.is_empty());
     assert!(bubbled("   ", 80).0.is_empty());
-    // Below four columns the text draws alone, padded to the width.
-    assert_eq!(bubbled("hi", 1).0, ["h", "i"]);
-    assert_eq!(bubbled("hi", 2).0, ["hi"]);
-    assert_eq!(bubbled("hi", 3).0, ["hi "]);
+    // Below four columns the text draws alone between its edges, padded
+    // to the width, with no stripe.
+    assert_eq!(bubbled("hi", 1).0, ["▄", "h", "i", "▀"]);
+    assert_eq!(bubbled("hi", 2).0, ["▄▄", "hi", "▀▀"]);
+    assert_eq!(bubbled("hi", 3).0, ["▄▄▄", "hi ", "▀▀▀"]);
     // From four columns the 4-column bubble draws, at 5 and 6 too.
     for columns in [4, 5, 6] {
         assert_eq!(
@@ -107,8 +108,8 @@ fn wide_glyphs_at_narrow_widths() {
         }
     }
     assert_eq!(bubbled("界", 4).0, ["▄▄▄▄", " 界 ", "▀▀▀▀"]);
-    assert_eq!(bubbled("界", 3).0, ["界 "]);
-    assert_eq!(bubbled("界", 1).0, [" "]);
+    assert_eq!(bubbled("界", 3).0, ["▄▄▄", "界 ", "▀▀▀"]);
+    assert_eq!(bubbled("界", 1).0, ["▄", " ", "▀"]);
 }
 
 #[test]

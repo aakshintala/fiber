@@ -88,20 +88,28 @@ pub(crate) fn rows(text: &str, columns: u16, out: &mut Rows) {
     );
 }
 
-/// The prompt below four columns: no pads and no stripe, each row wrapped
-/// at `columns` and padded with tinted blanks to it. A glyph wider than
-/// the columns is clipped to one tinted blank, so no row is wider and no
-/// glyph splits.
+/// The prompt below four columns: its edges with no pads and no stripe,
+/// each text row wrapped at `columns` and padded with tinted blanks to
+/// it. A glyph wider than the columns is clipped to one tinted blank, so
+/// no row is wider and no glyph splits.
 fn narrow(text: &str, columns: u16, out: &mut Rows) {
+    let max = usize::from(columns);
+    out.push_text(
+        (
+            surface::edge_row(max, Role::Prompt, true).right_aligned(),
+            None,
+        ),
+        RowText {
+            decoration: true,
+            ..RowText::plain()
+        },
+    );
     let tint = Style::default().bg(Role::Prompt.color());
-    for (row, join) in wrap_joined(text, usize::from(columns)) {
-        let row = if width(&row) > usize::from(columns) {
+    for (row, join) in wrap_joined(text, max) {
+        let row = if width(&row) > max {
             " ".to_owned()
         } else {
-            format!(
-                "{row}{}",
-                " ".repeat(usize::from(columns).saturating_sub(width(&row)))
-            )
+            format!("{row}{}", " ".repeat(max.saturating_sub(width(&row))))
         };
         out.push_text(
             (Line::styled(row, tint).right_aligned(), None),
@@ -111,6 +119,16 @@ fn narrow(text: &str, columns: u16, out: &mut Rows) {
             },
         );
     }
+    out.push_text(
+        (
+            surface::edge_row(max, Role::Prompt, false).right_aligned(),
+            None,
+        ),
+        RowText {
+            decoration: true,
+            ..RowText::plain()
+        },
+    );
 }
 
 #[cfg(test)]
