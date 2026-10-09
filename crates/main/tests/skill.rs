@@ -108,6 +108,73 @@ fn skill_kinds() -> Vec<&'static str> {
     kinds
 }
 
+/// The event kinds of a turn whose first reply calls one skill that the
+/// credential deny refuses and whose second is `Hello.`: the denied call
+/// never starts, and its denial is decided before completion.
+fn denied_skill_kinds() -> Vec<&'static str> {
+    vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "permission_resolved",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]
+}
+
+/// The event kinds of a run whose model loads a skill, reads its file,
+/// writes it, loads it again, then answers `Hello.`: four fast-path
+/// calls, each in its own step, with no `permission_` line.
+fn edit_kinds() -> Vec<&'static str> {
+    let mut kinds = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    for _ in 0..4 {
+        kinds.extend([
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+        ]);
+    }
+    kinds.extend([
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
+    kinds
+}
+
 /// The one line of `kind`.
 fn line<'a>(lines: &'a [Value], kind: &str) -> &'a Value {
     let mut found = lines.iter().filter(|line| line["kind"] == kind);
@@ -171,6 +238,7 @@ fn refused(setup: &Setup, name: &str) -> Value {
             hello(),
         ],
     );
+    assert_eq!(kinds(&lines), skill_kinds());
     line(&lines, "tool_call_completed").clone()
 }
 
@@ -221,6 +289,7 @@ fn a_name_not_in_the_listing_fails_invalid_arguments() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
         .collect();
+    assert_eq!(kinds(&lines), skill_kinds());
     let completed = line(&lines, "tool_call_completed");
     assert_eq!(completed["payload"]["status"], "failed");
     assert_eq!(completed["payload"]["error"]["code"], "invalid_arguments");
@@ -269,6 +338,7 @@ fn an_edit_between_two_loads_is_seen_by_the_second() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
         .collect();
+    assert_eq!(kinds(&lines), edit_kinds());
 
     let completed: Vec<_> = lines
         .iter()
@@ -284,8 +354,6 @@ fn an_edit_between_two_loads_is_seen_by_the_second() {
         "{:?}",
         kinds(&lines)
     );
-    assert_eq!(completed[0]["payload"]["status"], "completed");
-    assert_eq!(completed[3]["payload"]["status"], "completed");
     let first = completed[0]["payload"]["content"][0]["text"]
         .as_str()
         .unwrap();
@@ -312,10 +380,9 @@ fn tool_names(body: &[u8]) -> Vec<String> {
 #[test]
 fn adding_a_skill_leaves_the_tool_set_unchanged() {
     let plain = Setup::new();
-    let (plain_lines, plain_server) = ask(&plain, "hi", vec![hello()]);
+    let (_, plain_server) = ask(&plain, "hi", vec![hello()]);
     let plain_tools = tool_names(&plain_server.requests()[0].body);
     assert!(plain_tools.contains(&"skill".to_owned()));
-    let _ = plain_lines;
 
     let setup = Setup::new();
     install_skill(
@@ -358,7 +425,7 @@ fn a_skill_linked_into_credentials_is_denied() {
             hello(),
         ],
     );
-
+    assert_eq!(kinds(&lines), denied_skill_kinds());
     let completed = line(&lines, "tool_call_completed");
     assert_eq!(completed["payload"]["status"], "denied");
     assert!(

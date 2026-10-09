@@ -115,6 +115,7 @@ impl Tool for Skill {
             return Ok(no_effect());
         };
         let Ok((target, _)) = self.resolve(&name) else {
+            self.judged().remove(&name);
             return Ok(no_effect());
         };
         self.judged().insert(name, target.clone());

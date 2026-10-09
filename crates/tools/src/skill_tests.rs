@@ -102,9 +102,7 @@ fn text_of(output: &contract::tool::Output) -> String {
 
 #[test]
 fn the_definition_names_skill_with_its_schema() {
-    let held = TempDir::new("fiber-skill-definition");
     let skill = tool(Fake::mapping(BTreeMap::new()));
-    let _ = held;
     assert_eq!(
         serde_json::to_value(skill.definition()).unwrap(),
         json!({
@@ -244,6 +242,28 @@ fn a_link_repointed_between_effects_and_run_fails_path_changed() {
     effects_of(&skill, &arguments);
     std::fs::remove_file(root.join("skills/tdd")).unwrap();
     std::os::unix::fs::symlink(root.join("b/tdd"), root.join("skills/tdd")).unwrap();
+    let output = run_of(&skill, &arguments);
+    assert_eq!(code(&output), Some(ErrorCode::PathChanged));
+    assert!(!text_of(&output).contains("must never be read"));
+    assert_eq!(output.control, None);
+}
+
+#[test]
+fn a_failed_resolution_clears_the_judged_target() {
+    let held = TempDir::new("fiber-skill-clear");
+    let root = held.path().canonicalize().unwrap();
+    let path = write_skill(&root.join("tdd"), "Secret body that must never be read.\n");
+    let skill = tool(Fake::mapping(BTreeMap::from([(
+        "tdd".into(),
+        path.clone(),
+    )])));
+    let arguments = name("tdd");
+    effects_of(&skill, &arguments);
+    std::fs::remove_file(&path).unwrap();
+    let declared = effects_of(&skill, &arguments);
+    assert!(declared.declared.effects.is_empty());
+    assert_eq!(declared.declared.paths, None);
+    write_skill(&root.join("tdd"), "Secret body that must never be read.\n");
     let output = run_of(&skill, &arguments);
     assert_eq!(code(&output), Some(ErrorCode::PathChanged));
     assert!(!text_of(&output).contains("must never be read"));
