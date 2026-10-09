@@ -2627,10 +2627,20 @@ impl Jobs for WritableJobs {
             // deadline is computed and the waker subscribed before any
             // advance.
             let _sent = entered.send(());
-            while self.clock.now() < until {
-                // Bounded in real time: a hang-guard expiry fails the
-                // test with another error instead of the timeout.
-                if rx.recv_timeout(Duration::from_secs(10)).is_err() {
+            loop {
+                // The writer's own clock check: past it before parking.
+                if self.clock.now() >= until {
+                    break;
+                }
+                let mut expired = false;
+                self.clock.wait_until(None, &mut |_| {
+                    // Bounded in real time: a hang-guard expiry fails
+                    // the test with another error instead of the timeout.
+                    if rx.recv_timeout(Duration::from_secs(10)).is_err() {
+                        expired = true;
+                    }
+                });
+                if expired {
                     return Err(contract::jobs::WriteError::Io(std::io::Error::other(
                         "hang guard expired without the clock moving",
                     )));
@@ -2833,11 +2843,15 @@ fn job_stop_is_answered_after_a_stuck_job_input_times_out() {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sub", "full");
             send(&client, &job_input_line("c_in", &job_id, "x"));
-            // The reader is stuck in the write: move the session clock
-            // past the 1 s wait with no wall-clock sleep.
+            // The reader is stuck in the write: parked inside the clock
+            // wait, past its own check, before the clock moves.
             parked
                 .recv_timeout(DEADLINE)
                 .expect("the write parked in the terminal");
+            assert!(
+                clock.await_parked_unbounded(DEADLINE),
+                "the write did not park on the session clock"
+            );
             clock.advance(Duration::from_secs(2));
             let rejected = response(&client, "c_in");
             assert_eq!(

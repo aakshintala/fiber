@@ -23,23 +23,13 @@ fn open_tty(app: &mut App, job: &str) {
 
 /// The `job_input` lines an effect sends.
 fn job_inputs(effect: Effect) -> Vec<Value> {
-    match effect {
-        Effect::Send(lines) => commands(lines)
-            .into_iter()
-            .filter(|line| line["command"] == "job_input")
-            .collect(),
-        Effect::None
-        | Effect::Quit
-        | Effect::ListFiles
-        | Effect::FindPause { .. }
-        | Effect::Search { .. }
-        | Effect::Editor { .. }
-        | Effect::Exit(_)
-        | Effect::Copy(_)
-        | Effect::OpenLink(_)
-        | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => Vec::new(),
-    }
+    let Effect::Send(lines) = effect else {
+        return Vec::new();
+    };
+    commands(lines)
+        .into_iter()
+        .filter(|line| line["command"] == "job_input")
+        .collect()
 }
 
 #[test]

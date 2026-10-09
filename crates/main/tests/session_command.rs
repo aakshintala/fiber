@@ -2450,22 +2450,42 @@ fn job_input_types_into_a_tty_job_and_its_output_arrives() {
             "{{\"id\":\"c_in\",\"command\":\"job_input\",\"args\":{{\"job_id\":\"{job_id}\",\"text\":\"hi\\r\"}}}}"
         ),
     );
-    let accepted = answer(&client, "c_in");
-    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
-    let echo = until(&client, "the typed output", |line| {
-        line["kind"] == "job_delta"
-            && line["payload"]["text"]
-                .as_str()
-                .is_some_and(|text| text.contains("hi"))
-    });
-    assert_eq!(
-        echo.last().unwrap()["payload"]["job_id"],
-        job_id,
-        "the output is the typed job's"
+    // One wait collects the acknowledgement, the typed echo and the
+    // prompt's turn end together, in either order: each can arrive first,
+    // so no earlier observation is discarded.
+    let mut accepted = false;
+    let mut echoed = false;
+    let mut ended = false;
+    let lines = until(
+        &client,
+        "the input's acknowledgement, echo and turn end",
+        |line| {
+            if line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_in" {
+                accepted = true;
+            }
+            if line["kind"] == "job_delta"
+                && line["payload"]["job_id"] == job_id.as_str()
+                && line["payload"]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("hi"))
+            {
+                echoed = true;
+            }
+            if line["kind"] == "turn_completed" {
+                ended = true;
+            }
+            accepted && echoed && ended
+        },
     );
-    let _done = until(&client, "the prompt's turn_completed", |line| {
-        line["kind"] == "turn_completed"
-    });
+    let accepted = lines
+        .iter()
+        .find(|line| line["payload"].get("command_id") == Some(&json!("c_in")))
+        .expect("the input was accepted");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    assert!(
+        lines.iter().any(|line| line["kind"] == "turn_completed"),
+        "the prompt's turn ended"
+    );
     send_close_now(&client);
     let _tail = until_close(&client);
     drop(client);

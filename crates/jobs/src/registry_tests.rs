@@ -821,7 +821,8 @@ fn seam_writing(
 }
 
 /// Waits for `cancel` on `clock`, as a terminal whose queue stays full
-/// does: woken whenever the clock moves. Every caller moves the clock, so
+/// does: parked inside the clock's wait, past the writer's own clock
+/// check, woken whenever the clock moves. Every caller moves the clock, so
 /// the wait always ends. True when the cancel fired: a hang-guard expiry
 /// reports false, so the write fails instead of resolving to the timeout.
 fn wait_for_cancel(
@@ -837,13 +838,22 @@ fn wait_for_cancel(
     let (tx, rx) = mpsc::channel();
     let wake: Arc<dyn contract::clock::Wake> = Arc::new(Nudge(tx));
     clock.subscribe(Arc::downgrade(&wake));
-    while !cancel.is_cancelled() {
-        // Bounded in real time: every path below moves the clock first.
-        if rx.recv_timeout(Duration::from_secs(10)).is_err() {
+    loop {
+        // The writer's own clock check: past it before parking.
+        if cancel.is_cancelled() {
+            return true;
+        }
+        let mut expired = false;
+        clock.wait_until(None, &mut |_| {
+            // Bounded in real time: every path below moves the clock first.
+            if rx.recv_timeout(Duration::from_secs(10)).is_err() {
+                expired = true;
+            }
+        });
+        if expired {
             return false;
         }
     }
-    true
 }
 
 fn open_stuck(registry: &Arc<Registry>) -> (String, contract::jobs::Opened, mpsc::Receiver<()>) {
@@ -877,8 +887,18 @@ fn seam_write_times_out_once_the_deadline_passes_and_not_before() {
     entered
         .recv_timeout(DEADLINE)
         .expect("the write reached the terminal");
-    // Just before the deadline the write is still parked.
-    clock.advance(Duration::from_millis(999));
+    // Parked inside the clock wait, past the writer's own check.
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "the write did not park on the clock"
+    );
+    // The writer processes the pre-deadline advance and parks again
+    // before the test asserts it is still waiting.
+    let mark = clock.advance_marked(Duration::from_millis(999));
+    assert!(
+        clock.await_parked_since(&mark, None, DEADLINE),
+        "the write did not park again after the pre-deadline advance"
+    );
     assert!(
         rx.try_recv().is_err(),
         "the write returned before its deadline"
@@ -932,6 +952,12 @@ fn seam_write_behind_another_writer_still_times_out_at_the_deadline() {
     // The other writer releases, long after, on the wall clock: the
     // deadline on the session clock still bounds the write.
     drop(guard);
+    // Parked inside the clock wait, past the writer's own check, before
+    // the clock moves past the deadline.
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "the write did not park on the clock"
+    );
     clock.advance(Duration::from_millis(1001));
     let err = rx
         .recv_timeout(DEADLINE)
