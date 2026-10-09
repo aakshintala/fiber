@@ -47,13 +47,19 @@ fn cursor_position(bytes: &[u8]) -> Option<usize> {
 /// Whether `needle` matches `output` from its start. Each space in
 /// `needle` matches a space or one cursor-position sequence: a frame
 /// skips the cells it leaves unchanged, a blank cell between two words
-/// included, and moves the cursor past them.
+/// included, and moves the cursor past them. Any other byte may follow
+/// one cursor-position sequence, which a frame can emit inside a word.
 fn matches_at(mut output: &[u8], needle: &[u8]) -> bool {
     for &byte in needle {
         let skip = if byte == b' ' && output.first() != Some(&b' ') {
             cursor_position(output)
         } else {
-            (output.first() == Some(&byte)).then_some(1)
+            match output.first() {
+                Some(&first) if first == byte => Some(1),
+                _ => cursor_position(output)
+                    .filter(|&moved| output.get(moved) == Some(&byte))
+                    .map(|moved| moved + 1),
+            }
         };
         match skip.and_then(|skip| output.get(skip..)) {
             Some(rest) => output = rest,

@@ -4,8 +4,15 @@ use super::holds;
 fn a_needle_without_a_space_matches_one_run_of_bytes() {
     assert!(holds(b"ab>cd", b">"));
     assert!(holds(b"turn", b"turn"));
-    assert!(!holds(b"tu\x1b[1;1Hrn", b"turn"));
     assert!(!holds(b"tur", b"turn"));
+}
+
+#[test]
+fn a_cursor_move_inside_a_word_is_bridged() {
+    assert!(holds(b"q\x1b[3;9Huokkas", b"quokkas"));
+    assert!(holds(b"tu\x1b[1;1Hrn", b"turn"));
+    assert!(!holds(b"tu\x1b[1;1Hxn", b"turn"));
+    assert!(!holds(b"tu\x1b[1;1H", b"turn"));
 }
 
 #[test]
@@ -32,7 +39,6 @@ fn a_space_matches_nothing_else() {
     for output in [
         &b"turn0"[..],
         b"turn  0",
-        b"turn\x1b[10;9H\x1b[10;9H0",
         b"turn\x1b[10;9H 0",
         b"turn\x1b[10H0",
         b"turn\x1b[;9H0",
