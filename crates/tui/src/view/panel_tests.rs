@@ -399,28 +399,27 @@ fn full_session(app: &mut App) {
 
 #[test]
 fn session_card_full() {
+    use crate::app::panel::Spot;
+    use crate::mouse::TargetId;
     let mut app = attached(160, 40);
     full_session(&mut app);
     let (buf, targets) = draw_targets(&app);
     insta::assert_snapshot!("session_card_full", super::super::text(&buf));
-    let ids: Vec<crate::mouse::TargetId> = targets.iter().map(|target| target.id).collect();
-    assert!(
-        ids.iter()
-            .filter(|id| **id == crate::mouse::TargetId::Panel(crate::app::panel::Spot::Context))
-            .count()
-            >= 3
-    );
+    let ids: Vec<TargetId> = targets.iter().map(|target| target.id).collect();
     assert_eq!(
-        ids.iter()
-            .filter(|id| **id == crate::mouse::TargetId::Panel(crate::app::panel::Spot::Usage))
-            .count(),
-        4
-    );
-    assert_eq!(
-        ids.last(),
-        Some(&crate::mouse::TargetId::Panel(
-            crate::app::panel::Spot::Tools
-        ))
+        ids,
+        vec![
+            TargetId::Panel(Spot::Context),
+            TargetId::Panel(Spot::Context),
+            TargetId::Panel(Spot::Context),
+            TargetId::Panel(Spot::Context),
+            TargetId::Panel(Spot::Context),
+            TargetId::Panel(Spot::Usage),
+            TargetId::Panel(Spot::Usage),
+            TargetId::Panel(Spot::Usage),
+            TargetId::Panel(Spot::Usage),
+            TargetId::Panel(Spot::Tools),
+        ]
     );
 }
 
