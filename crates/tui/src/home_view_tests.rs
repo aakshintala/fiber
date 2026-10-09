@@ -75,6 +75,28 @@ fn home_only(app: &App, area: Rect, buf: &mut Buffer) -> Vec<crate::mouse::Targe
     super::render(app, &screen, area, buf, None)
 }
 
+/// Chooses a model for this session only: with no model on the chip,
+/// Enter opens the picker instead of starting, so the blocker tests
+/// pick through it, keeping the `[no model]` chips their snapshots show.
+fn choose_session_model(app: &mut App) {
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::CtrlL, now), crate::app::Effect::None);
+    app.on_models(Ok(crate::catalogue::Catalogue {
+        models: vec![crate::catalogue::ModelEntry {
+            reference: "test/model".to_owned(),
+            provider: "test".to_owned(),
+            id: "model".to_owned(),
+            levels: Vec::new(),
+            default_level: None,
+            configured: None,
+            roles: Vec::new(),
+        }],
+        notices: Vec::new(),
+    }));
+    assert_eq!(app.on_key(Key::Char('s'), now), crate::app::Effect::None);
+    assert!(!app.model_picker_open());
+}
+
 /// Types `text` into the draft, `\n` as Shift+Enter.
 fn type_draft(app: &mut App, text: &str) {
     let now = fakes::clock::FakeClock::new().now();
@@ -470,6 +492,7 @@ fn home_with_blocker_lines() {
     // width.
     let mut app = home(80, 24);
     app.on_line(hello());
+    choose_session_model(&mut app);
     type_draft(&mut app, "hi");
     let now = fakes::clock::FakeClock::new().now();
     let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
@@ -506,6 +529,7 @@ fn blockers_count_against_the_four_row_logo() {
     // box.
     let mut app = home(80, 17);
     app.on_line(hello());
+    choose_session_model(&mut app);
     type_draft(&mut app, "hi");
     let now = fakes::clock::FakeClock::new().now();
     let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {

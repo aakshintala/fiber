@@ -19,7 +19,7 @@ fn home() -> App {
         git: false,
         hover: true,
         version: "0.0.1".to_owned(),
-        model: None,
+        model: Some("test/model".to_owned()),
         thinking: None,
         logo_glyph: "⌇".to_owned(),
         keys: crate::KeysSetup::default(),
@@ -1790,7 +1790,7 @@ fn the_chip_defaults_to_the_launch_directory() {
         chips(&app),
         [
             "[w]",
-            "[no model]",
+            "[test/model]",
             "[thinking: default]",
             "enter starts a session",
         ]
@@ -1945,7 +1945,7 @@ fn git_home() -> App {
         git: true,
         hover: true,
         version: "0.0.1".to_owned(),
-        model: None,
+        model: Some("test/model".to_owned()),
         thinking: None,
         logo_glyph: "⌇".to_owned(),
         keys: crate::KeysSetup::default(),
@@ -3448,7 +3448,7 @@ fn the_switch_is_hidden_outside_git() {
         chips(&app),
         [
             "[w]",
-            "[no model]",
+            "[test/model]",
             "[thinking: default]",
             "enter starts a session",
         ]
@@ -3473,7 +3473,7 @@ fn a_chosen_row_workspace_takes_its_git_flag() {
         [
             "[w]",
             "[ ] new worktree",
-            "[no model]",
+            "[test/model]",
             "[thinking: default]",
             "enter starts a session",
         ]

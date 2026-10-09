@@ -185,15 +185,17 @@ impl App {
         Effect::None
     }
 
-    /// The context a stroke arrives in, first match wins, mirroring
-    /// `route_key`'s handler order: an overlay, the search bar, the
-    /// focused conversation, a completion panel, a steering selection,
-    /// else the input box. The notice overlay is no context: it takes
-    /// only Esc, which is `close_or_interrupt`'s key everywhere.
+    /// The context a stroke arrives in, front to back: the quit question,
+    /// the model picker, an overlay, the search bar, the focused
+    /// conversation, a completion panel, a steering selection, else the
+    /// input box. The notice overlay is no context: it takes only Esc,
+    /// which is `close_or_interrupt`'s key everywhere.
     fn key_context(&self) -> Context {
-        if self.quit_open()
-            || self.model_picker_open()
-            || self.config_view_open()
+        if self.quit_open() {
+            Context::Overlay
+        } else if self.model_picker_open() {
+            Context::Picker
+        } else if self.config_view_open()
             || self.session_view_open()
             || self.home_modal()
             || self.keymap_top().is_some()

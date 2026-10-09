@@ -288,11 +288,16 @@ pub trait Configure: Send + Sync {
 
     // The `tui.theme` row.
 
-    /// The theme files in Fiber home's `themes/`, by name, sorted.
-    fn themes(&self) -> Vec<String>;
+    /// The theme files `tui.theme` can name for `workspace`'s project, by
+    /// name, sorted: Fiber home's `themes/` and each enabled installed
+    /// extension's. A workspace whose configuration fails to load lists
+    /// Fiber home's themes only.
+    fn themes(&self, workspace: &Path) -> Vec<String>;
 
-    /// The theme `name` gives `tui.theme`, built as at start.
-    fn theme(&self, name: &str) -> ThemeSetting;
+    /// The theme `name` gives `tui.theme` for `workspace`'s project, built
+    /// as at start. A workspace whose configuration fails to load reads
+    /// Fiber home only.
+    fn theme(&self, workspace: &Path, name: &str) -> ThemeSetting;
 
     // `/tools`.
 

@@ -13,6 +13,11 @@ const BUILT_INS: &[(&str, &str, Option<&str>)] = &[
     ("new", "Goes home with the cursor in the input box.", None),
     ("resume", "Opens home at the session list.", None),
     ("model", "Opens the model picker.", None),
+    (
+        "thinking",
+        "Sets the thinking level, or opens the model picker on it.",
+        Some("[<level>]"),
+    ),
     ("tools", "Opens the tools view.", None),
     ("context", "Opens the context breakdown.", None),
     ("usage", "Opens the usage view.", None),

@@ -58,7 +58,7 @@ fn home() -> App {
         git: false,
         hover: true,
         version: "0.0.1".to_owned(),
-        model: None,
+        model: Some("test/model".to_owned()),
         thinking: None,
         logo_glyph: "⌇".to_owned(),
         keys: crate::KeysSetup::default(),

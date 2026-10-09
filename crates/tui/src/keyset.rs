@@ -9,7 +9,7 @@ use crate::bindings::BINDINGS;
 use crate::keys::{Edit, Key, default_event};
 use crate::stroke::Stroke;
 
-/// When a stroke arrives: exactly one of five contexts, mirroring
+/// When a stroke arrives: exactly one of six contexts, mirroring
 /// `route_key`'s handler order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Context {
@@ -23,6 +23,9 @@ pub(crate) enum Context {
     Search,
     /// An overlay has the keyboard.
     Overlay,
+    /// The model picker is open: only its own keys and the global
+    /// actions act.
+    Picker,
 }
 
 /// The contexts an action acts in, as a set.
@@ -40,9 +43,11 @@ impl Contexts {
     pub(crate) const SEARCH: Contexts = Contexts(0b01000);
     /// An overlay open.
     pub(crate) const OVERLAY: Contexts = Contexts(0b10000);
+    /// The model picker open.
+    pub(crate) const PICKER: Contexts = Contexts(0b100000);
     /// Every context. A literal, not a combination of the others, so no
     /// operator is left for a mutation to swap.
-    pub(crate) const ALL: Contexts = Contexts(0b11111);
+    pub(crate) const ALL: Contexts = Contexts(0b111111);
     /// The input box and steering.
     pub(crate) const INPUT_STEERING: Contexts = Contexts(0b00011);
     /// The input box, steering and the conversation.
@@ -56,6 +61,7 @@ impl Contexts {
             Context::Conversation => Contexts::CONVERSATION.0,
             Context::Search => Contexts::SEARCH.0,
             Context::Overlay => Contexts::OVERLAY.0,
+            Context::Picker => Contexts::PICKER.0,
         };
         self.0 & bit != 0
     }
