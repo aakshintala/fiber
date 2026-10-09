@@ -300,19 +300,15 @@ fn picker(p: Picker, w: usize) -> Vec<super::Row> {
             sp("█", dim()),
         ]));
         for (i, d) in complete_dirs(TYPED, ALL_DIRS).iter().enumerate() {
-            let rest = d.strip_prefix("~/work/").unwrap_or(d);
+            let rest = d.rsplit('/').next().unwrap_or(d);
             if i == 0 {
                 inner.push(super::Row {
-                    spans: vec![sp("▌ ", fg(BLUE)), sp("~/work/", dim()), sp(rest, bold())],
+                    spans: vec![sp("▌ ", fg(BLUE)), sp(rest, bold())],
                     bg: Some(lift(SEL)),
                     ..Default::default()
                 });
             } else {
-                inner.push(row(vec![
-                    sp("  ", Style::new()),
-                    sp("~/work/", dim()),
-                    sp(rest.to_string(), Style::new()),
-                ]));
+                inner.push(row(vec![sp("  ", Style::new()), sp(rest.to_string(), Style::new())]));
             }
         }
         inner.push(row(vec![sp("  ── recents ──", dim())]));
