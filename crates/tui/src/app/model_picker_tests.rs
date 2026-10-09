@@ -1633,3 +1633,228 @@ fn enter_on_home_with_no_model_opens_the_picker_and_keeps_the_draft() {
     assert!(!app.model_picker_open());
     started(effect);
 }
+
+/// Runs the draft as a built-in command.
+fn run_draft(app: &mut App, text: &str) -> Effect {
+    type_draft(app, text);
+    let now = now();
+    app.on_key(Key::Enter, now)
+}
+
+/// An app attached to [`SESSION`] with the fold naming `model` at
+/// `thinking`, and the three-model catalogue read.
+fn thinking_app(model: &str, thinking: Option<&str>) -> (App, Arc<crate::configure_fake::Fake>) {
+    let (mut app, seam) = choosing_app();
+    app.on_line(preamble_line(model, thinking));
+    (app, seam)
+}
+
+#[test]
+fn thinking_high_acts_as_the_chip() {
+    let (mut app, seam) = thinking_app("acme/m1", Some("high"));
+    let line = sent(run_draft(&mut app, "/thinking high"));
+    assert_eq!(line["command"], json!("model"));
+    assert_eq!(
+        line["args"],
+        json!({"model": "acme/m1", "thinking": "high"})
+    );
+    assert!(app.input().expand().is_empty());
+    // After acceptance only the level is written: `/thinking` never
+    // saves the model.
+    let id = line["id"].as_str().expect("an id").to_owned();
+    app.on_line(accepted(SESSION, &id));
+    assert_eq!(
+        seam.writes()
+            .iter()
+            .map(|(_, _, key, text)| (key.clone(), text.clone()))
+            .collect::<Vec<_>>(),
+        [("models.\"acme/m1\".thinking".to_owned(), "high".to_owned())]
+    );
+}
+
+#[test]
+fn an_undeclared_level_is_refused_with_the_supported_list() {
+    let (mut app, seam) = thinking_app("acme/m1", Some("high"));
+    assert_eq!(run_draft(&mut app, "/thinking max"), Effect::None);
+    assert_eq!(app.notice(), Some("acme/m1 takes low, high."));
+    assert!(app.model_picker.awaiting.is_empty());
+    assert!(seam.writes().is_empty());
+}
+
+#[test]
+fn a_model_without_levels_refuses_every_level() {
+    let (mut app, _) = thinking_app("acme/m2", None);
+    assert_eq!(run_draft(&mut app, "/thinking low"), Effect::None);
+    assert_eq!(app.notice(), Some("acme/m2 takes no thinking level."));
+    assert!(app.model_picker.awaiting.is_empty());
+}
+
+#[test]
+fn an_unknown_word_is_refused_with_the_seven_levels() {
+    let (mut app, _) = thinking_app("acme/m1", Some("high"));
+    assert_eq!(run_draft(&mut app, "/thinking turbo"), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some(
+            "Unknown thinking level \"turbo\"; the levels are off, minimal, low, medium, high, xhigh, max."
+        )
+    );
+    assert!(app.model_picker.awaiting.is_empty());
+}
+
+#[test]
+fn a_second_word_is_refused() {
+    let (mut app, _) = thinking_app("acme/m1", Some("high"));
+    assert_eq!(run_draft(&mut app, "/thinking high extra"), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some(
+            "Unknown thinking level \"extra\"; the levels are off, minimal, low, medium, high, xhigh, max."
+        )
+    );
+    assert!(app.model_picker.awaiting.is_empty());
+}
+
+#[test]
+fn with_no_entry_attached_the_session_decides() {
+    let (mut app, seam) = thinking_app("gone/x", None);
+    let line = sent(run_draft(&mut app, "/thinking high"));
+    assert_eq!(line["args"], json!({"model": "gone/x", "thinking": "high"}));
+    // The session's rejection is the refusal, writing nothing.
+    let id = line["id"].as_str().expect("an id").to_owned();
+    app.on_line(refused(SESSION, &id, "invalid_arguments", "no such model."));
+    assert_eq!(app.notice(), Some("no such model."));
+    assert!(seam.writes().is_empty());
+}
+
+#[test]
+fn with_no_entry_on_home_it_asks_for_a_read() {
+    let mut app = home();
+    app.home.as_mut().expect("home").launch.model = Some("gone/x".to_owned());
+    assert_eq!(run_draft(&mut app, "/thinking high"), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("The model list is not read yet; try again in a moment.")
+    );
+    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Cached));
+}
+
+#[test]
+fn with_no_model_it_says_to_choose_one() {
+    let (mut app, _) = choosing_app();
+    assert_eq!(run_draft(&mut app, "/thinking high"), Effect::None);
+    assert_eq!(app.notice(), Some("Choose a model first: Ctrl+L."));
+    assert!(app.model_picker.awaiting.is_empty());
+
+    let mut app = home();
+    assert_eq!(run_draft(&mut app, "/thinking high"), Effect::None);
+    assert_eq!(app.notice(), Some("Choose a model first: Ctrl+L."));
+}
+
+#[test]
+fn bare_thinking_opens_the_picker_on_the_current_models_chips() {
+    let (mut app, _) = thinking_app("acme/m1", Some("high"));
+    assert_eq!(run_draft(&mut app, "/thinking"), Effect::None);
+    assert!(app.model_picker_open());
+    assert!(app.input().expand().is_empty());
+    let open = app.model_picker.open.as_ref().expect("open");
+    assert_eq!(open.mode, crate::model_picker::Mode::Thinking);
+    // The selection sits on the current model's row, touched, at the
+    // current level.
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+    assert_eq!(chip(&app).as_deref(), Some("high"));
+    assert!(open.touched.first().copied().unwrap_or(false));
+    assert_eq!(
+        app.model_picker_frame(24).map(|frame| frame.footer),
+        Some(
+            "Enter set as default · s this session only · ↑↓ move · ←→ level · PageUp PageDown page · Tab scope · Ctrl+R refresh · Esc close"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn enter_there_writes_only_the_level() {
+    let (mut app, seam) = thinking_app("acme/m1", Some("high"));
+    assert_eq!(run_draft(&mut app, "/thinking"), Effect::None);
+    let line = sent(app.on_key(Key::Enter, now()));
+    let id = line["id"].as_str().expect("an id").to_owned();
+    app.on_line(accepted(SESSION, &id));
+    assert_eq!(
+        seam.writes()
+            .iter()
+            .map(|(_, _, key, text)| (key.clone(), text.clone()))
+            .collect::<Vec<_>>(),
+        [("models.\"acme/m1\".thinking".to_owned(), "high".to_owned())]
+    );
+}
+
+#[test]
+fn s_there_writes_nothing() {
+    let (mut app, seam) = thinking_app("acme/m1", Some("high"));
+    assert_eq!(run_draft(&mut app, "/thinking"), Effect::None);
+    let line = sent(app.on_key(Key::Char('s'), now()));
+    let id = line["id"].as_str().expect("an id").to_owned();
+    app.on_line(accepted(SESSION, &id));
+    assert!(seam.writes().is_empty());
+}
+
+#[test]
+fn choosing_another_row_there_is_an_ordinary_choice() {
+    let (mut app, seam) = thinking_app("acme/m1", Some("high"));
+    assert_eq!(run_draft(&mut app, "/thinking"), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m2"));
+    let line = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(line["args"], json!({"model": "acme/m2"}));
+    let id = line["id"].as_str().expect("an id").to_owned();
+    app.on_line(accepted(SESSION, &id));
+    assert!(
+        seam.writes()
+            .iter()
+            .any(|(_, _, key, text)| { key == "model" && text == "acme/m2" })
+    );
+}
+
+#[test]
+fn thinking_shows_the_current_row_outside_a_partial_scope() {
+    let mut app = scoped_home(&["acme/m2"]);
+    app.on_line(hello());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.on_line(preamble_line("acme/m1", Some("high")));
+    app.on_models(Ok(three()));
+    assert_eq!(run_draft(&mut app, "/thinking"), Effect::None);
+    // The scoped rows plus the current model's row: two rows, the
+    // current one selected.
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m2"));
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m2"));
+}
+
+#[test]
+fn thinking_shows_only_the_current_row_when_no_scoped_entry_is_installed() {
+    let mut app = scoped_home(&["gone/x"]);
+    app.on_line(hello());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.on_line(preamble_line("acme/m1", Some("high")));
+    app.on_models(Ok(three()));
+    assert_eq!(run_draft(&mut app, "/thinking"), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+}
+
+#[test]
+fn thinking_with_no_catalogue_entry_opens_as_choose() {
+    let (mut app, _) = thinking_app("gone/x", None);
+    assert_eq!(run_draft(&mut app, "/thinking"), Effect::None);
+    let open = app.model_picker.open.as_ref().expect("open");
+    assert_eq!(open.mode, crate::model_picker::Mode::Choose);
+
+    let mut app = home();
+    assert_eq!(run_draft(&mut app, "/thinking"), Effect::None);
+    let open = app.model_picker.open.as_ref().expect("open");
+    assert_eq!(open.mode, crate::model_picker::Mode::Choose);
+}

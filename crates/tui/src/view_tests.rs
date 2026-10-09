@@ -1074,12 +1074,15 @@ fn the_selected_completion_is_reversed_and_the_others_are_not() {
     }
     let (shown, buf) = wide(&mut app);
     let rows: Vec<&str> = shown.lines().collect();
-    assert!(rows[HEIGHT as usize - 6].starts_with("/home"), "{shown}");
+    // `/h` matches `/home`, `/handoff` and `/help` first, then
+    // `/thinking`: four rows above the input line.
+    assert!(rows[HEIGHT as usize - 7].starts_with("/home"), "{shown}");
     let reversed = |row: u16| {
         buf.cell((0, row))
             .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED))
     };
-    assert!(reversed(HEIGHT - 6), "{shown}");
+    assert!(reversed(HEIGHT - 7), "{shown}");
+    assert!(!reversed(HEIGHT - 6), "{shown}");
     assert!(!reversed(HEIGHT - 5), "{shown}");
     assert!(!reversed(HEIGHT - 4), "{shown}");
 }

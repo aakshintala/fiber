@@ -18,6 +18,9 @@ use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
 pub(crate) enum Mode {
     /// Choosing a model, and its thinking level.
     Choose,
+    /// Choosing a thinking level for the current model: its row shows
+    /// whatever the scope, and choosing it saves only the level.
+    Thinking,
 }
 
 /// One choice: the model and level under the cursor, whether the level
@@ -44,9 +47,8 @@ pub(crate) struct Choice {
 /// Nothing carries into the next open.
 #[derive(Debug)]
 pub(crate) struct Open {
-    /// What the picker was opened for. Choosing reads it; until then it
-    /// names the open.
-    #[allow(dead_code, reason = "Part 3's choosing reads the mode")]
+    /// What the picker was opened for: choosing reads it for the
+    /// current model's row.
     pub(crate) mode: Mode,
     /// The selected row's catalogue index.
     pub(crate) selected: usize,
@@ -172,7 +174,13 @@ impl ModelPicker {
                     // An open before the first catalogue answered has no
                     // model to keep: it lands on the on-screen model, else
                     // the first row.
-                    let (rows, _) = visible(&self.catalogue.models, &self.scoped, open.show_all);
+                    let (rows, _) = shown_in(
+                        &self.catalogue.models,
+                        &self.scoped,
+                        open.show_all,
+                        open.mode,
+                        open.target.as_ref(),
+                    );
                     on_screen
                         .and_then(|(model, _)| {
                             rows.iter().copied().find(|index| {
@@ -206,9 +214,18 @@ impl ModelPicker {
 
     /// Opens the picker fresh: the selection on the on-screen model, else
     /// the first row; each row's chip at its preselected level, untouched;
-    /// "show all" off. Each open asks `Stale`, keeping a wider `Every`.
+    /// "show all" off. A `/thinking` open touches the current model's
+    /// row, so Enter or `s` on it carries the chip's level. Each open asks
+    /// `Stale`, keeping a wider `Every`.
     pub(crate) fn open(&mut self, mode: Mode, on_screen: Option<(&str, Option<&str>)>) {
-        let (rows, _) = visible(&self.catalogue.models, &self.scoped, false);
+        let target = on_screen.map(|(model, level)| (model.to_owned(), level.map(str::to_owned)));
+        let (rows, _) = shown_in(
+            &self.catalogue.models,
+            &self.scoped,
+            false,
+            mode,
+            target.as_ref(),
+        );
         let selected = on_screen
             .and_then(|(model, _)| {
                 rows.iter().copied().find(|index| {
@@ -226,13 +243,27 @@ impl ModelPicker {
             .iter()
             .map(|entry| preselect(entry, on_screen))
             .collect();
+        let mut touched = vec![false; self.catalogue.models.len()];
+        // The current model's row starts touched: choosing it is a level
+        // choice, saving only the level.
+        if mode == Mode::Thinking
+            && let Some((model, _)) = &target
+            && let Some(at) = self
+                .catalogue
+                .models
+                .iter()
+                .position(|entry| &entry.reference == model)
+            && let Some(touched) = touched.get_mut(at)
+        {
+            *touched = true;
+        }
         self.open = Some(Open {
             mode,
             selected,
             chips,
-            touched: vec![false; self.catalogue.models.len()],
+            touched,
             show_all: false,
-            target: on_screen.map(|(model, level)| (model.to_owned(), level.map(str::to_owned))),
+            target,
         });
         self.want = Some(match self.want {
             Some(Refresh::Every) => Refresh::Every,
@@ -256,7 +287,13 @@ impl ModelPicker {
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        let (rows, _) = visible(&self.catalogue.models, &self.scoped, open.show_all);
+        let (rows, _) = shown_in(
+            &self.catalogue.models,
+            &self.scoped,
+            open.show_all,
+            open.mode,
+            open.target.as_ref(),
+        );
         if rows.is_empty() {
             return;
         }
@@ -306,7 +343,13 @@ impl ModelPicker {
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        let (rows, _) = visible(&self.catalogue.models, &self.scoped, open.show_all);
+        let (rows, _) = shown_in(
+            &self.catalogue.models,
+            &self.scoped,
+            open.show_all,
+            open.mode,
+            open.target.as_ref(),
+        );
         if rows.is_empty() {
             return;
         }
@@ -333,7 +376,13 @@ impl ModelPicker {
             return;
         }
         open.show_all = !open.show_all;
-        let (rows, _) = visible(&self.catalogue.models, &self.scoped, open.show_all);
+        let (rows, _) = shown_in(
+            &self.catalogue.models,
+            &self.scoped,
+            open.show_all,
+            open.mode,
+            open.target.as_ref(),
+        );
         if !rows.is_empty()
             && !rows.contains(&open.selected)
             && let Some(first) = rows.first()
@@ -364,11 +413,13 @@ impl ModelPicker {
     }
 
     /// The open picker's choice at the selection: the row's reference at
-    /// its chip, `level_chosen` exactly when the row was touched. `None`
-    /// while closed, or with no scoped row to choose.
+    /// its chip, `level_chosen` exactly when the row was touched. A
+    /// `/thinking` choice of the current model's own row saves only the
+    /// level; any other row is an ordinary choice. `None` while closed,
+    /// or with no scoped row to choose.
     pub(crate) fn choice(&self, session_only: bool) -> Option<Choice> {
         let open = self.open.as_ref()?;
-        let (rows, _) = visible(&self.catalogue.models, &self.scoped, open.show_all);
+        let (rows, _) = self.shown_rows(open);
         if rows.is_empty() {
             return None;
         }
@@ -380,13 +431,20 @@ impl ModelPicker {
             .flatten()
             .and_then(|chip| entry.levels.get(chip).cloned());
         let level_chosen = open.touched.get(open.selected).copied().unwrap_or(false);
-        Some(Choice {
-            reference: entry.reference.clone(),
-            level,
-            level_chosen,
-            save_model: true,
-            session_only,
-        })
+        Some(choice_at(entry, open, level, level_chosen, session_only))
+    }
+
+    /// The rows the open picker shows, by catalogue index, and the scope
+    /// line: the scoped rows, with a `/thinking` open adding the current
+    /// model's row in catalogue order whatever the scope.
+    fn shown_rows(&self, open: &Open) -> (Vec<usize>, Option<String>) {
+        shown_in(
+            &self.catalogue.models,
+            &self.scoped,
+            open.show_all,
+            open.mode,
+            open.target.as_ref(),
+        )
     }
 
     /// Clicks `cell` of `row`: the refresh button refreshes every list,
@@ -424,14 +482,9 @@ impl ModelPicker {
                         .flatten()
                         .and_then(|chip| entry.levels.get(chip).cloned());
                     let level_chosen = open.touched.get(index).copied().unwrap_or(false);
-                    Some(Choice {
-                        reference: entry.reference.clone(),
-                        level,
-                        level_chosen,
-                        save_model: true,
-                        session_only: false,
-                    })
-                } else if let Some(level) = cell.checked_sub(chips_at)
+                    return Some(choice_at(entry, open, level, level_chosen, false));
+                }
+                if let Some(level) = cell.checked_sub(chips_at)
                     && level < levels
                 {
                     if let Some(chip) = open.chips.get_mut(index) {
@@ -440,16 +493,15 @@ impl ModelPicker {
                     if let Some(touched) = open.touched.get_mut(index) {
                         *touched = true;
                     }
-                    Some(Choice {
-                        reference: entry.reference.clone(),
-                        level: entry.levels.get(level).cloned(),
-                        level_chosen: true,
-                        save_model: true,
-                        session_only: false,
-                    })
-                } else {
-                    None
+                    return Some(choice_at(
+                        entry,
+                        open,
+                        entry.levels.get(level).cloned(),
+                        true,
+                        false,
+                    ));
                 }
+                None
             }
         }
     }
@@ -500,7 +552,13 @@ impl ModelPicker {
     /// `None` while the picker is closed.
     fn layout(&self) -> Option<(Vec<RowAt>, Option<String>)> {
         let open = self.open.as_ref()?;
-        let (rows, scope) = visible(&self.catalogue.models, &self.scoped, open.show_all);
+        let (rows, scope) = shown_in(
+            &self.catalogue.models,
+            &self.scoped,
+            open.show_all,
+            open.mode,
+            open.target.as_ref(),
+        );
         let mut layout = vec![RowAt::Buttons];
         let mut provider: Option<&str> = None;
         for index in rows {
@@ -638,6 +696,52 @@ pub(crate) fn start_args(choice: &Choice) -> (String, Option<String>) {
         .as_ref()
         .map(|level| format!("models.\"{}\".thinking={level}", choice.reference));
     (choice.reference.clone(), override_text)
+}
+
+/// A choice of `entry` at `level`: the reference byte for byte, with
+/// the `/thinking` current-row rule on `save_model`.
+fn choice_at(
+    entry: &ModelEntry,
+    open: &Open,
+    level: Option<String>,
+    level_chosen: bool,
+    session_only: bool,
+) -> Choice {
+    // The person asked about thinking: choosing the current model's own
+    // row saves only the level, never the model.
+    let save_model = match (&open.mode, &open.target) {
+        (Mode::Thinking, Some((model, _))) => *model != entry.reference,
+        _ => true,
+    };
+    Choice {
+        reference: entry.reference.clone(),
+        level,
+        level_chosen,
+        save_model,
+        session_only,
+    }
+}
+
+/// The rows an open picker shows, by catalogue index, and the scope
+/// line: the scoped rows, with a `/thinking` open adding the current
+/// model's row in catalogue order whatever the scope. With a scope
+/// matching none, only that row shows, under the scope line.
+pub(crate) fn shown_in(
+    models: &[ModelEntry],
+    scoped: &[String],
+    show_all: bool,
+    mode: Mode,
+    target: Option<&(String, Option<String>)>,
+) -> (Vec<usize>, Option<String>) {
+    let (mut rows, line) = visible(models, scoped, show_all);
+    if mode == Mode::Thinking
+        && let Some((model, _)) = target
+        && let Some(at) = models.iter().position(|entry| &entry.reference == model)
+        && !rows.contains(&at)
+    {
+        rows.insert(rows.partition_point(|index| *index < at), at);
+    }
+    (rows, line)
 }
 
 /// The rows in scope, by catalogue index, and the scope line: with no

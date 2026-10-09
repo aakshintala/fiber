@@ -10,6 +10,9 @@ use crate::keys::{Edit, Key};
 use crate::model_picker::{Choice, Mode, command_args, saves};
 use crate::swapped::{Frame, Spot, about, rows_height};
 
+/// The thinking levels `/thinking` takes, in order.
+const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
 impl App {
     /// Folds a model-list read's answer: each catalogue notice shows once,
     /// and a read error shows once with the old catalogue kept.
@@ -246,7 +249,122 @@ impl App {
         self.model_picker.awaiting.remove(id);
     }
 
-    /// The open picker's frame at `height`: the header names the rebuild
+    /// Runs `/thinking`: bare, the picker on the current model's chips;
+    /// with a level, that level saved for the session's model, never the
+    /// global default. The draft is consumed either way.
+    pub(crate) fn thinking_command(&mut self, rest: &str) -> super::Effect {
+        self.draft.clear();
+        let mut words = rest.split_whitespace();
+        let Some(level) = words.next() else {
+            return self.open_thinking();
+        };
+        if !LEVELS.contains(&level) {
+            return self.refuse_level(level);
+        }
+        if let Some(extra) = words.next() {
+            return self.refuse_level(extra);
+        }
+        self.set_level(level)
+    }
+
+    /// Opens the picker on the current model's level chips, its row
+    /// touched: Enter saves the level, `s` applies it to this session
+    /// only. With no current model, or no catalogue entry for it, the
+    /// picker opens as an ordinary choose.
+    fn open_thinking(&mut self) -> super::Effect {
+        let current = self.thinking_model();
+        let listed = current.as_ref().is_some_and(|(model, _)| {
+            self.model_picker
+                .catalogue
+                .models
+                .iter()
+                .any(|entry| &entry.reference == model)
+        });
+        if listed {
+            self.open_model_picker(Mode::Thinking)
+        } else {
+            self.open_model_picker(Mode::Choose)
+        }
+    }
+
+    /// Sets `level` for the session's model, saving only the level, as
+    /// Enter on its chip does. Attached with no catalogue entry the
+    /// command goes out and the session's rejection is the refusal; on
+    /// home with no entry the read is asked for instead.
+    fn set_level(&mut self, level: &str) -> super::Effect {
+        let Some((model, _)) = self.thinking_model() else {
+            self.push_notice("Choose a model first: Ctrl+L.".to_owned());
+            return super::Effect::None;
+        };
+        let declared = self
+            .model_picker
+            .catalogue
+            .models
+            .iter()
+            .find(|entry| entry.reference == model)
+            .map(|entry| entry.levels.clone());
+        match declared {
+            Some(levels) if !levels.iter().any(|declared| declared == level) => {
+                if levels.is_empty() {
+                    self.push_notice(format!("{model} takes no thinking level."));
+                } else {
+                    self.push_notice(format!("{model} takes {}.", levels.join(", ")));
+                }
+                super::Effect::None
+            }
+            Some(_) => self.choose(Choice {
+                reference: model,
+                level: Some(level.to_owned()),
+                level_chosen: true,
+                save_model: false,
+                session_only: false,
+            }),
+            None if self.session().is_some() => self.choose(Choice {
+                reference: model,
+                level: Some(level.to_owned()),
+                level_chosen: true,
+                save_model: false,
+                session_only: false,
+            }),
+            None => {
+                self.push_notice(
+                    "The model list is not read yet; try again in a moment.".to_owned(),
+                );
+                let want = self.model_picker.want;
+                self.model_picker.want =
+                    Some(want.map_or(Refresh::Cached, |want| want.max(Refresh::Cached)));
+                super::Effect::None
+            }
+        }
+    }
+
+    /// The model `/thinking` acts on: the session's, or the home chips'.
+    fn thinking_model(&self) -> Option<(String, Option<String>)> {
+        if self.on_home() {
+            self.home.as_ref().and_then(|home| {
+                home.launch
+                    .model
+                    .clone()
+                    .map(|model| (model, home.launch.thinking.clone()))
+            })
+        } else {
+            self.panel_state.model().map(|model| {
+                (
+                    model.to_owned(),
+                    self.panel_state.thinking().map(str::to_owned),
+                )
+            })
+        }
+    }
+
+    /// Refuses an unknown thinking word with the seven levels.
+    fn refuse_level(&mut self, word: &str) -> super::Effect {
+        self.push_notice(format!(
+            "Unknown thinking level \"{word}\"; the levels are {}.",
+            LEVELS.join(", ")
+        ));
+        super::Effect::None
+    }
     /// size of the session on screen, if its last call is known. `None`
     /// while the picker is closed.
     pub(crate) fn model_picker_frame(&self, height: usize) -> Option<Frame> {

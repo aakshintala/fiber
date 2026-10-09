@@ -431,6 +431,7 @@ impl App {
                 self.draft.clear();
                 self.open_model_picker(crate::model_picker::Mode::Choose)
             }
+            "thinking" => self.thinking_command(&rest),
             "panel" => {
                 self.draft.clear();
                 self.toggle_panel()
