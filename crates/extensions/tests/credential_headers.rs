@@ -1010,7 +1010,9 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
         let clock = FakeClock::new();
         let blocking = ProviderServer::start([Response::status(200, "{}")]).unwrap();
         blocking.hold();
-        let block_url = blocking.url();
+        let last = ProviderServer::start([Response::status(200, "{}")]).unwrap();
+        last.hold();
+        let (block_url, last_url) = (blocking.url(), last.url());
         // An expiry 301 seconds past each fetch's own wall stays past the
         // refresh window, so no background refresh steals a fetch, and each
         // advance of 301 seconds expires it, so the next sign fetches
@@ -1029,7 +1031,7 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
                  expires_at = 1700000000 + (calls_c - 1) * 301 + 301 }}\n\
                  end }},\n\
                  sign = {{ timeout = 36000000, run = function(request)\n\
-                 host.http({{ url = \"{block_url}/s\", method = \"POST\" }})\n\
+                 host.http({{ url = (request.headers.authorization == \"Bearer tok-{calls}\" and \"{last_url}\" or \"{block_url}\") .. \"/s\", method = \"POST\" }})\n\
                  return {{}}\n\
                  end }},\n\
                  }})\n"
@@ -1066,10 +1068,21 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
             }));
             // The new call fetches its own token and blocks before the next
             // round, so every call is in flight at once.
-            assert!(
-                blocking.await_requests(round, CALL_DEADLINE),
-                "calls {calls}: sign {round} reaches its held request"
-            );
+            if round == calls {
+                assert!(
+                    blocking.await_requests(calls - 1, CALL_DEADLINE),
+                    "calls {calls}: earlier signs reach their held requests"
+                );
+                assert!(
+                    last.await_requests(1, CALL_DEADLINE),
+                    "calls {calls}: latest cached token reaches its held request"
+                );
+            } else {
+                assert!(
+                    blocking.await_requests(round, CALL_DEADLINE),
+                    "calls {calls}: sign {round} reaches its held request"
+                );
+            }
         }
         let mut in_flight: Vec<String> = signer
             .credentials()
@@ -1081,13 +1094,22 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
         expected_active.sort();
         assert_eq!(in_flight, expected_active, "calls {calls}: running values");
 
+        // Finish calls using older cached tokens first. The latest cached
+        // token completes last and stays among the sixteen retained calls.
         blocking.release();
-        for _ in 0..calls {
-            let (_, result) = finished.recv_timeout(CALL_DEADLINE).unwrap_or_else(|_| {
-                panic!("calls {calls}: every sign returns within {CALL_DEADLINE:?}")
+        for _ in 1..calls {
+            let (round, result) = finished.recv_timeout(CALL_DEADLINE).unwrap_or_else(|_| {
+                panic!("calls {calls}: earlier signs return within {CALL_DEADLINE:?}")
             });
+            assert_ne!(round, calls, "the latest cached token stays in flight");
             result.unwrap();
         }
+        last.release();
+        let (round, result) = finished.recv_timeout(CALL_DEADLINE).unwrap_or_else(|_| {
+            panic!("calls {calls}: the latest sign returns within {CALL_DEADLINE:?}")
+        });
+        assert_eq!(round, calls, "the latest cached token finishes last");
+        result.unwrap();
         for (index, thread) in threads.into_iter().enumerate() {
             thread
                 .join()
@@ -1099,23 +1121,10 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
             .map(|secret| secret.expose().to_owned())
             .collect();
         values.sort();
-        if values.len() > want {
-            let cached = provider.token(&pair(provider.name())).unwrap();
-            assert_eq!(
-                values.len(),
-                want + 1,
-                "only the current cache may add a distinct value: {values:?}"
-            );
-            assert!(
-                values.contains(&cached.expose().to_owned()),
-                "the extra value is the current cache: {values:?}"
-            );
-            values.retain(|value| value != cached.expose());
-        }
         assert_eq!(
             values.len(),
             want,
-            "calls {calls}: completed history is bounded once quiescent: {values:?}"
+            "calls {calls}: bounded once quiescent: {values:?}"
         );
         assert!(!values.contains(&"never-used-token".to_owned()));
         if calls == 16 {
