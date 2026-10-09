@@ -482,17 +482,14 @@ impl Skills {
         // The description is cut to the width the view draws at; the
         // pane's lines wrap instead, staying readable at 80 columns.
         let mut details = vec![cut(&info.description, self.width)];
-        if info.shadows.len() == 1
-            && let Some(path) = info.shadows.first()
-        {
-            details.push(format!("shadows {path}"));
-        } else if info.shadows.len() > 1 {
-            details.push(format!(
-                "shadows {} skills; Enter lists them",
-                info.shadows.len()
-            ));
-        } else if let Some(path) = &info.shadowed_by {
-            details.push(format!("shadowed by {path}"));
+        match info.shadows.as_slice() {
+            [path] => details.push(format!("shadows {path}")),
+            [] => {
+                if let Some(path) = &info.shadowed_by {
+                    details.push(format!("shadowed by {path}"));
+                }
+            }
+            many => details.push(format!("shadows {} skills; Enter lists them", many.len())),
         }
         details
     }
