@@ -2,6 +2,7 @@
 //! `docs/events.md` lines in a real terminal. Throwaway code: the fold and the
 //! drawing side by side, the input parser in `input.rs`, a few tests.
 
+mod home;
 mod input;
 mod lua;
 mod model_picker;
@@ -3111,6 +3112,8 @@ struct Args {
     bench: bool,
     no_pending: bool,
     hover: bool,
+    /// the home screen case (`--home`), drawn instead of the conversation
+    home: Option<String>,
     /// the rail design at start: 0 list, 1 cards, 2 tabs
     rail: u8,
     /// the B card density at start: 0 full, 1 medium, 2 compact
@@ -3144,6 +3147,7 @@ fn args() -> Args {
         bench: false,
         no_pending: false,
         hover: false,
+        home: None,
         rail: 1,
         density: 2,
         rail_share: 15.0,
@@ -3172,6 +3176,7 @@ fn args() -> Args {
             "--paging-bench" => a.bench = true,
             "--no-pending" => a.no_pending = true,
             "--hover" => a.hover = true,
+            "--home" => a.home = it.next(),
             "--rail" => {
                 a.rail = match it.next().as_deref().map(|v| v.to_uppercase()).as_deref() {
                     Some("A") => 0,
@@ -3193,7 +3198,7 @@ fn args() -> Args {
             }
             "--picker" => a.picker = it.next(),
             "-h" | "--help" => {
-                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
+                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -3288,7 +3293,7 @@ fn main() -> io::Result<()> {
         out.write_all(HOVER_ON.as_bytes())?;
     }
     let mut term = Terminal::new(CrosstermBackend::new(out))?;
-    let res = run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index);
+    let res = if a.home.is_some() { home::run_home(&a, &mut term) } else { run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index) };
     let b = term.backend_mut();
     if a.hover {
         b.write_all(HOVER_OFF.as_bytes())?;
@@ -3303,7 +3308,10 @@ fn main() -> io::Result<()> {
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
     }
-    println!("Session {0} · resume it with fiber --resume {0}", f.session_id);
+    // home draws no session, so there is nothing to resume
+    if a.home.is_none() {
+        println!("Session {0} · resume it with fiber --resume {0}", f.session_id);
+    }
     Ok(())
 }
 

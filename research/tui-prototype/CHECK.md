@@ -61,3 +61,12 @@ The model picker (#1629), one run per case (`cargo run --release -- fixtures/idl
 - scoped-all: all twelve models, the scoped five marked `· scoped`.
 - refreshing: openai-codex reads `⟳ refreshing` with a still spinner glyph, the other two `updated … ago`, and a `⟳ refresh all` button sits at the controls row's right end.
 - session-only: claude-sonnet-5-5 focused with `ⓢ this session only · nothing saved` under it and its rebuild cost on its row.
+
+Home (#1628), one `cargo run --release -- fixtures/session.jsonl --static --home <case>` per case, in Ghostty itself at 160 by 48.
+
+- empty: the logo should read as pixel letters four rows tall (⌇ in accent, the name in the accent gradient, `0.0.1` dim on the last row); under it the large input box with `/? for shortcuts`, the chip row and `enter starts a session`; under the box one dim `No sessions yet` line; the key hint at the foot.
+- sessions: six exited rows, each `○ name · spend`, the three outside the launch project with their workspace's last segment; the long pi-rig name should fit without pushing the spend off the row.
+- hover-workspace, hover-model, hover-thinking: the one chip should sit lighter than its neighbours while keeping its own text colour; hover-worktree: the switch chip lighter with its ● still blue.
+- worktree-on: the switch should read `[● new worktree]` in blue; worktree-off: `[○ new worktree]` dim.
+- picker-recent: the picker should float over home with even ▄ ▀ edges, four recent workspaces, the first row marked with ▌ on the lighter tint.
+- picker-typed: the typed row should read `› ~/work/fi█` with `fiber` and `fiber-worktrees` under it, the first marked; the recents below dimmed.

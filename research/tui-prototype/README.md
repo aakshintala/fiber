@@ -19,6 +19,7 @@ cargo run --release -- fixtures/session.jsonl
 | `--static` | loads the whole file at once |
 | `--reduced-motion` | keeps the working line's word still; `FIBER_REDUCED_MOTION=1` does the same |
 | `--hover` | also turns on mode 1003, every mouse motion, and tints the click target under the pointer; see "Hover's cost" |
+| `--home CASE` | draws the home screen case instead of the conversation; see "Home (#1628)" |
 | `--rail A\|B\|C` | the session rail design at start: list, cards, or tabs; the default is B; F2 cycles; see "The rail (#692)" |
 | `--rail-share P` | the rail's width at start, as a percent of the window; the default is 15, clamped to [22, 48] columns |
 | `--panel-share P` | the panel's width at start, as a percent of the window; the default is 21 (34 columns at 160), clamped to [30, 60] columns |
@@ -39,6 +40,43 @@ cargo run --release -- fixtures/session.jsonl
 | `--paging-bench` | prints the paging measurements that need no terminal, and exits |
 
 The key map is under "Stage 2".
+
+## Home (#1628)
+
+`--home CASE` draws the home screen instead of the conversation: the logo,
+the large input box with its chip row, and the session list, or the workspace
+picker over home. Each case draws one static frame from the fixtures in
+`src/home.rs` (six exited sessions with name or first prompt, spend and
+workspace segment; four recent workspaces; `~/work/fi` completing to `fiber`
+and `fiber-worktrees`) and waits for a key; Esc, q or Ctrl+C quits. Combine
+with `--static`; the fixture still loads but home ignores it.
+
+```sh
+cargo run --release -- fixtures/session.jsonl --static --home empty
+cargo run --release -- fixtures/session.jsonl --static --home sessions
+cargo run --release -- fixtures/session.jsonl --static --home hover-workspace
+cargo run --release -- fixtures/session.jsonl --static --home hover-worktree
+cargo run --release -- fixtures/session.jsonl --static --home hover-model
+cargo run --release -- fixtures/session.jsonl --static --home hover-thinking
+cargo run --release -- fixtures/session.jsonl --static --home worktree-on
+cargo run --release -- fixtures/session.jsonl --static --home worktree-off
+cargo run --release -- fixtures/session.jsonl --static --home picker-recent
+cargo run --release -- fixtures/session.jsonl --static --home picker-typed
+```
+
+- `empty`: home with an empty session list.
+- `sessions`: home with six exited sessions (○, name or first prompt, spend,
+  the workspace's last segment outside the launch project).
+- `hover-workspace`, `hover-worktree`, `hover-model`, `hover-thinking`: one
+  chip hovered (the `lift` tint, as `--hover` does it).
+- `worktree-on`, `worktree-off`: the new-worktree switch on and off.
+- `picker-recent`: the picker over home with recent workspaces only.
+- `picker-typed`: the picker over home with the typed-path row
+  (`~/work/fi` completing to `fiber` and `fiber-worktrees`, first row
+  selected) over the recents; this settles #1604 Q7.
+
+`./capture-home.sh` captures every case in tmux at 160 by 48, plain text and
+SGR, for the ticket's PR body.
 
 `cargo run --bin gen` rewrites the fixtures from `src/bin/gen.rs`. `fixtures/session.jsonl` ends with a turn still running, waiting on an approval from the reviewer delegate and on a question form from the main session. `fixtures/idle.jsonl` is the same session cut after its last finished turn.
 
