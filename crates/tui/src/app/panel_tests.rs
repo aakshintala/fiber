@@ -541,7 +541,8 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
         | Effect::Exit(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
-        | Effect::ReadImage(_) => panic!("opening sends"),
+        | Effect::ReadImage(_)
+        | Effect::OpenFile(_) => panic!("opening sends"),
     }
 }
 
