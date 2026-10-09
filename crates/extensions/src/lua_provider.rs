@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use config::{Config, ModelData, ProviderData, Secret};
 use contract::ErrorCode;
+use contract::redact::Secrets;
 use contract::signing::{self, SignRequest, Signer};
 use serde_json::{Map, Value, json};
 
@@ -57,9 +58,8 @@ pub struct LuaProvider {
     /// that label's token, never the previous one (`docs/model-routing.md`,
     /// "Keys, tokens and OAuth").
     token: Mutex<BTreeMap<CredentialPair, TokenState>>,
-    /// Values past `sign` calls used, per pair: a `sign()` error that names
-    /// a value an earlier call used is stored redacted while that call runs
-    /// (`docs/errors.md`, "The shape").
+    /// Completed call values, bounded per pair, plus the values currently
+    /// handed to running calls (`docs/errors.md`, "The shape").
     used: Mutex<BTreeMap<CredentialPair, UsedState>>,
 }
 
@@ -74,52 +74,27 @@ struct Token {
     headers: Vec<(String, Secret)>,
 }
 
-/// How many distinct past values `credentials()` reports besides the cached
-/// ones: every value is kept while a call that used it still runs, and the
-/// oldest idle ones are dropped past this many (`docs/errors.md`, "The
-/// shape").
+/// How many distinct values from completed calls `credentials()` retains
+/// besides the cached and in-flight values (`docs/errors.md`, "The shape").
 const USED_BOUND: usize = 16;
 
-/// The distinct values one pair's past `sign` calls used.
+/// One pair's completed-call history and the values owned by calls still
+/// running.
 #[derive(Debug, Default)]
 struct UsedState {
-    /// Every distinct value handed out, oldest first.
-    values: Vec<Secret>,
+    /// Distinct values from completed calls, oldest first.
+    completed: Vec<Secret>,
     /// One entry per value per call still running.
     active: Vec<Secret>,
 }
 
 impl UsedState {
-    /// Records `values` as handed to a call that starts now.
+    /// Records `values` as owned by a call that starts now.
     fn start(&mut self, values: &[Secret]) {
-        for value in values {
-            self.active.push(value.clone());
-            if !self
-                .values
-                .iter()
-                .any(|known| known.expose() == value.expose())
-            {
-                self.values.push(value.clone());
-            }
-        }
-        while self.values.len() > USED_BOUND {
-            let Some(idle) = self.values.iter().position(|known| {
-                !self
-                    .active
-                    .iter()
-                    .any(|held| held.expose() == known.expose())
-            }) else {
-                break;
-            };
-            self.values.remove(idle);
-        }
+        self.active.extend_from_slice(values);
     }
 
-    /// Forgets one running call's `values`. When no call remains in flight,
-    /// bounds the history to the last `USED_BOUND` distinct values, keeping
-    /// this returning call's own: `http.rs` reads `credentials()` right
-    /// after `sign` returns, and a value dropped here would miss redaction
-    /// (`docs/errors.md`, "The shape").
+    /// Moves one call's values from the in-flight set to the bounded history.
     fn finish(&mut self, values: &[Secret]) {
         for value in values {
             if let Some(held) = self
@@ -129,26 +104,14 @@ impl UsedState {
             {
                 self.active.remove(held);
             }
+            self.completed
+                .retain(|known| known.expose() != value.expose());
+            self.completed.push(value.clone());
         }
-        if !self.active.is_empty() || self.values.len() <= USED_BOUND {
-            return;
+        if self.completed.len() > USED_BOUND {
+            let excess = self.completed.len() - USED_BOUND;
+            self.completed.drain(..excess);
         }
-        let mut kept = Vec::new();
-        for known in self.values.iter().rev() {
-            if values.iter().any(|value| value.expose() == known.expose()) {
-                kept.push(known.clone());
-            }
-        }
-        for known in self.values.iter().rev() {
-            if kept.len() >= USED_BOUND {
-                break;
-            }
-            if !kept.iter().any(|kept| kept.expose() == known.expose()) {
-                kept.push(known.clone());
-            }
-        }
-        kept.reverse();
-        self.values = kept;
     }
 }
 
@@ -437,10 +400,9 @@ impl LuaProvider {
             .and_then(|entry| entry.current.clone())
     }
 
-    /// Records `values` as handed to a `sign` call for `pair` that starts
-    /// now, and forgets them when the returned guard drops, however the
-    /// call ends. A value is never dropped while a call that used it still
-    /// runs (`docs/errors.md`, "The shape").
+    /// Records `values` as owned by a `sign` call for `pair` that starts
+    /// now, and moves them to completed history when the guard drops
+    /// (`docs/errors.md`, "The shape").
     fn hold_used(self: &Arc<Self>, pair: &CredentialPair, values: &[Secret]) -> UsedGuard {
         lock(&self.used)
             .entry(pair.clone())
@@ -460,11 +422,9 @@ impl LuaProvider {
         }
     }
 
-    /// The values `credentials()` reports for `pair`: the cached token and
-    /// header values, plus the values of calls still running, so a `sign()`
-    /// error that names one is stored redacted (`docs/errors.md`, "The
-    /// shape"). Each value once: a running call's values are the cached
-    /// ones until a refresh replaces them.
+    /// The values `credentials()` reports for `pair`: the cached values,
+    /// completed history, and values of calls still running. Each value is
+    /// listed once (`docs/errors.md`, "The shape").
     fn signing_secrets(&self, pair: &CredentialPair) -> Vec<Secret> {
         let mut secrets = Vec::new();
         if let Some(current) = self.cached(pair) {
@@ -474,7 +434,7 @@ impl LuaProvider {
             }
         }
         if let Some(entry) = lock(&self.used).get(pair) {
-            for value in entry.values.iter().cloned() {
+            for value in entry.completed.iter().chain(&entry.active).cloned() {
                 push_unique(&mut secrets, value);
             }
         }
@@ -637,65 +597,72 @@ struct LuaSigner {
 impl Signer for LuaSigner {
     fn sign(&self, request: &SignRequest<'_>) -> Result<Vec<(String, String)>, signing::Error> {
         let mut headers = Vec::new();
-        // Held until the call ends, however it ends: the values stay
-        // reported while `sign()` still runs (`docs/errors.md`, "The
-        // shape").
+        let mut values = Vec::new();
         let mut _used = None;
-        if self.credential {
+        let current = if self.credential {
             let current = self.provider.signing_token(&self.pair)?;
-            // A header `credential()` must not return: `authorization`, and
-            // every header the request already carries, whatever their case.
-            // The message names the header, never its value
-            // (`docs/model-routing.md`, "Keys, tokens and OAuth").
-            for (name, _) in &current.headers {
-                if name.eq_ignore_ascii_case("authorization")
-                    || request
-                        .headers
-                        .iter()
-                        .any(|(sent, _)| sent.eq_ignore_ascii_case(name))
-                {
-                    return Err(signing::Error::Credential {
-                        code: ErrorCode::CredentialFailed,
-                        message: format!(
-                            "`{}`'s credential() returned `headers` with a name Fiber already sends: {name:?}.",
-                            self.provider.name(),
-                        ),
-                    });
+            values.push(current.secret.clone());
+            values.extend(current.headers.iter().map(|(_, value)| value.clone()));
+            _used = Some(self.provider.hold_used(&self.pair, &values));
+            Some(current)
+        } else {
+            None
+        };
+
+        let result: Result<Vec<(String, String)>, signing::Error> = (|| {
+            if let Some(current) = &current {
+                // A header `credential()` must not return: `authorization`,
+                // and every header the request already carries, whatever
+                // their case (`docs/model-routing.md`, "Keys, tokens and
+                // OAuth").
+                for (name, _) in &current.headers {
+                    if name.eq_ignore_ascii_case("authorization")
+                        || request
+                            .headers
+                            .iter()
+                            .any(|(sent, _)| sent.eq_ignore_ascii_case(name))
+                    {
+                        return Err(signing::Error::Credential {
+                            code: ErrorCode::CredentialFailed,
+                            message: format!(
+                                "`{}`'s credential() returned `headers` with a name Fiber already sends: {name:?}.",
+                                self.provider.name(),
+                            ),
+                        });
+                    }
+                }
+                headers.push((
+                    "authorization".to_owned(),
+                    format!("Bearer {}", current.secret.expose()),
+                ));
+                for (name, value) in &current.headers {
+                    headers.push((name.clone(), value.expose().to_owned()));
                 }
             }
-            headers.push((
-                "authorization".to_owned(),
-                format!("Bearer {}", current.secret.expose()),
-            ));
-            let mut values = vec![current.secret.clone()];
-            for (name, value) in &current.headers {
-                headers.push((name.clone(), value.expose().to_owned()));
-                values.push(value.clone());
+            if self.sign {
+                let seen: Vec<(String, String)> = request
+                    .headers
+                    .iter()
+                    .cloned()
+                    .chain(headers.iter().cloned())
+                    .collect();
+                let signed = self.provider.sign(&SignRequest {
+                    method: request.method,
+                    url: request.url,
+                    headers: &seen,
+                    body: request.body,
+                })?;
+                if signed
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                {
+                    headers.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+                }
+                headers.extend(signed);
             }
-            _used = Some(self.provider.hold_used(&self.pair, &values));
-        }
-        if self.sign {
-            let seen: Vec<(String, String)> = request
-                .headers
-                .iter()
-                .cloned()
-                .chain(headers.iter().cloned())
-                .collect();
-            let signed = self.provider.sign(&SignRequest {
-                method: request.method,
-                url: request.url,
-                headers: &seen,
-                body: request.body,
-            })?;
-            if signed
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
-            {
-                headers.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
-            }
-            headers.extend(signed);
-        }
-        Ok(headers)
+            Ok(headers)
+        })();
+        result.map_err(|error| redact_signing_error(error, &values))
     }
 
     fn credentials(&self) -> Vec<Secret> {
@@ -703,6 +670,27 @@ impl Signer for LuaSigner {
             return Vec::new();
         }
         self.provider.signing_secrets(&self.pair)
+    }
+}
+
+/// Redacts a returned signing error with the values this call owned, before
+/// the provider reads `credentials()` after `sign` returns (`docs/errors.md`,
+/// "The shape").
+fn redact_signing_error(error: signing::Error, values: &[Secret]) -> signing::Error {
+    let mut secrets = Secrets::default();
+    for value in values {
+        secrets.add(value.clone());
+    }
+    match error {
+        signing::Error::Failed(message) => signing::Error::Failed(secrets.redact(&message)),
+        signing::Error::NotHeaders(message) => signing::Error::NotHeaders(secrets.redact(&message)),
+        signing::Error::Credential { code, message } => signing::Error::Credential {
+            code,
+            message: secrets.redact(&message),
+        },
+        signing::Error::Unattended { message } => signing::Error::Unattended {
+            message: secrets.redact(&message),
+        },
     }
 }
 

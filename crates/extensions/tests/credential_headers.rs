@@ -2,9 +2,10 @@
 //! writing a provider looks like"; `docs/model-routing.md`, "Keys, tokens
 //! and OAuth"): the headers ride every signed request after `authorization`,
 //! are cached and refreshed with the token, and a header that names one
-//! Fiber builds itself fails the call with `credential_failed`. Old values
-//! stay reported while a call that used them still runs, so a `sign()` error
-//! naming one is stored redacted (`docs/errors.md`, "The shape").
+//! Fiber builds itself fails the call with `credential_failed`. Running-call
+//! values stay reported until completion, completed history is bounded to
+//! sixteen distinct values, and `sign()` errors redact their own values before
+//! returning (`docs/errors.md`, "The shape").
 
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
 #![allow(clippy::panic, reason = "test helpers; a hang is the test's failure")]
@@ -31,6 +32,7 @@ use serde_json::json;
 /// wall-clock limit on every wait, so a mutant cannot hang it
 /// (`docs/testing.md`, "Waits and timeouts").
 const WAIT: Duration = Duration::from_secs(5);
+const CALL_DEADLINE: Duration = Duration::from_secs(5);
 
 /// The fake clock's wall at construction: 2023-11-14T22:13:20Z.
 const WALL: u64 = 1_700_000_000;
@@ -434,6 +436,55 @@ fn sign_still_overrides_authorization_with_headers_present() {
 }
 
 #[test]
+fn completed_history_keeps_the_last_sixteen_distinct_tokens() {
+    for (calls, first_kept) in [(15_u32, 1_u32), (16, 1), (17, 2), (20, 5)] {
+        let setup = Setup::new();
+        let clock = FakeClock::new();
+        let provider = script_provider(
+            &setup,
+            clock.clone(),
+            Some(
+                "(function() calls = (calls or 0) + 1 return { \
+                 token = calls == 1 and \"never-used-token\" or \"tok-\" .. (calls - 1), \
+                 expires_at = 1700000000 + (calls - 1) * 3600 + 1800 } end)()",
+            ),
+            Some("{}"),
+        );
+        let signer = signer_of(&provider);
+        let unused = within({
+            let provider = Arc::clone(&provider);
+            move || provider.token(&pair(provider.name()))
+        })
+        .unwrap();
+        assert_eq!(unused.expose(), "never-used-token");
+        clock.advance(Duration::from_secs(3600));
+        for round in 1..=calls {
+            if round > 1 {
+                clock.advance(Duration::from_secs(3600));
+            }
+            let headers = sign_with(&signer, &[]).unwrap();
+            assert_eq!(
+                header(&headers, "authorization"),
+                Some(format!("Bearer tok-{round}")),
+                "calls {calls}, round {round}"
+            );
+        }
+        let mut reported: Vec<String> = signer
+            .credentials()
+            .iter()
+            .map(|secret| secret.expose().to_owned())
+            .collect();
+        reported.sort();
+        let mut expected: Vec<String> = (first_kept..=calls)
+            .map(|round| format!("tok-{round}"))
+            .collect();
+        expected.sort();
+        assert_eq!(reported, expected, "calls {calls}");
+        assert!(!reported.contains(&"never-used-token".to_owned()));
+    }
+}
+
+#[test]
 fn past_values_are_bounded_to_sixteen_distinct() {
     let setup = Setup::new();
     let clock = FakeClock::new();
@@ -495,7 +546,87 @@ fn past_values_are_bounded_to_sixteen_distinct() {
 }
 
 #[test]
-fn a_running_calls_values_survive_the_bound() {
+fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_history_values() {
+    let setup = Setup::new();
+    let clock = FakeClock::new();
+    let blocking = ProviderServer::start([Response::status(200, "{}")]).unwrap();
+    blocking.hold();
+    let block_url = blocking.url();
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        &format!(
+            "calls_c = 0\n\
+             fiber.provider(\"p\", {{\n\
+             credential = {{ timeout = 60000, run = function()\n\
+             calls_c = calls_c + 1\n\
+             if calls_c == 1 then\n\
+             local headers = {{}}\n\
+             for i = 1, 16 do headers[\"x-\" .. i] = \"hv-\" .. i end\n\
+             return {{ token = \"tok-old\", expires_at = 1700000301, headers = headers }}\n\
+             end\n\
+             return {{ token = \"tok-current\", expires_at = 4102444800 }}\n\
+             end }},\n\
+             sign = {{ timeout = 36000000, run = function(request)\n\
+             if request.headers.authorization == \"Bearer tok-old\" then\n\
+             host.http({{ url = \"{block_url}/s\", method = \"POST\" }})\n\
+             end\n\
+             return {{}}\n\
+             end }},\n\
+             }})\n"
+        ),
+    );
+    let extension = Arc::new(LuaExtension::new("ext", dir, setup.home(), clock.clone()));
+    let provider = LuaProvider::new(extension, "p");
+    let signer = signer_of(&provider);
+    let (done, first) = mpsc::channel();
+    let held = Arc::clone(&signer);
+    std::thread::spawn(move || {
+        let url = "http://127.0.0.1:1/v1/responses";
+        done.send(held.sign(&SignRequest {
+            method: "POST",
+            url,
+            headers: &[],
+            body: b"{}",
+        }))
+        .unwrap_or(());
+    });
+    assert!(
+        blocking.await_requests(1, CALL_DEADLINE),
+        "the call with seventeen values reaches its held sign request"
+    );
+
+    clock.advance(Duration::from_secs(301));
+    let second = sign_with(&signer, &[]).unwrap();
+    assert_eq!(
+        header(&second, "authorization"),
+        Some("Bearer tok-current".to_owned())
+    );
+    blocking.release();
+    first
+        .recv_timeout(CALL_DEADLINE)
+        .unwrap_or_else(|_| panic!("the held call returns within {CALL_DEADLINE:?}"))
+        .unwrap();
+
+    let mut reported: Vec<String> = signer
+        .credentials()
+        .iter()
+        .map(|secret| secret.expose().to_owned())
+        .collect();
+    reported.sort();
+    let mut expected: Vec<String> = (1..=16).map(|n| format!("hv-{n}")).collect();
+    expected.push("tok-current".to_owned());
+    expected.sort();
+    assert_eq!(
+        reported, expected,
+        "sixteen completed values plus the current cache"
+    );
+    assert!(!reported.contains(&"tok-old".to_owned()));
+    assert!(!reported.contains(&"never-used-token".to_owned()));
+}
+
+#[test]
+fn a_running_call_values_are_reported_until_it_finishes() {
     let setup = Setup::new();
     let clock = FakeClock::new();
     let blocking = ProviderServer::start([Response::status(200, "{}")]).unwrap();
@@ -584,10 +715,9 @@ fn a_running_calls_values_survive_the_bound() {
         Some("Bearer tok-1".to_owned())
     );
     assert_eq!(header(&headers, "x-h"), Some("hv-1".to_owned()));
-    // Once no call runs, the history is bounded to sixteen again without
-    // another sign, and the call that just returned stays listed for the
-    // credentials() read that follows its sign return (`docs/errors.md`,
-    // "The shape").
+    // Call 1 completes last, so its values are among the most recently
+    // completed values. They are retained by recency, not pinned past the
+    // call (`docs/errors.md`, "The shape").
     let mut values: Vec<String> = signer
         .credentials()
         .iter()
@@ -606,7 +736,122 @@ fn a_running_calls_values_survive_the_bound() {
 }
 
 #[test]
-fn an_old_token_stays_reported_while_its_sign_still_runs() {
+fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction() {
+    let setup = Setup::new();
+    let clock = FakeClock::new();
+    let first_call = ProviderServer::start([Response::status(200, "{}")]).unwrap();
+    first_call.hold();
+    let later_calls = ProviderServer::start([Response::status(200, "{}")]).unwrap();
+    later_calls.hold();
+    let (first_url, later_url) = (first_call.url(), later_calls.url());
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        &format!(
+            "calls_c = 0\n\
+             fiber.provider(\"p\", {{\n\
+             credential = {{ timeout = 60000, run = function()\n\
+             calls_c = calls_c + 1\n\
+             return {{ token = \"tok-\" .. calls_c, expires_at = 1700000000 + (calls_c - 1) * 301 + 301 }}\n\
+             end }},\n\
+             sign = {{ timeout = 36000000, run = function(request)\n\
+             local authorization = request.headers.authorization or \"missing\"\n\
+             if authorization == \"Bearer tok-1\" then\n\
+             host.http({{ url = \"{first_url}/s\", method = \"POST\" }})\n\
+             error(\"saw \" .. authorization)\n\
+             end\n\
+             host.http({{ url = \"{later_url}/s\", method = \"POST\" }})\n\
+             return {{}}\n\
+             end }},\n\
+             }})\n"
+        ),
+    );
+    let extension = Arc::new(LuaExtension::new("ext", dir, setup.home(), clock.clone()));
+    let provider = LuaProvider::new(extension, "p");
+    let signer = signer_of(&provider);
+    let (done, results) = mpsc::channel();
+
+    let launch = |call: usize, signer: Arc<dyn Signer>, done: mpsc::Sender<_>| {
+        std::thread::spawn(move || {
+            let url = "http://127.0.0.1:1/v1/responses";
+            let result = signer.sign(&SignRequest {
+                method: "POST",
+                url,
+                headers: &[],
+                body: b"{}",
+            });
+            done.send((call, result)).unwrap_or(());
+        });
+    };
+
+    // Each held request is a barrier: no call returns until the test releases
+    // its server, and each bounded wait proves the call reached that point.
+    launch(1, Arc::clone(&signer), done.clone());
+    assert!(
+        first_call.await_requests(1, CALL_DEADLINE),
+        "call 1 reached its held sign request"
+    );
+    for call in 2..=17 {
+        clock.advance(Duration::from_secs(301));
+        launch(call, Arc::clone(&signer), done.clone());
+        assert!(
+            later_calls.await_requests(call - 1, CALL_DEADLINE),
+            "call {call} reached its held sign request"
+        );
+    }
+
+    let mut in_flight: Vec<String> = signer
+        .credentials()
+        .iter()
+        .map(|secret| secret.expose().to_owned())
+        .filter(|value| value.starts_with("tok-"))
+        .collect();
+    in_flight.sort();
+    let mut expected: Vec<String> = (1..=17).map(|call| format!("tok-{call}")).collect();
+    expected.sort();
+    assert_eq!(in_flight, expected, "all running calls keep their token");
+
+    first_call.release();
+    let (call, result) = results
+        .recv_timeout(CALL_DEADLINE)
+        .unwrap_or_else(|_| panic!("call 1 returns within {CALL_DEADLINE:?}"));
+    assert_eq!(call, 1);
+    let Err(contract::signing::Error::Failed(message)) = result else {
+        panic!("call 1 fails after naming the token it used");
+    };
+
+    // Hold call 1's already-returned error while the other calls complete.
+    later_calls.release();
+    for _ in 2..=17 {
+        let (_, result) = results
+            .recv_timeout(CALL_DEADLINE)
+            .unwrap_or_else(|_| panic!("the remaining calls return within {CALL_DEADLINE:?}"));
+        result.unwrap();
+    }
+    assert!(
+        message.contains("[redacted]") && !message.contains("tok-1"),
+        "the returned error is already redacted: {message}"
+    );
+    let mut completed: Vec<String> = signer
+        .credentials()
+        .iter()
+        .map(|secret| secret.expose().to_owned())
+        .filter(|value| value.starts_with("tok-"))
+        .collect();
+    completed.sort();
+    assert_eq!(
+        completed.len(),
+        16,
+        "completed history is bounded: {completed:?}"
+    );
+    assert!(
+        !completed.contains(&"tok-1".to_owned()),
+        "call 1 was evicted: {completed:?}"
+    );
+}
+
+#[test]
+fn a_sign_error_is_redacted_after_a_credential_refresh() {
     let setup = Setup::new();
     let clock = FakeClock::new();
     let tokens = ProviderServer::start([
@@ -708,57 +953,39 @@ fn an_old_token_stays_reported_while_its_sign_still_runs() {
         panic!("the first sign fails naming the token it used");
     };
     assert!(
-        message.contains("tok-A-value") && !message.contains("tok-B-value"),
-        "the error names the old token it was handed, never mixed: {message}"
-    );
-    // The old token stays reported after the call ends, so the failure a
-    // `sign()` error carries is stored redacted: `http.rs` replaces every
-    // value `credentials()` lists (`docs/errors.md`, "The shape"; the
-    // substitution itself is pinned in `provider/tests/signed.rs`).
-    let values: Vec<String> = signer
-        .credentials()
-        .iter()
-        .map(|secret| secret.expose().to_owned())
-        .collect();
-    assert!(
-        values.contains(&"tok-A-value".to_owned()),
-        "the old token stays reported: {values:?}"
+        message.contains("[redacted]")
+            && !message.contains("tok-A-value")
+            && !message.contains("tok-B-value"),
+        "the error is redacted before it leaves sign: {message}"
     );
 }
 
 #[test]
-fn a_sign_error_naming_a_credential_header_value_lists_it_for_redaction() {
+fn a_sign_error_naming_a_credential_header_value_is_redacted_before_return() {
     let setup = Setup::new();
     let provider = provider_on(
         &setup,
         "{ token = \"tok-1\", expires_at = 4102444800, \
          headers = { [\"chatgpt-account-id\"] = \"acct_secret\" } }",
-        "error(\"saw \" .. (request.headers[\"chatgpt-account-id\"] or \"missing\"))",
+        "error(\"saw \" .. request.headers.authorization .. \" and \" .. request.headers[\"chatgpt-account-id\"])",
     );
     let signer = signer_of(&provider);
     let Err(contract::signing::Error::Failed(message)) = sign_with(&signer, &[]) else {
         panic!("the sign fails naming the header it saw");
     };
     assert!(
-        message.contains("acct_secret"),
-        "the error names the value before redaction: {message}"
+        message.contains("[redacted]")
+            && !message.contains("acct_secret")
+            && !message.contains("tok-1"),
+        "all credential values are redacted before return: {message}"
     );
-    let mut values: Vec<String> = signer
-        .credentials()
-        .iter()
-        .map(|secret| secret.expose().to_owned())
-        .collect();
-    values.sort();
-    assert_eq!(values, ["acct_secret", "tok-1"]);
 }
 
 #[test]
-fn concurrent_calls_bound_the_history_once_all_complete() {
-    // Each row: how many blocking signs share one pair, and the reported
-    // retention after every call completes, with no sign in between. Every
-    // fetch returns a new token, so every in-flight call holds a distinct
-    // value past the bound; completing them all bounds the history again.
-    for (calls, want) in [(16_usize, 16_usize), (17, 16), (20, 16)] {
+fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
+    // Each row gives the number of distinct running values and the number
+    // retained once the calls complete.
+    for (calls, want) in [(15_usize, 15_usize), (16, 16), (17, 16), (20, 16)] {
         let setup = Setup::new();
         let clock = FakeClock::new();
         let blocking = ProviderServer::start([Response::status(200, "{}")]).unwrap();
@@ -816,15 +1043,27 @@ fn concurrent_calls_bound_the_history_once_all_complete() {
             // The new call fetches its own token and blocks before the next
             // round, so every call is in flight at once.
             assert!(
-                blocking.await_requests(round, WAIT),
-                "calls {calls}: waited for sign {round} to block on the held server"
+                blocking.await_requests(round, CALL_DEADLINE),
+                "calls {calls}: sign {round} reaches its held request"
             );
         }
+        let mut in_flight: Vec<String> = signer
+            .credentials()
+            .iter()
+            .map(|secret| secret.expose().to_owned())
+            .collect();
+        in_flight.sort();
+        let mut expected_active: Vec<String> = (1..=calls).map(|n| format!("tok-{n}")).collect();
+        expected_active.sort();
+        assert_eq!(in_flight, expected_active, "calls {calls}: running values");
+
         blocking.release();
         for _ in 0..calls {
             finished
-                .recv_timeout(WAIT)
-                .unwrap_or_else(|_| panic!("calls {calls}: every sign returns within {WAIT:?}"))
+                .recv_timeout(CALL_DEADLINE)
+                .unwrap_or_else(|_| {
+                    panic!("calls {calls}: every sign returns within {CALL_DEADLINE:?}")
+                })
                 .unwrap();
         }
         let mut values: Vec<String> = signer
@@ -838,6 +1077,7 @@ fn concurrent_calls_bound_the_history_once_all_complete() {
             want,
             "calls {calls}: bounded once quiescent: {values:?}"
         );
+        assert!(!values.contains(&"never-used-token".to_owned()));
         if calls == 16 {
             let mut expected: Vec<String> = (1..=16_u32).map(|n| format!("tok-{n}")).collect();
             expected.sort();
