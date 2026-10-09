@@ -86,6 +86,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "reply", "args": {"request_id": "r",
             "decisions": ["approve", "skip", "never"]}}),
         json!({"id": "c", "command": "job_stop", "args": {"job_id": "j"}}),
+        json!({"id": "c", "command": "job_input", "args": {"job_id": "j", "text": "t"}}),
         json!({"id": "c", "command": "background"}),
         json!({"id": "c", "command": "reload"}),
         json!({"id": "c", "command": "tools"}),
@@ -288,6 +289,35 @@ fn args_that_are_present_are_never_replaced_by_an_empty_object() {
     assert!(parse(r#"{"id":"c","command":"handoff","args":"x"}"#).is_err());
     assert!(parse(r#"{"id":"c","command":"rewind","args":{"seq":"7"}}"#).is_err());
     assert!(parse(r#"{"id":"c","args":{}}"#).is_err());
+}
+
+#[test]
+fn job_input_reads_and_writes_back_unchanged() {
+    let line =
+        parse(r#"{"id":"c","command":"job_input","args":{"job_id":"j","text":"hi\u001b[A"}}"#)
+            .unwrap();
+    assert_eq!(
+        line.command,
+        Command::JobInput(JobInput {
+            job_id: JobId("j".into()),
+            // The keys as typed, escape sequences included.
+            text: "hi\x1b[A".into(),
+        })
+    );
+    assert_eq!(
+        serde_json::to_string(&line).unwrap(),
+        r#"{"id":"c","command":"job_input","args":{"job_id":"j","text":"hi\u001b[A"}}"#
+    );
+}
+
+#[test]
+fn job_input_refuses_a_key_it_does_not_take_or_a_missing_one() {
+    assert!(
+        parse(r#"{"id":"c","command":"job_input","args":{"job_id":"j","text":"t","force":true}}"#)
+            .is_err()
+    );
+    assert!(parse(r#"{"id":"c","command":"job_input","args":{"job_id":"j"}}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"job_input"}"#).is_err());
 }
 
 #[test]

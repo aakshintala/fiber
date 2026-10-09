@@ -412,6 +412,11 @@ impl App {
         if let Some(effect) = self.completion_key(&key) {
             return effect;
         }
+        // A running `tty` job's view types into the job ahead of the
+        // input box, behind every overlay above.
+        if let Some(effect) = self.item_job_key(&key) {
+            return effect;
+        }
         if let Some(effect) = self.draft_key(&key) {
             return effect;
         }
