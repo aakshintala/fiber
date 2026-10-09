@@ -56,6 +56,8 @@ fn head() -> Value {
             "session_threads": [threads_run(5, 7), threads_run(5, 7), threads_run(5, 7), threads_run(5, 7), threads_run(5, 7)],
             "session_start_ms": [6.1, 5.9, 6.0, 6.3, 6.0],
             "terminal_first_frame_ms": [18.2, 17.9, 18.0, 18.4, 18.1],
+            "sessions_list_ms": [12.1, 12.4, 11.9, 12.0, 12.2],
+            "terminal_attach_ms": attach_metric(),
             "busy_turn_rss_kib": [20480, 20490, 20470, 20485, 20475],
             "resume_20k_rss_kib": [11000, 11010, 10990, 11005, 10995],
             "resume_2m_rss_kib": [14000, 14010, 13990, 14005, 13995],
@@ -74,6 +76,32 @@ fn head() -> Value {
     })
 }
 
+fn attach_entries(fixture: &str, log_bytes: u64, ms: &[f64]) -> Vec<Value> {
+    ms.iter()
+        .map(|m| json!({"fixture": fixture, "log_bytes": log_bytes, "ms": m}))
+        .collect()
+}
+
+fn attach_metric() -> Value {
+    let mut entries = attach_entries("1 MiB", 1_050_231, &[31.2, 30.8, 31.0, 31.5, 30.9]);
+    entries.extend(attach_entries(
+        "10 MiB",
+        10_492_016,
+        &[88.0, 88.5, 88.2, 87.9, 88.4],
+    ));
+    Value::Array(entries)
+}
+
+fn attach_base_metric() -> Value {
+    let mut entries = attach_entries("1 MiB", 1_050_100, &[30.5, 30.5, 30.5, 30.5, 30.5]);
+    entries.extend(attach_entries(
+        "10 MiB",
+        10_490_000,
+        &[87.0, 87.0, 87.0, 87.0, 87.0],
+    ));
+    Value::Array(entries)
+}
+
 fn fsync_run(model_requests: u64, tool_calls: u64, fdatasync: u64) -> Value {
     json!({"model_requests": model_requests, "tool_calls": tool_calls, "fdatasync": fdatasync})
 }
@@ -88,6 +116,8 @@ fn base() -> Value {
         "metrics": {
             "session_start_ms": [0.6, 0.6, 0.6, 0.6, 0.6],
             "terminal_first_frame_ms": [1.8, 1.8, 1.8, 1.8, 1.8],
+            "sessions_list_ms": [11.5, 11.5, 11.5, 11.5, 11.5],
+            "terminal_attach_ms": attach_base_metric(),
             "paging_open_ms": [290.0, 290.0, 290.0, 290.0, 290.0],
             "paging_load_ms": [1.1, 1.1, 1.1, 1.1, 1.1],
             "paging_jump_ms": [2.2, 2.2, 2.2, 2.2, 2.2],
@@ -166,18 +196,16 @@ fn every_budget_holding_passes_and_the_comment_shows_it() {
 #[test]
 fn rows_not_measured_appear_with_their_ticket() {
     let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
-    for (budget, ticket) in [
-        ("Terminal to its first frame, attaching", "#410"),
-        ("Terminal to its first frame, attaching", "#668"),
-        ("Listing 1,000 sessions in one project, warm cache", "#410"),
-        ("`session_list`, waiting", "#581"),
+    let not_measured = comment.split("### Not measured").nth(1).unwrap();
+    assert!(
+        not_measured.contains("`session_list`, waiting") && not_measured.contains("#581"),
+        "{not_measured}"
+    );
+    for budget in [
+        "Terminal to its first frame, attaching",
+        "Listing 1,000 sessions in one project, warm cache",
     ] {
-        assert!(
-            comment
-                .lines()
-                .any(|l| l.contains(budget) && l.contains(ticket)),
-            "{budget} with {ticket} missing from:\n{comment}"
-        );
+        assert!(!not_measured.contains(budget), "{budget}:\n{comment}");
     }
 }
 
@@ -356,6 +384,8 @@ fn a_missing_metric_fails() {
         "terminal_idle_rss_kib",
         "session_threads",
         "terminal_first_frame_ms",
+        "sessions_list_ms",
+        "terminal_attach_ms",
     ] {
         let mut results = head();
         results["metrics"].as_object_mut().unwrap().remove(id);
@@ -441,6 +471,11 @@ fn a_failed_base_passes_and_shows_why() {
     assert_eq!(out.failures, Vec::<String>::new());
     assert!(
         row(&out.comment, "Session start").contains("| unavailable |"),
+        "{}",
+        out.comment
+    );
+    assert!(
+        row(&out.comment, "Terminal to its first frame, attaching").contains("| unavailable |"),
         "{}",
         out.comment
     );
@@ -538,7 +573,7 @@ fn a_failing_row_says_fail_and_the_failures_are_listed() {
 }
 
 #[test]
-fn every_gated_row_but_three_is_measured() {
+fn every_gated_row_but_one_is_measured() {
     let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
     let not_measured = comment.split("### Not measured").nth(1).unwrap();
     for budget in [
@@ -549,6 +584,17 @@ fn every_gated_row_but_three_is_measured() {
     ] {
         assert!(!not_measured.contains(budget), "{budget}:\n{comment}");
         assert!(row(&comment, budget).ends_with("| pass |"), "{comment}");
+    }
+    assert!(
+        not_measured.contains("`session_list`, waiting") && not_measured.contains("#581"),
+        "{comment}"
+    );
+    for budget in [
+        "Terminal to its first frame, attaching",
+        "Listing 1,000 sessions in one project, warm cache",
+    ] {
+        let line = row(&comment, budget);
+        assert!(line.ends_with("| advisory |"), "{line}");
     }
 }
 
@@ -778,4 +824,156 @@ fn a_malformed_base_paging_timing_shows_base_failed() {
     assert_eq!(out.failures, Vec::<String>::new());
     let row = row(&out.comment, "`paging` jig, open pass");
     assert!(row.contains("base failed: paging_open_ms"), "{row}");
+}
+
+#[test]
+fn the_listing_row_is_an_advisory_timing_of_sessions_list_ms() {
+    let out = judge(&head(), Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    let line = row(&out.comment, "Listing 1,000 sessions");
+    assert!(line.contains("12.1 ms"), "{line}");
+    assert!(line.contains("11.5 ms"), "{line}");
+    assert!(line.ends_with("| advisory |"), "{line}");
+
+    // Over the ceiling still passes: a timing row never fails.
+    let slow = with_metric(head(), "sessions_list_ms", json!(vec![60.0; 5]));
+    assert_eq!(failures_of(&slow), Vec::<String>::new());
+    let judged = judge(&slow, Some(&base()), Event::PullRequest);
+    let line = row(&judged.comment, "Listing 1,000 sessions");
+    assert!(line.contains("60.0 ms"), "{line}");
+    assert!(line.ends_with("| advisory |"), "{line}");
+}
+
+#[test]
+fn the_attaching_ceiling_is_50_ms_plus_10_ms_per_mib_of_each_fixtures_log() {
+    let mut full = attach_entries("1 MiB", 1_048_576, &[10.0, 10.0, 10.0, 10.0, 10.0]);
+    full.extend(attach_entries(
+        "10 MiB",
+        10_485_760,
+        &[20.0, 20.0, 20.0, 20.0, 20.0],
+    ));
+    let results = with_metric(head(), "terminal_attach_ms", Value::Array(full));
+    let out = judge(&results, Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    let line = row(&out.comment, "Terminal to its first frame, attaching");
+    // Each fixture's median, not one median across both.
+    assert!(
+        line.contains("1 MiB (1,048,576 bytes): 10.0 ms of 60.0 ms"),
+        "{line}"
+    );
+    assert!(
+        line.contains("10 MiB (10,485,760 bytes): 20.0 ms of 150.0 ms"),
+        "{line}"
+    );
+    assert!(line.ends_with("| advisory |"), "{line}");
+
+    // A fixture's ceiling follows its largest log: 1.5 MiB is 65.0 ms,
+    // which a `*` for `/`, a `+` for `-` or a swapped constant misses.
+    let mut mixed = attach_entries("1 MiB", 1_048_576, &[10.0, 10.0, 10.0, 10.0]);
+    mixed.extend(attach_entries("1 MiB", 1_572_864, &[10.0]));
+    mixed.extend(attach_entries(
+        "10 MiB",
+        10_485_760,
+        &[20.0, 20.0, 20.0, 20.0, 20.0],
+    ));
+    let results = with_metric(head(), "terminal_attach_ms", Value::Array(mixed));
+    let judged = judge(&results, Some(&base()), Event::PullRequest);
+    let line = row(&judged.comment, "Terminal to its first frame, attaching");
+    assert!(
+        line.contains("1 MiB (1,572,864 bytes): 10.0 ms of 65.0 ms"),
+        "{line}"
+    );
+}
+
+#[test]
+fn an_attaching_median_over_its_ceiling_is_advisory() {
+    let mut entries = attach_entries("1 MiB", 1_048_576, &[61.0; 5]);
+    entries.extend(attach_entries("10 MiB", 10_485_760, &[20.0; 5]));
+    let results = with_metric(head(), "terminal_attach_ms", Value::Array(entries));
+    let out = judge(&results, Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    let line = row(&out.comment, "Terminal to its first frame, attaching");
+    assert!(line.contains("61.0 ms of 60.0 ms"), "{line}");
+    assert!(line.ends_with("| advisory |"), "{line}");
+}
+
+#[test]
+fn the_attaching_ceiling_text_is_pinned() {
+    let out = judge_doc(
+        &doc_with(
+            "50 ms plus 10 ms per MiB of session log",
+            "50 ms plus 20 ms per MiB of session log",
+        ),
+        &head(),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    assert!(
+        has(&out.failures, "xtask/src/bench.rs"),
+        "{:?}",
+        out.failures
+    );
+    assert!(
+        has(&out.failures, "Terminal to its first frame, attaching"),
+        "{:?}",
+        out.failures
+    );
+}
+
+#[test]
+fn an_attaching_fixture_with_four_runs_fails() {
+    let mut entries = attach_entries("1 MiB", 1_048_576, &[10.0, 10.0, 10.0, 10.0]);
+    entries.extend(attach_entries("10 MiB", 10_485_760, &[20.0; 5]));
+    let results = with_metric(head(), "terminal_attach_ms", Value::Array(entries));
+    let failures = failures_of(&results);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(has(&failures, "terminal_attach_ms"), "{failures:?}");
+}
+
+#[test]
+fn an_attaching_run_missing_its_ten_mib_fixture_fails() {
+    let results = with_metric(
+        head(),
+        "terminal_attach_ms",
+        Value::Array(attach_entries("1 MiB", 1_048_576, &[10.0; 5])),
+    );
+    let failures = failures_of(&results);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(has(&failures, "terminal_attach_ms"), "{failures:?}");
+}
+
+#[test]
+fn an_unknown_attaching_fixture_fails() {
+    let mut entries = attach_entries("1 MiB", 1_048_576, &[10.0; 5]);
+    entries.extend(attach_entries("2 MiB", 2_097_152, &[15.0; 5]));
+    let results = with_metric(head(), "terminal_attach_ms", Value::Array(entries));
+    let failures = failures_of(&results);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(has(&failures, "terminal_attach_ms"), "{failures:?}");
+}
+
+#[test]
+fn an_attaching_entry_without_log_bytes_fails() {
+    let mut entries = attach_entries("1 MiB", 1_048_576, &[10.0; 5]);
+    entries.extend(vec![json!({"fixture": "10 MiB", "ms": 20.0}); 5]);
+    let results = with_metric(head(), "terminal_attach_ms", Value::Array(entries));
+    let failures = failures_of(&results);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(has(&failures, "terminal_attach_ms"), "{failures:?}");
+}
+
+#[test]
+fn a_base_without_the_attach_metric_shows_unavailable() {
+    let mut old = base();
+    old["metrics"]
+        .as_object_mut()
+        .unwrap()
+        .remove("terminal_attach_ms");
+    let out = judge(&head(), Some(&old), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    let attach = row(&out.comment, "Terminal to its first frame, attaching");
+    assert!(attach.contains("| unavailable |"), "{attach}");
+    assert!(!out.comment.contains("base failed:"), "{}", out.comment);
+    let listing = row(&out.comment, "Listing 1,000 sessions");
+    assert!(listing.contains("| 11.5 ms |"), "{listing}");
 }
