@@ -123,10 +123,13 @@ pub(crate) fn admit(
     true
 }
 
-/// The current subscription for a candidate whose mark has not changed and
-/// which can still be admitted exclusively. Call under the relays lock and
-/// keep that lock through `admit` so the epoch and level cannot change between
-/// this check and the admission.
+/// The kept subscription for a candidate whose stored mark is still the
+/// one it was collected with and which can still be admitted exclusively:
+/// `None` for a closed connection, a relay or an opening for `session`,
+/// once any attach recorded a newer mark, or when the mark is gone. Call
+/// under the relays lock and keep that lock through `admit`, so neither
+/// the epoch nor the level changes between this check and the admission,
+/// and nothing is written to the session for a candidate `admit` refuses.
 pub(crate) fn kept_for_candidate(
     held: &Relays,
     session: &str,
