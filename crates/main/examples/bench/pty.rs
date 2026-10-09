@@ -75,9 +75,10 @@ fn holds(output: &[u8], needle: &[u8]) -> bool {
 }
 
 impl Terminal {
-    /// Starts the copy of `fiber` in `home`'s workspace on a new pty.
+    /// Starts `fiber` with `args` in `home`'s workspace on a new pty.
     pub(crate) fn spawn(
         home: &Home,
+        args: &[&str],
         path: Option<&OsStr>,
         clock: &dyn Clock,
     ) -> Result<Self, String> {
@@ -114,6 +115,7 @@ impl Terminal {
         let mut command = crate::run::command(home.fiber(), home.root(), &home.home(), path);
         command
             .current_dir(home.workspace())
+            .args(args)
             .env("TERM", "xterm-256color")
             .stdin(side()?)
             .stdout(side()?)

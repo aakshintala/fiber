@@ -81,3 +81,19 @@ fn the_paging_workload_runs_only_with_its_jig_and_in_a_timing_run() {
         .collect();
     assert_eq!(runs, [3]);
 }
+
+#[test]
+fn the_sampled_workloads_run_once_and_in_a_timing_run() {
+    let timing = names("--fiber f --out o --only timing");
+    assert!(timing.contains(&"sessions list"), "{timing:?}");
+    assert!(timing.contains(&"terminal attach"), "{timing:?}");
+    assert!(!timing.contains(&"session idle"), "{timing:?}");
+    let runs: Vec<u32> = selected(&args("--fiber f --out o --runs 3").unwrap())
+        .iter()
+        .filter(|(workload, _)| {
+            workload.name == "sessions list" || workload.name == "terminal attach"
+        })
+        .map(|(_, runs)| *runs)
+        .collect();
+    assert_eq!(runs, [1, 1]);
+}

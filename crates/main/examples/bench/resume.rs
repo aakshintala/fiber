@@ -61,6 +61,12 @@ impl Fixture {
     /// run's reply. Each reports the context it was asked over, which a
     /// handoff restarts from the note, so no automatic handoff runs.
     pub(crate) fn script(&self) -> Vec<Response> {
+        self.script_with_last(LAST_REPLY)
+    }
+
+    /// [`Fixture::script`], with `last` as the reply to the prompt the
+    /// measured run sends.
+    pub(crate) fn script_with_last(&self, last: &str) -> Vec<Response> {
         let mut script = Vec::new();
         let mut context = 0;
         for turn in 0..self.turns {
@@ -73,7 +79,7 @@ impl Fixture {
                 context = NOTE.len();
             }
         }
-        script.push(text_reply(LAST_REPLY, context));
+        script.push(text_reply(last, context));
         script
     }
 }
@@ -83,13 +89,18 @@ fn prompt(turn: usize) -> String {
 }
 
 /// A command line for the socket.
-fn command(id: &str, name: &str, args: &Value) -> String {
+pub(crate) fn command(id: &str, name: &str, args: &Value) -> String {
     json!({"id": id, "command": name, "args": args}).to_string()
 }
 
 /// Sends `line`, whose id is `id`, then reads until its acknowledgement
 /// and the `turn_completed` after it, waiting at most [`TURN`].
-fn run_turn(ctx: &Ctx<'_>, client: &mut Client, id: &str, line: &str) -> Result<(), String> {
+pub(crate) fn run_turn(
+    ctx: &Ctx<'_>,
+    client: &mut Client,
+    id: &str,
+    line: &str,
+) -> Result<(), String> {
     client.send(line)?;
     let until = ctx.clock.now() + TURN;
     let what = format!("the turn_completed of {id}");
@@ -109,7 +120,7 @@ fn run_turn(ctx: &Ctx<'_>, client: &mut Client, id: &str, line: &str) -> Result<
 }
 
 /// Connects to the session's socket and subscribes at `full`.
-fn subscribe(ctx: &Ctx<'_>, home: &Home, id: &str) -> Result<Client, String> {
+pub(crate) fn subscribe(ctx: &Ctx<'_>, home: &Home, id: &str) -> Result<Client, String> {
     let mut client = Client::connect(&home.socket(id))?;
     client.send(&command("c_sub", "subscribe", &json!({"level": "full"})))?;
     let until = ctx.clock.now() + READY;

@@ -133,6 +133,15 @@ impl Proc {
         self.group
     }
 
+    /// Whether the process is still running: a `try_wait` that waits for
+    /// nothing.
+    pub(crate) fn running(&mut self) -> Result<bool, String> {
+        self.child
+            .try_wait()
+            .map(|status| status.is_none())
+            .map_err(|err| format!("checking the process: {err}"))
+    }
+
     /// Waits up to `within` for the process to exit, and reaps it.
     pub(crate) fn exits(&mut self, clock: &dyn Clock, within: Duration) -> Result<bool, String> {
         let exited = poll(clock, within, "the process to exit", || {
@@ -234,6 +243,96 @@ pub(crate) fn run_to_end(
         stdout: closed(&stdout)?,
         stderr: closed(&stderr)?,
     })
+}
+
+/// Runs `command` in its own process group with stdin closed, timing to
+/// its stdout closing: the duration is from the spawn to the clock read
+/// when the stdout reader reaches EOF, so waiting for the exit is never
+/// timed. Past `within` it errs naming `what`. Output still open [`STOP`]
+/// after the group is gone, held by a process that left the group, is an
+/// error rather than a wait.
+pub(crate) fn timed_to_end(
+    command: &mut Command,
+    clock: &dyn Clock,
+    within: Duration,
+    what: &str,
+) -> Result<(Finished, Duration), String> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    thread::scope(|scope| {
+        let mut proc = Proc::spawn(command, clock)?;
+        let (eof_tx, eof_rx) = mpsc::channel();
+        let mut stdout = proc
+            .child
+            .stdout
+            .take()
+            .ok_or_else(|| format!("{what} has no stdout"))?;
+        scope.spawn(move || {
+            let mut bytes = Vec::new();
+            match stdout.read_to_end(&mut bytes) {
+                Ok(_) | Err(_) => {}
+            }
+            let eof = clock.now();
+            match eof_tx.send((String::from_utf8_lossy(&bytes).into_owned(), eof)) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let stderr = read_on_thread(proc.child.stderr.take(), what)?;
+        let measured = eof_once(&mut proc, eof_rx, clock, within, what);
+        // Signals reach the group in real time, whatever clock times the run.
+        let stopped = proc.stop(&System);
+        // The deadline is the cause when the run timed out; a failed cleanup
+        // follows it rather than replacing it.
+        let (status, stdout, took) = match measured {
+            Ok(measured) => measured,
+            Err(timed_out) => {
+                return Err(match stopped {
+                    Ok(()) => timed_out,
+                    Err(cleanup) => format!("{timed_out}; {cleanup}"),
+                });
+            }
+        };
+        stopped?;
+        let stderr = stderr
+            .recv_timeout(STOP)
+            .map_err(|_| format!("the output of {what} stayed open"))?;
+        Ok((
+            Finished {
+                status,
+                stdout,
+                stderr,
+            },
+            took,
+        ))
+    })
+}
+
+/// The stdout text with its closing time, the exit status and the
+/// spawn-to-EOF duration: EOF ends the timing, the exit only ends the run.
+fn eof_once(
+    proc: &mut Proc,
+    eof: mpsc::Receiver<(String, Instant)>,
+    clock: &dyn Clock,
+    within: Duration,
+    what: &str,
+) -> Result<(ExitStatus, String, Duration), String> {
+    let wait = left(clock, proc.spawned + within, what)?;
+    let (stdout, eof) = eof
+        .recv_timeout(wait)
+        .map_err(|_| format!("timed out waiting for {what}"))?;
+    let took = eof.saturating_duration_since(proc.spawned);
+    // The exit poll only runs after EOF was read.
+    proc.exits(clock, within)?;
+    match proc
+        .child
+        .try_wait()
+        .map_err(|err| format!("waiting for {what}: {err}"))?
+    {
+        None => Err(format!("timed out waiting for {what}")),
+        Some(status) => Ok((status, stdout, took)),
+    }
 }
 
 /// Reads `pipe` to its end on a thread, which sends the text once.

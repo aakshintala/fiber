@@ -8,7 +8,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use fakes::{ProviderServer, Response};
@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use crate::home::Home;
 use crate::idle::{Ctx, Samples, Workload};
 use crate::linux;
-use crate::run::{self, Session};
+use crate::run::{self, Proc, Session};
 
 /// The workloads every run of the harness repeats.
 pub(crate) const WORKLOADS: [Workload; 2] = [
@@ -53,7 +53,7 @@ const TOOL_CALLS: usize = 429;
 
 /// The handoff trigger: `handoff.tokens`' default of 400,000 comes before
 /// 0.7 of the fake model's 1,000,000-token window.
-const TRIGGER_TOKENS: usize = 400_000;
+pub(crate) const TRIGGER_TOKENS: usize = 400_000;
 
 /// "A 300,000-token context is about 1.2 MB of text".
 pub(crate) const BYTES_PER_TOKEN: usize = 4;
@@ -292,6 +292,25 @@ pub(crate) fn turn_bytes(lines: &[(usize, Value)]) -> Result<usize, String> {
         }
     }
     Err("the log has no turn_completed after its turn_started".to_owned())
+}
+
+/// `fiber hub serve --installed` in `home`, up once its socket exists: an
+/// installed hub ignores the idle exit, so no timed sample includes a hub
+/// start.
+pub(crate) fn start_hub(ctx: &Ctx<'_>, home: &Home) -> Result<Proc, String> {
+    let mut command = run::command(home.fiber(), home.root(), &home.home(), ctx.path.as_deref());
+    command
+        .arg("hub")
+        .arg("serve")
+        .arg("--installed")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let hub = Proc::spawn(&mut command, ctx.clock)?;
+    run::poll(ctx.clock, READY, "the hub to listen", || {
+        Ok(home.hub_socket().exists())
+    })?;
+    Ok(hub)
 }
 
 /// Runs `measure` in `home`, then removes it and every process left in it.

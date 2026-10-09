@@ -16,10 +16,12 @@
     reason = "the harness reports usage and errors on stderr"
 )]
 
+mod attach;
 mod busy;
 mod home;
 mod idle;
 mod linux;
+mod listing;
 mod paging;
 mod pty;
 mod resume;
@@ -97,7 +99,8 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     })
 }
 
-/// Each workload `args` selects, with its run count.
+/// Each workload `args` selects, with its run count. Sampled workloads
+/// take their samples inside one run.
 fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32)> {
     let paging = paging::WORKLOADS.iter().filter(|_| args.paging.is_some());
     let repeated = idle::WORKLOADS
@@ -107,8 +110,13 @@ fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32)> {
         .chain(paging)
         .map(|workload| (workload, args.runs));
     let once = busy::ONCE.iter().map(|workload| (workload, 1));
+    let sampled = listing::SAMPLED
+        .iter()
+        .chain(attach::SAMPLED.iter())
+        .map(|workload| (workload, 1));
     repeated
         .chain(once)
+        .chain(sampled)
         .filter(|(workload, _)| args.only == Only::All || workload.timing)
         .collect()
 }
@@ -128,6 +136,7 @@ fn bench(args: &Args) -> Value {
                 clock: &clock,
                 idle: Duration::from_secs(args.idle_secs),
                 path: std::env::var_os("PATH"),
+                runs: args.runs,
                 paging: args.paging.as_deref(),
             };
             for (workload, runs) in selected(args) {
