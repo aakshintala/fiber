@@ -325,8 +325,9 @@ fn keymap_panel(c: &Look, cols: usize, rows: usize) -> Vec<super::Row> {
     ];
     let mut body = bind_rows(&vis, true, inner);
     let total = body.len();
-    // The chrome around the body: edges, blank, footer.
-    let cap = rows.saturating_sub(chrome.len() + 4);
+    // The chrome around the body: edges, blank, footer, and the scroll
+    // indicator's line in the narrowed view, so the ▀ edge never drops.
+    let cap = rows.saturating_sub(chrome.len() + if c.narrow { 5 } else { 4 });
     let off = if c.narrow { clamp_scroll(NARROW_SCROLL, total, cap) } else { 0 };
     let rest = total.saturating_sub(off + cap);
     let mut shown: Vec<super::Row> = body.drain(off..).take(cap).collect();
