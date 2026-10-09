@@ -46,7 +46,6 @@ mod focus;
 mod form;
 #[path = "history.rs"]
 mod history;
-#[path = "app_home.rs"]
 mod home;
 mod keyboard;
 mod links;

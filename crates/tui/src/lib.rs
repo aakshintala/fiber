@@ -36,6 +36,7 @@ mod look;
 mod markdown;
 mod mouse;
 mod offer;
+mod open_at;
 mod opener;
 mod osc;
 mod pages;
@@ -69,6 +70,8 @@ pub use attention::Attention;
 pub use configure::{Configure, ConfigureError, Layer, Saved, SettingRow, Shown, WriteScope};
 
 pub use home::Launch;
+
+pub use open_at::OpenAt;
 
 pub use look::ThemeSetting;
 

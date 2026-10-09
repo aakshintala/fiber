@@ -444,6 +444,68 @@ fn a_list_flag_with_a_subcommand_is_a_usage_sentence() {
 }
 
 #[test]
+fn resume_takes_an_optional_id() {
+    let Invocation::Run(Some(Commands::Resume { id })) = parse_from(["fiber", "resume"]) else {
+        panic!("bare resume");
+    };
+    assert_eq!(id, None);
+    let Invocation::Run(Some(Commands::Resume { id })) = parse_from(["fiber", "resume", "s_12"])
+    else {
+        panic!("resume with an id");
+    };
+    assert_eq!(id.as_deref(), Some("s_12"));
+    let help = super::render_help(&["resume"]).unwrap();
+    assert!(
+        help.contains("Open a session in the terminal, or home at the session list"),
+        "{help}"
+    );
+}
+
+#[test]
+fn continue_takes_no_arguments() {
+    let Invocation::Run(Some(Commands::Continue)) = parse_from(["fiber", "continue"]) else {
+        panic!("bare continue");
+    };
+    let help = super::render_help(&["continue"]).unwrap();
+    assert!(
+        help.contains("Open the most recent session in this project"),
+        "{help}"
+    );
+}
+
+#[test]
+fn resume_and_continue_reject_what_they_do_not_take() {
+    for args in [
+        &["fiber", "resume", "a", "b"][..],
+        &["fiber", "resume", ""][..],
+        &["fiber", "continue", "x"][..],
+    ] {
+        let said = sentence(args);
+        assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
+        assert_eq!(said.lines().count(), 1, "{said}");
+    }
+}
+
+#[test]
+fn the_menu_lists_resume_and_continue_under_sessions() {
+    let menu = menu();
+    let sessions = menu
+        .split("\n\n")
+        .find(|group| group.starts_with("Sessions:"))
+        .unwrap();
+    assert!(
+        sessions.lines().any(|l|
+            l == "  resume [<id>]                                                      Open a session in the terminal, or home at the session list"),
+        "{sessions}"
+    );
+    assert!(
+        sessions.lines().any(|l|
+            l == "  continue                                                           Open the most recent session in this project"),
+        "{sessions}"
+    );
+}
+
+#[test]
 fn the_menu_lists_the_sessions_list_under_sessions() {
     let menu = menu();
     let sessions = menu
@@ -1073,6 +1135,8 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
         visible(),
         [
             "ask",
+            "resume",
+            "continue",
             "sessions",
             "models",
             "extension",
@@ -1138,6 +1202,8 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
         visible(),
         [
             "ask",
+            "resume",
+            "continue",
             "sessions",
             "models",
             "extension",
