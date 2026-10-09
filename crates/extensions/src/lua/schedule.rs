@@ -345,7 +345,7 @@ fn settle(
         }) => (thread, target, deadline, timeout, request),
     };
     #[cfg(test)]
-    settle_hook(&target);
+    settle_hook(&target, Pause::Admission);
     // Read before the admission lock below takes it.
     let driver = hub.driver();
     // Every host call is admitted here: a stopped extension, whose callback
@@ -524,7 +524,16 @@ fn settle(
         }
         Request::Callback { port } => {
             drop(shared);
-            (oauth::listen(port, &deliver), None)
+            #[cfg(test)]
+            settle_hook(&target, Pause::Start);
+            let cancel = match oauth::listen(port, &deliver) {
+                Ok(cancel) => Some(cancel),
+                Err(reply) => {
+                    deliver(reply);
+                    None
+                }
+            };
+            (cancel, None)
         }
         Request::Exec(request) => {
             let hub_exec = Arc::clone(hub);
@@ -626,7 +635,17 @@ fn settle(
                 Target::Provider {
                     credential: Some(pair),
                     ..
-                } => oauth::lock(home, pair, &deliver),
+                } => {
+                    #[cfg(test)]
+                    settle_hook(&target, Pause::Start);
+                    match oauth::lock(home, pair, &deliver) {
+                        Ok(cancel) => Some(cancel),
+                        Err(reply) => {
+                            deliver(reply);
+                            None
+                        }
+                    }
+                }
                 Target::Provider {
                     name,
                     function,
@@ -681,14 +700,23 @@ fn settle(
     hub.notify();
 }
 
-/// What a test pauses `settle` with: called with the suspending target.
+/// What a test pauses `settle` with: called with the suspending target and
+/// the stage it reached.
 #[cfg(test)]
-type SettleHook = Arc<dyn Fn(&Target) + Send + Sync>;
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Pause {
+    Admission,
+    Start,
+}
 
-/// A test's pause inside `settle`, after the callback suspended and before
-/// its host work is admitted: it runs without the hub lock, so the test may
-/// abandon the VM or cancel the call there, without sleeps. The hook sees
-/// only calls for the tool it names; every other call passes through.
+/// A test's pause inside `settle`: called with the suspending target.
+#[cfg(test)]
+type SettleHook = Arc<dyn Fn(&Target, Pause) + Send + Sync>;
+
+/// A test's pause inside `settle`, at admission and before an OAuth start:
+/// it runs without the hub lock, so the test may abandon the VM or cancel
+/// the call there, without sleeps. The hook sees only calls for the tool it
+/// names; every other call passes through.
 #[cfg(test)]
 static SETTLE_HOOK: std::sync::Mutex<Option<SettleHook>> = std::sync::Mutex::new(None);
 
@@ -709,13 +737,13 @@ pub(super) fn unpause_settle() {
 }
 
 #[cfg(test)]
-fn settle_hook(target: &Target) {
+fn settle_hook(target: &Target, pause: Pause) {
     let hook = SETTLE_HOOK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
     if let Some(hook) = hook {
-        hook(target);
+        hook(target, pause);
     }
 }
 

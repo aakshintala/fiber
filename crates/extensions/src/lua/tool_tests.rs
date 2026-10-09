@@ -14,6 +14,7 @@ use contract::shapes::{DeclaredEffects, Effect};
 use fakes::clock::FakeClock;
 use serde_json::json;
 
+use super::super::schedule::Pause;
 use super::*;
 
 /// Wall-clock bound on every wait for the extension.
@@ -581,7 +582,10 @@ fn a_cancel_before_exec_admission_ends_the_call_and_keeps_the_extension() {
     super::super::schedule::pause_settle({
         let ext = Arc::clone(&ext);
         let cancel = cancel.clone();
-        Arc::new(move |target: &Target| {
+        Arc::new(move |target: &Target, pause: Pause| {
+            if pause != Pause::Admission {
+                return;
+            }
             if matches!(target, Target::Tool(name) if name == "admit")
                 && !fired.swap(true, Ordering::SeqCst)
             {

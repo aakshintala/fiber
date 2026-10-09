@@ -439,7 +439,10 @@ fn an_abandon_before_admission_starts_no_host_work() {
     pause_settle({
         let exec_hub = Arc::clone(&exec_hub);
         let drive_hub = Arc::clone(&drive_hub);
-        Arc::new(move |target: &Target| {
+        Arc::new(move |target: &Target, pause: Pause| {
+            if pause != Pause::Admission {
+                return;
+            }
             let stopped = || Error::Stopped {
                 extension: "fiber.test/stopped".to_owned(),
             };
@@ -553,9 +556,21 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
     }) as Arc<dyn contract::extension::Drive>);
     pause_settle({
         let hub = Arc::clone(&hub);
-        Arc::new(move |target: &Target| {
-            if let Target::Tool(name) = target
-                && let Some(id) = name.strip_prefix("cancel-").and_then(|id| id.parse().ok())
+        Arc::new(move |target: &Target, pause: Pause| {
+            if pause != Pause::Admission {
+                return;
+            }
+            let name = match target {
+                Target::Tool(name) => Some(name.as_str()),
+                Target::Provider { name, .. } => Some(name.as_str()),
+                Target::Command(_)
+                | Target::Hook { .. }
+                | Target::Timer { .. }
+                | Target::Effects(_) => None,
+            };
+            if let Some(id) = name
+                .and_then(|name| name.strip_prefix("cancel-"))
+                .and_then(|id| id.parse().ok())
             {
                 hub.lock().cancel_call(id);
             }
@@ -563,24 +578,52 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
     });
     let _guard = SettleGuard;
     let lua = mlua::Lua::new();
-    let requests = [
-        Request::Exec(exec::ExecRequest {
-            program: "sh".to_owned(),
-            args: vec![
-                "-c".to_owned(),
-                format!("touch '{}'", exec_marker.display()),
-            ],
-            cwd: dir.path().to_path_buf(),
-            cap: 1024,
-        }),
-        Request::Drive(crate::host::DriveRequest {
-            command: "prompt".to_owned(),
-            args: serde_json::Map::new(),
-        }),
-    ];
-    for request in requests {
+    let callback_port = {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .expect("a free loopback port");
+        listener.local_addr().expect("a bound port").port()
+    };
+    for case in ["exec", "drive", "callback", "lock"] {
         let id = started(&hub);
-        let target = Target::Tool(format!("cancel-{id}"));
+        let pair = crate::lua_provider::CredentialPair {
+            credential: "acme".to_owned(),
+            label: "default".to_owned(),
+        };
+        let (target, request) = match case {
+            "exec" => (
+                Target::Tool(format!("cancel-{id}")),
+                Request::Exec(exec::ExecRequest {
+                    program: "sh".to_owned(),
+                    args: vec![
+                        "-c".to_owned(),
+                        format!("touch '{}'", exec_marker.display()),
+                    ],
+                    cwd: dir.path().to_path_buf(),
+                    cap: 1024,
+                }),
+            ),
+            "drive" => (
+                Target::Tool(format!("cancel-{id}")),
+                Request::Drive(crate::host::DriveRequest {
+                    command: "prompt".to_owned(),
+                    args: serde_json::Map::new(),
+                }),
+            ),
+            "callback" => (
+                Target::Tool(format!("cancel-{id}")),
+                Request::Callback {
+                    port: callback_port,
+                },
+            ),
+            _ => (
+                Target::Provider {
+                    name: format!("cancel-{id}"),
+                    function: "credential",
+                    credential: Some(pair),
+                },
+                Request::Lock,
+            ),
+        };
         let mut parked = Vec::new();
         settle(
             &start_in(dir.path()),
@@ -609,4 +652,255 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
         !drive_marker.exists(),
         "no drive starts for a cancelled call"
     );
+}
+
+/// Neither `oauth::listen` nor `oauth::lock` starts once its call has been
+/// cancelled or its extension has stopped: both start under the admission
+/// lock, so no cancel or stop lands between admission and start. Each case
+/// runs `settle` on a worker with a 5 s deadline; the `Pause::Start` hook
+/// ends the call only when the start runs outside the lock (`Hub::try_lock`
+/// succeeds). Without the lock hold the end lands, the start still goes
+/// ahead and the parked entry keeps the port bound, failing the first
+/// asserts below.
+#[test]
+fn oauth_starts_under_the_admission_lock_so_no_cancel_or_stop_precedes_it() {
+    for (request_kind, ending) in [
+        ("callback", "cancel"),
+        ("callback", "stop"),
+        ("lock", "cancel"),
+        ("lock", "stop"),
+    ] {
+        let case = format!("{request_kind}/{ending}");
+        let dir = fakes::TempDir::new("fiber-schedule-oauth-race");
+        let hub = ready_hub();
+        let id = started(&hub);
+        let name = format!("race-oauth-{id}");
+        let port = {
+            let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .expect("a free loopback port");
+            listener.local_addr().expect("a bound port").port()
+        };
+        let target = Target::Provider {
+            name: name.clone(),
+            function: "credential",
+            credential: Some(crate::CredentialPair {
+                credential: "acme".to_owned(),
+                label: "default".to_owned(),
+            }),
+        };
+        let request = if request_kind == "callback" {
+            Request::Callback { port }
+        } else {
+            Request::Lock
+        };
+        let landed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let held = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        pause_settle({
+            let hub = Arc::clone(&hub);
+            let landed = Arc::clone(&landed);
+            let held = Arc::clone(&held);
+            Arc::new(move |target: &Target, pause: Pause| {
+                if pause != Pause::Start {
+                    return;
+                }
+                if !matches!(target, Target::Provider { name: wanted, .. } if wanted == &name) {
+                    return;
+                }
+                match hub.try_lock() {
+                    Some(mut guard) => {
+                        // The start runs outside the admission lock: end the
+                        // call the way a racing cancel or stop would.
+                        landed.store(true, std::sync::atomic::Ordering::SeqCst);
+                        if ending == "cancel" {
+                            guard.cancel_call(id);
+                        } else {
+                            let unsent = guard.stop(Error::Stopped {
+                                extension: "fiber.test/stopped".to_owned(),
+                            });
+                            drop(guard);
+                            drop(unsent);
+                        }
+                    }
+                    None => {
+                        held.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+            })
+        });
+        let _guard = SettleGuard;
+        let (settled_tx, settled_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        {
+            let hub = Arc::clone(&hub);
+            let target = target.clone();
+            let home = dir.path().to_path_buf();
+            std::thread::spawn(move || {
+                let lua = mlua::Lua::new();
+                let thread = entry(&lua, id).thread;
+                let mut parked = Vec::new();
+                settle(
+                    &start_in(&home),
+                    &hub,
+                    &mut parked,
+                    id,
+                    &target,
+                    Ok(Step::Suspend {
+                        thread,
+                        deadline: None,
+                        timeout: Duration::from_millis(100),
+                        target: target.clone(),
+                        request,
+                    }),
+                );
+                let summary: Vec<(u64, bool)> =
+                    parked.iter().map(|p| (p.id, p._cancel.is_some())).collect();
+                match settled_tx.send(summary) {
+                    Ok(()) | Err(_) => {}
+                }
+                // Held until the asserts ran: dropping it frees the port
+                // and ends the wait.
+                match done_rx.recv_timeout(Duration::from_secs(5)) {
+                    Ok(()) | Err(_) => {}
+                }
+            });
+        }
+        let summary: Vec<(u64, bool)> = settled_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or_else(|_| {
+                panic!("settle returned for {case}: calling code that blocks is a wait too")
+            });
+        let ended = {
+            let shared = hub.lock();
+            shared.cancelled.contains(&id) || !matches!(shared.phase, Phase::Ready(_))
+        };
+        if ended {
+            assert!(
+                summary.is_empty(),
+                "no lock wait began for an ended call in {case}"
+            );
+            if request_kind == "callback" {
+                assert!(
+                    std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_ok(),
+                    "no port was bound for an ended call in {case}"
+                );
+            }
+        }
+        assert!(
+            held.load(std::sync::atomic::Ordering::SeqCst),
+            "the start ran under the admission lock in {case}"
+        );
+        assert!(
+            !landed.load(std::sync::atomic::Ordering::SeqCst),
+            "no cancel or stop preceded the start in {case}"
+        );
+        assert_eq!(
+            summary,
+            vec![(id, true)],
+            "the start parked its cancel handle in {case}"
+        );
+        match done_tx.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+}
+
+/// A failed OAuth start delivers its failure after releasing the lock: a
+/// taken port and the reserved `default.lock` label both fail before any
+/// wait starts, and `settle` returns instead of deadlocking on its own
+/// delivery. A delivery under the lock would time out here.
+#[test]
+fn a_failed_oauth_start_delivers_its_failure_after_releasing_the_lock() {
+    let dir = fakes::TempDir::new("fiber-schedule-oauth-failure");
+    let taken = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .expect("a held loopback port");
+    let port = taken.local_addr().expect("a bound port").port();
+    for request_kind in ["callback", "lock"] {
+        let hub = ready_hub();
+        let id = started(&hub);
+        let (target, request) = if request_kind == "callback" {
+            (
+                Target::Tool("fail-oauth".to_owned()),
+                Request::Callback { port },
+            )
+        } else {
+            (
+                Target::Provider {
+                    name: "fail-oauth".to_owned(),
+                    function: "credential",
+                    credential: Some(crate::CredentialPair {
+                        credential: "acme".to_owned(),
+                        label: "default.lock".to_owned(),
+                    }),
+                },
+                Request::Lock,
+            )
+        };
+        let (settled_tx, settled_rx) = std::sync::mpsc::channel();
+        {
+            let hub = Arc::clone(&hub);
+            let target = target.clone();
+            let home = dir.path().to_path_buf();
+            std::thread::spawn(move || {
+                let lua = mlua::Lua::new();
+                let thread = entry(&lua, id).thread;
+                let mut parked = Vec::new();
+                settle(
+                    &start_in(&home),
+                    &hub,
+                    &mut parked,
+                    id,
+                    &target,
+                    Ok(Step::Suspend {
+                        thread,
+                        deadline: None,
+                        timeout: Duration::from_millis(100),
+                        target: target.clone(),
+                        request,
+                    }),
+                );
+                let summary: Vec<(u64, bool)> =
+                    parked.iter().map(|p| (p.id, p._cancel.is_some())).collect();
+                match settled_tx.send(summary) {
+                    Ok(()) | Err(_) => {}
+                }
+            });
+        }
+        let summary: Vec<(u64, bool)> = settled_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or_else(|_| {
+                panic!("settle returned for {request_kind}: it did not deliver under the lock")
+            });
+        {
+            let shared = hub.lock();
+            assert_eq!(
+                shared.replies.len(),
+                1,
+                "one failure was delivered for {request_kind}"
+            );
+            let (reply_id, reply) = &shared.replies[0];
+            assert_eq!(*reply_id, id, "the failure is for the call");
+            match reply {
+                Reply::Query(Err((code, _))) if request_kind == "callback" => {
+                    assert_eq!(*code, contract::ErrorCode::IoFailed);
+                }
+                Reply::Lock(Err(crate::host::LockError::Coded((code, _))))
+                    if request_kind == "lock" =>
+                {
+                    assert_eq!(*code, contract::ErrorCode::IoFailed);
+                }
+                Reply::Http(_)
+                | Reply::Drive(_)
+                | Reply::Exec(_)
+                | Reply::Query(_)
+                | Reply::Lock(_)
+                | Reply::Ask(_)
+                | Reply::Slept => panic!("no failure was delivered for {request_kind}"),
+            }
+        }
+        assert_eq!(
+            summary,
+            vec![(id, false)],
+            "a failed start parks no cancel handle for {request_kind}"
+        );
+    }
 }
