@@ -64,13 +64,6 @@ pub(crate) fn page_range(arguments: &Map<String, Value>) -> Result<Option<PageRa
 
 /// Parses `N` or `N-M`: ASCII digits only, `1 <= N <= M`, each fitting `u32`.
 fn parse_range(text: &str) -> Option<PageRange> {
-    if text.is_empty()
-        || !text
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || byte == b'-')
-    {
-        return None;
-    }
     let (first_text, last_text) = match text.split_once('-') {
         Some((first, last)) => (first, last),
         None => (text, text),
@@ -83,9 +76,6 @@ fn parse_range(text: &str) -> Option<PageRange> {
         return None;
     }
     // A second `-` leaves a non-digit in one half, refused above.
-    if last_text.contains('-') {
-        return None;
-    }
     let first: u32 = first_text.parse().ok()?;
     let last: u32 = last_text.parse().ok()?;
     if first < 1 || first > last {
@@ -175,7 +165,7 @@ pub(crate) fn read(
         Some(range) => format!("PDF: pages {}-{} of {total}.\n", range.first, range.last),
         None => format!("PDF: {page_count} pages.\n"),
     };
-    match render_pages(child, path, &stem, page_count, cancel) {
+    match render_pages(child, &stem, page_count, cancel) {
         Ok(pages) => {
             let part = PdfPart::new(format!("artifacts/{stem}.pdf"), page_count, Some(pages));
             match part {
@@ -306,7 +296,6 @@ enum RenderError {
 /// and no raw `<stem>-<n>.png` is left behind.
 fn render_pages(
     child: &ImageChild,
-    _path: &Path,
     stem: &str,
     page_count: u32,
     cancel: &dyn Cancel,

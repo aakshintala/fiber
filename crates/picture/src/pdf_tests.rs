@@ -69,15 +69,6 @@ fn pdf_bytes(pages: usize) -> Vec<u8> {
     bytes
 }
 
-fn args(values: &[&std::path::Path], extra: &[&str]) -> Vec<OsString> {
-    let mut out: Vec<OsString> = values
-        .iter()
-        .map(|value| value.as_os_str().to_owned())
-        .collect();
-    out.extend(extra.iter().map(OsString::from));
-    out
-}
-
 fn child(arguments: &[OsString]) -> (i32, String, String) {
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let code = run(arguments, &mut stdout, &mut stderr);
@@ -99,10 +90,6 @@ fn whole_at_ten_pages_writes_the_input_bytes_unchanged() {
     let dir = fakes::TempDir::new("fiber-pdf-whole");
     let bytes = pdf_bytes(10);
     let input = write_input(dir.path(), "in.pdf", &bytes);
-    let arguments = args(
-        &[&input, dir.path(), "p_whole".as_ref()],
-        &["pdf", "placeholder"],
-    );
     // Build the real 5-argument form: pdf <input> <dir> <stem> <what>.
     let real = vec![
         OsString::from("pdf"),
@@ -121,7 +108,6 @@ fn whole_at_ten_pages_writes_the_input_bytes_unchanged() {
         std::fs::read(dir.path().join("p_whole10.pdf")).unwrap(),
         bytes
     );
-    drop(arguments);
 }
 
 #[test]

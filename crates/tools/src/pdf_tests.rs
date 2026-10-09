@@ -173,9 +173,6 @@ fn the_whole_path_renders_two_pages_in_order() {
         fs::read_to_string(dir.path().join("what")).unwrap().trim(),
         "whole=10"
     );
-    // The file is seen for `write`.
-    let files = Files::new(dir.path().to_path_buf());
-    drop(files);
 }
 
 #[test]
@@ -285,29 +282,27 @@ fn an_unreadable_pdf_is_unsupported_file_with_the_childs_message() {
 
 #[test]
 fn pages_on_a_text_a_png_and_a_directory_are_invalid_arguments() {
-    for name in ["fiber-pdf-r9-text", "fiber-pdf-r9-png", "fiber-pdf-r9-dir"] {
-        let dir = TempDir::new(name);
-        fs::write(dir.path().join("a.txt"), "hi\n").unwrap();
-        fs::write(dir.path().join("a.png"), b"\x89PNG\r\n\x1a\nxxxx").unwrap();
-        fs::create_dir(dir.path().join("sub")).unwrap();
-        let fiber = fiber_stub(dir.path(), r#"touch "$(dirname "$0")/ran""#, IMAGE_BODY);
-        let ppm = ppm_stub(dir.path(), PPM_OK);
-        for path in ["a.txt", "a.png", "sub"] {
-            let output = run(
-                dir.path(),
-                &fiber,
-                &ppm,
-                json!({"path": path, "pages": "1-2"}),
-            );
-            assert_eq!(code(&output), Some(ErrorCode::InvalidArguments), "{path}");
-            assert!(
-                message(&output).contains("`pages` applies only to a PDF"),
-                "{path}: {}",
-                message(&output)
-            );
-        }
-        assert!(!dir.path().join("ran").exists());
+    let dir = TempDir::new("fiber-pdf-r9");
+    fs::write(dir.path().join("a.txt"), "hi\n").unwrap();
+    fs::write(dir.path().join("a.png"), b"\x89PNG\r\n\x1a\nxxxx").unwrap();
+    fs::create_dir(dir.path().join("sub")).unwrap();
+    let fiber = fiber_stub(dir.path(), r#"touch "$(dirname "$0")/ran""#, IMAGE_BODY);
+    let ppm = ppm_stub(dir.path(), PPM_OK);
+    for path in ["a.txt", "a.png", "sub"] {
+        let output = run(
+            dir.path(),
+            &fiber,
+            &ppm,
+            json!({"path": path, "pages": "1-2"}),
+        );
+        assert_eq!(code(&output), Some(ErrorCode::InvalidArguments), "{path}");
+        assert!(
+            message(&output).contains("`pages` applies only to a PDF"),
+            "{path}: {}",
+            message(&output)
+        );
     }
+    assert!(!dir.path().join("ran").exists());
 }
 
 #[test]
