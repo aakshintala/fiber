@@ -426,10 +426,7 @@ fn session_card_with_budget() {
         spend(900, 100, 50, 200, serde_json::json!(0.41), 1.10),
         Some(serde_json::json!({"tokens": 500, "window": 1000})),
     ));
-    insta::assert_snapshot!(
-        "session_card_with_budget",
-        super::super::text(&draw_panel(&app))
-    );
+    insta::assert_snapshot!("session_card_with_budget", screen(&app, 160, 40));
 }
 
 #[test]
@@ -567,6 +564,15 @@ fn a_name_listed_twice_places_one_card() {
         cards(&list(&["plan/tasks", "plan/tasks"]), &widgets),
         vec![super::Card::Widget(0)]
     );
+}
+
+/// Renders `app` on a `width` by `height` screen as text: the whole
+/// in-memory screen, trailing spaces trimmed.
+fn screen(app: &App, width: u16, height: u16) -> String {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    crate::view::text(&buf)
 }
 
 /// Draws only the panel rect of `app`.
