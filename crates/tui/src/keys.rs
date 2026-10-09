@@ -61,6 +61,8 @@ pub(crate) enum Key {
     AltDigit(u8),
     /// Ctrl+V (`0x16`, `CSI 118;5u`): `paste_image`.
     CtrlV,
+    /// Ctrl+L (`0x0c`, `CSI 108;5u`): `model_picker`.
+    CtrlL,
 }
 
 /// One key that edits the draft (`docs/tui.md`, "The input box",
@@ -207,6 +209,7 @@ pub(crate) fn default_event(stroke: &Stroke) -> Option<Event> {
         "ctrl+g" => key(Key::CtrlG),
         "ctrl+r" => key(Key::CtrlR),
         "ctrl+v" => key(Key::CtrlV),
+        "ctrl+l" => key(Key::CtrlL),
         "ctrl+f" | "super+f" => key(Key::CtrlF),
         "ctrl+j" => edit(Edit::CtrlJ),
         "alt+a" => key(Key::AltA),

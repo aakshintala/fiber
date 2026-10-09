@@ -531,6 +531,20 @@ fn ctrl_v_in_legacy_and_kitty_forms() {
 }
 
 #[test]
+fn ctrl_l_in_legacy_and_kitty_forms() {
+    assert_eq!(
+        feed_all(&[&[0x0cu8] as &[u8]]),
+        vec![Event::Key(Key::CtrlL)]
+    );
+    assert_eq!(feed_all(&[b"\x1b[108;5u"]), vec![Event::Key(Key::CtrlL)]);
+    // A lock key changes nothing; another modifier is no binding.
+    assert_eq!(feed_all(&[b"\x1b[108;69u"]), vec![Event::Key(Key::CtrlL)]);
+    for bytes in [b"\x1b[108;6u".as_slice(), b"\x1b[108;3u"] {
+        assert!(feed_all(&[bytes]).is_empty(), "{bytes:?}");
+    }
+}
+
+#[test]
 fn esc_x_in_one_read_is_alt_x() {
     assert_eq!(feed_all(&[b"\x1bx"]), vec![Event::Key(Key::AltX)]);
     // With kitty's flags, Alt+X is `CSI 120;3u`.
@@ -1105,6 +1119,7 @@ fn default_event_matches_the_parity_table() {
         (modified(Code::Char('g'), ctrl), key(Key::CtrlG)),
         (modified(Code::Char('r'), ctrl), key(Key::CtrlR)),
         (modified(Code::Char('v'), ctrl), key(Key::CtrlV)),
+        (modified(Code::Char('l'), ctrl), key(Key::CtrlL)),
         (modified(Code::Char('f'), ctrl), key(Key::CtrlF)),
         (modified(Code::Char('f'), super_), key(Key::CtrlF)),
         (modified(Code::Char('j'), ctrl), edit(Edit::CtrlJ)),

@@ -161,6 +161,7 @@ impl App {
             | Key::CtrlG
             | Key::CtrlR
             | Key::CtrlV
+            | Key::CtrlL
             | Key::CtrlF => None,
         }
     }
@@ -372,7 +373,7 @@ impl App {
                 }
             }
             // Ctrl+V never reaches the draft behind an open panel.
-            Key::CtrlV => {}
+            Key::CtrlV | Key::CtrlL => {}
             Key::Char(_)
             | Key::Backspace
             | Key::CtrlC
@@ -547,6 +548,7 @@ impl App {
             | Key::CtrlG
             | Key::CtrlR
             | Key::CtrlV
+            | Key::CtrlL
             | Key::CtrlF => Some(top),
         };
         Some(Effect::None)

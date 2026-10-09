@@ -106,7 +106,7 @@ impl App {
                 }
                 Some(Effect::None)
             }
-            Key::Char(_) | Key::Backspace | Key::CtrlR | Key::CtrlV | Key::CtrlF => {
+            Key::Char(_) | Key::Backspace | Key::CtrlR | Key::CtrlV | Key::CtrlL | Key::CtrlF => {
                 Some(Effect::None)
             }
             Key::CtrlC

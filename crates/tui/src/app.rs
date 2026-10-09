@@ -374,7 +374,7 @@ impl App {
             Key::AltR | Key::AltDigit(_) => Effect::None,
             Key::CtrlR => self.open_search(),
             Key::CtrlV => self.paste.press(self.draft.serial()),
-            Key::CtrlF => Effect::None,
+            Key::CtrlF | Key::CtrlL => Effect::None,
             Key::CtrlG => self.open_in_editor(),
             Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),
         }
