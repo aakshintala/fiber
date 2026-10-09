@@ -887,16 +887,10 @@ fn an_open_view_runs_and_steers_again_after_its_job_restarts() {
     start_delegate(&mut app, "j_1", DELEGATE_A);
     opened_item(&mut app, "j_1");
     complete(&mut app, "j_1");
-    assert!(!app
-        .item_view()
-        .unwrap_or_else(|| panic!("a view"))
-        .running);
+    assert!(!app.item_view().unwrap_or_else(|| panic!("a view")).running);
     // The same job id runs again: the open view returns to running.
     start_delegate(&mut app, "j_1", DELEGATE_A);
-    assert!(app
-        .item_view()
-        .unwrap_or_else(|| panic!("a view"))
-        .running);
+    assert!(app.item_view().unwrap_or_else(|| panic!("a view")).running);
     app.draft.set("focus on the tests");
     let out = match app.on_key(Key::Enter, clock.now()) {
         Effect::Send(lines) => commands(lines),
@@ -952,9 +946,7 @@ fn reopening_restarts_the_call_count_for_the_replay() {
     app.on_line(other_line(DELEGATE_A, "tool_call_completed", json!({})));
     app.on_line(other_line(DELEGATE_A, "tool_call_completed", json!({})));
     assert_eq!(
-        app.item_view()
-            .unwrap_or_else(|| panic!("a view"))
-            .calls,
+        app.item_view().unwrap_or_else(|| panic!("a view")).calls,
         Some(2)
     );
     app.close_item();
