@@ -9,6 +9,44 @@ use contract::events::Event;
 
 use crate::{EVENTS, Error};
 
+/// The session used most recently in `sessions`
+/// (`docs/invocation.md`, "Commands and flags"): the one whose log's
+/// last line is newest, live or exited alike. A directory counts only
+/// when [`resolve`] would accept it, and never when its first line names
+/// a parent: a delegate resumes only through its parent
+/// (`docs/delegates.md`), which the hub refuses to resume. Activity is
+/// the `ts` of the log's last complete line; when that line does not
+/// parse, or holds no numeric `ts`, the first line's `ts` stands in, so
+/// a session is never skipped for a corrupt tail. Ties go to the greater
+/// id. A missing `sessions` directory holds no candidate.
+pub fn most_recent(sessions: &Path, in_project: &dyn Fn(&str) -> bool) -> Option<SessionId> {
+    let entries = std::fs::read_dir(sessions).ok()?;
+    let mut best: Option<(u64, SessionId)> = None;
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false)
+            || !entry.path().join(EVENTS).is_file()
+        {
+            continue;
+        }
+        let Some(opening) = opening(&entry.path(), in_project) else {
+            continue;
+        };
+        if opening.delegate {
+            continue;
+        }
+        let activity = crate::last_ts(&entry.path()).unwrap_or(opening.ts);
+        let id = SessionId(entry.file_name().to_string_lossy().into_owned());
+        let newer = match &best {
+            None => true,
+            Some((ts, winner)) => (activity, &id) > (*ts, winner),
+        };
+        if newer {
+            best = Some((activity, id));
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
 /// Resolves `selector` to the session it names in `sessions`: a name that
 /// equals it, or the one name it prefixes. A directory is a session only
 /// when its first complete line is `session_started` (`docs/events.md`,
@@ -67,18 +105,33 @@ pub fn resolve(
 /// log, a torn first line, or a first line that does not parse all read as
 /// no first line at all.
 fn is_session(dir: &Path, in_project: &dyn Fn(&str) -> bool) -> bool {
-    let mut lines = match crate::lines(dir) {
-        Ok(lines) => lines,
-        Err(_) => return false,
-    };
-    let Some(first) = lines.next() else {
-        return false;
-    };
-    let Ok(line) = first else {
-        return false;
-    };
+    opening(dir, in_project).is_some()
+}
+
+/// What `dir`'s first complete line says, when it holds one of this
+/// project's sessions: its `ts`, and whether it names a parent, which
+/// makes the session a delegate (`docs/delegates.md`). `None` the same
+/// way [`is_session`] says no: an empty log, a torn first line, a first
+/// line that does not parse or is not `session_started`, or a workspace
+/// `in_project` refuses.
+struct Opening {
+    /// The first line's `ts`.
+    ts: u64,
+    /// The first line names a parent.
+    delegate: bool,
+}
+
+fn opening(dir: &Path, in_project: &dyn Fn(&str) -> bool) -> Option<Opening> {
+    let mut lines = crate::lines(dir).ok()?;
+    let first = lines.next()?;
+    let line = first.ok()?;
     match Event::from_envelope(&line) {
-        Ok(Some(Event::SessionStarted(started))) => in_project(&started.workspace),
-        _ => false,
+        Ok(Some(Event::SessionStarted(started))) if in_project(&started.workspace) => {
+            Some(Opening {
+                ts: line.ts,
+                delegate: started.parent.is_some(),
+            })
+        }
+        _ => None,
     }
 }

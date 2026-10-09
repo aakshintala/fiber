@@ -14,7 +14,7 @@ use common::{event, tool_call_started};
 use contract::SessionId;
 use contract::events::Event;
 use log::Log;
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn setup() -> (fakes::TempDir, std::path::PathBuf) {
     let root = fakes::TempDir::new("fiber-resolve");
@@ -252,4 +252,220 @@ fn a_torn_first_line_is_ignored() {
         Err(log::Error::NotFound(_))
     ));
     assert_eq!(log::resolve(&sessions, "s_t", &|_| true).unwrap().0, "s_t2");
+}
+
+/// Session `id` whose log holds `text` byte for byte.
+fn logged_raw(sessions: &std::path::Path, id: &str, text: &str) {
+    let dir = sessions.join(id);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("events.jsonl"), text).unwrap();
+}
+
+/// A `session_started` envelope line for `id` at `ts` in `workspace`.
+fn started_line(id: &str, ts: u64, workspace: &str) -> Value {
+    json!({"kind": "session_started", "session_id": id, "ts": ts, "schema_version": 1,
+        "payload": {"workspace": workspace,
+            "variables": {"path": "/usr/bin", "names": [], "source": "inherited"}}})
+}
+
+/// An envelope line of `kind` for `id` with `ts`, a JSON value so the test
+/// can hold a non-numeric one.
+fn line(id: &str, kind: &str, ts: Value) -> Value {
+    json!({"kind": kind, "session_id": id, "ts": ts, "schema_version": 1, "payload": {}})
+}
+
+/// Session `id` whose log is `lines`, each one complete line.
+fn logged(sessions: &std::path::Path, id: &str, lines: &[Value]) {
+    let mut text = String::new();
+    for line in lines {
+        text.push_str(&line.to_string());
+        text.push('\n');
+    }
+    logged_raw(sessions, id, &text);
+}
+
+#[test]
+fn the_session_with_the_newest_last_line_wins() {
+    let (_root, sessions) = setup();
+    // Started later but idle longer loses to the session active latest.
+    logged(
+        &sessions,
+        "s_old",
+        &[
+            started_line("s_old", 200, "/w"),
+            line("s_old", "fiber_exited", json!(200)),
+        ],
+    );
+    logged(
+        &sessions,
+        "s_new",
+        &[
+            started_line("s_new", 100, "/w"),
+            line("s_new", "fiber_exited", json!(300)),
+        ],
+    );
+
+    assert_eq!(log::most_recent(&sessions, &|_| true).unwrap().0, "s_new");
+}
+
+#[test]
+fn a_tie_goes_to_the_greater_id() {
+    let (_root, sessions) = setup();
+    logged(
+        &sessions,
+        "s_m2",
+        &[
+            started_line("s_m2", 100, "/w"),
+            line("s_m2", "fiber_exited", json!(300)),
+        ],
+    );
+    logged(
+        &sessions,
+        "s_m1",
+        &[
+            started_line("s_m1", 200, "/w"),
+            line("s_m1", "fiber_exited", json!(300)),
+        ],
+    );
+
+    assert_eq!(log::most_recent(&sessions, &|_| true).unwrap().0, "s_m2");
+}
+
+#[test]
+fn a_delegate_is_skipped_even_when_latest() {
+    let (_root, sessions) = setup();
+    let mut started = started_line("s_d", 100, "/w");
+    started["payload"]["parent"] =
+        json!({"session_id": "s_p", "delegate_id": "j_0123456789abcdef"});
+    logged(
+        &sessions,
+        "s_d",
+        &[started, line("s_d", "fiber_exited", json!(999))],
+    );
+    logged(
+        &sessions,
+        "s_n",
+        &[
+            started_line("s_n", 100, "/w"),
+            line("s_n", "fiber_exited", json!(200)),
+        ],
+    );
+
+    assert_eq!(log::most_recent(&sessions, &|_| true).unwrap().0, "s_n");
+}
+
+#[test]
+fn directories_no_resolve_would_accept_are_skipped() {
+    let (_root, sessions) = setup();
+    // A first line that is not `session_started`.
+    logged(
+        &sessions,
+        "s_bad",
+        &[line("s_bad", "tool_call_started", json!(999))],
+    );
+    // No log at all.
+    fs::create_dir_all(sessions.join("s_ghost")).unwrap();
+    // Another workspace's session, newest of all.
+    logged(
+        &sessions,
+        "s_other",
+        &[
+            started_line("s_other", 100, "/else"),
+            line("s_other", "fiber_exited", json!(999)),
+        ],
+    );
+    logged(
+        &sessions,
+        "s_good",
+        &[
+            started_line("s_good", 100, "/w"),
+            line("s_good", "fiber_exited", json!(200)),
+        ],
+    );
+    let in_project = |workspace: &str| workspace == "/w";
+
+    assert_eq!(
+        log::most_recent(&sessions, &in_project).unwrap().0,
+        "s_good"
+    );
+}
+
+#[test]
+fn a_torn_suffix_is_ignored() {
+    let (_root, sessions) = setup();
+    // Bytes after the last newline are torn: the preceding complete
+    // line's `ts` counts, beating the competitor.
+    let text = format!(
+        "{}\n{}\n{{\"kind\": \"fiber_exited\", \"ts\": 900",
+        started_line("s_t", 100, "/w"),
+        line("s_t", "assistant_message_completed", json!(400)),
+    );
+    logged_raw(&sessions, "s_t", &text);
+    logged(
+        &sessions,
+        "s_c",
+        &[
+            started_line("s_c", 100, "/w"),
+            line("s_c", "fiber_exited", json!(300)),
+        ],
+    );
+
+    assert_eq!(log::most_recent(&sessions, &|_| true).unwrap().0, "s_t");
+}
+
+#[test]
+fn an_unparseable_last_line_falls_back_to_the_started_ts() {
+    let (_root, sessions) = setup();
+    // The last complete line does not parse, so the started `ts` counts
+    // and still beats the competitor.
+    let text = format!("{}\nnot json at all\n", started_line("s_f", 500, "/w"));
+    logged_raw(&sessions, "s_f", &text);
+    logged(
+        &sessions,
+        "s_c",
+        &[
+            started_line("s_c", 100, "/w"),
+            line("s_c", "fiber_exited", json!(400)),
+        ],
+    );
+
+    assert_eq!(log::most_recent(&sessions, &|_| true).unwrap().0, "s_f");
+}
+
+#[test]
+fn a_last_line_without_a_numeric_ts_falls_back_to_the_started_ts() {
+    let (_root, sessions) = setup();
+    logged(
+        &sessions,
+        "s_f",
+        &[
+            started_line("s_f", 500, "/w"),
+            line("s_f", "fiber_exited", json!("soon")),
+        ],
+    );
+    logged(
+        &sessions,
+        "s_c",
+        &[
+            started_line("s_c", 100, "/w"),
+            line("s_c", "fiber_exited", json!(400)),
+        ],
+    );
+
+    assert_eq!(log::most_recent(&sessions, &|_| true).unwrap().0, "s_f");
+}
+
+#[test]
+fn no_candidate_is_none() {
+    let (root, sessions) = setup();
+    // A missing directory.
+    assert!(log::most_recent(&root.path().join("missing"), &|_| true).is_none());
+    // An empty one.
+    assert!(log::most_recent(&sessions, &|_| true).is_none());
+    // Only a delegate.
+    let mut started = started_line("s_d", 100, "/w");
+    started["payload"]["parent"] =
+        json!({"session_id": "s_p", "delegate_id": "j_0123456789abcdef"});
+    logged(&sessions, "s_d", &[started]);
+    assert!(log::most_recent(&sessions, &|_| true).is_none());
 }
