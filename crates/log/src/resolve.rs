@@ -23,6 +23,7 @@ pub fn most_recent(sessions: &Path, in_project: &dyn Fn(&str) -> bool) -> Option
     let entries = std::fs::read_dir(sessions).ok()?;
     entries
         .flatten()
+        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
         .filter_map(|entry| {
             let opening = opening(&entry.path(), in_project)?;
             if opening.delegate {

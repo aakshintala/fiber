@@ -469,3 +469,21 @@ fn no_candidate_is_none() {
     logged(&sessions, "s_d", &[started]);
     assert!(log::most_recent(&sessions, &|_| true).is_none());
 }
+
+#[test]
+fn a_symlink_to_a_session_directory_is_skipped() {
+    let (_root, sessions) = setup();
+    logged(
+        &sessions,
+        "s_real",
+        &[
+            started_line("s_real", 100, "/w"),
+            line("s_real", "fiber_exited", json!(300)),
+        ],
+    );
+    // `resolve` rejects a symlink; a link that ties the real session and
+    // wins on id would be chosen if the walk followed it.
+    std::os::unix::fs::symlink(sessions.join("s_real"), sessions.join("s_zlink")).unwrap();
+
+    assert_eq!(log::most_recent(&sessions, &|_| true).unwrap().0, "s_real");
+}
