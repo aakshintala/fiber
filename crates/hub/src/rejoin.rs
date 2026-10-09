@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex, Weak};
 use serde_json::{Map, Value};
 
 use crate::connection::{Hub, lock};
+use crate::feed::kind_of;
 use crate::relay::Relays;
 
 /// Per connection, in `Relays`: what the sweep needs.
@@ -59,10 +60,11 @@ impl Mark {
     /// `fiber_started` can land at that line's start. File IO: never under
     /// the relays lock.
     pub(crate) fn now(home: &Path, session: &str) -> Mark {
-        let _ = (home, session);
+        let log = crate::resume::find_log(home, &contract::SessionId(session.to_owned()));
+        let read = log.as_deref().map_or(0, complete_len);
         Mark {
-            log: None,
-            read: 0,
+            log,
+            read,
             live: false,
             epoch: 0,
         }
@@ -73,6 +75,17 @@ impl Rejoin {
     pub(crate) fn close(&mut self) {
         self.closed = true;
     }
+}
+
+/// The end of the last complete line in the file at `log`: one past its
+/// last newline, or 0 when it has none or cannot be read. Never the raw
+/// length: a torn tail is discarded.
+fn complete_len(log: &Path) -> u64 {
+    let bytes = std::fs::read(log).unwrap_or_default();
+    bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |at| at as u64 + 1)
 }
 
 /// Under the relays lock, in attach, after mint and before spawn.
@@ -273,7 +286,41 @@ fn rejoin_pass(hub: &Arc<Hub>, candidates: Vec<Candidate>) {
 /// than `read` was replaced: resets read to 0 and live to false, then
 /// reads the new file from its start.
 fn advance(mark: Mark) -> Mark {
-    mark
+    let Some(log) = mark.log.clone() else {
+        return mark;
+    };
+    let Ok(bytes) = std::fs::read(&log) else {
+        return mark;
+    };
+    let len = bytes.len() as u64;
+    let (mut read, mut live) = if len < mark.read {
+        // The log was replaced under the same id: start over.
+        (0, false)
+    } else {
+        (mark.read, mark.live)
+    };
+    let mut rest = bytes
+        .get(usize::try_from(read).unwrap_or(usize::MAX)..)
+        .unwrap_or_default()
+        .split(|byte| *byte == b'\n');
+    // Every segment but the last is a complete line: the last is the
+    // partial tail, or empty when the bytes end in a newline.
+    let mut line = rest.next().unwrap_or_default();
+    for next in rest {
+        match kind_of(line) {
+            Some(kind) if kind == "fiber_started" => live = true,
+            Some(kind) if kind == "fiber_exited" || kind == "rewound" => live = false,
+            _ => {}
+        }
+        read += line.len() as u64 + 1;
+        line = next;
+    }
+    Mark {
+        log: Some(log),
+        read,
+        live,
+        epoch: mark.epoch,
+    }
 }
 
 /// The kept subscription for a candidate whose stored mark is still the

@@ -678,7 +678,7 @@ fn closed_since(log: &Path, from: u64) -> bool {
 }
 
 /// The `kind` of one log line. `None` when it does not parse.
-fn kind_of(line: &[u8]) -> Option<String> {
+pub(crate) fn kind_of(line: &[u8]) -> Option<String> {
     let value: Value = serde_json::from_slice(line).ok()?;
     value.get("kind")?.as_str().map(str::to_owned)
 }
