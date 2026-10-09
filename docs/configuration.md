@@ -351,8 +351,9 @@ Fiber writes configuration in these places:
 - dragging the rail's or the panel's edge saves the global `tui.rail.width`
   or `tui.panel.width` (`docs/tui.md`, "Layout")
 - `/credential` saves the global `providers."<name>".credential`, unless the
-  switch is marked as this session only, and `fiber login` writes it when it
-  stores a provider's first label (`docs/model-routing.md`, "Credentials")
+  switch is marked as this session only, and `fiber login`, or the terminal's
+  `/login`, writes it when it stores a provider's first label
+  (`docs/model-routing.md`, "Credentials")
 - `/scoped-models` saves the global `scoped_models`, and the `/keys` screen
   saves the global `keys`, only the bindings that differ from the defaults
 - `host.config.set` writes an extension's settings file

@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/login_view_tests.rs
+expression: "drawn(&login, 80, 24)"
+---
+Log in                                                                         ✕
+Providers
+  acme  key
+  codex  browser
+Secrets
+  acme.api_key
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Key for acme: ••••••
+Label (--as), empty for default:
+> work
+Tab key or label · Enter store · Esc cancel

@@ -9,6 +9,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use contract::ErrorCode;
+use contract::Secret;
 
 use crate::ThemeSetting;
 
@@ -117,6 +118,35 @@ pub struct RulesSection {
     pub rows: Result<Vec<RuleRow>, String>,
 }
 
+/// How a `/login` row logs in (`docs/tui.md`, "Logging in").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginKind {
+    /// A provider whose key goes in the hidden field.
+    Key,
+    /// A provider that logs in through the browser.
+    Browser,
+    /// A secret an installed extension declares.
+    Secret,
+}
+
+/// One `/login` row: a provider or a declared secret, by name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginTarget {
+    /// The provider or secret's name.
+    pub name: String,
+    /// How the row logs in.
+    pub kind: LoginKind,
+}
+
+/// What a login stored: the file under Fiber home, and whether it replaced one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stored {
+    /// The file under Fiber home, such as `credentials/acme/default`.
+    pub path: String,
+    /// Whether it replaced a stored secret.
+    pub replaced: bool,
+}
+
 /// What a revoke did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Revoked {
@@ -179,6 +209,21 @@ pub trait Configure: Send + Sync {
         line: usize,
         text: &str,
     ) -> Result<Revoked, ConfigureError>;
+
+    // `/login`.
+
+    /// The installed providers by name, then the secrets installed
+    /// extensions declare, as `fiber login`'s menu lists them.
+    fn login_targets(&self) -> Result<Vec<LoginTarget>, ConfigureError>;
+
+    /// Stores `key` for provider or secret `name`, under `label` for a
+    /// provider, through the same steps as `fiber login`.
+    fn store_key(
+        &self,
+        name: &str,
+        label: Option<&str>,
+        key: Secret,
+    ) -> Result<Stored, ConfigureError>;
 
     // The `tui.theme` row.
 
