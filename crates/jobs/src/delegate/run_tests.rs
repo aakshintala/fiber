@@ -761,7 +761,7 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
         exited_line(10, "Bound."),
     ]));
     let rig = rig(replies);
-    rig.start(&shell, BOUND, 1024);
+    let done = rig.start(&shell, BOUND, 1024);
     let pgid = pid_in_file(&pidfile);
     let watchdog = Watchdog::group(pgid);
     wait_calls(&rig, 1);
@@ -800,7 +800,11 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
         notice.delegate.as_ref().map(|finish| finish.text.clone()),
         Some("Bound.".into())
     );
-    rig.clock.advance(Duration::from_secs(2));
+    // The report is sent from `retire`: waiting on the runner's return
+    // proves the watch stays at rest (docs/testing.md, "Waits and
+    // timeouts": every wait has a deadline on the wall clock).
+    done.recv_timeout(DEADLINE)
+        .expect("the runner returns after `fiber_exited`");
     assert_eq!(
         rig.script.calls().len(),
         8,
@@ -860,12 +864,16 @@ fn the_watch_is_not_called_again_after_fiber_exited() {
     let rig = rig(vec![WatchReply::Exited(vec![exited_line(1, "Once.")])]);
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
-    rig.start(&shell, BOUND, 1024);
+    let done = rig.start(&shell, BOUND, 1024);
     wait_calls(&rig, 1);
     release_fifo(&fifo, b"go\n");
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Completed);
-    rig.clock.advance(Duration::from_secs(3));
+    // The report is sent from `retire`: waiting on the runner's return
+    // proves the watch stays at rest (docs/testing.md, "Waits and
+    // timeouts": every wait has a deadline on the wall clock).
+    done.recv_timeout(DEADLINE)
+        .expect("the runner returns after `fiber_exited`");
     assert_eq!(rig.script.calls().len(), 1);
     watchdog.stand_down(DEADLINE);
 }
@@ -939,9 +947,11 @@ fn a_stop_on_a_term_ignorer_kills_past_the_bound() {
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
     assert_eq!(rig.registry.stop_delegates(), 1);
-    for _ in 0..12 {
-        rig.clock.advance(Duration::from_millis(500));
-    }
+    // No stepped advance: the driver inside `reported` walks the runner
+    // through its retry parks to the park at the stop bound, whose
+    // advance sends SIGKILL (docs/testing.md, "Waits and timeouts": a
+    // test advances a fake clock only after a signal that the code under
+    // test is waiting on that clock).
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Cancelled);
     assert_eq!(
@@ -1271,7 +1281,7 @@ fn a_blocked_watch_still_lets_a_stop_through() {
     // the clock without it.
     let (release, gate) = mpsc::channel();
     let rig = rig(vec![WatchReply::Block(gate)]);
-    rig.start(&shell, BOUND, 1024);
+    let done = rig.start(&shell, BOUND, 1024);
     let pgid = pid_in_file(&pidfile);
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
@@ -1284,8 +1294,20 @@ fn a_blocked_watch_still_lets_a_stop_through() {
         }
     });
     assert_eq!(rig.registry.stop_delegates(), 1);
-    for _ in 0..12 {
-        rig.clock.advance(Duration::from_millis(500));
+    // The watch is blocked, so `outstanding` keeps the retry out of the
+    // deadline: the runner parks at each poll horizon, then at the stop
+    // bound (docs/testing.md, "Waits and timeouts": a test advances a
+    // fake clock only after a signal that the code under test is waiting
+    // on that clock). Nothing moves the clock before the stop, so the
+    // bound is five polls on from the origin.
+    let t0 = rig.clock.origin();
+    for k in 1..=5 {
+        let at = t0 + Duration::from_secs(k);
+        assert!(
+            rig.clock.await_parked(at, DEADLINE),
+            "the runner parks until {at:?}"
+        );
+        rig.clock.advance(super::POLL);
     }
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Cancelled);
@@ -1304,7 +1326,11 @@ fn a_blocked_watch_still_lets_a_stop_through() {
                 && *signal == rustix::process::Signal::KILL),
         "SIGKILL went out once the bound passed"
     );
-    rig.clock.advance(Duration::from_secs(1));
+    // The report is sent from `retire`: waiting on the runner's return
+    // proves no timer can still fire (docs/testing.md, "Waits and
+    // timeouts": every wait has a deadline on the wall clock).
+    done.recv_timeout(DEADLINE)
+        .expect("the runner returns after the stop");
     assert_eq!(
         rig.script.calls().len(),
         1,
