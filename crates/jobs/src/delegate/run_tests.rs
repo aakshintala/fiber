@@ -1094,6 +1094,7 @@ fn a_blocked_watch_still_lets_a_stop_through() {
     let pgid = pid_in_file(&pidfile);
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
+    wait_calls(&rig, 1);
     assert_eq!(rig.registry.stop_delegates(), 1);
     for _ in 0..12 {
         rig.clock.advance(Duration::from_millis(500));
