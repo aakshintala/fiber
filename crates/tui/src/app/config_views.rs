@@ -13,6 +13,7 @@ use super::{App, Effect};
 use crate::ThemeSetting;
 use crate::configure::Configure;
 use crate::keys::{Edit, Key};
+use crate::rules_view::Rules;
 use crate::settings_view::{Act, Ctx, Settings};
 use crate::swapped::{Frame, List, Spot};
 
@@ -24,6 +25,8 @@ const UNAVAILABLE: &str = "Not available in this terminal.";
 pub(crate) enum ConfigView {
     /// `/settings`.
     Settings,
+    /// `/rules`.
+    Rules,
 }
 
 /// The open view.
@@ -31,6 +34,8 @@ pub(crate) enum ConfigView {
 enum Open {
     /// `/settings`.
     Settings(Settings),
+    /// `/rules`.
+    Rules(Rules),
     /// A view with no seam to read through, by its title.
     Unavailable(&'static str),
 }
@@ -64,7 +69,12 @@ impl App {
                 let workspace = self.workspace();
                 Open::Settings(Settings::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
+            (Some(seam), ConfigView::Rules) => {
+                let workspace = self.workspace();
+                Open::Rules(Rules::open(&self.config_ctx(seam.as_ref(), &workspace)))
+            }
             (None, ConfigView::Settings) => Open::Unavailable("Settings"),
+            (None, ConfigView::Rules) => Open::Unavailable("Rules"),
         };
         self.config_views.open = Some(open);
         Effect::None
@@ -110,6 +120,7 @@ impl App {
                 let ctx = self.config_ctx(seam.as_ref(), &workspace);
                 match &mut self.config_views.open {
                     Some(Open::Settings(settings)) => settings.key(key, &ctx),
+                    Some(Open::Rules(rules)) => rules.key(key, &ctx),
                     Some(Open::Unavailable(_)) | None => esc(key),
                 }
             }
@@ -121,26 +132,39 @@ impl App {
     /// Hands an editing key to the open view's field. `None` with no view
     /// open.
     pub(in crate::app) fn config_view_edit(&mut self, edit: &Edit) -> Option<Effect> {
-        match self.config_views.open.as_mut()? {
-            Open::Settings(settings) => settings.edit_key(edit.clone()),
-            Open::Unavailable(_) => {}
-        }
-        Some(Effect::None)
+        self.config_views.open.as_ref()?;
+        let act = match self.config_views.seam.clone() {
+            Some(seam) => {
+                let workspace = self.workspace();
+                let ctx = self.config_ctx(seam.as_ref(), &workspace);
+                match &mut self.config_views.open {
+                    Some(Open::Settings(settings)) => {
+                        settings.edit_key(edit.clone());
+                        Act::Stay
+                    }
+                    Some(Open::Rules(rules)) => rules.edit_key(edit, &ctx),
+                    Some(Open::Unavailable(_)) | None => Act::Stay,
+                }
+            }
+            None => Act::Stay,
+        };
+        Some(self.config_act(act))
     }
 
     /// A click on the open view's `spot`.
     pub(in crate::app) fn config_view_click(&mut self, spot: Spot) -> Effect {
         let act = match (self.config_views.seam.clone(), spot) {
             (_, Spot::Close) => Act::Close,
-            (Some(seam), Spot::Row(_)) => {
+            (Some(seam), Spot::Row(_) | Spot::Revoke(_)) => {
                 let workspace = self.workspace();
                 let ctx = self.config_ctx(seam.as_ref(), &workspace);
                 match &mut self.config_views.open {
                     Some(Open::Settings(settings)) => settings.click(spot, &ctx),
+                    Some(Open::Rules(rules)) => rules.click(spot, &ctx),
                     Some(Open::Unavailable(_)) | None => Act::Stay,
                 }
             }
-            (None, Spot::Row(_)) => Act::Stay,
+            (None, Spot::Row(_) | Spot::Revoke(_)) => Act::Stay,
         };
         self.config_act(act)
     }
@@ -171,6 +195,7 @@ impl App {
             .map(|(_, tokens)| *tokens);
         Some(match self.config_views.open.as_ref()? {
             Open::Settings(settings) => settings.frame(usage),
+            Open::Rules(rules) => rules.frame(),
             Open::Unavailable(title) => Frame {
                 title: (*title).to_owned(),
                 rows: Vec::new(),
@@ -196,8 +221,10 @@ impl App {
         if let Some(seam) = self.config_views.seam.clone() {
             let workspace = self.workspace();
             let ctx = self.config_ctx(seam.as_ref(), &workspace);
-            if let Some(Open::Settings(settings)) = &mut self.config_views.open {
-                settings.reread(&ctx);
+            match &mut self.config_views.open {
+                Some(Open::Settings(settings)) => settings.reread(&ctx),
+                Some(Open::Rules(rules)) => rules.reread(&ctx),
+                Some(Open::Unavailable(_)) | None => {}
             }
         }
     }

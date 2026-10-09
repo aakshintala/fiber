@@ -433,6 +433,7 @@ impl Settings {
         let shown = self.shown(ctx);
         match (spot, &mut self.mode) {
             (Spot::Close, _) => Act::Close,
+            (Spot::Revoke(_), _) => Act::Stay,
             (Spot::Row(at), Mode::Choices { names, .. }) => match names.get(at).cloned() {
                 Some(name) => self.choose(&name, ctx),
                 None => Act::Stay,

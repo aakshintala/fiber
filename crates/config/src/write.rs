@@ -256,6 +256,54 @@ pub(crate) fn append_line(file: &Path, line: &str) -> Result<(), ConfigError> {
     write_atomic(file, &current, 0o666)
 }
 
+/// Deletes physical line `line` of `file`, counted from 1, when it still
+/// reads `text`: `true` when it removed. Every other byte is kept,
+/// including blank lines, unknown keys, CRLF endings and a final line
+/// with no newline. A line is cut as `str::lines` cuts it. A missing
+/// file, a line number of 0 or past the end, or a line whose text
+/// changed removes nothing and answers `false`, writing nothing; a
+/// missing file gets no directory or lock file. The lock is held from
+/// the read to the rename (`docs/state.md`, "Concurrent access").
+pub(crate) fn remove_line(file: &Path, line: usize, text: &str) -> Result<bool, ConfigError> {
+    let io = |source| ConfigError::Io {
+        file: file.to_path_buf(),
+        source,
+    };
+    if !plain(file, false)? {
+        return Ok(false);
+    }
+    let _lock = locked(file)?;
+    let current = match fs::read(file) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(source) => return Err(io(source)),
+    };
+    let segments: Vec<&[u8]> = current.split_inclusive(|b| *b == b'\n').collect();
+    let Some(segment) = line.checked_sub(1).and_then(|index| segments.get(index)) else {
+        return Ok(false);
+    };
+    let mut held = *segment;
+    let mut newline = false;
+    if let Some(rest) = held.strip_suffix(b"\n") {
+        held = rest;
+        newline = true;
+    }
+    if newline {
+        held = held.strip_suffix(b"\r").unwrap_or(held);
+    }
+    if held != text.as_bytes() {
+        return Ok(false);
+    }
+    let mut rest = Vec::new();
+    for (index, other) in segments.iter().enumerate() {
+        if index + 1 != line {
+            rest.extend_from_slice(other);
+        }
+    }
+    write_atomic(file, &rest, 0o666)?;
+    Ok(true)
+}
+
 /// Reads `file` under its lock, sets one key and writes the whole file back,
 /// keys sorted with a 2-space indent. With `only_if_unset`, a file that
 /// already holds a value at `key` is left alone. `true` when it wrote.
@@ -499,6 +547,45 @@ mod tests {
         worker.join().unwrap();
         let written: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(written, json!({"a": 1, "b": 2, "c": 3}));
+    }
+
+    #[test]
+    fn a_remove_waits_for_the_files_lock_then_keeps_the_other_write() {
+        let dir = TempDir::new("fiber-write-lock");
+        let file = dir.path().join("rules");
+        fs::write(&file, "{\"gone\": 1}\n").unwrap();
+        let setup = file.clone();
+        let held = within("the test to take the file's lock", move || locked(&setup)).unwrap();
+        let (started, started_rx) = mpsc::channel();
+        let (done, done_rx) = mpsc::channel();
+        let worker_file = file.clone();
+        let worker = thread::spawn(move || {
+            started.send(()).unwrap();
+            let removed = remove_line(&worker_file, 1, "{\"gone\": 1}").unwrap();
+            done.send(removed).unwrap();
+        });
+        assert!(
+            started_rx.recv_timeout(DEADLINE).is_ok(),
+            "waited {DEADLINE:?} for the remove to reach the file's lock"
+        );
+        wait_until("the remove to be waiting on the file's lock", || {
+            waiting() == 1
+        });
+        assert!(
+            done_rx.try_recv().is_err(),
+            "the remove finished while the file was locked"
+        );
+        // Another session's line lands while the remove waits: the lock
+        // serializes whole-file writes, it does not hide them.
+        fs::write(&file, "{\"gone\": 1}\n{\"late\": 3}\n").unwrap();
+        drop(held);
+        let removed = match done_rx.recv_timeout(DEADLINE) {
+            Ok(removed) => removed,
+            Err(_) => panic!("waited {DEADLINE:?} for the remove to finish after the release"),
+        };
+        worker.join().unwrap();
+        assert!(removed, "the held line is still there");
+        assert_eq!(fs::read(&file).unwrap(), "{\"late\": 3}\n".as_bytes());
     }
 
     #[test]

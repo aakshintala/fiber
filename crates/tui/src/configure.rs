@@ -87,6 +87,45 @@ pub struct Saved {
     pub warnings: Vec<String>,
 }
 
+/// Which rules file (`docs/configuration.md`, "Standing rules").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RulesScope {
+    /// `rules` at the top of Fiber home.
+    Global,
+    /// `projects/<key>/rules` in Fiber home.
+    Project,
+}
+
+/// One line of a rules file: its physical number from 1, its text, its
+/// rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleRow {
+    /// The line's physical number, counted from 1 over every line.
+    pub line: usize,
+    /// The line's text, without its line ending.
+    pub text: String,
+    /// The rule the line parses to.
+    pub rule: contract::Rule,
+}
+
+/// One rules file: its path, and its rules or why it cannot be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RulesSection {
+    /// The file listed.
+    pub file: PathBuf,
+    /// The file's rules, in order; a missing file holds none.
+    pub rows: Result<Vec<RuleRow>, String>,
+}
+
+/// What a revoke did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Revoked {
+    /// The line was deleted.
+    Removed,
+    /// The line had moved, changed or gone: nothing was written.
+    Stale,
+}
+
 /// Why a read or a write failed: the failure's code and its message,
 /// which the view shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +164,21 @@ pub trait Configure: Send + Sync {
 
     /// Fiber home's `config.json`.
     fn global_file(&self) -> PathBuf;
+
+    // `/rules`.
+
+    /// The global and the project's rules files, for `workspace`'s
+    /// project.
+    fn rules(&self, workspace: &Path) -> Result<(RulesSection, RulesSection), ConfigureError>;
+
+    /// Deletes line `line` of `scope`'s file when it still reads `text`.
+    fn revoke(
+        &self,
+        workspace: &Path,
+        scope: RulesScope,
+        line: usize,
+        text: &str,
+    ) -> Result<Revoked, ConfigureError>;
 
     // The `tui.theme` row.
 

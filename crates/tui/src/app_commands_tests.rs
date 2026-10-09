@@ -208,7 +208,7 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
     // The eighth row, still in the first window.
     assert_eq!(
         selected(&app).as_deref(),
-        Some("/reload  Reloads configuration, MCP servers and extensions.  command")
+        Some("/name <text>  Names the session.  command")
     );
     assert_eq!(app.completions().and_then(|c| c.selected), Some(7));
     app.on_key(Key::Down, now());
@@ -226,17 +226,17 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
     app.on_key(Key::Down, now());
     assert_eq!(
         selected(&app).as_deref(),
-        Some("/?  Opens the key map.  command")
+        Some("/approvals  Reopens the waiting approvals and questions.  command")
     );
     app.on_key(Key::Down, now());
     assert_eq!(
         selected(&app).as_deref(),
-        Some("/help  Opens the key map.  command")
+        Some("/?  Opens the key map.  command")
     );
     app.on_key(Key::Up, now());
     assert_eq!(
         selected(&app).as_deref(),
-        Some("/?  Opens the key map.  command")
+        Some("/approvals  Reopens the waiting approvals and questions.  command")
     );
     // The draft is untouched by moving.
     assert_eq!(app.draft(), "/");

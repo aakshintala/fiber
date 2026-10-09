@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/rules_view_tests.rs
+expression: "drawn(&rules, 80, 24)"
+---
+Rules                                                                          ✕
+Global rules  /home/rules
+✕ allow  shell  npm test  2026-10-07 00:00 UTC  s_01
+✕ deny  shell  (any)
+Project rules  /home/projects/-w/rules
+/home/projects/-w/rules:2: bad  Ctrl+G opens it to fix it.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+↑↓ move · Delete revoke · Ctrl+G open the file · Esc close

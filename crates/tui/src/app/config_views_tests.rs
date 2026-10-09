@@ -448,3 +448,127 @@ fn without_a_seam_only_esc_closes_the_view() {
     app.on_key(Key::Esc, now());
     assert!(!app.config_view_open());
 }
+
+/// Types `/rules` and presses Enter.
+fn slash_rules(app: &mut App) -> Effect {
+    for ch in "/rules".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    app.on_key(Key::Enter, now())
+}
+
+/// A seam with one global rule on line 1.
+fn rules_fake() -> (Arc<Fake>, String) {
+    let fake = fake();
+    let rule = contract::rules::Rule {
+        decision: contract::rules::RuleDecision::Allow,
+        tool: "shell".to_owned(),
+        prefix: "npm test".to_owned(),
+        added: Some(1791331200000),
+        session_id: Some(contract::SessionId("s_01".to_owned())),
+    };
+    let text = serde_json::to_string(&rule).unwrap_or_default();
+    if let Ok(mut rules) = fake.rules.lock() {
+        *rules = Ok((
+            crate::configure::RulesSection {
+                file: PathBuf::from("/home/rules"),
+                rows: Ok(vec![crate::configure::RuleRow {
+                    line: 1,
+                    text: text.clone(),
+                    rule,
+                }]),
+            },
+            crate::configure::RulesSection {
+                file: PathBuf::from("/home/projects/-w/rules"),
+                rows: Ok(Vec::new()),
+            },
+        ));
+    }
+    (fake, text)
+}
+
+#[test]
+fn slash_rules_opens_the_view_attached_and_on_home() {
+    let seam = fake();
+    let mut app = home(Some(Arc::clone(&seam)));
+    assert_eq!(slash_rules(&mut app), Effect::None);
+    assert!(app.config_view_open());
+    assert!(app.input().is_empty());
+    let rows = screen(&app);
+    assert!(
+        rows.first().is_some_and(|row| row.starts_with("Rules")),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.starts_with("Global rules")),
+        "{rows:?}"
+    );
+    assert_eq!(seam.reads(), [PathBuf::from("/w")]);
+
+    let mut app = attached(Some(seam));
+    slash_rules(&mut app);
+    assert!(app.config_view_open());
+    let rows = screen(&app);
+    assert!(rows.iter().any(|row| row.starts_with("Rules")), "{rows:?}");
+}
+
+#[test]
+fn without_a_seam_rules_says_not_available_and_delete_does_nothing() {
+    let mut app = attached(None);
+    slash_rules(&mut app);
+    let frame = app.config_view_screen();
+    assert_eq!(
+        frame.map(|frame| frame.below),
+        Some(vec!["Not available in this terminal.".to_owned()])
+    );
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+    assert!(app.config_view_open());
+    assert!(app.input().is_empty());
+}
+
+#[test]
+fn delete_reaches_the_rules_view_not_the_draft() {
+    let (seam, text) = rules_fake();
+    let mut app = attached(Some(Arc::clone(&seam)));
+    slash_rules(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+    assert_eq!(
+        seam.revokes(),
+        [(
+            PathBuf::from("/w"),
+            crate::configure::RulesScope::Global,
+            1,
+            text
+        )]
+    );
+    assert!(app.input().is_empty());
+    assert!(app.config_view_open());
+}
+
+#[test]
+fn a_click_on_a_rules_x_revokes() {
+    let (seam, text) = rules_fake();
+    let mut app = attached(Some(Arc::clone(&seam)));
+    slash_rules(&mut app);
+    assert_eq!(app.on_click(TargetId::View(Spot::Revoke(1))), Effect::None);
+    assert_eq!(
+        seam.revokes(),
+        [(
+            PathBuf::from("/w"),
+            crate::configure::RulesScope::Global,
+            1,
+            text
+        )]
+    );
+    assert!(app.config_view_open());
+}
+
+#[test]
+fn file_closed_rereads_the_rules() {
+    let seam = fake();
+    let mut app = attached(Some(Arc::clone(&seam)));
+    slash_rules(&mut app);
+    app.config_file_closed(Ok(()));
+    assert_eq!(seam.reads().len(), 2);
+}
