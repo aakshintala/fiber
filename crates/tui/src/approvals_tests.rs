@@ -765,10 +765,11 @@ mod through_the_app {
         let now = fakes::clock::FakeClock::new().now();
         let mut app = attached();
         app.set_size(60, 20);
-        assert_eq!(app.conversation_height(), 19);
+        assert_eq!(app.conversation_height(), 17);
         feed(&mut app, standing_ask(S_A, "a_1", "r_1", "one"));
-        // Header, why, allow once and deny replace the input line.
-        assert_eq!(app.conversation_height(), 16);
+        // Header, why, allow once and deny with the panel's edges
+        // replace the input line.
+        assert_eq!(app.conversation_height(), 14);
         feed(
             &mut app,
             call(S_A, "a_2", "shell", serde_json::json!("w ".repeat(35))),
@@ -776,10 +777,10 @@ mod through_the_app {
         feed(&mut app, standing_ask(S_A, "a_2", "r_2", "two"));
         app.on_key(Key::AltA, now);
         // The call wraps onto two rows.
-        assert_eq!(app.conversation_height(), 14);
+        assert_eq!(app.conversation_height(), 12);
         press(&mut app, Key::Esc, 1, now);
         assert!(app.panel().is_none());
-        assert_eq!(app.conversation_height(), 18);
+        assert_eq!(app.conversation_height(), 16);
     }
 
     #[test]

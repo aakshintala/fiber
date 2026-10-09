@@ -487,11 +487,11 @@ fn the_approvals_row_opens_the_waiting_queue() {
 fn the_conversation_gives_up_the_panel_rows() {
     let mut app = connected();
     app.set_size(80, 24);
-    assert_eq!(app.conversation_height(), 23);
+    assert_eq!(app.conversation_height(), 21);
     type_text(&mut app, "/");
-    assert_eq!(app.conversation_height(), 15);
+    assert_eq!(app.conversation_height(), 13);
     type_text(&mut app, "han");
-    assert_eq!(app.conversation_height(), 22);
+    assert_eq!(app.conversation_height(), 20);
 }
 
 #[test]
@@ -535,14 +535,14 @@ fn the_key_map_scrolls_and_takes_every_key_but_ctrl_c() {
     app.set_size(80, 10);
     turn_starts(&mut app);
     app.on_key(Key::F1, now());
-    // A conversation of 9 rows: a page is 8.
-    assert_eq!(app.conversation_height(), 9);
+    // A conversation of 7 rows: a page is 6.
+    assert_eq!(app.conversation_height(), 7);
     app.on_key(Key::Up, now());
     assert_eq!(app.keymap_top(), Some(0));
     app.on_key(Key::Down, now());
     assert_eq!(app.keymap_top(), Some(1));
     app.on_key(Key::PageDown, now());
-    assert_eq!(app.keymap_top(), Some(9));
+    assert_eq!(app.keymap_top(), Some(7));
     app.on_key(Key::PageUp, now());
     assert_eq!(app.keymap_top(), Some(1));
     app.on_key(Key::PageUp, now());
@@ -556,7 +556,7 @@ fn the_key_map_scrolls_and_takes_every_key_but_ctrl_c() {
         .iter()
         .map(|line| crate::view::rows(ratatui::text::Line::raw(line.as_str()), 80))
         .sum();
-    assert_eq!(last, Some(rows - 9));
+    assert_eq!(last, Some(rows - 7));
     app.on_key(Key::Down, now());
     assert_eq!(app.keymap_top(), last);
     // Other keys do nothing: no typing, no interrupt, no send.

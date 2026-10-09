@@ -230,8 +230,8 @@ fn scrolled_up_the_view_stays_put_and_end_follows_again() {
     app.on_line(delta("s_aaaaaaaaaaaaaaaa", "a_1", "streamed"));
     let after = screen(&app);
     // The rows above the overlay are the rows that were there.
-    let kept: Vec<&str> = before.lines().take(9).collect();
-    assert_eq!(after.lines().take(9).collect::<Vec<_>>(), kept);
+    let kept: Vec<&str> = before.lines().take(8).collect();
+    assert_eq!(after.lines().take(8).collect::<Vec<_>>(), kept);
     assert!(after.contains("↓ New messages below"));
     app.on_key(Key::End, now);
     let followed = screen(&app);
@@ -249,16 +249,16 @@ fn page_down_to_the_bottom_follows_again() {
         app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", &format!("prompt {n}")));
     }
     let bottom = screen(&app);
-    // The bottom shows prompt 25's time through prompt 30: two rows a
-    // turn over sixty rows, eleven of conversation. A page is those 11
+    // The bottom shows prompt 26's time through prompt 30: two rows a
+    // turn over sixty rows, nine of conversation. A page is those 9
     // rows less one, and the top stops at the first row.
     let time = format!("{:>60}", "00:00");
     let prompt = |n: u32| format!("{:>59}", format!("prompt {n}"));
     app.on_key(Key::PageUp, now);
     let shown = screen(&app);
     let shown: Vec<&str> = shown.lines().collect();
-    assert_eq!(shown[0], time, "one page up moves ten rows");
-    assert_eq!(shown[1], prompt(21));
+    assert_eq!(shown[0], time, "one page up moves eight rows");
+    assert_eq!(shown[1], prompt(23));
     // One page down lands exactly on the bottom, which follows again: new
     // output scrolls in with no overlay.
     app.on_key(Key::PageDown, now);
@@ -266,27 +266,27 @@ fn page_down_to_the_bottom_follows_again() {
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "prompt 31"));
     let followed = screen(&app);
     assert!(!followed.contains("↓ New messages below"));
-    assert!(followed.contains(format!("{}\n{}\n>", prompt(31), time).as_str()));
-    // Six pages up reaches the top, where another stops: 51, 41, 31, 21,
-    // 11, 1, then clamped to 0.
-    for _ in 0..6 {
+    assert!(followed.contains(format!("{}\n{}", prompt(31), time).as_str()));
+    // Seven pages up reaches the top, where another stops: 45, 37, 29,
+    // 21, 13, 5, then clamped to 0.
+    for _ in 0..7 {
         app.on_key(Key::PageUp, now);
     }
     assert!(screen(&app).starts_with(format!("{}\n", prompt(1)).as_str()));
     app.on_key(Key::PageUp, now);
     assert!(screen(&app).starts_with(format!("{}\n", prompt(1)).as_str()));
-    // Six pages down lands exactly on the bottom: 10, 20, 30, 40, 50,
-    // then clamped to 51. Odd tops show a turn's time first, even tops
-    // its bubble: row 41 is prompt 21's time, row 10 prompt 6's bubble.
+    // Seven pages down lands exactly on the bottom: 8, 16, 24, 32, 40,
+    // 48, then clamped to 53. Even tops show a turn's bubble first: row
+    // 8 is prompt 5's bubble.
     app.on_key(Key::PageDown, now);
-    assert!(screen(&app).starts_with(format!("{}\n", prompt(6)).as_str()));
-    for _ in 0..5 {
+    assert!(screen(&app).starts_with(format!("{}\n", prompt(5)).as_str()));
+    for _ in 0..6 {
         app.on_key(Key::PageDown, now);
     }
-    assert!(screen(&app).contains(format!("{}\n{}\n>", prompt(31), time).as_str()));
+    assert!(screen(&app).contains(format!("{}\n{}", prompt(31), time).as_str()));
     // PageDown while following does nothing.
     app.on_key(Key::PageDown, now);
-    assert!(screen(&app).contains(format!("{}\n{}\n>", prompt(31), time).as_str()));
+    assert!(screen(&app).contains(format!("{}\n{}", prompt(31), time).as_str()));
 }
 
 #[test]
@@ -298,9 +298,9 @@ fn a_long_draft_shows_its_end() {
     // The draft wraps: its start on the row above, its end on the last.
     let shown = screen(&app);
     let rows: Vec<&str> = shown.lines().collect();
-    assert_eq!(rows.get(10).map(|row| row.chars().count()), Some(60));
-    assert!(rows.get(10).is_some_and(|row| row.starts_with("> a")));
-    assert_eq!(rows.last().copied(), Some("  aaaaaaaaaaaaend"));
+    assert_eq!(rows.get(9).map(|row| row.chars().count()), Some(60));
+    assert!(rows.get(9).is_some_and(|row| row.starts_with("> a")));
+    assert_eq!(rows.get(10).copied(), Some("  aaaaaaaaaaaaend"));
 }
 
 #[test]
@@ -317,7 +317,10 @@ fn draw_folds_an_events_file() {
     .map(|line| line.to_string())
     .join("\n");
     let shown = crate::draw(&events, 20, 4).unwrap_or_else(|error| panic!("draw: {error}"));
-    assert_eq!(shown, format!("{:>19}\n{:>20}\nHello.\n>\n", "hi", "00:00"));
+    assert_eq!(
+        shown,
+        format!("Hello.\n{}\n>\n{}\n", "▄".repeat(20), "▀".repeat(20))
+    );
     assert_eq!(
         crate::draw("not json", 20, 4).map_err(|e| e.starts_with("line 1:")),
         Err(true)
@@ -342,18 +345,18 @@ fn a_short_screen_keeps_the_input_line_last() {
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "two"));
     app.connect_failed("lost".to_owned());
     app.on_key(Key::CtrlC, now);
-    // The input line wins the last row, then the hint; the conversation
-    // gets what is left, the notice floating over its top row.
-    let notice = "lost   ✕";
+    // The input line wins the last row with its edges where they fit,
+    // then the hint; a screen too short for them all drops the hint
+    // first, and the notice with the conversation.
     assert_eq!(sized(&mut app, 20, 1), ">\n");
     assert_eq!(sized(&mut app, 20, 2), "Press Ctrl+C again t\n>\n");
     assert_eq!(
         sized(&mut app, 20, 3),
-        format!("{notice:>20}\nPress Ctrl+C again t\n>\n")
+        "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n>\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
     );
     assert_eq!(
         sized(&mut app, 20, 4),
-        format!("{notice:>20}\n{:>20}\nPress Ctrl+C again t\n>\n", "00:00")
+        "Press Ctrl+C again t\n▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n>\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
     );
 }
 
@@ -439,12 +442,13 @@ fn approval_standing_ask() {
     app.on_line(standing(S_A, "a_1", "r_1"));
     let (shown, buf) = wide(&mut app);
     insta::assert_snapshot!("approval_standing_ask", shown);
-    // Header to deny, five rows, take the approval tint; the row above
-    // does not.
-    for row in 7..12 {
+    // Header to deny, five rows, take the approval tint with edges above
+    // and below; the rows beyond the edges do not.
+    for row in 6..11 {
         assert_eq!(bg(&buf, row), super::APPROVAL_TINT.bg, "row {row}");
     }
-    assert_eq!(bg(&buf, 6), Some(ratatui::style::Color::Reset));
+    assert_eq!(bg(&buf, 5), Some(ratatui::style::Color::Reset));
+    assert_eq!(bg(&buf, 11), Some(ratatui::style::Color::Reset));
 }
 
 #[test]
@@ -461,7 +465,7 @@ fn approval_review_escalation_with_rule() {
     ));
     let (shown, buf) = wide(&mut app);
     insta::assert_snapshot!("approval_review_escalation_with_rule", shown);
-    assert_eq!(bg(&buf, 11), super::ALERT_TINT.bg);
+    assert_eq!(bg(&buf, 10), super::ALERT_TINT.bg);
     assert_ne!(super::ALERT_TINT.bg, super::APPROVAL_TINT.bg);
 }
 
@@ -585,16 +589,14 @@ fn a_short_screen_drops_the_badge_after_the_hint() {
     let badge = "! 1 waiting · /approvals or ⌥A";
     assert_eq!(sized(&mut app, 40, 1), ">\n");
     assert_eq!(sized(&mut app, 40, 2), format!("{badge}\n>\n"));
+    // The input box's edges take the rows the hint and the badge lose.
     assert_eq!(
         sized(&mut app, 40, 3),
-        format!("Press Ctrl+C again to quit\n{badge}\n>\n")
+        format!("{}\n>\n{}\n", "▄".repeat(40), "▀".repeat(40))
     );
     assert_eq!(
         sized(&mut app, 40, 4),
-        format!(
-            "{:>40}\nPress Ctrl+C again to quit\n{badge}\n>\n",
-            "lost           ✕"
-        )
+        format!("{badge}\n{}\n>\n{}\n", "▄".repeat(40), "▀".repeat(40))
     );
 }
 
@@ -604,7 +606,7 @@ fn a_panel_taller_than_the_screen_keeps_its_header() {
     app.on_line(standing(S_A, "a_1", "r_1"));
     assert_eq!(
         sized(&mut app, 40, 2),
-        format!("approval · {S_A} · 1 of 1\nasked by a global rule: echo hi\n")
+        format!("▌ approval · {S_A} · 1 of 1\n▌ asked by a global rule: echo hi\n")
     );
 }
 
@@ -632,7 +634,7 @@ fn a_draft_of_three_lines() {
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
     type_draft(&mut app, "first\nsecond\nthird");
     insta::assert_snapshot!("draft_of_three_lines", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(7, 11)));
+    assert_eq!(cursor_at(&app), Some(Position::new(7, 10)));
 }
 
 #[test]
@@ -641,14 +643,14 @@ fn a_draft_taller_than_a_third_scrolls_with_the_cursor() {
     type_draft(&mut app, "l1\nl2\nl3\nl4\nl5\nl6");
     // 12 rows: the box shows 4, the last four while the cursor is there.
     insta::assert_snapshot!("draft_taller_than_the_cap", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(4, 11)));
+    assert_eq!(cursor_at(&app), Some(Position::new(4, 10)));
     let now = fakes::clock::FakeClock::new().now();
     for _ in 0..5 {
         app.on_key(Key::Up, now);
     }
     // On the first line, the box shows the first four.
     insta::assert_snapshot!("draft_scrolled_to_its_top", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(4, 8)));
+    assert_eq!(cursor_at(&app), Some(Position::new(4, 7)));
 }
 
 #[test]
@@ -658,7 +660,7 @@ fn a_paste_token_in_the_draft() {
     let pasted: Vec<String> = (1..=312).map(|n| format!("line {n}")).collect();
     app.on_edit(Edit::Paste(pasted.join("\n")));
     insta::assert_snapshot!("draft_with_a_paste_token", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(34, 11)));
+    assert_eq!(cursor_at(&app), Some(Position::new(34, 10)));
 }
 
 #[test]
@@ -669,21 +671,21 @@ fn a_draft_wider_than_the_screen_wraps() {
     let shown = screen(&app);
     let rows: Vec<&str> = shown.lines().collect();
     assert_eq!(
-        rows.get(10).copied(),
+        rows.get(9).copied(),
         Some(format!("> {}", "w".repeat(58)).as_str())
     );
     assert_eq!(
-        rows.get(11).copied(),
+        rows.get(10).copied(),
         Some(format!("  {}", "w".repeat(12)).as_str())
     );
-    assert_eq!(cursor_at(&app), Some(Position::new(14, 11)));
+    assert_eq!(cursor_at(&app), Some(Position::new(14, 10)));
 }
 
 #[test]
 fn the_cursor_hides_while_the_panel_is_open() {
     let mut app = empty();
     attach(&mut app, "s_aaaaaaaaaaaaaaaa");
-    assert_eq!(cursor_at(&app), Some(Position::new(2, 11)));
+    assert_eq!(cursor_at(&app), Some(Position::new(2, 10)));
     app.on_line(session_line(
         "s_aaaaaaaaaaaaaaaa",
         "permission_requested",
@@ -994,14 +996,14 @@ fn the_selected_completion_is_reversed_and_the_others_are_not() {
     }
     let (shown, buf) = wide(&mut app);
     let rows: Vec<&str> = shown.lines().collect();
-    assert!(rows[HEIGHT as usize - 4].starts_with("/home"), "{shown}");
+    assert!(rows[HEIGHT as usize - 6].starts_with("/home"), "{shown}");
     let reversed = |row: u16| {
         buf.cell((0, row))
             .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED))
     };
-    assert!(reversed(HEIGHT - 4), "{shown}");
-    assert!(!reversed(HEIGHT - 3), "{shown}");
-    assert!(!reversed(HEIGHT - 2), "{shown}");
+    assert!(reversed(HEIGHT - 6), "{shown}");
+    assert!(!reversed(HEIGHT - 5), "{shown}");
+    assert!(!reversed(HEIGHT - 4), "{shown}");
 }
 
 #[test]
@@ -1048,14 +1050,14 @@ fn search_panel() {
     insta::assert_snapshot!("search_panel", sized(&mut app, 80, 24));
     let (shown, buf) = wide(&mut app);
     let rows: Vec<&str> = shown.lines().collect();
-    assert_eq!(rows[HEIGHT as usize - 4], "search prompts: fix", "{shown}");
+    assert_eq!(rows[HEIGHT as usize - 6], "search prompts: fix", "{shown}");
     let reversed = |row: u16| {
         buf.cell((0, row))
             .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED))
     };
-    assert!(!reversed(HEIGHT - 4), "{shown}");
-    assert!(!reversed(HEIGHT - 3), "{shown}");
-    assert!(reversed(HEIGHT - 2), "{shown}");
+    assert!(!reversed(HEIGHT - 6), "{shown}");
+    assert!(!reversed(HEIGHT - 5), "{shown}");
+    assert!(reversed(HEIGHT - 4), "{shown}");
     // Nothing matching says so.
     app.on_key(Key::Char('z'), now);
     let (shown, _) = wide(&mut app);
@@ -1204,17 +1206,17 @@ fn replying(width: u16, height: u16, text: &str) -> App {
 fn the_badge_is_a_target_over_the_cells_it_drew() {
     use crate::mouse::{Target, TargetId};
     let mut app = badged();
-    // The badge's 30 characters on the row above the input line.
+    // The badge's 30 characters on the row above the input box.
     let (_, targets) = pointed(&mut app, 40, 12, None);
     let badge = Target {
         id: TargetId::Badge,
-        rect: Rect::new(0, 10, 30, 1),
+        rect: Rect::new(0, 8, 30, 1),
     };
     // The open turn's prompt and its time are stops on the two rows above
     // the badge.
     let turn = Target {
         id: TargetId::Turn(0),
-        rect: Rect::new(0, 8, 40, 2),
+        rect: Rect::new(0, 6, 40, 2),
     };
     assert_eq!(targets, vec![badge, turn]);
     // Narrower than its text, it takes the whole row.
@@ -1256,21 +1258,21 @@ fn new_messages_below_is_a_target_over_the_cells_it_drew() {
 fn the_target_under_the_pointer_gets_the_hover_background_only() {
     let mut app = badged();
     let (plain, _) = pointed(&mut app, 40, 12, None);
-    let (hovered, _) = pointed(&mut app, 40, 12, Some((7, 10)));
+    let (hovered, _) = pointed(&mut app, 40, 12, Some((7, 8)));
     for y in 0..12 {
         for x in 0..40 {
             let (Some(before), Some(after)) = (plain.cell((x, y)), hovered.cell((x, y))) else {
                 panic!("no cell at {x},{y}");
             };
             let mut expected = before.clone();
-            if y == 10 && x < 30 {
+            if y == 8 && x < 30 {
                 expected.bg = super::HOVER_TINT.bg.unwrap_or_default();
             }
             assert_eq!(after, &expected, "cell {x},{y}");
         }
     }
     // Off every target, the frame is the one with no pointer.
-    for pointer in [(30, 10), (0, 11), (0, 9), (39, 0)] {
+    for pointer in [(30, 8), (0, 11), (0, 9), (39, 0)] {
         let (off, _) = pointed(&mut app, 40, 12, Some(pointer));
         assert_eq!(off, plain, "{pointer:?}");
     }
@@ -1309,12 +1311,12 @@ fn a_collapsed_groups_line_is_a_target_over_its_rows() {
     use crate::app::Target;
     let mut app = empty();
     tool_turn(&mut app);
-    // The summary wraps to rows 6 and 7 of `tool_group_collapsed`.
+    // The summary wraps to rows 4 and 5 of `tool_group_collapsed`.
     let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     let group = app.targets().first().map(|(_, target)| *target);
     assert!(matches!(group, Some(Target::Group(_))), "{group:?}");
     let drawn: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
-    assert_eq!(drawn, vec![Rect::new(0, 6, WIDTH, 2)]);
+    assert_eq!(drawn, vec![Rect::new(0, 4, WIDTH, 2)]);
     assert_eq!(
         lines(&targets).first().map(|(target, _)| Some(*target)),
         Some(group)
@@ -1351,11 +1353,11 @@ fn ledger_rows_are_targets_over_their_rows() {
     assert_eq!(
         rects,
         vec![
-            Rect::new(0, 4, WIDTH, 2),
+            Rect::new(0, 2, WIDTH, 2),
+            Rect::new(0, 4, WIDTH, 1),
+            Rect::new(0, 5, WIDTH, 1),
             Rect::new(0, 6, WIDTH, 1),
-            Rect::new(0, 7, WIDTH, 1),
-            Rect::new(0, 8, WIDTH, 1),
-            Rect::new(0, 11, WIDTH, 1),
+            Rect::new(0, 9, WIDTH, 1),
         ]
     );
     let opens: Vec<_> = app
@@ -1372,14 +1374,14 @@ fn a_thought_line_is_a_target_over_its_row() {
     use crate::app::Target;
     let mut app = empty();
     thought_turn(&mut app);
-    // Row 8 of `thought_line`.
+    // Row 6 of `thought_line`.
     let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     let drawn = lines(&targets);
     assert_eq!(drawn.len(), 1);
     assert!(matches!(drawn.first(), Some((Target::Thought(_), _))));
     assert_eq!(
         drawn.first().map(|(_, rect)| *rect),
-        Some(Rect::new(0, 8, WIDTH, 1))
+        Some(Rect::new(0, 6, WIDTH, 1))
     );
 }
 
@@ -1389,11 +1391,11 @@ fn a_line_partly_scrolled_off_targets_only_its_rows_shown() {
     tool_turn(&mut app);
     // Four conversation rows: the summary's second row, the reply and the
     // two-row footer.
-    let (_, targets) = pointed(&mut app, WIDTH, 5, None);
+    let (_, targets) = pointed(&mut app, WIDTH, 7, None);
     let rects: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
     assert_eq!(rects, vec![Rect::new(0, 0, WIDTH, 1)]);
     // Three rows: the summary is wholly out of view.
-    let (_, targets) = pointed(&mut app, WIDTH, 4, None);
+    let (_, targets) = pointed(&mut app, WIDTH, 6, None);
     assert!(lines(&targets).is_empty());
 }
 
@@ -1403,13 +1405,13 @@ fn the_overlay_row_hits_new_messages_below_not_the_line_under_it() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = empty();
     tool_turn(&mut app);
-    app.set_size(WIDTH, 4);
+    app.set_size(WIDTH, 6);
     app.on_key(Key::PageUp, now);
     app.on_line(turn_started(S_A, "next"));
     assert!(app.has_new());
-    // From the third row of the turn: the summary's two rows, the second
-    // under the overlay.
-    let (buf, targets) = pointed(&mut app, WIDTH, 3, None);
+    // The summary's rows above the overlay, the second line's target on
+    // the top row with the overlay below it.
+    let (buf, targets) = pointed(&mut app, WIDTH, 5, None);
     assert!(text(&buf).contains("New messages below"), "{}", text(&buf));
     let rects: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
     assert_eq!(rects, vec![Rect::new(0, 0, WIDTH, 1)]);
@@ -1452,7 +1454,7 @@ fn a_paste_token_is_a_target_over_its_label_on_every_row() {
     let mut app = with_token();
     let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     let rects = token_rects(&targets);
-    assert_eq!(rects, vec![Rect::new(6, 11, 28, 1)]);
+    assert_eq!(rects, vec![Rect::new(6, 10, 28, 1)]);
     assert_eq!(cells(&buf, &rects), LABEL);
     // Wrapped, one target per row the label takes.
     let (buf, targets) = pointed(&mut app, 20, HEIGHT, None);
@@ -1475,7 +1477,7 @@ fn a_paste_token_scrolled_out_of_the_box_is_no_target() {
     // Scrolled to its top, the token is on the box's first row.
     let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     let rects = token_rects(&targets);
-    assert_eq!(rects, vec![Rect::new(6, 8, 28, 1)]);
+    assert_eq!(rects, vec![Rect::new(6, 7, 28, 1)]);
     assert_eq!(cells(&buf, &rects), LABEL);
 }
 
@@ -1638,10 +1640,10 @@ fn copied_needs_a_conversation_row_to_show_on() {
     assert!(
         text(&buffer(&app, 30, 10))
             .lines()
-            .nth(7)
+            .nth(5)
             .is_some_and(|row| row.starts_with("rust"))
     );
-    click(&mut app, 30, 10, 27, 7);
+    click(&mut app, 30, 10, 27, 5);
     assert!(app.copied());
     app.set_size(30, 1);
     assert_eq!(text(&buffer(&app, 30, 1)), ">\n");
@@ -1651,6 +1653,9 @@ fn copied_needs_a_conversation_row_to_show_on() {
 fn the_focused_target_is_drawn_reversed() {
     let mut app = empty();
     tool_turn(&mut app);
+    tool_turn(&mut app);
+    // A third turn leaves another turn's group line above the focused
+    // turn, outside it.
     tool_turn(&mut app);
     app.on_key(Key::BackTab, fakes::clock::FakeClock::new().now());
     let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
@@ -1766,7 +1771,7 @@ fn a_turn_spanning_drawn_lines_sums_their_heights() {
         .iter()
         .find(|target| target.id == TargetId::Turn(0))
         .expect("turn 0 is drawn");
-    assert_eq!(turn.rect, Rect::new(0, 4, WIDTH, 7));
+    assert_eq!(turn.rect, Rect::new(0, 2, WIDTH, 7));
 }
 
 #[test]
@@ -1775,11 +1780,11 @@ fn a_turn_past_the_last_row_is_clipped_to_it() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = empty();
     tool_turn(&mut app);
-    app.set_size(WIDTH, 4);
+    app.set_size(WIDTH, 6);
     app.on_key(Key::PageUp, now);
     app.on_line(turn_started(S_A, "next"));
     assert!(app.has_new());
-    let (_, targets) = pointed(&mut app, WIDTH, 3, None);
+    let (_, targets) = pointed(&mut app, WIDTH, 5, None);
     let turn = targets
         .iter()
         .find(|target| target.id == TargetId::Turn(0))
@@ -1802,5 +1807,5 @@ fn input_with_an_image_token() {
         app.on_edit(Edit::Left);
     }
     insta::assert_snapshot!("input_with_an_image_token", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(17, 11)));
+    assert_eq!(cursor_at(&app), Some(Position::new(17, 10)));
 }

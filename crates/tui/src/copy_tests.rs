@@ -135,18 +135,18 @@ fn a_click_maps_through_the_rows_while_scrolled_up() {
 fn the_overlay_row_hides_a_copy_target_under_it() {
     let now = fakes::clock::FakeClock::new().now();
     let filler: String = (1..=12).map(|n| format!("line {n}\n\n")).collect();
-    let code = "1\n2\n3\n4\n5\n6";
+    let code = "1\n2\n3\n4";
     let mut app = with_reply(30, 8, &format!("{filler}```rust\n{code}\n```"));
-    // Seven conversation rows: one PageUp moves the top up six, so the
-    // header, six rows from the end, lands on the last conversation row.
-    assert_eq!(app.conversation_height(), 7);
+    // Five conversation rows: one PageUp moves the top up four, landing
+    // the code header, five rows from the end, on the bottom row.
+    assert_eq!(app.conversation_height(), 5);
     app.on_key(Key::PageUp, now);
-    assert_eq!(row_of(&app, 30, 8, "rust"), Some(6));
-    assert_eq!(click(&mut app, 27, 6), Effect::Copy(code.to_owned()));
+    assert_eq!(row_of(&app, 30, 8, "rust"), Some(4));
+    assert_eq!(click(&mut app, 27, 4), Effect::Copy(code.to_owned()));
     app.on_line(turn_started("more"));
     assert!(app.has_new());
     assert_eq!(row_of(&app, 30, 8, "rust"), None);
-    assert_eq!(click(&mut app, 27, 6), Effect::None);
+    assert_eq!(click(&mut app, 27, 4), Effect::None);
 }
 
 #[test]
@@ -180,7 +180,7 @@ fn a_click_maps_past_a_prompt_that_wraps() {
         Some("a_1"),
     ));
     let header = row_of(&app, 30, 12, "rust").expect("header");
-    assert_eq!(header, 9);
+    assert_eq!(header, 7);
     assert_eq!(
         click(&mut app, 27, header),
         Effect::Copy("let a = 1;".to_owned())

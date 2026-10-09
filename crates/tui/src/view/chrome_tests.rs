@@ -98,7 +98,7 @@ fn attached_160x40_with_the_panel() {
     assert_eq!(buf.cell((126, 18)).map(|cell| cell.symbol()), Some(" "));
     assert_eq!(
         cursor(&app, Rect::new(0, 0, 160, 40)),
-        Some(Position::new(2, 39))
+        Some(Position::new(2, 38))
     );
 }
 

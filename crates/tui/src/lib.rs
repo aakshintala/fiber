@@ -47,6 +47,7 @@ mod shell;
 mod slash;
 mod sources;
 mod stroke;
+mod surface;
 mod term;
 mod theme;
 mod turn;

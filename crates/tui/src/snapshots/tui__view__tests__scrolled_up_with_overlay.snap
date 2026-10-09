@@ -2,15 +2,15 @@
 source: crates/tui/src/view_tests.rs
 expression: screen(&app)
 ---
-                                                   prompt 8
-                                                       00:00
-▣ completed
-                                                   prompt 9
                                                        00:00
 ▣ completed
                                                   prompt 10
                                                        00:00
 ▣ completed
                                                   prompt 11
+                                                       00:00
+▣ completed
                     ↓ New messages below
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 >
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

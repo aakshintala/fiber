@@ -684,14 +684,15 @@ fn the_first_match_at_or_after_the_top_row_is_current() {
     text_turn(&mut log, &mut seq, &mut app, &refs);
     assert_eq!(app.pages().page_count(), 1);
     // The top row between the two matches: only the one below can become
-    // current, and nothing scrolls back.
+    // current. The smaller conversation no longer shows it, so the view
+    // scrolls to reveal it, and nothing scrolls back.
     app.jump(3);
     assert_eq!(app.top(), Some(3));
     let ranges = search_all(&mut app, &log, "needle");
     assert!(ranges.is_empty());
     assert_eq!(count(&app), "2 of 2");
     assert_eq!(current_text(&app).as_deref(), Some("needle below"));
-    assert_eq!(app.top(), Some(3));
+    assert_eq!(app.top(), Some(11));
 }
 
 #[test]

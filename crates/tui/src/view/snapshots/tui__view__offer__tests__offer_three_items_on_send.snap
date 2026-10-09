@@ -2,8 +2,6 @@
 source: crates/tui/src/view/offer_tests.rs
 expression: screen
 ---
-    runs: /bin/echo
-
   MCP server b
      approve  [skip]  never
     MCP server: b
@@ -17,4 +15,6 @@ expression: screen
     runs: /bin/echo
 
 › Send · 0 approve, 3 skip, 0 never
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 >
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

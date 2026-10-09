@@ -116,8 +116,9 @@ fn without_home_the_column_is_the_screen() {
     assert_eq!(app.chrome().layout(), None);
     assert_eq!(app.chrome().floor_line(), None);
     assert_eq!(app.column_width(), 160);
-    // No header row: the input box's one row is all that sits below.
-    assert_eq!(app.conversation_height(), 39);
+    // No header row: the input box's one row with its edges is all that
+    // sits below.
+    assert_eq!(app.conversation_height(), 37);
     // Below the floor, without home, today's screen still draws.
     let small = plain(30, 8);
     assert_eq!(small.chrome().floor_line(), None);
@@ -147,8 +148,8 @@ fn attached_at_160_the_column_is_the_screen_less_the_panel() {
     assert_eq!(app.column_width(), 126);
     assert_eq!(app.chrome().regions().panel, layout.panel);
     assert_eq!(app.regions.panel, layout.panel);
-    // The header's row and the input box's.
-    assert_eq!(app.conversation_height(), 38);
+    // The header's row and the input box's row with its edges.
+    assert_eq!(app.conversation_height(), 36);
 }
 
 #[test]
@@ -238,6 +239,75 @@ fn conversation_height_equals_the_drawn_rows() {
         assert_eq!(drawn, app.conversation_height(), "{width}x{height}");
         // The header holds row 0 and the input box the last row.
         assert!(!screen.lines().next().unwrap_or_default().contains('w'));
+    }
+}
+
+/// Counts the conversation's content rows on screen: the long turn's rows
+/// and its time row.
+fn content_rows(screen: &str) -> usize {
+    screen
+        .lines()
+        .filter(|row| row.contains("www") || row.contains("00:00"))
+        .count()
+}
+
+#[test]
+fn conversation_height_counts_the_box_edges_where_they_fit() {
+    // One input row: the count side at rooms of rows + 1 (no edges),
+    // rows + 2 and rows + 4 (edges). Below the floor there is no header,
+    // so the rooms are the heights; the drawn side at these rooms is
+    // pinned by the input box's own short-screen test, and full screens
+    // agree above.
+    for (height, want) in [(2, 1), (3, 0), (5, 2)] {
+        let app = attached(60, height);
+        assert_eq!(app.conversation_height(), want, "60x{height}");
+    }
+}
+
+#[test]
+fn conversation_height_counts_the_panel_edges_where_they_fit() {
+    let long: String = std::iter::repeat_n('w', 20_000).collect();
+    // An eight-row approval in rooms of rows + 1 (no edges), rows + 2
+    // and rows + 4 (edges): the long prefix wraps its line.
+    let prefix: String = std::iter::repeat_n('p', 200).collect();
+    for height in [10, 11, 13] {
+        let mut app = attached(60, height);
+        app.on_line(turn_started(&long));
+        app.on_line(session_line(
+            SESSION,
+            "permission_requested",
+            serde_json::json!({"request_id": "r_1", "effects": ["executes"],
+                "reversible": true, "step": "standing_ask",
+                "standing_rule": {"scope": "global", "prefix": prefix}}),
+        ));
+        let (screen, _) = draw(&app, 60, height);
+        assert_eq!(
+            content_rows(&screen),
+            app.conversation_height(),
+            "60x{height}"
+        );
+    }
+    // An eight-row form in rooms of rows + 1 (no edges), rows + 2 and
+    // rows + 4 (edges).
+    for height in [10, 11, 13] {
+        let mut app = attached(60, height);
+        app.on_line(turn_started(&long));
+        app.on_line(session_line(
+            SESSION,
+            "interaction_requested",
+            serde_json::json!({"request_id": "r_4f", "kind": "form",
+                "action_ids": ["a_1"], "fields": [
+                {"header": "Base", "question": "Which branch?",
+                 "options": [{"label": "main"}, {"label": "dev"}]},
+                {"header": "Name", "question": "What name?"}]}),
+        ));
+        assert!(app.panel().is_some(), "60x{height}: a form is open");
+        let (screen, _) = draw(&app, 60, height);
+        assert_eq!(
+            content_rows(&screen),
+            app.conversation_height(),
+            "60x{height}"
+        );
     }
 }
 

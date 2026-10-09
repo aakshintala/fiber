@@ -101,6 +101,8 @@ pub fn run(
     terminal
         .app
         .set_osc9(crate::attention::supported(&terminal.var));
+    // Whether stripes draw is read once, before the first frame.
+    crate::surface::init(&|name| std::env::var(name).ok());
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
     if terminal.screen.draw(&mut terminal.app, None).is_err() {

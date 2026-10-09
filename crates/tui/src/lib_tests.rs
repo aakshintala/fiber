@@ -527,11 +527,17 @@ fn resize_redraws_at_the_new_size() {
     .unwrap_or_else(|err| panic!("winsize: {err}"));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(pair.slave));
     feed(&mut lp, vec![Input::Bytes(b"hi".to_vec()), Input::Resize]);
-    // The input line draws on the new last row; the test backend keeps its
-    // 60x12 buffer, cleared by the resize.
+    // The input line draws one row above the new last row, under its top
+    // edge; the test backend keeps its 60x12 buffer, cleared by the
+    // resize.
     let shown = crate::view::text(lp.screen.backend().buffer());
     let rows: Vec<&str> = shown.lines().collect();
-    assert_eq!(rows.get(9).copied(), Some("> hi"));
+    assert_eq!(rows.get(8).copied(), Some("> hi"));
+    assert!(
+        rows.get(9)
+            .is_some_and(|row| row.chars().all(|ch| ch == '▀')),
+        "{rows:?}"
+    );
     assert!(rows.iter().skip(10).all(|row| row.is_empty()));
 }
 
@@ -798,7 +804,7 @@ fn the_screen_shows_the_cursor_at_the_draft() {
     feed(&mut lp, vec![Input::Bytes(b"ab\x1b[D".to_vec())]);
     let backend = lp.screen.backend_mut();
     assert!(backend.cursor_visible());
-    backend.assert_cursor_position((3, 11));
+    backend.assert_cursor_position((3, 10));
 }
 
 #[test]
