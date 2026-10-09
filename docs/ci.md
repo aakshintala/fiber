@@ -182,8 +182,9 @@ binary comes from the build cache when the backstop stored one for that
 commit, and is built otherwise. The scripts that build and measure both
 binaries are the head's, so a base older than a script still compares. It checks that the stripped head binary is
 under 20 MiB and runs the benchmarks that gate each pull request
-(`docs/performance.md`). A timing gate compares against the base binary
-measured in the same job on the same runner.
+(`docs/performance.md`). The base binary runs the same benchmarks in the
+same job on the same runner: a timing gate compares against it, and a memory
+or exact budget the base fails too does not fail the pull request.
 
 A base that does not build, because `main` is red, does not fail the job. The
 job compares against the nearest first-parent ancestor of the base that has a

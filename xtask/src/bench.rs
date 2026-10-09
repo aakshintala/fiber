@@ -502,12 +502,14 @@ struct Line {
 
 /// Judges `head` (and `base` on a pull request) against the budget table in
 /// `performance`, the text of `docs/performance.md`. `base` is the base
-/// result file's text, or why it could not be read.
+/// result file's text, or why it could not be read. `base_commit` names the
+/// commit the base binary is from.
 pub(crate) fn report(
     performance: &str,
     head: &str,
     base: Option<Result<String, String>>,
     event: Event,
+    base_commit: &str,
 ) -> Report {
     let mut failures = Vec::new();
     let head = match parse_results(head) {
@@ -517,8 +519,20 @@ pub(crate) fn report(
             None
         }
     };
+    let base_parsed = match (event, &base) {
+        (Event::PullRequest, Some(Ok(text))) => parse_results(text).ok(),
+        _ => None,
+    };
+    let mut also_at_base = Vec::new();
     if let Some(results) = &head {
-        failures.extend(results.failures.iter().map(|f| format!("self-check: {f}")));
+        for f in &results.failures {
+            // A self-check the base fails too is not the pull request's.
+            if base_parsed.as_ref().is_some_and(|b| b.failures.contains(f)) {
+                also_at_base.push(format!("self-check: {f}"));
+            } else {
+                failures.push(format!("self-check: {f}"));
+            }
+        }
         if results.idle_secs < MIN_IDLE_SECS {
             failures.push(format!(
                 "idle window of {} s, expected at least {MIN_IDLE_SECS} s",
@@ -551,7 +565,14 @@ pub(crate) fn report(
         let budget = cells.first().map_or("", String::as_str);
         let cell = cells.get(1).map_or("", String::as_str);
         if let Some((_, check)) = MEASURED.iter().find(|(b, _)| *b == budget) {
-            let (broken, line) = judge(budget, cell, *check, head.as_ref(), &base, &rows);
+            let (broken, line) = judge(
+                budget,
+                cell,
+                *check,
+                (head.as_ref(), base_parsed.as_ref(), base_commit),
+                &base,
+                &rows,
+            );
             failures.extend(broken.into_iter().map(|f| format!("{budget}: {f}")));
             lines.push(line);
         } else if !NOT_MEASURED.iter().any(|(b, _)| *b == budget) {
@@ -576,19 +597,56 @@ pub(crate) fn report(
     }
 
     let idle_secs = head.as_ref().map(|h| h.idle_secs);
-    let comment = comment(&lines, &failures, &base, idle_secs);
+    let mut comment = comment(&lines, &failures, &base, idle_secs);
+    if !also_at_base.is_empty() {
+        comment.push_str(&format!(
+            "\n### Over at base {base_commit}\n\n{}\n",
+            also_at_base
+                .iter()
+                .map(|f| format!("- {f}\n"))
+                .collect::<String>()
+        ));
+    }
     Report { failures, comment }
 }
 
-/// One row's failures and its comment line.
+/// The head's results, the base's when they parsed, and the commit the base
+/// binary is from.
+type Measured<'a> = (Option<&'a Results>, Option<&'a Results>, &'a str);
+
+/// Whether `cell` is a memory ceiling; if not, the row's failure goes to
+/// `failures`, which no base excuses.
+fn kib_ceiling(cell: &str, failures: &mut Vec<String>) -> bool {
+    match ceiling(cell) {
+        Ok(Quantity::Kib(_)) => true,
+        Ok(Quantity::Ms(_)) => {
+            failures.push(format!("{cell:?} is not a memory ceiling"));
+            false
+        }
+        Err(e) => {
+            failures.push(e);
+            false
+        }
+    }
+}
+
+/// A base metric that is absent is not a budget the base is over.
+fn base_is_over(failures: &[String]) -> bool {
+    !failures.is_empty() && !failures.iter().any(|f| f.contains(": missing"))
+}
+
+/// One row's failures and its comment line. A memory or exact budget the base
+/// fails too does not fail the row: it reads "over at base".
 fn judge(
     budget: &str,
     cell: &str,
     check: Check,
-    head: Option<&Results>,
+    (head, base_results, base_commit): Measured<'_>,
     base: &Base,
     rows: &[Vec<String>],
 ) -> (Vec<String>, Line) {
+    let mut measured = Vec::new();
+    let mut within = None;
     let mut failures = Vec::new();
     let mut line = Line {
         budget: budget.to_owned(),
@@ -598,7 +656,11 @@ fn judge(
         result: "pass",
     };
     match check {
-        Check::Memory(ids) => line.head = memory(cell, ids, head, &mut failures),
+        Check::Memory(ids) => {
+            if kib_ceiling(cell, &mut failures) {
+                line.head = memory(cell, ids, head, &mut measured);
+            }
+        }
         Check::Within { row, id } => {
             let other = rows
                 .iter()
@@ -613,7 +675,10 @@ fn judge(
                             "the ceiling reads {cell:?}; it must read {expected:?}, the {row:?} row's ceiling"
                         ));
                     }
-                    line.head = memory(other, &[id], head, &mut failures);
+                    if kib_ceiling(other, &mut failures) {
+                        line.head = memory(other, &[id], head, &mut measured);
+                        within = Some((other.clone(), id));
+                    }
                 }
             }
         }
@@ -645,8 +710,32 @@ fn judge(
                 ));
             }
             let (broken, observed) = exact(rule, head);
-            failures.extend(broken);
+            measured.extend(broken);
             line.head = observed;
+        }
+    }
+    if !measured.is_empty() {
+        let base_failures = base_results.map(|b| match check {
+            Check::Memory(ids) => {
+                let mut f = Vec::new();
+                memory(cell, ids, Some(b), &mut f);
+                f
+            }
+            Check::Within { .. } => {
+                let mut f = Vec::new();
+                if let Some((other, id)) = &within {
+                    memory(other, &[id], Some(b), &mut f);
+                }
+                f
+            }
+            Check::Exact { rule, .. } => exact(rule, Some(b)).0,
+            Check::Timing(_) => Vec::new(),
+        });
+        if base_failures.is_some_and(|f| base_is_over(&f)) {
+            line.base = format!("over at base {base_commit}");
+            line.result = "over at base";
+        } else {
+            failures.extend(measured);
         }
     }
     if !failures.is_empty() {

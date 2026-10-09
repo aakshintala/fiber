@@ -23,7 +23,7 @@
 //!   as tab-separated lines
 //! - `docs-only FILE...`: whether every file is a docs file, as `docs-only: yes` or
 //!   `docs-only: no`
-//! - `bench-report --head FILE [--base FILE] --doc docs/performance.md --event
+//! - `bench-report --head FILE [--base FILE --base-commit SHA] --doc docs/performance.md --event
 //!   pull_request|push --comment FILE`: judges the benchmark result files
 //!   against the budget table and writes the pull request comment; exit 1
 //!   when a budget, a head self-check or the table mapping fails
@@ -264,7 +264,8 @@ fn run(args: &[String]) -> Result<bool, String> {
             // An unreadable base is reported in the comment, not as a usage
             // error: the base only feeds advisory timings.
             let base = optional(rest, "--base").map(|path| read(&path));
-            let out = bench::report(&doc, &head, base, event);
+            let base_commit = optional(rest, "--base-commit").unwrap_or_default();
+            let out = bench::report(&doc, &head, base, event, &base_commit);
             std::fs::write(&comment_path, &out.comment)
                 .map_err(|e| format!("{comment_path}: {e}"))?;
             report(

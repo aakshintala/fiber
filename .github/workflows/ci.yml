@@ -413,9 +413,10 @@ jobs:
             if [ -f "$RUNNER_TEMP/release/base/paging" ]; then
               base_paging=(--paging "$RUNNER_TEMP/release/base/paging")
             fi
-            # The base feeds advisory timings only: a base run that writes no
-            # file is reported by bench-report, not here.
-            "$harness" --fiber "$RUNNER_TEMP/release/base/fiber" --out "$out/base.json" --only timing \
+            # The base is measured on every row: a memory or exact budget it
+            # fails too does not fail the pull request. A base run that writes
+            # no file is reported by bench-report, not here.
+            "$harness" --fiber "$RUNNER_TEMP/release/base/fiber" --out "$out/base.json" --only all \
               "${base_paging[@]}" || echo "::warning::the base binary's benchmarks exited $?"
           fi
       - name: Judge the benchmarks against docs/performance.md
@@ -426,6 +427,9 @@ jobs:
             --comment "$out/bench-comment.md")
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             args+=(--base "$out/base.json")
+            if [ -f "$RUNNER_TEMP/release/base/commit" ]; then
+              args+=(--base-commit "$(git rev-parse --short "$(cat "$RUNNER_TEMP/release/base/commit")")")
+            fi
           fi
           status=0
           cargo xtask bench-report "${args[@]}" || status=$?

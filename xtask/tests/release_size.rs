@@ -79,6 +79,8 @@ impl Repo {
     fn new() -> Self {
         let dir = TestDir::new("rsrepo");
         git(&dir, &["init", "-q", "-b", "main"]);
+        // No commit holds scripts/: the script under test is the head's, so a
+        // base that predates it still compares.
         // The jig's source, so the paging jig finds one at every commit.
         dir.write("crates/tui/examples/paging.rs", "fn main() {}\n");
         git(&dir, &["add", "crates"]);
