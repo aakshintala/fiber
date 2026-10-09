@@ -49,6 +49,7 @@
       "id": "gpt-6.1-sol",
       "protocol": "openai-responses",
       "base_url": "https://opencode.ai/zen/v1",
+      "web_search": "web_search",
       "compat": {
         "cache_key_header": "x-opencode-session"
       },
