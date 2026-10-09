@@ -4,7 +4,7 @@
 
 use crate::cases::{Case, Surface};
 use crate::input::{Key, Mods};
-use crate::{bold, dim, fg, hot_row, row, sp, width, Act, Row, Ui, BLUE, ORANGE, SEL, SPIN};
+use crate::{bold, dim, fg, hot_row, panel, row, sp, width, Act, Row, Ui, BLUE, ORANGE, SPIN};
 use ratatui::style::Style;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use unicode_width::UnicodeWidthStr;
@@ -175,14 +175,14 @@ pub struct State {
 
 /// Every `--picker` case.
 pub(crate) const CASES: &[Case<State>] = &[
-    Case { name: "list", help: "providers and models, current marked", check: "three providers with a dozen models between them, roles on the rows, `● current` on claude-opus-5-5, its level chips on the row below.", build: base },
+    Case { name: "list", help: "providers and models, current marked", check: "three providers with a dozen models between them, roles on the rows, `● current` on claude-opus-5-5, its level chips on the row below; a centred panel with ▄ ▀ edges and the ▌ stripe, dim providers with a blank row between sections, the focused model `›` on a full-width accent bar with its rebuild cost right-aligned, and a bold-key legend foot.", build: base },
     // after a click on the thinking chip: the current level focused
-    Case { name: "levels", help: "the current model's thinking chips focused", check: "the current model's thinking chips focused (`[high]`), the rest dim.", build: || State { chip: Some(2), ..base() } },
-    Case { name: "scoped", help: "five scoped models only", check: "five models only, a `scoped · 5 of 12` chip and a `[show all]` toggle.", build: || State { scoped: SCOPED.to_vec(), ..base() } },
-    Case { name: "scoped-all", help: "all models, scoped ones marked", check: "all twelve models, the scoped five marked `· scoped`.", build: || State { scoped: SCOPED.to_vec(), show_all: true, ..base() } },
-    Case { name: "refreshing", help: "one provider refreshing", check: "openai-codex reads `⟳ refreshing` with a still spinner glyph, the other two `updated … ago`, and a `⟳ refresh all` button sits at the controls row's right end.", build: || State { refreshing: vec![1], ..base() } },
+    Case { name: "levels", help: "the current model's thinking chips focused", check: "the current model's thinking chips focused (`[high]`), the rest dim; same panel, bar and legend.", build: || State { chip: Some(2), ..base() } },
+    Case { name: "scoped", help: "five scoped models only", check: "five models only, a `scoped · 5 of 12` chip and a `[show all]` toggle; same panel, bar and legend.", build: || State { scoped: SCOPED.to_vec(), ..base() } },
+    Case { name: "scoped-all", help: "all models, scoped ones marked", check: "all twelve models, the scoped five marked `· scoped`; same panel, bar and legend.", build: || State { scoped: SCOPED.to_vec(), show_all: true, ..base() } },
+    Case { name: "refreshing", help: "one provider refreshing", check: "openai-codex reads `⟳ refreshing` with a still spinner glyph, the other two `updated … ago`, and a `⟳ refresh all` button sits at the controls row's right end; same panel, bar and legend.", build: || State { refreshing: vec![1], ..base() } },
     // a non-current model focused, the `s` mark applied
-    Case { name: "session-only", help: "a model picked for this session only", check: "claude-sonnet-5-5 focused with `ⓢ this session only · nothing saved` under it and its rebuild cost on its row.", build: || State { focus: 1, session_only: Some(1), ..base() } },
+    Case { name: "session-only", help: "a model picked for this session only", check: "claude-sonnet-5-5 `›` on the accent bar with `ⓢ this session only · nothing saved` under it and its rebuild cost on its row; same panel and legend.", build: || State { focus: 1, session_only: Some(1), ..base() } },
 ];
 
 /// `--picker`, for `--help` and `check/model-picker.md`.
@@ -276,30 +276,19 @@ fn spin(s: &State) -> &'static str {
     }
 }
 
-/// Every body row sits on the raised surface.
-fn pk(r: Row) -> Row {
-    Row { bg: Some(SEL), ..r }
-}
-
+/// A provider section header: dim, never bold beside the title.
 fn provider_row(p: &Provider, refreshing: bool, s: &State) -> Row {
     let (what, st) = if refreshing {
         (format!("⟳ refreshing {} ", spin(s)), fg(ORANGE))
     } else {
         (format!("· updated {} ", p.updated), dim())
     };
-    pk(row(vec![
-        sp(p.name, bold()),
-        sp(" ", Style::new()),
-        sp(what, st),
-    ]))
+    row(vec![sp(p.name, dim()), sp(" ", Style::new()), sp(what, st)])
 }
 
 fn model_row(f: usize, m: &Model, focused: bool, scoped_mark: bool) -> Row {
     let mut spans = vec![
-        sp(
-            if focused { "› " } else { "  " },
-            if focused { fg(ORANGE) } else { dim() },
-        ),
+        sp(if focused { "› " } else { "  " }, if focused { bold() } else { Style::new() }),
         sp(
             m.id,
             if focused {
@@ -320,12 +309,7 @@ fn model_row(f: usize, m: &Model, focused: bool, scoped_mark: bool) -> Row {
         spans.push(sp("· scoped ", dim()));
     }
     spans.extend([sp("\t", Style::new()), sp(m.rebuild, dim())]);
-    Row {
-        spans,
-        bg: Some(SEL),
-        act: Some(Act::Pick(f)),
-        ..Default::default()
-    }
+    Row { spans, act: Some(Act::Pick(f)), ..Default::default() }
 }
 
 fn chips_row(s: &State, f: usize, m: &Model, focused: bool) -> Row {
@@ -355,14 +339,11 @@ fn chips_row(s: &State, f: usize, m: &Model, focused: bool) -> Row {
             parts.push((sp(label, st), Some(Act::PickChip(f, j))));
         }
     }
-    pk(hot_row(parts))
+    hot_row(parts)
 }
 
 fn note_row() -> Row {
-    pk(row(vec![sp(
-        "    ⓢ this session only · nothing saved",
-        dim(),
-    )]))
+    row(vec![sp("    ⓢ this session only · nothing saved", dim())])
 }
 
 /// The controls: the scope chip, the show-all toggle, and the refresh button.
@@ -389,15 +370,31 @@ fn controls(s: &State, w: usize) -> Row {
     );
     parts.push((sp(" ".repeat(pad), Style::new()), None));
     parts.push((sp(right, dim()), Some(Act::PickRefresh)));
-    pk(hot_row(parts))
+    hot_row(parts)
 }
 
-fn footer() -> Row {
-    pk(row(vec![sp("  ↑↓ move · ←→ levels · enter choose · s session only · a show all · r refresh · esc close", dim())]))
+/// The foot legend's pairs: keys bold, labels muted, naming panel keys the
+/// body never lists as choices.
+fn footer_pairs() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("↑↓", "move"),
+        ("←→", "levels"),
+        ("enter", "choose"),
+        ("s", "session only"),
+        ("a", "show all"),
+        ("r", "refresh"),
+        ("esc", "close"),
+    ]
 }
 
-/// The rows below the header.
-pub fn view(s: &State, w: usize) -> Vec<Row> {
+/// The foot legend: keys bold, labels muted.
+fn footer(inner: usize) -> Row {
+    panel::footer_legend(&footer_pairs(), inner)
+}
+
+/// The panel's body at an inner width: controls, dim provider sections with
+/// a blank row between them, and the visible models, the focused one barred.
+fn body(s: &State, inner: usize) -> Vec<Row> {
     let all = fixture();
     let mut at: Vec<(usize, usize)> = vec![];
     for (pi, p) in all.iter().enumerate() {
@@ -407,27 +404,61 @@ pub fn view(s: &State, w: usize) -> Vec<Row> {
     }
     let vis = visible(s);
     let pos = vis.iter().position(|&i| i == s.focus).unwrap_or(0);
-    let mut out = vec![controls(s, w)];
+    let mut out = vec![controls(s, inner)];
+    let mut first_section = true;
     for (pi, p) in all.iter().enumerate() {
         let here: Vec<usize> = vis.iter().copied().filter(|&i| at[i].0 == pi).collect();
         if here.is_empty() {
             continue;
         }
+        if !first_section {
+            out.push(row(vec![]));
+        }
+        first_section = false;
         out.push(provider_row(p, s.refreshing.contains(&pi), s));
         for &f in &here {
             let (ppi, mi) = at[f];
             let m = &all[ppi].models[mi];
             let focused = vis[pos] == f;
             let scoped_mark = s.show_all && s.scoped.contains(&f);
-            out.push(model_row(f, m, focused, scoped_mark));
+            if focused {
+                out.extend(panel::bar(vec![model_row(f, m, focused, scoped_mark)]));
+            } else {
+                out.push(model_row(f, m, focused, scoped_mark));
+            }
             out.push(chips_row(s, f, m, focused));
             if s.session_only == Some(f) {
                 out.push(note_row());
             }
         }
     }
-    out.push(footer());
     out
+}
+
+/// The rows below the header: a centred panel that never fills the area.
+/// Interaction is unchanged: rows stay area-wide, so every click target
+/// keeps its coordinates.
+pub fn view(s: &State, w: usize) -> Vec<Row> {
+    let probe = body(s, 10_000);
+    // The controls row pads to its width, so it never sizes the panel.
+    let natural = probe.iter().skip(1).map(|r| width(&r.spans)).max().unwrap_or(0);
+    // The legend's unfitted width: `fit` would pad it to the probe width.
+    let foot: Vec<ratatui::text::Span<'static>> = footer_pairs()
+        .iter()
+        .flat_map(|(k, l)| {
+            vec![
+                crate::sp(*k, crate::bold()),
+                crate::sp(" ", ratatui::style::Style::new()),
+                crate::sp(*l, crate::dim()),
+                crate::sp(" · ", crate::dim()),
+            ]
+        })
+        .collect();
+    let natural = natural.max(width(&foot).saturating_sub(3));
+    let panel_w = panel::fit_width(natural, w.saturating_sub(4).min(96), w);
+    let inner = panel::inner_w(panel_w);
+    let rows = panel::frame(None, body(s, inner), Some(footer(inner)), panel_w);
+    panel::centre(rows, panel_w, w)
 }
 
 /// The picker's keys. True when the key was consumed.
@@ -525,6 +556,33 @@ mod tests {
         );
         assert!(t.contains("—"), "the current model shows no rebuild cost");
         assert_eq!(picks(&view(&for_case("list"), 100)), 12);
+    }
+
+    #[test]
+    fn the_picker_is_a_centred_panel_with_a_bar_and_legend() {
+        let rows = view(&for_case("list"), 100);
+        let t = text(&rows);
+        assert!(t.contains("\u{2584}"), "no top edge");
+        assert!(t.contains("\u{2580}"), "no bottom edge");
+        assert!(t.contains("\u{258c}"), "no stripe");
+        assert!(t.contains("\u{203a} "), "no gutter marker");
+        // Centred: the edge run neither starts at the margin nor fills the row.
+        let edge = t.split('\n').find(|l| l.contains("\u{2584}")).unwrap();
+        let run = edge.chars().filter(|&c| c == '\u{2584}').count();
+        assert!(edge.starts_with(' '), "panel flush left");
+        assert!(run < 100, "panel fills the area");
+        // The focused model rides a full-width accent bar inside blank margins.
+        let picked = rows.iter().find(|r| matches!(r.act, Some(Act::Pick(0)))).unwrap();
+        assert_eq!(picked.spans[0].style.bg, None, "no margin");
+        let ink: Vec<_> = picked.spans.iter().filter(|s| !s.content.trim().is_empty()).collect();
+        assert!(!ink.is_empty());
+        assert!(ink.iter().all(|s| s.style.bg == Some(BLUE)), "bar is not full width");
+        // Provider sections split on a blank row.
+        let b = body(&for_case("list"), 90);
+        let pi = b.iter().position(|r| plain(r).contains("openai-codex")).unwrap();
+        assert!(plain(&b[pi - 1]).trim().is_empty(), "no blank before the section");
+        // The foot is a bold-key legend.
+        assert!(t.contains("\u{2191}\u{2193} move · \u{2190}\u{2192} levels · enter choose · s session only · a show all · r refresh · esc close"));
     }
 
     #[test]
