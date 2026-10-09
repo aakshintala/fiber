@@ -60,18 +60,12 @@ impl App {
         message: &str,
     ) {
         if code == "session_not_found" && self.delegate_running(&session) && self.connected() {
-            // The frame time is set on every loop input; without it
-            // (only in tests that drive no clock) the wall clock
-            // stands in, so the retry still waits its delay.
-            #[allow(
-                clippy::disallowed_methods,
-                reason = "the loop always sets the frame time first; the wall clock only covers clockless tests"
-            )]
-            let fallback = Instant::now();
+            // The retry waits from the frame's injected time, set on
+            // every loop input; without it the wish sends on the next
+            // reconciliation instead.
             let retry_at = self
                 .motion()
                 .now_instant()
-                .or(Some(fallback))
                 .and_then(|now| now.checked_add(RETRY));
             let want = self
                 .items
