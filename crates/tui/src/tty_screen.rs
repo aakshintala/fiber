@@ -142,12 +142,26 @@ impl Parser {
                 // `BEL` ends the sequence, dropped.
                 '\x07' => {
                     self.state = State::Ground;
+                    self.content = 0;
+                    self.osc_esc = false;
                 }
                 '\x1b' => {
+                    // Every pending byte counts toward the bound,
+                    // including the escape itself, so a run of escapes
+                    // cannot hold the sequence past it.
                     self.osc_esc = true;
+                    self.content = self.content.saturating_add(1);
+                    if self.content > PENDING_CAP {
+                        // Past the bound the sequence is dropped and the
+                        // escape with it, so the tail reads as ground.
+                        self.state = State::Ground;
+                        self.content = 0;
+                        self.osc_esc = false;
+                    }
                 }
                 '\\' if self.osc_esc => {
                     self.state = State::Ground;
+                    self.content = 0;
                     self.osc_esc = false;
                 }
                 _ => {

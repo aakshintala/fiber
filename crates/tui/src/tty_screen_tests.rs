@@ -440,3 +440,31 @@ fn an_st_over_long_drops_across_deltas() {
     assert!(row.starts_with('x'));
     assert!(row.ends_with('Z'));
 }
+
+#[test]
+fn osc_escape_bytes_count_toward_the_bound() {
+    // 63 escapes plus `X` stay inside the bound, so `BEL` closes with
+    // nothing drawn.
+    let held = "\x1b".repeat(63);
+    let grid = fed_grid(&[format!("\x1b]{held}X\x07").as_str()]);
+    assert!(text(&grid)[0].is_empty());
+    // The 65th pending byte drops the sequence, so `X` draws.
+    let over = "\x1b".repeat(64);
+    let grid = fed_grid(&[format!("\x1b]{over}X\x07").as_str()]);
+    assert_eq!(text(&grid)[0], "X");
+    let over = "\x1b".repeat(65);
+    let grid = fed_grid(&[format!("\x1b]{over}X\x07").as_str()]);
+    assert_eq!(text(&grid)[0], "X");
+}
+
+#[test]
+fn osc_escape_bound_holds_across_deltas() {
+    let held_first = "\x1b".repeat(30);
+    let held_second = "\x1b".repeat(33);
+    let grid = fed_grid(&["\x1b]", held_first.as_str(), held_second.as_str(), "X\x07"]);
+    assert!(text(&grid)[0].is_empty());
+    let over_first = "\x1b".repeat(30);
+    let over_second = "\x1b".repeat(35);
+    let grid = fed_grid(&["\x1b]", over_first.as_str(), over_second.as_str(), "X\x07"]);
+    assert_eq!(text(&grid)[0], "X");
+}
