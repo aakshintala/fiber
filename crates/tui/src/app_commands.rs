@@ -11,6 +11,7 @@ use serde_json::json;
 
 use super::{App, Effect, Kind, Link, Phase, mint, session_command};
 use crate::editor::Target;
+use crate::input::Draft;
 use crate::keymap;
 use crate::keys::{Edit, Key};
 use crate::shell;
@@ -71,6 +72,16 @@ pub(crate) struct Completions {
     pub(crate) lines: Vec<String>,
     /// The selected row among `lines`, when one is selectable.
     pub(crate) selected: Option<usize>,
+}
+
+/// The draft's content as a prompt's `content` argument: text runs and
+/// image parts in order, each run one text part. `SentPart` serializes as
+/// the wire part, `type` with the part's fields, so the content converts
+/// directly. Every part serializes, so the fallback never runs.
+pub(super) fn content_arg(draft: &Draft) -> serde_json::Value {
+    let content =
+        serde_json::to_value(draft.content()).unwrap_or(serde_json::Value::Array(Vec::new()));
+    json!({ "content": content })
 }
 
 impl App {
@@ -149,6 +160,7 @@ impl App {
             | Key::F1
             | Key::CtrlG
             | Key::CtrlR
+            | Key::CtrlV
             | Key::CtrlF => None,
         }
     }
@@ -359,6 +371,8 @@ impl App {
                     return Some(self.on_enter());
                 }
             }
+            // Ctrl+V never reaches the draft behind an open panel.
+            Key::CtrlV => {}
             Key::Char(_)
             | Key::Backspace
             | Key::CtrlC
@@ -383,8 +397,13 @@ impl App {
     }
 
     /// Runs the draft when its first word is a built-in command; `None`
-    /// when it is not one, and the draft goes out as typed.
+    /// when it is not one, and the draft goes out as typed. A draft
+    /// holding an image is never a built-in command: Enter sends it as a
+    /// prompt.
     pub(super) fn built_in(&mut self) -> Option<Effect> {
+        if self.draft.has_image() {
+            return None;
+        }
         let draft = self.draft.expand();
         let draft = draft.trim();
         let (head, rest) = draft.split_once(char::is_whitespace).unwrap_or((draft, ""));
@@ -459,9 +478,8 @@ impl App {
         };
         let id = mint();
         let line = session_command(&id, command, &session, args).to_string();
-        let text = self.draft.expand();
-        self.draft.clear();
-        self.pending.insert(id, (Kind::Command, text));
+        let draft = std::mem::take(&mut self.draft);
+        self.pending.insert(id, (Kind::Command, draft));
         Effect::Send(vec![line])
     }
 
@@ -475,7 +493,7 @@ impl App {
         let lines =
             vec![session_command(&id, "close", &session, Some(json!({"now": true}))).to_string()];
         // Home has a fresh draft: a rejected `close` gives only its notice.
-        self.pending.insert(id, (Kind::Command, String::new()));
+        self.pending.insert(id, (Kind::Command, Draft::default()));
         self.go_home();
         Effect::Send(lines)
     }
@@ -528,6 +546,7 @@ impl App {
             | Key::CtrlO
             | Key::CtrlG
             | Key::CtrlR
+            | Key::CtrlV
             | Key::CtrlF => Some(top),
         };
         Some(Effect::None)
@@ -554,25 +573,31 @@ impl App {
         }
     }
 
-    /// Enter sends the draft, its tokens expanded: `start` with no session,
-    /// `prompt` when idle, `steer` during a turn, and `shell` for a `!`
-    /// command whenever attached.
+    /// Enter sends the draft: `start` with no session, `prompt` when
+    /// idle, `steer` during a turn, and `shell` for a `!` command whenever
+    /// attached. A draft holding an image sends its content as a prompt
+    /// or `steer`, never as a built-in or a `!` command.
     pub(super) fn on_enter(&mut self) -> Effect {
         if let Some(effect) = self.built_in() {
             return effect;
         }
+        let has_image = self.draft.has_image();
         let text = self.draft.expand();
         // A command sent after the connection is lost goes nowhere, so the
-        // draft stays.
-        if text.trim().is_empty() || self.link == Link::Down {
+        // draft stays. An empty draft stays too, unless it holds an image.
+        if self.link == Link::Down {
+            return Effect::None;
+        }
+        if !has_image && text.trim().is_empty() {
             return Effect::None;
         }
         if self.steering.is_selected() {
             return self.amend();
         }
         let id = mint();
-        let content = json!([{"type": "text", "text": text}]);
-        let (kind, line) = match (&self.phase, shell::parse(&text)) {
+        let args = content_arg(&self.draft);
+        let shell = (!has_image).then(|| shell::parse(&text)).flatten();
+        let (kind, line) = match (&self.phase, shell) {
             (Phase::Starting | Phase::Pending { .. }, Some(_)) => {
                 self.notices.push("Start a session first.".to_owned());
                 return Effect::None;
@@ -592,7 +617,6 @@ impl App {
                 } else {
                     (Kind::Prompt, "prompt")
                 };
-                let args = json!({ "content": content });
                 (kind, session_command(&id, command, session, Some(args)))
             }
         };
@@ -601,8 +625,8 @@ impl App {
                 command_id: id.clone(),
             };
         }
-        self.draft.clear();
-        self.pending.insert(id, (kind, text));
+        let draft = std::mem::take(&mut self.draft);
+        self.pending.insert(id, (kind, draft));
         let line = line.to_string();
         if self.link == Link::Up {
             Effect::Send(vec![line])
@@ -614,14 +638,14 @@ impl App {
         }
     }
 
-    /// The first prompt of a session `start` made, carrying `text`, sent
+    /// The first prompt of a session `start` made, carrying `draft`, sent
     /// after its `subscribe` so the session counts this terminal before
-    /// the prompt. A rejection returns the text to an empty draft.
-    pub(super) fn first_prompt(&mut self, session: &SessionId, text: String) -> String {
+    /// the prompt. A rejection returns the draft to an empty box.
+    pub(super) fn first_prompt(&mut self, session: &SessionId, draft: Draft) -> String {
         let id = mint();
-        let args = json!({ "content": [{"type": "text", "text": text}] });
+        let args = content_arg(&draft);
         let line = session_command(&id, "prompt", session, Some(args)).to_string();
-        self.pending.insert(id, (Kind::Prompt, text));
+        self.pending.insert(id, (Kind::Prompt, draft));
         line
     }
 
@@ -638,7 +662,7 @@ impl App {
         };
         let id = mint();
         let line = session_command(&id, "cancel", &session, None).to_string();
-        self.pending.insert(id, (Kind::Cancel, String::new()));
+        self.pending.insert(id, (Kind::Cancel, Draft::default()));
         Effect::Send(vec![line])
     }
 
@@ -669,18 +693,36 @@ impl App {
     }
 
     /// The editor returned: its text replaces `target`'s, the whole draft's
-    /// as typed with the cursor at its end; an error is the notice, and the
-    /// draft stays.
+    /// as typed with image labels relinked and the cursor at its end; an
+    /// error is the notice, and the draft stays.
     pub(crate) fn editor_returned(&mut self, target: Target, result: Result<String, String>) {
         match (result, target) {
             (Err(notice), _) => self.notices.push(notice),
             (Ok(text), Target::Token(number)) => self.draft.set_token(number, &text),
-            (Ok(text), Target::Draft) => self.draft.set(&text),
+            (Ok(text), Target::Draft) => self.draft.edited(&text),
             (Ok(_), Target::Item) => {}
         }
         self.overlays.selected = 0;
         self.edited();
         self.settle();
+    }
+
+    /// A clipboard image read finished: its image lands at the cursor
+    /// when its ticket is running and the box holds its draft, its notice
+    /// shows, and anything else is dropped silently.
+    pub(crate) fn on_image(&mut self, ticket: u64, result: Result<String, String>) {
+        match self.paste.land(ticket, self.draft.serial(), result) {
+            super::paste::Landed::Image(data) => {
+                self.draft.insert_image(data);
+                self.edited();
+                self.settle();
+            }
+            super::paste::Landed::Notice(notice) => {
+                self.notices.push(notice);
+                self.settle();
+            }
+            super::paste::Landed::Dropped => {}
+        }
     }
 }
 

@@ -61,6 +61,7 @@ fn sent(effect: Effect) -> Vec<Value> {
         | Effect::OpenLink(_)
         | Effect::Quit
         | Effect::ListFiles
+        | Effect::ReadImage(_)
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. } => Vec::new(),

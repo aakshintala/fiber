@@ -194,6 +194,7 @@ pub(super) fn new_loop<B: Backend>(
         search: None,
         stash: std::collections::VecDeque::new(),
         reader: None,
+        paste_reader: None,
         pointer: crate::mouse::Pointer::default(),
         hover: true,
         var: Box::new(|_| None),
@@ -1559,6 +1560,7 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         search: None,
         stash: std::collections::VecDeque::new(),
         reader: None,
+        paste_reader: None,
         pointer: crate::mouse::Pointer::default(),
         hover: true,
         var: Box::new(|_| None),
@@ -1673,7 +1675,8 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
             | Input::ConnectFailed(_)
             | Input::Disconnected
             | Input::Resize
-            | Input::Files { .. } => panic!("a pause sent something else"),
+            | Input::Files { .. }
+            | Input::Image { .. } => panic!("a pause sent something else"),
         }
     }
     generations.sort();

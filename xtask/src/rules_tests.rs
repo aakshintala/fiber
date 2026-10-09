@@ -84,11 +84,29 @@ fn signal_sites_ignores_each_pattern_inside_the_allowlist() {
             ("fakes", "src/process_group.rs"),
             ("cli", "src/extension_test.rs"),
             ("mcp", "src/registry.rs"),
+            ("tui", "src/paste_image.rs"),
             ("tools", "src/shell/process_group.rs"),
         ] {
             let files = [file(krate, rel, line.clone())];
             assert_eq!(signal_sites(&files), Vec::<String>::new(), "{pattern}");
         }
+    }
+}
+
+#[test]
+fn signal_sites_reports_a_signal_elsewhere_in_tui() {
+    for &(pattern, needs_kill) in SIGNAL_PATTERNS {
+        let files = [file("tui", "src/app.rs", signal_line(pattern, needs_kill))];
+        let hits = signal_sites(&files);
+        assert!(
+            hits.contains(&format!("crates/tui/src/app.rs:2: {pattern}")),
+            "{pattern}: {hits:?}"
+        );
+        assert!(
+            hits.iter()
+                .all(|hit| hit.starts_with("crates/tui/src/app.rs:2: ")),
+            "{pattern}: {hits:?}"
+        );
     }
 }
 

@@ -211,6 +211,23 @@ fn a_key_bound_by_an_action_without_a_canonical_event_gives_nothing() {
 }
 
 #[test]
+fn a_person_key_for_paste_image_gives_ctrl_v() {
+    let entries = &[("paste_image", json!("alt+v"))];
+    for context in [Context::Input, Context::Steering] {
+        assert_eq!(
+            at(entries, "alt+v", context),
+            super::Resolved::Key(Key::CtrlV),
+            "{context:?}"
+        );
+        assert_eq!(
+            at(entries, "ctrl+v", context),
+            super::Resolved::Nothing,
+            "{context:?}"
+        );
+    }
+}
+
+#[test]
 fn unbinding_search_results_leaves_no_alias_live_in_search() {
     let entries = &[("search_results", json!([]))];
     for name in ["ctrl+f", "super+f"] {
