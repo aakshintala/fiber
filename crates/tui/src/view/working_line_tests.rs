@@ -763,6 +763,3 @@ fn a_band_clipped_at_the_bottom_row_keeps_its_still_form() {
     assert!(!shown.contains(SPINNER[0]), "{shown}");
     assert_eq!(app.take_wake(), None);
 }
-
-
-
