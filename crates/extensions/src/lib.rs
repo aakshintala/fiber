@@ -268,9 +268,7 @@ pub enum Error {
         provider: String,
     },
     /// A bare model id no installed provider has.
-    #[error(
-        "No installed provider has the model `{id}`. Install its provider with `fiber extension install <name>`."
-    )]
+    #[error("No installed model matches `{id}`. Run `fiber models` to list them.")]
     ModelMissing {
         /// The id as typed.
         id: String,
@@ -454,7 +452,7 @@ impl Error {
                 ErrorCode::ExtensionIncompatible
             }
             Self::BadVersion { .. } | Self::BadName { .. } => ErrorCode::ConfigInvalid,
-            Self::ProviderMissing { .. } | Self::ModelMissing { .. } => ErrorCode::ExtensionMissing,
+            Self::ProviderMissing { .. } => ErrorCode::ExtensionMissing,
             Self::Damaged(_)
             | Self::Lua { .. }
             | Self::Timeout { .. }
@@ -463,7 +461,9 @@ impl Error {
             | Self::BadReturn { .. }
             | Self::Stopped { .. } => ErrorCode::ExtensionFailed,
             Self::UnknownCommand { .. } => ErrorCode::UnknownCommand,
-            Self::UnknownModel { .. } | Self::NoModel => ErrorCode::NoModel,
+            Self::UnknownModel { .. } | Self::ModelMissing { .. } | Self::NoModel => {
+                ErrorCode::NoModel
+            }
             Self::Unconfigured { .. } => ErrorCode::ModelUnconfigured,
             Self::Ambiguous { .. } => ErrorCode::ModelAmbiguous,
             Self::Credential(_) => ErrorCode::CredentialFailed,
