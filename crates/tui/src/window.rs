@@ -1014,17 +1014,14 @@ impl Pages {
         &self.index
     }
 
-    /// The code block target in a resident page, when it is still held.
-    pub(crate) fn copy_target(
-        &self,
-        target: Target,
-        width: u16,
-    ) -> Option<crate::markdown::CopyTarget> {
+    /// The code block target in a resident page, when it is still held:
+    /// the block rendered at the width the pages wrap at.
+    pub(crate) fn copy_target(&self, target: Target) -> Option<crate::markdown::CopyTarget> {
         self.closed
             .iter()
             .flatten()
             .chain(std::iter::once(&self.open))
-            .find_map(|part| crate::app::copy::copy_target(&part.turns, target, width))
+            .find_map(|part| crate::app::copy::copy_target(&part.turns, target, self.wrap_width()))
     }
 
     /// Adds shell output to the page where it ran.

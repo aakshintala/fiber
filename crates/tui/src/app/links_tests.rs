@@ -452,3 +452,49 @@ fn two_different_urls_on_adjacent_rows_stay_two_links() {
     let urls: Vec<&str> = found.iter().map(|link| link.url.as_str()).collect();
     assert_eq!(urls, ["http://a.example", "http://b.example"], "{found:?}");
 }
+
+#[test]
+fn a_bare_url_in_a_prompt_bubble_is_on_its_drawn_cells() {
+    // The bubble is right-aligned, so the link starts where the drawn
+    // `http` starts, not where it would sit in a reply row.
+    let prompt = "see http://example.com/a";
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    assert!(app.on_line(hello()).is_empty());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.on_line(line(
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": prompt}]}]}),
+        None,
+    ));
+    app.on_line(line(
+        "turn_completed",
+        json!({"outcome": "completed"}),
+        None,
+    ));
+    let area = app.conversation_area();
+    let (buf, _) = draw(&app);
+    let mut col = None;
+    for y in area.top()..area.bottom() {
+        let row: String = (area.left()..area.right())
+            .map(|x| buf[(x, y)].symbol().to_owned())
+            .collect();
+        if let Some(at) = row.find("http") {
+            col = Some(area.x.saturating_add(at as u16));
+            break;
+        }
+    }
+    let col = col.expect("the prompt draws its URL");
+    let found = app.visible_links(area);
+    let link = found
+        .iter()
+        .find(|link| link.url == "http://example.com/a")
+        .unwrap_or_else(|| panic!("no bare link in {prompt:?}: {found:?}"));
+    assert_eq!(link.rects.len(), 1, "{link:?}");
+    assert_eq!(
+        (link.rects[0].x, link.rects[0].width),
+        (col, 20),
+        "{link:?}"
+    );
+}

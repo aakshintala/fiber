@@ -261,7 +261,7 @@ impl App {
             return self
                 .screen
                 .pages()
-                .copy_target(target, self.column_width())
+                .copy_target(target)
                 .map(|copy| copy.code);
         }
         let rows: Vec<String> = self

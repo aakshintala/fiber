@@ -203,9 +203,7 @@ fn conversation_height_equals_the_drawn_rows_in_the_narrow_layout() {
             crate::view::render(&app, area, &mut buf, None);
             let drawn = crate::view::text(&buf)
                 .lines()
-                .filter(|row| {
-                    row.contains("www") || row.contains("00:00") || prompt_edge(row, &app)
-                })
+                .filter(|row| row.contains("ww") || row.contains("00:00") || prompt_edge(row, &app))
                 .count();
             assert_eq!(drawn, app.conversation_height(), "{name} at 100x{height}");
         }
@@ -248,9 +246,7 @@ fn conversation_height_equals_the_drawn_rows_with_delegates() {
             crate::view::render(&app, area, &mut buf, None);
             let drawn = crate::view::text(&buf)
                 .lines()
-                .filter(|row| {
-                    row.contains("www") || row.contains("00:00") || prompt_edge(row, &app)
-                })
+                .filter(|row| row.contains("ww") || row.contains("00:00") || prompt_edge(row, &app))
                 .count();
             assert_eq!(drawn, app.conversation_height(), "{name} at 100x{height}");
         }

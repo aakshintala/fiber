@@ -196,7 +196,14 @@ pub(crate) fn render(
                         overlay_cross(buf, conversation, &mut targets);
                     }
                     None => {
-                        conversation_rows(app, conversation, buf, &mut targets);
+                        // The rows draw in the scroll bar's rows area, one
+                        // column narrower than the conversation, leaving
+                        // the last column to the bar.
+                        // The rows draw in the scroll bar's rows area, one
+                        // column narrower than the conversation, leaving
+                        // the last column to the bar.
+                        let (rows, _) = scroll_bar::split(conversation);
+                        conversation_rows(app, rows, buf, &mut targets);
                         marks::draw(app, conversation, buf, &mut targets);
                     }
                 },
