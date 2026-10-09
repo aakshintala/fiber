@@ -493,3 +493,179 @@ fn narrow_with_delegates_and_widget() {
     let (screen, _) = draw(&app, 100, 30);
     insta::assert_snapshot!("narrow_with_delegates_and_widget", screen);
 }
+
+/// Renders `app` at `width` by `height`: the screen's rows, the terminal
+/// cursor and the click targets.
+fn rendered(
+    app: &App,
+    width: u16,
+    height: u16,
+) -> (
+    Vec<String>,
+    Option<ratatui::layout::Position>,
+    Vec<crate::mouse::Target>,
+) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(app, area, &mut buf, None);
+    let rows: Vec<String> = crate::view::text(&buf).lines().map(str::to_owned).collect();
+    (rows, crate::view::cursor(app, area), targets)
+}
+
+/// An app at 100 columns wanting both status rows: row 1 from the idle
+/// session, row 2 from the running job.
+fn two_rows(height: u16) -> App {
+    let mut app = attached(100, height);
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(started("j_1", "build"));
+    app
+}
+
+#[test]
+fn the_draft_cursor_sits_above_one_status_row() {
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    let (rows, cursor, _) = rendered(&app, 100, 30);
+    assert_eq!(app.narrow_fit().map(|fit| fit.status), Some(1));
+    let at = cursor.expect("a cursor on the input row");
+    // The input row, then the one status row.
+    assert_eq!(usize::from(at.y), rows.len() - 2);
+    assert!(rows[usize::from(at.y)].contains('>'), "{rows:?}");
+    assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
+}
+
+#[test]
+fn the_draft_cursor_sits_above_two_status_rows() {
+    let app = two_rows(30);
+    let (rows, cursor, _) = rendered(&app, 100, 30);
+    assert_eq!(app.narrow_fit().map(|fit| fit.status), Some(2));
+    let at = cursor.expect("a cursor on the input row");
+    // The input row, then row 1, then row 2.
+    assert_eq!(usize::from(at.y), rows.len() - 3);
+    assert!(rows[usize::from(at.y)].contains('>'), "{rows:?}");
+    assert!(rows[rows.len() - 2].contains("$1.50"), "{rows:?}");
+    assert!(rows[rows.len() - 1].contains("1 job running"), "{rows:?}");
+}
+
+#[test]
+fn the_draft_cursor_tracks_the_kept_status_rows_on_short_screens() {
+    // A five-line widget, open, sheds the status rows one by one as the
+    // screen shortens, while the input row stays above them.
+    let setup = |height: u16| {
+        let mut app = two_rows(height);
+        app.on_line(widget("ex", "wid", &["l1", "l2", "l3", "l4", "l5"]));
+        app.on_click(TargetId::Panel(Spot::Widget));
+        app
+    };
+    let mut kept = std::collections::BTreeSet::new();
+    for height in 10..=14 {
+        let app = setup(height);
+        let (rows, cursor, _) = rendered(&app, 100, height);
+        let keep = app.narrow_fit().map(|fit| fit.status).unwrap_or(0);
+        kept.insert(keep);
+        let at = cursor.expect("a cursor on the input row");
+        // The cursor stays on the input row while the kept rows change
+        // beneath it.
+        assert_eq!(usize::from(at.y), usize::from(height) - keep - 1);
+        assert!(rows[usize::from(at.y)].contains('>'), "{height}: {rows:?}");
+        let below = &rows[usize::from(at.y) + 1..];
+        assert_eq!(below.len(), keep, "{height}: {rows:?}");
+        if keep >= 1 {
+            assert!(below[0].contains("$1.50"), "{height}: {rows:?}");
+        }
+        if keep >= 2 {
+            assert!(below[1].contains("1 job running"), "{height}: {rows:?}");
+        }
+    }
+    // The sweep covers each side of both shedding boundaries.
+    assert!(
+        kept.contains(&0) && kept.contains(&1) && kept.contains(&2),
+        "{kept:?}"
+    );
+}
+
+/// An approval panel asking to run `ls`.
+fn approval() -> Line {
+    session_line(
+        SESSION,
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"], "reversible": true,
+            "step": "standing_ask", "standing_rule": {"scope": "global", "prefix": "ls"}}),
+    )
+}
+
+#[test]
+fn the_approval_panel_draws_above_the_status_row() {
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(approval());
+    assert!(app.panel().is_some());
+    let (rows, cursor, _) = rendered(&app, 100, 30);
+    // An approval has no text cursor.
+    assert!(cursor.is_none());
+    // The panel's last row sits directly above the status row.
+    assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
+    assert!(
+        rows[rows.len() - 2].contains("deny · type to add feedback"),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn the_approval_panel_takes_the_bottom_row_once_the_status_sheds() {
+    // A five-line widget, open, leaves no status row at ten rows.
+    let setup = || {
+        let mut app = attached(100, 10);
+        app.on_line(idle(SESSION, "one"));
+        app.on_line(widget("ex", "wid", &["l1", "l2", "l3", "l4", "l5"]));
+        app.on_click(TargetId::Panel(Spot::Widget));
+        app.on_line(approval());
+        app
+    };
+    assert!(setup().panel().is_some());
+    assert_eq!(setup().narrow_fit().map(|fit| fit.status), Some(0));
+    let (rows, cursor, _) = rendered(&setup(), 100, 10);
+    assert!(cursor.is_none());
+    // No status row survives, so the panel ends on the last row.
+    assert!(!rows.iter().any(|row| row.contains("$1.50")), "{rows:?}");
+    assert!(
+        rows[rows.len() - 1].contains("deny · type to add feedback"),
+        "{rows:?}"
+    );
+}
+
+/// A form asking which branch, then for a name in words.
+fn form() -> Line {
+    session_line(
+        SESSION,
+        "interaction_requested",
+        serde_json::json!({"request_id": "r_4f", "kind": "form", "action_ids": ["a_1"],
+            "fields": [
+                {"header": "Base", "question": "Which branch?", "multiSelect": false,
+                    "options": [{"label": "main", "description": "the default"},
+                        {"label": "dev"}]},
+                {"header": "Name", "question": "What name?"}]}),
+    )
+}
+
+#[test]
+fn the_question_caret_sits_inside_the_panel_above_the_status_row() {
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(form());
+    assert!(app.panel().is_some());
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::Tab, now);
+    for key in "qx".chars().map(Key::Char) {
+        app.on_key(key, fakes::clock::FakeClock::new().now());
+    }
+    let (rows, cursor, _) = rendered(&app, 100, 30);
+    assert_eq!(app.narrow_fit().map(|fit| fit.status), Some(1));
+    let at = cursor.expect("a caret in the words row");
+    // The caret's row holds the typed words, above the panel's last row
+    // and the status row beneath it.
+    assert!(rows[usize::from(at.y)].contains("qx"), "{rows:?}");
+    assert!(usize::from(at.y) < rows.len() - 2, "{rows:?}");
+    assert!(rows[rows.len() - 2].contains("Chat about this"), "{rows:?}");
+    assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
+}

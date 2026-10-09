@@ -229,6 +229,20 @@ pub(crate) fn delegates(app: &App, width: u16) -> Vec<Line<'static>> {
         .collect()
 }
 
+/// How many status rows draw at the column's bottom.
+pub(crate) fn kept(app: &App) -> usize {
+    app.narrow_fit().map_or(0, |fit| fit.status)
+}
+
+/// The bottom the input box or its replacement panel draws above: the
+/// column's bottom less the kept status rows. Drawing and the terminal
+/// cursor share it, so the caret never lands on a status row.
+pub(crate) fn input_bottom(app: &App, area: Rect) -> u16 {
+    area.bottom()
+        .saturating_sub(super::to_u16(kept(app)))
+        .max(area.y)
+}
+
 /// Draws the status line at the bottom of the column: row 1 above row 2,
 /// keeping the first `fit.status` rows of the narrow layout's fit.
 pub(super) fn draw_status(
@@ -238,20 +252,22 @@ pub(super) fn draw_status(
     bottom: &mut u16,
     targets: &mut Vec<Target>,
 ) {
-    let keep = app.narrow_fit().map_or(0, |fit| fit.status);
-    for row in status(app, area.width).into_iter().take(keep).rev() {
-        let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) else {
+    let end = input_bottom(app, area);
+    let mut y = area.bottom();
+    for row in status(app, area.width).into_iter().take(kept(app)).rev() {
+        let Some(at) = y.checked_sub(1).filter(|at| *at >= area.y) else {
             continue;
         };
-        buf.set_line(area.x, y, &row.line, area.width);
-        *bottom = y;
+        buf.set_line(area.x, at, &row.line, area.width);
+        y = at;
         for (start, wide, spot) in row.spots {
             targets.push(Target {
                 id: TargetId::Panel(spot),
-                rect: Rect::new(area.x.saturating_add(start), y, wide, 1),
+                rect: Rect::new(area.x.saturating_add(start), at, wide, 1),
             });
         }
     }
+    *bottom = end;
 }
 
 /// Draws the widget row above the input box and its completion panel: a
