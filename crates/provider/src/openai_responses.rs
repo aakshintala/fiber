@@ -286,8 +286,14 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         .enumerate()
         .filter_map(|(index, input)| match input {
             Input::User { text, images } => {
-                let prepared =
-                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
+                let prepared = crate::images::prepare(
+                    text,
+                    images,
+                    &[],
+                    &request.session_dir,
+                    endpoint.text_only,
+                    crate::images::PdfForm::Native,
+                );
                 Some(json!({ "role": "user", "content": output(prepared) }))
             }
             Input::Assistant {
@@ -347,10 +353,17 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 action_id,
                 text,
                 images,
+                pdfs,
                 ..
             } => {
-                let prepared =
-                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
+                let prepared = crate::images::prepare(
+                    text,
+                    images,
+                    pdfs,
+                    &request.session_dir,
+                    endpoint.text_only,
+                    crate::images::PdfForm::Native,
+                );
                 Some(json!({
                     "type": "function_call_output",
                     "call_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
@@ -361,12 +374,13 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         .collect()
 }
 
-/// A `function_call_output`'s `output`: the plain text when no image is
-/// sent, otherwise an array holding one `input_text` part, when the text
-/// is non-empty, then one `input_image` part per image, each carrying a
-/// data URL (`docs/tools.md`, "read").
+/// A `function_call_output`'s `output`: the plain text when no image or PDF
+/// is sent, otherwise an array holding one `input_text` part, when the text
+/// is non-empty, then one `input_image` part per image, each carrying a data
+/// URL, then one `input_file` part per PDF carrying its bytes as a data URL
+/// (`docs/tools.md`, "read").
 fn output(prepared: crate::images::Prepared) -> Value {
-    if prepared.images.is_empty() {
+    if prepared.images.is_empty() && prepared.documents.is_empty() {
         return json!(prepared.text);
     }
     let mut parts = Vec::new();
@@ -375,6 +389,13 @@ fn output(prepared: crate::images::Prepared) -> Value {
     }
     for image in &prepared.images {
         parts.push(json!({"type": "input_image", "image_url": crate::images::data_url(image)}));
+    }
+    for document in &prepared.documents {
+        parts.push(json!({
+            "type": "input_file",
+            "filename": document.filename,
+            "file_data": format!("data:application/pdf;base64,{}", document.data),
+        }));
     }
     Value::Array(parts)
 }

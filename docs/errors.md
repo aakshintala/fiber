@@ -315,7 +315,7 @@ the lines that carry it.
 | `reviewer_selection_failed` | notice | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one |
 | `session_has_dependents` | exit, hub command | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") |
 | `session_held` | exit, hub command | another process holds the session, or runs it at a schema version this build cannot read (`docs/invocation.md`, "Processes") |
-| `session_not_found` | exit, hub command | a resume names no session, or a command whose `session_id` names no session, running or exited, or names a delegate that is not running (`docs/invocation.md`, "The hub" and "Lifecycle") |
+| `session_not_found` | exit, hub command | a resume names no session, or a command whose `session_id` names no session, running or exited, or names a delegate that is not running, or a hub command's `session` argument names none (`docs/invocation.md`, "The hub" and "Lifecycle") |
 | `signal` | tool call, job | a process killed by a signal Fiber did not send |
 | `skill_invalid` | notice | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
 | `skill_shadowed` | notice | two skills share a name, an MCP server's prompt is named like a skill, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") |

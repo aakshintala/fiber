@@ -20,7 +20,7 @@ pub enum ThemeSetting {
     Dark,
     /// The built-in light theme.
     Light,
-    /// A theme file in Fiber home's `themes/`.
+    /// A theme file, from Fiber home's `themes/` or an installed extension's.
     File {
         /// The theme's name, the file's without `.json`.
         name: String,

@@ -1,6 +1,5 @@
-//! The `resolve` jig (`docs/testing.md`, "Jigs"): `cargo run -p config
-//! --example resolve` prints the merged configuration for a Fiber home and
-//! project.
+//! The `resolve` jig (`docs/testing.md`, "Jigs"): the `resolve` example prints the
+//! merged configuration for a Fiber home and project.
 
 #![allow(
     clippy::unwrap_used,
@@ -11,6 +10,7 @@
 mod common;
 
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -25,25 +25,25 @@ use serde_json::{Value, json};
 /// the deadlines sum to 55s, so 120s is at least twice them:
 /// `docs/testing.md`, "Waits and timeouts", needs nextest's timeout to be
 /// at least twice the test's own deadlines, so a hang reports which wait
-/// expired. A cold compile of the example can be slow.
+/// expired.
 const JIG_DEADLINE: Duration = Duration::from_secs(50);
 
+/// The example `cargo test` built beside this test binary
+/// (`target/<profile>/examples/resolve`), so the test starts no cargo and
+/// waits on no build lock.
+fn example_path() -> PathBuf {
+    let mut path = std::env::current_exe().unwrap();
+    path.pop();
+    path.pop();
+    path.join("examples").join("resolve")
+}
+
 fn resolve(setup: &Setup, args: &[&str]) -> Output {
-    let child = Command::new(env!("CARGO"))
-        .args([
-            "run",
-            "--quiet",
-            "-p",
-            "config",
-            "--example",
-            "resolve",
-            "--",
-        ])
+    let child = Command::new(example_path())
         .arg(setup.workspace())
         .arg(PROJECT)
         .args(args)
         .env("FIBER_HOME", setup.home())
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
@@ -54,7 +54,7 @@ fn resolve(setup: &Setup, args: &[&str]) -> Output {
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
     let output = finished
         .recv_timeout(JIG_DEADLINE)
-        .expect("the resolve jig finished: cargo run --example resolve")
+        .expect("the resolve jig finished: the resolve example")
         .unwrap();
     watchdog.stand_down(Duration::from_secs(5));
     output

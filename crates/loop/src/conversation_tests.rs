@@ -821,6 +821,7 @@ fn image_result() -> Event {
 
 fn expected_image_result() -> Input {
     Input::ToolResult {
+        pdfs: Vec::new(),
         action_id: ActionId("a_1".into()),
         text: "Image: 8x4 image/png.\n".into(),
         is_error: false,
@@ -856,6 +857,120 @@ fn the_free_renderer_carries_image_refs_too() {
         &mut crate::handoff::Carry::default(),
     );
     assert_eq!(out, vec![expected_image_result()]);
+}
+
+fn pdf_result() -> Event {
+    Event::ToolCallCompleted(contract::events::ToolCallCompleted {
+        status: contract::events::CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![
+            contract::shapes::ContentPart::Text {
+                text: "PDF: 2 pages.\n".into(),
+            },
+            contract::shapes::ContentPart::Pdf(
+                contract::shapes::PdfPart::new(
+                    "artifacts/p_3f2a9c0d1e4b5a67.pdf".into(),
+                    2,
+                    Some(vec![
+                        contract::shapes::ImagePart {
+                            path: "artifacts/i_0a1b2c3d4e5f6071.png".into(),
+                            mime_type: "image/png".into(),
+                            width: 1545,
+                            height: 2000,
+                        },
+                        contract::shapes::ImagePart {
+                            path: "artifacts/i_8090a0b0c0d0e0f0.png".into(),
+                            mime_type: "image/png".into(),
+                            width: 1545,
+                            height: 2000,
+                        },
+                    ]),
+                )
+                .unwrap(),
+            ),
+        ],
+        details: None,
+        artifact: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        provider_item: None,
+    })
+}
+
+fn expected_pdf_result() -> Input {
+    Input::ToolResult {
+        action_id: ActionId("a_1".into()),
+        text: "PDF: 2 pages.\n".into(),
+        is_error: false,
+        images: Vec::new(),
+        pdfs: vec![contract::provider::PdfRef {
+            path: "artifacts/p_3f2a9c0d1e4b5a67.pdf".into(),
+            page_count: 2,
+            pages: Some(vec![
+                contract::provider::ImageRef {
+                    path: "artifacts/i_0a1b2c3d4e5f6071.png".into(),
+                    mime_type: "image/png".into(),
+                    width: 1545,
+                    height: 2000,
+                },
+                contract::provider::ImageRef {
+                    path: "artifacts/i_8090a0b0c0d0e0f0.png".into(),
+                    mime_type: "image/png".into(),
+                    width: 1545,
+                    height: 2000,
+                },
+            ]),
+        }],
+    }
+}
+
+#[test]
+fn a_pdf_part_becomes_a_pdf_ref_on_the_result() {
+    let lines = vec![
+        line("tool_call_requested", &call("read"), Some("a_1")),
+        line("tool_call_completed", &pdf_result(), Some("a_1")),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(rebuilt.len(), 2);
+    assert_eq!(rebuilt[1], expected_pdf_result());
+}
+
+#[test]
+fn a_pdf_part_without_pages_becomes_a_pdf_ref_without_pages() {
+    let Event::ToolCallCompleted(mut done) = pdf_result() else {
+        panic!("not a result");
+    };
+    done.content = vec![
+        contract::shapes::ContentPart::Text {
+            text: "PDF: 2 pages.\n".into(),
+        },
+        contract::shapes::ContentPart::Pdf(
+            contract::shapes::PdfPart::new("artifacts/p_3f2a9c0d1e4b5a67.pdf".into(), 2, None)
+                .unwrap(),
+        ),
+    ];
+    let completed = Event::ToolCallCompleted(done);
+    let lines = vec![
+        line("tool_call_requested", &call("read"), Some("a_1")),
+        line("tool_call_completed", &completed, Some("a_1")),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    let Input::ToolResult { text, pdfs, .. } = &rebuilt[1] else {
+        panic!("{rebuilt:?}");
+    };
+    // The text excludes the part, as it does an image part.
+    assert_eq!(text, "PDF: 2 pages.\n");
+    assert_eq!(
+        pdfs,
+        &vec![contract::provider::PdfRef {
+            path: "artifacts/p_3f2a9c0d1e4b5a67.pdf".into(),
+            page_count: 2,
+            pages: None,
+        }]
+    );
 }
 
 #[test]

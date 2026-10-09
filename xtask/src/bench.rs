@@ -397,7 +397,9 @@ fn per_thread(list: List, ids: &[&str], head: Option<&Results>) -> (Vec<String>,
                 };
                 match checked {
                     Ok(None) => {}
-                    Ok(Some(broken)) => failures.push(format!("{id}: run {}: {broken}", i + 1)),
+                    Ok(Some(broken)) => {
+                        failures.push(format!("{OVER}{id}: run {}: {broken}", i + 1));
+                    }
                     Err(e) => failures.push(e),
                 }
             }
@@ -443,7 +445,7 @@ fn per_entry(
                     observed = shown;
                 }
                 if let Some(broken) = broken {
-                    failures.push(format!("{id}: run {}: {broken}", i + 1));
+                    failures.push(format!("{OVER}{id}: run {}: {broken}", i + 1));
                 }
             }
             Err(e) => failures.push(e),
@@ -517,12 +519,14 @@ struct Line {
 
 /// Judges `head` (and `base` on a pull request) against the budget table in
 /// `performance`, the text of `docs/performance.md`. `base` is the base
-/// result file's text, or why it could not be read.
+/// result file's text, or why it could not be read. `base_commit` names the
+/// commit the base binary is from.
 pub(crate) fn report(
     performance: &str,
     head: &str,
     base: Option<Result<String, String>>,
     event: Event,
+    base_commit: &str,
 ) -> Report {
     let mut failures = Vec::new();
     let head = match parse_results(head) {
@@ -531,6 +535,10 @@ pub(crate) fn report(
             failures.push(format!("head results: {e}"));
             None
         }
+    };
+    let base_parsed = match (event, &base) {
+        (Event::PullRequest, Some(Ok(text))) => parse_results(text).ok(),
+        _ => None,
     };
     if let Some(results) = &head {
         failures.extend(results.failures.iter().map(|f| format!("self-check: {f}")));
@@ -566,7 +574,14 @@ pub(crate) fn report(
         let budget = cells.first().map_or("", String::as_str);
         let cell = cells.get(1).map_or("", String::as_str);
         if let Some((_, check)) = MEASURED.iter().find(|(b, _)| *b == budget) {
-            let (broken, line) = judge(budget, cell, *check, head.as_ref(), &base, &rows);
+            let (broken, line) = judge(
+                budget,
+                cell,
+                *check,
+                (head.as_ref(), base_parsed.as_ref(), base_commit),
+                &base,
+                &rows,
+            );
             failures.extend(broken.into_iter().map(|f| format!("{budget}: {f}")));
             lines.push(line);
         } else if !NOT_MEASURED.iter().any(|(b, _)| *b == budget) {
@@ -595,15 +610,32 @@ pub(crate) fn report(
     Report { failures, comment }
 }
 
-/// One row's failures and its comment line.
+/// The head's results, the base's when they parsed, and the commit the base
+/// binary is from.
+type Measured<'a> = (Option<&'a Results>, Option<&'a Results>, &'a str);
+
+/// Starts each failure that is a measurement over its budget, as opposed to
+/// a result that is missing or malformed.
+const OVER: &str = "over budget: ";
+
+/// Whether `failures` are non-empty and all measured violations. Only these
+/// can be excused by a base that has them too.
+fn all_over(failures: &[String]) -> bool {
+    !failures.is_empty() && failures.iter().all(|f| f.starts_with(OVER))
+}
+
+/// One row's failures and its comment line. A memory or exact budget the base
+/// fails too does not fail the row: it reads "over at base".
 fn judge(
     budget: &str,
     cell: &str,
     check: Check,
-    head: Option<&Results>,
+    (head, base_results, base_commit): Measured<'_>,
     base: &Base,
     rows: &[Vec<String>],
 ) -> (Vec<String>, Line) {
+    let mut measured = Vec::new();
+    let mut within = None;
     let mut failures = Vec::new();
     let mut line = Line {
         budget: budget.to_owned(),
@@ -613,7 +645,7 @@ fn judge(
         result: "pass",
     };
     match check {
-        Check::Memory(ids) => line.head = memory(cell, ids, head, &mut failures),
+        Check::Memory(ids) => line.head = memory(cell, ids, head, &mut measured),
         Check::Within { row, id } => {
             let other = rows
                 .iter()
@@ -628,7 +660,8 @@ fn judge(
                             "the ceiling reads {cell:?}; it must read {expected:?}, the {row:?} row's ceiling"
                         ));
                     }
-                    line.head = memory(other, &[id], head, &mut failures);
+                    line.head = memory(other, &[id], head, &mut measured);
+                    within = Some((other.clone(), id));
                 }
             }
         }
@@ -683,8 +716,32 @@ fn judge(
                 ));
             }
             let (broken, observed) = exact(rule, head);
-            failures.extend(broken);
+            measured.extend(broken);
             line.head = observed;
+        }
+    }
+    if !measured.is_empty() {
+        let base_failures = base_results.map(|b| match check {
+            Check::Memory(ids) => {
+                let mut f = Vec::new();
+                memory(cell, ids, Some(b), &mut f);
+                f
+            }
+            Check::Within { .. } => {
+                let mut f = Vec::new();
+                if let Some((other, id)) = &within {
+                    memory(other, &[id], Some(b), &mut f);
+                }
+                f
+            }
+            Check::Exact { rule, .. } => exact(rule, Some(b)).0,
+            Check::Timing(_) | Check::PerMib { .. } => Vec::new(),
+        });
+        if all_over(&measured) && base_failures.is_some_and(|f| all_over(&f)) {
+            line.base = format!("over at base {base_commit}");
+            line.result = "over at base";
+        } else {
+            failures.extend(measured);
         }
     }
     if !failures.is_empty() {
@@ -714,7 +771,7 @@ fn memory(cell: &str, ids: &[&str], head: Option<&Results>, failures: &mut Vec<S
                 shown.push(format!("{id}: {value:.0} KiB"));
                 if value > limit {
                     failures.push(format!(
-                        "median {value:.0} KiB of {id} is over {limit:.0} KiB"
+                        "{OVER}median {value:.0} KiB of {id} is over {limit:.0} KiB"
                     ));
                 }
             }

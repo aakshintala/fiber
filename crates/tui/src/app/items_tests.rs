@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use contract::clock::Clock;
 use contract::{JobId, SessionId};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
 use super::super::{App, Effect};
@@ -836,6 +838,188 @@ fn enter_on_a_completed_delegate_keeps_the_draft() {
     let effect = app.on_key(Key::Enter, clock.now());
     assert_eq!(effect, Effect::None);
     assert_eq!(app.draft(), "one more thing");
+}
+
+/// Folds a plain job as `job`, with no delegate.
+fn start_job(app: &mut App, job: &str) {
+    app.on_line(session_line(
+        "job_started",
+        json!({"job_id": job, "description": format!("task {job}"),
+            "output_path": "/tmp/out"}),
+    ));
+}
+
+/// One `job_started` at `ts` from tool call `action`.
+fn job_started(app: &mut App, job: &str, description: &str, ts: u64, action: &str) {
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "job_started".to_owned(),
+        session_id: SessionId(SESSION.to_owned()),
+        ts,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId(action.to_owned())),
+        seq: None,
+        payload: json!({"job_id": job, "description": description,
+            "output_path": "/tmp/out"})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }));
+}
+
+/// Folds a `shell` call asking for a pseudo-terminal on action `a_1`, so
+/// the next `job_started` on that action takes a grid.
+fn mark_tty(app: &mut App) {
+    app.on_line(session_line(
+        "tool_call_requested",
+        json!({"name": "shell", "arguments": {"tty": true}}),
+    ));
+}
+
+/// Feeds `text` as `job`'s delta.
+fn job_text(app: &mut App, job: &str, text: &str) {
+    app.on_line(session_line(
+        "job_delta",
+        json!({"job_id": job, "text": text}),
+    ));
+}
+
+/// Renders `app` at `width` by `height`: the screen's rows and the click
+/// targets.
+fn rendered(app: &App, width: u16, height: u16) -> (Vec<String>, Vec<crate::mouse::Target>) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(app, area, &mut buf, None);
+    let rows: Vec<String> = crate::view::text(&buf).lines().map(str::to_owned).collect();
+    (rows, targets)
+}
+
+/// The wall time of `clock`, in milliseconds.
+fn wall_ms(clock: &std::sync::Arc<fakes::clock::FakeClock>) -> u64 {
+    contract::clock::wall_ms(clock.wall())
+}
+
+#[test]
+fn running_tty_job_shows_its_cleared_and_redrawn_screen() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    mark_tty(&mut app);
+    job_started(
+        &mut app,
+        "j_9",
+        "run the editor",
+        wall_ms(&clock).saturating_sub(11_000),
+        "a_1",
+    );
+    job_text(
+        &mut app,
+        "j_9",
+        "stale output\nmore stale\x1b[2J\x1b[H$ edit file.txt\n",
+    );
+    let _ = open(&mut app, "j_9");
+    assert!(app.item_open());
+    let (rows, _) = rendered(&app, 80, 24);
+    assert!(rows.iter().any(|row| row.contains("$ edit file.txt")));
+    assert!(!rows.iter().any(|row| row.contains("stale")));
+    insta::assert_snapshot!("running_tty_job_screen", rows.join("\n"));
+}
+
+#[test]
+fn ordinary_job_shows_the_tail_of_its_output() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    job_started(
+        &mut app,
+        "j_2",
+        "build the workspace",
+        wall_ms(&clock).saturating_sub(11_000),
+        "a_1",
+    );
+    job_text(&mut app, "j_2", "compiling one\ncompiling two\ndone\n");
+    let _ = open(&mut app, "j_2");
+    assert!(app.item_open());
+    let (rows, _) = rendered(&app, 80, 24);
+    assert!(rows.iter().any(|row| row.contains("done")));
+    insta::assert_snapshot!("ordinary_job_tail", rows.join("\n"));
+}
+
+#[test]
+fn completed_job_keeps_its_output_and_loses_its_stop() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    job_started(
+        &mut app,
+        "j_2",
+        "build the workspace",
+        wall_ms(&clock).saturating_sub(11_000),
+        "a_1",
+    );
+    job_text(&mut app, "j_2", "done\n");
+    let _ = open(&mut app, "j_2");
+    assert!(app.item_open());
+    let started = wall_ms(&clock).saturating_sub(11_000);
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "job_completed".to_owned(),
+        session_id: SessionId(SESSION.to_owned()),
+        ts: started.saturating_add(5_000),
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"job_id": "j_2", "status": "completed"})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }));
+    let (rows, targets) = rendered(&app, 80, 24);
+    assert!(rows.iter().any(|row| row.contains("completed")));
+    assert!(rows.iter().any(|row| row.contains("5s")));
+    assert!(rows.iter().any(|row| row.contains("done")));
+    assert!(
+        targets
+            .iter()
+            .all(|target| target.id != crate::mouse::TargetId::Item(crate::app::items::Spot::Stop)),
+        "a completed job draws no stop target"
+    );
+    insta::assert_snapshot!("completed_job_body", rows.join("\n"));
+}
+
+#[test]
+fn enter_in_a_job_view_keeps_the_draft_with_its_notice() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    start_job(&mut app, "j_1");
+    let _ = open(&mut app, "j_1");
+    app.draft.set("do it");
+    assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
+    assert_eq!(app.draft(), "do it");
+    assert_eq!(app.notice(), Some("A job takes no input here."));
+}
+
+#[test]
+fn enter_in_an_other_harness_delegate_view_keeps_the_draft_with_its_notice() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    start_job(&mut app, "j_1");
+    app.on_line(session_line(
+        "delegate_started",
+        json!({"job_id": "j_1",
+            "delegate_session_id": DELEGATE_A,
+            "harness": "claude", "model": "other/model", "workspace": "/w"}),
+    ));
+    let _ = open(&mut app, "j_1");
+    app.draft.set("steer this");
+    assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
+    assert_eq!(app.draft(), "steer this");
+    assert_eq!(app.notice(), Some("This delegate takes no steering here."));
 }
 
 #[test]

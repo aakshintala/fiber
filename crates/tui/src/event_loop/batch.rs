@@ -13,9 +13,11 @@ use crate::Input;
 // debt: 4,096 is picked, not measured; a measured fold rate per line on the benchmark runner would set it.
 pub(super) const HUB_BATCH: usize = 4096;
 
-/// Whether the batch takes `input` with the ones waiting: hub lines and
-/// ticks only.
-fn batchable(input: &Input) -> bool {
+/// Whether the batch takes `input` with the ones waiting, and whether a
+/// batch starting with `input` holds: hub lines and ticks only. Hub
+/// lines and ticks never swap screens, so only they hold; a key, click
+/// or resize may open a delegate, which swaps the shown screen.
+pub(super) fn batchable(input: &Input) -> bool {
     matches!(input, Input::Hub(_) | Input::Tick)
 }
 

@@ -917,7 +917,7 @@ fn one_line_alone_counts_its_page_at_once() {
     inputs.truncate(1);
     let before = lp.app.pages().recounts;
     assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
-    // A batch of one holds nothing back: the line counts its page.
+    // A batch of one counts its page once, at its end.
     assert_eq!(lp.app.pages().recounts - before, 1);
 }
 
@@ -1059,4 +1059,406 @@ fn two_finished_lines_in_one_batch_write_both_notifications_in_order() {
             .unwrap_or(usize::MAX)
     };
     assert!(at(one) < at(two));
+}
+
+/// How long the loop may take to drain the replay before the test fails
+/// it: a named receive deadline, never a sleep on the test thread.
+const DRAIN: Duration = Duration::from_secs(5);
+
+/// Lower-case words, the same for the seed.
+fn filler(len: usize, seed: u64) -> String {
+    const WORDS: [&str; 8] = [
+        "turn", "tool", "call", "file", "session", "context", "model", "log",
+    ];
+    let mut state = seed;
+    let mut text = String::with_capacity(len + 8);
+    while text.len() < len {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let pick = usize::try_from(state >> 61).unwrap_or_default();
+        text.push_str(WORDS.get(pick).copied().unwrap_or("x"));
+        text.push(' ');
+    }
+    text.truncate(len);
+    text
+}
+
+/// A log of `turns` handoff turns with 4 KiB replies, the last reply
+/// `last`: one screenful per reply, a handoff between turns.
+fn handoff_log(turns: u64, last: &str) -> Vec<Envelope> {
+    let mut lines = Vec::new();
+    let mut seq = 0u64;
+    let mut push = |kind: &str, action: Option<&str>, payload: Value| {
+        lines.push(line(kind, Some(seq), action, payload));
+        seq += 1;
+    };
+    for turn in 0..turns {
+        push(
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver", "content": [{"type": "text", "text": format!("turn {turn}")}]}]}),
+        );
+        push("step_started", None, json!({}));
+        let message = format!("a_m{turn}");
+        push("assistant_message_started", Some(&message), json!({}));
+        let text = if turn + 1 == turns {
+            last.to_owned()
+        } else {
+            filler(4096, turn)
+        };
+        push("text_completed", Some(&message), json!({"text": text}));
+        push(
+            "assistant_message_completed",
+            Some(&message),
+            json!({"outcome": "completed"}),
+        );
+        push("turn_completed", None, json!({"outcome": "completed"}));
+        push("usage_recorded", None, json!({}));
+        if turn + 1 < turns {
+            push("handoff_started", None, json!({"trigger": "manual"}));
+            push(
+                "handoff_completed",
+                None,
+                json!({"outcome": "completed", "tokens_before": 1000}),
+            );
+        }
+    }
+    lines
+}
+
+/// A batch settles once at its end: trimming mid-batch would drop pages
+/// the batch's uncounted rows still hold in the window, so the head pages
+/// stay resident until the end, and only the exact counts trim them.
+#[test]
+fn a_batch_settles_once_at_its_end() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.begin_batch();
+    assert!(app.pages().holding());
+    for envelope in handoff_log(150, "the last reply holds quokkas") {
+        app.on_line(Line::Session(envelope));
+    }
+    assert!(app.pages().part(0).is_some());
+    assert!(app.pages().part(1).is_some());
+    app.end_batch();
+    assert!(!app.pages().holding());
+    assert!(app.pages().page_count() > 2);
+    // The head leaves once the counts are exact.
+    assert!(app.pages().part(0).is_none());
+}
+
+/// `fiber resume` opens through the hub: feed, recent, the subscribe and
+/// the session's commands, then the whole log streams as live lines. The
+/// loop folds every batch and draws the tail: the last reply shows, and
+/// no page is fetched twice.
+#[test]
+fn resume_open_replays_the_log_to_the_tail() {
+    use std::io::{BufRead, BufReader, Write};
+    let lines = handoff_log(150, "the last reply holds quokkas");
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        git: false,
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        open_at: crate::OpenAt::Session(contract::SessionId(SESSION.to_owned())),
+        ..Default::default()
+    });
+    app.set_size(60, 12);
+    let screen =
+        Screen::new(TestBackend::new(60, 12), 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = Loop {
+        app,
+        parser: crate::keys::Parser::default(),
+        screen,
+        hub: None,
+        tty: None,
+        on_attach: Box::new(|_| {}),
+        clock: fakes::clock::FakeClock::new(),
+        wakeups: 0,
+        stash: std::collections::VecDeque::new(),
+        files_out: None,
+        search: None,
+        reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
+        paste_reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: true,
+        var: Box::new(|_| None),
+        copy_command: None,
+        open_command: None,
+        title: crate::osc::Title::default(),
+        shape: crate::osc::Shape::default(),
+        retry: None,
+        tick: crate::tick::TickThread::idle(),
+    };
+    let (tx, rx) = mpsc::channel();
+    let (tui_end, hub_end) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let read_end = tui_end
+        .try_clone()
+        .unwrap_or_else(|err| panic!("clone: {err}"));
+    let read_tx = tx.clone();
+    std::thread::Builder::new()
+        .name("resume-read".to_owned())
+        .spawn(move || crate::link::read_lines(read_end, &read_tx))
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // The hub: answers commands, then streams the log on subscribe and
+    // hangs up, so the loop drains and returns.
+    let stream = lines.clone();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&seen);
+    std::thread::Builder::new()
+        .name("resume-hub".to_owned())
+        .spawn(move || {
+            let mut reader = BufReader::new(hub_end.try_clone().unwrap());
+            let mut hub_end = hub_end;
+            let mut text = String::new();
+            let mut write = |value: Value| {
+                let mut bytes = serde_json::to_string(&value).unwrap_or_default();
+                bytes.push('\n');
+                hub_end.write_all(bytes.as_bytes()).unwrap_or(());
+            };
+            let hub_ack = |id: &Value, result: Value| {
+                json!({"kind": "command_accepted", "ts": 0,
+                    "schema_version": contract::SCHEMA_VERSION,
+                    "payload": {"command_id": id, "result": result}})
+            };
+            let session_ack = |id: &Value, result: Value| {
+                let envelope = line("command_accepted", None, None, json!({}));
+                let mut value = serde_json::to_value(&envelope).unwrap_or(Value::Null);
+                value["payload"] = json!({"command_id": id, "result": result});
+                value
+            };
+            while reader.read_line(&mut text).is_ok_and(|read| read > 0) {
+                let command: Value = serde_json::from_str(&text).unwrap_or_default();
+                text.clear();
+                if let Ok(mut held) = record.lock() {
+                    held.push(command.clone());
+                }
+                let id = command["id"].clone();
+                match command["command"].as_str() {
+                    Some("feed") => write(hub_ack(&id, json!({}))),
+                    Some("recent") => write(hub_ack(&id, json!({"sessions": []}))),
+                    Some("subscribe") => {
+                        // A command naming a session is relayed, never
+                        // answered by the hub itself: only the session's
+                        // accept arrives, carrying its id, then the log.
+                        write(session_ack(&id, json!({})));
+                        for envelope in &stream {
+                            write(serde_json::to_value(envelope).unwrap_or(Value::Null));
+                        }
+                        return;
+                    }
+                    Some("commands") => {
+                        write(session_ack(&id, json!({"commands": []})));
+                    }
+                    Some("history") => {
+                        let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
+                        let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
+                        write(session_ack(
+                            &id,
+                            json!({"lines": history(&stream, from, to)}),
+                        ));
+                    }
+                    _ => write(hub_ack(&id, json!({}))),
+                }
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let hello = contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    };
+    tx.send(Input::Connected(tui_end, hello))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    drop(tx);
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("resume-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done.send((code, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (code, lp) = finished
+        .recv_timeout(DRAIN)
+        .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to drain: {err}"));
+    assert_eq!(code, 0);
+    assert!(ranges(&seen).is_empty(), "{:?}", ranges(&seen));
+    let screen = shown(&lp);
+    assert!(screen.contains("quokkas"), "{screen}");
+}
+
+/// A left click at 0-based `col`, `row`: the press and the release.
+fn click(col: u16, row: u16) -> Input {
+    let (col, row) = (col + 1, row + 1);
+    Input::Bytes(format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m").into_bytes())
+}
+
+/// Ctrl+C twice, which quits the loop with code 0.
+fn quit() -> Input {
+    Input::Bytes(vec![0x03, 0x03])
+}
+
+/// A wide loop with the delegates card, attached, holding one running
+/// Fiber delegate: the first delegate spot's 0-based cell.
+fn delegate_spot() -> (Loop<TestBackend>, (u16, u16)) {
+    let (mut lp, _) = super::tests::new_loop(TestBackend::new(160, 40), None);
+    lp.app.set_size(160, 40);
+    lp.screen
+        .resize(160, 40)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
+    lp.app.set_home(crate::home::Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: ["session", "changed_files", "delegates", "jobs", "quota"]
+            .map(str::to_owned)
+            .to_vec(),
+        ..Default::default()
+    });
+    lp.app.attach(contract::SessionId(SESSION.to_owned()));
+    let hub =
+        |kind: &str, payload: Value| Input::Hub(Line::Session(line(kind, None, None, payload)));
+    let code = super::tests::feed(
+        &mut lp,
+        vec![
+            hub(
+                "job_started",
+                json!({"job_id": "j_1", "description": "task one", "output_path": "/tmp/out"}),
+            ),
+            hub(
+                "delegate_started",
+                json!({"job_id": "j_1", "delegate_session_id": "s_bbbbbbbbbbbbbbbb",
+                    "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+            ),
+        ],
+    );
+    assert_eq!(code, 0);
+    assert!(!lp.app.item_open());
+    // Either delegate row opens the delegate; the description names it.
+    let panel = lp
+        .app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.panel)
+        .unwrap_or_else(|| panic!("a panel"));
+    let row = shown(&lp)
+        .lines()
+        .position(|text| text.contains("task one"))
+        .unwrap_or_else(|| panic!("the delegate row"));
+    (lp, (panel.x + 2, u16::try_from(row).unwrap_or(u16::MAX)))
+}
+
+/// A key batch never holds: opening a delegate swaps the shown screen,
+/// and a hold would stick to the stashed parent past the batch's end.
+/// The click opens the delegate, and the quit ends the run: neither
+/// the shown nor the stashed screen is held after.
+#[test]
+fn a_key_that_opens_a_delegate_leaves_nothing_held() {
+    let (mut lp, (col, row)) = delegate_spot();
+    let (tx, rx) = mpsc::channel();
+    tx.send(click(col, row))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(quit()).unwrap_or_else(|err| panic!("send: {err}"));
+    drop(tx);
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("delegate-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done.send((code, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (code, lp) = finished
+        .recv_timeout(DRAIN)
+        .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to quit: {err}"));
+    assert_eq!(code, 0);
+    assert!(lp.app.item_open());
+    assert!(!lp.app.pages().holding());
+    assert!(!lp.app.stashed_holding());
+}
+
+/// Quitting ends the run through the batch's end, so a hold never
+/// outlives the loop: a quit in its own batch leaves nothing held.
+#[test]
+fn a_quit_in_its_own_batch_leaves_nothing_held() {
+    let (mut lp, _) = super::tests::new_loop(TestBackend::new(60, 12), None);
+    let (tx, rx) = mpsc::channel();
+    tx.send(quit()).unwrap_or_else(|err| panic!("send: {err}"));
+    drop(tx);
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("quit-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done.send((code, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (code, lp) = finished
+        .recv_timeout(DRAIN)
+        .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to quit: {err}"));
+    assert_eq!(code, 0);
+    assert!(!lp.app.pages().holding());
+}
+
+/// A hub batch holds while it folds and settles once at its end: two
+/// changed lines count the open page once, and the hold is released.
+#[test]
+fn a_hub_batch_holds_while_folding() {
+    let (mut lp, _) = super::tests::new_loop(TestBackend::new(60, 12), None);
+    lp.app.attach(contract::SessionId(SESSION.to_owned()));
+    let mut seq = 0u64;
+    let mut turn = |kind: &str, action: Option<&str>, payload: Value| {
+        let envelope = line(kind, Some(seq), action, payload);
+        seq += 1;
+        Input::Hub(Line::Session(envelope))
+    };
+    let (tx, rx) = mpsc::channel();
+    tx.send(turn(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    ))
+    .unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(turn(
+        "text_completed",
+        Some("a_m"),
+        json!({"text": "marker one"}),
+    ))
+    .unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(quit()).unwrap_or_else(|err| panic!("send: {err}"));
+    drop(tx);
+    let before = lp.app.pages().recounts;
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("hub-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done.send((code, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (code, lp) = finished
+        .recv_timeout(DRAIN)
+        .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to quit: {err}"));
+    assert_eq!(code, 0);
+    // Both lines folded before the count: one recount for the batch.
+    assert_eq!(lp.app.pages().recounts - before, 1);
+    assert!(!lp.app.pages().holding());
+    let screen = shown(&lp);
+    assert!(screen.contains("marker one"), "{screen}");
 }

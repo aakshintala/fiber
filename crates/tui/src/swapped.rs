@@ -35,6 +35,10 @@ pub(crate) enum Spot {
     /// A rule row's ✕, by its index: revokes the rule
     /// (`docs/tui.md`, "Swapped views").
     Revoke(usize),
+    /// A delegate or job row, by its job's serial: a press and a release
+    /// on the same serial opens that item, never the row's position.
+    /// Only the running list draws one.
+    Item(u64),
 }
 
 /// How a cell draws: plain text, a provider heading, or dimmed text
@@ -146,7 +150,8 @@ pub(crate) fn rows_height(frame: &Frame, height: usize) -> usize {
 pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     let height = usize::from(area.height);
     if let Some(frame) = app
-        .model_picker_frame(height)
+        .keys_frame(height)
+        .or_else(|| app.model_picker_frame(height))
         .or_else(|| app.config_view_screen())
     {
         render(&frame, area, buf, targets);

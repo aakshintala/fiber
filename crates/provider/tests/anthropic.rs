@@ -445,6 +445,7 @@ fn a_call_with_no_input_text_is_sent_back_as_an_empty_object() {
                 model: "anthropic/claude-sonnet-5-5".into(),
             },
             Input::ToolResult {
+                pdfs: Vec::new(),
                 action_id: ActionId("a_1".into()),
                 text: "pong".into(),
                 is_error: false,
@@ -832,6 +833,7 @@ fn four_turn_conversation() -> Vec<Input> {
             model: "anthropic/claude-sonnet-5-5".into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_1".into()),
             text: "18 C, clear".into(),
             is_error: false,
@@ -924,6 +926,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
             model: "anthropic/claude-sonnet-5-5".into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_1".into()),
             text: "18 C, clear".into(),
             is_error: false,
@@ -1465,6 +1468,7 @@ fn a_failed_tool_result_sends_is_error_and_a_success_sends_none() {
                 model: "anthropic/claude-sonnet-5-5".into(),
             },
             Input::ToolResult {
+                pdfs: Vec::new(),
                 action_id: ActionId("a_1".into()),
                 text: "boom".into(),
                 is_error,
@@ -1513,6 +1517,7 @@ fn image_conversation(is_error: bool, images: Vec<contract::provider::ImageRef>)
             model: "anthropic/claude-sonnet-5-5".into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_1".into()),
             text: "Image: 2x1 image/png.\n".into(),
             is_error,
@@ -1640,6 +1645,110 @@ fn a_rewound_child_sends_its_parent_image_as_the_same_bytes() {
     };
     let child_request = ModelRequest {
         conversation: image_conversation(false, vec![png_ref(&absolute)]),
+        session_dir: child,
+        ..request()
+    };
+    let parent_body = bodies_of(&parent_request, 1).pop().unwrap();
+    let child_body = bodies_of(&child_request, 1).pop().unwrap();
+    assert_eq!(parent_body, child_body);
+}
+
+/// A conversation whose one tool result carries a PDF with two pages.
+fn pdf_conversation(pdf: contract::provider::PdfRef) -> Vec<Input> {
+    vec![
+        Input::ToolCall {
+            action_id: ActionId("a_1".into()),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "a.pdf"}),
+                provider_id: Some(ProviderCallId("toolu_1".into())),
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+            model: "anthropic/claude-sonnet-5-5".into(),
+        },
+        Input::ToolResult {
+            action_id: ActionId("a_1".into()),
+            text: "PDF: 2 pages.\n".into(),
+            is_error: false,
+            images: Vec::new(),
+            pdfs: vec![pdf],
+        },
+    ]
+}
+
+fn pdf_ref(
+    path: &str,
+    pages: Option<Vec<contract::provider::ImageRef>>,
+) -> contract::provider::PdfRef {
+    contract::provider::PdfRef {
+        path: path.into(),
+        page_count: 2,
+        pages,
+    }
+}
+
+#[test]
+fn a_stored_pdf_is_sent_inside_the_tool_result_as_a_document() {
+    let session = fakes::TempDir::new("fiber-anthropic-request-pdf");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/p_1.pdf"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: pdf_conversation(pdf_ref("artifacts/p_1.pdf", None)),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["messages"][1]["content"][0],
+        json!({
+            "type": "tool_result",
+            "tool_use_id": "toolu_1",
+            "content": [
+                {"type": "text", "text": "PDF: 2 pages.\n"},
+                {"type": "document", "source": {
+                    "type": "base64", "media_type": "application/pdf", "data": "YWJjZA=="}},
+            ],
+            "cache_control": {"type": "ephemeral"},
+        })
+    );
+}
+
+#[test]
+fn a_rewound_child_sends_its_parent_pdf_as_the_same_bytes() {
+    let root = fakes::TempDir::new("fiber-anthropic-rewound-pdf");
+    let sessions = root.path().join("sessions");
+    let parent = sessions.join("s_parent");
+    let child = sessions.join("s_child");
+    std::fs::create_dir_all(parent.join("artifacts")).unwrap();
+    std::fs::create_dir_all(&child).unwrap();
+    std::fs::write(parent.join("artifacts/p_1.pdf"), b"abcd").unwrap();
+    std::fs::write(parent.join("artifacts/i_1.png"), b"abcd").unwrap();
+    std::fs::write(parent.join("artifacts/i_2.png"), b"abcd").unwrap();
+    let absolute = |name: &str| parent.join(name).display().to_string();
+    let parent_request = ModelRequest {
+        conversation: pdf_conversation(pdf_ref(
+            "artifacts/p_1.pdf",
+            Some(vec![
+                png_ref("artifacts/i_1.png"),
+                png_ref("artifacts/i_2.png"),
+            ]),
+        )),
+        session_dir: parent.clone(),
+        ..request()
+    };
+    let child_request = ModelRequest {
+        conversation: pdf_conversation(pdf_ref(
+            &absolute("artifacts/p_1.pdf"),
+            Some(vec![
+                png_ref(&absolute("artifacts/i_1.png")),
+                png_ref(&absolute("artifacts/i_2.png")),
+            ]),
+        )),
         session_dir: child,
         ..request()
     };

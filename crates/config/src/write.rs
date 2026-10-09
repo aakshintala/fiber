@@ -722,6 +722,10 @@ fn write_synced(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
 #[path = "write_lock_tests.rs"]
 mod lock_tests;
 
+mod entries;
+
+pub use entries::update_global_entries;
+
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;

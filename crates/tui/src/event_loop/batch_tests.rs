@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver};
 
-use super::{HUB_BATCH, batch};
+use super::{HUB_BATCH, batch, batchable};
 use crate::Input;
 use crate::link::Line;
 
@@ -163,4 +163,13 @@ fn a_non_batchable_first_is_alone() {
     // Nothing taken: the stash and the channel wait as they were.
     assert_eq!(described(stash.make_contiguous()), ["hub-1"]);
     assert!(matches!(rx.try_recv(), Ok(Input::Hub(_))));
+}
+
+#[test]
+fn hub_lines_and_ticks_hold_and_nothing_else_does() {
+    assert!(batchable(&hub(0)));
+    assert!(batchable(&Input::Tick));
+    assert!(!batchable(&key()));
+    assert!(!batchable(&Input::Resize));
+    assert!(!batchable(&Input::Disconnected));
 }

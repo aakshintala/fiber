@@ -97,7 +97,11 @@ pub(crate) fn draw_header(app: &App, area: Rect, buf: &mut Buffer, targets: &mut
 }
 
 /// Draws the item view's body for a view with no transcript: the output
-/// path line.
+/// line, then the job's output since the terminal attached: a `tty` job's
+/// screen, or the tail of any other job's.
+///
+/// `job_delta` is ephemeral, so output written before the terminal
+/// attached is not shown (`docs/events.md`, `job_delta`).
 pub(crate) fn draw_body(app: &App, area: Rect, buf: &mut Buffer) {
     let Some(view) = app.item_view() else {
         return;
@@ -109,10 +113,21 @@ pub(crate) fn draw_body(app: &App, area: Rect, buf: &mut Buffer) {
     buf.set_stringn(
         area.x,
         area.y,
-        format::cut(&format!("Output: {}", view.output_path), wide),
+        format::cut(
+            &format!("Output since this terminal attached · {}", view.output_path),
+            wide,
+        ),
         wide,
         style(Role::Muted),
     );
+    let height = usize::from(area.height).saturating_sub(1);
+    let rows = app.item_output_rows(area.width, super::to_u16(height));
+    for (index, row) in rows.iter().enumerate() {
+        let y = area
+            .y
+            .saturating_add(super::to_u16(index).saturating_add(1));
+        buf.set_stringn(area.x, y, format::cut(row, wide), wide, style(Role::Text));
+    }
 }
 
 /// The elapsed milliseconds the status row shows: from the run's start to

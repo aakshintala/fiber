@@ -426,8 +426,15 @@ fn block_of(
 ) -> Vec<Value> {
     match input {
         Input::User { text, images } => {
-            let prepared = crate::images::prepare(text, images, session_dir, text_only);
-            if prepared.images.is_empty() {
+            let prepared = crate::images::prepare(
+                text,
+                images,
+                &[],
+                session_dir,
+                text_only,
+                crate::images::PdfForm::Native,
+            );
+            if prepared.images.is_empty() && prepared.documents.is_empty() {
                 return vec![json!({"type": "text", "text": prepared.text})];
             }
             let mut blocks = Vec::new();
@@ -438,6 +445,12 @@ fn block_of(
                 blocks.push(json!({
                     "type": "image",
                     "source": {"type": "base64", "media_type": image.mime_type, "data": image.data},
+                }));
+            }
+            for document in &prepared.documents {
+                blocks.push(json!({
+                    "type": "document",
+                    "source": {"type": "base64", "media_type": "application/pdf", "data": document.data},
                 }));
             }
             blocks
@@ -472,6 +485,7 @@ fn block_of(
             text,
             is_error,
             images,
+            pdfs,
         } => {
             // A failed tool result sends Anthropic's `is_error` flag; a
             // success sends no such key
@@ -481,7 +495,7 @@ fn block_of(
             let mut result = json!({
                 "type": "tool_result",
                 "tool_use_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
-                "content": crate::images::anthropic_content(crate::images::prepare(text, images, session_dir, text_only)),
+                "content": crate::images::anthropic_content(crate::images::prepare(text, images, pdfs, session_dir, text_only, crate::images::PdfForm::Native)),
             });
             if *is_error && let Some(map) = result.as_object_mut() {
                 map.insert("is_error".into(), json!(true));

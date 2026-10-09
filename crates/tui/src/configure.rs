@@ -156,6 +156,18 @@ pub enum Revoked {
     Stale,
 }
 
+/// One `/keys` change to save: the action's id, and its new entry.
+/// `None` removes `keys.<id>`; `Some` sets it to the names in written
+/// form, `Some(vec![])` unbinding the action
+/// (`docs/configuration.md`, "Keys").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyEdit {
+    /// The action's id.
+    pub id: String,
+    /// The new entry, or `None` to remove it.
+    pub keys: Option<Vec<String>>,
+}
+
 /// Why a read or a write failed: the failure's code and its message,
 /// which the view shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,11 +288,16 @@ pub trait Configure: Send + Sync {
 
     // The `tui.theme` row.
 
-    /// The theme files in Fiber home's `themes/`, by name, sorted.
-    fn themes(&self) -> Vec<String>;
+    /// The theme files `tui.theme` can name for `workspace`'s project, by
+    /// name, sorted: Fiber home's `themes/` and each enabled installed
+    /// extension's. A workspace whose configuration fails to load lists
+    /// Fiber home's themes only.
+    fn themes(&self, workspace: &Path) -> Vec<String>;
 
-    /// The theme `name` gives `tui.theme`, built as at start.
-    fn theme(&self, name: &str) -> ThemeSetting;
+    /// The theme `name` gives `tui.theme` for `workspace`'s project, built
+    /// as at start. A workspace whose configuration fails to load reads
+    /// Fiber home only.
+    fn theme(&self, workspace: &Path, name: &str) -> ThemeSetting;
 
     // `/tools`.
 
@@ -316,6 +333,12 @@ pub trait Configure: Send + Sync {
     /// The text of the `SKILL.md` at `path`: at most 64 KiB, with `…`
     /// when cut.
     fn skill_text(&self, path: &Path) -> Result<String, ConfigureError>;
+
+    // `/keys`.
+
+    /// Saves the `/keys` screen's edits to the global `keys`, in one
+    /// write. Called only with a non-empty slice.
+    fn save_keys(&self, edits: &[KeyEdit]) -> Result<(), ConfigureError>;
 }
 
 #[cfg(test)]

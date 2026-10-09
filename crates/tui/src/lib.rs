@@ -51,11 +51,13 @@ mod pages;
 mod paste_image;
 #[cfg(test)]
 mod pty_watch;
+mod rebind;
 #[cfg(test)]
 mod results_support;
 mod retry;
 mod rows;
 mod rules_view;
+mod running_view;
 mod screen;
 mod settings_view;
 mod shell;
@@ -69,6 +71,7 @@ mod term;
 mod theme;
 mod tick;
 mod tools_view;
+mod tty_screen;
 mod turn;
 mod turn_text;
 mod usage_view;
@@ -87,9 +90,9 @@ pub use attention::Attention;
 
 pub use catalogue::{Catalogue, ModelEntry, ReadModels, Refresh};
 pub use configure::{
-    Configure, ConfigureError, Layer, LoginKind, LoginTarget, Revoked, RuleRow, RulesScope,
-    RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup,
-    ToolLists, ToolSwitches, WriteScope,
+    Configure, ConfigureError, KeyEdit, Layer, LoginKind, LoginTarget, Revoked, RuleRow,
+    RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope,
+    ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 
 pub use home::Launch;

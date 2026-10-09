@@ -5,7 +5,7 @@
 
 mod batch;
 
-use batch::batch;
+use batch::{batch, batchable};
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -78,7 +78,14 @@ pub fn run(
     // keeps the launch description.
     let models = std::mem::take(&mut launch.models);
     app.set_configure(launch.configure.take());
+    // With no model configured the picker opens on home, before the
+    // first frame: saving the choice writes the config default. It stays
+    // shut when attaching to a session.
+    let pick_at_start = launch.model.is_none() && launch.open_at == crate::OpenAt::Home;
     app.set_home(launch);
+    if pick_at_start {
+        app.open_model_picker(crate::model_picker::Mode::Choose);
+    }
     app.set_size(width, height);
     let retry = Retry::new(&clock);
     let mut terminal = Loop {
@@ -253,22 +260,33 @@ impl<B: Backend> Loop<B> {
                     Err(_) => return 0,
                 },
             };
+            // Only a batch starting with a hub line or tick holds: a
+            // key, click or resize folds nothing into a held page, and
+            // opening a delegate swaps the shown screen, which must
+            // never happen mid-hold. A hub batch folds before it counts:
+            // the open page is counted once for the batch, not once per
+            // changed line, and the batch settles once at its end, when
+            // the counts are exact.
+            let held = batchable(&first);
             let inputs = batch(first, &mut self.stash, rx);
-            // A batch of lines folds before it counts: the open page is
-            // counted once for the batch, not once per changed line. A
-            // batch of one holds nothing back.
-            let held = inputs.len() > 1;
             if held {
                 self.app.begin_batch();
             }
+            let mut code = None;
             for input in inputs {
                 self.wakeups = self.wakeups.saturating_add(1);
-                if let Some(code) = self.handle(input) {
-                    return code;
+                if let Some(quit) = self.handle(input) {
+                    code = Some(quit);
+                    break;
                 }
             }
+            // The batch's end runs on every path out, so a quit never
+            // leaves the hold set.
             if held {
                 self.app.end_batch();
+            }
+            if let Some(code) = code {
+                return code;
             }
             if let Some(code) = self.frame(rx) {
                 return code;
