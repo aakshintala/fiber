@@ -494,9 +494,7 @@ impl Sink for Lines {
                 line.push(ch);
             }
             self.col = self.col.saturating_add(1);
-            if line.len() > LINE_WIDTH {
-                line.truncate(LINE_WIDTH);
-            }
+            line.truncate(LINE_WIDTH);
         }
     }
 

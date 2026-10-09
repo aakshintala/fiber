@@ -65,8 +65,8 @@ fn carriage_return_overwrites_the_row() {
 
 #[test]
 fn backspace_steps_back_one_cell() {
-    let grid = fed_grid(&["ab\rc"]);
-    assert_eq!(text(&grid)[0], "cb");
+    let grid = fed_grid(&["ab\x08c"]);
+    assert_eq!(text(&grid)[0], "ac");
 }
 
 #[test]
@@ -122,6 +122,21 @@ fn erase_display_clears_the_grid() {
 }
 
 #[test]
+fn erase_display_modes_keep_the_other_side_of_the_cursor() {
+    let grid = fed_grid(&["above\nmiddle\nbelow\x1b[2;3H\x1b[0J"]);
+    let rows = text(&grid);
+    assert_eq!(rows[0], "above");
+    assert_eq!(rows[1], "mi");
+    assert_eq!(rows[2], "");
+
+    let grid = fed_grid(&["above\nmiddle\nbelow\x1b[2;3H\x1b[1J"]);
+    let rows = text(&grid);
+    assert_eq!(rows[0], "");
+    assert_eq!(rows[1], "   dle");
+    assert_eq!(rows[2], "below");
+}
+
+#[test]
 fn cursor_home_defaults_to_the_first_cell() {
     let grid = fed_grid(&["ab\x1b[Hc"]);
     assert_eq!(text(&grid)[0], "cb");
@@ -146,6 +161,14 @@ fn cursor_moves_default_to_one_and_clamp() {
     let rows = text(&grid);
     assert_eq!(rows[23].trim_end().len(), 80);
     assert!(rows[23].ends_with('z'));
+}
+
+#[test]
+fn cursor_up_moves_to_the_previous_row() {
+    let grid = fed_grid(&["top\nbot\x1b[Ax"]);
+    let rows = text(&grid);
+    assert_eq!(rows[0], "topx");
+    assert_eq!(rows[1], "bot");
 }
 
 #[test]
@@ -224,6 +247,12 @@ fn lines_overwrite_on_carriage_return() {
 }
 
 #[test]
+fn lines_backspace_steps_back_one_character() {
+    let lines = fed_lines(&["abc\x08X"]);
+    assert_eq!(words(&lines), ["abX"]);
+}
+
+#[test]
 fn lines_treat_crlf_and_lf_alike() {
     let lines = fed_lines(&["a\r\nb"]);
     assert_eq!(words(&lines), ["a", "b"]);
@@ -251,8 +280,9 @@ fn lines_keep_at_most_a_thousand() {
 #[test]
 fn lines_cut_a_row_at_1024_characters() {
     let lines = fed_lines(&["y".repeat(1025).as_str()]);
-    let rows = lines.rows(1024, 24);
-    assert_eq!(rows[0].len(), 1024);
+    let rows = lines.rows(1025, 24);
+    assert_eq!(rows[0].len(), 1025);
+    assert_eq!(rows[0].chars().last(), Some(' '));
 }
 
 #[test]
@@ -430,6 +460,20 @@ fn an_st_over_long_drops_and_draws_the_tail() {
     let row = text(&grid)[0].clone();
     assert!(row.starts_with('x'));
     assert!(row.ends_with('Z'));
+}
+
+#[test]
+fn an_st_terminator_at_the_pending_limit_closes_the_sequence() {
+    let held = "x".repeat(PENDING_CAP - 1);
+    let sequence = format!("a\x1bP{held}\x1b\\b");
+    let grid = fed_grid(&[sequence.as_str()]);
+    assert_eq!(text(&grid)[0], "ab");
+}
+
+#[test]
+fn an_st_backslash_without_esc_is_content() {
+    let grid = fed_grid(&["a\x1bPpayload\\still\x1b\\b"]);
+    assert_eq!(text(&grid)[0], "ab");
 }
 
 #[test]
