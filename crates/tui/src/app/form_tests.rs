@@ -7,8 +7,10 @@ use contract::clock::Clock;
 use serde_json::{Value, json};
 
 use crate::app::{App, Effect};
+use crate::approvals::form::Spot;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
+use crate::mouse::TargetId;
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 const S_B: &str = "s_bbbbbbbbbbbbbbbb";
@@ -68,6 +70,20 @@ fn asked_by(session: &str) -> contract::Envelope {
                 {"label": "dev"}]},
             {"header": "Name", "question": "What name?"}]}),
     )
+}
+
+/// A one-question interaction `kind` with request id `id`.
+fn asked_one(kind: &str, id: &str) -> contract::Envelope {
+    let payload = match kind {
+        "confirm" => json!({"request_id": id, "kind": kind, "prompt": "Continue?"}),
+        "select" => json!({"request_id": id, "kind": kind, "prompt": "Pick one?",
+            "options": [{"label": "a"}, {"label": "b"}, {"label": "c"}]}),
+        "multi_select" => json!({"request_id": id, "kind": kind, "prompt": "Pick some?",
+            "options": [{"label": "a"}, {"label": "b"}, {"label": "c"}]}),
+        "text_input" => json!({"request_id": id, "kind": kind, "prompt": "What?"}),
+        _ => panic!("unknown one-question interaction: {kind}"),
+    };
+    from(S_A, "interaction_requested", payload)
 }
 
 /// An app attached to `S_A` showing the form `r_4f`.
@@ -462,4 +478,143 @@ fn a_global_binding_on_a_form_key_wins() {
     stroke(&mut app, "right");
     assert!(app.keymap_top().is_some());
     assert_eq!(tab_line(&app), "[Base]  Name  Submit");
+}
+
+/// Sends the key sequence that answers one interaction kind.
+fn answer_one(app: &mut App, kind: &str) -> (String, Value) {
+    match kind {
+        "confirm" => sent(app, Key::Enter),
+        "select" => {
+            press(app, Key::Down);
+            sent(app, Key::Enter)
+        }
+        "multi_select" => {
+            press(app, Key::Char(' '));
+            press(app, Key::Down);
+            press(app, Key::Down);
+            press(app, Key::Char(' '));
+            sent(app, Key::Enter)
+        }
+        "text_input" => {
+            press(app, Key::Char('h'));
+            press(app, Key::Char('i'));
+            sent(app, Key::Enter)
+        }
+        _ => panic!("unknown one-question interaction: {kind}"),
+    }
+}
+
+#[test]
+fn each_one_question_kind_sends_its_exact_reply_args() {
+    for (kind, request_id, expected) in [
+        (
+            "confirm",
+            "r_c",
+            json!({"request_id": "r_c", "confirmed": true}),
+        ),
+        (
+            "select",
+            "r_s",
+            json!({"request_id": "r_s", "labels": ["b"]}),
+        ),
+        (
+            "multi_select",
+            "r_m",
+            json!({"request_id": "r_m", "labels": ["a", "c"]}),
+        ),
+        (
+            "text_input",
+            "r_t",
+            json!({"request_id": "r_t", "text": "hi"}),
+        ),
+    ] {
+        let mut app = attached();
+        feed(&mut app, asked_one(kind, request_id));
+        let (_, reply) = answer_one(&mut app, kind);
+        assert_eq!(reply["command"], "reply", "{kind}");
+        assert_eq!(reply["session_id"], S_A, "{kind}");
+        assert_eq!(reply["args"], expected, "{kind}");
+        assert!(app.panel().is_none(), "{kind}");
+    }
+}
+
+#[test]
+fn esc_on_each_one_question_declines_then_cancels_once() {
+    for (kind, request_id) in [
+        ("confirm", "r_c"),
+        ("select", "r_s"),
+        ("multi_select", "r_m"),
+        ("text_input", "r_t"),
+    ] {
+        let mut app = attached();
+        feed(&mut app, asked_one(kind, request_id));
+        let (reply_id, reply) = sent(&mut app, Key::Esc);
+        assert_eq!(reply["command"], "reply", "{kind}");
+        assert_eq!(reply["session_id"], S_A, "{kind}");
+        assert_eq!(
+            reply["args"],
+            json!({"request_id": request_id, "declined": true}),
+            "{kind}"
+        );
+        let cancel_id = cancels(&mut app, accepted(S_A, &reply_id), S_A);
+        assert!(
+            fold(&mut app, accepted(S_A, &reply_id)).is_empty(),
+            "{kind}"
+        );
+        assert!(cancel_id.starts_with("c_"));
+    }
+}
+
+#[test]
+fn an_enter_reply_accept_does_not_cancel_any_one_question_turn() {
+    for (kind, request_id) in [
+        ("confirm", "r_c"),
+        ("select", "r_s"),
+        ("multi_select", "r_m"),
+        ("text_input", "r_t"),
+    ] {
+        let mut app = attached();
+        feed(&mut app, asked_one(kind, request_id));
+        let (reply_id, _) = answer_one(&mut app, kind);
+        assert!(
+            fold(&mut app, accepted(S_A, &reply_id)).is_empty(),
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn a_rejected_text_input_reply_restores_its_words() {
+    let mut app = attached();
+    feed(&mut app, asked_one("text_input", "r_t"));
+    press(&mut app, Key::Char('h'));
+    press(&mut app, Key::Char('i'));
+    let (reply_id, _) = sent(&mut app, Key::Enter);
+    assert!(app.panel().is_none());
+    assert!(fold(&mut app, rejected(S_A, &reply_id)).is_empty());
+    assert_eq!(header(&app), format!("question · {S_A} · 1 of 1"));
+    assert!(panel(&app).contains(&"› ✎ hi".to_owned()));
+}
+
+#[test]
+fn clicking_chat_about_this_declines_a_one_question() {
+    let mut app = attached();
+    feed(&mut app, asked_one("confirm", "r_c"));
+    let (reply_id, value) = without_id_from_effect(app.on_click(TargetId::Form(Spot::Chat)));
+    assert_eq!(value["command"], "reply");
+    assert_eq!(value["session_id"], S_A);
+    assert_eq!(
+        value["args"],
+        json!({"request_id": "r_c", "declined": true})
+    );
+    cancels(&mut app, accepted(S_A, &reply_id), S_A);
+}
+
+/// Parses the one command sent by a click, taking out its id.
+fn without_id_from_effect(effect: Effect) -> (String, Value) {
+    let Effect::Send(lines) = effect else {
+        panic!("expected one line, got {effect:?}");
+    };
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    without_id(lines.first().map(String::as_str).unwrap_or_default())
 }

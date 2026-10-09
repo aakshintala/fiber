@@ -620,7 +620,7 @@ Durable. The call's outcome.
 | `details` | any JSON | no | data for clients, such as an edit's diff; never sent to the model |
 | `artifact` | string | no | the full output's path, when the result was cut or a hook returned text for it |
 | `changes` | array | no | on a call that changed files, one object per file: `path` (string) and `added` and `removed` (integers, lines) |
-| `control` | object | no | instructions to the loop: `handoff` (string), a handoff note (`docs/handoff.md`); `questions` (`questions`); `name` (string), a session name (`docs/tools.md`, "What a result carries") |
+| `control` | object | no | instructions to the loop: `handoff` (string), a handoff note (`docs/handoff.md`); `questions` (`questions`); `name` (string), a session name (`docs/tools.md`, "What a result carries"); `skill` (an object holding `name` and `path`, both strings), a skill the call loaded (`docs/tools.md`, "Skills") |
 | `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the result |
 | `provider_item` | any JSON | no | on a call the provider ran, its result block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
 

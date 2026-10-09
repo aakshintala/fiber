@@ -50,6 +50,8 @@ mod osc;
 mod pages;
 mod paste_image;
 #[cfg(test)]
+mod pty_watch;
+#[cfg(test)]
 mod results_support;
 mod retry;
 mod rows;
@@ -108,10 +110,6 @@ pub type Connect = Box<dyn FnMut() -> io::Result<(UnixStream, HubLine)> + Send>;
 
 /// Called once with the session id when `start` is accepted.
 pub type OnAttach = Box<dyn Fn(&SessionId) + Send>;
-
-/// Saves a dragged share to the global configuration: its key and its
-/// percent, or why it could not be saved.
-pub type Save = Box<dyn Fn(&str, f64) -> Result<(), String> + Send>;
 
 /// One thing the loop wakes for.
 pub(crate) enum Input {

@@ -110,14 +110,16 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   tool that changes files sets it, an extension's included.
 - `artifact`: the path to the full output, present when the result was cut or
   when an `after_tool` hook returned text for the artifact.
-- `control`: instructions to the loop, absent on most results. Three fields
+- `control`: instructions to the loop, absent on most results. Four fields
   are defined. `handoff`, a handoff note: the loop restarts the model's
   context from it at the step boundary (`docs/handoff.md`). `questions`, a
   `questions` array: once every call in the step has completed, the turn ends
   `completed` with the questions of every call that set it, in call order, on
   `turn_completed`, after any handoff in the step. `name`, a session name: the
   loop writes `session_named` just before the call's `tool_call_completed`, or
-  fails the call `name_pinned` while the person's name pins it. Any tool may
+  fails the call `name_pinned` while the person's name pins it. `skill`, a
+  skill the call loaded: the loop folds every completed call's into the
+  skills the current context loaded ("Skills"). Any tool may
   set them; the loop acts on the fields, never on which tool set them.
 - Images are written to the session's `artifacts/` (see `docs/state.md`) as
   the processed file (`docs/model-routing.md`, "Image limits") and referenced
@@ -948,7 +950,12 @@ does not know, is read as UTF-8, and bytes that are not valid UTF-8 become
   them, the rule for reasoning state
   (`docs/loop.md`). Anthropic refuses a request whose encrypted search content
   was changed. After a switch to another model reference, the request leaves
-  them out.
+  them out. On `google-generative-ai` the search arrives as the candidate's
+  `groundingMetadata`, which no request field accepts: it is logged and shown
+  but never sent back, and the model's own content parts, with their
+  `thoughtSignature`, are what goes back. Probed on `gemini-3-flash-preview`,
+  October 9, 2026: `groundingMetadata` on a content or on a part is refused
+  with 400 "Unknown name", and a follow-up turn without it searches again.
 - Whether a hosted search is declared is fixed when the preamble is built
   ("Which tools the model sees"). On Anthropic, turning it on or off changes
   the system prompt and so the cache.
@@ -1281,13 +1288,15 @@ Fiber finds skills and how the listing is built are `docs/system-prompt.md`,
 - Its definition never lists skill names. The names are in the listing, so
   adding or removing a skill never changes the tool set and the cached prefix
   holds (`docs/prompt-cache.md`).
-- Fiber records each load, so it knows which skills the current context is
-  working under. A handoff sends them again after the note
+- Fiber records each load as the result's `control.skill`, so it knows which
+  skills the current context is working under. A handoff sends them again
+  after the note
   (`docs/handoff.md`, "What the model sees after a handoff"), and the terminal
   shows each load as a skill, not as a file read.
-- The tool declares `reads` on the skill's file and is never reviewed. It is
-  declared in every session, in full, and counts toward the built-in budget
-  ("Size budget in CI").
+- It declares `reads` on the resolved target of the skill's file, and a link that
+  changes before the read fails the call with `path_changed`. It is never reviewed.
+  It is declared in every session, in full, and counts toward the built-in
+  budget ("Size budget in CI").
 
 ## Built in or extension
 

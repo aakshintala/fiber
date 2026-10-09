@@ -12,7 +12,7 @@ use contract::{Envelope, SessionId};
 
 use super::{App, Effect};
 use crate::ThemeSetting;
-use crate::configure::Configure;
+use crate::configure::{Configure, Layer};
 use crate::keys::{Edit, Key};
 use crate::login_view::Login;
 use crate::rules_view::Rules;
@@ -100,6 +100,26 @@ impl App {
     /// The seam the views and the model picker write through, if any.
     pub(in crate::app) fn configure_seam(&self) -> Option<Arc<dyn Configure>> {
         self.config_views.seam.clone()
+    }
+
+    /// Saves one dragged share to the global configuration through the
+    /// seam, as `fiber config set` would (`docs/tui.md`, "Layout"). With
+    /// no seam nothing is saved; a failed save and each warning is a
+    /// notice, so it shows on the frame drawn next, keeping the live
+    /// width.
+    pub(crate) fn save_share(&mut self, key: &str, share: f64) {
+        let Some(seam) = self.config_views.seam.clone() else {
+            return;
+        };
+        let workspace = self.workspace();
+        match seam.set(&workspace, Layer::Global, key, &format!("{share}")) {
+            Ok(saved) => {
+                for warning in saved.warnings {
+                    self.push_notice(warning);
+                }
+            }
+            Err(error) => self.push_notice(format!("Could not save {key}: {}", error.message)),
+        }
     }
 
     /// Opens `view`, closing any open, its unsaved edit dropped. With no

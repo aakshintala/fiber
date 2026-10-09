@@ -591,22 +591,6 @@ fn a_form_resolved_by_fiber_leaves_the_queue() {
 }
 
 #[test]
-fn a_confirm_interaction_is_not_queued() {
-    let options = json!([{"label": "a"}, {"label": "b"}]);
-    for payload in [
-        json!({"request_id": "r_1", "kind": "confirm", "prompt": "Sure?"}),
-        json!({"request_id": "r_2", "kind": "select", "prompt": "One?", "options": options}),
-        json!({"request_id": "r_3", "kind": "multi_select", "prompt": "Some?",
-            "options": options}),
-        json!({"request_id": "r_4", "kind": "text_input", "prompt": "What?"}),
-    ] {
-        let queue = folded(&[envelope("interaction_requested", payload.clone())]);
-        assert!(queue.panel(80).is_none(), "{payload}");
-        assert!(queue.badge(0).is_none(), "{payload}");
-    }
-}
-
-#[test]
 fn a_re_raised_form_keeps_what_was_typed() {
     let mut queue = folded(&[asked("r_4f", json!({"action_ids": ["a_1"]}))]);
     assert_eq!(queue.on_key(&Key::Char('x')), Some(PanelKey::Handled));

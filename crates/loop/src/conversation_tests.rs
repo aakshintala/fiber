@@ -1798,3 +1798,175 @@ fn rebuild_without_a_switch_stamps_with_the_session_model() {
         Input::Reasoning { model, .. } if model == "fake/only"
     ));
 }
+
+fn skilled_result(status: contract::events::CallStatus, name: &str, path: &str) -> Event {
+    Event::ToolCallCompleted(contract::events::ToolCallCompleted {
+        status,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![contract::shapes::ContentPart::Text { text: "ok".into() }],
+        details: None,
+        artifact: None,
+        changes: None,
+        control: Some(contract::events::Control {
+            handoff: None,
+            questions: None,
+            skill: Some(contract::events::SkillLoad {
+                name: name.into(),
+                path: path.into(),
+            }),
+        }),
+        changed_by: None,
+        provider_item: None,
+    })
+}
+
+fn handoff_over(completed: bool) -> Event {
+    Event::HandoffCompleted(contract::events::HandoffCompleted {
+        outcome: if completed {
+            Outcome::Completed
+        } else {
+            Outcome::Failed
+        },
+        error: None,
+        note: None,
+        tokens_before: 0,
+        instructions: None,
+    })
+}
+
+#[test]
+fn a_failed_or_cancelled_call_with_control_skill_is_not_folded() {
+    use contract::events::CallStatus;
+    for status in [CallStatus::Failed, CallStatus::Cancelled] {
+        let lines = vec![
+            line("tool_call_requested", &call("skill"), Some("a_1")),
+            line(
+                "tool_call_completed",
+                &skilled_result(status, "tdd", "/w/tdd/SKILL.md"),
+                Some("a_1"),
+            ),
+        ];
+        let open = std::collections::HashSet::new();
+        let (_, _, _, carry) = super::rebuild_and_sent(
+            &lines,
+            "fake/model-1",
+            &open,
+            crate::handoff::Carry::default(),
+        )
+        .unwrap();
+        assert!(carry.skills.is_empty(), "{status:?}");
+    }
+}
+
+#[test]
+fn a_completed_handoff_rebuilds_to_empty_skills_and_a_failed_one_keeps_them() {
+    let loads = || {
+        vec![
+            line("tool_call_requested", &call("skill"), Some("a_1")),
+            line(
+                "tool_call_completed",
+                &skilled_result(
+                    contract::events::CallStatus::Completed,
+                    "a",
+                    "/w/a/SKILL.md",
+                ),
+                Some("a_1"),
+            ),
+            line("tool_call_requested", &call("skill"), Some("a_2")),
+            line(
+                "tool_call_completed",
+                &skilled_result(
+                    contract::events::CallStatus::Completed,
+                    "b",
+                    "/w/b/SKILL.md",
+                ),
+                Some("a_2"),
+            ),
+        ]
+    };
+    let open = std::collections::HashSet::new();
+    let mut done_lines = loads();
+    done_lines.push(line("handoff_completed", &handoff_over(true), None));
+    let (_, _, _, carry) = super::rebuild_and_sent(
+        &done_lines,
+        "fake/model-1",
+        &open,
+        crate::handoff::Carry::default(),
+    )
+    .unwrap();
+    assert!(carry.skills.is_empty());
+    let mut failed_lines = loads();
+    failed_lines.push(line("handoff_completed", &handoff_over(false), None));
+    let (_, _, _, carry) = super::rebuild_and_sent(
+        &failed_lines,
+        "fake/model-1",
+        &open,
+        crate::handoff::Carry::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        carry.skills,
+        vec![
+            contract::events::SkillLoad {
+                name: "a".into(),
+                path: "/w/a/SKILL.md".into(),
+            },
+            contract::events::SkillLoad {
+                name: "b".into(),
+                path: "/w/b/SKILL.md".into(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn rendering_line_by_line_and_rebuilding_agree_on_skills() {
+    let lines = vec![
+        line("tool_call_requested", &call("skill"), Some("a_1")),
+        line(
+            "tool_call_completed",
+            &skilled_result(
+                contract::events::CallStatus::Completed,
+                "a",
+                "/w/a/SKILL.md",
+            ),
+            Some("a_1"),
+        ),
+        line("tool_call_requested", &call("skill"), Some("a_2")),
+        line(
+            "tool_call_completed",
+            &skilled_result(
+                contract::events::CallStatus::Completed,
+                "b",
+                "/w/b/SKILL.md",
+            ),
+            Some("a_2"),
+        ),
+    ];
+    let mut conversation = Vec::new();
+    let mut had = BTreeMap::new();
+    let mut live = crate::handoff::Carry::default();
+    for envelope in &lines {
+        let event = Event::from_envelope(envelope).unwrap().unwrap();
+        render(
+            &mut conversation,
+            &event,
+            envelope.action_id.as_ref(),
+            "fake/model-1",
+            &mut had,
+            &mut live,
+        );
+    }
+    let open = std::collections::HashSet::new();
+    let (_, _, _, rebuilt) = super::rebuild_and_sent(
+        &lines,
+        "fake/model-1",
+        &open,
+        crate::handoff::Carry::default(),
+    )
+    .unwrap();
+    assert_eq!(live.skills, rebuilt.skills);
+    assert_eq!(live.skills.len(), 2);
+}

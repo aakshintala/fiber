@@ -262,6 +262,8 @@ fn a_model_whose_web_search_its_protocol_does_not_read_is_left_out() {
              "base_url": "http://127.0.0.1:1/v1", "context_window": 1000, "web_search": "web_search_20260209"},
             {"id": "wrong", "protocol": "openai-responses",
              "base_url": "http://127.0.0.1:1/v1", "context_window": 1000, "web_search": "web_search_20250305"},
+            {"id": "hosted", "protocol": "openai-responses",
+             "base_url": "http://127.0.0.1:1/v1", "context_window": 1000, "web_search": "web_search"},
         ]
     });
     let source = setup.source("acme", &manifest("acme"), std::slice::from_ref(&data));
@@ -269,6 +271,7 @@ fn a_model_whose_web_search_its_protocol_does_not_read_is_left_out() {
     let (providers, notices) = Providers::load(&setup.home()).unwrap();
     assert!(providers.resolve("acme/good").is_ok());
     assert!(providers.resolve("acme/plain").is_ok());
+    assert!(providers.resolve("acme/hosted").is_ok());
     assert!(matches!(
         providers.resolve("acme/bad").unwrap_err(),
         Error::UnknownModel { .. }
