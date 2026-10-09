@@ -19,7 +19,7 @@ use unicode_width::UnicodeWidthStr;
 const CASES: &[Case<Look>] = &[
     Case { name: "keymap", help: "the key map, All tab, empty search", check: "the key map should dock at the bottom full width with ▄ ▀ edges and the ▌ stripe; `Key map` bold accent with a dim ✕, a muted purpose and `34 actions, 24 with other paths`; the All tab inverse with the rest muted; a muted search line with an empty query; group, action and keys columns starting together on three fixed columns with other paths dim in the keys; the first row `›` on a full-width accent bar; a `↓` arrow in the gutter whenever rows hide below (as in keymap-narrow); the foot a bold-key legend naming no body pair; nothing clipped.", build: || Look { kind: Kind::Keymap, narrow: false, tab: None, query: "" } },
     Case { name: "keymap-tab", help: "the key map, Session tab", check: "the Session tab inverse with only Session rows under it, the first `›` on the accent bar; no arrow, everything fits; same columns and legend.", build: || Look { kind: Kind::Keymap, narrow: false, tab: Some("Session"), query: "" } },
-    Case { name: "keymap-search", help: "the key map, narrowed by a query", check: "`session` typed after the muted search line narrows the rows to the four bindings naming a session, across groups; the first `›` on the accent bar; no arrow; same columns and legend.", build: || Look { kind: Kind::Keymap, narrow: false, tab: None, query: "session" } },
+    Case { name: "keymap-search", help: "the key map, narrowed by a query", check: "`session` typed after the muted search line narrows the rows to the five bindings naming a session, across groups; the first `›` on the accent bar; no arrow; same columns and legend.", build: || Look { kind: Kind::Keymap, narrow: false, tab: None, query: "session" } },
     Case { name: "keymap-narrow", help: "the key map, narrowed, scrolled", check: "the same panel at 100 columns, rows wrapped, opened scrolled, with an `↑ N more · ↓ M more` indicator on its last line; the three columns keep their starts.", build: || Look { kind: Kind::Keymap, narrow: true, tab: None, query: "" } },
     Case { name: "quit", help: "the quit question", check: "the question should read `2 sessions working` muted under a bold accent `Quit`; `enter` marked `›` with its key bold on a full-width accent bar and no `· default`; the foot sits left with the body and names no choice.", build: || Look { kind: Kind::Quit, narrow: false, tab: None, query: "" } },
     Case { name: "delete", help: "the delete question", check: "the question should name `docs: rail spec` and its spend, and what `--cascade` would add, under a bold accent title; padding all round; the foot a bold-key legend naming no body pair.", build: || Look { kind: Kind::Delete, narrow: false, tab: None, query: "" } },
@@ -821,12 +821,13 @@ mod tests {
     }
 
     #[test]
-    fn keymap_search_narrows_to_the_four_session_rows() {
+    fn keymap_search_narrows_to_the_five_session_rows() {
         let c = parse("keymap-search").unwrap();
         let t = text(&c, 160, 48);
         for a in [
             "Start a new session",
             "Switch to the session of rail card N",
+            "Recall an earlier prompt from the project of the session on screen",
             "Delete the selected exited session in the session list",
             "Choose in the model picker for this session only",
         ] {
