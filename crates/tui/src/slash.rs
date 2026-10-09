@@ -24,6 +24,7 @@ const BUILT_INS: &[(&str, &str, Option<&str>)] = &[
     ("panel", "Shows or hides the panel.", None),
     ("rules", "Opens the standing rules.", None),
     ("settings", "Opens the configuration keys.", None),
+    ("keys", "Opens the rebinding screen.", None),
     ("skills", "Opens the skills.", None),
     ("handoff", "Starts a handoff.", Some("[instructions]")),
     ("name", "Names the session.", Some("<text>")),

@@ -441,6 +441,7 @@ a click on it returns too. The views are:
   layer each comes from. It edits a key through the same path as
   `fiber config set`, and says when a change needs a reload and what that
   costs. Ctrl+G opens the file.
+- **`/keys`:** the rebinding screen ("Bindings").
 - **`/skills`:** one row per skill with its name, one-line description, where
   it comes from (the repository, personal, an extension by name, or built in),
   whether the model can see it, any skill it shadows, and whether it is
@@ -1194,13 +1195,20 @@ No action can be bound to Ctrl+C, and `clear_then_quit` cannot be rebound,
 because the second Ctrl+C always quits ("Input and focus"). Either entry gives
 a `notice` and keeps the defaults.
 
-`/keys` opens the rebinding screen: every action with its id, description and
-current keys, the unbound ones included. Selecting an action and pressing a
-key binds it, so only a key the terminal actually delivers can be bound. A key
-already bound to another action shows inline, with a choice to swap or
-cancel. One key resets an action to its default. The screen saves only the
-bindings that differ from the defaults, so a default changed in a later
-release still applies.
+`/keys` opens the rebinding screen: every action with its keys, id and
+description, the unbound ones included. Selecting an action, pressing Enter
+and then a key binds it, so only a key the terminal actually delivers can be
+bound; an action with variants takes one key for each variant, in order. A key
+already bound to another action shows inline, with a choice to swap or cancel.
+A swap gives the other action, in that key's place, the key this action held
+for the same variant; when there is none, or it would clash, the other action
+loses that key's group instead. `r` resets an action to its defaults, through
+the same swap or cancel when a default is now another action's. Delete, or
+Backspace, unbinds it, saving `[]`. The screen's own keys are fixed: ↑ ↓
+PageUp PageDown move, and Esc cancels a capture or closes the screen, so Esc
+is bound only by hand. Ctrl+C still clears, then quits, there. The screen saves
+only the bindings that differ from the defaults, so a default changed in a
+later release still applies.
 
 ### Slash commands
 

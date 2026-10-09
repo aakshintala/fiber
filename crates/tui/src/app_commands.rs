@@ -127,6 +127,11 @@ impl App {
         if self.overlays.keymap.is_some() {
             return Effect::None;
         }
+        // The `/keys` screen takes every stroke in `on_press`, so only
+        // a paste reaches here, and it does nothing behind the screen.
+        if self.keys_screen_open() {
+            return Effect::None;
+        }
         if let Some(effect) = self.offer_edit(&edit) {
             return effect;
         }
@@ -449,6 +454,7 @@ impl App {
                 self.next_request()
             }
             "settings" => self.open_config_view(super::ConfigView::Settings),
+            "keys" => self.open_keys(),
             "tools" => self.open_config_view(super::ConfigView::Tools),
             "skills" => self.open_config_view(super::ConfigView::Skills),
             "context" => {

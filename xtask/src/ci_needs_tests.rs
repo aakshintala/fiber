@@ -21,7 +21,7 @@ fn workflow(extra: &[&str], ci_body: &str) -> String {
         out.push_str(&format!("  {job}:\n    runs-on: ubuntu-24.04\n"));
     }
     out.push_str(
-        "  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  ci:\n",
+        "  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  ci:\n",
     );
     out.push_str(ci_body);
     out
@@ -29,7 +29,7 @@ fn workflow(extra: &[&str], ci_body: &str) -> String {
 
 fn small_doc() -> String {
     String::from(
-        "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`. Done.\n",
+        "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`. Done.\n",
     )
 }
 
@@ -117,9 +117,9 @@ fn missing_jobs_are_sorted() {
 #[test]
 fn an_extra_report_job_in_the_doc_fails() {
     let doc = real_doc();
-    let from = "`bench_comment`.";
+    let from = "`cache_prune`.";
     assert!(doc.contains(from), "the fixture drifted");
-    let changed = doc.replace(from, "`bench_comment`, `extra`.");
+    let changed = doc.replace(from, "`cache_prune`, `extra`.");
     let failures = check(&real_workflow(), &changed).unwrap();
     assert_eq!(failures.len(), 1);
     assert!(
@@ -147,7 +147,7 @@ fn a_missing_report_job_in_the_doc_fails() {
 #[test]
 fn a_fragment_split_over_lines_passes() {
     let doc = String::from(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing:\n  `backstop_report`, `bench_comment`.\n",
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing:\n  `backstop_report`, `bench_comment`, `cache_prune`.\n",
     );
     assert_eq!(check(&scalar(&[], "select"), &doc), Ok(vec![]));
 }
@@ -155,7 +155,7 @@ fn a_fragment_split_over_lines_passes() {
 #[test]
 fn a_correct_copy_elsewhere_cannot_hide_a_wrong_declaration() {
     let doc = String::from(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `extra`. Done.\n\n## Toolchain\n\nexcept the jobs that report and gate nothing: `backstop_report`, `bench_comment`.\n",
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `extra`. Done.\n\n## Toolchain\n\nexcept the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -169,7 +169,7 @@ fn a_correct_copy_elsewhere_cannot_hide_a_wrong_declaration() {
 #[test]
 fn two_identical_declarations_in_the_section_fail() {
     let doc = String::from(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`. Again: except the jobs that report and gate nothing: `backstop_report`, `bench_comment`.\n",
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`. Again: except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -183,7 +183,7 @@ fn two_identical_declarations_in_the_section_fail() {
 #[test]
 fn two_different_declarations_in_the_section_fail() {
     let doc = String::from(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`. Or: except the jobs that report and gate nothing: `backstop_report`, `extra`.\n",
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`. Or: except the jobs that report and gate nothing: `backstop_report`, `extra`.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -197,7 +197,7 @@ fn two_different_declarations_in_the_section_fail() {
 #[test]
 fn a_fragment_only_outside_the_section_fails() {
     let doc = String::from(
-        "# CI\n\n## The merge gate\n\nJobs run and gate the merge.\n\n## Toolchain\n\nexcept the jobs that report and gate nothing: `backstop_report`, `bench_comment`.\n",
+        "# CI\n\n## The merge gate\n\nJobs run and gate the merge.\n\n## Toolchain\n\nexcept the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -223,7 +223,7 @@ fn a_section_running_to_the_end_of_the_file_passes() {
 #[test]
 fn a_subheading_does_not_end_the_section() {
     let doc = String::from(
-        "# CI\n\n## The merge gate\n\n### Detail\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`. Done.\n",
+        "# CI\n\n## The merge gate\n\n### Detail\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`. Done.\n",
     );
     assert_eq!(check(&scalar(&[], "select"), &doc), Ok(vec![]));
 }
@@ -231,7 +231,7 @@ fn a_subheading_does_not_end_the_section() {
 #[test]
 fn a_second_declaration_after_a_subheading_counts() {
     let doc = String::from(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`.\n\n### Detail\n\nAgain: except the jobs that report and gate nothing: `backstop_report`, `bench_comment`.\n",
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`.\n\n### Detail\n\nAgain: except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -298,7 +298,7 @@ fn a_hyphenated_job_name_passes() {
 #[test]
 fn matrix_legs_count_as_one_job() {
     let workflow = String::from(
-        "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  test:\n    strategy:\n      matrix:\n        runner: [a, b]\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: select\n    runs-on: ubuntu-24.04\n",
+        "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  test:\n    strategy:\n      matrix:\n        runner: [a, b]\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: select\n    runs-on: ubuntu-24.04\n",
     );
     let failures = check(&workflow, &small_doc()).unwrap();
     assert_eq!(failures.len(), 1);
@@ -405,7 +405,7 @@ fn a_needs_list_continued_on_the_next_line_is_an_error() {
 #[test]
 fn a_quoted_needs_name_is_an_error_naming_the_line() {
     let err = check(&scalar(&[], "['select']"), &small_doc()).unwrap_err();
-    assert!(err.contains(":11:"), "{err}");
+    assert!(err.contains(":13:"), "{err}");
 }
 
 #[test]
@@ -478,13 +478,13 @@ fn a_workflow_whose_only_job_is_ci_is_read() {
         "name: CI\non: push\njobs:\n  ci:\n    needs: select\n    runs-on: ubuntu-24.04\n",
     );
     let failures = check(&workflow, &small_doc()).unwrap();
-    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert_eq!(failures.len(), 3, "{failures:?}");
 }
 
 #[test]
 fn a_nested_ci_key_is_not_the_ci_job() {
     let workflow = String::from(
-        "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n    ci:\n      runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: select\n    runs-on: ubuntu-24.04\n",
+        "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n    ci:\n      runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: select\n    runs-on: ubuntu-24.04\n",
     );
     assert_eq!(check(&workflow, &small_doc()), Ok(vec![]));
 }
@@ -515,7 +515,7 @@ fn a_hash_after_a_word_is_not_a_comment() {
 #[test]
 fn a_heading_with_extra_text_is_not_the_section() {
     let doc = String::from(
-        "# CI\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`.\n\n## The merge gate!\n\nJobs run and gate the merge.\n",
+        "# CI\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`.\n\n## The merge gate!\n\nJobs run and gate the merge.\n",
     );
     let err = check(&scalar(&[], "select"), &doc).unwrap_err();
     assert!(err.contains("no `## The merge gate` heading"), "{err}");
@@ -524,7 +524,7 @@ fn a_heading_with_extra_text_is_not_the_section() {
 #[test]
 fn a_declaration_above_the_heading_is_not_in_the_section() {
     let doc = String::from(
-        "# CI\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`.\n\n## The merge gate\n\nJobs run and gate the merge.\n",
+        "# CI\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`.\n\n## The merge gate\n\nJobs run and gate the merge.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);

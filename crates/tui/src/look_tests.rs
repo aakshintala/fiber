@@ -211,7 +211,7 @@ fn paint_leaves_reset_and_other_colours() {
         ("a", Style::new().fg(Color::Reset).bg(Color::Reset)),
         (
             "b",
-            Style::new().fg(Color::Indexed(30)).bg(Color::Rgb(1, 2, 3)),
+            Style::new().fg(Color::Indexed(40)).bg(Color::Rgb(1, 2, 3)),
         ),
         ("c", Style::new().fg(Color::Red).bg(Color::Indexed(255))),
     ]);
@@ -247,7 +247,7 @@ fn no_color_blanks_edges_but_not_text_half_blocks() {
         ("▄", Style::new().fg(Role::Surface.color())),
         ("▀", Style::new().fg(Role::Prompt.color())),
         ("▄", Style::new().fg(Role::Accent.color())),
-        ("▀", Style::new().fg(Color::Indexed(30))),
+        ("▀", Style::new().fg(Color::Indexed(40))),
         ("x", Style::new().fg(Role::Surface.color())),
     ]);
     look.paint(&mut buf);

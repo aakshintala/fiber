@@ -13,6 +13,9 @@
 #[path = "support/probes.rs"]
 mod probes;
 
+#[path = "support/large.rs"]
+mod large;
+
 #[path = "support/wire_tools.rs"]
 mod wire_tools;
 
@@ -23,13 +26,13 @@ use std::thread;
 use std::time::Duration;
 
 use contract::events::{
-    CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
+    CacheLifetime, CallStatus, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
 };
 use contract::provider::{
-    CallError, CallUsage, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider,
-    Reply, ReplyAction, ToolDefinition,
+    CallError, CallUsage, Delta, Finish, HostedCall, Input, InputSize, ModelCall, ModelRequest,
+    Provider, Reply, ReplyAction, ToolDefinition,
 };
-use contract::shapes::Tokens;
+use contract::shapes::{ContentPart, Tokens};
 use contract::{ActionId, ErrorCode, GenerationId, ProviderCallId};
 use fakes::{ProviderServer, Response, fingerprint};
 use provider::Endpoint;
@@ -623,7 +626,21 @@ fn after(reply: &Reply, model: &str) -> Vec<Input> {
                 call: call.clone(),
                 model: model.into(),
             }),
-            ReplyAction::Hosted(_) => {}
+            ReplyAction::Hosted(hosted) => {
+                // A hosted pair renders as two adjacent own-model lines,
+                // the call's block then the result's, as
+                // `crates/loop/src/conversation.rs` renders them.
+                for item in [
+                    hosted.call.provider_item.clone(),
+                    hosted.completed.provider_item.clone(),
+                ] {
+                    conversation.push(Input::Assistant {
+                        model: model.into(),
+                        text: String::new(),
+                        provider_item: item,
+                    });
+                }
+            }
         }
     }
     for (n, action) in reply.actions.iter().enumerate() {
@@ -2139,6 +2156,168 @@ fn sent_tools_are_sent_verbatim_and_set_the_strictness() {
     assert_eq!(empty.get("toolConfig"), None);
 }
 
+fn hosted_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "web_search".into(),
+        description: String::new(),
+        input_schema: json!({}),
+        deferred: false,
+        hosted: Some("google_search".into()),
+    }
+}
+
+fn loose_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "a_loose".into(),
+        description: "Loose.".into(),
+        input_schema: json!({"type": "object", "properties": {"a": {"type": "string"}}}),
+        deferred: false,
+        hosted: None,
+    }
+}
+
+#[test]
+fn a_hosted_search_is_its_own_tool_and_turns_on_server_side_invocations() {
+    // A hosted definition's wire entry is its kind alone, with no name:
+    // the loop zips the wire list with the tool map in name order.
+    let wired: Vec<Value> = Gemini::new(Endpoint::default())
+        .wire_tools(&[weather_tool(), hosted_tool()])
+        .into_iter()
+        .map(Value::Object)
+        .collect();
+    assert_eq!(
+        wired,
+        vec![
+            json!({"name": "get_weather", "description": "Weather for a city.",
+                "parametersJsonSchema": weather_tool().input_schema}),
+            json!({"google_search": {}}),
+        ]
+    );
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut sent = request();
+    sent.tools = vec![weather_tool(), hosted_tool()];
+    run(Box::new(Gemini::new(endpoint(&server)).request(&sent)))
+        .0
+        .unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(
+        body["tools"],
+        json!([{"functionDeclarations": [wired[0].clone()]}, {"google_search": {}}])
+    );
+    // The hosted `{}` schema does not turn off strict: the request stays
+    // `VALIDATED`, with the flag the search needs beside function tools.
+    assert_eq!(
+        body["toolConfig"],
+        json!({"functionCallingConfig": {"mode": "VALIDATED"},
+            "includeServerSideToolInvocations": true})
+    );
+}
+
+#[test]
+fn a_hosted_search_alone_sends_no_function_declarations() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut sent = request();
+    sent.tools = vec![hosted_tool()];
+    run(Box::new(Gemini::new(endpoint(&server)).request(&sent)))
+        .0
+        .unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(body["tools"], json!([{"google_search": {}}]));
+    assert_eq!(
+        body["toolConfig"],
+        json!({"functionCallingConfig": {"mode": "VALIDATED"},
+            "includeServerSideToolInvocations": true})
+    );
+}
+
+#[test]
+fn a_non_strict_function_beside_a_hosted_search_sends_auto() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut sent = request();
+    sent.tools = vec![loose_tool(), hosted_tool()];
+    run(Box::new(Gemini::new(endpoint(&server)).request(&sent)))
+        .0
+        .unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(
+        body["toolConfig"],
+        json!({"functionCallingConfig": {"mode": "AUTO"},
+            "includeServerSideToolInvocations": true})
+    );
+    assert_eq!(body["tools"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn a_rewound_build_with_a_hosted_entry_is_split_the_same_way() {
+    // A rewound session's logged build splits like a fresh one: the
+    // declaration goes in `functionDeclarations`, the hosted entry
+    // after it, with the same `toolConfig`.
+    let declaration = json!({"name": "get_weather", "description": "Weather for a city.",
+        "parametersJsonSchema": weather_tool().input_schema});
+    let sent = || {
+        vec![declaration.clone(), json!({"google_search": {}})]
+            .into_iter()
+            .map(|tool| tool.as_object().unwrap().clone())
+            .collect::<Vec<_>>()
+    };
+    let server =
+        ProviderServer::start([completed_reply(), completed_reply(), completed_reply()]).unwrap();
+    let gemini = Gemini::new(endpoint(&server));
+    let mut fresh = request();
+    fresh.tools = vec![weather_tool(), hosted_tool()];
+    run(Box::new(gemini.request(&fresh))).0.unwrap();
+    let mut rewound = request();
+    rewound.sent_tools = Some(sent());
+    run(Box::new(gemini.request(&rewound))).0.unwrap();
+    assert_eq!(sent_body(&server, 1), sent_body(&server, 0));
+    // A non-strict sent declaration beside the hosted entry sends `AUTO`
+    // with the flag, the strict filter on the sent path.
+    let mut loose = request();
+    loose.sent_tools = Some(vec![
+        json!({"name": "a_loose", "description": "Loose.",
+            "parametersJsonSchema": loose_tool().input_schema})
+        .as_object()
+        .unwrap()
+        .clone(),
+        json!({"google_search": {}}).as_object().unwrap().clone(),
+    ]);
+    run(Box::new(gemini.request(&loose))).0.unwrap();
+    assert_eq!(
+        sent_body(&server, 2)["toolConfig"],
+        json!({"functionCallingConfig": {"mode": "AUTO"},
+            "includeServerSideToolInvocations": true})
+    );
+}
+
+#[test]
+fn without_a_hosted_search_the_tool_config_has_no_flag() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Gemini::new(endpoint(&server)).request(&request())))
+        .0
+        .unwrap();
+    let config = sent_body(&server, 0)["toolConfig"].clone();
+    assert_eq!(config.as_object().unwrap().len(), 1);
+    assert_eq!(
+        config,
+        json!({"functionCallingConfig": {"mode": "VALIDATED"}})
+    );
+}
+
+#[test]
+fn open_returns_the_reply_bytes_unread() {
+    use std::io::Read;
+    let bytes = recording("sse2-stream-ok.json");
+    let server = ProviderServer::start([Response::stream(bytes.clone())]).unwrap();
+    let mut out = Vec::new();
+    Gemini::new(endpoint(&server))
+        .request(&request())
+        .open()
+        .unwrap()
+        .read_to_end(&mut out)
+        .unwrap();
+    assert_eq!(out, bytes);
+}
+
 #[test]
 fn a_sent_declaration_without_a_schema_is_not_strict() {
     // The strictness comes from each sent declaration's
@@ -2164,4 +2343,656 @@ fn a_sent_declaration_without_a_schema_is_not_strict() {
         body["toolConfig"],
         json!({"functionCallingConfig": {"mode": "AUTO"}})
     );
+}
+
+/// A recording saved by the `record` jig, response bytes only.
+fn recorded(name: &str) -> Vec<u8> {
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/recordings")
+            .join(name),
+    )
+    .unwrap()
+}
+
+/// What the Gemini web-search recording holds, read independently of the
+/// decoder: the search parts in arrival order, the last grounding and the
+/// readable text.
+struct RecordedSearch {
+    search: Vec<Value>,
+    grounding: Option<Value>,
+    text: String,
+}
+
+impl RecordedSearch {
+    /// The recording's `toolCall` parts, in arrival order.
+    fn calls(&self) -> impl Iterator<Item = &Value> {
+        self.search
+            .iter()
+            .filter(|part| part.get("toolCall").is_some())
+    }
+
+    /// The recording's `toolResponse` parts, in arrival order.
+    fn responses(&self) -> impl Iterator<Item = &Value> {
+        self.search
+            .iter()
+            .filter(|part| part.get("toolResponse").is_some())
+    }
+}
+
+fn recorded_search(bytes: &[u8]) -> RecordedSearch {
+    let mut out = RecordedSearch {
+        search: Vec::new(),
+        grounding: None,
+        text: String::new(),
+    };
+    for line in String::from_utf8_lossy(bytes).lines() {
+        let Some(data) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        let event: Value = serde_json::from_str(data).unwrap();
+        let candidate = &event["candidates"][0];
+        for part in candidate["content"]["parts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            if part.get("toolCall").is_some() || part.get("toolResponse").is_some() {
+                out.search.push(part.clone());
+            } else if part.get("thought").and_then(Value::as_bool) != Some(true) {
+                out.text
+                    .push_str(part.get("text").and_then(Value::as_str).unwrap_or(""));
+            }
+        }
+        if let Some(grounding) = candidate.get("groundingMetadata") {
+            out.grounding = Some(grounding.clone());
+        }
+    }
+    out
+}
+
+fn grounding_urls(grounding: &Value) -> Vec<&str> {
+    grounding["groundingChunks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|chunk| chunk.pointer("/web/uri").and_then(Value::as_str))
+        .collect()
+}
+
+fn hosted_actions(reply: &Reply) -> Vec<&HostedCall> {
+    reply
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            ReplyAction::Hosted(hosted) => Some(hosted),
+            ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::ToolCall(_) => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_recorded_search_decodes_each_call_and_response_as_a_hosted_call() {
+    let bytes = recorded("gemini-web-search.sse");
+    let want = recorded_search(&bytes);
+    assert!(
+        want.calls().next().is_some(),
+        "the recording holds a search"
+    );
+    assert!(want.grounding.is_some(), "the recording holds a grounding");
+    let (reply, deltas) = decoded(&bytes);
+    let reply = reply.unwrap();
+    assert!(
+        deltas
+            .iter()
+            .all(|delta| !matches!(delta, Delta::ToolCallArguments(_))),
+        "a hosted search streams no arguments"
+    );
+    let hosted = hosted_actions(&reply);
+    assert_eq!(hosted.len(), want.calls().count());
+    for (n, (pair, call)) in hosted.iter().zip(want.calls()).enumerate() {
+        assert_eq!(pair.call.name, "web_search");
+        assert_eq!(pair.call.arguments, call["toolCall"]["args"]);
+        assert_eq!(
+            pair.call.provider_id,
+            call["toolCall"]
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(|id| ProviderCallId(id.to_owned()))
+        );
+        assert_eq!(pair.call.provider_item, Some(call.clone()));
+        let response = want
+            .responses()
+            .find(|response| response["toolResponse"]["id"] == call["toolCall"]["id"])
+            .unwrap();
+        // The result block is tens of kilobytes: compare without printing
+        // it whole on failure.
+        large::assert_json_eq(
+            response,
+            pair.completed.provider_item.as_ref().unwrap(),
+            "the hosted completion's result block",
+        );
+        assert_eq!(pair.completed.status, CallStatus::Completed);
+        if n + 1 == hosted.len() {
+            // The grounding's URLs go on the last completion, with the
+            // grounding itself as its details.
+            let grounding = want.grounding.as_ref().unwrap();
+            let urls = grounding_urls(grounding);
+            assert!(!urls.is_empty());
+            assert_eq!(
+                pair.completed.content,
+                vec![ContentPart::Text {
+                    text: urls.join("\n")
+                }]
+            );
+            large::assert_json_eq(
+                grounding,
+                pair.completed.details.as_ref().unwrap(),
+                "the last completion's grounding details",
+            );
+        } else {
+            // Gemini reports one grounding per reply, never saying which
+            // search found which source: earlier completions stay empty.
+            assert_eq!(
+                pair.completed.content,
+                vec![ContentPart::Text {
+                    text: String::new()
+                }]
+            );
+            assert_eq!(pair.completed.details, None);
+        }
+    }
+    assert_eq!(reply.web_searches, None);
+    assert_eq!(reply.text(), want.text);
+}
+
+#[test]
+fn the_recorded_search_replays_its_parts_and_never_its_grounding() {
+    let bytes = recorded("gemini-web-search.sse");
+    let want = recorded_search(&bytes);
+    let server = ProviderServer::start([
+        Response::stream(bytes.clone()),
+        completed_reply(),
+        completed_reply(),
+    ])
+    .unwrap();
+    let provider: Box<dyn Provider> = Box::new(Gemini::new(endpoint(&server)));
+    let (reply, _) = run(provider.call(&request()));
+    let reply = reply.unwrap();
+    // The next request, as the loop renders the reply: the search parts
+    // go back unchanged, in order.
+    let next = ModelRequest {
+        conversation: after(&reply, REFERENCE),
+        ..request()
+    };
+    run(provider.call(&next)).0.unwrap();
+    let parts = sent_body(&server, 1)["contents"][1]["parts"].clone();
+    let replayed: Vec<Value> = parts
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|part| part.get("toolCall").is_some() || part.get("toolResponse").is_some())
+        .cloned()
+        .collect();
+    // The search parts include a block of tens of kilobytes: compare
+    // without printing them whole on failure.
+    large::assert_json_eq(
+        &Value::Array(replayed),
+        &Value::Array(want.search.clone()),
+        "the replayed search parts",
+    );
+    let raw = String::from_utf8(server.requests()[1].body.clone()).unwrap();
+    assert!(
+        !raw.contains("groundingMetadata"),
+        "the replay sends no grounding: {} bytes",
+        raw.len()
+    );
+    assert!(
+        !raw.contains("groundingChunks"),
+        "the replay sends no grounding: {} bytes",
+        raw.len()
+    );
+    // Another model reference leaves the search parts out.
+    let foreign = ModelRequest {
+        conversation: after(&reply, "openai/gpt-6-luna"),
+        ..request()
+    };
+    run(provider.call(&foreign)).0.unwrap();
+    let raw = String::from_utf8(server.requests()[2].body.clone()).unwrap();
+    assert!(
+        !raw.contains("toolCall"),
+        "another model gets no search parts: {} bytes",
+        raw.len()
+    );
+    assert!(
+        !raw.contains("toolResponse"),
+        "another model gets no search parts: {} bytes",
+        raw.len()
+    );
+}
+
+/// A scripted `toolCall` part: `args` and `id` are left out when `None`.
+fn tool_call_part(id: Option<&str>, args: Option<Value>) -> Value {
+    let mut tool = json!({"toolType": "GOOGLE_SEARCH_WEB"});
+    if let Some(id) = id {
+        tool["id"] = json!(id);
+    }
+    if let Some(args) = args {
+        tool["args"] = args;
+    }
+    json!({"thoughtSignature": "c2lnMQ", "toolCall": tool})
+}
+
+/// A scripted `toolResponse` part: `id` is left out when `None`.
+fn tool_response_part(id: Option<&str>, response: Value) -> Value {
+    let mut tool = json!({"toolType": "GOOGLE_SEARCH_WEB"});
+    if let Some(id) = id {
+        tool["id"] = json!(id);
+    }
+    tool["response"] = response;
+    json!({"thoughtSignature": "c2lnMg", "toolResponse": tool})
+}
+
+/// A stream holding each part alone in its own chunk, ending stopped.
+fn stream_parts(parts: Vec<Value>) -> Vec<u8> {
+    let mut chunks: Vec<Value> = parts
+        .into_iter()
+        .map(|part| chunk(json!([part]), None))
+        .collect();
+    chunks.push(chunk(json!([]), Some("STOP")));
+    stream(&chunks)
+}
+
+/// Each action as its kind with what it logged: a hosted pair as its two
+/// blocks, reasoning as its block, text as its words.
+fn shapes(reply: &Reply) -> Vec<(String, Value)> {
+    reply
+        .actions
+        .iter()
+        .map(|action| match action {
+            ReplyAction::Hosted(pair) => (
+                "hosted".to_owned(),
+                json!([pair.call.provider_item, pair.completed.provider_item]),
+            ),
+            ReplyAction::Reasoning(reasoning) => (
+                "reasoning".to_owned(),
+                reasoning.provider_item.clone().unwrap(),
+            ),
+            ReplyAction::Text(text) => ("text".to_owned(), json!(text.text)),
+            ReplyAction::ToolCall(_) => ("toolcall".to_owned(), Value::Null),
+        })
+        .collect()
+}
+
+#[test]
+fn a_search_whose_response_has_an_error_completes_failed() {
+    let decode_pair = |response: Value| {
+        decoded(&stream_parts(vec![
+            tool_call_part(Some("c1"), Some(json!({"queries": ["x"]}))),
+            tool_response_part(Some("c1"), response),
+        ]))
+        .0
+        .unwrap()
+    };
+    let response = |response: Value| tool_response_part(Some("c1"), response);
+    let failed = &decode_pair(json!({"error": {"status": "UNAVAILABLE"}})).actions;
+    let [ReplyAction::Hosted(pair)] = failed.as_slice() else {
+        panic!("{failed:?}");
+    };
+    assert_eq!(pair.completed.status, CallStatus::Failed);
+    assert_eq!(
+        pair.completed.content,
+        vec![ContentPart::Text {
+            text: "The provider's search failed: UNAVAILABLE.".into()
+        }]
+    );
+    let error = pair.completed.error.as_ref().unwrap();
+    assert_eq!(error.code, ErrorCode::ToolError);
+    assert_eq!(error.message, "The provider's search failed: UNAVAILABLE.");
+    assert_eq!(
+        pair.completed.provider_item,
+        Some(response(json!({"error": {"status": "UNAVAILABLE"}})))
+    );
+    // An `error` without a string `status` fails as `unknown`.
+    for error in [json!({"error": {}}), json!({"error": {"status": 7}})] {
+        let reply = decode_pair(error);
+        let [ReplyAction::Hosted(pair)] = reply.actions.as_slice() else {
+            panic!("{:?}", reply.actions);
+        };
+        assert_eq!(pair.completed.status, CallStatus::Failed);
+        match pair.completed.content.as_slice() {
+            [ContentPart::Text { text }] => {
+                assert_eq!(text, "The provider's search failed: unknown.")
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    // No `error` completes, with empty text until the grounding lands.
+    let reply = decode_pair(json!({"search_suggestions": "<html>"}));
+    let [ReplyAction::Hosted(pair)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(pair.completed.status, CallStatus::Completed);
+    assert_eq!(
+        pair.completed.content,
+        vec![ContentPart::Text {
+            text: String::new()
+        }]
+    );
+}
+
+#[test]
+fn a_call_pairs_only_with_the_response_right_after_it() {
+    let call = |id: &str| tool_call_part(Some(id), Some(json!({"queries": ["x"]})));
+    let response = |id: &str| tool_response_part(Some(id), json!({"search_suggestions": "<s>"}));
+    let text = json!({"text": "hi"});
+    // Each row: the stream's parts, then the exact actions in arrival
+    // order. Every row replays the stream's parts unchanged, in order.
+    let rows = vec![
+        // A call with its response right after it is one hosted search.
+        (
+            vec![call("a"), response("a")],
+            vec![("hosted".to_owned(), json!([call("a"), response("a")]))],
+        ),
+        // Another call between them leaves the first waiting: it is
+        // logged as reasoning, then the pair, then the orphaned response.
+        (
+            vec![call("a"), call("b"), response("b"), response("a")],
+            vec![
+                ("reasoning".to_owned(), call("a")),
+                ("hosted".to_owned(), json!([call("b"), response("b")])),
+                ("reasoning".to_owned(), response("a")),
+            ],
+        ),
+        // A response with another id pairs with neither part.
+        (
+            vec![call("a"), response("x")],
+            vec![
+                ("reasoning".to_owned(), call("a")),
+                ("reasoning".to_owned(), response("x")),
+            ],
+        ),
+        // Text after a call flushes the waiting call first.
+        (
+            vec![call("a"), text.clone()],
+            vec![
+                ("reasoning".to_owned(), call("a")),
+                ("text".to_owned(), json!("hi")),
+            ],
+        ),
+        // A call at the end of the stream never met its response.
+        (vec![call("a")], vec![("reasoning".to_owned(), call("a"))]),
+        // A lone response is reasoning too.
+        (
+            vec![response("a")],
+            vec![("reasoning".to_owned(), response("a"))],
+        ),
+    ];
+    for (parts, want) in rows {
+        let reply = decoded(&stream_parts(parts.clone())).0.unwrap();
+        assert_eq!(shapes(&reply), want);
+        let (contents, _) = sent_contents(after(&reply, REFERENCE));
+        assert_eq!(contents[1], json!({"role": "model", "parts": parts}));
+    }
+}
+
+#[test]
+fn a_calls_args_and_id_boundaries() {
+    let decode_pair =
+        |call: Value, response: Value| decoded(&stream_parts(vec![call, response])).0.unwrap();
+    // `args` absent, a string or an array give `{}`; an object is kept.
+    for (args, want) in [
+        (None, json!({})),
+        (Some(json!("q")), json!({})),
+        (Some(json!(["q"])), json!({})),
+        (Some(json!({"queries": ["x"]})), json!({"queries": ["x"]})),
+    ] {
+        let reply = decode_pair(
+            tool_call_part(Some("c1"), args),
+            tool_response_part(Some("c1"), json!({})),
+        );
+        let [ReplyAction::Hosted(pair)] = reply.actions.as_slice() else {
+            panic!("{:?}", reply.actions);
+        };
+        assert_eq!(pair.call.arguments, want);
+    }
+    // An empty id carries no `provider_id`, and pairs with an empty one.
+    let reply = decode_pair(
+        tool_call_part(Some(""), None),
+        tool_response_part(Some(""), json!({})),
+    );
+    let [ReplyAction::Hosted(pair)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(pair.call.provider_id, None);
+    // Both ids absent pair the same way, with no `provider_id`.
+    let reply = decode_pair(
+        tool_call_part(None, None),
+        tool_response_part(None, json!({})),
+    );
+    let [ReplyAction::Hosted(pair)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(pair.call.provider_id, None);
+    // A call without an id pairs with a response whose id is `""`.
+    let reply = decode_pair(
+        tool_call_part(None, None),
+        tool_response_part(Some(""), json!({})),
+    );
+    assert!(matches!(reply.actions.as_slice(), [ReplyAction::Hosted(_)]));
+    // A call with an id and a response without one never pair.
+    let reply = decode_pair(
+        tool_call_part(Some("a"), None),
+        tool_response_part(None, json!({})),
+    );
+    assert!(matches!(
+        reply.actions.as_slice(),
+        [ReplyAction::Reasoning(_), ReplyAction::Reasoning(_)]
+    ));
+}
+
+#[test]
+fn a_search_then_a_function_call_replays_in_order() {
+    let thought = json!({"text": "Checking.", "thought": true, "thoughtSignature": "dGhvdWdodA"});
+    let call = tool_call_part(Some("c1"), Some(json!({"queries": ["x"]})));
+    let response = tool_response_part(Some("c1"), json!({"search_suggestions": "<s>"}));
+    let function = json!({"functionCall": {"name": "get_weather", "args": {"city": "Paris"}},
+        "thoughtSignature": "c2FsbA"});
+    let grounding =
+        json!({"groundingChunks": [{"web": {"uri": "https://a.example", "title": "A"}}]});
+    let mut last = chunk(json!([{"text": "Done."}]), Some("STOP"));
+    last["candidates"][0]["groundingMetadata"] = grounding.clone();
+    let reply = decoded(&stream(&[
+        chunk(json!([thought.clone()]), None),
+        chunk(json!([call.clone()]), None),
+        chunk(json!([response.clone()]), None),
+        chunk(json!([function.clone()]), None),
+        last,
+    ]))
+    .0
+    .unwrap();
+    // The pair sits where it arrived; the call's signature stays on the
+    // call after it; the grounding lands on the hosted completion.
+    assert!(matches!(
+        reply.actions.as_slice(),
+        [
+            ReplyAction::Reasoning(_),
+            ReplyAction::Hosted(_),
+            ReplyAction::Reasoning(_),
+            ReplyAction::ToolCall(_),
+            ReplyAction::Text(_),
+        ]
+    ));
+    let [ReplyAction::Reasoning(_), ReplyAction::Hosted(pair), ..] = reply.actions.as_slice()
+    else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(
+        pair.completed.content,
+        vec![ContentPart::Text {
+            text: "https://a.example".into()
+        }]
+    );
+    assert_eq!(pair.completed.details, Some(grounding));
+    let (contents, _) = sent_contents(after(&reply, REFERENCE));
+    assert_eq!(
+        contents[1],
+        json!({"role": "model", "parts": [
+            {"text": "Checking.", "thought": true, "thoughtSignature": "dGhvdWdodA"},
+            call, response,
+            {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}},
+             "thoughtSignature": "c2FsbA"},
+            {"text": "Done."}]})
+    );
+    // No search part carries the call's signature; the result goes in the
+    // next user content as a `functionResponse`.
+    assert_eq!(
+        contents[2],
+        json!({"role": "user", "parts": [{"functionResponse": {"name": "get_weather",
+            "response": {"output": "18 C, clear"}}}]})
+    );
+}
+
+#[test]
+fn the_last_grounding_wins() {
+    let old = json!({"groundingChunks": [{"web": {"uri": "https://old.example"}}]});
+    let new = json!({"groundingChunks": [{"web": {"uri": "https://new.example"}}]});
+    let mut first = chunk(json!([{"text": "a"}]), None);
+    first["candidates"][0]["groundingMetadata"] = old;
+    let mut last = chunk(json!([{"text": "b"}]), Some("STOP"));
+    last["candidates"][0]["groundingMetadata"] = new.clone();
+    let reply = decoded(&stream(&[
+        chunk(json!([tool_call_part(Some("c1"), None)]), None),
+        chunk(json!([tool_response_part(Some("c1"), json!({}))]), None),
+        first,
+        last,
+    ]))
+    .0
+    .unwrap();
+    let [ReplyAction::Hosted(pair), ..] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(
+        pair.completed.content,
+        vec![ContentPart::Text {
+            text: "https://new.example".into()
+        }]
+    );
+    assert_eq!(pair.completed.details, Some(new));
+}
+
+#[test]
+fn only_the_first_candidate_is_read() {
+    let pair = chunk(
+        json!([
+            tool_call_part(Some("c1"), None),
+            tool_response_part(Some("c1"), json!({})),
+        ]),
+        None,
+    );
+    let mut event = chunk(json!([{"text": "hi"}]), Some("STOP"));
+    event["candidates"]
+        .as_array_mut()
+        .unwrap()
+        .push(pair["candidates"][0].clone());
+    event["candidates"][1]["groundingMetadata"] =
+        json!({"groundingChunks": [{"web": {"uri": "https://a.example"}}]});
+    let reply = decoded(&stream(&[event])).0.unwrap();
+    // The second candidate's pair and grounding are never read.
+    let [ReplyAction::Text(text)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(text.text, "hi");
+}
+
+#[test]
+fn grounding_goes_on_the_last_hosted_result_only() {
+    let grounded = json!({"groundingChunks": [
+        {"web": {"uri": "https://a.example"}},
+        {"web": {"uri": 7}},
+        {"web": {"uri": "https://b.example"}},
+    ]});
+    let mut last = chunk(json!([]), Some("STOP"));
+    last["candidates"][0]["groundingMetadata"] = grounded.clone();
+    let reply = decoded(&stream(&[
+        chunk(json!([tool_call_part(Some("c1"), None)]), None),
+        chunk(json!([tool_response_part(Some("c1"), json!({}))]), None),
+        chunk(json!([tool_call_part(Some("c2"), None)]), None),
+        chunk(json!([tool_response_part(Some("c2"), json!({}))]), None),
+        last,
+    ]))
+    .0
+    .unwrap();
+    let [ReplyAction::Hosted(first), ReplyAction::Hosted(second)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    // Non-string URIs are skipped; only the last completion carries the
+    // grounding, as its details and its URLs.
+    assert_eq!(
+        first.completed.content,
+        vec![ContentPart::Text {
+            text: String::new()
+        }]
+    );
+    assert_eq!(first.completed.details, None);
+    assert_eq!(
+        second.completed.content,
+        vec![ContentPart::Text {
+            text: "https://a.example\nhttps://b.example".into()
+        }]
+    );
+    assert_eq!(second.completed.details, Some(grounded));
+    // Grounding with no pair logs nothing.
+    let mut alone = chunk(json!([{"text": "hi"}]), Some("STOP"));
+    alone["candidates"][0]["groundingMetadata"] =
+        json!({"groundingChunks": [{"web": {"uri": "https://a.example"}}]});
+    let reply = decoded(&stream(&[alone])).0.unwrap();
+    assert!(hosted_actions(&reply).is_empty());
+    // Pairs with no grounding complete with empty text.
+    let reply = decoded(&stream_parts(vec![
+        tool_call_part(Some("c1"), None),
+        tool_response_part(Some("c1"), json!({})),
+    ]))
+    .0
+    .unwrap();
+    let [ReplyAction::Hosted(pair)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(
+        pair.completed.content,
+        vec![ContentPart::Text {
+            text: String::new()
+        }]
+    );
+    assert_eq!(pair.completed.details, None);
+    // A failed last completion keeps its failure text and gets the details.
+    let mut failed = chunk(json!([]), Some("STOP"));
+    failed["candidates"][0]["groundingMetadata"] =
+        json!({"groundingChunks": [{"web": {"uri": "https://a.example"}}]});
+    let grounding = failed["candidates"][0]["groundingMetadata"].clone();
+    let reply = decoded(&stream(&[
+        chunk(json!([tool_call_part(Some("c1"), None)]), None),
+        chunk(
+            json!([tool_response_part(
+                Some("c1"),
+                json!({"error": {"status": "UNAVAILABLE"}})
+            )]),
+            None,
+        ),
+        failed,
+    ]))
+    .0
+    .unwrap();
+    let [ReplyAction::Hosted(pair)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(pair.completed.status, CallStatus::Failed);
+    match pair.completed.content.as_slice() {
+        [ContentPart::Text { text }] => {
+            assert_eq!(text, "The provider's search failed: UNAVAILABLE.")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(pair.completed.details, Some(grounding));
 }

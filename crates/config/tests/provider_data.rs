@@ -575,6 +575,7 @@ fn reads_web_search_reads_one_type_per_protocol() {
                 (protocol, kind),
                 (Protocol::AnthropicMessages, "web_search_20250305")
                     | (Protocol::OpenaiResponses, "web_search")
+                    | (Protocol::GoogleGenerativeAi, "google_search")
             );
             assert_eq!(
                 protocol.reads_web_search(kind),

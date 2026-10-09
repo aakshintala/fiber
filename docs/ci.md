@@ -40,7 +40,7 @@ the pull request is marked ready, which starts the full run.
 
 Every job in `.github/workflows/ci.yml` but the verdict job is in the
 verdict job's `needs`, except the jobs that report and gate nothing:
-`backstop_report`, `bench_comment`. They run outside the verdict, so their
+`backstop_report`, `bench_comment`, `cache_prune`. They run outside the verdict, so their
 result never decides `CI`. The docs check fails when any other job is
 missing from `needs`, so a new job, such as a new shard, cannot run
 without gating the merge.
@@ -144,6 +144,13 @@ On Linux x86_64 alone:
   dependency tree (`cargo xtask tui-isolation`), so no other crate depends on
   a crate admitted only for the terminal
 - `shellcheck --shell=sh` on `scripts/install.sh` and its test stubs
+- actionlint over every file in `.github/workflows/`, when the diff changes
+  one. A workflow change runs the whole selection ("Selection"), so the job is
+  always selected. No `taiki-e/install-action` tool installs actionlint, so the
+  step downloads the pinned release, v1.7.12, and checks its SHA-256. It also runs
+  shellcheck on each `run:` script. Any finding fails the job. Locally it is
+  optional: `brew install actionlint`, then `actionlint` from the repository
+  root.
 - cargo-deny's licence, source and ban checks
 - the built-in tool definitions within their byte budget, with each
   definition's size printed
@@ -270,9 +277,12 @@ never blocks a merge.
 
 The backstop is the only run that saves the build cache. Pull requests
 restore it and never write it, so branches do not fill the repository's
-10 GB cache. When the backstop saves a new generation of the build cache it
-deletes the older ones, and it keeps a stored release binary only for a commit
-that the 9-ancestor lookup can still reach from an open pull request's base.
+10 GB cache. When the backstop saves a new generation of the build cache, a final job
+(`scripts/cache-prune`, the only one with `actions: write`) deletes the older
+ones, and it keeps a stored release binary only for a commit among the 10
+nearest first-parent commits of `main`'s head or of an open pull request's
+base, the commits the 9-ancestor lookup can reach. A failed delete warns and
+never fails the backstop; the job is not in `ci`'s needs.
 The test job saves its cache once the workspace build succeeded,
 even when a later check fails, and saves nothing when the build fails.
 
@@ -355,7 +365,8 @@ Node.js version GitHub currently supports. An action still on a deprecated
 Node.js version is moved to its newest major before it is pinned.
 
 No job polls the Actions API in a loop. The backstop's one lookup of the
-last passing `main` commit is the only Actions API call a workflow makes.
+last passing `main` commit is the only Actions API call a workflow makes to
+find a run; the backstop's cache pruning also lists and deletes cache entries.
 Agents wait on the `CI` check with `gh-ci`, never with a `gh run watch`
 loop, because such loops have tripped GitHub's Actions rate limit. `gh-ci` is
 a small `gh` wrapper that waits with few API calls; it lives in the owner's

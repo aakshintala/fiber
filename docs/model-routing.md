@@ -20,7 +20,7 @@ Protocols are native Rust in the `provider` module. Five speak to vendors:
 | `anthropic-messages` | Anthropic, OpenCode, OpenRouter, Databricks, muse, AWS Bedrock (Claude), Google Vertex (Claude), Azure (Foundry Claude) |
 | `openai-completions` | OpenCode, OpenRouter, Databricks, muse, Azure |
 | `openai-responses` | OpenAI, ChatGPT/codex, OpenCode, Databricks, muse, Azure |
-| `google-generative-ai` | the Gemini API, Google Vertex (Gemini), OpenCode (Zen's Gemini models) |
+| `google-generative-ai` | the Gemini API, Google Vertex (Gemini) |
 | `bedrock-converse` | AWS Bedrock (models other than Claude) |
 
 A sixth, `scripted`, speaks to no vendor: it reads a script file
@@ -149,6 +149,13 @@ Measured against `gemini-3.1-flash-lite` on the Gemini API:
   `[a-zA-Z0-9_-]{1,64}`, a 65-character id, and a `functionResponse` id that
   differs from the call's.
 - A `functionResponse` may carry an image in `parts`, and the model read it.
+- A request that declares function tools beside the hosted `google_search`
+  is refused with HTTP 400 unless `toolConfig` sets
+  `includeServerSideToolInvocations` to `true`. With the flag the search
+  arrives as `toolCall` and `toolResponse` content parts, each signed with
+  its own `thoughtSignature`, before the answer text; the candidate's
+  `groundingMetadata` on the last chunk carries the result URLs. Measured
+  October 9, 2026 on `gemini-3-flash-preview`.
 - Function-calling mode `VALIDATED` returned schema-valid arguments where
   `AUTO` returned arguments that broke an enum and an integer type. In the
   sample it did not force a call.
@@ -200,8 +207,9 @@ Measured on October 1, 2026 with one OpenCode key (`research/opencode-probe`).
   `opencode-zen` is billed per token at `https://opencode.ai/zen`, and its
   models carry prices only.
 - Both serve `openai-responses` at `/v1/responses`, `openai-completions` at
-  `/v1/chat/completions` and `anthropic-messages` at `/v1/messages`. Zen also
-  serves `google-generative-ai` for its Gemini models.
+  `/v1/chat/completions` and `anthropic-messages` at `/v1/messages`. Zen lists
+  `google-generative-ai` models, but the one request probed on that route was
+  refused (`research/opencode-zen-gemini-probe`).
 - A model speaks one protocol. `muse-spark-1.3-contributor` on Go answered on
   `/v1/responses`, and on the other two it answered 400 with
   `ModelProtocolUnsupported`. Each model declares its protocol.
@@ -315,6 +323,8 @@ For each model:
   size notices are measured against it
 - output token limit, input kinds and cost
 - whether a subscription login covers it ("Cost")
+
+A first-party package's `models` list is generated, except `openrouter`'s, which its `models()` reads from OpenRouter ("Model discovery"). `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. The `opencode-zen` package also leaves out its `google-generative-ai` models: the one request probed on that route, to `gemini-3.5-flash-lite`, answered 403 "Model access is disabled" (`research/opencode-zen-gemini-probe`). It derives each model's protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
 
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
 needs is declared, or it is not set.

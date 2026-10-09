@@ -1,187 +1,331 @@
 {
-  "name": "gemini",
   "credential": {
     "env": "GEMINI_API_KEY"
   },
-  "reviewer_model": "gemini-3.8-flash",
   "models": [
     {
-      "id": "gemini-3.1-pro-preview",
-      "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "input": [
-        "text",
-        "image"
-      ],
+      "context_window": 131072,
       "cost": {
-        "input": 2.0,
-        "output": 12.0,
         "cache_read": 0.2,
+        "input": 2,
+        "output": 12,
         "tiers": [
           {
-            "input_tokens_above": 200000,
-            "input": 4,
-            "output": 18,
             "cache_read": 0.4,
-            "cache_write": 0
+            "cache_write": 0,
+            "input": 4,
+            "input_tokens_above": 200000,
+            "output": 18
           }
         ]
-      }
-    },
-    {
-      "id": "gemini-3.8-flash",
-      "protocol": "google-generative-ai",
-      "base_url": "https://generativelanguage.googleapis.com/v1beta",
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
+      },
+      "id": "deep-research-max-preview-04-2026",
       "input": [
         "text",
         "image"
       ],
-      "cost": {
-        "input": 0.75,
-        "output": 3.75,
-        "cache_read": 0.075
-      }
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai"
     },
     {
-      "id": "gemini-3.5-flash-lite",
-      "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
+      "context_window": 131072,
+      "cost": {
+        "cache_read": 0.2,
+        "input": 2,
+        "output": 12,
+        "tiers": [
+          {
+            "cache_read": 0.4,
+            "cache_write": 0,
+            "input": 4,
+            "input_tokens_above": 200000,
+            "output": 18
+          }
+        ]
+      },
+      "id": "deep-research-preview-04-2026",
       "input": [
         "text",
         "image"
       ],
-      "cost": {
-        "input": 0.3,
-        "output": 2.5,
-        "cache_read": 0.03
-      }
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai"
     },
     {
-      "id": "gemini-3.1-flash-lite",
-      "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
       "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "input": [
-        "text",
-        "image"
-      ],
       "cost": {
-        "input": 0.25,
-        "output": 1.5,
-        "cache_read": 0.025
-      }
-    },
-    {
-      "id": "gemini-3-flash-preview",
-      "protocol": "google-generative-ai",
-      "base_url": "https://generativelanguage.googleapis.com/v1beta",
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "input": [
-        "text",
-        "image"
-      ],
-      "cost": {
+        "cache_read": 0.05,
         "input": 0.5,
-        "output": 3.0,
-        "cache_read": 0.05
-      }
-    },
-    {
-      "id": "gemini-3.1-pro-preview-customtools",
-      "protocol": "google-generative-ai",
-      "base_url": "https://generativelanguage.googleapis.com/v1beta",
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
+        "output": 3
+      },
+      "id": "gemini-3-flash-preview",
       "input": [
         "text",
         "image"
       ],
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
+    },
+    {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
       "cost": {
-        "input": 2.0,
-        "output": 12.0,
-        "cache_read": 0.2,
-        "tiers": [
-          {
-            "input_tokens_above": 200000,
-            "input": 4,
-            "output": 18,
-            "cache_read": 0.4,
-            "cache_write": 0
-          }
-        ]
-      }
-    },
-    {
-      "id": "gemini-3.1-flash-lite-preview",
-      "protocol": "google-generative-ai",
-      "base_url": "https://generativelanguage.googleapis.com/v1beta",
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
+        "cache_read": 0.025,
+        "input": 0.25,
+        "output": 1.5
+      },
+      "id": "gemini-3.1-flash-lite",
       "input": [
         "text",
         "image"
       ],
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
+    },
+    {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 65536,
       "cost": {
         "input": 0.25,
-        "output": 1.5,
-        "cache_read": 0.025
-      }
-    },
-    {
-      "id": "gemini-3.5-flash",
-      "protocol": "google-generative-ai",
-      "base_url": "https://generativelanguage.googleapis.com/v1beta",
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
+        "output": 30
+      },
+      "id": "gemini-3.1-flash-lite-image",
       "input": [
         "text",
         "image"
       ],
+      "max_output_tokens": 4096,
+      "protocol": "google-generative-ai"
+    },
+    {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
       "cost": {
+        "cache_read": 0.025,
+        "input": 0.25,
+        "output": 1.5
+      },
+      "id": "gemini-3.1-flash-lite-preview",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
+    },
+    {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 131072,
+      "cost": {
+        "input": 0.75,
+        "output": 4.5
+      },
+      "id": "gemini-3.1-flash-live-preview",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai"
+    },
+    {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.2,
+        "input": 2,
+        "output": 12,
+        "tiers": [
+          {
+            "cache_read": 0.4,
+            "cache_write": 0,
+            "input": 4,
+            "input_tokens_above": 200000,
+            "output": 18
+          }
+        ]
+      },
+      "id": "gemini-3.1-pro-preview",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
+    },
+    {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.2,
+        "input": 2,
+        "output": 12,
+        "tiers": [
+          {
+            "cache_read": 0.4,
+            "cache_write": 0,
+            "input": 4,
+            "input_tokens_above": 200000,
+            "output": 18
+          }
+        ]
+      },
+      "id": "gemini-3.1-pro-preview-customtools",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
+    },
+    {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.15,
         "input": 1.5,
-        "output": 9.0,
-        "cache_read": 0.15
-      }
+        "output": 9
+      },
+      "id": "gemini-3.5-flash",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
     },
     {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.03,
+        "input": 0.3,
+        "output": 2.5
+      },
+      "id": "gemini-3.5-flash-lite",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
+    },
+    {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.075,
+        "input": 0.75,
+        "output": 3.75
+      },
       "id": "gemini-3.6-flash",
-      "protocol": "google-generative-ai",
-      "base_url": "https://generativelanguage.googleapis.com/v1beta",
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
       "input": [
         "text",
         "image"
       ],
-      "cost": {
-        "input": 0.75,
-        "output": 3.75,
-        "cache_read": 0.075
-      }
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
     },
     {
-      "id": "gemini-3.7-flash",
-      "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
       "context_window": 1048576,
-      "max_output_tokens": 65536,
+      "cost": {
+        "cache_read": 0.075,
+        "input": 0.75,
+        "output": 3.75
+      },
+      "id": "gemini-3.7-flash",
       "input": [
         "text",
         "image"
       ],
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
+    },
+    {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
       "cost": {
+        "cache_read": 0.075,
         "input": 0.75,
-        "output": 3.75,
-        "cache_read": 0.075
-      }
+        "output": 3.75
+      },
+      "id": "gemini-3.8-flash",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
+    },
+    {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.075,
+        "input": 0.75,
+        "output": 3.75
+      },
+      "id": "gemini-flash-latest",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai"
+    },
+    {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.03,
+        "input": 0.3,
+        "output": 2.5
+      },
+      "id": "gemini-flash-lite-latest",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65536,
+      "protocol": "google-generative-ai"
+    },
+    {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 262144,
+      "id": "gemma-4-26b-a4b-it",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 32768,
+      "protocol": "google-generative-ai"
+    },
+    {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 262144,
+      "id": "gemma-4-31b-it",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 32768,
+      "protocol": "google-generative-ai"
     }
-  ]
+  ],
+  "name": "gemini",
+  "reviewer_model": "gemini-3.8-flash"
 }
