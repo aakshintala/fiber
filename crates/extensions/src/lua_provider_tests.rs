@@ -5,15 +5,37 @@ use std::fs;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use contract::Secret;
 use contract::signing::{SignRequest, Signer};
 use fakes::clock::FakeClock;
 
 use crate::{
     CredentialPair, LuaExtension,
-    lua_provider::{LuaProvider, LuaSigner},
+    lua_provider::{LuaProvider, LuaSigner, redact_values},
 };
 
 const WAIT: Duration = Duration::from_secs(5);
+
+#[test]
+fn redaction_replaces_each_non_empty_call_value() {
+    let cases: &[(&[&str], &str, &str)] = &[
+        (&[""], "untouched", "untouched"),
+        (&["tok", "tok-1"], "saw tok-1", "saw [redacted]"),
+        (
+            &["token"],
+            "token and token again",
+            "[redacted] and [redacted] again",
+        ),
+        (&["absent"], "no credential here", "no credential here"),
+    ];
+    for (values, message, expected) in cases {
+        let values: Vec<Secret> = values
+            .iter()
+            .map(|value| Secret::new((*value).to_owned()))
+            .collect();
+        assert_eq!(redact_values(message, &values), *expected, "{values:?}");
+    }
+}
 
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();

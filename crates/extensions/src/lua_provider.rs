@@ -14,7 +14,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use config::{Config, ModelData, ProviderData, Secret};
 use contract::ErrorCode;
-use contract::redact::Secrets;
 use contract::signing::{self, SignRequest, Signer};
 use serde_json::{Map, Value, json};
 
@@ -677,21 +676,44 @@ impl Signer for LuaSigner {
 /// the provider reads `credentials()` after `sign` returns (`docs/errors.md`,
 /// "The shape").
 fn redact_signing_error(error: signing::Error, values: &[Secret]) -> signing::Error {
-    let mut secrets = Secrets::default();
-    for value in values {
-        secrets.add(value.clone());
-    }
+    let redact = |message: String| redact_values(&message, values);
     match error {
-        signing::Error::Failed(message) => signing::Error::Failed(secrets.redact(&message)),
-        signing::Error::NotHeaders(message) => signing::Error::NotHeaders(secrets.redact(&message)),
+        signing::Error::Failed(message) => signing::Error::Failed(redact(message)),
+        signing::Error::NotHeaders(message) => signing::Error::NotHeaders(redact(message)),
         signing::Error::Credential { code, message } => signing::Error::Credential {
             code,
-            message: secrets.redact(&message),
+            message: redact(message),
         },
         signing::Error::Unattended { message } => signing::Error::Unattended {
-            message: secrets.redact(&message),
+            message: redact(message),
         },
     }
+}
+
+/// Replaces values owned by one call without scanning inserted placeholders.
+/// Longer values match first so an overlapping shorter value cannot leave a
+/// fragment; empty values are skipped so the scan always advances.
+fn redact_values(message: &str, values: &[Secret]) -> String {
+    let mut patterns: Vec<&str> = values
+        .iter()
+        .map(Secret::expose)
+        .filter(|value| !value.is_empty())
+        .collect();
+    patterns.sort_by_key(|value| std::cmp::Reverse(value.len()));
+    let mut redacted = String::with_capacity(message.len());
+    let mut rest = message;
+    while !rest.is_empty() {
+        if let Some(value) = patterns.iter().find(|value| rest.starts_with(**value)) {
+            redacted.push_str("[redacted]");
+            rest = rest.strip_prefix(*value).unwrap_or("");
+        } else if let Some(next) = rest.chars().next() {
+            redacted.push(next);
+            rest = rest.get(next.len_utf8()..).unwrap_or("");
+        } else {
+            break;
+        }
+    }
+    redacted
 }
 
 /// Pushes `secret` unless one with the same value is already listed, so
