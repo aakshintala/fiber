@@ -198,9 +198,6 @@ pub(crate) fn render(
                     None => {
                         // The rows draw in the scroll bar's rows area, one
                         // column narrower than the conversation, leaving
-                        // the last column to the bar.
-                        // The rows draw in the scroll bar's rows area, one
-                        // column narrower than the conversation, leaving
                         // the last column to the bar, which draws before
                         // the marks over it.
                         let (rows, bar) = scroll_bar::split(conversation);

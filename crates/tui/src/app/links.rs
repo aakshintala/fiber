@@ -127,9 +127,6 @@ impl App {
         // Links are placed and counted at the width the pages wrap at:
         // the rows draw one column narrower than the column, leaving
         // the last column to the scroll bar.
-        // Links are placed and counted at the width the pages wrap at:
-        // the rows draw one column narrower than the column, leaving
-        // the last column to the scroll bar.
         let area_width = self.screen.pages().wrap_width();
         // Each resident page once, its rows with their texts as drawn now.
         let mut pages: BTreeMap<usize, (Vec<crate::turn::Row>, Vec<crate::rows::RowText>)> =
