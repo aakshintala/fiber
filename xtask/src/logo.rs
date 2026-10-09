@@ -200,10 +200,10 @@ impl OutlinePen for Pen<'_> {
 pub(crate) fn mask(font: &[u8]) -> Result<Vec<u8>, String> {
     let font = FontRef::new(font).map_err(|error| format!("font: {error}"))?;
     let location = LocationRef::default();
-    let scale = fit_scale(ink_box(&rasterise(&font, PROBE, WAVE_PX + 8, 112.0)));
+    let scale = fit_scale(ink_box(&rasterise(&font, PROBE, 0, 112.0)));
     let ascent = font.metrics(Size::new(scale), location).ascent;
     let baseline = ascent + (HEIGHT as f32 - ascent) / 2.0;
-    let mut glyphs = rasterise(&font, scale, WAVE_PX + 8, baseline);
+    let mut glyphs = rasterise(&font, scale, 0, baseline);
     if let Some((left, top, width, height)) = ink_box(&glyphs) {
         let spare_w = (WIDTH - WAVE_PX) as f32 - width as f32;
         let spare_h = HEIGHT as f32 - height as f32;

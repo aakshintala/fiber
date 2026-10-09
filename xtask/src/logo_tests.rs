@@ -199,13 +199,41 @@ fn name_ink_box(bytes: &[u8]) -> Option<(usize, usize, usize, usize)> {
 
 #[test]
 fn mask_centres_the_test_font_at_exact_pixels() {
-    let bytes = mask(&minimal_font()).unwrap();
+    let bytes = mask(&minimal_font((0, 0))).unwrap();
     assert_eq!(name_ink_box(&bytes), Some((68, 11, 564, 137)));
 }
 
 #[test]
+fn mask_centres_an_off_centre_test_font_at_exact_pixels() {
+    // Glyph ids are b, e, f, i, r; the flat f leaves one advance before ink.
+    let font_bytes = test_font(
+        &[(500, 700), (500, 700), (500, 0), (500, 700), (500, 700)],
+        (0, 10),
+    );
+    let font = FontRef::new(&font_bytes).unwrap();
+    let probe = ink_box(&rasterise(&font, PROBE, 0, 112.0)).unwrap();
+    let (left, top, _, _) = probe;
+    assert_eq!((left, top), (60, 41));
+
+    let scale = fit_scale(Some(probe));
+    let ascent = font
+        .metrics(Size::new(scale), LocationRef::default())
+        .ascent;
+    let baseline = ascent + (HEIGHT as f32 - ascent) / 2.0;
+    let (_, _, width, height) = ink_box(&rasterise(&font, scale, 0, baseline)).unwrap();
+    // The name region has 132 even horizontal and 23 odd vertical pixels spare.
+    assert_eq!((WIDTH - WAVE_PX - width, HEIGHT - height), (132, 23));
+
+    let bytes = mask(&font_bytes).unwrap();
+    assert_eq!(name_ink_box(&bytes), Some((126, 11, 448, 137)));
+}
+
+#[test]
 fn rasterise_skips_a_flat_glyph_and_keeps_its_advance() {
-    let bytes = test_font(&[(500, 0), (500, 700), (500, 700), (500, 700), (500, 700)]);
+    let bytes = test_font(
+        &[(500, 0), (500, 700), (500, 700), (500, 700), (500, 700)],
+        (0, 0),
+    );
     let font = FontRef::new(&bytes).unwrap();
     let glyphs = rasterise(&font, PROBE, WAVE_PX + 8, 112.0);
     assert_eq!(glyphs.len(), 4);
@@ -217,7 +245,10 @@ fn rasterise_skips_a_flat_glyph_and_keeps_its_advance() {
 
 #[test]
 fn rasterise_skips_a_zero_width_glyph() {
-    let bytes = test_font(&[(0, 700), (500, 700), (500, 700), (500, 700), (500, 700)]);
+    let bytes = test_font(
+        &[(0, 700), (500, 700), (500, 700), (500, 700), (500, 700)],
+        (0, 0),
+    );
     let font = FontRef::new(&bytes).unwrap();
     let glyphs = rasterise(&font, PROBE, WAVE_PX + 8, 112.0);
     assert_eq!(glyphs.len(), 4);
@@ -225,7 +256,10 @@ fn rasterise_skips_a_zero_width_glyph() {
 
 #[test]
 fn rasterise_keeps_a_hairline_glyph() {
-    let bytes = test_font(&[(1, 1), (500, 700), (500, 700), (500, 700), (500, 700)]);
+    let bytes = test_font(
+        &[(1, 1), (500, 700), (500, 700), (500, 700), (500, 700)],
+        (0, 0),
+    );
     let font = FontRef::new(&bytes).unwrap();
     let glyphs = rasterise(&font, PROBE, WAVE_PX + 8, 112.0);
     assert_eq!(glyphs.len(), 5);
@@ -368,7 +402,7 @@ fn checked_in_mask_is_the_right_size_with_ink_in_both_regions() {
 fn run_writes_a_sized_mask_with_ink_in_both_regions() {
     let dir = fakes::TempDir::new("fiber-logo-mask");
     let font = dir.path().join("test-font.ttf");
-    std::fs::write(&font, minimal_font()).unwrap();
+    std::fs::write(&font, minimal_font((0, 0))).unwrap();
     let first = dir.path().join("first/logo-mask.bin");
     let second = dir.path().join("second/logo-mask.bin");
     for out in [&first, &second] {
@@ -403,28 +437,45 @@ fn run_writes_a_sized_mask_with_ink_in_both_regions() {
 /// the command entry point. The repo bundles no font, so the test builds
 /// one from its tables: head, hhea, maxp, hmtx, cmap format 12, short
 /// loca and glyf. Checksums are zero, which the parser does not verify.
-fn minimal_font() -> Vec<u8> {
-    test_font(&[(500, 700), (500, 700), (500, 700), (500, 700), (500, 700)])
+fn minimal_font(origin: (i16, i16)) -> Vec<u8> {
+    test_font(
+        &[(500, 700), (500, 700), (500, 700), (500, 700), (500, 700)],
+        origin,
+    )
 }
 
 /// A font like [`minimal_font`], but each of `b`, `e`, `f`, `i` and `r` in
 /// glyph-id order gets a `width`-by-`height` filled rectangle in font
-/// units. A zero side is a degenerate contour the rasteriser skips; a
-/// one-unit side is a hairline it keeps.
-fn test_font(sizes: &[(i16, i16)]) -> Vec<u8> {
-    /// One `width`-by-`height` filled rectangle: a single contour through
-    /// four on-curve corners, stored as 16-bit deltas.
-    fn rectangle(width_units: i16, height_units: i16) -> Vec<u8> {
+/// units at `origin`. A zero side is a degenerate contour the rasteriser
+/// skips; a one-unit side is a hairline it keeps.
+fn test_font(sizes: &[(i16, i16)], origin: (i16, i16)) -> Vec<u8> {
+    /// One `width`-by-`height` filled rectangle at `origin`: a single
+    /// contour through four on-curve corners, stored as 16-bit deltas.
+    fn rectangle(width_units: i16, height_units: i16, origin: (i16, i16)) -> Vec<u8> {
         let mut glyph = Vec::new();
         glyph.extend_from_slice(&1u16.to_be_bytes());
-        for edge in [0i16, 0, width_units, height_units] {
+        for edge in [
+            origin.0,
+            origin.1,
+            origin.0 + width_units,
+            origin.1 + height_units,
+        ] {
             glyph.extend_from_slice(&edge.to_be_bytes());
         }
         for word in [3u16, 0] {
             glyph.extend_from_slice(&word.to_be_bytes());
         }
         glyph.extend_from_slice(&[1u8, 1, 1, 1]);
-        for delta in [0i16, width_units, 0, -width_units, 0, 0, height_units, 0] {
+        for delta in [
+            origin.0,
+            width_units,
+            0,
+            -width_units,
+            origin.1,
+            0,
+            height_units,
+            0,
+        ] {
             glyph.extend_from_slice(&delta.to_be_bytes());
         }
         glyph
@@ -501,7 +552,7 @@ fn test_font(sizes: &[(i16, i16)]) -> Vec<u8> {
     let empty = vec![0u8; 10];
     let rects: Vec<Vec<u8>> = sizes
         .iter()
-        .map(|(width, height)| rectangle(*width, *height))
+        .map(|(width, height)| rectangle(*width, *height, origin))
         .collect();
     let mut glyf = Vec::new();
     let mut loca = Vec::new();
