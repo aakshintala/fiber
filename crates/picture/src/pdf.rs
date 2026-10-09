@@ -15,6 +15,12 @@ const WRITE_FAILED: i32 = 3;
 /// Exit code: the PDF has more pages than asked for.
 pub(crate) const TOO_MANY: i32 = 4;
 
+/// The most bytes one object or cross-reference stream may decompress to
+/// while the PDF loads (`docs/tools.md`, "read"). It equals the 64 MiB file
+/// cap, so a small file cannot peak far past what the cap bounds: object and
+/// cross-reference streams are the only streams lopdf decodes while loading.
+const MAX_DECOMPRESSED_BYTES: usize = 67_108_864;
+
 /// What the caller asked for.
 #[derive(Debug, PartialEq, Eq)]
 enum What {
@@ -69,7 +75,10 @@ pub(crate) fn run(
             return REFUSED;
         }
     };
-    let mut document = match lopdf::Document::load_mem(&bytes) {
+    let mut document = match lopdf::Document::load_mem_with_options(
+        &bytes,
+        lopdf::LoadOptions::with_max_decompressed_size(MAX_DECOMPRESSED_BYTES),
+    ) {
         Ok(document) => document,
         Err(error) => {
             writeln!(stderr, "{error}").unwrap_or(());

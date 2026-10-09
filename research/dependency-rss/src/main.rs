@@ -6,6 +6,20 @@ use std::hint::black_box;
 #[cfg(any(feature = "image", feature = "image-fir"))]
 mod image_timing;
 
+#[cfg(feature = "lopdf")]
+/// The image child's object-stream decompression limit, equal to its 64 MiB
+/// file cap (`docs/tools.md`, "read"): the probe loads with the same limit.
+const MAX_DECOMPRESSED_BYTES: usize = 67_108_864;
+
+#[cfg(feature = "lopdf")]
+fn load_pdf(bytes: &[u8]) -> lopdf::Document {
+    lopdf::Document::load_mem_with_options(
+        bytes,
+        lopdf::LoadOptions::with_max_decompressed_size(MAX_DECOMPRESSED_BYTES),
+    )
+    .unwrap()
+}
+
 fn text(lines: usize) -> String {
     (0..lines).map(|i| format!("line {i}: the quick brown fox_{i} jumps over 42 lazy dogs\n")).collect()
 }
@@ -475,13 +489,14 @@ fn main() {
     {
         // With PDF_FIXTURE set, the workload is what the image child does
         // for a PDF input (crates/picture/src/pdf.rs, `pages=1-20`): read the
-        // file, load it, count its pages, cut the range, write a temp file.
+        // file, load it with the child's decompression limit, count its
+        // pages, cut the range, write a temp file.
         // run.sh sets PDF_FIXTURE to one scanned-document-like fixture per
         // row (research/dependency-rss/gen). Without it, the small
         // in-memory workload below is the `lopdf` row of the main table.
         if let Ok(path) = std::env::var("PDF_FIXTURE") {
             let bytes = std::fs::read(&path).unwrap();
-            let mut document = lopdf::Document::load_mem(&bytes).unwrap();
+            let mut document = load_pdf(&bytes);
             let total = document.get_pages().len();
             let total_u32 = u32::try_from(total).unwrap();
             assert!(total_u32 >= 20, "{path} has only {total_u32} pages");
@@ -497,7 +512,7 @@ fn main() {
                 .join(format!("dep-rss-pdf-{}.pdf", std::process::id()));
             std::fs::write(&out, &cut).unwrap();
             assert_eq!(
-                lopdf::Document::load_mem(&cut).unwrap().get_pages().len() as u32,
+                load_pdf(&cut).get_pages().len() as u32,
                 last - first + 1
             );
             eprintln!(
@@ -565,14 +580,14 @@ fn main() {
         doc.trailer.set("Info", info_id);
         let mut built = Vec::new();
         doc.save_to(&mut built).unwrap();
-        let mut loaded = Document::load_mem(&built).unwrap();
+        let mut loaded = load_pdf(&built);
         assert_eq!(loaded.get_pages().len(), 20);
         let remove: Vec<u32> = (1..=20u32).filter(|p| *p < 3 || *p > 7).collect();
         loaded.delete_pages(&remove);
         loaded.prune_objects();
         let mut cut = Vec::new();
         loaded.save_to(&mut cut).unwrap();
-        assert_eq!(Document::load_mem(&cut).unwrap().get_pages().len(), 5);
+        assert_eq!(load_pdf(&cut).get_pages().len(), 5);
         black_box(cut);
         }
     }

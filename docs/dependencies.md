@@ -237,6 +237,8 @@ Notes:
   The peak is about 2.1 times the file size, so the 64 MiB cap (`docs/tools.md`,
   "read") bounds the child near 133 MiB: 129,696 KiB at 62.6 MiB on Linux x86_64,
   under the 50-megapixel image path's peak, and still takes a 100-page scan.
+  Object and cross-reference streams, the only streams decoded while loading,
+  are each capped at 64 MiB of decompressed output, the same figure as the file cap.
 - The image row is `image` 0.25 with default features off and only the png,
   jpeg, gif and webp codecs, plus `fast_image_resize` 6 with its `image`
   feature, Lanczos3. It is pure Rust and passes cargo-deny. Memory is the

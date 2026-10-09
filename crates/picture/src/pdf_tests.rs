@@ -92,6 +92,13 @@ fn pdf_bytes(pages: usize) -> Vec<u8> {
     bytes
 }
 
+fn load(bytes: &[u8]) -> lopdf::Result<lopdf::Document> {
+    lopdf::Document::load_mem_with_options(
+        bytes,
+        lopdf::LoadOptions::with_max_decompressed_size(super::MAX_DECOMPRESSED_BYTES),
+    )
+}
+
 fn child(arguments: &[OsString]) -> (i32, String, String) {
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let code = run(arguments, &mut stdout, &mut stderr);
@@ -106,6 +113,88 @@ fn write_input(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::path::Pa
     let path = dir.join(name);
     std::fs::write(&path, bytes).unwrap();
     path
+}
+
+// A one-page PDF whose objects the writer packs into a single Flate object
+// stream (plus a cross-reference stream) decoding to exactly `decompressed`
+// bytes. The padding string is the only part that grows, so a small probe
+// build measures the fixed overhead and the real build sizes its padding to
+// hit `decompressed` exactly. The page dict is packed on purpose: lopdf
+// loads leniently, so a stream past the limit is dropped instead of failing
+// the load, and without its page the file counts zero pages, which `run`
+// refuses.
+fn objstm_pdf(decompressed: usize) -> Vec<u8> {
+    use lopdf::{Document, Object, SaveOptions, dictionary};
+    fn build(pad: usize) -> Vec<u8> {
+        let mut document = Document::with_version("1.5");
+        let catalog_id = document.new_object_id();
+        let pages_id = document.new_object_id();
+        let page_id = document.new_object_id();
+        let pad_id = document.new_object_id();
+        document.objects.insert(
+            catalog_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Catalog",
+                "Pages" => pages_id,
+            }),
+        );
+        document.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![Object::Reference(page_id)],
+                "Count" => 1,
+            }),
+        );
+        document.objects.insert(
+            page_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+            }),
+        );
+        document
+            .objects
+            .insert(pad_id, Object::string_literal("A".repeat(pad).as_str()));
+        document.trailer.set("Root", catalog_id);
+        let mut bytes = Vec::new();
+        document
+            .save_with_options(
+                &mut bytes,
+                SaveOptions {
+                    use_object_streams: true,
+                    use_xref_streams: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        bytes
+    }
+    fn packed_size(bytes: &[u8]) -> usize {
+        let document = load(bytes).unwrap();
+        let mut sizes = Vec::new();
+        for object in document.objects.values() {
+            if let Object::Stream(stream) = object {
+                let is_packed = stream.dict.get(b"Type").and_then(Object::as_name).ok()
+                    == Some(b"ObjStm".as_slice());
+                if is_packed {
+                    sizes.push(stream.get_plain_content().unwrap().len());
+                }
+            }
+        }
+        assert_eq!(sizes.len(), 1, "the writer must pack one object stream");
+        sizes[0]
+    }
+    // The probe carries a tiny padding: small enough to load under the
+    // limit, so its packed size measures the fixed overhead.
+    let probe_pad = 16;
+    let overhead = packed_size(&build(probe_pad)) - probe_pad;
+    let bytes = build(decompressed - overhead);
+    if decompressed <= super::MAX_DECOMPRESSED_BYTES {
+        assert_eq!(packed_size(&bytes), decompressed);
+    }
+    bytes
 }
 
 #[test]
@@ -167,7 +256,7 @@ fn pages_two_to_three_of_five_writes_two_pages() {
     assert_eq!(value.get("page_count"), Some(&serde_json::json!(2)));
     assert_eq!(value.get("total"), Some(&serde_json::json!(5)));
     let cut = std::fs::read(dir.path().join("p_cut.pdf")).unwrap();
-    let reloaded = lopdf::Document::load_mem(&cut).unwrap();
+    let reloaded = load(&cut).unwrap();
     assert_eq!(reloaded.get_pages().len(), 2);
 }
 
@@ -184,10 +273,7 @@ fn pages_last_to_last_succeeds_and_past_the_end_exits_4() {
     ];
     assert_eq!(child(&ok).0, 0);
     let cut = std::fs::read(dir.path().join("p_last.pdf")).unwrap();
-    assert_eq!(
-        lopdf::Document::load_mem(&cut).unwrap().get_pages().len(),
-        1
-    );
+    assert_eq!(load(&cut).unwrap().get_pages().len(), 1);
     for (n, what) in ["pages=5-6", "pages=6-6"].iter().enumerate() {
         let stem = format!("p_past{n}");
         let arguments = vec![
@@ -247,6 +333,63 @@ fn non_pdf_truncated_and_zero_page_pdfs_exit_1() {
     let (code, _, stderr) = child(&arguments);
     assert_eq!(code, 1);
     assert!(!stderr.is_empty());
+}
+
+#[test]
+fn an_object_stream_past_the_limit_is_refused_and_writes_nothing() {
+    let dir = fakes::TempDir::new("fiber-pdf-objstm-over");
+    let bytes = objstm_pdf(super::MAX_DECOMPRESSED_BYTES + 1);
+    let input = write_input(dir.path(), "in.pdf", &bytes);
+    let arguments = vec![
+        OsString::from("pdf"),
+        input.into_os_string(),
+        dir.path().as_os_str().to_owned(),
+        OsString::from("p_over"),
+        OsString::from("whole=10"),
+    ];
+    let (code, stdout, stderr) = child(&arguments);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert!(!stderr.is_empty());
+    assert!(!dir.path().join("p_over.pdf").exists());
+}
+
+#[test]
+fn an_object_stream_at_the_limit_loads_and_writes_the_input_bytes() {
+    let dir = fakes::TempDir::new("fiber-pdf-objstm-at");
+    let bytes = objstm_pdf(super::MAX_DECOMPRESSED_BYTES);
+    let input = write_input(dir.path(), "in.pdf", &bytes);
+    let arguments = vec![
+        OsString::from("pdf"),
+        input.into_os_string(),
+        dir.path().as_os_str().to_owned(),
+        OsString::from("p_at"),
+        OsString::from("whole=10"),
+    ];
+    let (code, stdout, stderr) = child(&arguments);
+    assert_eq!((code, stderr.as_str()), (0, ""));
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(value.get("page_count"), Some(&serde_json::json!(1)));
+    assert_eq!(std::fs::read(dir.path().join("p_at.pdf")).unwrap(), bytes);
+}
+
+#[test]
+fn an_object_stream_under_the_limit_loads_and_cuts() {
+    let dir = fakes::TempDir::new("fiber-pdf-objstm-under");
+    let input = write_input(dir.path(), "in.pdf", &objstm_pdf(1024));
+    let arguments = vec![
+        OsString::from("pdf"),
+        input.into_os_string(),
+        dir.path().as_os_str().to_owned(),
+        OsString::from("p_under"),
+        OsString::from("pages=1-1"),
+    ];
+    let (code, stdout, stderr) = child(&arguments);
+    assert_eq!((code, stderr.as_str()), (0, ""));
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(value.get("page_count"), Some(&serde_json::json!(1)));
+    let cut = std::fs::read(dir.path().join("p_under.pdf")).unwrap();
+    assert_eq!(load(&cut).unwrap().get_pages().len(), 1);
 }
 
 #[test]
@@ -310,7 +453,7 @@ fn the_fixture_pdf_counts_two_pages() {
         env!("CARGO_MANIFEST_DIR")
     ))
     .unwrap();
-    let document = lopdf::Document::load_mem(&bytes).unwrap();
+    let document = load(&bytes).unwrap();
     assert_eq!(document.get_pages().len(), 2);
 }
 
