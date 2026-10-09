@@ -30,6 +30,17 @@ pub(crate) fn parse_line(text: &str) -> Option<Line> {
     }
 }
 
+/// Whether `line` answers command `id`: the accepted or rejected answer
+/// carrying its id.
+pub(crate) fn answers(line: &Envelope, id: &str) -> bool {
+    matches!(line.kind.as_str(), "command_accepted" | "command_rejected")
+        && line
+            .payload
+            .get("command_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(id)
+}
+
 /// Reads a `history` answer: its durable lines on `command_accepted`,
 /// or why there are none on `command_rejected` or an unreadable answer.
 /// The loop and the search both read answers through it, so the two

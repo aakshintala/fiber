@@ -544,7 +544,7 @@ impl<B: Backend> Loop<B> {
                 return Err(LOST.to_owned());
             };
             match input {
-                Input::Hub(Line::Session(line)) if answers(&line, id) => {
+                Input::Hub(Line::Session(line)) if link::answers(&line, id) => {
                     return link::history_answer(&line);
                 }
                 Input::Disconnected => {
@@ -702,16 +702,6 @@ impl<B: Backend> Drop for Loop<B> {
         }
         self.hang_up();
     }
-}
-
-/// Whether `line` answers command `id`.
-fn answers(line: &Envelope, id: &str) -> bool {
-    matches!(line.kind.as_str(), "command_accepted" | "command_rejected")
-        && line
-            .payload
-            .get("command_id")
-            .and_then(serde_json::Value::as_str)
-            == Some(id)
 }
 
 #[cfg(test)]
