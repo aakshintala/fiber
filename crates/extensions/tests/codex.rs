@@ -536,8 +536,11 @@ fn device_login(
     let rx = start_login(&provider, Some("work"), LoginMethod::Device);
     // Two pending polls, five seconds apart; the clock moves only once a
     // poll has parked on it.
+    // A ready result is kept, never dropped: `try_recv` consumes it.
+    let mut done = None;
     for step in [5, 10] {
-        if rx.try_recv().is_ok() {
+        if let Ok(result) = rx.try_recv() {
+            done = Some(result);
             break;
         }
         assert!(
@@ -547,7 +550,10 @@ fn device_login(
         );
         env.clock.advance(Duration::from_secs(5));
     }
-    let logged = finish_login(&rx);
+    let logged = match done {
+        Some(result) => result,
+        None => finish_login(&rx),
+    };
     let shown = browser.shown.lock().unwrap().clone();
     assert_eq!(
         shown,
