@@ -23,14 +23,16 @@ use support::*;
 /// The prompt a started session runs.
 const PROMPT: &str = "the-volume-of-the-meeting-room";
 
-/// The event kinds of `lines`, in order, without `session_status`: an
-/// observer thread writes it, so where it falls among the loop's own
-/// lines is not what this test pins (as `tests/session_command.rs`
-/// filters it).
+/// The event kinds of `lines`, in order, without `session_status` or
+/// `attention`: an observer thread writes `session_status`, so where it
+/// falls among the loop's own lines is not what this test pins (as
+/// `tests/session_command.rs` filters it), and the hub's `attention` line
+/// derives from that status, so whether it comes and where is not pinned
+/// either.
 fn kinds(lines: &[Value]) -> Vec<&str> {
     lines
         .iter()
-        .filter(|line| line["kind"] != "session_status")
+        .filter(|line| line["kind"] != "session_status" && line["kind"] != "attention")
         .map(|line| line["kind"].as_str().unwrap())
         .collect()
 }

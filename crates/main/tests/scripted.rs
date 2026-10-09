@@ -150,12 +150,33 @@ fn log_kinds(setup: &Setup, id: &str) -> Vec<String> {
         .collect()
 }
 
-/// The event kinds of socket `lines`, in order, without `session_status`.
+/// The event kinds of socket `lines`, in order, without `session_status`
+/// or `attention`: an observer thread writes `session_status`, and the
+/// hub's `attention` line derives from it, so neither's presence or
+/// position is pinned.
 fn kinds(lines: &[Value]) -> Vec<&str> {
     lines
         .iter()
-        .filter(|line| line["kind"] != "session_status")
+        .filter(|line| line["kind"] != "session_status" && line["kind"] != "attention")
         .map(|line| line["kind"].as_str().unwrap())
+        .collect()
+}
+
+/// [`kinds`] without `clients`, after checking `lines` hold exactly one.
+/// The hub sends a `start`'s first prompt once the requester's `full`
+/// `subscribe` is accepted or 1 second after its answer, whichever comes
+/// first (`docs/invocation.md`, "What the hub speaks"), so on a loaded
+/// machine the ephemeral `clients` line can fall after the loop's first
+/// lines: only its presence is pinned, not its position.
+fn kinds_with_one_clients_line(lines: &[Value]) -> Vec<&str> {
+    let clients = lines
+        .iter()
+        .filter(|line| line["kind"] == "clients")
+        .count();
+    assert_eq!(clients, 1, "{lines:?}");
+    kinds(lines)
+        .into_iter()
+        .filter(|kind| *kind != "clients")
         .collect()
 }
 
@@ -573,12 +594,12 @@ fn a_scripted_log_with_a_recorded_label_still_resumes() {
 }
 
 /// The hub stream of a scripted start turn through `turn_completed`: the
-/// full ordered list without any retry lines.
-const SCRIPTED_START_KINDS: [&str; 14] = [
+/// full ordered list without any retry lines and without `clients`, which
+/// [`kinds_with_one_clients_line`] checks.
+const SCRIPTED_START_KINDS: [&str; 13] = [
     "session_started",
     "fiber_started",
     "extensions_loaded",
-    "clients",
     "preamble_built",
     "opening_message",
     "turn_started",
@@ -621,7 +642,7 @@ fn the_credential_command_on_a_scripted_session_is_rejected() {
     let mut stream = until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
-    assert_eq!(kinds(&stream), SCRIPTED_START_KINDS);
+    assert_eq!(kinds_with_one_clients_line(&stream), SCRIPTED_START_KINDS);
 
     client.send(
         &json!({"id": "c_cred", "session_id": id, "command": "credential", "args": {"label": "x"}})
@@ -635,11 +656,12 @@ fn the_credential_command_on_a_scripted_session_is_rejected() {
         (line["kind"] == "command_accepted" || line["kind"] == "command_rejected")
             && line["payload"]["command_id"] == "c_cred"
     });
-    // `session_status` is an observer-thread line pinned nowhere (as
-    // `kinds` filters it): drop it, then exactly the reply remains.
+    // `session_status` is an observer-thread line, and `attention` derives
+    // from it; neither is pinned (as `kinds` filters them): drop them, then
+    // exactly the reply remains.
     let rejected: Vec<Value> = waited
         .into_iter()
-        .filter(|line| line["kind"] != "session_status")
+        .filter(|line| line["kind"] != "session_status" && line["kind"] != "attention")
         .collect();
     assert_eq!(rejected.len(), 1, "{rejected:?}");
     assert_eq!(rejected[0]["kind"], "command_rejected", "{rejected:?}");
@@ -656,7 +678,7 @@ fn the_credential_command_on_a_scripted_session_is_rejected() {
     let mut expected: Vec<&str> = SCRIPTED_START_KINDS.to_vec();
     expected.push("command_rejected");
     expected.extend(["command_accepted", "fiber_exited"]);
-    assert_eq!(kinds(&stream), expected);
+    assert_eq!(kinds_with_one_clients_line(&stream), expected);
 
     guard.wait_gone();
     drop(client);
@@ -702,7 +724,7 @@ fn a_live_scripted_resume_with_a_label_is_rejected() {
     let stream = until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
-    assert_eq!(kinds(&stream), SCRIPTED_START_KINDS);
+    assert_eq!(kinds_with_one_clients_line(&stream), SCRIPTED_START_KINDS);
 
     let run = fiber(&setup, &["ask", "--resume", &id, "--credential", "x", "hi"]);
     assert_eq!(run.code, Some(1), "{}", run.stderr);
