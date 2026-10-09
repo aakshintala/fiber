@@ -49,7 +49,10 @@ fn declared_providers() -> Vec<(String, String)> {
             let text = std::fs::read_to_string(&file).expect("provider file reads");
             let data: serde_json::Value =
                 serde_json::from_str(&text).expect("provider file parses");
-            let name = data["name"].as_str().expect("provider file names itself");
+            let name = data
+                .get("name")
+                .and_then(|name| name.as_str())
+                .expect("provider file names itself");
             assert_eq!(name, stem, "{}", file.display());
             pairs.push((name.to_owned(), package.clone()));
         }
@@ -74,7 +77,9 @@ fn every_declared_provider_names_its_package() {
                 provider: name.clone(),
             }
             .to_string(),
-            format!("The provider `{name}` is not installed. Run `fiber extension install {package}`.")
+            format!(
+                "The provider `{name}` is not installed. Run `fiber extension install {package}`."
+            )
         );
         assert_eq!(
             config::full_name(package),
