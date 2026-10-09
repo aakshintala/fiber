@@ -125,17 +125,12 @@ fn refreshed(
         .map(|(_, provider)| Arc::clone(provider))
         .collect();
     for (name, handle) in extensions::refresh_lists(&wanted, providers, config, max_age) {
-        let extension = loaded
-            .lua_providers()
-            .iter()
-            .find(|(_, provider)| provider.name() == name)
-            .map(|(extension, _)| extension.as_str())
-            .unwrap_or(&name);
         match handle.join() {
             Ok(Ok(models)) => {
                 let mut models: Vec<ModelData> = models;
+                // The catalogue exposes text, not notice extension metadata.
                 notices.extend(
-                    extensions::leave_out_invalid(&name, extension, &mut models)
+                    extensions::leave_out_invalid(&name, &name, &mut models)
                         .into_iter()
                         .map(|notice| notice.message),
                 );

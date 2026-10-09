@@ -499,8 +499,8 @@ fn clicks_select_rows_chips_and_buttons() {
     assert_eq!(open.selected, 0);
     assert_eq!(open.chips.first().copied().flatten(), Some(1));
     assert!(open.touched.first().copied().unwrap_or(false));
-    // Past the last chip, a click only selects.
-    picker.click_cell(2, 9);
+    // The first cell after the last chip only selects the row.
+    picker.click_cell(2, 4);
     let open = picker.open.as_ref().unwrap();
     assert_eq!(open.selected, 0);
     assert_eq!(open.chips.first().copied().flatten(), Some(1));
@@ -513,4 +513,39 @@ fn clicks_select_rows_chips_and_buttons() {
     // A row past the frame selects nothing.
     picker.click_cell(40, 0);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    // A model row is a selection stop.
+    picker.select_frame_row(5);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(2));
+}
+
+#[test]
+fn the_first_chip_target_follows_the_roles_cell() {
+    let mut model = entry("acme/m1", &["low", "high"], None, None);
+    model.roles.push("review".to_owned());
+    let mut picker = ModelPicker {
+        catalogue: Catalogue {
+            models: vec![model],
+            notices: Vec::new(),
+        },
+        ..ModelPicker::default()
+    };
+    picker.open(Mode::Choose, None);
+
+    let frame = picker.frame(24, None).unwrap();
+    assert_eq!(frame.rows[2][2].1, Some(crate::swapped::Spot::Cell(2, 2)));
+}
+
+#[test]
+fn each_chip_target_advances_one_cell() {
+    let mut picker = ModelPicker {
+        catalogue: Catalogue {
+            models: vec![entry("acme/m1", &["low", "high"], None, None)],
+            notices: Vec::new(),
+        },
+        ..ModelPicker::default()
+    };
+    picker.open(Mode::Choose, None);
+
+    let frame = picker.frame(24, None).unwrap();
+    assert_eq!(frame.rows[2][2].1, Some(crate::swapped::Spot::Cell(2, 2)));
 }

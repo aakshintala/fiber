@@ -111,6 +111,10 @@ fn is_cooked(termios: &rustix::termios::Termios) -> bool {
 /// Reads until `marker` appears with one named deadline, returning
 /// everything up to and including it.
 pub(super) fn read_until(main: &File, marker: &[u8], what: &str) -> Vec<u8> {
+    read_until_with_timeout(main, marker, what, DEADLINE)
+}
+
+fn read_until_with_timeout(main: &File, marker: &[u8], what: &str, timeout: Duration) -> Vec<u8> {
     let mut dup = main.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
     let marker = marker.to_vec();
     let (done, finished) = mpsc::channel();
@@ -138,10 +142,52 @@ pub(super) fn read_until(main: &File, marker: &[u8], what: &str) -> Vec<u8> {
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    match finished.recv_timeout(DEADLINE) {
+    match finished.recv_timeout(timeout) {
         Ok(buf) => buf,
-        Err(_) => panic!("waited {DEADLINE:?} for {what}"),
+        Err(_) => panic!("waited {timeout:?} for {what}"),
     }
+}
+
+/// Watches `main` without stopping: sends the bytes through each marker,
+/// then keeps reading and discarding so the terminal's output cannot fill.
+fn watch(main: &File, markers: Vec<&'static [u8]>) -> Receiver<Vec<u8>> {
+    let mut dup = main.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-watch".to_owned())
+        .spawn(move || {
+            let mut buf = Vec::new();
+            let mut at = 0usize;
+            let mut byte = [0u8; 1];
+            while at < markers.len() {
+                match dup.read(&mut byte) {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {
+                        buf.push(byte[0]);
+                        let marker = markers[at];
+                        if buf.len() >= marker.len()
+                            && buf.get(buf.len() - marker.len()..) == Some(marker)
+                        {
+                            let chunk = std::mem::take(&mut buf);
+                            if done.send(chunk).is_err() {
+                                break;
+                            }
+                            at += 1;
+                        }
+                    }
+                }
+            }
+            let mut discard = [0u8; 4096];
+            while dup.read(&mut discard).is_ok_and(|read| read > 0) {}
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    finished
+}
+
+fn watched_with_timeout(frames: &Receiver<Vec<u8>>, what: &str, timeout: Duration) -> Vec<u8> {
+    frames
+        .recv_timeout(timeout)
+        .unwrap_or_else(|err| panic!("waited {timeout:?} for {what}: {err}"))
 }
 
 /// Every byte the backend wrote, shared with the test.
@@ -1889,6 +1935,9 @@ fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
 #[test]
 fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
     let mut pair = open();
+    const START: &[u8] =
+        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+    let frames = watch(&pair.main, vec![START, b"shortcuts", b"the lists are in"]);
     let slave = pair
         .slave
         .try_clone()
@@ -1929,10 +1978,14 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    first_frame(&pair);
+    assert_eq!(
+        watched_with_timeout(&frames, "terminal start", DEADLINE),
+        START
+    );
+    watched_with_timeout(&frames, "the first frame", DEADLINE);
     // Asked after the first frame, the cached read answers: its notice
     // draws, so the catalogue it came with is held.
-    read_until(&pair.main, b"the lists are in", "the cached read's notice");
+    watched_with_timeout(&frames, "the cached read's notice", Duration::from_secs(2));
     assert_eq!(*seen.lock().unwrap(), [crate::Refresh::Cached]);
     pair.main
         .write_all(&[0x03, 0x03])

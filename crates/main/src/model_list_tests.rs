@@ -557,6 +557,35 @@ fn a_provider_with_a_data_file_is_not_listed_twice() {
 }
 
 #[test]
+fn a_held_providers_cached_invalid_model_is_not_reported_twice() {
+    let setup = Setup::new("fiber-model-list-cached-invalid");
+    setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
+    config::write_model_cache(
+        &setup.home(),
+        "acme",
+        &json!([{
+            "id": "m1",
+            "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1",
+            "context_window": 0,
+        }]),
+    )
+    .unwrap();
+    let called = Cell::new(false);
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        &unloaded(&called),
+    )
+    .unwrap();
+    assert!(catalogue.models.is_empty());
+    assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
+    assert!(catalogue.notices[0].contains("acme/m1"));
+    assert!(catalogue.notices[0].contains("context_window"));
+}
+
+#[test]
 fn the_scripted_provider_is_never_listed() {
     let setup = Setup::new("fiber-model-list-scripted");
     setup.write_cache("scripted", &["m1"]);
