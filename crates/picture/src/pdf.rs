@@ -154,7 +154,8 @@ pub(crate) fn run(
 /// only, `1 <= first <= last`. Anything else is a usage error.
 fn parse_what(what: &str) -> Option<What> {
     if let Some(rest) = what.strip_prefix("whole=") {
-        if rest.is_empty() || !rest.bytes().all(|byte| byte.is_ascii_digit()) {
+        // An empty `rest` fails the parse below.
+        if !rest.bytes().all(|byte| byte.is_ascii_digit()) {
             return None;
         }
         let max: u32 = rest.parse().ok()?;
@@ -162,9 +163,8 @@ fn parse_what(what: &str) -> Option<What> {
     }
     if let Some(rest) = what.strip_prefix("pages=") {
         let (first_text, last_text) = rest.split_once('-')?;
-        if first_text.is_empty()
-            || last_text.is_empty()
-            || !first_text.bytes().all(|byte| byte.is_ascii_digit())
+        // An empty half fails the parse below.
+        if !first_text.bytes().all(|byte| byte.is_ascii_digit())
             || !last_text.bytes().all(|byte| byte.is_ascii_digit())
         {
             return None;

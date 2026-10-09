@@ -134,6 +134,9 @@ fn page_ranges_refuse_anything_else() {
         "a",
         "99999999999",
         "4294967296-4294967296",
+        "+1-3",
+        "1-+3",
+        "+3",
     ] {
         let error = page_range(&pages_argument(text)).unwrap_err();
         if text == "1-21" {

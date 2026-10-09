@@ -1,8 +1,31 @@
 //! Tests beside [`super::run`]: the PDF mode's counting, cutting and exit codes.
 
 use std::ffi::OsString;
+use std::io::Write;
 
-use super::run;
+use super::{What, parse_what, run};
+
+/// A stdout whose writes or flushes fail on request.
+struct Stream {
+    fail_write: bool,
+    fail_flush: bool,
+}
+
+impl Write for Stream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.fail_write {
+            return Err(std::io::Error::other("write refused"));
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.fail_flush {
+            return Err(std::io::Error::other("flush refused"));
+        }
+        Ok(())
+    }
+}
 
 fn pdf_bytes(pages: usize) -> Vec<u8> {
     use lopdf::content::{Content, Operation};
@@ -289,4 +312,77 @@ fn the_fixture_pdf_counts_two_pages() {
     .unwrap();
     let document = lopdf::Document::load_mem(&bytes).unwrap();
     assert_eq!(document.get_pages().len(), 2);
+}
+
+#[test]
+fn a_stdout_that_refuses_the_line_exits_3_for_whole_and_pages() {
+    let dir = fakes::TempDir::new("fiber-pdf-stdout");
+    let input = write_input(dir.path(), "in.pdf", &pdf_bytes(5));
+    for (stem, what, fail_write, fail_flush) in [
+        ("p_w_write", "whole=10", true, false),
+        ("p_w_flush", "whole=10", false, true),
+        ("p_r_write", "pages=2-3", true, false),
+        ("p_r_flush", "pages=2-3", false, true),
+    ] {
+        let arguments = vec![
+            OsString::from("pdf"),
+            input.clone().into_os_string(),
+            dir.path().as_os_str().to_owned(),
+            OsString::from(stem),
+            OsString::from(what),
+        ];
+        let mut stdout = Stream {
+            fail_write,
+            fail_flush,
+        };
+        let mut stderr = Vec::new();
+        let code = run(&arguments, &mut stdout, &mut stderr);
+        assert_eq!(code, 3, "{what} write={fail_write} flush={fail_flush}");
+    }
+}
+
+#[test]
+fn a_cut_counts_its_pages_from_first_to_last() {
+    let dir = fakes::TempDir::new("fiber-pdf-count");
+    let input = write_input(dir.path(), "in.pdf", &pdf_bytes(5));
+    for (n, (what, expected)) in [("pages=1-3", 3), ("pages=2-5", 4)].into_iter().enumerate() {
+        let arguments = vec![
+            OsString::from("pdf"),
+            input.clone().into_os_string(),
+            dir.path().as_os_str().to_owned(),
+            OsString::from(format!("p_count{n}")),
+            OsString::from(what),
+        ];
+        let (code, stdout, stderr) = child(&arguments);
+        assert_eq!((code, stderr.as_str()), (0, ""), "{what}");
+        let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+        assert_eq!(
+            value.get("page_count"),
+            Some(&serde_json::json!(expected)),
+            "{what}"
+        );
+    }
+}
+
+#[test]
+fn what_accepts_a_range_from_page_one_and_refuses_a_sign_or_an_empty_half() {
+    assert_eq!(
+        parse_what("pages=1-1"),
+        Some(What::Pages { first: 1, last: 1 })
+    );
+    assert_eq!(
+        parse_what("pages=1-3"),
+        Some(What::Pages { first: 1, last: 3 })
+    );
+    assert_eq!(parse_what("pages=0-3"), None);
+    for text in [
+        "whole=+3",
+        "pages=+1-3",
+        "pages=1-+3",
+        "pages=-3",
+        "pages=3-",
+        "whole=",
+    ] {
+        assert_eq!(parse_what(text), None, "{text}");
+    }
 }

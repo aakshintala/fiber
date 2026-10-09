@@ -68,9 +68,8 @@ fn parse_range(text: &str) -> Option<PageRange> {
         Some((first, last)) => (first, last),
         None => (text, text),
     };
-    if first_text.is_empty()
-        || last_text.is_empty()
-        || !first_text.bytes().all(|byte| byte.is_ascii_digit())
+    // An empty half fails the parse below.
+    if !first_text.bytes().all(|byte| byte.is_ascii_digit())
         || !last_text.bytes().all(|byte| byte.is_ascii_digit())
     {
         return None;
