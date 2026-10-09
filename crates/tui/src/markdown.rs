@@ -98,6 +98,13 @@ impl Reply {
         rendered
     }
 
+    /// The width the cache holds a render for, if any. Tests only:
+    /// reads the slot without filling it.
+    #[cfg(test)]
+    pub(crate) fn cached_at(&self) -> Option<u16> {
+        self.cache.borrow().as_ref().map(|(width, _)| *width)
+    }
+
     /// The rendered lines at `width`, each code block's header carrying
     /// its copy target, and each with what it adds to its logical line.
     pub(crate) fn rows(&self, width: u16, out: &mut Rows) {
