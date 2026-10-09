@@ -579,6 +579,19 @@ impl App {
             .map_or(&self.screen, |stashed| stashed)
     }
 
+    /// Whether the stashed parent screen waits for its batch's end.
+    /// Tests only: a swapped-in transcript must never sit held, so the
+    /// delegate test reads the hidden screen's hold directly; the shown
+    /// screen alone cannot show it.
+    #[cfg(test)]
+    pub(crate) fn stashed_holding(&self) -> bool {
+        self.items
+            .open
+            .as_ref()
+            .and_then(|open| open.stashed.as_ref())
+            .is_some_and(|stashed| stashed.pages().holding())
+    }
+
     /// The attached session's screen, for folding its lines.
     pub(super) fn attached_screen_mut(&mut self) -> &mut super::screen::Screen {
         if self

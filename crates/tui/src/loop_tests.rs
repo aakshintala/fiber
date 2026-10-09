@@ -1368,8 +1368,8 @@ fn delegate_spot() -> (Loop<TestBackend>, (u16, u16)) {
 
 /// A key batch never holds: opening a delegate swaps the shown screen,
 /// and a hold would stick to the stashed parent past the batch's end.
-/// The click opens the delegate, and the quit ends the run: nothing is
-/// held after.
+/// The click opens the delegate, and the quit ends the run: neither
+/// the shown nor the stashed screen is held after.
 #[test]
 fn a_key_that_opens_a_delegate_leaves_nothing_held() {
     let (mut lp, (col, row)) = delegate_spot();
@@ -1392,6 +1392,7 @@ fn a_key_that_opens_a_delegate_leaves_nothing_held() {
     assert_eq!(code, 0);
     assert!(lp.app.item_open());
     assert!(!lp.app.pages().holding());
+    assert!(!lp.app.stashed_holding());
 }
 
 /// Quitting ends the run through the batch's end, so a hold never
