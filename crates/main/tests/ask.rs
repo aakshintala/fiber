@@ -1010,7 +1010,7 @@ Sessions:
 
 Fiber itself:
   approve [--yes]                           Show what this repository ships and approve it
-  login [<name>] [--as <label>]             Store a provider's key or an extension's secret
+  login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
   completion <shell>                        Print a completion script for bash, zsh or fish
   help [<command>]                          Print this menu, or a command's help
