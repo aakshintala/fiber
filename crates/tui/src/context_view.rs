@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use contract::Envelope;
 use log::Rate;
 
-use crate::swapped::{Frame, List, about};
+use crate::swapped::{Frame, Ink, List, Spot, about};
 
 /// The number of largest tool results shown.
 pub(crate) const LARGEST_SHOWN: usize = 5;
@@ -231,11 +231,14 @@ pub(crate) fn frame(
         } else {
             u128::from(sized.total) * 100 / u128::from(sized.window)
         };
-        rows.push(row(format!(
-            "context  {} of {} tokens · {percent}%",
-            about(sized.total),
-            about(sized.window)
-        )));
+        rows.push(row(
+            format!(
+                "context  {} of {} tokens · {percent}%",
+                about(sized.total),
+                about(sized.window)
+            ),
+            Ink::Plain,
+        ));
         let breakdown = categories(fold, rate, sized.total);
         let fill = breakdown.unwrap_or([
             (Category::SystemPrompt, 0),
@@ -243,20 +246,21 @@ pub(crate) fn frame(
             (Category::ToolResults, 0),
             (Category::Messages, sized.total),
         ]);
-        rows.push(row(bar(
-            &fill,
-            sized.window,
-            sized.trigger,
-            usize::from(width),
-        )));
+        rows.push(row(
+            bar(&fill, sized.window, sized.trigger, usize::from(width)),
+            Ink::Plain,
+        ));
         if breakdown.is_some() {
             for (category, tokens) in fill {
-                rows.push(row(format!(
-                    "{} {}  {} tokens",
-                    glyph(category),
-                    label(category),
-                    about(tokens)
-                )));
+                rows.push(row(
+                    format!(
+                        "{} {}  {} tokens",
+                        glyph(category),
+                        label(category),
+                        about(tokens)
+                    ),
+                    Ink::Plain,
+                ));
             }
             below.push(
                 "Sizes are approximate: bytes at the session's own tokens-per-byte rate."
@@ -266,30 +270,37 @@ pub(crate) fn frame(
             below.push("Breakdown after a request without images.".to_owned());
         }
         if fold.forked {
-            rows.push(row("history before the fork counts under messages"));
+            rows.push(row(
+                "history before the fork counts under messages",
+                Ink::Muted,
+            ));
         }
-        rows.push(row(match sized.trigger {
-            Some(trigger) => format!(
-                "│ handoff at {} tokens: Fiber writes a summary and the work continues in a fresh context",
-                about(trigger)
-            ),
-            None => "automatic handoff off".to_owned(),
-        }));
-        rows.push(row("largest tool results"));
+        rows.push(row(
+            match sized.trigger {
+                Some(trigger) => format!(
+                    "│ handoff at {} tokens: Fiber writes a summary and the work continues in a fresh context",
+                    about(trigger)
+                ),
+                None => "automatic handoff off".to_owned(),
+            },
+            Ink::Muted,
+        ));
+        rows.push(row("largest tool results", Ink::Heading));
         if fold.largest.is_empty() {
-            rows.push(row("  none since the last handoff"));
+            rows.push(row("  none since the last handoff", Ink::Muted));
         } else {
             for result in &fold.largest {
                 let size = rate.tokens(result.bytes).map_or_else(
                     || format!("{} bytes", about(result.bytes)),
                     |tokens| format!("~{} tokens", about(tokens)),
                 );
-                rows.push(row(format!("  {}  {size}", result.tool)));
+                rows.push(row(format!("  {}  {size}", result.tool), Ink::Plain));
             }
         }
     } else {
         rows.push(row(
-            "The context shows after the session's first request.".to_owned()
+            "The context shows after the session's first request.".to_owned(),
+            Ink::Muted,
         ));
     }
     Frame {
@@ -311,8 +322,8 @@ fn label(category: Category) -> &'static str {
     }
 }
 
-fn row(text: impl Into<String>) -> Vec<(String, Option<crate::swapped::Spot>)> {
-    vec![(text.into(), None)]
+fn row(text: impl Into<String>, ink: Ink) -> Vec<(String, Option<Spot>, Ink)> {
+    vec![(text.into(), None, ink)]
 }
 
 fn byte_count(bytes: usize) -> u64 {
