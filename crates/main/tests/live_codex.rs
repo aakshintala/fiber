@@ -24,7 +24,7 @@ fn a_live_codex_turn_replies() {
         return;
     };
     let model = std::env::var("FIBER_LIVE_CODEX_MODEL").unwrap_or("gpt-6-luna".to_owned());
-    let mut child = Command::new(env!("CARGO_BIN_EXE_fiber"))
+    let child = Command::new(env!("CARGO_BIN_EXE_fiber"))
         .args([
             "ask",
             "--model",
