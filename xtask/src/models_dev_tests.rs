@@ -3,6 +3,8 @@
 
 use serde_json::json;
 
+use crate::test_dir::TestDir;
+
 use super::*;
 
 /// A source model that passes every filter, with `extra` merged over the
@@ -42,6 +44,7 @@ fn fixed_package(source: &'static str, protocol: &'static str) -> Package {
         protocol: ProtocolRule::Fixed(protocol),
         base_url: "https://t/v1",
         drop_deprecated: false,
+        drop_protocols: &[],
         skip: &[],
         protocol_overrides: &[],
         every_model: r#"{}"#,
@@ -603,4 +606,102 @@ fn trim_keeps_every_model_and_only_the_fields_read() {
     }
     let twice = trim(&trimmed).unwrap();
     assert_eq!(trimmed, twice);
+}
+
+/// Production `curl`'s argv for `url`: asserting every flag keeps `fetch`
+/// honest, so adding, dropping or reordering one fails both cases below.
+fn assert_curl_argv(url: &str) {
+    let command = curl(url);
+    let argv: Vec<String> = [command.get_program()]
+        .into_iter()
+        .chain(command.get_args())
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(argv, ["curl", "-fsSL", "--max-time", "120", url]);
+}
+
+/// A `file://` URL for `dir` joining `name`, which no test writes.
+fn missing_url(dir: &TestDir, name: &str) -> String {
+    format!("file://{}", dir.path().join(name).display())
+}
+
+#[test]
+fn fetch_reads_a_file_url() {
+    assert_curl_argv("https://models.dev/api.json");
+    let dir = TestDir::new("models-dev-fetch-read");
+    dir.write("catalog.json", "{\"anthropic\":{\"models\":{}}}");
+    let file = dir.path().join("catalog.json");
+    let url = format!("file://{}", file.display());
+    assert_eq!(fetch(&url).unwrap(), std::fs::read(&file).unwrap());
+    // The other half of the contract, so this case also fails when the
+    // exit-status check flips: a missing file is an error, not bytes.
+    let missing = missing_url(&dir, "missing.json");
+    assert!(fetch(&missing).is_err(), "{missing}");
+}
+
+#[test]
+fn fetch_names_a_failed_curl() {
+    assert_curl_argv("https://models.dev/api.json");
+    let dir = TestDir::new("models-dev-fetch-fail");
+    let missing = missing_url(&dir, "missing.json");
+    let error = fetch(&missing).unwrap_err();
+    assert!(error.contains("exit status"), "{error}");
+    assert!(error.contains(&missing), "{error}");
+    // And reading a file still works, so this case also fails when the
+    // argv above changes to flags that cannot read one.
+    dir.write("catalog.json", "{}");
+    let file = dir.path().join("catalog.json");
+    let url = format!("file://{}", file.display());
+    assert_eq!(fetch(&url).unwrap(), std::fs::read(&file).unwrap());
+}
+
+#[test]
+fn zen_leaves_out_google_generative_ai_until_it_is_probed() {
+    let google = || tool_model(json!({"provider": {"npm": "@ai-sdk/google"}}));
+    let other = || tool_model(json!({"provider": {"npm": "@ai-sdk/openai"}}));
+    let zen = PACKAGES
+        .iter()
+        .find(|package| package.path.ends_with("opencode-zen.json"))
+        .unwrap();
+    let (output, left_out) = generate_one(
+        zen,
+        &[
+            ("gemini-3.8-flash", google()),
+            ("gpt-6-luna", other()),
+            ("muse-spark-1.3", other()),
+            ("gpt-6.1-sol", other()),
+        ],
+    );
+    assert!(generated_model(&output, "gemini-3.8-flash").is_none());
+    for id in ["gpt-6-luna", "muse-spark-1.3", "gpt-6.1-sol"] {
+        assert!(generated_model(&output, id).is_some(), "{id}");
+    }
+    assert!(
+        left_out
+            .iter()
+            .any(|line| line.contains("gemini-3.8-flash")),
+        "{left_out:?}"
+    );
+    let go = PACKAGES
+        .iter()
+        .find(|package| package.path.ends_with("opencode-go.json"))
+        .unwrap();
+    let (output, _) = generate_one(
+        go,
+        &[
+            ("gemini-3.8-flash", google()),
+            ("muse-spark-1.3-contributor", other()),
+            (
+                "minimax-m2.7",
+                tool_model(json!({"provider": {"npm": "@ai-sdk/anthropic"}})),
+            ),
+        ],
+    );
+    assert!(generated_model(&output, "gemini-3.8-flash").is_some());
+    let gemini = PACKAGES
+        .iter()
+        .find(|package| package.path.ends_with("providers/gemini.json"))
+        .unwrap();
+    let (output, _) = generate_one(gemini, &[("gemini-3.8-flash", tool_model(json!({})))]);
+    assert!(generated_model(&output, "gemini-3.8-flash").is_some());
 }
