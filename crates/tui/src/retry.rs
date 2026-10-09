@@ -80,11 +80,20 @@ impl Retry {
     /// watch's clone fails, so the caller reports instead of starting a
     /// read no quit can end. The watch ends at [`Retry::untrack`].
     pub(crate) fn track(&self, stream: &UnixStream) -> std::io::Result<bool> {
+        self.track_with(|| stream.try_clone())
+    }
+
+    /// Watches the stream `clone` returns, so tests inject the clone
+    /// failure without exhausting descriptors.
+    pub(crate) fn track_with(
+        &self,
+        clone: impl FnOnce() -> std::io::Result<UnixStream>,
+    ) -> std::io::Result<bool> {
         let mut gate = self.lock();
         if gate.quit {
             return Ok(false);
         }
-        gate.watched = Some(stream.try_clone()?);
+        gate.watched = Some(clone()?);
         Ok(true)
     }
 

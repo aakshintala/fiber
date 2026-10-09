@@ -134,26 +134,14 @@ fn track_succeeds_until_quit_then_refuses() {
 #[test]
 fn track_reports_the_clone_failure_and_watches_nothing() {
     let (clock, retry) = permit();
-    let (ours, _theirs) = std::os::unix::net::UnixStream::pair().expect("pair");
-    // Exhaust descriptors so the next clone fails as it would under
-    // real descriptor exhaustion. The loop is bounded: each pass holds
-    // one more file while each probe clone closes again. Falling off
-    // the end means the clone kept succeeding, and the match below
-    // fails loudly instead of testing nothing.
-    let mut held = Vec::new();
-    for _ in 0..100_000 {
-        if ours.try_clone().is_err() {
-            break;
-        }
-        held.push(std::fs::File::open("/dev/null").expect("open"));
-    }
-    let error = match retry.track(&ours) {
+    // Inject the clone failure: exhausting descriptors would depend on
+    // the fd limit, which exceeds the loop bound on some hosts.
+    let error = match retry.track_with(|| Err(std::io::Error::other("clone failed"))) {
         Err(error) => error,
         Ok(_) => panic!("track reports the clone failure"),
     };
     assert!(!error.to_string().is_empty());
     assert!(retry.lock().watched.is_none());
-    drop(held);
     // The failure wedges nothing: quit still ends a wait, within DEADLINE.
     let rx = waiting(&clock, &retry);
     retry.quit();
