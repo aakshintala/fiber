@@ -10,7 +10,7 @@
 
 use std::ffi::OsString;
 use std::os::unix::process::CommandExt as _;
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
 use std::time::{Duration, Instant};
 
@@ -282,8 +282,7 @@ fn drain(read: &std::io::PipeReader) {
 /// Reads standard output while it has bytes: end-of-file, or any read
 /// error but an interrupted or empty read, ends the output. Stops past
 /// `cap`, so the draft never holds more than the cap plus one byte.
-fn read_stdout(stdout: &mut ChildStdout, out: &mut Vec<u8>, eof: &mut bool, cap: usize) {
-    use std::io::Read as _;
+fn read_stdout(stdout: &mut impl std::io::Read, out: &mut Vec<u8>, eof: &mut bool, cap: usize) {
     let mut buf = [0u8; 8192];
     while out.len() <= cap {
         match stdout.read(&mut buf) {

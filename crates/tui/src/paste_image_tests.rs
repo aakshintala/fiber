@@ -919,6 +919,36 @@ fn drain_empties_the_wake_pipe() {
     }
 }
 
+struct InterruptedOnce {
+    reads: usize,
+}
+
+impl std::io::Read for InterruptedOnce {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.reads += 1;
+        match self.reads {
+            1 => Err(std::io::Error::from(std::io::ErrorKind::Interrupted)),
+            2 => {
+                let bytes = b"hello";
+                buf[..bytes.len()].copy_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            _ => Ok(0),
+        }
+    }
+}
+
+#[test]
+fn read_stdout_retries_interrupted_until_eof() {
+    let mut stdout = InterruptedOnce { reads: 0 };
+    let mut out = Vec::new();
+    let mut eof = false;
+    read_stdout(&mut stdout, &mut out, &mut eof, 1024);
+    assert_eq!(out, b"hello", "data after Interrupted must be read");
+    assert!(eof, "Ok(0) must set eof");
+    assert_eq!(stdout.reads, 3, "Interrupted, data and Ok(0) are read");
+}
+
 #[test]
 fn read_stdout_waits_for_data_without_eof() {
     use std::io::Write as _;
