@@ -45,7 +45,7 @@ fn row(frame: &crate::swapped::Frame, at: usize) -> String {
         .get(at)
         .into_iter()
         .flatten()
-        .map(|(text, _)| text.as_str())
+        .map(|(text, _, _)| text.as_str())
         .collect()
 }
 
