@@ -3,6 +3,7 @@ source: crates/tui/src/view/panel_tests.rs
 expression: "super::super::text(&draw_panel(&app))"
 ---
 
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
   directory  …sers/you/work/fiber
   model  test/model · thinking hi
   context  50% of 1.0k tokens
@@ -12,3 +13,4 @@ expression: "super::super::text(&draw_panel(&app))"
   continues in a fresh context
   tokens in / out  500 / 0
   cache hits  0%
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

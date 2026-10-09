@@ -9,6 +9,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use contract::ErrorCode;
+use contract::Secret;
 
 use crate::ThemeSetting;
 
@@ -85,6 +86,74 @@ pub struct Saved {
     pub file: PathBuf,
     /// Warnings, one line each.
     pub warnings: Vec<String>,
+}
+
+/// Which rules file (`docs/configuration.md`, "Standing rules").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RulesScope {
+    /// `rules` at the top of Fiber home.
+    Global,
+    /// `projects/<key>/rules` in Fiber home.
+    Project,
+}
+
+/// One line of a rules file: its physical number from 1, its text, its
+/// rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleRow {
+    /// The line's physical number, counted from 1 over every line.
+    pub line: usize,
+    /// The line's text, without its line ending.
+    pub text: String,
+    /// The rule the line parses to.
+    pub rule: contract::Rule,
+}
+
+/// One rules file: its path, and its rules or why it cannot be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RulesSection {
+    /// The file listed.
+    pub file: PathBuf,
+    /// The file's rules, in order; a missing file holds none.
+    pub rows: Result<Vec<RuleRow>, String>,
+}
+
+/// How a `/login` row logs in (`docs/tui.md`, "Logging in").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginKind {
+    /// A provider whose key goes in the hidden field.
+    Key,
+    /// A provider that logs in through the browser.
+    Browser,
+    /// A secret an installed extension declares.
+    Secret,
+}
+
+/// One `/login` row: a provider or a declared secret, by name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginTarget {
+    /// The provider or secret's name.
+    pub name: String,
+    /// How the row logs in.
+    pub kind: LoginKind,
+}
+
+/// What a login stored: the file under Fiber home, and whether it replaced one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stored {
+    /// The file under Fiber home, such as `credentials/acme/default`.
+    pub path: String,
+    /// Whether it replaced a stored secret.
+    pub replaced: bool,
+}
+
+/// What a revoke did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Revoked {
+    /// The line was deleted.
+    Removed,
+    /// The line had moved, changed or gone: nothing was written.
+    Stale,
 }
 
 /// Why a read or a write failed: the failure's code and its message,
@@ -164,6 +233,36 @@ pub trait Configure: Send + Sync {
 
     /// Fiber home's `config.json`.
     fn global_file(&self) -> PathBuf;
+
+    // `/rules`.
+
+    /// The global and the project's rules files, for `workspace`'s
+    /// project.
+    fn rules(&self, workspace: &Path) -> Result<(RulesSection, RulesSection), ConfigureError>;
+
+    /// Deletes line `line` of `scope`'s file when it still reads `text`.
+    fn revoke(
+        &self,
+        workspace: &Path,
+        scope: RulesScope,
+        line: usize,
+        text: &str,
+    ) -> Result<Revoked, ConfigureError>;
+
+    // `/login`.
+
+    /// The installed providers by name, then the secrets installed
+    /// extensions declare, as `fiber login`'s menu lists them.
+    fn login_targets(&self) -> Result<Vec<LoginTarget>, ConfigureError>;
+
+    /// Stores `key` for provider or secret `name`, under `label` for a
+    /// provider, through the same steps as `fiber login`.
+    fn store_key(
+        &self,
+        name: &str,
+        label: Option<&str>,
+        key: Secret,
+    ) -> Result<Stored, ConfigureError>;
 
     // The `tui.theme` row.
 

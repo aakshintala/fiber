@@ -4,6 +4,7 @@
 //! view is about, and lists the themes in Fiber home's `themes/`. The
 //! terminal loads configuration with no `-c`, so no row comes from one.
 
+mod login;
 mod tools;
 
 use std::path::{Path, PathBuf};
@@ -11,8 +12,8 @@ use std::path::{Path, PathBuf};
 use config::{Config, SettingValue, Source, Sources};
 use contract::shapes::Failure;
 use tui::{
-    ConfigureError, Layer, Saved, SettingRow, Shown, SwitchScope, ToolGroup, ToolSwitches,
-    WriteScope,
+    ConfigureError, Layer, LoginTarget, Revoked, RuleRow, RulesScope, RulesSection, Saved,
+    SettingRow, Shown, Stored, SwitchScope, ToolGroup, ToolSwitches, WriteScope,
 };
 
 /// The seam over Fiber home.
@@ -39,7 +40,15 @@ impl Seam {
     }
 }
 
-/// A `config` failure as the views show it.
+/// A failure as the views show it.
+fn from_failure(failure: Failure) -> ConfigureError {
+    ConfigureError {
+        code: failure.code,
+        message: failure.message,
+    }
+}
+
+/// A configuration failure as the views show it.
 fn from_config(error: config::ConfigError) -> ConfigureError {
     ConfigureError {
         code: error.code(),
@@ -47,11 +56,31 @@ fn from_config(error: config::ConfigError) -> ConfigureError {
     }
 }
 
-/// A failure as the views show it.
-fn from_failure(failure: Failure) -> ConfigureError {
-    ConfigureError {
-        code: failure.code,
-        message: failure.message,
+/// The terminal's scope for `config`'s.
+fn scope_to(scope: RulesScope) -> config::RulesScope {
+    match scope {
+        RulesScope::Global => config::RulesScope::Global,
+        RulesScope::Project => config::RulesScope::Project,
+    }
+}
+
+/// One rules file's rows for the view.
+fn section(listing: config::RulesListing) -> RulesSection {
+    RulesSection {
+        file: listing.file,
+        rows: listing
+            .lines
+            .map(|lines| {
+                lines
+                    .into_iter()
+                    .map(|line| RuleRow {
+                        line: line.line,
+                        text: line.text,
+                        rule: line.rule,
+                    })
+                    .collect()
+            })
+            .map_err(|error| error.to_string()),
     }
 }
 
@@ -169,6 +198,44 @@ impl tui::Configure for Seam {
 
     fn global_file(&self) -> PathBuf {
         self.home.join("config.json")
+    }
+
+    fn rules(&self, workspace: &Path) -> Result<(RulesSection, RulesSection), ConfigureError> {
+        let (_, project) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
+        let (global, project) = config::list_rules(&self.home, &project);
+        Ok((section(global), section(project)))
+    }
+
+    fn revoke(
+        &self,
+        workspace: &Path,
+        scope: RulesScope,
+        line: usize,
+        text: &str,
+    ) -> Result<Revoked, ConfigureError> {
+        let (_, project) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
+        let removed = config::remove_rule(&self.home, &project, scope_to(scope), line, text)
+            .map_err(from_config)?;
+        Ok(if removed {
+            Revoked::Removed
+        } else {
+            Revoked::Stale
+        })
+    }
+
+    // `/login`.
+
+    fn login_targets(&self) -> Result<Vec<LoginTarget>, ConfigureError> {
+        login::targets(&self.home)
+    }
+
+    fn store_key(
+        &self,
+        name: &str,
+        label: Option<&str>,
+        key: contract::Secret,
+    ) -> Result<Stored, ConfigureError> {
+        login::store(&self.home, name, label, key)
     }
 
     fn themes(&self) -> Vec<String> {

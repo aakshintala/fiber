@@ -174,7 +174,7 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
         Role::Surface
     };
     // debt: a waiting card holds still; its 10-second pulse comes with the working line's tick; upgrade trigger: #686 lands.
-    let stripe = Span::styled("▌", style(tone(row)));
+    let stripe = crate::surface::stripe_cell(tone(row), tint, false);
     let texts = [
         first_row(app, row, text),
         vec![Span::raw(format::cut(&title(row), text))],
@@ -182,7 +182,7 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
         usage(row, text, width >= BAR_FROM),
     ];
     out.push(RailRow {
-        line: Line::styled("▄".repeat(card_w), style(tint)),
+        line: crate::surface::edge_row(card_w, tint, true),
         tint: None,
         spots: Vec::new(),
         start: Some(row.key),
@@ -204,7 +204,7 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
         });
     }
     out.push(RailRow {
-        line: Line::styled("▀".repeat(card_w), style(tint)),
+        line: crate::surface::edge_row(card_w, tint, false),
         tint: None,
         spots: Vec::new(),
         start: None,

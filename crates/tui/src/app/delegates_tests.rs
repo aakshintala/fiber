@@ -148,8 +148,9 @@ fn the_wheel_over_another_card_scrolls_the_panel_not_the_card() {
     let mut app = panel_app(&["delegates"]);
     fold_delegates(&mut app, 4);
     big_widget(&mut app);
-    // The card's six rows, a blank row, then the widget's title row.
-    let last = first_row(&app).saturating_add(5);
+    // The card's eight rows with its edges, a blank row, then the
+    // widget's title row.
+    let last = first_row(&app).saturating_add(7);
     wheel(&mut app, false, last);
     assert_eq!(app.panel_state().delegate_scroll(), 1);
     wheel(&mut app, false, last.saturating_add(1));
@@ -184,8 +185,9 @@ fn the_wheel_finds_the_card_with_the_panel_scrolled() {
     let skip = app.panel_state().scroll();
     assert!(skip > 0);
     assert_eq!(app.panel_state().delegate_scroll(), 0);
-    // The widget's 61 rows and a blank row come before the card.
-    let card = first.saturating_add(u16::try_from(62 - skip).unwrap_or(u16::MAX));
+    // The widget's 61 text rows with its edges, and a blank row, come
+    // before the card.
+    let card = first.saturating_add(u16::try_from(64 - skip).unwrap_or(u16::MAX));
     wheel(&mut app, false, card.saturating_sub(1));
     assert_eq!(app.panel_state().delegate_scroll(), 0);
     assert_eq!(app.panel_state().scroll(), skip);

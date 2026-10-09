@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/home_view_tests.rs
-assertion_line: 112
 expression: "screen(&app, 80, 24)"
 ---
 /home  Goes home.  command
@@ -8,9 +7,9 @@ expression: "screen(&app, 80, 24)"
 /resume  Opens home at the session list.  command
 /tools  Opens the tools view.  command▀█  █▀▀▀▀ █▀▀▀▄
 /panel  Shows or hides the panel.  command████  █▄▄▄▀
-/settings  Opens the configuration keys.  command ▀▄
-/handoff [instructions]  Starts a handoff.  command █ 0.0.1
-/name <text>  Names the session.  command
+/rules  Opens the standing rules.  command█▀▀▀▀ █ ▀▄
+/settings  Opens the configuration keys.  command   █ 0.0.1
+/handoff [instructions]  Starts a handoff.  command
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 > /
 

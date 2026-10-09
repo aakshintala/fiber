@@ -3,5 +3,7 @@ source: crates/tui/src/view/panel/delegates_tests.rs
 expression: "crate::view::text(&buf)"
 ---
 
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
   ● fiber  anthropic/claude-o
     review the parser and the
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

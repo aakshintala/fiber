@@ -9,17 +9,18 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 /// What `setup` writes with hover on: the alternate screen, the title
-/// pushed, bracketed paste, mouse modes 1000, 1002, 1006 and 1003, then the two queries.
+/// pushed, bracketed paste, mouse modes 1000, 1002, 1006 and 1003, the
+/// appearance queries, then the two detection queries.
 const START_HOVER: &[u8] =
-    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
 /// What `setup` writes with hover off: no mode 1003.
 const START_NO_HOVER: &[u8] =
-    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?u\x1b[c";
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
 /// What `restore` writes: kitty's flags popped, bracketed paste and every
-/// mouse mode off, the title popped, the alternate screen left, the
-/// cursor shown.
+/// mouse mode off, theme reporting off, the title popped, the alternate
+/// screen left, the cursor shown.
 const END: &[u8] =
-    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -157,11 +158,12 @@ fn suspend_restores_and_resume_sets_up_again_without_hover_or_kitty() {
     super::resume(false, false).unwrap_or_else(|err| panic!("resume: {err}"));
     let raw = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(!is_cooked(&raw));
-    // No 1003 and no kitty push: the next bytes are the test's own.
+    // No 1003 and no kitty push, then the appearance queries: the next
+    // bytes are the test's own.
     (&pair.slave)
         .write_all(b"mark")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let expected = [RESUME_NO_HOVER, b"mark"].concat();
+    let expected = [RESUME_NO_HOVER, crate::appearance::QUERIES, b"mark"].concat();
     assert_eq!(
         read_exact(&pair.main, expected.len(), "the resume bytes"),
         expected
@@ -179,7 +181,12 @@ fn resume_turns_hover_on_and_pushes_kitty_when_they_were() {
     super::suspend().unwrap_or_else(|err| panic!("suspend: {err}"));
     read_exact(&pair.main, END.len(), "the suspend bytes");
     super::resume(true, true).unwrap_or_else(|err| panic!("resume: {err}"));
-    let expected = [RESUME_NO_HOVER, b"\x1b[?1003h\x1b[>1u"].concat();
+    let expected = [
+        RESUME_NO_HOVER,
+        b"\x1b[?1003h\x1b[>1u",
+        crate::appearance::QUERIES,
+    ]
+    .concat();
     assert_eq!(
         read_exact(&pair.main, expected.len(), "the resume bytes"),
         expected
@@ -206,6 +213,28 @@ fn restore_after_a_suspend_writes_nothing_more() {
 #[test]
 fn resume_before_setup_fails() {
     assert!(super::resume(false, false).is_err());
+}
+
+#[test]
+fn the_restore_turns_scheme_reports_off_before_the_title_pops() {
+    let off = b"\x1b[?2031l";
+    let pop = b"\x1b[23;2t";
+    let Some(at) = super::RESTORE
+        .windows(off.len())
+        .position(|window| window == off)
+    else {
+        panic!("the restore turns scheme reports off");
+    };
+    let Some(title) = super::RESTORE
+        .windows(pop.len())
+        .position(|window| window == pop)
+    else {
+        panic!("the restore pops the title");
+    };
+    assert!(
+        at + off.len() <= title,
+        "scheme reports off before the title pops"
+    );
 }
 
 #[test]

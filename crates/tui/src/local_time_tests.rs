@@ -5,7 +5,7 @@ use jiff::tz::TimeZone;
 use ratatui::layout::Alignment;
 use ratatui::style::Modifier;
 
-use super::{new_york, time_of_day};
+use super::{new_york, time_of_day, utc_minute};
 
 #[test]
 fn spring_forward_skips_the_second_hour() {
@@ -48,6 +48,21 @@ fn out_of_range_instants_have_no_time() {
 }
 
 #[test]
+fn utc_minute_formats_ms_as_a_utc_minute() {
+    assert_eq!(utc_minute(0), Some("1970-01-01 00:00 UTC".to_owned()));
+    // 2024-02-29T23:59:59.999Z: the leap day, truncated to the minute.
+    assert_eq!(
+        utc_minute(1709251199999),
+        Some("2024-02-29 23:59 UTC".to_owned())
+    );
+    let latest = u64::try_from(jiff::Timestamp::MAX.as_millisecond()).unwrap_or(u64::MAX);
+    assert_eq!(utc_minute(latest), Some("9999-12-30 22:00 UTC".to_owned()));
+    assert_eq!(utc_minute(latest.saturating_add(1)), None);
+    assert_eq!(utc_minute(latest.saturating_add(2)), None);
+    assert_eq!(utc_minute(u64::MAX), None);
+}
+
+#[test]
 fn the_time_row_is_a_dim_right_aligned_row_with_no_target() {
     use crate::rows::Rows;
     use crate::turn::Turn;
@@ -57,8 +72,8 @@ fn the_time_row_is_a_dim_right_aligned_row_with_no_target() {
     let mut out = Rows::default();
     turn.rows(80, &zone, &mut out);
     let (rows, _) = out.into_parts();
-    assert_eq!(rows.len(), 2);
-    let (line, target) = &rows[1];
+    assert_eq!(rows.len(), 4);
+    let (line, target) = &rows[3];
     assert_eq!(line.to_string(), "14:15");
     assert!(line.alignment == Some(Alignment::Right));
     assert!(line.style.add_modifier.contains(Modifier::DIM));
@@ -69,5 +84,5 @@ fn the_time_row_is_a_dim_right_aligned_row_with_no_target() {
     let mut out = Rows::default();
     turn.rows(80, &zone, &mut out);
     let (rows, _) = out.into_parts();
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 3);
 }

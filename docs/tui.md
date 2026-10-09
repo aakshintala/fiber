@@ -1016,14 +1016,16 @@ fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
 
 ## Look
 
-- **Surfaces, not lines.** The person's messages, each tool group, the input
+- **Surfaces, not lines.** The person's messages, each turn's card, the input
   box, the approval panel and each card sit on their own background tint, with
   half-block edges (▄ above, ▀ below) and no borders.
 - **A stripe marks state** on the side its surface is anchored to: ▌ on the
   left for a steering message, a running or finished job and an approval; ▐ on
   the right for the person's prompt bubble. The stripe is one unbroken bar,
   because ▌ and ▐ fill half of each cell as Ghostty draws them. Where a
-  terminal cannot draw it unbroken, there is no stripe.
+  terminal cannot draw it unbroken, there is no stripe. Fiber draws stripes
+  in Ghostty, WezTerm and kitty, and not inside tmux or screen; elsewhere
+  the stripe's cell keeps its tint.
 - **Colours come from the theme,** in truecolour where the terminal has it:
   `COLORTERM` of `truecolor` or `24bit`, or a `TERM` of `xterm-ghostty`,
   `xterm-kitty`, `wezterm` or one ending in `-direct`, which survives SSH where
@@ -1063,7 +1065,7 @@ The roles, in order:
 | `heading` | markdown headings |
 | `success` | a finished job's stripe when it succeeded |
 | `warning` | RETRYING and its spinner, the context bar from 60% |
-| `error` | CRASHED, a failed job's stripe, the context bar from 85%, "irreversible" in an approval's header |
+| `error` | CRASHED, a failed job's stripe, an escalation's stripe, the context bar from 85%, "irreversible" in an approval's header |
 | `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe |
 | `added` | lines added: an edited file's `+N`, added lines in a diff |
 | `removed` | lines removed: an edited file's `−N`, removed lines in a diff |

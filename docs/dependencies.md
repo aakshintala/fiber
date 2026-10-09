@@ -145,7 +145,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | encoding_rs | `web_fetch`'s decoding by the declared character set | 224 | 332 | 272 | 5 | 490 |
 | pulldown-cmark | the terminal's markdown in replies (`docs/tui.md`, "Look") | 428 | 384 | ~0 | 4 | 724 |
 | flate2 | decompressing the release's docs and extensions archives (`docs/releasing.md`, "Installing"), and the test fakes' release archives | 560 | 640 | 592 | 6 | 403 |
-| jiff | the terminal's local time of day under a prompt bubble and on steering (`docs/tui.md`, "Turns"), with daylight saving and `TZ`, which `std` lacks | 536 | 640 | 384 | 2 | 692 |
+| jiff | the terminal's local time of day under a prompt bubble and on steering (`docs/tui.md`, "Turns"), and a standing rule's `added` time in `/rules`, with daylight saving and `TZ`, which `std` lacks | 536 | 640 | 384 | 2 | 692 |
 | all of the above together | | 8,896 | 8,184 | 5,201 | 155 | 8,165 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 67,825 | 32 | 5,234 |
 

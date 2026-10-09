@@ -14,9 +14,11 @@ const BUILT_INS: &[(&str, &str, Option<&str>)] = &[
     ("resume", "Opens home at the session list.", None),
     ("tools", "Opens the tools view.", None),
     ("panel", "Shows or hides the panel.", None),
+    ("rules", "Opens the standing rules.", None),
     ("settings", "Opens the configuration keys.", None),
     ("handoff", "Starts a handoff.", Some("[instructions]")),
     ("name", "Names the session.", Some("<text>")),
+    ("login", "Logs in.", None),
     (
         "reload",
         "Reloads configuration, MCP servers and extensions.",

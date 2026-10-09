@@ -351,8 +351,9 @@ Fiber writes configuration in these places:
 - dragging the rail's or the panel's edge saves the global `tui.rail.width`
   or `tui.panel.width` (`docs/tui.md`, "Layout")
 - `/credential` saves the global `providers."<name>".credential`, unless the
-  switch is marked as this session only, and `fiber login` writes it when it
-  stores a provider's first label (`docs/model-routing.md`, "Credentials")
+  switch is marked as this session only, and `fiber login`, or the terminal's
+  `/login`, writes it when it stores a provider's first label
+  (`docs/model-routing.md`, "Credentials")
 - `/scoped-models` saves the global `scoped_models`, and the `/keys` screen
   saves the global `keys`, only the bindings that differ from the defaults
 - `host.config.set` writes an extension's settings file
@@ -370,6 +371,9 @@ Fiber writes configuration in these places:
   `tools.enabled` and `tools.disabled` in the project's file or the global
   file, never a repository's; a file that holds no list starts from the one
   it inherits (`docs/tui.md`, "Swapped views")
+- the terminal's `/rules` deletes one line of a rules file under the file's
+  lock, leaving every other line as it was (`docs/tui.md`, "Swapped views";
+  "Standing rules")
 - `fiber mcp add` and `fiber mcp remove` write an entry under `mcp.servers`,
   in the same three files (`docs/mcp.md`, "Configuration")
 - `fiber hub install --port` writes the global `hub.port`, and `fiber hub add`

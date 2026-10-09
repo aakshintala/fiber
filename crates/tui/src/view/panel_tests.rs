@@ -530,8 +530,14 @@ fn widget_rows_are_cut_at_the_text_width() {
         .iter()
         .map(|row| row.line.to_string())
         .collect();
-    assert_eq!(drawn.len(), 2);
-    assert!(drawn.iter().all(|row| crate::format::width(row) <= text));
+    // The card's edges frame its two text rows.
+    assert_eq!(drawn.len(), 4);
+    assert!(drawn[1].starts_with("plan · tasks"));
+    for row in &drawn[1..3] {
+        assert!(crate::format::width(row) <= text, "{row:?}");
+    }
+    assert_eq!(crate::format::width(&drawn[0]), text + 2);
+    assert_eq!(crate::format::width(&drawn[3]), text + 2);
 }
 
 /// Folds `paths` of `(path, added, removed)` as one completed call.
@@ -594,11 +600,11 @@ fn a_scroll_past_the_end_after_a_resize_is_clamped_when_drawn() {
     for _ in 0..8 {
         wheel_down(&mut app);
     }
-    assert_eq!(app.panel_state().scroll(), 22);
+    assert_eq!(app.panel_state().scroll(), 24);
     app.set_size(160, 60);
     let (buf, _) = draw_targets(&app);
     let shown = super::super::text(&buf);
-    assert_eq!(shown.lines().nth(1).unwrap_or_default(), "  line 01");
+    assert_eq!(shown.lines().nth(1).unwrap_or_default(), "  line 02");
 }
 
 #[test]
@@ -616,7 +622,7 @@ fn the_top_five_by_lines_changed_ties_by_path() {
         ],
     );
     let drawn = texts(&app, 40);
-    let files: Vec<&String> = drawn.iter().take(5).collect();
+    let files: Vec<&String> = drawn.iter().skip(1).take(5).collect();
     assert_eq!(files.len(), 5);
     for (row, path) in files
         .iter()
@@ -624,8 +630,8 @@ fn the_top_five_by_lines_changed_ties_by_path() {
     {
         assert!(row.starts_with(path), "{row}");
     }
-    assert!(drawn[0].ends_with("+8 \u{2212}2"));
-    assert!(drawn[4].ends_with("+4 \u{2212}2"));
+    assert!(drawn[1].ends_with("+8 \u{2212}2"));
+    assert!(drawn[5].ends_with("+4 \u{2212}2"));
     assert!(
         drawn
             .iter()
@@ -647,7 +653,7 @@ fn exactly_five_paths_all_show() {
         ],
     );
     let drawn = texts(&app, 40);
-    assert_eq!(drawn.len(), 6);
+    assert_eq!(drawn.len(), 8);
     assert!(
         drawn
             .iter()
@@ -700,7 +706,10 @@ fn one_job_shows_the_card() {
     let mut app = attached(160, 40);
     fold_job(&mut app, "j_1", "build");
     fold_job(&mut app, "j_2", "test");
-    assert_eq!(texts(&app, 40), vec!["2 jobs running".to_owned()]);
+    assert_eq!(
+        texts(&app, 40),
+        vec!["▄".repeat(39), "2 jobs running".to_owned(), "▀".repeat(39)]
+    );
 }
 
 #[test]
@@ -713,7 +722,7 @@ fn the_jobs_line_is_a_target_and_its_rows_are_not() {
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].id, crate::mouse::TargetId::Panel(Spot::Jobs));
     assert_eq!(targets[0].rect.x, 2);
-    assert_eq!(targets[0].rect.y, 1);
+    assert_eq!(targets[0].rect.y, 2);
     assert_eq!(
         targets[0].rect.width,
         u16::try_from("2 jobs running".len()).unwrap_or(u16::MAX)
@@ -723,9 +732,11 @@ fn the_jobs_line_is_a_target_and_its_rows_are_not() {
     assert_eq!(
         drawn,
         vec![
+            "▄".repeat(39),
             "2 jobs running".to_owned(),
             "  build".to_owned(),
-            "  test".to_owned()
+            "  test".to_owned(),
+            "▀".repeat(39)
         ]
     );
     let (_, targets) = draw_targets(&app);
@@ -753,4 +764,44 @@ fn jobs_card_collapsed_and_expanded() {
     app.on_click(crate::mouse::TargetId::Panel(crate::app::panel::Spot::Jobs));
     let (buf, _) = draw_targets(&app);
     insta::assert_snapshot!("jobs_card_collapsed_and_expanded", super::super::text(&buf));
+}
+
+#[test]
+fn each_card_sits_on_its_surface_with_edges() {
+    use crate::theme::Role;
+    let mut app = attached(100, 30);
+    fold_widget(&mut app, "ext", "one", &["hello"]);
+    fold_widget(&mut app, "ext", "two", &["world"]);
+    let area = Rect::new(60, 0, 40, 30);
+    let mut buf = Buffer::empty(area);
+    super::draw(&app, area, &mut buf, &mut Vec::new());
+    let surface = Role::Surface.color();
+    // Two cards of two text rows: top edge, text, text, bottom edge, a
+    // blank row between them, all from the panel's second column.
+    for (top, title) in [(1, "ext · one"), (6, "ext · two")] {
+        for x in 61..100 {
+            assert_eq!(buf[(x, top)].fg, surface, "top edge at ({x}, {top})");
+            assert_eq!(buf[(x, top)].symbol(), "▄");
+            assert_eq!(
+                buf[(x, top + 3)].fg,
+                surface,
+                "bottom edge at ({x}, {})",
+                top + 3
+            );
+            assert_eq!(buf[(x, top + 3)].symbol(), "▀");
+        }
+        for y in [top + 1, top + 2] {
+            for x in 61..100 {
+                assert_eq!(buf[(x, y)].bg, surface, "text at ({x}, {y})");
+            }
+        }
+        let row: String = (61..100)
+            .map(|x| buf[(x, top + 1)].symbol().to_owned())
+            .collect();
+        assert!(row.contains(title), "{row:?}");
+    }
+    // The separator row between cards stays untinted.
+    for x in 60..100 {
+        assert_ne!(buf[(x, 5)].bg, surface, "separator at ({x}, 5)");
+    }
 }

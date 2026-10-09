@@ -14,6 +14,8 @@ use super::{App, Effect};
 use crate::ThemeSetting;
 use crate::configure::Configure;
 use crate::keys::{Edit, Key};
+use crate::login_view::Login;
+use crate::rules_view::Rules;
 use crate::settings_view::{Act, Ctx, Settings};
 use crate::swapped::{Frame, List, Spot};
 use crate::tools_view::Tools;
@@ -28,6 +30,10 @@ pub(crate) enum ConfigView {
     Settings,
     /// `/tools`.
     Tools,
+    /// `/rules`.
+    Rules,
+    /// `/login`.
+    Login,
 }
 
 /// The open view.
@@ -37,6 +43,10 @@ enum Open {
     Settings(Settings),
     /// `/tools`.
     Tools(Tools),
+    /// `/rules`.
+    Rules(Rules),
+    /// `/login`.
+    Login(Login),
     /// A view with no seam to read through, by its title.
     Unavailable(&'static str),
 }
@@ -71,8 +81,18 @@ impl App {
                 Open::Settings(Settings::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
             (Some(seam), ConfigView::Tools) => return self.open_tools(seam),
+            (Some(seam), ConfigView::Rules) => {
+                let workspace = self.workspace();
+                Open::Rules(Rules::open(&self.config_ctx(seam.as_ref(), &workspace)))
+            }
+            (Some(seam), ConfigView::Login) => {
+                let workspace = self.workspace();
+                Open::Login(Login::open(&self.config_ctx(seam.as_ref(), &workspace)))
+            }
             (None, ConfigView::Settings) => Open::Unavailable("Settings"),
             (None, ConfigView::Tools) => Open::Unavailable("Tools"),
+            (None, ConfigView::Rules) => Open::Unavailable("Rules"),
+            (None, ConfigView::Login) => Open::Unavailable("Log in"),
         };
         self.config_views.open = Some(open);
         Effect::None
@@ -134,6 +154,8 @@ impl App {
                 match &mut self.config_views.open {
                     Some(Open::Settings(settings)) => settings.key(key, &ctx),
                     Some(Open::Tools(tools)) => tools.key(key, &ctx),
+                    Some(Open::Rules(rules)) => rules.key(key, &ctx),
+                    Some(Open::Login(login)) => login.key(key, &ctx),
                     Some(Open::Unavailable(_)) | None => esc(key),
                 }
             }
@@ -145,28 +167,49 @@ impl App {
     /// Hands an editing key to the open view's field. `None` with no view
     /// open.
     pub(in crate::app) fn config_view_edit(&mut self, edit: &Edit) -> Option<Effect> {
-        match self.config_views.open.as_mut()? {
-            Open::Settings(settings) => settings.edit_key(edit.clone()),
-            Open::Tools(tools) => tools.edit_key(edit),
-            Open::Unavailable(_) => {}
-        }
-        Some(Effect::None)
+        self.config_views.open.as_ref()?;
+        let act = match self.config_views.seam.clone() {
+            Some(seam) => {
+                let workspace = self.workspace();
+                let ctx = self.config_ctx(seam.as_ref(), &workspace);
+                match &mut self.config_views.open {
+                    Some(Open::Settings(settings)) => {
+                        settings.edit_key(edit.clone());
+                        Act::Stay
+                    }
+                    Some(Open::Tools(tools)) => {
+                        tools.edit_key(edit);
+                        Act::Stay
+                    }
+                    Some(Open::Rules(rules)) => rules.edit_key(edit, &ctx),
+                    Some(Open::Login(login)) => {
+                        login.edit_key(edit);
+                        Act::Stay
+                    }
+                    Some(Open::Unavailable(_)) | None => Act::Stay,
+                }
+            }
+            None => Act::Stay,
+        };
+        Some(self.config_act(act))
     }
 
     /// A click on the open view's `spot`.
     pub(in crate::app) fn config_view_click(&mut self, spot: Spot) -> Effect {
         let act = match (self.config_views.seam.clone(), spot) {
             (_, Spot::Close) => Act::Close,
-            (Some(seam), Spot::Row(_) | Spot::Switch { .. }) => {
+            (Some(seam), Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_)) => {
                 let workspace = self.workspace();
                 let ctx = self.config_ctx(seam.as_ref(), &workspace);
                 match &mut self.config_views.open {
                     Some(Open::Settings(settings)) => settings.click(spot, &ctx),
                     Some(Open::Tools(tools)) => tools.click(spot, &ctx),
+                    Some(Open::Rules(rules)) => rules.click(spot, &ctx),
+                    Some(Open::Login(login)) => login.click(spot, &ctx),
                     Some(Open::Unavailable(_)) | None => Act::Stay,
                 }
             }
-            (None, Spot::Row(_) | Spot::Switch { .. }) => Act::Stay,
+            (None, Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_)) => Act::Stay,
         };
         self.config_act(act)
     }
@@ -198,6 +241,8 @@ impl App {
         Some(match self.config_views.open.as_ref()? {
             Open::Settings(settings) => settings.frame(usage),
             Open::Tools(tools) => tools.frame(usage),
+            Open::Rules(rules) => rules.frame(),
+            Open::Login(login) => login.frame(),
             Open::Unavailable(title) => Frame {
                 title: (*title).to_owned(),
                 rows: Vec::new(),
@@ -223,8 +268,10 @@ impl App {
         if let Some(seam) = self.config_views.seam.clone() {
             let workspace = self.workspace();
             let ctx = self.config_ctx(seam.as_ref(), &workspace);
-            if let Some(Open::Settings(settings)) = &mut self.config_views.open {
-                settings.reread(&ctx);
+            match &mut self.config_views.open {
+                Some(Open::Settings(settings)) => settings.reread(&ctx),
+                Some(Open::Rules(rules)) => rules.reread(&ctx),
+                Some(Open::Tools(_) | Open::Login(_) | Open::Unavailable(_)) | None => {}
             }
         }
     }
@@ -302,3 +349,7 @@ fn esc(key: &Key) -> Act {
 #[cfg(test)]
 #[path = "config_views_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_login_tests.rs"]
+mod login_tests;

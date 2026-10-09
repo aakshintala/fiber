@@ -224,9 +224,9 @@ fn declared(providers: &Providers) -> impl Iterator<Item = &str> {
         .filter(|name| providers.get(name).is_none())
 }
 
-/// The usage error for a name that is neither a provider nor a declared
-/// secret, listing both.
-fn unknown(providers: &Providers, name: &str) -> Failure {
+/// The message for a name that is neither a provider nor a declared
+/// secret, listing both, with no CLI hint: `login` adds it.
+fn unknown_message(providers: &Providers, name: &str) -> String {
     let names: Vec<&str> = providers.names().collect();
     let secrets: Vec<&str> = declared(providers).collect();
     let names = if names.is_empty() {
@@ -239,9 +239,9 @@ fn unknown(providers: &Providers, name: &str) -> Failure {
     } else {
         format!("the declared secrets are {}", secrets.join(", "))
     };
-    usage(format!(
+    format!(
         "`{name}` is neither an installed provider nor a declared secret; {names}, and {secrets}."
-    ))
+    )
 }
 
 /// The provider or declared secret a person picks from the menu, by number
@@ -252,8 +252,21 @@ fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
             "`fiber login` takes a provider or a secret's name when there is no terminal to ask on.",
         ));
     }
-    let providers: Vec<&str> = io.providers.names().collect();
-    let secrets: Vec<&str> = declared(io.providers).collect();
+    let all = targets(io.providers);
+    let providers: Vec<&str> = all
+        .iter()
+        .filter_map(|target| match target {
+            LoginName::Provider(name) => Some(name.as_str()),
+            LoginName::Secret(_) => None,
+        })
+        .collect();
+    let secrets: Vec<&str> = all
+        .iter()
+        .filter_map(|target| match target {
+            LoginName::Secret(name) => Some(name.as_str()),
+            LoginName::Provider(_) => None,
+        })
+        .collect();
     if providers.is_empty() && secrets.is_empty() {
         return Err(usage(
             "No provider is installed, and no installed extension declares a secret.",
@@ -273,7 +286,6 @@ fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
         menu.push_str(&format!("  {}) {name}\n", index + providers.len() + 1));
     }
     menu.push_str("Provider or secret, by number or name: ");
-    let names: Vec<&str> = providers.into_iter().chain(secrets).collect();
     io.err
         .write_all(menu.as_bytes())
         .and_then(|()| io.err.flush())
@@ -285,10 +297,10 @@ fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
         return Err(usage("Nothing was chosen."));
     }
     let picked = match answer.parse::<usize>() {
-        Ok(number) => number.checked_sub(1).and_then(|index| names.get(index)),
-        Err(_) => names.iter().find(|name| **name == answer),
+        Ok(number) => number.checked_sub(1).and_then(|index| all.get(index)),
+        Err(_) => all.iter().find(|target| target.name() == answer),
     };
-    picked.map(|name| (*name).to_owned()).ok_or_else(|| {
+    picked.map(|target| target.name().to_owned()).ok_or_else(|| {
         usage(format!(
             "`{answer}` is neither a listed number nor an installed provider or declared secret."
         ))
@@ -304,33 +316,155 @@ fn credential_key(name: &str) -> String {
     }
 }
 
-/// Stores a secret an installed extension declares as `credentials/<name>`
-/// (`docs/configuration.md`, "Secrets"). One already stored is replaced, and
-/// the result line says so: logging in again is how a key is rotated.
-fn store_declared(name: &str, label: Option<&str>, io: &mut LoginIo<'_>) -> Result<(), Failure> {
-    if label.is_some() {
-        return Err(usage(format!(
-            "--as applies only to a provider, and `{name}` is a declared secret."
-        )));
+/// A `fiber login` menu row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoginName {
+    /// An installed provider, by name.
+    Provider(String),
+    /// A secret an installed extension declares, by name.
+    Secret(String),
+}
+
+impl LoginName {
+    /// The provider or secret's name.
+    fn name(&self) -> &str {
+        match self {
+            Self::Provider(name) | Self::Secret(name) => name,
+        }
     }
-    let replaced = read_secret(io.home, name)
-        .map_err(config_failure)?
-        .is_some();
-    let prompt = if io.terminal {
-        format!("Value for {name}: ")
+}
+
+/// What a login stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginStored {
+    /// The file under Fiber home, such as `credentials/acme/default`.
+    pub path: String,
+    /// Whether it replaced a stored secret.
+    pub replaced: bool,
+}
+
+/// Why a store failed: a usage refusal, with no CLI hint, or a failure.
+enum StoreFailure {
+    /// A usage refusal, with no CLI hint.
+    Refused(String),
+    /// A failure to report as is.
+    Failed(Failure),
+}
+
+impl From<Failure> for StoreFailure {
+    fn from(failure: Failure) -> Self {
+        Self::Failed(failure)
+    }
+}
+
+/// The installed providers by name, then the secrets installed extensions
+/// declare: the one place the menu's order lives. A name that is both is
+/// the provider's.
+fn targets(providers: &Providers) -> Vec<LoginName> {
+    providers
+        .names()
+        .map(|name| LoginName::Provider(name.to_owned()))
+        .chain(declared(providers).map(|name| LoginName::Secret(name.to_owned())))
+        .collect()
+}
+
+/// The installed providers in `home`.
+fn providers_in(home: &Path) -> Result<Providers, Failure> {
+    // debt: notices from loading are dropped, as `parts_with` drops them;
+    // surfaced when #382 lands.
+    let (providers, _notices) =
+        Providers::load(home).map_err(|e| failure(e.code(), e.to_string()))?;
+    Ok(providers)
+}
+
+/// Stores `key` for provider or secret `name`, under `label` for a
+/// provider: the steps `login` runs after a name is chosen, in their order.
+/// The key comes from `read`: a refused login reads no key.
+fn store(
+    home: &Path,
+    providers: &Providers,
+    name: &str,
+    label: Option<&str>,
+    read: impl FnOnce(&str) -> Result<Secret, Failure>,
+) -> Result<LoginStored, StoreFailure> {
+    if let Some(data) = providers.get(name) {
+        let stored = stored_name(data);
+        // A key login reveals no email; the OAuth login of #311 passes its own.
+        let label = chosen_label(label, None);
+        let file = CredentialFile::new(home, stored, label).map_err(config_failure)?;
+        // Held until the login ends, so two logins never both pass the check.
+        let Some(lock) = file.try_lock().map_err(config_failure)? else {
+            return Err(StoreFailure::Failed(failure(
+                ErrorCode::IoFailed,
+                format!("another login for {name} is running"),
+            )));
+        };
+        if read_credential(home, stored, label)
+            .map_err(config_failure)?
+            .is_some()
+        {
+            return Err(StoreFailure::Refused(format!(
+                "credentials/{stored}/{label} is already stored; log in under another label with --as <label>, or run `fiber logout {name} --as {label}` first."
+            )));
+        }
+        let key = read(&format!("Key for {name}: "))?;
+        if key.expose().is_empty() {
+            return Err(StoreFailure::Refused(
+                "No key was given; nothing was stored.".to_owned(),
+            ));
+        }
+        store_credential(home, stored, label, &key).map_err(config_failure)?;
+        let first = set_global_if_unset(home, &credential_key(name), label.into());
+        if let Err(e) = first {
+            // A retry must start clean: no key stored without its label.
+            delete_credential_held(home, stored, label, &lock).unwrap_or(false);
+            return Err(config_failure(e).into());
+        }
+        Ok(LoginStored {
+            path: format!("credentials/{stored}/{label}"),
+            replaced: false,
+        })
+    } else if providers.secrets().any(|secret| secret == name) {
+        if label.is_some() {
+            return Err(StoreFailure::Refused(format!(
+                "--as applies only to a provider, and `{name}` is a declared secret."
+            )));
+        }
+        let replaced = read_secret(home, name).map_err(config_failure)?.is_some();
+        let value = read(&format!("Value for {name}: "))?;
+        if value.expose().is_empty() {
+            return Err(StoreFailure::Refused(
+                "No value was given; nothing was stored.".to_owned(),
+            ));
+        }
+        store_secret(home, name, &value).map_err(config_failure)?;
+        Ok(LoginStored {
+            path: format!("credentials/{name}"),
+            replaced,
+        })
     } else {
-        String::new()
-    };
-    let value = io
-        .keys
-        .read_key(&prompt, io.stdin, io.err)
-        .map_err(terminal_failure)?;
-    if value.expose().is_empty() {
-        return Err(usage("No value was given; nothing was stored."));
+        Err(StoreFailure::Refused(unknown_message(providers, name)))
     }
-    store_secret(io.home, name, &value).map_err(config_failure)?;
-    let done = if replaced { "replaced" } else { "stored" };
-    writeln!(io.err, "fiber: {done} credentials/{name}").map_err(terminal_failure)
+}
+
+/// The installed providers by name, then the declared secrets.
+pub fn login_targets(home: &Path) -> Result<Vec<LoginName>, Failure> {
+    Ok(targets(&providers_in(home)?))
+}
+
+/// Stores `key` for `name` as `fiber login <name> [--as <label>]` would,
+/// the key already read. A refusal carries no CLI hint.
+pub fn login_store(
+    home: &Path,
+    name: &str,
+    label: Option<&str>,
+    key: Secret,
+) -> Result<LoginStored, Failure> {
+    let providers = providers_in(home)?;
+    store(home, &providers, name, label, |_| Ok(key)).map_err(|error| match error {
+        StoreFailure::Refused(message) => failure(ErrorCode::Usage, message),
+        StoreFailure::Failed(failure) => failure,
+    })
 }
 
 /// Logs in to the provider `name`, or stores the secret `name` an installed
@@ -348,52 +482,27 @@ pub(crate) fn login(
         Some(name) => name.to_owned(),
         None => choose(io)?,
     };
-    let Some(data) = io.providers.get(&name) else {
-        return if io.providers.secrets().any(|secret| secret == name) {
-            store_declared(&name, label, io)
-        } else {
-            Err(unknown(io.providers, &name))
-        };
-    };
-    let stored = stored_name(data);
-    // A key login reveals no email; the OAuth login of #311 passes its own.
-    let label = chosen_label(label, None);
-    let file = CredentialFile::new(io.home, stored, label).map_err(config_failure)?;
-    // Held until the login ends, so two logins never both pass the check.
-    let Some(lock) = file.try_lock().map_err(config_failure)? else {
-        return Err(failure(
-            ErrorCode::IoFailed,
-            format!("another login for {name} is running"),
-        ));
-    };
-    if read_credential(io.home, stored, label)
-        .map_err(config_failure)?
-        .is_some()
-    {
-        return Err(usage(format!(
-            "credentials/{stored}/{label} is already stored; log in under another label with --as <label>, or run `fiber logout {name} --as {label}` first."
-        )));
+    let home = io.home;
+    let providers = io.providers;
+    let terminal = io.terminal;
+    let stored = store(home, providers, &name, label, |prompt| {
+        let prompt = if terminal { prompt } else { "" };
+        io.keys
+            .read_key(prompt, io.stdin, io.err)
+            .map_err(terminal_failure)
+    });
+    match stored {
+        Ok(stored) => {
+            let done = if stored.replaced {
+                "replaced"
+            } else {
+                "stored"
+            };
+            writeln!(io.err, "fiber: {done} {}", stored.path).map_err(terminal_failure)
+        }
+        Err(StoreFailure::Refused(message)) => Err(usage(message)),
+        Err(StoreFailure::Failed(failure)) => Err(failure),
     }
-    let prompt = if io.terminal {
-        format!("Key for {name}: ")
-    } else {
-        String::new()
-    };
-    let key = io
-        .keys
-        .read_key(&prompt, io.stdin, io.err)
-        .map_err(terminal_failure)?;
-    if key.expose().is_empty() {
-        return Err(usage("No key was given; nothing was stored."));
-    }
-    store_credential(io.home, stored, label, &key).map_err(config_failure)?;
-    let first = set_global_if_unset(io.home, &credential_key(&name), label.into());
-    if let Err(e) = first {
-        // A retry must start clean: no key stored without its label.
-        delete_credential_held(io.home, stored, label, &lock).unwrap_or(false);
-        return Err(config_failure(e));
-    }
-    writeln!(io.err, "fiber: stored credentials/{stored}/{label}").map_err(terminal_failure)
 }
 
 /// Where a provider's key comes from when nothing is stored: the first
@@ -512,11 +621,7 @@ fn finish(result: Result<(), Failure>) -> i32 {
 
 fn home_and_providers() -> Result<(std::path::PathBuf, Providers), Failure> {
     let home = config::fiber_home_from_env().map_err(config_failure)?;
-    // debt: notices from loading are dropped, as `parts_with` drops them;
-    // surfaced when #382 lands.
-    let (providers, _notices) =
-        Providers::load(&home).map_err(|e| failure(e.code(), e.to_string()))?;
-    Ok((home, providers))
+    Ok((home.clone(), providers_in(&home)?))
 }
 
 /// `fiber login [<name>] [--as <label>]`.

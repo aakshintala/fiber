@@ -202,43 +202,42 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
         selected(&app).as_deref(),
         Some("/home  Goes home.  command")
     );
-    for _ in 0..7 {
+    for _ in 0..8 {
         app.on_key(Key::Down, now());
     }
-    // The eighth row, still in the first window.
+    // The name command, after the added configuration commands.
     assert_eq!(
         selected(&app).as_deref(),
         Some("/name <text>  Names the session.  command")
     );
     assert_eq!(app.completions().and_then(|c| c.selected), Some(7));
     app.on_key(Key::Down, now());
-    // The ninth row: the window moves down by one.
+    // The next row: the window moves down by one.
     let completions = app.completions();
     assert_eq!(completions.as_ref().and_then(|c| c.selected), Some(7));
     assert_eq!(
         completions
             .and_then(|c| c.lines.first().cloned())
             .as_deref(),
-        Some("/new  Goes home with the cursor in the input box.  command")
+        Some("/resume  Opens home at the session list.  command")
     );
     app.on_key(Key::Down, now());
     app.on_key(Key::Down, now());
     app.on_key(Key::Down, now());
+    for _ in 0..16 {
+        if selected(&app).as_deref() == Some("/quit  Quits.  command") {
+            break;
+        }
+        app.on_key(Key::Down, now());
+    }
+    assert_eq!(selected(&app).as_deref(), Some("/quit  Quits.  command"));
     app.on_key(Key::Down, now());
     assert_eq!(
         selected(&app).as_deref(),
-        Some("/?  Opens the key map.  command")
-    );
-    app.on_key(Key::Down, now());
-    assert_eq!(
-        selected(&app).as_deref(),
-        Some("/help  Opens the key map.  command")
+        Some("/approvals  Reopens the waiting approvals and questions.  command")
     );
     app.on_key(Key::Up, now());
-    assert_eq!(
-        selected(&app).as_deref(),
-        Some("/?  Opens the key map.  command")
-    );
+    assert_eq!(selected(&app).as_deref(), Some("/quit  Quits.  command"));
     // The draft is untouched by moving.
     assert_eq!(app.draft(), "/");
 }
@@ -490,11 +489,11 @@ fn the_approvals_row_opens_the_waiting_queue() {
 fn the_conversation_gives_up_the_panel_rows() {
     let mut app = connected();
     app.set_size(80, 24);
-    assert_eq!(app.conversation_height(), 23);
+    assert_eq!(app.conversation_height(), 21);
     type_text(&mut app, "/");
-    assert_eq!(app.conversation_height(), 15);
+    assert_eq!(app.conversation_height(), 13);
     type_text(&mut app, "han");
-    assert_eq!(app.conversation_height(), 22);
+    assert_eq!(app.conversation_height(), 20);
 }
 
 #[test]
@@ -538,14 +537,14 @@ fn the_key_map_scrolls_and_takes_every_key_but_ctrl_c() {
     app.set_size(80, 10);
     turn_starts(&mut app);
     app.on_key(Key::F1, now());
-    // A conversation of 9 rows: a page is 8.
-    assert_eq!(app.conversation_height(), 9);
+    // A conversation of 7 rows: a page is 6.
+    assert_eq!(app.conversation_height(), 7);
     app.on_key(Key::Up, now());
     assert_eq!(app.keymap_top(), Some(0));
     app.on_key(Key::Down, now());
     assert_eq!(app.keymap_top(), Some(1));
     app.on_key(Key::PageDown, now());
-    assert_eq!(app.keymap_top(), Some(9));
+    assert_eq!(app.keymap_top(), Some(7));
     app.on_key(Key::PageUp, now());
     assert_eq!(app.keymap_top(), Some(1));
     app.on_key(Key::PageUp, now());
@@ -559,7 +558,7 @@ fn the_key_map_scrolls_and_takes_every_key_but_ctrl_c() {
         .iter()
         .map(|line| crate::view::rows(ratatui::text::Line::raw(line.as_str()), 80))
         .sum();
-    assert_eq!(last, Some(rows - 9));
+    assert_eq!(last, Some(rows - 7));
     app.on_key(Key::Down, now());
     assert_eq!(app.keymap_top(), last);
     // Other keys do nothing: no typing, no interrupt, no send.

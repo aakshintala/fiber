@@ -436,6 +436,8 @@ impl App {
             }
             "settings" => self.open_config_view(super::ConfigView::Settings),
             "tools" => self.open_config_view(super::ConfigView::Tools),
+            "rules" => self.open_config_view(super::ConfigView::Rules),
+            "login" => self.open_config_view(super::ConfigView::Login),
             // `?` and `help`.
             _ => {
                 self.draft.clear();

@@ -4,13 +4,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use contract::ErrorCode;
+use contract::{ErrorCode, Secret};
 
 use crate::ThemeSetting;
 use crate::configure::{
-    Configure, ConfigureError, Layer, Saved, SettingRow, Shown, SwitchScope, ToolGroup, ToolLists,
-    ToolSwitches, WriteScope,
+    Configure, ConfigureError, Layer, LoginTarget, Revoked, RulesScope, RulesSection, Saved,
+    SettingRow, Shown, Stored, SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
+
+/// One revoke the view asked for: the workspace, scope, line and text.
+pub(crate) type Revoke = (PathBuf, RulesScope, usize, String);
 
 /// One write the view asked for: the workspace, layer, key and text.
 pub(crate) type Write = (PathBuf, Layer, String, String);
@@ -38,6 +41,18 @@ pub(crate) struct Fake {
     pub(crate) themes: Vec<String>,
     /// What `global_file` answers.
     pub(crate) global: PathBuf,
+    /// What `rules` answers.
+    pub(crate) rules: Mutex<Result<(RulesSection, RulesSection), ConfigureError>>,
+    /// Every revoke asked for, in order.
+    pub(crate) revokes: Mutex<Vec<Revoke>>,
+    /// What `revoke` answers.
+    pub(crate) revoked: Mutex<Result<Revoked, ConfigureError>>,
+    /// What `login_targets` answers.
+    pub(crate) targets: Mutex<Result<Vec<LoginTarget>, ConfigureError>>,
+    /// Every key asked to store, in order: the name, the label and the key.
+    pub(crate) stores: Mutex<Vec<(String, Option<String>, Secret)>>,
+    /// What `store_key` answers.
+    pub(crate) stored: Mutex<Result<Stored, ConfigureError>>,
 }
 
 impl Fake {
@@ -53,6 +68,24 @@ impl Fake {
             fail_after_write: Mutex::new(false),
             themes: Vec::new(),
             global: file(Layer::Global),
+            rules: Mutex::new(Ok((
+                RulesSection {
+                    file: PathBuf::from("/home/rules"),
+                    rows: Ok(Vec::new()),
+                },
+                RulesSection {
+                    file: PathBuf::from("/home/projects/-w/rules"),
+                    rows: Ok(Vec::new()),
+                },
+            ))),
+            revokes: Mutex::new(Vec::new()),
+            revoked: Mutex::new(Ok(Revoked::Removed)),
+            targets: Mutex::new(Ok(Vec::new())),
+            stores: Mutex::new(Vec::new()),
+            stored: Mutex::new(Ok(Stored {
+                path: "credentials/acme/default".to_owned(),
+                replaced: false,
+            })),
         }
     }
 
@@ -64,6 +97,33 @@ impl Fake {
     /// The workspaces read so far.
     pub(crate) fn reads(&self) -> Vec<PathBuf> {
         self.reads.lock().map(|r| r.clone()).unwrap_or_default()
+    }
+
+    /// The revokes asked for so far.
+    pub(crate) fn revokes(&self) -> Vec<Revoke> {
+        self.revokes.lock().map(|r| r.clone()).unwrap_or_default()
+    }
+
+    /// The names and labels asked to store so far, in order.
+    pub(crate) fn stores(&self) -> Vec<(String, Option<String>)> {
+        self.stores
+            .lock()
+            .map(|stores| {
+                stores
+                    .iter()
+                    .map(|(name, label, _)| (name.clone(), label.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The `n`th stored key's value.
+    pub(crate) fn secret_of(&self, n: usize) -> String {
+        self.stores
+            .lock()
+            .ok()
+            .and_then(|stores| stores.get(n).map(|(_, _, key)| key.expose().to_owned()))
+            .unwrap_or_default()
     }
 }
 
@@ -138,6 +198,74 @@ impl Configure for Fake {
 
     fn global_file(&self) -> PathBuf {
         self.global.clone()
+    }
+
+    fn rules(&self, workspace: &Path) -> Result<(RulesSection, RulesSection), ConfigureError> {
+        if let Ok(mut reads) = self.reads.lock() {
+            reads.push(workspace.to_path_buf());
+        }
+        self.rules.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |rules| rules.clone(),
+        )
+    }
+
+    fn revoke(
+        &self,
+        workspace: &Path,
+        scope: RulesScope,
+        line: usize,
+        text: &str,
+    ) -> Result<Revoked, ConfigureError> {
+        if let Ok(mut revokes) = self.revokes.lock() {
+            revokes.push((workspace.to_path_buf(), scope, line, text.to_owned()));
+        }
+        self.revoked.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |revoked| revoked.clone(),
+        )
+    }
+
+    fn login_targets(&self) -> Result<Vec<LoginTarget>, ConfigureError> {
+        self.targets.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |targets| targets.clone(),
+        )
+    }
+
+    fn store_key(
+        &self,
+        name: &str,
+        label: Option<&str>,
+        key: Secret,
+    ) -> Result<Stored, ConfigureError> {
+        if let Ok(mut stores) = self.stores.lock() {
+            stores.push((name.to_owned(), label.map(str::to_owned), key));
+        }
+        self.stored.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |stored| stored.clone(),
+        )
     }
 
     fn themes(&self) -> Vec<String> {

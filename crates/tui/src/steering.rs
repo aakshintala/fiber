@@ -223,9 +223,11 @@ impl App {
         Effect::None
     }
 
-    /// The steering queue's rows, oldest first.
+    /// The steering queue's rows, oldest first: each cut at the inset
+    /// width, past the row's stripe and gap (`docs/tui.md`, "Look").
     pub(crate) fn steering(&self) -> Vec<String> {
-        self.steering.lines(self.column_width())
+        self.steering
+            .lines(crate::surface::inset(self.column_width()))
     }
 
     /// For each steering row, oldest first, whether it draws a ✕.
