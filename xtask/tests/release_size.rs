@@ -11,6 +11,8 @@
     reason = "test code may unwrap (docs/code-quality.md, \"Lints\"); a failure is the test's"
 )]
 
+#[path = "../src/child.rs"]
+mod child;
 #[path = "../src/test_dir.rs"]
 #[allow(
     dead_code,
@@ -22,9 +24,9 @@ use std::fs;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
 use std::time::Duration;
 
+use child::finished;
 use test_dir::TestDir;
 
 /// How long a test waits for one child, in real time; a passing run never
@@ -46,19 +48,10 @@ fn run(what: &str, mut command: Command) -> (Option<i32>, String) {
         .process_group(0)
         .spawn()
         .unwrap();
-    let pid = child.id();
-    let (done, waited) = mpsc::channel();
-    std::thread::spawn(move || done.send(child.wait_with_output()).unwrap_or(()));
-    if let Ok(output) = waited.recv_timeout(CHILD_WITHIN) {
-        let output = output.unwrap();
-        let text =
-            String::from_utf8(output.stdout).unwrap() + &String::from_utf8(output.stderr).unwrap();
-        (output.status.code(), text)
-    } else {
-        fakes::kill_group(pid, "KILL").unwrap_or(false);
-        let reaped = waited.recv_timeout(CHILD_WITHIN).is_ok();
-        panic!("waited {CHILD_WITHIN:?} for {what} (reaped: {reaped})");
-    }
+    let output = finished(what, child, &[], CHILD_WITHIN);
+    let text =
+        String::from_utf8(output.stdout).unwrap() + &String::from_utf8(output.stderr).unwrap();
+    (output.status.code(), text)
 }
 
 fn git(repo: &TestDir, args: &[&str]) -> String {
@@ -86,6 +79,9 @@ impl Repo {
     fn new() -> Self {
         let dir = TestDir::new("rsrepo");
         git(&dir, &["init", "-q", "-b", "main"]);
+        // The jig's source, so the paging jig finds one at every commit.
+        dir.write("crates/tui/examples/paging.rs", "fn main() {}\n");
+        git(&dir, &["add", "crates"]);
         for message in ["ancestor", "base", "head"] {
             git(&dir, &["commit", "-q", "--allow-empty", "-m", message]);
         }
@@ -138,6 +134,31 @@ impl Repo {
         git(&self.dir, &["checkout", "-q", "main"]);
     }
 
+    /// Runs `scripts/paging-jig` at HEAD, after `release-size` left its base.
+    fn paging_jig(&self) -> String {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/release_size_fixture/bin");
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/paging-jig");
+        let path = format!("{}:{}", fixture.display(), std::env::var("PATH").unwrap());
+        let mut command = Command::new("bash");
+        command
+            .arg(script)
+            .env("PATH", path)
+            .env("RUNNER_TEMP", self.temp.path())
+            .env("FAKE_CARGO_FAIL_IN", "never")
+            .current_dir(self.dir.path());
+        let (code, out) = run("scripts/paging-jig", command);
+        assert_eq!(code, Some(0), "{out}");
+        out
+    }
+
+    fn base_jig(&self) -> Option<String> {
+        fs::read_to_string(self.temp.path().join("release/base/paging")).ok()
+    }
+
+    fn base_commit(&self) -> Option<String> {
+        fs::read_to_string(self.temp.path().join("release/base/commit")).ok()
+    }
+
     fn base_binary(&self) -> PathBuf {
         self.temp.path().join("release/base/fiber")
     }
@@ -167,6 +188,9 @@ fn a_base_that_builds_is_built_and_compared() {
         fs::read_to_string(repo.base_binary()).unwrap(),
         format!("built at {base}\n")
     );
+    assert_eq!(repo.base_commit().unwrap().trim(), repo.base);
+    repo.paging_jig();
+    assert_eq!(repo.base_jig().unwrap(), format!("built at {base}\n"));
 }
 
 /// A path component no directory in a run has, so the stub cargo never fails.
@@ -225,6 +249,9 @@ fn a_base_that_does_not_build_with_no_stored_ancestor_skips_the_comparison() {
     assert_eq!(code, Some(0), "{out}");
     let base = repo.short(&repo.base);
     assert!(!repo.base_binary().exists(), "no base binary to compare");
+    assert!(repo.base_commit().is_none());
+    let jig = repo.paging_jig();
+    assert!(repo.base_jig().is_none(), "no base jig: {jig}");
     assert!(!out.contains("head - base"), "{out}");
     // The head was still measured and checked against the limit.
     assert!(out.contains("release-size: head "), "{out}");

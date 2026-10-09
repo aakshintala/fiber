@@ -172,8 +172,9 @@ skips the base comparison and the timing gates. In both cases the job
 summary names the base, says it does not build, and names the commit it
 compared against or says the comparison was skipped. The head's size check and
 benchmarks still gate the pull request, and a head that does not build still
-fails the job. The paging jig and the benchmarks follow the same rule: a base
-with no binary has no base timings, and the comment says so.
+fails the job. The paging jig and the benchmarks follow the same rule: the jig is built at
+the commit the base binary is from, and a base with no binary has no base
+timings, and the comment says so.
 
 The release profile sets `lto = "fat"` and `codegen-units = 1`, which
 shrinks the binary and lengthens the release build.

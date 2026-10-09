@@ -357,11 +357,10 @@ jobs:
           BASE_MATCHED_KEY: ${{ steps.stored.outputs.cache-matched-key }}
         run: scripts/release-size "$BASE_COMMIT"
       # The paging rows' jig, built for the target that ships; a base without
-      # one leaves its paging timings unavailable.
+      # one leaves its paging timings unavailable. Its base is the commit
+      # scripts/release-size compared against.
       - name: Build the paging jig
-        env:
-          BASE_COMMIT: ${{ steps.base.outputs.commit }}
-        run: scripts/paging-jig "$BASE_COMMIT"
+        run: scripts/paging-jig
       # Only the backstop saves, so a pull request's base comes from main.
       - name: Store this commit's binary
         if: github.event_name == 'push'
