@@ -489,6 +489,29 @@ fn a_mark_at_or_past_the_width_does_not_spin() {
 }
 
 #[test]
+fn a_mark_with_no_drawn_rows_does_not_spin() {
+    let (mut app, clock) = running();
+    app.set_now(clock.origin(), 0);
+    let area = Rect::new(0, 0, 4, 2);
+    let mut buf = Buffer::empty(area);
+    // Keep the other guards clear so the zero-row comparison is exercised.
+    spin(
+        &app,
+        &mut buf,
+        area,
+        Drawn {
+            y: 0,
+            col: 0,
+            first_row_shown: true,
+            rows: 1,
+            count: 0,
+        },
+    );
+    assert!(!text(&buf).contains(SPINNER[0]), "{}", text(&buf));
+    assert_eq!(app.take_wake(), None);
+}
+
+#[test]
 fn a_mark_at_column_zero_can_spin_when_its_line_wraps() {
     let (mut app, clock) = running();
     let origin = clock.origin();
@@ -548,6 +571,38 @@ fn a_zero_height_area_does_not_reserve_a_new_messages_row() {
         app.take_wake(),
         origin.checked_add(Duration::from_millis(120))
     );
+}
+
+#[test]
+fn a_mark_at_or_two_past_the_overlay_clamp_does_not_spin() {
+    let area = Rect::new(0, 0, 4, 2);
+    let last = area.bottom().saturating_sub(1);
+    for y in [last, last.saturating_add(2)] {
+        let (mut app, clock) = running_first();
+        app.on_key(Key::PageUp, clock.now());
+        app.on_line(session_line(
+            "assistant_message_delta",
+            serde_json::json!({"text": "streamed"}),
+            Some("a_2"),
+        ));
+        assert!(app.has_new());
+        app.set_now(clock.origin(), 0);
+        let mut buf = Buffer::empty(area);
+        spin(
+            &app,
+            &mut buf,
+            area,
+            Drawn {
+                y,
+                col: 0,
+                first_row_shown: true,
+                rows: 1,
+                count: 1,
+            },
+        );
+        assert!(!text(&buf).contains(SPINNER[0]), "y={y}: {}", text(&buf));
+        assert_eq!(app.take_wake(), None, "y={y}");
+    }
 }
 
 #[test]
