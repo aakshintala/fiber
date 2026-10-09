@@ -26,9 +26,9 @@ const RANGE_MAX: u32 = 20;
 const RENDER_SIDE: u32 = 2000;
 
 /// The most bytes a PDF may hold (`docs/tools.md`, "read"). A PDF over the
-/// cap fails before its bytes are loaded, so the child never holds more
-/// than about 2.1 times this (`docs/dependencies.md`).
-pub(crate) const PDF_MAX_BYTES: u64 = 67_108_864;
+/// cap fails before its bytes are loaded. This is a file-size limit, not a
+/// memory bound; measured peaks are in `docs/dependencies.md`.
+pub(crate) const PDF_MAX_BYTES: u64 = 104_857_600;
 
 /// Whether `len`, a file's metadata length in bytes, is over the PDF cap. A
 /// PDF of exactly [`PDF_MAX_BYTES`] is accepted.
@@ -40,7 +40,7 @@ pub(crate) fn pdf_over_cap(len: u64) -> bool {
 /// and the file's size.
 pub(crate) fn over_cap_message(path: &Path, size: u64) -> String {
     format!(
-        "`{}` is a PDF of {size} bytes, over the 64 MiB cap ({PDF_MAX_BYTES} bytes).",
+        "`{}` is a PDF of {size} bytes, over the 100 MiB cap ({PDF_MAX_BYTES} bytes).",
         path.display()
     )
 }

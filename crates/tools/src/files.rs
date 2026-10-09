@@ -73,7 +73,7 @@ pub(crate) enum Inspected {
         /// The hash of the bytes read, for the stale-file check.
         hash: u64,
     },
-    /// A PDF over the 64 MiB cap, by its metadata length and first bytes.
+    /// A PDF over the 100 MiB cap, by its metadata length and first bytes.
     /// Its bytes were never loaded, so there is no hash and no stale-file
     /// check: `read` refuses it before the child loads it
     /// (`docs/tools.md`, "read").

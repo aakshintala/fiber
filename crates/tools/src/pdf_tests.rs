@@ -117,7 +117,7 @@ fn the_pdf_cap_fails_over_not_at() {
     ] {
         assert_eq!(pdf_over_cap(len), over, "{len}");
     }
-    assert_eq!(PDF_MAX_BYTES, 67_108_864);
+    assert_eq!(PDF_MAX_BYTES, 104_857_600);
 }
 
 /// A sparse PDF of `len` bytes: PDF magic up front, zeros after. Instant
@@ -141,7 +141,7 @@ fn a_pdf_one_byte_over_the_cap_never_reaches_the_child() {
     let output = run(dir.path(), &fiber, &ppm, json!({"path": "big.pdf"}));
     assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile));
     let text = message(&output);
-    assert!(text.contains("64 MiB"), "{text}");
+    assert!(text.contains("100 MiB"), "{text}");
     assert!(text.contains(&PDF_MAX_BYTES.to_string()), "{text}");
     assert!(text.contains(&(PDF_MAX_BYTES + 1).to_string()), "{text}");
     assert!(!dir.path().join("ran").exists());
