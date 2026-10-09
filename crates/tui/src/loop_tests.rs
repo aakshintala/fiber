@@ -919,7 +919,7 @@ fn one_line_alone_counts_its_page_at_once() {
     inputs.truncate(1);
     let before = lp.app.pages().recounts;
     assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
-    // A batch of one holds nothing back: the line counts its page.
+    // A batch of one counts its page once, at its end.
     assert_eq!(lp.app.pages().recounts - before, 1);
 }
 
