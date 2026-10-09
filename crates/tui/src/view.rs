@@ -507,7 +507,18 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
             .iter()
             .find_map(|(marked, col)| (*marked == at).then_some(*col))
         {
-            working_line::spin(app, buf, area, y, col, skip == 0, count);
+working_line::spin(
+                app,
+                buf,
+                area,
+                working_line::Drawn {
+                    y,
+                    col,
+                    first_row_shown: skip == 0,
+                    rows,
+                    count,
+                },
+            );
         }
         if let Some(open) = open {
             let height = rect.height.min(last.saturating_sub(rect.y));

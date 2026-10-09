@@ -67,28 +67,44 @@ pub(super) fn draw(
     }
 }
 
+/// Where a marked line drew: its first drawn row, its mark's column,
+/// whether its first row shows, and its total wrapped rows with how
+/// many drew. A mark past the first row never spins.
+pub(crate) struct Drawn {
+    /// The line's first drawn row on screen.
+    pub(crate) y: u16,
+    /// The mark's column in the line.
+    pub(crate) col: u16,
+    /// The line's first row shows (`skip == 0`).
+    pub(crate) first_row_shown: bool,
+    /// The line's total wrapped rows.
+    pub(crate) rows: usize,
+    /// How many of its rows drew.
+    pub(crate) count: usize,
+}
+
 /// Spins a marked conversation line's cell: the line's first row, while
 /// that row shows above the "new messages" overlay. Anything else stays
 /// as drawn and asks for no frame, so a hidden mark draws no timer.
-pub(crate) fn spin(
-    app: &App,
-    buf: &mut Buffer,
-    area: Rect,
-    y: u16,
-    col: u16,
-    first_row_shown: bool,
-    rows: usize,
-) {
-    if !first_row_shown || rows == 0 || col >= area.width || (col > 0 && rows != 1) {
+pub(crate) fn spin(app: &App, buf: &mut Buffer, area: Rect, drawn: Drawn) {
+    if !drawn.first_row_shown
+        || drawn.count == 0
+        || drawn.col >= area.width
+        || (drawn.col > 0 && drawn.rows != 1)
+    {
         return;
     }
     let last = area
         .bottom()
         .saturating_sub(u16::from(app.has_new() && area.height > 0));
-    if y >= last {
+    if drawn.y >= last {
         return;
     }
-    app.motion().spin(buf, area.x.saturating_add(col), y);
+    app.motion().spin(
+        buf,
+        area.x.saturating_add(drawn.col),
+        drawn.y,
+    );
 }
 
 #[cfg(test)]

@@ -703,3 +703,50 @@ fn rest_frames_keep_asking_for_the_next_frame() {
         origin.checked_add(Duration::from_millis(2_160))
     );
 }
+
+#[test]
+fn a_band_clipped_at_the_bottom_row_keeps_its_still_form() {
+    let clock = FakeClock::new();
+    let mut app = App::new(PathBuf::from("/w"));
+    // Forty columns: the band wraps in two, its dot on the first row in
+    // column 34, inside the width, so only the single-row rule holds it.
+    app.set_size(40, 12);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    for n in 1..=5 {
+        app.on_line(prompt(format!("before {n}")));
+    }
+    app.on_line(session_line(
+        "turn_started",
+        serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(session_line(
+        "preamble_built",
+        serde_json::json!({"reason": "start", "model": "fake/m",
+            "context_window": 1_000_000, "tool_choice": "auto",
+            "cache_lifetime": "5m", "system_prompt": "", "tools": [],
+            "trigger_at": 400_000}),
+        None,
+    ));
+    app.on_line(session_line("handoff_started", serde_json::json!({"trigger": "auto"}), None));
+    for n in 1..=4 {
+        app.on_line(prompt(format!("after {n}")));
+    }
+    // Three wheel steps up: the band's first row lands on the bottom
+    // row, its second row below the area.
+    for _ in 0..3 {
+        app.on_wheel(&Mouse { kind: MouseKind::WheelUp, col: 15, row: 5 });
+    }
+    app.set_now(clock.origin(), 0);
+    let area = Rect::new(0, 0, 40, 12);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let shown = text(&buf);
+    // The first band row shows on the bottom row with its dot still:
+    // a wrapped mark never spins.
+    assert!(shown.lines().nth(10).is_some_and(|row| row.starts_with("⇄ Handoff")), "{shown}");
+    assert!(shown.lines().nth(10).is_some_and(|row| row.contains('●')), "{shown}");
+    assert!(!shown.contains(SPINNER[0]), "{shown}");
+    assert_eq!(app.take_wake(), None);
+}
