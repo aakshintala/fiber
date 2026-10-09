@@ -64,7 +64,7 @@ fn in_progress_damaged_and_plain_files_are_left_out() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_non_utf8_healthy_directory_is_returned_exactly_once() {
     use std::os::unix::ffi::OsStringExt as _;
@@ -72,14 +72,8 @@ fn a_non_utf8_healthy_directory_is_returned_exactly_once() {
     let home = fakes::TempDir::new("fiber-package-dirs-non-utf8");
     let raw = std::ffi::OsString::from_vec(b"ext-\xff".to_vec());
     let dir = home.path().join("extensions").join(&raw);
-    // macOS rejects non-UTF-8 file names with EILSEQ (os error 92), so
-    // there is nothing to list there; the old lossy `root.join(&name)`
-    // code reads the substituted path instead of `entry.path()`.
-    match fs::create_dir_all(&dir) {
-        Ok(()) => {}
-        Err(e) if e.raw_os_error() == Some(92) => return,
-        Err(e) => panic!("mkdir: {e}"),
-    }
+    // Linux only: macOS rejects non-UTF-8 file names (EILSEQ).
+    fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("mkdir: {e}"));
     fs::write(dir.join(".fiber.json"), RECORD).unwrap_or_else(|e| panic!("write: {e}"));
     assert_eq!(package_dirs(home.path()), vec![dir]);
 }
