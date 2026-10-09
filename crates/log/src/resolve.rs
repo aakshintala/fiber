@@ -76,7 +76,7 @@ pub fn resolve(
         let name = entry.file_name().to_string_lossy().into_owned();
         if entry.file_type().map(|k| k.is_dir()).unwrap_or(false)
             && entry.path().join(EVENTS).is_file()
-            && is_session(&entry.path(), in_project)
+            && opening(&entry.path(), in_project).is_some()
         {
             names.push(name);
         }
@@ -99,21 +99,12 @@ pub fn resolve(
     }
 }
 
-/// Whether `dir` holds one of this project's sessions: its first complete
-/// line parses and is `session_started` with a workspace `in_project`
-/// accepts. Anything else is not a session, and never an error: an empty
-/// log, a torn first line, or a first line that does not parse all read as
-/// no first line at all.
-fn is_session(dir: &Path, in_project: &dyn Fn(&str) -> bool) -> bool {
-    opening(dir, in_project).is_some()
-}
-
 /// What `dir`'s first complete line says, when it holds one of this
 /// project's sessions: its `ts`, and whether it names a parent, which
-/// makes the session a delegate (`docs/delegates.md`). `None` the same
-/// way [`is_session`] says no: an empty log, a torn first line, a first
-/// line that does not parse or is not `session_started`, or a workspace
-/// `in_project` refuses.
+/// makes the session a delegate (`docs/delegates.md`). `None` when it
+/// holds none: an empty log, a torn first line, a first line that does
+/// not parse or is not `session_started`, or a workspace `in_project`
+/// refuses.
 struct Opening {
     /// The first line's `ts`.
     ts: u64,

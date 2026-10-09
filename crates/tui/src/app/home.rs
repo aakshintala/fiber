@@ -20,9 +20,7 @@ use crate::mouse::{Target, TargetId};
 use crate::view::max_question_scroll;
 use contract::SessionId;
 
-#[path = "app_exit.rs"]
 mod exit;
-#[path = "app_open_at.rs"]
 mod open_at;
 
 /// Home's state: the launch description, and whether a `start` went out in
@@ -400,14 +398,13 @@ impl App {
                                 .get("result")
                                 .map(recent_rows)
                                 .unwrap_or_default();
-                            let listed = !rows.is_empty();
                             if let Some(home) = self.home.as_mut() {
                                 home.sessions.recent(rows, first);
                             }
-                            self.list_answered(first, true, listed);
+                            self.list_answered(first, true);
                         } else {
                             self.notices.push(refusal(&hub.payload));
-                            self.list_answered(first, false, false);
+                            self.list_answered(first, false);
                         }
                         return Some(Vec::new());
                     }
@@ -1372,5 +1369,5 @@ fn refusal(payload: &serde_json::Map<String, Value>) -> String {
 }
 
 #[cfg(test)]
-#[path = "app_home_tests.rs"]
+#[path = "home_tests.rs"]
 mod tests;

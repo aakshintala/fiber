@@ -243,6 +243,30 @@ fn a_list_launch_with_no_rows_leaves_the_box_focused() {
 }
 
 #[test]
+fn a_list_launch_with_an_empty_first_page_but_a_live_row_focuses_the_list() {
+    let mut app = home_at(OpenAt::List);
+    assert!(app.on_line(status("s_aaaaaaaaaaaaaaaa")).is_empty());
+    let lines = commands(app.on_line(hello()));
+    let recent = lines[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recent id"));
+    assert!(
+        app.on_line(accepted(recent, json!({"sessions": []})))
+            .is_empty()
+    );
+    assert!(spent(&app));
+    drawn(&mut app);
+    let row = keys(&app)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a row"));
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row)))
+    );
+}
+
+#[test]
 fn a_list_launch_on_a_rejected_first_page_leaves_the_box_focused() {
     let mut app = home_at(OpenAt::List);
     let lines = commands(app.on_line(hello()));
@@ -277,7 +301,7 @@ fn a_home_launch_never_focuses_the_list() {
 #[test]
 fn a_later_recent_page_never_focuses_the_list() {
     let mut app = home_at(OpenAt::List);
-    app.list_answered(false, true, true);
+    app.list_answered(false, true);
     assert!(!spent(&app));
     drawn(&mut app);
     assert_eq!(app.focused(), None);
