@@ -507,7 +507,7 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
             .iter()
             .find_map(|(marked, col)| (*marked == at).then_some(*col))
         {
-working_line::spin(
+            working_line::spin(
                 app,
                 buf,
                 area,

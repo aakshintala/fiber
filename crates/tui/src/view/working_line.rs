@@ -100,11 +100,8 @@ pub(crate) fn spin(app: &App, buf: &mut Buffer, area: Rect, drawn: Drawn) {
     if drawn.y >= last {
         return;
     }
-    app.motion().spin(
-        buf,
-        area.x.saturating_add(drawn.col),
-        drawn.y,
-    );
+    app.motion()
+        .spin(buf, area.x.saturating_add(drawn.col), drawn.y);
 }
 
 #[cfg(test)]
