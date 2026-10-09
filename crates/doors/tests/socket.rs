@@ -809,6 +809,7 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
             model: "fake/m".into(),
             context_window: 200_000,
             trigger_at: None,
+            budget: None,
             thinking: None,
             tool_choice: "auto".into(),
             cache_lifetime: CacheLifetime::FiveMinutes,

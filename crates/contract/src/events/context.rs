@@ -128,7 +128,7 @@ pub struct SentTool {
 }
 
 /// `preamble_built` (`docs/prompt-cache.md`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PreambleBuilt {
     /// Why it was built.
     pub reason: PreambleReason,
@@ -140,6 +140,10 @@ pub struct PreambleBuilt {
     /// automatic handoff is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_at: Option<u64>,
+    /// The session's `budget.usd`, after every configuration layer and `-c`;
+    /// absent when none is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<f64>,
     /// The thinking level, where the model takes one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,

@@ -306,6 +306,7 @@ fn built(window: u64, tools: Vec<contract::events::SentTool>) -> contract::event
         model: "m".into(),
         context_window: window,
         trigger_at: None,
+        budget: None,
         thinking: None,
         tool_choice: "auto".into(),
         cache_lifetime: contract::events::CacheLifetime::OneHour,

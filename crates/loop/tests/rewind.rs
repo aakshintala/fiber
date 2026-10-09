@@ -714,6 +714,7 @@ fn a_rewind_before_the_first_request_keeps_the_logged_model_and_thinking() {
             model: "fake/model-9".into(),
             context_window: fakes::CONTEXT_WINDOW,
             trigger_at: None,
+            budget: None,
             thinking: Some("high".into()),
             tool_choice: "auto".into(),
             cache_lifetime: CacheLifetime::OneHour,

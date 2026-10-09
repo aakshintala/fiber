@@ -1855,6 +1855,27 @@ fn a_zero_budget_fails_the_turn_before_the_provider_is_called() {
     assert_eq!(run.last()["payload"]["exit_code"], 1);
 }
 
+#[test]
+fn the_configured_budget_reaches_preamble_built() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "budget": {"usd": 1.5}}),
+    );
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let built = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["budget"], 1.5);
+}
+
 /// Meta's own `openai-responses` stream for `muse-spark-1.3-contributor`,
 /// rebuilt from the lines the probe kept: reasoning, then
 /// `response.incomplete` at the probe's 16-token cap, with no text.
