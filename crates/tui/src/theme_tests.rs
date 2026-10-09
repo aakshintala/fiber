@@ -347,10 +347,7 @@ fn doc_dark_reads_the_third_column_of_the_themes_table() {
     let doc = "## Look\n\n| a | b | c |\n|---|---|---|\n| `x` | use | `1` |\n\n### Themes\n\nText.\n\n\
                | Role | Use | Dark |\n|---|---|---|\n| `text` | words | the terminal's foreground |\n| `muted` | dim | `text`, dim |\n\nAfter.\n\n\
                | `later` | no | `2` |\n\n### Next\n";
-    assert_eq!(
-        doc_dark(doc),
-        ["the terminal's foreground", "`text`, dim"]
-    );
+    assert_eq!(doc_dark(doc), ["the terminal's foreground", "`text`, dim"]);
 }
 
 /// The dark theme's shade the doc's dark cell `cell` names for `role`.
@@ -361,9 +358,7 @@ fn dark_cell(cell: &str, role: Role) -> Shade {
         hex => {
             let digits = hex.strip_prefix("`#").and_then(|hex| hex.strip_suffix('`'));
             let rgb = digits.and_then(|digits| {
-                if digits.len() == 6
-                    && digits.bytes().all(|byte| byte.is_ascii_hexdigit())
-                {
+                if digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                     let channel =
                         |at: usize| u8::from_str_radix(&digits[at..at.saturating_add(2)], 16).ok();
                     Some(Shade::Rgb((channel(0)?, channel(2)?, channel(4)?)))
@@ -386,7 +381,12 @@ fn the_dark_theme_is_the_doc_table() {
     let dark = doc_dark(&doc);
     assert_eq!(dark.len(), ROLES, "{dark:?}");
     for (role, cell) in Role::ALL.into_iter().zip(dark.iter()) {
-        assert_eq!(Theme::DARK.shade(role), dark_cell(cell, role), "{}", role.name());
+        assert_eq!(
+            Theme::DARK.shade(role),
+            dark_cell(cell, role),
+            "{}",
+            role.name()
+        );
     }
 }
 
