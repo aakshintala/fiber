@@ -63,8 +63,8 @@ pub(crate) enum Retire {
 pub(crate) struct AckOrder {
     inner: Mutex<Inner>,
     changed: Condvar,
-    /// Tests only: a one-shot pause in `drain` after its collect and
-    /// remove, where the fix takes the relays lock to wait for `route`.
+    /// Tests only: a one-shot pause at `drain`'s start, before any lock:
+    /// the point where the drain waits for `route`'s write outcome.
     #[cfg(test)]
     pub(crate) before_drain: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: a one-shot signal at the top of the relay thread's
@@ -318,16 +318,24 @@ pub(crate) fn drain(
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<Relays>>,
 ) {
-    let dropped: Vec<(String, String)> = lock(kept)
-        .iter()
-        .filter(|(_, _, sent)| *sent)
-        .map(|(id, _, _)| (session.to_owned(), id.clone()))
-        .collect();
-    lock(kept).retain(|(_, _, sent)| !sent);
     #[cfg(test)]
     if let Some(before) = lock(&order.before_drain).take() {
         before();
     }
+    // Under the relays lock, which `route` holds from keeping a command as
+    // sent until its write's outcome: a command whose write failed is
+    // never dropped as sent.
+    let dropped: Vec<(String, String)> = {
+        let _held = lock(relays);
+        let mut kept = lock(kept);
+        let dropped = kept
+            .iter()
+            .filter(|(_, _, sent)| *sent)
+            .map(|(id, _, _)| (session.to_owned(), id.clone()))
+            .collect();
+        kept.retain(|(_, _, sent)| !sent);
+        dropped
+    };
     order.drop_ids(&dropped);
     pump(session, epoch, kept, hub, writer, relays, true);
 }
