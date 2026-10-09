@@ -271,7 +271,8 @@ fn a_frame_fetches_a_dropped_page_in_answers_of_256_and_draws_it() {
     // To the top: the first turn's bubble starts the screen, its text
     // on the next row.
     assert!(
-        rows.first().is_some_and(|row| row.trim_start().starts_with('▄')),
+        rows.first()
+            .is_some_and(|row| row.trim_start().starts_with('▄')),
         "{screen}"
     );
     assert!(

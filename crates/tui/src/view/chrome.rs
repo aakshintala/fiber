@@ -11,9 +11,6 @@ use crate::app::App;
 use crate::layout::Layout;
 use crate::markdown::{Role, style};
 
-/// The rail's and the panel's background.
-const REGION_TINT: Style = Style::new().bg(Role::Surface.color());
-
 /// The draggable edge's grip, drawn on three rows at mid-height.
 const GRIP: &str = "⋮";
 
@@ -30,14 +27,12 @@ pub(super) fn floor(text: &str, area: Rect, buf: &mut Buffer) {
 /// its header row.
 pub(super) fn draw(app: &App, layout: &Layout, buf: &mut Buffer) -> Rect {
     if let Some(rail) = layout.rail {
-        buf.set_style(rail, REGION_TINT);
         grip(buf, rail.right().saturating_sub(1), rail);
     }
     if let Some(at) = layout.grip {
         grip(buf, at.x, at);
     }
     if let Some(panel) = layout.panel {
-        buf.set_style(panel, REGION_TINT);
         grip(buf, panel.x, panel);
     }
     let column = layout.column;

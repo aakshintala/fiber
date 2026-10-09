@@ -202,3 +202,22 @@ fn grip_excludes_the_bottom_edge() {
     assert_eq!(symbol(6, &buf), Some("⋮".to_owned()));
     assert_eq!(symbol(7, &buf), Some(" ".to_owned()));
 }
+
+#[test]
+fn the_regions_are_not_tinted() {
+    use crate::theme::Role;
+    let app = app(160, 40, false);
+    let (buf, _) = draw(&app, 160, 40);
+    // The panel's region keeps the background: a cell no card covers
+    // carries no surface tint.
+    let surface = Role::Surface.color();
+    let panel = app
+        .chrome()
+        .layout()
+        .expect("a layout")
+        .panel
+        .expect("a panel");
+    for x in panel.left()..panel.right() {
+        assert_ne!(buf[(x, panel.y)].bg, surface);
+    }
+}

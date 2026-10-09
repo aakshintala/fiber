@@ -687,10 +687,7 @@ fn failed_turn_says_why_before_it_closes() {
     attach(&mut app, clock.now(), "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
     app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "failed"));
-    assert_eq!(
-        texts(&app)[4..],
-        ["✗ boom · io_failed", "▣ failed"]
-    );
+    assert_eq!(texts(&app)[4..], ["✗ boom · io_failed", "▣ failed"]);
 }
 
 #[test]

@@ -448,4 +448,3 @@ fn title_parts_are_left_out_when_empty() {
     assert_eq!(title(true, Some("!"), ""), "! · fiber");
     assert_eq!(title(true, Some("!"), "n"), "! n · fiber");
 }
-

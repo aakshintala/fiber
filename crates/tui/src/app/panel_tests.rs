@@ -1149,11 +1149,11 @@ fn the_wheel_scrolls_the_panel_by_three_and_clamps() {
         assert_eq!(app.panel_state().scroll(), expected);
     }
     app.on_wheel(&down);
-    assert_eq!(app.panel_state().scroll(), 22);
+    assert_eq!(app.panel_state().scroll(), 24);
     app.on_wheel(&down);
-    assert_eq!(app.panel_state().scroll(), 22);
+    assert_eq!(app.panel_state().scroll(), 24);
     let up = mouse(MouseKind::WheelUp, 140, 20);
-    for expected in [19, 16, 13, 10, 7, 4, 1] {
+    for expected in [21, 18, 15, 12, 9, 6, 3, 0] {
         app.on_wheel(&up);
         assert_eq!(app.panel_state().scroll(), expected);
     }
@@ -1224,27 +1224,27 @@ fn wheel_up_after_growth_moves_on_the_first_wheel() {
     for _ in 0..8 {
         app.on_wheel(&down);
     }
-    assert_eq!(app.panel_state().scroll(), 22);
+    assert_eq!(app.panel_state().scroll(), 24);
     app.set_size(160, 60);
-    // The stored 22 draws clamped to 2.
+    // The stored 24 draws clamped to 4.
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
-        "  line 01"
+        "  line 02"
     );
-    // Clamped 2 saturates to 0, so the display moves to the top, not
-    // stuck at 2 (22 - 3 = 19 would stick).
+    // Clamped 4 moves to 1, so the display moves, not stuck at 4
+    // (24 - 3 = 21 would stick).
     app.on_wheel(&mouse(MouseKind::WheelUp, 140, 20));
-    assert_eq!(app.panel_state().scroll(), 0);
+    assert_eq!(app.panel_state().scroll(), 1);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
         "  plan \u{b7} tasks"
     );
-    // Down from the top clamps to the new end: 0 + 3 past 2 stays at 2.
+    // Down moves to the new end at 4.
     app.on_wheel(&mouse(MouseKind::WheelDown, 140, 20));
-    assert_eq!(app.panel_state().scroll(), 2);
+    assert_eq!(app.panel_state().scroll(), 4);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
-        "  line 01"
+        "  line 02"
     );
 }
 
@@ -1257,32 +1257,32 @@ fn wheel_up_after_shrinkage_moves_on_the_first_wheel() {
     for _ in 0..8 {
         app.on_wheel(&down);
     }
-    assert_eq!(app.panel_state().scroll(), 22);
+    assert_eq!(app.panel_state().scroll(), 24);
     let lines: Vec<String> = (0..50).map(|n| format!("line {n:02}")).collect();
     app.on_line(session_line(
         SESSION,
         "extension_ui",
         serde_json::json!({"extension": "plan", "widget": "tasks", "lines": lines}),
     ));
-    // Fifty lines draw 51 rows against 39, so the stored 22 draws
-    // clamped to 12.
+    // Fifty lines draw 53 rows against 39, so the stored 24 draws
+    // clamped to 14.
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
-        "  line 11"
+        "  line 12"
     );
-    // Clamped 12 - 3 = 9, so the display moves, not stuck at 12
-    // (22 - 3 = 19 would stick).
+    // Clamped 14 - 3 = 11, so the display moves, not stuck at 14
+    // (24 - 3 = 21 would stick).
     app.on_wheel(&mouse(MouseKind::WheelUp, 140, 20));
-    assert_eq!(app.panel_state().scroll(), 9);
+    assert_eq!(app.panel_state().scroll(), 11);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
-        "  line 08"
+        "  line 09"
     );
-    // Down returns to the shrunk end: 9 + 3 = 12.
+    // Down returns toward the shrunk end: 11 + 3 = 14.
     app.on_wheel(&mouse(MouseKind::WheelDown, 140, 20));
-    assert_eq!(app.panel_state().scroll(), 12);
+    assert_eq!(app.panel_state().scroll(), 14);
     assert_eq!(
         panel_text(&app).lines().nth(1).unwrap_or_default(),
-        "  line 11"
+        "  line 12"
     );
 }

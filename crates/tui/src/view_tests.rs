@@ -148,7 +148,12 @@ fn prompt_bubble_shows_the_local_time_under_it() {
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
     assert_eq!(
         texts,
-        vec!["▄▄▄▄▄".to_owned(), " go ▐".to_owned(), "▀▀▀▀▀".to_owned(), "10:15".to_owned()]
+        vec![
+            "▄▄▄▄▄".to_owned(),
+            " go ▐".to_owned(),
+            "▀▀▀▀▀".to_owned(),
+            "10:15".to_owned()
+        ]
     );
     let time = app
         .lines()
@@ -186,7 +191,12 @@ fn prompt_bubble_defaults_to_utc() {
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
     assert_eq!(
         texts,
-        vec!["▄▄▄▄▄".to_owned(), " go ▐".to_owned(), "▀▀▀▀▀".to_owned(), "14:15".to_owned()]
+        vec![
+            "▄▄▄▄▄".to_owned(),
+            " go ▐".to_owned(),
+            "▀▀▀▀▀".to_owned(),
+            "14:15".to_owned()
+        ]
     );
 }
 
@@ -1673,14 +1683,32 @@ fn the_focused_target_is_drawn_reversed() {
     // outside it.
     attach(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "a"));
-    app.on_line(at("tool_call_requested", Some("a_1"), 0,
-        json!({"name": "read", "arguments": {"path": "src/a.rs"}})));
-    app.on_line(at("tool_call_completed", Some("a_1"), 0,
+    app.on_line(at(
+        "tool_call_requested",
+        Some("a_1"),
+        0,
+        json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+    ));
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_1"),
+        0,
         json!({"status": "completed",
-            "content": [{"type": "text", "text": "fn a() {}"}]})));
-    app.on_line(at("turn_completed", None, 0, json!({"outcome": "completed"})));
+            "content": [{"type": "text", "text": "fn a() {}"}]}),
+    ));
+    app.on_line(at(
+        "turn_completed",
+        None,
+        0,
+        json!({"outcome": "completed"}),
+    ));
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "b"));
-    app.on_line(at("text_completed", Some("a_m"), 0, json!({"text": "reply"})));
+    app.on_line(at(
+        "text_completed",
+        Some("a_m"),
+        0,
+        json!({"text": "reply"}),
+    ));
     app.on_key(Key::BackTab, fakes::clock::FakeClock::new().now());
     let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     app.drawn(&targets);
@@ -1833,4 +1861,3 @@ fn input_with_an_image_token() {
     insta::assert_snapshot!("input_with_an_image_token", screen(&app));
     assert_eq!(cursor_at(&app), Some(Position::new(17, 10)));
 }
-

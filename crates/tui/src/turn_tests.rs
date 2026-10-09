@@ -203,7 +203,9 @@ fn a_group_counts_its_calls_by_kind_and_its_span() {
     assert_eq!(
         texts(&app),
         vec![
-            "▄▄▄▄▄▄▄▄▄", " fix it ▐", "▀▀▀▀▀▀▀▀▀",
+            "▄▄▄▄▄▄▄▄▄",
+            " fix it ▐",
+            "▀▀▀▀▀▀▀▀▀",
             "00:00",
             "• Read 2 files, edited 1 file +3 −1, ran 1 command, thought once · 12s",
             "Done.",
@@ -321,7 +323,9 @@ fn a_thinking_only_group_is_one_line_per_block() {
     assert_eq!(
         texts(&app),
         vec![
-            "▄▄▄▄▄▄", " why ▐", "▀▀▀▀▀▀",
+            "▄▄▄▄▄▄",
+            " why ▐",
+            "▀▀▀▀▀▀",
             "00:00",
             "+ Thought: Plan the fix · 22s",
             "+ Thought: short",
