@@ -187,11 +187,7 @@ impl App {
         else {
             return;
         };
-        for entry in &mut self.model_picker.catalogue.models {
-            if entry.reference == reference {
-                entry.configured = choice.level.clone();
-            }
-        }
+        self.picker_thinking_saved(reference, choice.level.clone());
         if let Some(home) = self.home.as_mut() {
             home.launch.thinking = choice.level.clone();
         }
@@ -253,10 +249,20 @@ impl App {
         else {
             return;
         };
+        self.picker_thinking_saved(reference, Some(text.to_owned()));
+    }
+
+    /// Folds a saved level into the catalogue and matching pending start.
+    fn picker_thinking_saved(&mut self, reference: &str, level: Option<String>) {
         for entry in &mut self.model_picker.catalogue.models {
             if entry.reference == reference {
-                entry.configured = Some(text.to_owned());
+                entry.configured = level.clone();
             }
+        }
+        if let Some(choice) = self.model_picker.start_model.as_mut()
+            && choice.reference == reference
+        {
+            choice.level = level;
         }
     }
 

@@ -1711,6 +1711,36 @@ fn enter_after_s_on_home_forgets_the_session_only_choice() {
 }
 
 #[test]
+fn enter_on_home_supersedes_a_pending_choice_for_the_same_model() {
+    let mut app = home();
+    let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
+    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.on_line(hello());
+    app.on_models(Ok(three()));
+
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    open(&mut app);
+    app.on_edit(Edit::Left);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+
+    assert!(app.model_picker.start_model.is_none());
+    let launch = &app.home.as_ref().expect("home").launch;
+    assert_eq!(launch.model.as_deref(), Some("acme/m1"));
+    assert_eq!(launch.thinking.as_deref(), Some("low"));
+    assert_eq!(
+        seam.writes()
+            .iter()
+            .map(|(_, _, key, text)| (key.clone(), text.clone()))
+            .collect::<Vec<_>>(),
+        [
+            ("model".to_owned(), "acme/m1".to_owned()),
+            ("models.\"acme/m1\".thinking".to_owned(), "low".to_owned())
+        ]
+    );
+}
+
+#[test]
 fn s_after_enter_on_home_still_rides_the_next_start() {
     let mut app = home();
     let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
@@ -2007,6 +2037,97 @@ fn thinking_with_a_level_saves_for_the_pending_home_choice() {
             .map(|(_, _, key, text)| (key.clone(), text.clone()))
             .collect::<Vec<_>>(),
         [("models.\"acme/m1\".thinking".to_owned(), "high".to_owned())]
+    );
+}
+
+#[test]
+fn thinking_low_updates_a_pending_home_choice_and_the_next_start() {
+    let mut app = home();
+    let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
+    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.on_line(hello());
+    app.on_models(Ok(three()));
+    open(&mut app);
+    // `s` holds `acme/m1` at high for this start only.
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(
+        app.model_picker
+            .start_model
+            .as_ref()
+            .map(|choice| choice.level.as_deref()),
+        Some(Some("high"))
+    );
+
+    // `/thinking low` saves a different level without saving the model.
+    assert_eq!(run_draft(&mut app, "/thinking low"), Effect::None);
+    assert_eq!(
+        seam.writes()
+            .iter()
+            .map(|(_, _, key, text)| (key.clone(), text.clone()))
+            .collect::<Vec<_>>(),
+        [("models.\"acme/m1\".thinking".to_owned(), "low".to_owned())]
+    );
+
+    // Reopening draws low as the selected chip; the same level rides the
+    // pending model into the next start.
+    open(&mut app);
+    let frame = app.model_picker_frame(24).expect("picker frame");
+    let chip_cells = frame.rows[2]
+        .iter()
+        .map(|(text, _, _)| text.as_str())
+        .collect::<Vec<_>>();
+    let chips = chip(&app);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    type_draft(&mut app, "hi");
+    let args = started(app.on_key(Key::Enter, now()));
+    assert_eq!(
+        (
+            chips.as_deref(),
+            chip_cells,
+            args["model"].clone(),
+            args["overrides"].clone()
+        ),
+        (
+            Some("low"),
+            vec!["m1   ", "[low] ", "high "],
+            json!("acme/m1"),
+            json!(["models.\"acme/m1\".thinking=low"])
+        )
+    );
+}
+
+#[test]
+fn an_accepted_level_updates_only_the_matching_pending_start_model() {
+    let mut app = home();
+    let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
+    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    let held = crate::model_picker::Choice {
+        reference: "acme/m1".to_owned(),
+        level: Some("high".to_owned()),
+        level_chosen: false,
+        save_model: false,
+        session_only: true,
+    };
+    app.model_picker.start_model = Some(held.clone());
+
+    app.model_picker.awaiting.insert(
+        "other".to_owned(),
+        vec![("models.\"acme/m2\".thinking".to_owned(), "low".to_owned())],
+    );
+    app.model_picker_accepted("other");
+    assert_eq!(app.model_picker.start_model, Some(held.clone()));
+
+    app.model_picker.awaiting.insert(
+        "same".to_owned(),
+        vec![("models.\"acme/m1\".thinking".to_owned(), "low".to_owned())],
+    );
+    app.model_picker_accepted("same");
+    assert_eq!(
+        app.model_picker
+            .start_model
+            .as_ref()
+            .and_then(|choice| choice.level.as_deref()),
+        Some("low")
     );
 }
 
