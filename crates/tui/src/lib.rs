@@ -18,6 +18,7 @@ mod clipboard;
 mod configure;
 #[cfg(test)]
 mod configure_fake;
+mod context_view;
 mod editor;
 mod event_loop;
 mod files;
@@ -37,6 +38,7 @@ mod logical;
 mod login_view;
 mod look;
 mod markdown;
+mod motion;
 mod mouse;
 mod offer;
 mod open_at;
@@ -60,12 +62,14 @@ mod surface;
 mod swapped;
 mod term;
 mod theme;
+mod tick;
 mod tools_view;
 mod turn;
 mod turn_text;
 mod usage_view;
 mod view;
 mod window;
+mod working;
 
 use std::io;
 use std::os::unix::net::UnixStream;
@@ -141,6 +145,10 @@ pub(crate) enum Input {
         /// The image in base64, or the notice.
         result: Result<String, String>,
     },
+    /// The working line's timer passed: the frame the tick armed drew,
+    /// and the next moving frame arms it again (`docs/tui.md`, "The
+    /// working line").
+    Tick,
 }
 
 /// Restores the terminal [`run`] set up: turns mouse reporting off, leaves

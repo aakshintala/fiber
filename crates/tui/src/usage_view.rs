@@ -68,13 +68,12 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
     let mut rows = Vec::new();
     let calls: Vec<&UsageRecorded> = fold.calls.values().map(|(_, line)| line).collect();
     if calls.is_empty() {
-        let empty = log::usage(std::iter::empty::<&UsageRecorded>());
-        budget_row(&mut rows, budget, &empty);
+        budget_row(&mut rows, budget, 0.0);
         rows.push(row("No model calls yet."));
     } else {
         let session = log::usage(calls.iter().copied());
         append_entry(&mut rows, "session", &session);
-        budget_row(&mut rows, budget, &session);
+        budget_row(&mut rows, budget, session.cost.unwrap_or(0.0));
 
         rows.push(row("by turn"));
         let known_turns: BTreeSet<TurnId> = fold.turns.iter().cloned().collect();
@@ -165,9 +164,8 @@ fn append_entry(rows: &mut Vec<Vec<(String, Option<Spot>)>>, heading: &str, usag
     )));
 }
 
-fn budget_row(rows: &mut Vec<Vec<(String, Option<Spot>)>>, budget: Option<f64>, usage: &Usage) {
+fn budget_row(rows: &mut Vec<Vec<(String, Option<Spot>)>>, budget: Option<f64>, billed: f64) {
     if let Some(budget) = budget {
-        let billed = usage.cost.unwrap_or(0.0);
         let left = (budget - billed).max(0.0);
         rows.push(row(format!(
             "budget left  {} of {}",

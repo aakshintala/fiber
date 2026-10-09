@@ -2551,3 +2551,37 @@ fn joins_survive_a_new_width() {
     let reference = whole(&pages, &lines);
     assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
 }
+
+#[test]
+fn shown_carries_the_spin_marks_of_its_lines() {
+    let mut stream = Stream::new(false);
+    stream.turn(0, 30);
+    // A running tail: a turn, its step and its requested call, never
+    // completed, so its group line moves on the open page.
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    );
+    stream.durable("step_started", None, json!({}));
+    stream.durable("assistant_message_started", Some("a_mx"), json!({}));
+    stream.durable(
+        "tool_call_requested",
+        Some("a_tx"),
+        json!({"name": "read", "arguments": {"path": "src/x.rs"}}),
+    );
+    let mut pages = Pages::new(60);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    assert!(pages.index().pages().len() > 1, "too few pages");
+    let shown = pages.shown(0, usize::MAX);
+    // The one moving line, by its index in the joined lines: finished
+    // groups mark nothing.
+    let moving = shown
+        .lines
+        .iter()
+        .rposition(|(line, _, _)| line.to_string().starts_with("• Read 1 file"));
+    assert_eq!(shown.spins, vec![(moving.unwrap_or(usize::MAX), 0)]);
+}

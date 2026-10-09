@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/context_view_tests.rs
+expression: screen
+---
+Context                                                                        ✕
+context  61,234 of 200,000 tokens · 30%
+▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│░░░░░░░░░░░░░░░░░░░░░░░
+█ system prompt  13 tokens
+▓ tool definitions  17 tokens
+▒ tool results  11 tokens
+▆ messages  61,193 tokens
+│ handoff at 140,000 tokens: Fiber writes a summary and the work continues in a
+largest tool results
+  read  ~11 tokens
+
+
+
+
+
+
+
+
+
+
+
+
+Sizes are approximate: bytes at the session's own tokens-per-byte rate.
+↑↓ scroll · Esc close

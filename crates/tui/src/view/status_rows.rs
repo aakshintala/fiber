@@ -106,7 +106,7 @@ fn session_segments(app: &App) -> Vec<(String, Option<Spot>)> {
             .map(|context| (window, context))
     }) {
         let pct = context.tokens.saturating_mul(100) / window;
-        out.push((format!("{pct}% context"), None));
+        out.push((format!("{pct}% context"), Some(Spot::Context)));
     }
     if let Some(spend) = app.attached_spend() {
         // With a budget the segment reads billed spend against it, as
@@ -318,6 +318,8 @@ pub(super) fn draw_widget(
 /// the narrow layout's fit of them.
 pub(super) fn draw_delegates(app: &App, area: Rect, buf: &mut Buffer, bottom: &mut u16) {
     let keep = app.narrow_fit().map_or(0, |fit| fit.delegates);
+    // A drawn state row's spinner moves on the tick.
+    super::panel::delegates::ask(app, 0..keep);
     for line in delegates(app, area.width).into_iter().take(keep).rev() {
         let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) else {
             continue;

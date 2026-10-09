@@ -2,8 +2,8 @@
 //! `recent` pages, keys, glyphs and lines.
 
 use super::{
-    Left, Level, Row, Sessions, State, Subs, delete_line, dependents, from_status, line, opening,
-    quit_line, recent_rows,
+    Left, Level, Row, Sessions, State, Subs, delete_line, dependents, from_status, glyph, line,
+    line_with, opening, quit_line, recent_rows,
 };
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
@@ -854,4 +854,27 @@ fn in_git_names_a_workspace_with_a_git_row() {
     assert!(sessions.in_git("/Users/a/work/fiber"));
     assert!(!sessions.in_git("/Users/a/work/lens"));
     assert!(!sessions.in_git("/Users/a/work/nowhere"));
+}
+
+#[test]
+fn line_with_draws_the_glyph_it_is_given() {
+    let row = from_status(&envelope(
+        "s_aaaaaaaaaaaaaaaa",
+        json!({"state": "streaming"}),
+    ));
+    assert!(line_with(&row, PROJECT, "⠋").starts_with("⠋"), "{row:?}");
+    assert!(line_with(&row, PROJECT, "●").starts_with("●"), "{row:?}");
+}
+
+#[test]
+fn line_is_line_with_the_still_glyph() {
+    for state in [
+        json!({"state": "streaming"}),
+        json!({"state": "retrying"}),
+        json!({"state": "jobs"}),
+        json!({"state": "idle"}),
+    ] {
+        let row = from_status(&envelope("s_aaaaaaaaaaaaaaaa", state));
+        assert_eq!(line(&row, PROJECT), line_with(&row, PROJECT, glyph(&row)));
+    }
 }

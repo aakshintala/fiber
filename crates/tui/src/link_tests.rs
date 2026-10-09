@@ -1,6 +1,6 @@
 //! Tests for hub lines out and in.
 
-use super::{Line, parse_line, read_lines, write_line};
+use super::{Line, answers, parse_line, read_lines, write_line};
 use crate::Input;
 use std::io::Read;
 use std::os::unix::net::UnixStream;
@@ -80,6 +80,27 @@ fn parse_line_splits_and_refuses_malformed() {
     ));
     assert!(parse_line("not json").is_none());
     assert!(parse_line(r#"{"kind": 1}"#).is_none());
+}
+
+#[test]
+fn answers_matches_only_its_command() {
+    let line = |kind: &str, id: &str| contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId("s_x".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"command_id": id})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    };
+    assert!(answers(&line("command_accepted", "c_1"), "c_1"));
+    assert!(answers(&line("command_rejected", "c_1"), "c_1"));
+    assert!(!answers(&line("command_accepted", "c_2"), "c_1"));
+    assert!(!answers(&line("turn_started", "c_1"), "c_1"));
 }
 
 #[test]

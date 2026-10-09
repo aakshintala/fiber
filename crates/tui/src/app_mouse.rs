@@ -73,6 +73,9 @@ impl App {
             TargetId::Rail(spot) => self.rail_click(spot),
             TargetId::Token(number) => self.open_token(number),
             TargetId::Turn(_) => Effect::None,
+            // The working line's interrupt clicks like Esc: `cancel`,
+            // only when busy and connected.
+            TargetId::Interrupt => self.on_esc(),
         };
         self.settle();
         effect

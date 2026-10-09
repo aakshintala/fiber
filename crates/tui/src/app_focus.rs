@@ -240,6 +240,7 @@ impl App {
             TargetId::Turn(at) => self.turn_text(at),
             TargetId::Badge
             | TargetId::NewBelow
+            | TargetId::Interrupt
             | TargetId::DropSteering(_)
             | TargetId::DismissNotice(_)
             | TargetId::MoreNotices

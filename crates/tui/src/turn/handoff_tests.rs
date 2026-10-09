@@ -118,7 +118,7 @@ fn each_trigger_reads_as_the_band_says_it() {
         started(&mut app, trigger);
         assert_eq!(
             band(&app),
-            format!("⇄ Handoff · {says} · writing the note…"),
+            format!("⇄ Handoff · {says} · ● writing the note…"),
             "{trigger}"
         );
     }
@@ -128,7 +128,7 @@ fn each_trigger_reads_as_the_band_says_it() {
     preamble(&mut app, None);
     start(&mut app);
     started(&mut app, "auto");
-    assert_eq!(band(&app), "⇄ Handoff · automatic · writing the note…");
+    assert_eq!(band(&app), "⇄ Handoff · automatic · ● writing the note…");
 }
 
 #[test]
@@ -167,7 +167,7 @@ fn the_note_goes_into_the_band_and_the_size_waits_for_the_next_call() {
             "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             "Working.",
             "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-            "⇄ Handoff · automatic at 400.0k · writing the note…",
+            "⇄ Handoff · automatic at 400.0k · ● writing the note…",
         ]
     );
     completed(
@@ -424,4 +424,34 @@ fn set_open_reports_whether_the_note_matched() {
     assert!(!band.open);
     assert!(!band.set_open(&Target::Orphans(3), true));
     assert!(!band.open);
+}
+
+#[test]
+fn a_writing_band_is_marked_at_its_dot() {
+    let mut app = app();
+    preamble(&mut app, Some(400_000));
+    start(&mut app);
+    started(&mut app, "auto");
+    // The dot after "⇄ Handoff · automatic at 400.0k · " spins.
+    let shown = app.shown(0, usize::MAX);
+    let at = shown
+        .lines
+        .iter()
+        .position(|(line, _, _)| line.to_string().starts_with('⇄'))
+        .expect("a band line");
+    assert_eq!(shown.spins, vec![(at, 34)]);
+}
+
+#[test]
+fn a_finished_band_is_not_marked() {
+    let mut app = app();
+    preamble(&mut app, Some(400_000));
+    start(&mut app);
+    started(&mut app, "auto");
+    completed(
+        &mut app,
+        json!({"outcome": "completed", "note": ["a_n"], "tokens_before": 402_000}),
+    );
+    assert!(band(&app).starts_with("⇄ Handoff"));
+    assert_eq!(app.shown(0, usize::MAX).spins, Vec::new());
 }
