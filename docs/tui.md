@@ -642,6 +642,10 @@ box, as an approval does (`docs/tools.md`, "Asking the person").
 - "Chat about this", and Esc, decline the form and end the turn, so the person
   can answer in their own words. The terminal sends `reply` with `declined`,
   then `cancel`: the call completes `declined`, and the cancel ends the turn.
+  The cancel follows only an interaction a tool call raised, one whose
+  `interaction_requested` carries `action_ids`. One raised outside a tool call,
+  such as an extension command's `host.ask`, is declined and leaves any running
+  turn alone.
 - Once answered, the answers sit in the turn's card as a "you answered" rule,
   like a steering message, one row per question, with `skipped` and the note
   shown. The call's ledger row reads "answered" or "declined", and the group
