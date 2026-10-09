@@ -266,43 +266,31 @@ fn reported(rig: &Rig) -> contract::inbox::JobNotice {
     panic!("the runner did not report");
 }
 
-/// Waits, under one wall-clock deadline, until the runner is parked on the
-/// fake clock with a deadline still ahead of `now()`: it has finished a pass
-/// and waits for the next wake. Never moves the clock.
-fn wait_runner_parked(clock: &Arc<FakeClock>) {
-    within("the runner parks on the clock", DEADLINE, {
+/// Wakes the runner by one poll interval at a time, each only once it is
+/// parked on the clock with every deadline ahead of `now()`: it has finished
+/// a pass and waits for the next wake. Stops when it parks `bound` ahead of
+/// `now()`, which only the wait for the drain does: the clock has not moved
+/// since the reap, and an ordinary poll parks at most one interval ahead.
+/// One wall-clock deadline covers the whole loop, so a runner that never
+/// reaches the drain fails the test instead of hanging it.
+fn wake_until_draining(clock: &Arc<FakeClock>, bound: Duration) {
+    within("the runner waits for the drain", DEADLINE, {
         let clock = Arc::clone(clock);
         move || {
             loop {
                 let parked = clock.parked();
                 let now = clock.now();
-                if !parked.is_empty() && parked.iter().flatten().all(|until| *until > now) {
+                if parked.iter().flatten().any(|until| *until >= now + bound) {
                     return;
                 }
-                thread::yield_now();
+                if !parked.is_empty() && parked.iter().flatten().all(|until| *until > now) {
+                    clock.advance(Duration::from_secs(1));
+                } else {
+                    thread::yield_now();
+                }
             }
         }
     });
-}
-
-/// Wakes the runner by one poll interval at a time, each only once it is
-/// parked on the clock, until it parks with a deadline at or past `at`.
-/// Stops on the park itself, not after a count, and fails at the deadline of
-/// `wait_runner_parked` if the runner never parks.
-fn wake_until_parked_at(rig: &Rig, at: std::time::Instant) {
-    loop {
-        wait_runner_parked(&rig.clock);
-        if rig
-            .clock
-            .parked()
-            .iter()
-            .flatten()
-            .any(|until| *until >= at)
-        {
-            return;
-        }
-        rig.clock.advance(Duration::from_secs(1));
-    }
 }
 
 /// A FIFO `shell` blocks reading until the test writes. Short-lived and
@@ -545,8 +533,7 @@ fn a_delayed_drain_still_feeds_the_fold() {
     // bound. Each wake is given only after the runner has parked on the
     // clock, so the reap lands on a wake it is waiting for; the clock stays
     // still once the bound park is seen, so only the drain's end can wake it.
-    let at_bound = rig.clock.origin() + Duration::from_secs(30);
-    wake_until_parked_at(&rig, at_bound);
+    wake_until_draining(&rig.clock, Duration::from_secs(30));
     assert!(
         rig.inbox.try_recv().is_err(),
         "the fold waits for the drain"
