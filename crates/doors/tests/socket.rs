@@ -2718,6 +2718,45 @@ fn job_input_to_a_job_without_a_terminal_is_rejected_invalid_arguments() {
 }
 
 #[test]
+fn job_input_to_a_closed_terminal_is_rejected_io_failed() {
+    let temp = Temp::new();
+    let jobs = FakeJobs::new(&temp.0);
+    let job = jobs
+        .open(Opening {
+            tool: "shell".into(),
+            description: "cat".into(),
+            stop: Stop(Box::new(|| {})),
+            lines: false,
+            input: Some(contract::jobs::Input(Box::new(|_, _, _| {
+                Err(std::io::Error::other("the terminal is closed"))
+            }))),
+        })
+        .unwrap();
+    let job_id = job.started.job_id.0.clone();
+    let opened = Opened::open(vec![]);
+    opened.session.jobs(WritableJobs::wrap(jobs));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &job_input_line("c_1", &job_id, "x"));
+            assert_eq!(
+                rejection(&response(&client, "c_1")),
+                (
+                    "io_failed",
+                    "Writing to the job's terminal failed: the terminal is closed."
+                )
+            );
+            Ok(())
+        })
+        .unwrap();
+    drop(job);
+    opened.close();
+}
+
+#[test]
 fn job_input_with_malformed_args_is_invalid_arguments() {
     let opened = Opened::open(vec![]);
     let socket = opened.socket.clone();
