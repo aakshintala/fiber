@@ -2,12 +2,13 @@
 //! with GFM tables and strikethrough. Every line the renderer returns fits
 //! the width it was given, so each draws as exactly one row.
 
+mod reply;
 mod table;
 mod text;
 
-use std::cell::RefCell;
 use std::ops::Range;
-use std::sync::Arc;
+
+pub(crate) use reply::Reply;
 
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
@@ -15,9 +16,8 @@ use ratatui::text::{Line, Span};
 
 pub(crate) use crate::theme::Role;
 
-use crate::app::Target;
 use crate::highlight;
-use crate::rows::{Join, RowText, Rows};
+use crate::rows::{Join, RowText};
 
 /// A reply rendered at one width.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -45,83 +45,6 @@ impl Rendered {
     /// The `block`th code block's copy target.
     pub(crate) fn target(&self, block: usize) -> Option<CopyTarget> {
         self.targets.get(block).cloned()
-    }
-}
-
-/// One reply's text and its render, kept until the text changes or the
-/// render is wanted at another width.
-#[derive(Debug, Clone)]
-pub(crate) struct Reply {
-    text: String,
-    id: usize,
-    cache: RefCell<Option<(u16, Arc<Rendered>)>>,
-}
-
-impl Reply {
-    /// A reply holding `text`, its copy targets named by `id`.
-    pub(crate) fn new(text: String, id: usize) -> Self {
-        Self {
-            text,
-            id,
-            cache: RefCell::new(None),
-        }
-    }
-
-    /// The id its copy targets carry.
-    pub(crate) fn id(&self) -> usize {
-        self.id
-    }
-
-    /// Appends a delta.
-    pub(crate) fn push(&mut self, text: &str) {
-        self.text.push_str(text);
-        *self.cache.get_mut() = None;
-    }
-
-    /// Replaces the text.
-    pub(crate) fn set(&mut self, text: String) {
-        self.text = text;
-        *self.cache.get_mut() = None;
-    }
-
-    /// The text rendered at `width`, from the cache when it was rendered at
-    /// that width.
-    pub(crate) fn rendered(&self, width: u16) -> Arc<Rendered> {
-        let mut cached = self.cache.borrow_mut();
-        if let Some((at, rendered)) = &*cached
-            && *at == width
-        {
-            return Arc::clone(rendered);
-        }
-        let rendered = Arc::new(render(&self.text, width));
-        *cached = Some((width, Arc::clone(&rendered)));
-        rendered
-    }
-
-    /// The width the cache holds a render for, if any. Tests only:
-    /// reads the slot without filling it.
-    #[cfg(test)]
-    pub(crate) fn cached_at(&self) -> Option<u16> {
-        self.cache.borrow().as_ref().map(|(width, _)| *width)
-    }
-
-    /// The rendered lines at `width`, each code block's header carrying
-    /// its copy target, and each with what it adds to its logical line.
-    pub(crate) fn rows(&self, width: u16, out: &mut Rows) {
-        let rendered = self.rendered(width);
-        for (at, line) in rendered.lines.iter().cloned().enumerate() {
-            let block = rendered.targets.iter().position(|target| target.line == at);
-            let target = block.map(|block| Target::Copy {
-                reply: self.id,
-                block,
-            });
-            let text = rendered
-                .text
-                .get(at)
-                .cloned()
-                .unwrap_or_else(RowText::plain);
-            out.push_text((line, target), text);
-        }
     }
 }
 
