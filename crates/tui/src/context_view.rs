@@ -62,9 +62,7 @@ impl ContextFold {
                     })
                     .filter_map(|tool| tool.get("definition"))
                     .fold(0u64, |total, definition| {
-                        let bytes = serde_json::to_vec(definition)
-                            .map_or(0, |serialized| byte_count(serialized.len()));
-                        total.saturating_add(bytes)
+                        total.saturating_add(byte_count(definition.to_string().len()))
                     });
             }
             "tool_call_requested" => {
@@ -182,11 +180,12 @@ pub(crate) fn bar(
             .min(count)
             .try_into()
             .unwrap_or(cells);
-        for (at, symbol) in symbols.iter_mut().enumerate().take(end).skip(start) {
+        for symbol in symbols
+            .iter_mut()
+            .skip(start)
+            .take(end.saturating_sub(start))
+        {
             *symbol = glyph(*category);
-            if at.saturating_add(1) >= end {
-                break;
-            }
         }
         start = end;
     }
@@ -243,7 +242,8 @@ pub(crate) fn frame(
             about(sized.total),
             about(sized.window)
         )));
-        let fill = categories(fold, rate, sized.total).unwrap_or([
+        let breakdown = categories(fold, rate, sized.total);
+        let fill = breakdown.unwrap_or([
             (Category::SystemPrompt, 0),
             (Category::ToolDefinitions, 0),
             (Category::ToolResults, 0),
@@ -255,7 +255,7 @@ pub(crate) fn frame(
             sized.trigger,
             usize::from(width),
         )));
-        if rate.tokens(0).is_some() {
+        if breakdown.is_some() {
             for (category, tokens) in fill {
                 rows.push(row(format!(
                     "{} {}  {} tokens",

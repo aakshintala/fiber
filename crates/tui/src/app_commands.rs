@@ -439,6 +439,10 @@ impl App {
             }
             "settings" => self.open_config_view(super::ConfigView::Settings),
             "tools" => self.open_config_view(super::ConfigView::Tools),
+            "context" => {
+                self.draft.clear();
+                self.open_session_view(super::SessionView::Context)
+            }
             "usage" => {
                 self.draft.clear();
                 self.open_session_view(super::SessionView::Usage)

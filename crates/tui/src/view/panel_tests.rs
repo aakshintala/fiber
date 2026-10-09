@@ -404,15 +404,23 @@ fn session_card_full() {
     let (buf, targets) = draw_targets(&app);
     insta::assert_snapshot!("session_card_full", super::super::text(&buf));
     let ids: Vec<crate::mouse::TargetId> = targets.iter().map(|target| target.id).collect();
+    assert!(
+        ids.iter()
+            .filter(|id| **id == crate::mouse::TargetId::Panel(crate::app::panel::Spot::Context))
+            .count()
+            >= 3
+    );
     assert_eq!(
-        ids,
-        [
-            crate::mouse::TargetId::Panel(crate::app::panel::Spot::Usage),
-            crate::mouse::TargetId::Panel(crate::app::panel::Spot::Usage),
-            crate::mouse::TargetId::Panel(crate::app::panel::Spot::Usage),
-            crate::mouse::TargetId::Panel(crate::app::panel::Spot::Usage),
-            crate::mouse::TargetId::Panel(crate::app::panel::Spot::Tools),
-        ]
+        ids.iter()
+            .filter(|id| **id == crate::mouse::TargetId::Panel(crate::app::panel::Spot::Usage))
+            .count(),
+        4
+    );
+    assert_eq!(
+        ids.last(),
+        Some(&crate::mouse::TargetId::Panel(
+            crate::app::panel::Spot::Tools
+        ))
     );
 }
 
@@ -437,6 +445,31 @@ fn session_card_with_budget() {
         Some(serde_json::json!({"tokens": 500, "window": 1000})),
     ));
     insta::assert_snapshot!("session_card_with_budget", screen(&app, 160, 40));
+}
+
+#[test]
+fn every_context_card_row_opens_the_context_view() {
+    use crate::app::panel::Spot;
+    let mut app = attached(160, 40);
+    app.on_line(preamble_line(Some(800)));
+    app.on_line(status_line(
+        spend(500, 0, 0, 0, serde_json::json!(0.0), 0.0),
+        Some(serde_json::json!({"tokens": 500, "window": 1000})),
+    ));
+    let drawn = rows(&app, 40);
+    let context_rows: Vec<&super::Row> = drawn
+        .iter()
+        .filter(|row| {
+            let line = row.line.to_string();
+            line.starts_with("context") || line.contains('▆') || line.contains("handoff")
+        })
+        .collect();
+    assert!(context_rows.len() >= 3);
+    assert!(
+        context_rows
+            .iter()
+            .all(|row| row.spot == Some(Spot::Context))
+    );
 }
 
 #[test]

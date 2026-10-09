@@ -239,13 +239,13 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
     });
     if let Some((window, context)) = context {
         let pct = context.tokens.saturating_mul(100) / window;
-        out.push(plain(format!(
-            "context  {pct}% of {}",
-            format::tokens(window)
-        )));
+        out.push(targeted(
+            format!("context  {pct}% of {}", format::tokens(window)),
+            Spot::Context,
+        ));
         out.push(Row {
             line: context_bar(context.tokens, window, panel.trigger_at(), text),
-            spot: None,
+            spot: Some(Spot::Context),
             tint: None,
             edge: false,
         });
@@ -256,7 +256,7 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             );
             out.extend(format::wrap(&handoff, text).into_iter().map(|row| Row {
                 line: Line::styled(row, style(Role::Muted)),
-                spot: None,
+                spot: Some(Spot::Context),
                 tint: None,
                 edge: false,
             }));
