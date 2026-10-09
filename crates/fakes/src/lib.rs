@@ -17,6 +17,7 @@ pub mod jobs;
 mod oauth_server;
 mod process_group;
 mod provider_server;
+pub mod pty;
 pub mod refused;
 mod rerun;
 mod scripted_provider;
