@@ -232,19 +232,20 @@ Notes:
   |---|---|---|---|---|
   | 52.2 MiB | 100 | 108,120 | 108,036 | 122,641 |
   | 62.6 MiB | 120 | 129,696 | 129,660 | 144,945 |
-  | 64.0 MiB, the cap | 122 | 132,476 | 132,508 | 146,929 |
+  | 64.0 MiB | 122 | 132,476 | 132,508 | 146,929 |
   | 500.7 MiB | 960 | 1,033,660 | 1,033,604 | 1,058,291 |
   | 3.5 MiB, 200 small objects a page in compressed object streams | 100 | 71,648 | 71,684 | 80,481 |
 
-  For raw image streams the peak is about 2.1 times the file size, so the 64 MiB
-  cap (`docs/tools.md`, "read") bounds the child near 133 MiB on Linux x86_64
-  (132,476 KiB at the cap), under the 50-megapixel image path's peak, and still
-  takes a 100-page scan. A PDF of many small objects peaks by object count, not
+  For raw image streams the peak is about 2.1 times the file size: 132,476 KiB
+  on Linux x86_64 for the 64.0 MiB fixture above, under the 50-megapixel
+  image path's peak. The cap (`docs/tools.md`, "read") is a file-size limit,
+  not a memory bound. A PDF of many small objects peaks by object count, not
   file size: 71,648 KiB for 3.5 MiB. No real scanned PDF was available to the
   probe, so the fixtures are generated; lopdf keeps image streams undecoded, so
-  their content does not change the peak.
+  their content does not change the peak. Rows for the 100 MiB cap come from
+  later CI probe runs.
   Object and cross-reference streams, the only streams decoded while loading,
-  are each capped at 64 MiB of decompressed output, the same figure as the file cap.
+  are each capped at 64 MiB of decompressed output, separate from the file cap.
 - The image row is `image` 0.25 with default features off and only the png,
   jpeg, gif and webp codecs, plus `fast_image_resize` 6 with its `image`
   feature, Lanczos3. It is pure Rust and passes cargo-deny. Memory is the

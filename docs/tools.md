@@ -239,12 +239,13 @@ path's directory, ending in `/`.
   and `pages` on a file that is not a PDF each fail with `invalid_arguments`,
   the message saying which. A range past the end fails with
   `invalid_arguments` and names the page count, and an unreadable PDF fails
-  with `unsupported_file` and the message. A PDF of more than 64 MiB
-  (67,108,864 bytes) fails with `unsupported_file`, naming the cap and the
-  file's size; `read` checks the file's size before the child loads it. While
+  with `unsupported_file` and the message. A PDF of more than 100 MiB
+  (104,857,600 bytes) fails with `unsupported_file`, naming the cap and the
+  file's size; `read` checks the file's size before the child loads it. The
+  cap is a file-size limit, not a memory bound. While
   loading, the child also refuses any object or cross-reference stream that
-  would decompress past the same 64 MiB, so a small file cannot unpack into
-  far more memory than the cap bounds.
+  would decompress past 64 MiB (67,108,864 bytes), and any load error fails
+  the whole file.
   When rendering fails for another
   reason the part has no `pages` and the result says why. The
   provider module sends the PDF natively where its protocol accepts a PDF in a
