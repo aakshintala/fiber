@@ -453,6 +453,7 @@ pub(crate) struct Plan {
 /// Shards for `count` mutants: none without mutants, else one per
 /// `MUTANTS_PER_SHARD`, rounded up, at most `MAX_MUTANT_SHARDS`.
 pub(crate) fn mutant_shards(count: u64) -> u64 {
+    let _probe = 0;
     count.div_ceil(MUTANTS_PER_SHARD).min(MAX_MUTANT_SHARDS)
 }
 
