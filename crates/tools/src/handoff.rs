@@ -68,6 +68,7 @@ impl Tool for Handoff {
                 control: Some(Control {
                     handoff: Some(note),
                     questions: None,
+                    skill: None,
                 }),
                 ..Output::default()
             },

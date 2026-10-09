@@ -28,6 +28,10 @@
 
 - Call `handoff` with your note to restart your context from it, for example when one piece of work ends and an unrelated one begins.
 
+## skill
+
+- When a task matches a skill's description in the skills listing, load it with `skill` before starting, and follow it.
+
 ## web_search
 
 - When an answer used `web_search`, end it with a list of the sources you used, as markdown links.

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use contract::events::{Control, HandoffCompleted, Note, Outcome, ToolCallRequested};
+use contract::events::{Control, HandoffCompleted, Note, Outcome, SkillLoad, ToolCallRequested};
 use contract::provider::Input;
 use contract::shapes::{Question, Tokens};
 use contract::{ActionId, events::ContextNudged};
@@ -284,6 +284,7 @@ fn asking(texts: &[&str]) -> Control {
     Control {
         handoff: None,
         questions: Some(texts.iter().map(|text| question(text)).collect()),
+        skill: None,
     }
 }
 
@@ -313,10 +314,99 @@ fn a_handoff_note_alone_asks_nothing() {
     let note = Control {
         handoff: Some("the note".into()),
         questions: None,
+        skill: None,
     };
     carry.call_completed(&first, &user("r1"), None, Some(&note));
     carry.call_completed(&second, &user("r2"), None, None);
     assert!(carry.asked().is_empty());
     assert_eq!(carry.noted(), [first]);
     assert_eq!(carry.step[0].note.as_deref(), Some("the note"));
+}
+
+fn skilled(name: &str, path: &str) -> Control {
+    Control {
+        handoff: None,
+        questions: None,
+        skill: Some(SkillLoad {
+            name: name.into(),
+            path: path.into(),
+        }),
+    }
+}
+
+#[test]
+fn a_completed_call_with_control_skill_appends_its_load() {
+    let (mut carry, [first, ..]) = three_calls();
+    carry.call_completed(
+        &first,
+        &user("r1"),
+        None,
+        Some(&skilled("tdd", "/w/tdd/SKILL.md")),
+    );
+    assert_eq!(
+        carry.skills,
+        [SkillLoad {
+            name: "tdd".into(),
+            path: "/w/tdd/SKILL.md".into(),
+        }]
+    );
+}
+
+#[test]
+fn reloading_a_skill_keeps_its_position_and_takes_the_new_path() {
+    let (mut carry, [first, second, _]) = three_calls();
+    carry.call_completed(
+        &first,
+        &user("r1"),
+        None,
+        Some(&skilled("a", "/old/a/SKILL.md")),
+    );
+    carry.call_completed(
+        &second,
+        &user("r2"),
+        None,
+        Some(&skilled("b", "/w/b/SKILL.md")),
+    );
+    carry.call_completed(
+        &first,
+        &user("r3"),
+        None,
+        Some(&skilled("a", "/new/a/SKILL.md")),
+    );
+    assert_eq!(
+        carry.skills,
+        [
+            SkillLoad {
+                name: "a".into(),
+                path: "/new/a/SKILL.md".into(),
+            },
+            SkillLoad {
+                name: "b".into(),
+                path: "/w/b/SKILL.md".into(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_control_without_a_skill_and_no_control_leave_the_list_unchanged() {
+    let (mut carry, [first, second, _]) = three_calls();
+    carry.call_completed(&first, &user("r1"), None, Some(&asking(&["q"])));
+    carry.call_completed(&second, &user("r2"), None, None);
+    assert!(carry.skills.is_empty());
+}
+
+#[test]
+fn a_restart_on_a_completed_handoff_leaves_skills_empty() {
+    let (mut carry, [first, ..]) = three_calls();
+    carry.call_completed(
+        &first,
+        &user("r1"),
+        None,
+        Some(&skilled("tdd", "/w/tdd/SKILL.md")),
+    );
+    carry.restart(&completed(Some(Note::Actions {
+        note: vec![first.clone()],
+    })));
+    assert!(carry.skills.is_empty());
 }

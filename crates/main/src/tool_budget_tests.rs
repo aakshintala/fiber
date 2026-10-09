@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 /// The largest per-protocol total the built-in definitions may take, in
 /// bytes. It started at the largest total at the commit that added the
 /// check, with no headroom.
-const BUDGET: usize = 8_881;
+const BUDGET: usize = 9_327;
 
 /// The one hosted tool type a protocol reads back
 /// (`config::Protocol::reads_web_search`).
@@ -68,6 +68,27 @@ fn delegates() -> crate::delegates::Delegates {
     )
 }
 
+/// The skills the budget measures tools for: none are listed.
+struct NoSkills;
+
+impl contract::skills::Skills for NoSkills {
+    fn file(&self, _name: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    fn body(
+        &self,
+        _name: &str,
+        _file: &std::path::Path,
+    ) -> Result<String, contract::skills::SkillRead> {
+        Err(contract::skills::SkillRead::Invalid)
+    }
+}
+
+fn skills() -> Arc<dyn contract::skills::Skills> {
+    Arc::new(NoSkills)
+}
+
 /// Every definition `builtin` registers, the hosted search included.
 fn builtin_definitions() -> Vec<ToolDefinition> {
     let root = fakes::TempDir::new("fiber-tool-budget");
@@ -87,6 +108,7 @@ fn builtin_definitions() -> Vec<ToolDefinition> {
         &Arc::new(tools::PathLocks::new()),
         Some(HOSTED_SEARCH),
         &delegates(),
+        skills(),
     )
     .unwrap();
     let definitions: Vec<ToolDefinition> =

@@ -392,6 +392,11 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "tool_call_completed",
             json!({"status": "completed", "content": content,
+            "control": {"skill": {"name": "tdd", "path": "/w/.agents/skills/tdd/SKILL.md"}}}),
+        ),
+        (
+            "tool_call_completed",
+            json!({"status": "completed", "content": content,
             "provider_item": {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01",
             "content": []}}),
         ),
