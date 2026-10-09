@@ -114,15 +114,10 @@ impl ContextFold {
     }
 
     fn keep_largest(&mut self, result: Largest) {
-        let at = self
-            .largest
-            .iter()
-            .position(|known| result.bytes > known.bytes)
-            .unwrap_or(self.largest.len());
-        if at < LARGEST_SHOWN {
-            self.largest.insert(at, result);
-            self.largest.truncate(LARGEST_SHOWN);
-        }
+        self.largest.push(result);
+        self.largest
+            .sort_by_key(|largest| std::cmp::Reverse(largest.bytes));
+        self.largest.truncate(LARGEST_SHOWN);
     }
 }
 
