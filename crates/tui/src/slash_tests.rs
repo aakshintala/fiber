@@ -29,6 +29,7 @@ fn built_ins_come_in_table_order_then_the_answer_rows() {
             "resume",
             "model",
             "tools",
+            "context",
             "usage",
             "panel",
             "rules",
@@ -53,6 +54,12 @@ fn built_ins_come_in_table_order_then_the_answer_rows() {
             .find(|row| row.name == "tdd")
             .map(|row| &row.description),
         Some(&"The tdd skill.".to_owned())
+    );
+    assert_eq!(
+        all.iter()
+            .find(|row| row.name == "context")
+            .map(|row| row.line()),
+        Some("/context  Opens the context breakdown.  command".to_owned())
     );
 }
 

@@ -1,6 +1,6 @@
 //! Tests for the usage view's fold and frame (`docs/tui.md`, "Swapped views").
 
-use super::{UsageFold, frame};
+use super::{UsageFold, budget_row, frame};
 use crate::swapped::{List, render};
 use contract::events::{DelegateStarted, UsageRecorded};
 use contract::shapes::Tokens;
@@ -238,6 +238,13 @@ fn budget_left_counts_only_known_billed_cost_and_never_goes_below_zero() {
         fold.recorded(None, recorded("g1", "m", 1, cost, None));
         assert!(text(&fold, Some(5.0)).contains(&format!("budget left  {expected}")));
     }
+}
+
+#[test]
+fn budget_row_takes_the_billed_amount() {
+    let mut rows = Vec::new();
+    budget_row(&mut rows, Some(5.0), 1.25);
+    assert_eq!(rows[0][0].0, "budget left  $3.75 of $5.00");
 }
 
 #[test]

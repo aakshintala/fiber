@@ -497,3 +497,267 @@ fn a_delegate_started_line_adds_a_delegate_row_for_its_calls() {
     assert!(shown.contains("◆ j_2 · model/d"), "{shown}");
     assert!(!shown.contains(&format!("session {DELEGATE}")), "{shown}");
 }
+
+fn context_preamble() -> Line {
+    session_line(
+        SESSION,
+        "preamble_built",
+        None,
+        json!({
+            "reason": "start", "model": "model/m", "context_window": 100,
+            "trigger_at": 80, "system_prompt": "sys",
+            "tools": [{"name": "read", "registered_by": "builtin", "deferred": false,
+                "definition": {"a": 1}}],
+            "tool_choice": "auto", "cache_lifetime": "5m",
+        }),
+    )
+}
+
+fn context_status(tokens: u64, window: u64) -> Line {
+    session_line(
+        SESSION,
+        "session_status",
+        None,
+        json!({
+            "name": "work", "workspace": "/w", "project": "-w", "state": "idle",
+            "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 0}, "cost": 0.0, "subscription_cost": 0.0},
+            "model": "model/m", "delegates": 0, "jobs": 0, "clients": 0,
+            "context": {"tokens": tokens, "window": window},
+        }),
+    )
+}
+
+fn context_request_started() -> Line {
+    session_line(SESSION, "assistant_message_started", None, json!({}))
+}
+
+fn context_usage(input_media: Option<bool>) -> Line {
+    let mut payload = json!({
+        "generation_id": "g_context", "model": "model/m",
+        "tokens": {"input": 10, "cache_read": 0, "cache_write": {}, "output": 0},
+        "input_bytes": 10, "cost": 0.0,
+    });
+    if let Some(input_media) = input_media {
+        payload["input_media"] = json!(input_media);
+    }
+    session_line(SESSION, "usage_recorded", None, payload)
+}
+
+fn context_tool(name: &str, result: &str) -> [Line; 2] {
+    [
+        session_line(
+            SESSION,
+            "tool_call_requested",
+            None,
+            json!({"name": name, "arguments": {}}),
+        ),
+        session_line(
+            SESSION,
+            "tool_call_completed",
+            None,
+            json!({"status": "completed", "content": [{"type": "text", "text": result}]}),
+        ),
+    ]
+}
+
+fn context_handoff() -> Line {
+    session_line(
+        SESSION,
+        "handoff_completed",
+        None,
+        json!({"outcome": "completed"}),
+    )
+}
+
+fn open_context(app: &mut App) {
+    assert_eq!(app.open_session_view(SessionView::Context), Effect::None);
+}
+
+fn slash_context(app: &mut App) -> Effect {
+    app.on_edit(Edit::Paste("/context".to_owned()));
+    app.on_key(Key::Enter, now())
+}
+
+#[test]
+fn slash_context_opens_the_view_and_clears_the_draft() {
+    let mut app = attached(80, 24);
+    app.on_line(context_preamble());
+    app.on_line(context_status(50, 100));
+    assert_eq!(slash_context(&mut app), Effect::None);
+    assert!(app.session_view_open());
+    assert!(app.input().is_empty());
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("Context"), "{shown}");
+    assert!(shown.contains("context  50 of 100 tokens"), "{shown}");
+    app.on_key(Key::Down, now());
+    assert_eq!(app.session_view_screen(0).unwrap().list.selected(), 1);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.session_view_open());
+}
+
+#[test]
+fn context_folds_the_preamble_rate_total_handoff_and_tool_results() {
+    let mut app = attached(100, 40);
+    app.on_line(context_preamble());
+    app.on_line(context_status(50, 100));
+    app.on_line(context_request_started());
+    app.on_line(context_usage(None));
+    for line in context_tool("read", "12345") {
+        app.on_line(line);
+    }
+    open_context(&mut app);
+    let shown = screen(&app, 100, 40).0;
+    for expected in [
+        "context  50 of 100 tokens · 50%",
+        "█ system prompt  3 tokens",
+        "▓ tool definitions  7 tokens",
+        "▒ tool results  5 tokens",
+        "▆ messages  35 tokens",
+        "handoff at 80 tokens",
+        "read  ~5 tokens",
+    ] {
+        assert!(shown.contains(expected), "missing {expected:?} in {shown}");
+    }
+    let zero_width = app.session_view_screen(0).unwrap();
+    let wide = app.session_view_screen(80).unwrap();
+    assert_eq!(zero_width.rows.len(), wide.rows.len());
+}
+
+#[test]
+fn clicking_a_context_row_selects_it() {
+    let mut app = attached(100, 40);
+    app.on_line(context_preamble());
+    app.on_line(context_status(50, 100));
+    open_context(&mut app);
+    let (_, targets) = screen(&app, 100, 40);
+    assert!(
+        targets
+            .iter()
+            .any(|target| { target.id == TargetId::View(ViewSpot::Row(1)) })
+    );
+    app.on_click(TargetId::View(ViewSpot::Row(1)));
+    assert_eq!(app.session_view_screen(100).unwrap().list.selected(), 1);
+}
+
+#[test]
+fn a_request_with_input_media_keeps_result_sizes_in_bytes() {
+    let mut app = attached(100, 40);
+    app.on_line(context_preamble());
+    app.on_line(context_request_started());
+    app.on_line(context_usage(Some(true)));
+    app.on_line(context_status(50, 100));
+    for line in context_tool("read", "12345") {
+        app.on_line(line);
+    }
+    open_context(&mut app);
+    let shown = screen(&app, 100, 40).0;
+    assert!(
+        shown.contains("Breakdown after a request without images."),
+        "{shown}"
+    );
+    assert!(shown.contains("read  5 bytes"), "{shown}");
+    assert!(!shown.contains("system prompt  3 tokens"), "{shown}");
+}
+
+#[test]
+fn a_fork_counts_its_own_results_and_completed_handoff_clears_them() {
+    let mut app = attached(100, 40);
+    app.on_line(session_line(
+        SESSION,
+        "session_started",
+        None,
+        json!({"workspace": "/w", "variables": {},
+            "forked_from": {"session_id": "s_parent", "seq": 8}}),
+    ));
+    app.on_line(context_preamble());
+    app.on_line(context_request_started());
+    app.on_line(context_usage(None));
+    app.on_line(context_status(100, 100));
+    for line in context_tool("read", "12345") {
+        app.on_line(line);
+    }
+    for line in context_tool("write", "1234567") {
+        app.on_line(line);
+    }
+    open_context(&mut app);
+    let shown = screen(&app, 100, 40).0;
+    assert!(shown.contains("▒ tool results  12 tokens"), "{shown}");
+    assert!(shown.contains("▆ messages  78 tokens"), "{shown}");
+    assert!(
+        shown.contains("history before the fork counts under messages"),
+        "{shown}"
+    );
+    assert!(shown.contains("read  ~5 tokens"), "{shown}");
+    assert!(shown.contains("write  ~7 tokens"), "{shown}");
+    assert!(!shown.contains("ancestor"), "{shown}");
+    app.on_line(context_handoff());
+    let after = screen(&app, 100, 40).0;
+    assert!(after.contains("▒ tool results  0 tokens"), "{after}");
+    assert!(after.contains("none since the last handoff"), "{after}");
+}
+
+#[test]
+fn going_home_clears_context_state_for_the_next_attachment() {
+    let mut app = attached(100, 40);
+    app.on_line(context_preamble());
+    app.on_line(context_status(50, 100));
+    for line in context_tool("read", "result") {
+        app.on_line(line);
+    }
+    open_context(&mut app);
+    app.go_home();
+    assert!(!app.session_view_open());
+    app.attach(SessionId(SESSION.to_owned()));
+    open_context(&mut app);
+    let shown = screen(&app, 100, 40).0;
+    assert!(
+        shown.contains("The context shows after the session's first request."),
+        "{shown}"
+    );
+    assert!(!shown.contains("read"), "{shown}");
+}
+
+#[test]
+fn the_session_card_context_rows_open_the_view_and_keep_the_draft() {
+    let mut app = home_attached(160, 40);
+    app.on_line(context_preamble());
+    app.on_line(context_status(50, 100));
+    app.on_edit(Edit::Paste("keep this draft".to_owned()));
+    let (_, targets) = screen(&app, 160, 40);
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::Panel(PanelSpot::Context))
+    );
+    assert_eq!(
+        app.on_click(TargetId::Panel(PanelSpot::Context)),
+        Effect::None
+    );
+    assert!(app.session_view_open());
+    assert_eq!(app.input().expand(), "keep this draft");
+    assert!(screen(&app, 160, 40).0.contains("Context"));
+}
+
+#[test]
+fn the_narrow_context_segment_opens_the_view_and_keeps_the_draft() {
+    let mut app = home_attached(100, 30);
+    app.on_line(context_preamble());
+    app.on_line(context_status(50, 100));
+    app.on_edit(Edit::Paste("keep this draft".to_owned()));
+    let (shown, targets) = screen(&app, 100, 30);
+    assert!(shown.contains("50% context"), "{shown}");
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::Panel(PanelSpot::Context))
+    );
+    assert_eq!(
+        app.on_click(TargetId::Panel(PanelSpot::Context)),
+        Effect::None
+    );
+    assert!(app.session_view_open());
+    assert_eq!(app.input().expand(), "keep this draft");
+    assert!(screen(&app, 100, 30).0.contains("Context"));
+}

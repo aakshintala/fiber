@@ -74,7 +74,7 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
     } else {
         let session = log::usage(calls.iter().copied());
         append_entry(&mut rows, "session", &session);
-        budget_row(&mut rows, budget, &session);
+        budget_row(&mut rows, budget, session.cost.unwrap_or(0.0));
 
         rows.push(row("by turn", Ink::Heading));
         let known_turns: BTreeSet<TurnId> = fold.turns.iter().cloned().collect();

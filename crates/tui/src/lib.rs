@@ -19,6 +19,7 @@ mod clipboard;
 mod configure;
 #[cfg(test)]
 mod configure_fake;
+mod context_view;
 mod editor;
 mod event_loop;
 mod files;

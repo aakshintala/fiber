@@ -4,6 +4,7 @@
 //! state except when the view explicitly offers a command.
 
 use super::{App, Effect};
+use crate::context_view::{self, ContextFold, Sized};
 use crate::keys::Key;
 use crate::swapped::{Frame, List, Spot};
 use crate::usage_view::UsageFold;
@@ -15,6 +16,8 @@ use contract::events::{DelegateStarted, JobStarted, UsageRecorded};
 pub(crate) enum SessionView {
     /// `/usage`.
     Usage,
+    /// `/context`.
+    Context,
 }
 
 /// The selected row in the open usage view.
@@ -22,6 +25,8 @@ pub(crate) enum SessionView {
 enum Open {
     /// `/usage`.
     Usage(List),
+    /// `/context`.
+    Context(List),
 }
 
 /// The session views' state, reset for each attachment.
@@ -29,6 +34,8 @@ enum Open {
 pub(in crate::app) struct SessionViews {
     open: Option<Open>,
     usage: UsageFold,
+    rate: log::RateFold,
+    context: ContextFold,
 }
 
 impl App {
@@ -45,6 +52,7 @@ impl App {
         self.close_keymap();
         self.session_views.open = Some(match view {
             SessionView::Usage => Open::Usage(List::default()),
+            SessionView::Context => Open::Context(List::default()),
         });
         Effect::None
     }
@@ -64,11 +72,9 @@ impl App {
             self.close_session_view();
             return Some(Effect::None);
         }
-        let frame = self.session_view_screen(0)?;
-        let rows = frame.rows.len();
-        let height = crate::swapped::rows_height(&frame, self.conversation_height());
+        let (rows, height) = self.session_view_list_metrics()?;
         match self.session_views.open.as_mut()? {
-            Open::Usage(list) => {
+            Open::Usage(list) | Open::Context(list) => {
                 list.key(key, rows, height);
             }
         }
@@ -81,13 +87,11 @@ impl App {
             self.close_session_view();
             return Effect::None;
         }
-        let Some(frame) = self.session_view_screen(0) else {
+        let Some((rows, height)) = self.session_view_list_metrics() else {
             return Effect::None;
         };
-        let rows = frame.rows.len();
-        let height = crate::swapped::rows_height(&frame, self.conversation_height());
         if let Spot::Row(at) = spot
-            && let Some(Open::Usage(list)) = self.session_views.open.as_mut()
+            && let Some(Open::Usage(list) | Open::Context(list)) = self.session_views.open.as_mut()
         {
             list.select(at, rows, height);
         }
@@ -96,18 +100,45 @@ impl App {
 
     /// The open session view's frame. Its row count does not depend on
     /// `width`, which lets key handling count rows at width zero.
-    pub(crate) fn session_view_screen(&self, _width: u16) -> Option<Frame> {
+    pub(crate) fn session_view_screen(&self, width: u16) -> Option<Frame> {
         match self.session_views.open.as_ref()? {
             Open::Usage(list) => Some(crate::usage_view::frame(
                 &self.session_views.usage,
                 self.panel_state.budget(),
                 *list,
             )),
+            Open::Context(list) => {
+                let sized = self.panel_state.status().and_then(|status| {
+                    let context = status.context.as_ref()?;
+                    Some(Sized {
+                        total: context.tokens,
+                        window: self.panel_state.window()?,
+                        trigger: self.panel_state.trigger_at(),
+                    })
+                });
+                Some(context_view::frame(
+                    &self.session_views.context,
+                    self.session_views.rate.rate(),
+                    sized,
+                    *list,
+                    width,
+                ))
+            }
         }
+    }
+
+    fn session_view_list_metrics(&self) -> Option<(usize, usize)> {
+        let frame = self.session_view_screen(0)?;
+        Some((
+            frame.rows.len(),
+            crate::swapped::rows_height(&frame, self.conversation_height()),
+        ))
     }
 
     /// Folds one line from the attached session into the session views.
     pub(in crate::app) fn session_views_line(&mut self, envelope: &Envelope) {
+        self.session_views.rate.fold(envelope);
+        self.session_views.context.fold(envelope);
         match envelope.kind.as_str() {
             "turn_started" => {
                 if let Some(turn) = &envelope.turn_id {

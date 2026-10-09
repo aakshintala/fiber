@@ -106,7 +106,7 @@ fn session_segments(app: &App) -> Vec<(String, Option<Spot>)> {
             .map(|context| (window, context))
     }) {
         let pct = context.tokens.saturating_mul(100) / window;
-        out.push((format!("{pct}% context"), None));
+        out.push((format!("{pct}% context"), Some(Spot::Context)));
     }
     if let Some(spend) = app.attached_spend() {
         // With a budget the segment reads billed spend against it, as
