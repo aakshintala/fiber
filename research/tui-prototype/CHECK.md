@@ -57,3 +57,4 @@ Each surface's cases are in `check/`, one file per surface, built from the cases
 
 - [check/model-picker.md](check/model-picker.md)
 - [check/home.md](check/home.md)
+- [check/overlays.md](check/overlays.md)

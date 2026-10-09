@@ -4,6 +4,7 @@
 
 mod cases;
 mod home;
+mod overlays;
 mod input;
 mod lua;
 mod model_picker;
@@ -3091,7 +3092,7 @@ struct Audit {
 }
 
 /// Every surface that declares cases; `--help` and `check/` are built from them.
-const SURFACES: &[cases::Surface] = &[home::SURFACE, model_picker::SURFACE];
+const SURFACES: &[cases::Surface] = &[home::SURFACE, overlays::SURFACE, model_picker::SURFACE];
 
 // ============================================================ main
 struct Args {
@@ -3118,6 +3119,8 @@ struct Args {
     hover: bool,
     /// the home screen case (`--home`), drawn instead of the conversation
     home: Option<String>,
+    /// the overlay case (`--overlay`), drawn instead of the conversation
+    overlay: Option<String>,
     /// the rail design at start: 0 list, 1 cards, 2 tabs
     rail: u8,
     /// the B card density at start: 0 full, 1 medium, 2 compact
@@ -3152,6 +3155,7 @@ fn args() -> Args {
         no_pending: false,
         hover: false,
         home: None,
+        overlay: None,
         rail: 1,
         density: 2,
         rail_share: 15.0,
@@ -3181,6 +3185,7 @@ fn args() -> Args {
             "--no-pending" => a.no_pending = true,
             "--hover" => a.hover = true,
             "--home" => a.home = it.next(),
+            "--overlay" => a.overlay = it.next(),
             "--rail" => {
                 a.rail = match it.next().as_deref().map(|v| v.to_uppercase()).as_deref() {
                     Some("A") => 0,
@@ -3202,7 +3207,7 @@ fn args() -> Args {
             }
             "--picker" => a.picker = it.next(),
             "-h" | "--help" => {
-                print!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}", cases::help(SURFACES));
+                print!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home CASE] [--overlay CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}", cases::help(SURFACES));
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -3297,7 +3302,7 @@ fn main() -> io::Result<()> {
         out.write_all(HOVER_ON.as_bytes())?;
     }
     let mut term = Terminal::new(CrosstermBackend::new(out))?;
-    let res = if a.home.is_some() { home::run_home(&a, &mut term) } else { run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index) };
+    let res = if a.home.is_some() { home::run_home(&a, &mut term) } else if a.overlay.is_some() { overlays::run_overlay(&a, &mut term) } else { run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index) };
     let b = term.backend_mut();
     if a.hover {
         b.write_all(HOVER_OFF.as_bytes())?;
@@ -3312,8 +3317,8 @@ fn main() -> io::Result<()> {
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
     }
-    // home draws no session, so there is nothing to resume
-    if a.home.is_none() {
+    // home and the overlays draw no session, so there is nothing to resume
+    if a.home.is_none() && a.overlay.is_none() {
         println!("Session {0} · resume it with fiber --resume {0}", f.session_id);
     }
     Ok(())
@@ -4597,6 +4602,7 @@ mod tests {
             all,
             [
                 "--home empty, sessions, hover-workspace, hover-worktree, hover-model, hover-thinking, worktree-on, worktree-off, picker-recent, picker-typed",
+                "--overlay keymap, keymap-narrow, quit, delete, history, notice, close-mouse",
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only",
             ]
         );
