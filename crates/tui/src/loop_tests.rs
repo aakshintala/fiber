@@ -1062,3 +1062,244 @@ fn two_finished_lines_in_one_batch_write_both_notifications_in_order() {
     };
     assert!(at(one) < at(two));
 }
+
+/// How long the loop may take to drain the replay before the test fails
+/// it: a named receive deadline, never a sleep on the test thread.
+const DRAIN: Duration = Duration::from_secs(5);
+
+/// Lower-case words, the same for the seed.
+fn filler(len: usize, seed: u64) -> String {
+    const WORDS: [&str; 8] = [
+        "turn", "tool", "call", "file", "session", "context", "model", "log",
+    ];
+    let mut state = seed;
+    let mut text = String::with_capacity(len + 8);
+    while text.len() < len {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let pick = usize::try_from(state >> 61).unwrap_or_default();
+        text.push_str(WORDS.get(pick).copied().unwrap_or("x"));
+        text.push(' ');
+    }
+    text.truncate(len);
+    text
+}
+
+/// A log of `turns` handoff turns with 4 KiB replies, the last reply
+/// `last`: one screenful per reply, a handoff between turns.
+fn handoff_log(turns: u64, last: &str) -> Vec<Envelope> {
+    let mut lines = Vec::new();
+    let mut seq = 0u64;
+    let mut push = |kind: &str, action: Option<&str>, payload: Value| {
+        lines.push(line(kind, Some(seq), action, payload));
+        seq += 1;
+    };
+    for turn in 0..turns {
+        push(
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver", "content": [{"type": "text", "text": format!("turn {turn}")}]}]}),
+        );
+        push("step_started", None, json!({}));
+        let message = format!("a_m{turn}");
+        push("assistant_message_started", Some(&message), json!({}));
+        let text = if turn + 1 == turns {
+            last.to_owned()
+        } else {
+            filler(4096, turn)
+        };
+        push("text_completed", Some(&message), json!({"text": text}));
+        push(
+            "assistant_message_completed",
+            Some(&message),
+            json!({"outcome": "completed"}),
+        );
+        push("turn_completed", None, json!({"outcome": "completed"}));
+        push("usage_recorded", None, json!({}));
+        if turn + 1 < turns {
+            push("handoff_started", None, json!({"trigger": "manual"}));
+            push(
+                "handoff_completed",
+                None,
+                json!({"outcome": "completed", "tokens_before": 1000}),
+            );
+        }
+    }
+    lines
+}
+
+/// A batch settles once at its end: trimming mid-batch would drop pages
+/// the batch's uncounted rows still hold in the window, so the head pages
+/// stay resident until the end, and only the exact counts trim them.
+#[test]
+fn a_batch_settles_once_at_its_end() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.begin_batch();
+    assert!(app.pages().holding());
+    for envelope in handoff_log(150, "the last reply holds quokkas") {
+        app.on_line(Line::Session(envelope));
+    }
+    assert!(app.pages().part(0).is_some());
+    assert!(app.pages().part(1).is_some());
+    app.end_batch();
+    assert!(!app.pages().holding());
+    assert!(app.pages().page_count() > 2);
+    // The head leaves once the counts are exact.
+    assert!(app.pages().part(0).is_none());
+}
+
+/// `fiber resume` opens through the hub: feed, recent, the subscribe and
+/// the session's commands, then the whole log streams as live lines. The
+/// loop folds every batch and draws the tail: the last reply shows, and
+/// no page is fetched twice.
+#[test]
+fn resume_open_replays_the_log_to_the_tail() {
+    use std::io::{BufRead, BufReader, Write};
+    let lines = handoff_log(150, "the last reply holds quokkas");
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        git: false,
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        open_at: crate::OpenAt::Session(contract::SessionId(SESSION.to_owned())),
+        ..Default::default()
+    });
+    app.set_size(60, 12);
+    let screen =
+        Screen::new(TestBackend::new(60, 12), 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = Loop {
+        app,
+        parser: crate::keys::Parser::default(),
+        screen,
+        hub: None,
+        tty: None,
+        on_attach: Box::new(|_| {}),
+        clock: fakes::clock::FakeClock::new(),
+        wakeups: 0,
+        stash: std::collections::VecDeque::new(),
+        files_out: None,
+        search: None,
+        reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
+        paste_reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: true,
+        var: Box::new(|_| None),
+        copy_command: None,
+        open_command: None,
+        title: crate::osc::Title::default(),
+        save: None,
+        shape: crate::osc::Shape::default(),
+        retry: None,
+        tick: crate::tick::TickThread::idle(),
+    };
+    let (tx, rx) = mpsc::channel();
+    let (tui_end, hub_end) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let read_end = tui_end
+        .try_clone()
+        .unwrap_or_else(|err| panic!("clone: {err}"));
+    let read_tx = tx.clone();
+    std::thread::Builder::new()
+        .name("resume-read".to_owned())
+        .spawn(move || crate::link::read_lines(read_end, &read_tx))
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // The hub: answers commands, then streams the log on subscribe and
+    // hangs up, so the loop drains and returns.
+    let stream = lines.clone();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&seen);
+    std::thread::Builder::new()
+        .name("resume-hub".to_owned())
+        .spawn(move || {
+            let mut reader = BufReader::new(hub_end.try_clone().unwrap());
+            let mut hub_end = hub_end;
+            let mut text = String::new();
+            let mut write = |value: Value| {
+                let mut bytes = serde_json::to_string(&value).unwrap_or_default();
+                bytes.push('\n');
+                hub_end.write_all(bytes.as_bytes()).unwrap_or(());
+            };
+            let hub_ack = |id: &Value, result: Value| {
+                json!({"kind": "command_accepted", "ts": 0,
+                    "schema_version": contract::SCHEMA_VERSION,
+                    "payload": {"command_id": id, "result": result}})
+            };
+            let session_ack = |id: &Value, result: Value| {
+                let envelope = line("command_accepted", None, None, json!({}));
+                let mut value = serde_json::to_value(&envelope).unwrap_or(Value::Null);
+                value["payload"] = json!({"command_id": id, "result": result});
+                value
+            };
+            while reader.read_line(&mut text).is_ok_and(|read| read > 0) {
+                let command: Value = serde_json::from_str(&text).unwrap_or_default();
+                text.clear();
+                if let Ok(mut held) = record.lock() {
+                    held.push(command.clone());
+                }
+                let id = command["id"].clone();
+                match command["command"].as_str() {
+                    Some("feed") => write(hub_ack(&id, json!({}))),
+                    Some("recent") => write(hub_ack(&id, json!({"sessions": []}))),
+                    Some("subscribe") => {
+                        // A command naming a session is relayed, never
+                        // answered by the hub itself: only the session's
+                        // accept arrives, carrying its id, then the log.
+                        write(session_ack(&id, json!({})));
+                        for envelope in &stream {
+                            write(serde_json::to_value(envelope).unwrap_or(Value::Null));
+                        }
+                        return;
+                    }
+                    Some("commands") => {
+                        write(session_ack(&id, json!({"commands": []})));
+                    }
+                    Some("history") => {
+                        let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
+                        let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
+                        write(session_ack(
+                            &id,
+                            json!({"lines": history(&stream, from, to)}),
+                        ));
+                    }
+                    _ => write(hub_ack(&id, json!({}))),
+                }
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let hello = contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    };
+    tx.send(Input::Connected(tui_end, hello))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    drop(tx);
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("resume-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done.send((code, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (code, lp) = finished
+        .recv_timeout(DRAIN)
+        .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to drain: {err}"));
+    assert_eq!(code, 0);
+    assert!(ranges(&seen).is_empty(), "{:?}", ranges(&seen));
+    let screen = shown(&lp);
+    assert!(screen.contains("quokkas"), "{screen}");
+}
