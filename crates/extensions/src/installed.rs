@@ -174,6 +174,34 @@ pub(crate) fn read(home: &Path) -> Result<Listing, Error> {
     Ok(Listing { installed, damaged })
 }
 
+/// The directories of the healthy installed extensions: every
+/// `extensions/<dir>/` whose install record reads, sorted by directory
+/// file name. Best-effort and infallible: a missing or unreadable
+/// `extensions/`, an unreadable entry, a name starting with `.` (an
+/// install in progress) and a directory whose record is missing or
+/// unreadable each contribute nothing. Only the record is read; no
+/// manifest, Lua or repository code is loaded.
+pub fn package_dirs(home: &Path) -> Vec<PathBuf> {
+    let root = home.join("extensions");
+    let Ok(entries) = fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let dir = root.join(&name);
+        if Record::read(&dir).is_err() {
+            continue;
+        }
+        dirs.push(dir);
+    }
+    dirs.sort();
+    dirs
+}
+
 /// What `fiber extension remove` will delete, worked out under the lock. Dropping it
 /// deletes nothing.
 pub struct Removal {
@@ -322,6 +350,10 @@ fn existing_data(layers: &[PathBuf], dir: &str) -> Result<Vec<PathBuf>, Error> {
     }
     Ok(data)
 }
+
+#[cfg(test)]
+#[path = "installed_tests.rs"]
+mod package_dirs_tests;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "a failure is the test's")]
