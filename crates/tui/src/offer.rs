@@ -198,6 +198,7 @@ impl Offer {
             | Key::CtrlG
             | Key::CtrlR
             | Key::CtrlV
+            | Key::CtrlL
             | Key::CtrlF
             | Key::AltUp
             | Key::AltDown

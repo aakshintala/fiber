@@ -223,7 +223,8 @@ impl Approval {
             | Key::BackTab
             | Key::CtrlG
             | Key::CtrlR
-            | Key::CtrlV => {}
+            | Key::CtrlV
+            | Key::CtrlL => {}
             // The layout's keys reach the screen behind the panel.
             Key::PageUp
             | Key::PageDown

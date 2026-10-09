@@ -1,7 +1,11 @@
 //! The event loop (`docs/tui.md`, "History and paging"): `run` sets the
 //! terminal up, draws the first frame and starts the input threads; the loop
-//! handles one input at a time, fetches the history pages a frame needs
+//! handles one batch of ready inputs at a time, fetches the history pages a frame needs
 //! before drawing it, and hands the terminal to the editor.
+
+mod batch;
+
+use batch::batch;
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -19,6 +23,7 @@ use signal_hook::consts::{SIGINT, SIGQUIT, SIGWINCH};
 use signal_hook::iterator::Signals;
 
 use crate::app::{App, Effect, mint, session_command};
+use crate::catalogue;
 use crate::home::Launch;
 use crate::keys::{Button, Event, MouseKind, Parser, Reply};
 use crate::link::{self, Line};
@@ -69,6 +74,9 @@ pub fn run(
         app.push_notice(notice);
     }
     app.set_keys(std::mem::take(&mut launch.keys));
+    // The model lists are read off the loop: taken out before home
+    // keeps the launch description.
+    let models = std::mem::take(&mut launch.models);
     let save = launch.save.take();
     app.set_configure(launch.configure.take());
     app.set_home(launch);
@@ -87,6 +95,7 @@ pub fn run(
         search: None,
         stash: VecDeque::new(),
         reader: None,
+        model_reader: catalogue::Reader::new(models),
         pointer: Pointer::default(),
         hover,
         var: Box::new(|name| std::env::var(name).ok()),
@@ -124,6 +133,10 @@ pub fn run(
     terminal.write_title();
     let (tx, rx) = mpsc::channel();
     terminal.files_out = Some(tx.clone());
+    // The cached lists are asked after the first frame, so the first
+    // frame draws at once and the picker lists them as soon as the read
+    // answers.
+    terminal.model_reader.ask(catalogue::Refresh::Cached, &tx);
     terminal.reader = terminal
         .tty
         .as_ref()
@@ -196,6 +209,8 @@ struct Loop<B: Backend> {
     stash: VecDeque<Input>,
     /// The tty's reader, paused while the editor has the terminal.
     reader: Option<Reader>,
+    /// The one model-list read at a time.
+    model_reader: catalogue::Reader,
     /// The pointer's last cell and a pending click.
     pointer: Pointer,
     /// `tui.hover`: whether the pointer's cell is recorded and tinted.
@@ -230,27 +245,34 @@ const LOST: &str = "connection lost";
 
 impl<B: Backend> Loop<B> {
     /// Handles inputs until one quits, or every sender is gone: those a
-    /// frame held while it waited first, then the channel's. The only wait
-    /// is `recv` with no timeout.
+    /// frame held while it waited first, then the channel's. Ready hub
+    /// lines and ticks share one frame; anything else ends the batch
+    /// for its own. The only wait is `recv` with no timeout.
     fn run(&mut self, rx: &Receiver<Input>) -> i32 {
         loop {
-            let input = match self.stash.pop_front() {
+            let first = match self.stash.pop_front() {
                 Some(input) => input,
                 None => match rx.recv() {
                     Ok(input) => input,
                     Err(_) => return 0,
                 },
             };
-            self.wakeups = self.wakeups.saturating_add(1);
-            if let Some(code) = self.step(input, rx) {
+            for input in batch(first, &mut self.stash, rx) {
+                self.wakeups = self.wakeups.saturating_add(1);
+                if let Some(code) = self.handle(input) {
+                    return code;
+                }
+            }
+            if let Some(code) = self.frame(rx) {
                 return code;
             }
         }
     }
 
-    /// Handles one input, loads the pages the frame needs, and draws what
-    /// changed. Returns the exit code when the terminal quits.
-    fn step(&mut self, input: Input, rx: &Receiver<Input>) -> Option<i32> {
+    /// Handles one input: the time, what it does to the app, and what it
+    /// sends. Returns the exit code when the terminal quits, before any
+    /// frame, as handling every input in `step` did.
+    fn handle(&mut self, input: Input) -> Option<i32> {
         self.app.set_now(
             self.clock.now(),
             contract::clock::wall_ms(self.clock.wall()),
@@ -384,6 +406,14 @@ impl<B: Backend> Loop<B> {
             }
             Input::Disconnected => self.on_disconnected(),
             Input::Files { generation, result } => self.app.on_files(generation, result),
+            Input::Models(result) => {
+                self.app.on_models(result);
+                // The queued read, if one waits, starts on the loop's
+                // channel; without one there is no loop to answer.
+                if let Some(out) = self.files_out.clone() {
+                    self.model_reader.done(&out);
+                }
+            }
             Input::Image { ticket, result } => self.app.on_image(ticket, result),
             Input::FindDue(generation) => {
                 let lines = self.app.find_due(generation);
@@ -412,7 +442,18 @@ impl<B: Backend> Loop<B> {
         if !self.app.files_open() {
             self.search = None;
         }
+        // The model-list read the picker owes, if one is owed.
+        if let (Some(refresh), Some(out)) = (self.app.take_reads(), &self.files_out) {
+            self.model_reader.ask(refresh, &out.clone());
+        }
         self.save_shares();
+        None
+    }
+
+    /// Loads the pages the frame needs, and draws what changed: once per
+    /// batch, after every input in it is handled. Returns the exit code
+    /// when the terminal cannot be drawn.
+    fn frame(&mut self, rx: &Receiver<Input>) -> Option<i32> {
         self.page_in(rx);
         self.apply_theme();
         // A selection's copy waiting on dropped pages runs once they load.
@@ -429,6 +470,16 @@ impl<B: Backend> Loop<B> {
         self.write_shape();
         self.write_alerts();
         None
+    }
+
+    /// Handles one input and draws the frame. Tests only: production
+    /// code draws once per batch through `run`.
+    #[cfg(test)]
+    fn step(&mut self, input: Input, rx: &Receiver<Input>) -> Option<i32> {
+        if let Some(code) = self.handle(input) {
+            return Some(code);
+        }
+        self.frame(rx)
     }
 
     /// Saves the shares a drag's release queued, in order. A failed
@@ -590,6 +641,7 @@ impl<B: Backend> Loop<B> {
                 | Input::Resize
                 | Input::FindDue(_)
                 | Input::Image { .. }
+                | Input::Models(_)
                 | Input::Files { .. }) => self.stash.push_back(other),
             }
         }

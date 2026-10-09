@@ -9,15 +9,23 @@
 # its size printed beside the head's; the base size never fails the script.
 # BASE_CACHED=true means the workflow restored the base binary and its
 # checksum into $RUNNER_TEMP/release/cache; anything else builds the base in
-# a git worktree, reusing this checkout's target directory. Without a base
-# commit (a push), the head binary and its checksum are also written to
-# $RUNNER_TEMP/release/cache for the workflow to store under the commit.
+# a git worktree, reusing this checkout's target directory. A base that does
+# not build does not fail the script: BASE_MATCHED_KEY, the cache key the
+# workflow restored under (release-musl-<sha>, empty when none matched), then
+# names the nearest first-parent ancestor of the base with a stored binary,
+# which stands in as the base. With none, the base comparison is skipped.
+# Either way the line "base <sha> does not build" goes to stdout and to
+# $GITHUB_STEP_SUMMARY, and only a failed head build or a head over the
+# limit fails the script. Without a base commit (a push), the head binary and
+# its checksum are also written to $RUNNER_TEMP/release/cache for the
+# workflow to store under the commit.
 #
 # Outputs: $RUNNER_TEMP/release/head/fiber, and $RUNNER_TEMP/release/base/fiber
-# with a base commit; both stripped and executable. Runs on Linux (GNU stat,
-# sha256sum, strip).
+# with a base commit whose comparison is not skipped; both stripped and
+# executable. base/commit then holds the full hash of the commit the base
+# binary is from: the base, or the ancestor that stands in for it. Runs on Linux (sha256sum, strip).
 set -euo pipefail
-shopt -s inherit_errexit
+shopt -s inherit_errexit 2> /dev/null || true # bash 4.4; macOS ships 3.2
 cd "$(git rev-parse --show-toplevel)"
 
 readonly target=x86_64-unknown-linux-musl
@@ -27,17 +35,37 @@ out="${RUNNER_TEMP:?}/release"
 top=$PWD
 
 # Builds the checkout in the current directory into the shared target
-# directory and writes the stripped binary to $1.
+# directory and writes the stripped binary to $1. Each step is chained, so a
+# failed build fails the function even where errexit does not apply.
 build() {
-  CARGO_TARGET_DIR="$top/target" cargo build --release --locked --target "$target" --bin fiber
-  mkdir -p "${1%/*}"
-  strip -o "$1" "$top/target/$target/release/fiber"
+  CARGO_TARGET_DIR="$top/target" cargo build --release --locked --target "$target" --bin fiber &&
+    mkdir -p "${1%/*}" &&
+    strip -o "$1" "$top/target/$target/release/fiber"
+}
+
+# Prints $* and adds it to the job summary.
+note() {
+  echo "release-size: $*"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    echo "$*" >> "$GITHUB_STEP_SUMMARY"
+  fi
+}
+
+# Copies the stored binary in $out/cache to $out/base/fiber after checking its
+# checksum.
+use_stored() {
+  if [ ! -f "$out/cache/fiber" ] || [ ! -f "$out/cache/fiber.sha256" ] ||
+    ! (cd "$out/cache" && sha256sum --check --strict fiber.sha256); then
+    echo "release-size: the stored base binary for $1 is missing or fails its checksum"
+    exit 1
+  fi
+  cp "$out/cache/fiber" "$out/base/fiber"
 }
 
 # Prints "<bytes> <MiB to 2 decimals>" for the file $1.
 size() {
   local bytes mib
-  bytes=$(stat -c %s "$1")
+  bytes=$(wc -c < "$1" | tr -d ' ')
   mib=$(awk -v b="$bytes" 'BEGIN { printf "%.2f", b / 1048576 }')
   echo "$bytes $mib"
 }
@@ -56,36 +84,50 @@ if [ -z "$base_commit" ]; then
 else
   base_sha=$(git rev-parse --short "$base_commit")
   mkdir -p "$out/base"
+  compare=true
+  compared=$(git rev-parse "$base_commit")
   if [ "${BASE_CACHED:-}" = true ]; then
     how=stored
-    if [ ! -f "$out/cache/fiber" ] || [ ! -f "$out/cache/fiber.sha256" ] ||
-      ! (cd "$out/cache" && sha256sum --check --strict fiber.sha256); then
-      echo "release-size: the stored base binary for $base_commit is missing or fails its checksum"
-      exit 1
-    fi
-    cp "$out/cache/fiber" "$out/base/fiber"
+    use_stored "$base_commit"
   else
     how=built
     worktree="$RUNNER_TEMP/release-base"
-    trap 'git -C "$top" worktree remove --force "$worktree"' EXIT
-    git worktree add --detach "$worktree" "$base_commit"
+    trap 'git -C "$top" worktree remove --force "$worktree" 2> /dev/null || true' EXIT
     # The base may pin another toolchain; each command reads its
     # rust-toolchain.toml.
-    (
-      cd "$worktree"
-      rustup toolchain install
-      rustup target add "$target"
-      build "$out/base/fiber"
-    )
+    if ! { git worktree add --detach "$worktree" "$base_commit" &&
+      (
+        cd "$worktree" &&
+          rustup toolchain install &&
+          rustup target add "$target" &&
+          build "$out/base/fiber"
+      ); }; then
+      rm -f "$out/base/fiber"
+      ancestor=${BASE_MATCHED_KEY:-}
+      ancestor=${ancestor#release-musl-}
+      if [ -n "$ancestor" ]; then
+        how=stored
+        use_stored "$ancestor"
+        compared=$ancestor
+        note "The base $base_sha does not build. Its size is compared against the nearest first-parent ancestor with a stored binary, $(git rev-parse --short "$ancestor")."
+      else
+        compare=false
+        note "The base $base_sha does not build and no first-parent ancestor has a stored binary. The base comparison and the timing gates are skipped; the head's size check and benchmarks still gate."
+      fi
+    fi
   fi
-  base_size=$(size "$out/base/fiber")
-  read -r base_bytes base_mib <<<"$base_size"
-  echo "release-size: base $base_sha fiber is $base_bytes bytes ($base_mib MiB), $how"
-  delta=$((head_bytes - base_bytes))
-  if [ "$delta" -ge 0 ]; then
-    delta="+$delta"
+  if [ "$compare" = true ]; then
+    # The commit the base binary is from, for the jig's base (scripts/paging-jig).
+    echo "$compared" > "$out/base/commit"
+    base_size=$(size "$out/base/fiber")
+    read -r base_bytes base_mib <<<"$base_size"
+    echo "release-size: base $(git rev-parse --short "$compared") fiber is $base_bytes bytes ($base_mib MiB), $how"
+    delta=$((head_bytes - base_bytes))
+    if [ "$delta" -ge 0 ]; then
+      delta="+$delta"
+    fi
+    echo "release-size: head - base = $delta bytes"
   fi
-  echo "release-size: head - base = $delta bytes"
 fi
 
 if [ "$head_bytes" -ge "$limit" ]; then

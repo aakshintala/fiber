@@ -101,6 +101,7 @@ impl App {
     /// seam the view says it is not available.
     pub(crate) fn open_config_view(&mut self, view: ConfigView) -> Effect {
         self.draft.clear();
+        self.model_picker.close();
         self.close_session_view();
         self.config_views.open = None;
         let open = match (self.config_views.seam.clone(), view) {
@@ -152,7 +153,8 @@ impl App {
         Effect::Send(vec![line])
     }
 
-    /// Closes any open configuration view.
+    /// Closes any open configuration view, so another swapped view can take
+    /// its place.
     pub(in crate::app) fn close_config_view(&mut self) {
         self.config_views.open = None;
     }
@@ -275,6 +277,9 @@ impl App {
                 }
             }
             (None, Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_)) => Act::Stay,
+            // Only the model picker draws cells with targets of their
+            // own; here a cell is never pushed.
+            (_, Spot::Cell(_, _)) => Act::Stay,
         };
         self.config_act(act)
     }
@@ -318,6 +323,17 @@ impl App {
                 footer: "Esc close".to_owned(),
             },
         })
+    }
+
+    /// The last call's prompt size on the session on screen, if its
+    /// call was the session's own: what a reload's cache rebuild costs.
+    /// A copied or extension call, or another session's, counts nothing.
+    pub(in crate::app) fn usage_on_screen(&self) -> Option<u64> {
+        self.config_views
+            .usage
+            .as_ref()
+            .filter(|(session, _)| self.session() == Some(session))
+            .map(|(_, tokens)| *tokens)
     }
 
     /// The theme a choice queued, once.

@@ -333,6 +333,37 @@ fn attention_switches_come_from_config_with_defaults() {
     }
 }
 
+#[test]
+fn scoped_models_come_from_config() {
+    let dir = fakes::TempDir::new("fiber-launch-scoped");
+    let workspace = dir.path().to_path_buf();
+    let identity = workspace
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("canonical: {err}"));
+    let set_config = config(
+        dir.path(),
+        &workspace,
+        vec!["scoped_models=[\"openai/gpt-5\"]".to_owned()],
+    );
+    let set = launch(
+        workspace.clone(),
+        &identity,
+        &set_config,
+        tui::ThemeSetting::Follow,
+    );
+    assert_eq!(set.scoped_models, ["openai/gpt-5"]);
+    assert!(set.models.is_none());
+    // Unset, the picker shows every installed model.
+    let plain_config = config(dir.path(), &workspace, Vec::new());
+    let unset = launch(
+        workspace,
+        &identity,
+        &plain_config,
+        tui::ThemeSetting::Follow,
+    );
+    assert!(unset.scoped_models.is_empty());
+}
+
 /// Reads the global `config.json` under `home`.
 fn global(home: &std::path::Path) -> serde_json::Value {
     let text = std::fs::read_to_string(home.join("config.json"))

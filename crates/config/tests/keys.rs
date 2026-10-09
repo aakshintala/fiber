@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 const STR: &str = "a string";
+const ROLE: &str = "a model reference, or an object with `model`, the reference";
 const BOOL: &str = "true or false";
 const COUNT: &str = "a whole number of zero or more";
 const NUMBER: &str = "a number";
@@ -24,10 +25,17 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
     vec![
         (&["model"], json!("openai/gpt-5.6"), json!(5), STR, true),
         (
+            &["scoped_models"],
+            json!(["openai/gpt-5.6"]),
+            json!("openai/gpt-5.6"),
+            LIST,
+            true,
+        ),
+        (
             &["roles", "fast"],
             json!("fiber:openai/gpt-5.6:xhigh"),
             json!(true),
-            STR,
+            ROLE,
             true,
         ),
         (

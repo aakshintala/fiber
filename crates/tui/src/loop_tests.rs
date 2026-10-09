@@ -145,6 +145,7 @@ fn opened() -> (
         files_out: None,
         search: None,
         reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
         paste_reader: None,
         pointer: crate::mouse::Pointer::default(),
         hover: true,
@@ -345,6 +346,7 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             | Input::FindDue(_)
             | Input::Tick
             | Input::Files { .. }
+            | Input::Models(_)
             | Input::Image { .. } => "other".to_owned(),
             Input::Resize => "resize".to_owned(),
         })
@@ -697,4 +699,322 @@ fn a_selection_waiting_on_a_page_copies_in_the_same_step() {
         .unwrap_or_else(|err| panic!("base64: {err}"));
     let copied = String::from_utf8_lossy(&copied).into_owned();
     assert!(copied.contains("first"), "{copied:?}");
+}
+
+/// A backend wrapping `TestBackend` that counts `flush` calls: one per
+/// frame written, since a frame identical to the last writes nothing.
+struct CountingBackend {
+    inner: TestBackend,
+    flushes: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl ratatui::backend::Backend for CountingBackend {
+    type Error = <TestBackend as ratatui::backend::Backend>::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        self.inner.draw(content)
+    }
+
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> Result<ratatui::layout::Position, Self::Error> {
+        self.inner.get_cursor_position()
+    }
+
+    fn set_cursor_position<P: Into<ratatui::layout::Position>>(
+        &mut self,
+        position: P,
+    ) -> Result<(), Self::Error> {
+        self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        self.inner.clear()
+    }
+
+    fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> Result<(), Self::Error> {
+        self.inner.clear_region(clear_type)
+    }
+
+    fn size(&self) -> Result<ratatui::layout::Size, Self::Error> {
+        self.inner.size()
+    }
+
+    fn window_size(&mut self) -> Result<ratatui::backend::WindowSize, Self::Error> {
+        self.inner.window_size()
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        self.flushes.set(self.flushes.get().saturating_add(1));
+        self.inner.flush()
+    }
+}
+
+/// A loop on the counting backend at 60x12, attached to the session as
+/// [`opened`] does but with no lines folded yet, and its flush count.
+fn counting() -> (
+    Loop<CountingBackend>,
+    std::rc::Rc<std::cell::Cell<usize>>,
+    Sender<Input>,
+    mpsc::Receiver<Input>,
+) {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    let hello = contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    };
+    app.on_line(Line::Hub(hello));
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    let flushes = std::rc::Rc::new(std::cell::Cell::new(0));
+    let backend = CountingBackend {
+        inner: TestBackend::new(60, 12),
+        flushes: std::rc::Rc::clone(&flushes),
+    };
+    let screen = Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let lp = Loop {
+        app,
+        parser: crate::keys::Parser::default(),
+        screen,
+        hub: None,
+        tty: None,
+        on_attach: Box::new(|_| {}),
+        clock: fakes::clock::FakeClock::new(),
+        wakeups: 0,
+        stash: std::collections::VecDeque::new(),
+        files_out: None,
+        search: None,
+        reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
+        paste_reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: true,
+        var: Box::new(|_| None),
+        copy_command: None,
+        open_command: None,
+        title: crate::osc::Title::default(),
+        save: None,
+        shape: crate::osc::Shape::default(),
+        retry: None,
+        tick: crate::tick::TickThread::idle(),
+    };
+    let (tx, rx) = mpsc::channel();
+    (lp, flushes, tx, rx)
+}
+
+#[test]
+fn queued_hub_lines_draw_one_frame() {
+    let (mut lp, flushes, tx, rx) = counting();
+    let mut seq = 0u64;
+    let mut hub = |kind: &str, action: Option<&str>, payload: Value| {
+        let envelope = line(kind, Some(seq), action, payload);
+        seq += 1;
+        tx.send(Input::Hub(Line::Session(envelope)))
+            .unwrap_or_else(|err| panic!("send: {err}"));
+    };
+    for (turn, marker) in ["marker one", "marker two", "marker three"]
+        .into_iter()
+        .enumerate()
+    {
+        hub(
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": format!("prompt {turn}")}]}]}),
+        );
+        hub(
+            "text_completed",
+            Some(&format!("a_m{turn}")),
+            json!({"text": marker}),
+        );
+        hub("turn_completed", None, json!({"outcome": "completed"}));
+    }
+    drop(tx);
+    // Every line queued before the loop runs: one run of waiting lines
+    // draws one frame.
+    assert_eq!(lp.run(&rx), 0);
+    assert_eq!(flushes.get(), 1, "one frame for the queued lines");
+    let screen = crate::view::text(lp.screen.backend().inner.buffer());
+    assert!(screen.contains("marker three"), "{screen}");
+    assert!(!screen.contains("esc to interrupt"), "{screen}");
+}
+
+/// Runs `lp` over `inputs` queued before it starts, to the end of input.
+fn run_queued(
+    lp: &mut Loop<CountingBackend>,
+    rx: mpsc::Receiver<Input>,
+    tx: Sender<Input>,
+    inputs: Vec<Input>,
+) -> i32 {
+    for input in inputs {
+        tx.send(input).unwrap_or_else(|err| panic!("send: {err}"));
+    }
+    drop(tx);
+    lp.run(&rx)
+}
+
+/// One turn's lines with `marker` as its reply, numbered from `seq`.
+fn turn_lines(marker: &str, turn: usize, seq: &mut u64) -> Vec<Input> {
+    let mut lines = Vec::new();
+    let mut push = |kind: &str, action: Option<String>, payload: Value| {
+        lines.push(Input::Hub(Line::Session(line(
+            kind,
+            Some(*seq),
+            action.as_deref(),
+            payload,
+        ))));
+        *seq += 1;
+    };
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": format!("prompt {turn}")}]}]}),
+    );
+    push(
+        "text_completed",
+        Some(format!("a_m{turn}")),
+        json!({"text": marker}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    lines
+}
+
+/// The screen a counting loop drew last.
+fn counted(lp: &Loop<CountingBackend>) -> String {
+    crate::view::text(lp.screen.backend().inner.buffer())
+}
+
+#[test]
+fn lines_a_key_and_lines_draw_three_frames() {
+    let (mut lp, flushes, tx, rx) = counting();
+    let mut seq = 0u64;
+    let mut inputs = turn_lines("marker one", 0, &mut seq);
+    inputs.push(Input::Bytes(b"a".to_vec()));
+    inputs.extend(turn_lines("marker two", 1, &mut seq));
+    // The lines share a frame each, and the key keeps its own.
+    assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+    assert_eq!(flushes.get(), 3);
+    assert_eq!(lp.app.draft(), "a");
+    let screen = counted(&lp);
+    assert!(screen.contains("marker two"), "{screen}");
+    assert!(!screen.contains("esc to interrupt"), "{screen}");
+}
+
+#[test]
+fn more_than_a_batch_of_lines_draws_two_frames() {
+    let (mut lp, flushes, tx, rx) = counting();
+    let full = super::batch::HUB_BATCH / 3;
+    let mut seq = 0u64;
+    let mut inputs = Vec::new();
+    for turn in 0..full {
+        inputs.extend(turn_lines(&format!("marker {turn}"), turn, &mut seq));
+    }
+    assert_eq!(inputs.len(), super::batch::HUB_BATCH - 1);
+    inputs.extend(turn_lines(&format!("marker {full}"), full, &mut seq));
+    inputs.truncate(super::batch::HUB_BATCH + 1);
+    assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+    assert_eq!(flushes.get(), 2);
+    let screen = counted(&lp);
+    assert!(screen.contains(&format!("marker {full}")), "{screen}");
+    assert!(!screen.contains("esc to interrupt"), "{screen}");
+}
+
+#[test]
+fn a_tick_among_queued_lines_draws_no_frame_of_its_own() {
+    let (mut lp, flushes, tx, rx) = counting();
+    let mut seq = 0u64;
+    let mut inputs = turn_lines("marker one", 0, &mut seq);
+    inputs.push(Input::Tick);
+    inputs.extend(turn_lines("marker two", 1, &mut seq));
+    assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+    assert_eq!(flushes.get(), 1);
+    let screen = counted(&lp);
+    assert!(screen.contains("marker two"), "{screen}");
+    assert!(!screen.contains("esc to interrupt"), "{screen}");
+}
+
+#[test]
+fn a_disconnect_among_lines_ends_the_batch_with_its_own_frame() {
+    let (mut lp, flushes, tx, rx) = counting();
+    let (ours, _theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let hello = contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    };
+    let mut seq = 0u64;
+    let mut inputs = vec![Input::Connected(ours, hello)];
+    inputs.extend(turn_lines("marker one", 0, &mut seq));
+    inputs.push(Input::Disconnected);
+    inputs.extend(turn_lines("marker two", 1, &mut seq));
+    assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+    // The connect, the first turn, the disconnect and the second turn
+    // each draw their own frame.
+    assert_eq!(flushes.get(), 4);
+    assert_eq!(lp.app.notice(), Some("Connection lost."));
+    let screen = counted(&lp);
+    assert!(screen.contains("marker two"), "{screen}");
+}
+
+/// One finished `attention` line naming `name`.
+fn finished(name: &str) -> Input {
+    Input::Hub(Line::Hub(contract::HubLine {
+        kind: "attention".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({
+            "session_id": "s_aaaaaaaaaaaaaaaa",
+            "name": name,
+            "reason": "finished",
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }))
+}
+
+#[test]
+fn two_finished_lines_in_one_batch_write_both_notifications_in_order() {
+    let dir = fakes::TempDir::new("tui-attention-batch");
+    let path = dir.path().join("tty");
+    let tty = std::fs::File::create(&path).unwrap_or_else(|err| panic!("create: {err}"));
+    let (mut lp, _) = super::tests::new_loop(TestBackend::new(60, 12), Some(tty));
+    lp.app.set_osc9(true);
+    // Both lines fold into one batch, so one frame queues both alerts:
+    // neither may be lost.
+    assert_eq!(
+        super::tests::feed(&mut lp, vec![finished("one"), finished("two")]),
+        0
+    );
+    let bytes = std::fs::read(&path).unwrap_or_else(|err| panic!("read: {err}"));
+    let one = "\x1b]9;Fiber: one finished\x07";
+    let two = "\x1b]9;Fiber: two finished\x07";
+    let count = |needle: &str| {
+        bytes
+            .windows(needle.len())
+            .filter(|w| *w == needle.as_bytes())
+            .count()
+    };
+    assert_eq!(count(one), 1);
+    assert_eq!(count(two), 1);
+    let at = |needle: &str| {
+        bytes
+            .windows(needle.len())
+            .position(|w| w == needle.as_bytes())
+            .unwrap_or(usize::MAX)
+    };
+    assert!(at(one) < at(two));
 }

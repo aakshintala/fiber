@@ -111,3 +111,36 @@ fn a_list_newer_than_the_clock_is_fresh() {
         Some(std::time::Duration::ZERO)
     );
 }
+
+#[test]
+fn cached_model_lists_names_each_json_stem_sorted() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let list = json!([{ "id": "m1", "protocol": "openai-responses", "base_url": "http://x/v1", "context_window": 1000 }]);
+    write_model_cache(&home, "zeta", &list).unwrap();
+    write_model_cache(&home, "acme", &list).unwrap();
+    assert_eq!(config::cached_model_lists(&home).unwrap(), ["acme", "zeta"]);
+}
+
+#[test]
+fn a_missing_cache_directory_lists_none() {
+    let setup = Setup::new();
+    assert_eq!(
+        config::cached_model_lists(&setup.home()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn lock_and_other_files_are_skipped() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let list = json!([{ "id": "m1", "protocol": "openai-responses", "base_url": "http://x/v1", "context_window": 1000 }]);
+    write_model_cache(&home, "acme", &list).unwrap();
+    let dir = home.join("cache/models");
+    std::fs::write(dir.join("acme.lock"), "").unwrap();
+    std::fs::write(dir.join("notes.txt"), "not a list").unwrap();
+    std::fs::write(dir.join(".json"), "[]").unwrap();
+    std::fs::create_dir(dir.join("sub.json")).unwrap();
+    assert_eq!(config::cached_model_lists(&home).unwrap(), ["acme"]);
+}

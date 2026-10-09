@@ -101,10 +101,10 @@ pub(crate) fn render(
         chrome::floor(line, area, buf);
         return Vec::new();
     }
-    // A configuration view takes home's place (`docs/tui.md`, "Swapped
-    // views"). Notices float above it (`docs/tui.md`, "Notices"), as
+    // A swapped view takes home's place (`docs/tui.md`, "Swapped
+    // views"): the configuration view or the model picker. Notices float above it (`docs/tui.md`, "Notices"), as
     // over the conversation.
-    if app.config_view_open() && app.on_home() {
+    if (app.config_view_open() || app.model_picker_open()) && app.on_home() {
         let mut targets = Vec::new();
         crate::swapped::draw(app, area, buf, &mut targets);
         notices(app, area, buf, &mut targets);
@@ -171,9 +171,10 @@ pub(crate) fn render(
                 .render(conversation, buf);
             overlay_cross(buf, conversation, &mut targets);
         }
-        // A swapped view takes the conversation area. Notices float above
-        // it (`docs/tui.md`, "Notices"), as over the conversation.
-        None if app.config_view_open() || app.session_view_open() => {
+        // A swapped view takes the conversation's place: the configuration
+        // view, model picker or session view. Notices float above it
+        // (`docs/tui.md`, "Notices"), as over the conversation.
+        None if app.config_view_open() || app.model_picker_open() || app.session_view_open() => {
             crate::swapped::draw(app, conversation, buf, &mut targets);
             notices(app, conversation, buf, &mut targets);
         }
@@ -322,8 +323,13 @@ fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
 /// shown form's caret wins over an open repository offer, which already
 /// gives the panel its keys.
 pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
-    // A swapped view has no input caret.
-    if app.chrome().floor_line().is_some() || app.config_view_open() || app.session_view_open() {
+    // A swapped view draws any field caret in its frame; it has no
+    // input-box caret.
+    if app.chrome().floor_line().is_some()
+        || app.config_view_open()
+        || app.model_picker_open()
+        || app.session_view_open()
+    {
         return None;
     }
     if let Some(screen) = app.home_screen() {

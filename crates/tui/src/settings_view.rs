@@ -14,7 +14,7 @@ use crate::ThemeSetting;
 use crate::configure::{Configure, Layer, SettingRow, Shown, WriteScope};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
-use crate::swapped::{Frame, List, Spot, about, rows_height};
+use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
 
 /// The key the theme choice edits.
 const THEME: &str = "tui.theme";
@@ -453,6 +453,9 @@ impl Settings {
                 Act::Stay
             }
             (Spot::Row(_), Mode::Field(_)) => Act::Stay,
+            // Only the model picker draws cells with targets of their
+            // own; here a cell is never pushed.
+            (Spot::Cell(_, _), _) => Act::Stay,
         }
     }
 
@@ -473,7 +476,7 @@ impl Settings {
                         } else {
                             ""
                         };
-                        vec![(format!("{name}{mark}"), None)]
+                        vec![(format!("{name}{mark}"), None, Ink::Plain)]
                     })
                     .collect(),
                 list: *list,
@@ -521,7 +524,7 @@ impl Settings {
     }
 
     /// One line per key: the key, its value and its layer.
-    fn lines(&self) -> Vec<Vec<(String, Option<Spot>)>> {
+    fn lines(&self) -> Vec<Vec<(String, Option<Spot>, Ink)>> {
         let width = self
             .rows
             .iter()
@@ -541,7 +544,11 @@ impl Settings {
                         .collect::<Vec<_>>()
                         .join(", "),
                 };
-                vec![(format!("{:<width$}  {value}  {}", row.key, row.layer), None)]
+                vec![(
+                    format!("{:<width$}  {value}  {}", row.key, row.layer),
+                    None,
+                    Ink::Plain,
+                )]
             })
             .collect()
     }

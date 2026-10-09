@@ -41,7 +41,7 @@ pub use hub_status::hub_status;
 pub use login::{
     LoginName, LoginStored, LogoutTarget, login_store, login_targets, run_login, run_logout,
 };
-pub use models::{models, refresh_model_lists};
+pub use models::{models, providers_and_config, refresh_model_lists};
 pub use prune::{PruneArgs, prune};
 pub use release::release_install;
 pub use sessions::{delete, export};

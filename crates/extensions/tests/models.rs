@@ -1303,3 +1303,82 @@ fn forget_lua_drops_every_handle_and_keeps_the_models() {
     let model = providers.resolve("acme/m").unwrap();
     assert_eq!(providers.addendum(&model), Some("Lua says hi.\n"));
 }
+
+/// One cached model with `id`, on `openai-responses`.
+fn cached(id: &str) -> config::ModelData {
+    serde_json::from_value(json!({
+        "id": id,
+        "protocol": "openai-responses",
+        "base_url": "http://127.0.0.1:1/v1",
+        "context_window": 1000,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn add_cached_inserts_an_unheld_provider_with_its_models() {
+    let mut providers = Providers::default();
+    assert!(providers.add_cached("acme", vec![cached("m1")]));
+    assert_eq!(providers.names().collect::<Vec<_>>(), ["acme"]);
+    assert_eq!(
+        providers
+            .get("acme")
+            .unwrap()
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        ["m1"]
+    );
+    assert!(providers.resolve("acme/m1").is_ok());
+}
+
+#[test]
+fn add_cached_leaves_a_held_provider_alone() {
+    let setup = Setup::new();
+    let mut providers = installed(&setup, &[("openai", provider("openai", &["gpt-5.6"]))]);
+    assert!(!providers.add_cached("openai", vec![cached("other")]));
+    assert_eq!(
+        providers
+            .get("openai")
+            .unwrap()
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        ["gpt-5.6"]
+    );
+}
+
+#[test]
+fn add_cached_refuses_scripted() {
+    let mut providers = Providers::default();
+    assert!(!providers.add_cached("scripted", vec![cached("m1")]));
+    assert!(providers.get("scripted").is_none());
+}
+
+#[test]
+fn set_models_replaces_a_held_providers_models() {
+    let setup = Setup::new();
+    let mut providers = installed(&setup, &[("openai", provider("openai", &["gpt-5.6"]))]);
+    providers.set_models("openai", vec![cached("gpt-7")]);
+    assert_eq!(
+        providers
+            .get("openai")
+            .unwrap()
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        ["gpt-7"]
+    );
+}
+
+#[test]
+fn set_models_inserts_an_unheld_provider_and_refuses_scripted() {
+    let mut providers = Providers::default();
+    providers.set_models("acme", vec![cached("m1")]);
+    assert!(providers.resolve("acme/m1").is_ok());
+    providers.set_models("scripted", vec![cached("m1")]);
+    assert!(providers.get("scripted").is_none());
+}

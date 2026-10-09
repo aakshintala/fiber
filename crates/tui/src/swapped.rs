@@ -27,11 +27,38 @@ pub(crate) enum Spot {
     Close,
     /// A row, by its index: selects it, or chooses it in a choice list.
     Row(usize),
+    /// A cell, by its row and place in it: a button, or a chip in the
+    /// model picker. A view without cells never sees one.
+    Cell(usize, usize),
     /// A switch in a row: `at` 0 is this project, 1 everywhere.
     Switch { row: usize, at: usize },
     /// A rule row's ✕, by its index: revokes the rule
     /// (`docs/tui.md`, "Swapped views").
     Revoke(usize),
+}
+
+/// How a cell draws: plain text, a provider heading, or dimmed text
+/// such as a row's roles. The selected row still reverses over it, so
+/// it shows on every theme and with no colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ink {
+    /// Plain text.
+    Plain,
+    /// A heading: bold.
+    Heading,
+    /// Dimmed text: the muted role's colour.
+    Muted,
+}
+
+impl Ink {
+    /// The cell's style.
+    fn style(self) -> Style {
+        match self {
+            Ink::Plain => Style::default(),
+            Ink::Heading => Style::new().add_modifier(Modifier::BOLD),
+            Ink::Muted => Style::new().fg(Role::Muted.color()),
+        }
+    }
 }
 
 /// A list's selection and the first row shown.
@@ -94,8 +121,8 @@ pub(crate) struct Frame {
     /// The header's title.
     pub(crate) title: String,
     /// The rows, each in cells drawn left to right, some with a click
-    /// target of their own.
-    pub(crate) rows: Vec<Vec<(String, Option<Spot>)>>,
+    /// target of their own, each with how it draws.
+    pub(crate) rows: Vec<Vec<(String, Option<Spot>, Ink)>>,
     /// The selection and the first row shown.
     pub(crate) list: List,
     /// Lines below the rows: what a write said, when a key applies.
@@ -114,9 +141,14 @@ pub(crate) fn rows_height(frame: &Frame, height: usize) -> usize {
     height.saturating_sub(fixed)
 }
 
-/// Draws the open view into `area`, pushing its click targets.
+/// Draws the open swapped view into `area`, pushing its click targets:
+/// the model picker while it is open, else the open configuration view.
 pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
-    if let Some(frame) = app.config_view_screen() {
+    let height = usize::from(area.height);
+    if let Some(frame) = app
+        .model_picker_frame(height)
+        .or_else(|| app.config_view_screen())
+    {
         render(&frame, area, buf, targets);
     } else if let Some(frame) = app.session_view_screen(area.width) {
         render(&frame, area, buf, targets);
@@ -152,13 +184,13 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
             rect: line,
         });
         let mut x = area.x;
-        for (text, spot) in cells {
+        for (text, spot, ink) in cells {
             let (end, _) = buf.set_stringn(
                 x,
                 y,
                 text,
                 usize::from(area.right().saturating_sub(x)),
-                Style::default(),
+                ink.style(),
             );
             if let Some(spot) = spot {
                 targets.push(Target {

@@ -11,6 +11,7 @@ use ratatui::text::{Line, Span};
 
 use crate::app::App;
 use crate::app::panel::{Branch, Spot};
+use crate::changed_files_view;
 use crate::format;
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
@@ -492,17 +493,9 @@ fn changed_files_rows(app: &App, text: usize) -> Vec<Row> {
     if changes.is_empty() {
         return Vec::new();
     }
-    let mut paths: Vec<(&str, u64, u64)> = changes
-        .iter()
-        .map(|(path, (added, removed))| (path.as_str(), *added, *removed))
-        .collect();
-    paths.sort_by(|a, b| {
-        b.1.saturating_add(b.2)
-            .cmp(&a.1.saturating_add(a.2))
-            .then_with(|| a.0.cmp(b.0))
-    });
+    let paths = changed_files_view::ranked(changes);
     let mut out = Vec::new();
-    for (path, added, removed) in paths.iter().take(5) {
+    for (rank, (path, added, removed)) in paths.iter().take(5).enumerate() {
         let counts = format!("+{added} \u{2212}{removed}");
         let room = text.saturating_sub(format::width(&counts).saturating_add(1));
         let shown = cut_left(path, room);
@@ -514,7 +507,7 @@ fn changed_files_rows(app: &App, text: usize) -> Vec<Row> {
                 Span::raw(" ".to_owned()),
                 Span::styled(format!("\u{2212}{removed}"), style(Role::Removed)),
             ]),
-            spot: None,
+            spot: Some(Spot::File(rank)),
             tint: None,
             edge: false,
         });
@@ -529,10 +522,13 @@ fn changed_files_rows(app: &App, text: usize) -> Vec<Row> {
             )
         },
     );
-    out.push(plain(format!(
-        "{} changed  +{added} \u{2212}{removed}",
-        format::count(files, "file", "files")
-    )));
+    out.push(targeted(
+        format!(
+            "{} changed  +{added} \u{2212}{removed}",
+            format::count(files, "file", "files")
+        ),
+        Spot::ChangedFiles,
+    ));
     out
 }
 

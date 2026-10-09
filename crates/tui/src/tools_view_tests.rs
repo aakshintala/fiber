@@ -114,7 +114,7 @@ fn names(tools: &Tools) -> Vec<String> {
         .map(|cells| {
             cells
                 .into_iter()
-                .map(|(text, _)| text)
+                .map(|(text, _, _)| text)
                 .collect::<Vec<_>>()
                 .join("")
         })
@@ -130,7 +130,7 @@ fn tool_names(tools: &Tools) -> Vec<String> {
         .filter_map(|cells| {
             cells
                 .first()
-                .map(|(text, _)| text.trim().to_owned())
+                .map(|(text, _, _)| text.trim().to_owned())
                 .filter(|name| {
                     !name.starts_with("Built-in")
                         && !name.starts_with("Extension")
@@ -236,7 +236,7 @@ fn built_in_rows_have_no_switch() {
     let mut tools = opened(&fake, &[builtin("read")], None);
     let frame = tools.frame(None);
     assert_eq!(frame.rows.len(), 2);
-    for (_, spot) in &frame.rows[1] {
+    for (_, spot, _) in &frame.rows[1] {
         assert!(!matches!(spot, Some(Spot::Switch { .. })), "{frame:?}");
     }
     tools.key(&Key::Down, &ctx(&fake, None));

@@ -152,7 +152,7 @@ fn changed_files_segments(app: &App) -> Vec<(String, Option<Spot>)> {
             "{} +{added} \u{2212}{removed}",
             format::count(files, "file", "files")
         ),
-        None,
+        Some(Spot::ChangedFiles),
     )]
 }
 

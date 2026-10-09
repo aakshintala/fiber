@@ -6,14 +6,16 @@
     reason = "test code may unwrap (docs/code-quality.md, \"Lints\"); clippy exempts only #[test] functions here"
 )]
 
+#[path = "../src/child.rs"]
+mod child;
 #[path = "../src/test_dir.rs"]
 mod test_dir;
 
-use std::io::Write;
 use std::os::unix::process::CommandExt as _;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
+use child::finished;
 use test_dir::TestDir;
 
 const DEPENDENCIES: &str = "# Dependencies
@@ -50,48 +52,6 @@ const CODE_QUALITY: &str = "# Code quality
 /// only bounds a hang.
 const CHILD_WITHIN: Duration = Duration::from_secs(5);
 
-#[allow(
-    clippy::panic,
-    reason = "a child that cannot run, or one still running past its deadline, fails the test naming the wait"
-)]
-/// Runs a child's stdin write and `wait_with_output` on a thread and returns
-/// its output. A thread writes `stdin` to the child's stdin (when
-/// non-empty; the handle is dropped either way), then sends
-/// `wait_with_output()`; the test thread receives with a deadline. On a
-/// miss it kills the child's own process group, receives once more under
-/// the bound to reap, then fails naming the wait (`docs/testing.md`,
-/// "Waits and timeouts"). The child leads its own group
-/// (`process_group(0)` at spawn), so the kill never reaches the test's.
-fn finished(what: &str, mut child: Child, stdin: &[u8]) -> Output {
-    let pid = child.id();
-    let stdin = stdin.to_vec();
-    let (done, waited) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let outcome = (|| {
-            if stdin.is_empty() {
-                drop(child.stdin.take());
-            } else if let Some(mut input) = child.stdin.take() {
-                input.write_all(&stdin)?;
-            }
-            child.wait_with_output()
-        })();
-        done.send(outcome).unwrap_or(());
-    });
-    match waited.recv_timeout(CHILD_WITHIN) {
-        Ok(outcome) => match outcome {
-            Ok(output) => output,
-            Err(err) => panic!("{what} has no output: {err}"),
-        },
-        Err(_) => {
-            match fakes::kill_group(pid, "KILL") {
-                Ok(_) | Err(_) => {}
-            }
-            let reaped = waited.recv_timeout(CHILD_WITHIN).is_ok();
-            panic!("waited {CHILD_WITHIN:?} for {what} (reaped: {reaped})");
-        }
-    }
-}
-
 fn xtask(dir: &TestDir, args: &[&str], env: &[(&str, &str)], stdin: &str) -> (i32, String) {
     let child = Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args(args)
@@ -107,7 +67,12 @@ fn xtask(dir: &TestDir, args: &[&str], env: &[(&str, &str)], stdin: &str) -> (i3
         status,
         stdout,
         stderr,
-    } = finished(&format!("xtask {args:?}"), child, stdin.as_bytes());
+    } = finished(
+        &format!("xtask {args:?}"),
+        child,
+        stdin.as_bytes(),
+        CHILD_WITHIN,
+    );
     let text = String::from_utf8(stdout).unwrap() + &String::from_utf8(stderr).unwrap();
     (status.code().unwrap(), text)
 }
@@ -123,7 +88,7 @@ fn git(dir: &TestDir, args: &[&str]) {
         .process_group(0)
         .spawn()
         .unwrap();
-    let status = finished(&format!("git {args:?}"), child, &[]).status;
+    let status = finished(&format!("git {args:?}"), child, &[], CHILD_WITHIN).status;
     assert!(status.success(), "git {args:?}");
 }
 

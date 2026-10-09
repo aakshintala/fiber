@@ -230,7 +230,7 @@ fn one_line(text: &str) -> String {
 /// `seconds` since the epoch as a UTC time to the second,
 /// `2026-10-07T10:00:03Z`.
 fn utc(seconds: u64) -> String {
-    let (year, month, day) = civil_from_days(seconds / 86_400);
+    let (year, month, day) = contract::clock::utc_date_of_secs(seconds);
     let second = seconds % 86_400;
     format!(
         "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
@@ -238,26 +238,6 @@ fn utc(seconds: u64) -> String {
         second % 3_600 / 60,
         second % 60
     )
-}
-
-/// Proleptic Gregorian date of `days` since 1970-01-01.
-// `loop` keeps its own copy (`loop::opening::civil_from_days`): `cli`
-// may not call `tools`, and `contract` holds no behaviour beyond
-// serialisation.
-fn civil_from_days(days: u64) -> (u64, u64, u64) {
-    let era = (days + 719_468) / 146_097;
-    let start = days + 719_468 - era * 146_097;
-    let year = (start - start / 1_460 + start / 36_524 - start / 146_096) / 365;
-    let ordinal = start - (365 * year + year / 4 - year / 100);
-    let month = (5 * ordinal + 2) / 153;
-    let day = ordinal - (153 * month + 2) / 5 + 1;
-    let month = if month < 10 { month + 3 } else { month - 9 };
-    let year = if month <= 2 {
-        year + era * 400 + 1
-    } else {
-        year + era * 400
-    };
-    (year, month, day)
 }
 
 #[cfg(test)]

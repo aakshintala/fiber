@@ -115,15 +115,24 @@ fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
         line["kind"] == "fiber_exited"
     });
     stream.extend(tail);
-    // The complete, ordered stream: the replayed start, the live startup
-    // lines, the close acknowledgement, and the exit.
+    // The stream, in order, with the one `clients` line set aside: the hub
+    // writes it when the `full` subscribe attaches, which races the
+    // session's own `fiber_started` and `extensions_loaded`.
+    let clients = stream
+        .iter()
+        .filter(|line| line["kind"] == "clients")
+        .count();
+    assert_eq!(clients, 1, "{stream:?}");
+    let without_clients: Vec<&str> = kinds(&stream)
+        .into_iter()
+        .filter(|kind| *kind != "clients")
+        .collect();
     assert_eq!(
-        kinds(&stream),
+        without_clients,
         [
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "command_accepted",
             "fiber_exited",
         ]

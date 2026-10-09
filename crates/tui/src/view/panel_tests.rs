@@ -892,7 +892,16 @@ fn changed_files_card() {
             ("src/a.rs", 3, 3),
         ],
     );
-    insta::assert_snapshot!("changed_files_card", super::super::text(&draw_panel(&app)));
+    let (buf, targets) = draw_targets(&app);
+    assert_eq!(
+        targets.iter().map(|target| target.id).collect::<Vec<_>>(),
+        [
+            crate::mouse::TargetId::Panel(crate::app::panel::Spot::File(0)),
+            crate::mouse::TargetId::Panel(crate::app::panel::Spot::File(1)),
+            crate::mouse::TargetId::Panel(crate::app::panel::Spot::ChangedFiles),
+        ]
+    );
+    insta::assert_snapshot!("changed_files_card", super::super::text(&buf));
 }
 
 #[test]

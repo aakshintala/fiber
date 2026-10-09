@@ -55,6 +55,15 @@ pub(crate) fn launch(
     let thinking = config
         .get("thinking", None)
         .and_then(|(value, _)| value.as_str().map(str::to_owned));
+    // `scoped_models`, empty for every installed model
+    // (`docs/configuration.md`, "Keys").
+    let scoped_models = config
+        .get("scoped_models", None)
+        .and_then(|(value, _)| value.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|name| name.as_str().map(str::to_owned))
+        .collect();
     tui::Launch {
         workspace,
         project,
@@ -65,6 +74,8 @@ pub(crate) fn launch(
         version: env!("CARGO_PKG_VERSION").to_owned(),
         model,
         thinking,
+        models: None,
+        scoped_models,
         // `tui.logo_glyph`, defaulting to ⌇ (`docs/configuration.md`).
         logo_glyph: config
             .get("tui.logo_glyph", None)

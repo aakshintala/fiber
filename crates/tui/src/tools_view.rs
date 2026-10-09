@@ -10,7 +10,7 @@ use crate::configure::{SwitchScope, ToolGroup, ToolLists, ToolSwitches};
 use crate::format::{cut, width};
 use crate::keys::{Edit, Key};
 use crate::settings_view::{Act, Ctx, reload_text};
-use crate::swapped::{Frame, List, Spot, about, rows_height};
+use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
 
 /// A tool name's column.
 const NAME: usize = 20;
@@ -202,7 +202,7 @@ impl Tools {
     pub(crate) fn click(&mut self, spot: Spot, ctx: &Ctx<'_>) -> Act {
         match spot {
             Spot::Close => Act::Close,
-            Spot::Revoke(_) => Act::Stay,
+            Spot::Revoke(_) | Spot::Cell(_, _) => Act::Stay,
             Spot::Row(at) => {
                 let shown = self.shown(ctx);
                 self.list.select(at, self.rows.len(), shown);
@@ -386,7 +386,7 @@ impl Tools {
     }
 
     /// One tool's cells: its name, its two switches, its state and size.
-    fn tool_cells(&self, index: usize, row: &ToolRow) -> Vec<(String, Option<Spot>)> {
+    fn tool_cells(&self, index: usize, row: &ToolRow) -> Vec<(String, Option<Spot>, Ink)> {
         let selected = index == self.list.selected();
         let (project, everywhere) = match &row.group {
             None => ((" ".repeat(12), None), (" ".repeat(10), None)),
@@ -414,18 +414,22 @@ impl Tools {
             ),
         };
         vec![
-            (format!("  {}", fit(&row.name, NAME)), None),
-            project,
-            ("  ".to_owned(), None),
-            everywhere,
-            (format!("  {:<8}  {}", row.state, row.size), None),
+            (format!("  {}", fit(&row.name, NAME)), None, Ink::Plain),
+            (project.0, project.1, Ink::Plain),
+            ("  ".to_owned(), None, Ink::Plain),
+            (everywhere.0, everywhere.1, Ink::Plain),
+            (
+                format!("  {:<8}  {}", row.state, row.size),
+                None,
+                Ink::Plain,
+            ),
         ]
     }
 }
 
 /// One group's heading cells: its name over the name column, the switch
 /// names over theirs, and the state and size names.
-fn heading_cells(group: &Option<ToolGroup>, switches: bool) -> Vec<(String, Option<Spot>)> {
+fn heading_cells(group: &Option<ToolGroup>, switches: bool) -> Vec<(String, Option<Spot>, Ink)> {
     let (project, everywhere) = if switches {
         ("this project", "everywhere")
     } else {
@@ -441,6 +445,7 @@ fn heading_cells(group: &Option<ToolGroup>, switches: bool) -> Vec<(String, Opti
             "size"
         ),
         None,
+        Ink::Heading,
     )]
 }
 
