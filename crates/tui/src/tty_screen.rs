@@ -40,6 +40,7 @@ enum State {
 }
 
 /// One escape parser, holding its state across deltas.
+#[derive(Debug, Clone)]
 pub(crate) struct Parser {
     /// What the parser is inside of.
     state: State,
@@ -238,6 +239,7 @@ fn number(params: &[u8], at: usize, default: usize) -> usize {
 }
 
 /// A `tty` job's screen: cells and a cursor.
+#[derive(Debug, Clone)]
 pub(crate) struct Grid {
     /// The cells, row by row.
     cells: Vec<Vec<char>>,
@@ -407,6 +409,7 @@ impl Default for Grid {
 /// [`LINE_WIDTH`] characters. Carriage return moves to the start of the
 /// row so the next text overwrites it, and every escape sequence is
 /// dropped before it arrives.
+#[derive(Debug, Clone)]
 pub(crate) struct Lines {
     /// The lines, oldest first.
     lines: Vec<Vec<char>>,
@@ -499,6 +502,7 @@ impl Default for Lines {
 }
 
 /// A job's bounded output: a grid for a `tty` job, lines for any other.
+#[derive(Debug, Clone)]
 pub(crate) enum Output {
     /// A `tty` job's screen with its parser.
     Grid(Parser, Grid),
