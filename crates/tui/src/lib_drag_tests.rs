@@ -1,9 +1,11 @@
 //! Loop-level tests for dragging the rail's edge: the release saves the
-//! share through the launch callback, and a failed save is a notice
+//! share through the configure seam, and a failed save is a notice
 //! (`docs/tui.md`, "Layout").
 
 use super::Input;
 use super::tests::{Pair, feed, new_loop, open};
+use crate::configure::{Configure, Layer};
+use crate::configure_fake::Fake;
 use crate::home::Launch;
 use crate::link::Line;
 use crate::osc;
@@ -11,7 +13,7 @@ use crate::pty_watch::{watch, watched};
 use ratatui::backend::TestBackend;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 
 const A: &str = "s_aaaaaaaaaaaaaaaa";
 const B: &str = "s_bbbbbbbbbbbbbbbb";
@@ -23,8 +25,8 @@ fn shown(lp: &super::Loop<TestBackend>) -> String {
 }
 
 /// A loop at 200x40 with home state, attached to `A`, saving through
-/// `save`.
-fn wide(save: Option<crate::Save>) -> super::Loop<TestBackend> {
+/// `seam`.
+fn wide(seam: Option<Arc<Fake>>) -> super::Loop<TestBackend> {
     let (mut lp, _) = new_loop(TestBackend::new(200, 40), None);
     lp.app.set_size(200, 40);
     lp.screen
@@ -39,7 +41,8 @@ fn wide(save: Option<crate::Save>) -> super::Loop<TestBackend> {
         ..Default::default()
     });
     lp.app.attach(contract::SessionId(A.to_owned()));
-    lp.save = save;
+    lp.app
+        .set_configure(seam.map(|seam| seam as Arc<dyn Configure>));
     lp
 }
 
@@ -112,28 +115,32 @@ fn step(lp: &mut super::Loop<TestBackend>, bytes: &[u8]) {
 }
 
 #[test]
-fn a_drag_saves_through_the_launch_callback() {
-    let (out, saved) = mpsc::channel();
-    let save: crate::Save = Box::new(move |key, share| {
-        drop(out.send((key.to_owned(), share)));
-        Ok(())
-    });
-    let mut lp = wide(Some(save));
+fn a_drag_saves_through_the_configure_seam() {
+    let fake = Arc::new(Fake::new(Vec::new()));
+    let mut lp = wide(Some(Arc::clone(&fake)));
     lp.app.on_line(live(A));
     lp.app.on_line(live(B));
     feed(&mut lp, drag());
+    // Exactly one write for the one drag: the share as a number in the
+    // global file.
     assert_eq!(
-        saved.try_recv().unwrap_or_else(|err| panic!("save: {err}")),
-        ("tui.rail.width".to_owned(), 15.5)
+        fake.writes(),
+        vec![(
+            PathBuf::from("/w"),
+            Layer::Global,
+            "tui.rail.width".to_owned(),
+            "15.5".to_owned()
+        )]
     );
-    // Exactly one save for the one drag.
-    assert!(saved.try_recv().is_err());
 }
 
 #[test]
 fn a_failed_save_is_a_notice() {
-    let save: crate::Save = Box::new(|_, _| Err("disk full".to_owned()));
-    let mut lp = wide(Some(save));
+    let fake = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut refuse) = fake.refuse.lock() {
+        *refuse = Some("disk full".to_owned());
+    }
+    let mut lp = wide(Some(fake));
     lp.app.on_line(live(A));
     lp.app.on_line(live(B));
     feed(&mut lp, drag());
@@ -142,6 +149,33 @@ fn a_failed_save_is_a_notice() {
         "{}",
         shown(&lp)
     );
+}
+
+#[test]
+fn without_a_seam_a_drag_saves_nothing_silently() {
+    let mut lp = wide(None);
+    lp.app.on_line(live(A));
+    lp.app.on_line(live(B));
+    // Draw the frame before the drag, so the comparison is of two frames.
+    feed(&mut lp, vec![Input::Bytes(Vec::new())]);
+    let before = shown(&lp);
+    assert!(!before.trim().is_empty(), "the first frame is drawn");
+    feed(&mut lp, drag());
+    assert_ne!(shown(&lp), before, "the drag moved the rail's edge");
+    assert!(!shown(&lp).contains("Could not save"), "{}", shown(&lp));
+}
+
+#[test]
+fn a_save_warning_is_a_notice() {
+    let fake = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut warnings) = fake.warnings.lock() {
+        *warnings = vec!["the width moved".to_owned()];
+    }
+    let mut lp = wide(Some(fake));
+    lp.app.on_line(live(A));
+    lp.app.on_line(live(B));
+    feed(&mut lp, drag());
+    assert!(shown(&lp).contains("the width moved"), "{}", shown(&lp));
 }
 
 #[test]

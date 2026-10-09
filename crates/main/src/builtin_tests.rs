@@ -46,6 +46,27 @@ fn delegates() -> crate::delegates::Delegates {
         Arc::new(|_| Err(Vec::new())),
     )
 }
+
+/// The skills the `builtin` calls load through: none are listed.
+struct NoSkills;
+
+impl contract::skills::Skills for NoSkills {
+    fn file(&self, _name: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    fn body(
+        &self,
+        _name: &str,
+        _file: &std::path::Path,
+    ) -> Result<String, contract::skills::SkillRead> {
+        Err(contract::skills::SkillRead::Invalid)
+    }
+}
+
+fn skills() -> Arc<dyn contract::skills::Skills> {
+    Arc::new(NoSkills)
+}
 /// How long a test waits for one builtin tool call, in real time.
 ///
 /// Each wrapped call starts a child (bash for the driver shell; the image
@@ -87,6 +108,7 @@ fn the_driver_shell_runs_echo() {
         &Arc::new(tools::PathLocks::new()),
         None,
         &delegates(),
+        skills(),
     )
     .unwrap();
     let mut arguments = serde_json::Map::new();
@@ -100,7 +122,7 @@ fn the_driver_shell_runs_echo() {
         .iter()
         .find_map(|part| match part {
             ContentPart::Text { text } => Some(text.as_str()),
-            ContentPart::Image { .. } | ContentPart::Unknown => None,
+            ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown => None,
         })
         .expect("echo wrote text");
     assert!(text.contains("hi"), "{text}");
@@ -133,6 +155,7 @@ fn read_is_wired_to_the_image_child() {
         &Arc::new(tools::PathLocks::new()),
         None,
         &delegates(),
+        skills(),
     )
     .unwrap();
     let (_, read) = tools
@@ -176,6 +199,7 @@ fn the_forget_callback_clears_what_the_file_tools_have_seen() {
         &Arc::new(tools::PathLocks::new()),
         None,
         &delegates(),
+        skills(),
     )
     .unwrap();
     let tool = |name: &str| {
@@ -224,6 +248,7 @@ fn without_the_forget_callback_the_same_write_goes_through() {
         &Arc::new(tools::PathLocks::new()),
         None,
         &delegates(),
+        skills(),
     )
     .unwrap();
     let tool = |name: &str| {
@@ -272,6 +297,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
         &Arc::new(tools::PathLocks::new()),
         None,
         &delegates(),
+        skills(),
     )
     .unwrap();
     let names: Vec<String> = tools
@@ -291,6 +317,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
             "read",
             "session_search",
             "shell",
+            "skill",
             "web_fetch",
             "write",
             "jobs"
@@ -307,6 +334,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
             "read",
             "session_search",
             "shell",
+            "skill",
             "web_fetch",
             "write",
             "jobs"
@@ -337,6 +365,7 @@ fn session_search_declares_reads_on_the_workspace_project_in_fiber_home() {
         &Arc::new(tools::PathLocks::new()),
         None,
         &delegates(),
+        skills(),
     )
     .unwrap();
     let (_, search) = tools
@@ -388,6 +417,7 @@ fn the_model_shell_is_non_interactive() {
         &Arc::new(tools::PathLocks::new()),
         None,
         &delegates(),
+        skills(),
     )
     .unwrap();
     let shell = tools
@@ -428,6 +458,7 @@ fn registered_with(web_search: Option<&str>) -> (Vec<(String, Option<String>)>, 
         &Arc::new(tools::PathLocks::new()),
         web_search,
         &delegates(),
+        skills(),
     )
     .unwrap();
     let definitions = tools
@@ -484,6 +515,7 @@ fn hosted_is_what_builtin_registers_for_web_search() {
         &Arc::new(tools::PathLocks::new()),
         Some("web_search_20250305"),
         &delegates(),
+        skills(),
     )
     .unwrap();
     let (tool, info) = super::hosted("web_search_20250305").unwrap();
@@ -590,6 +622,7 @@ fn every_builtin_schema_keeps_to_the_documented_subset() {
         &Arc::new(tools::PathLocks::new()),
         Some("web_search_20250305"),
         &delegates(),
+        skills(),
     )
     .unwrap();
     assert!(tools.len() >= 9, "web_search and jobs register too");

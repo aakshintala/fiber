@@ -86,6 +86,7 @@ fn to_driver(questions: Vec<Question>) -> Output {
         control: Some(Control {
             handoff: None,
             questions: Some(questions),
+            skill: None,
         }),
         ..text(SENT)
     }

@@ -351,10 +351,16 @@ impl App {
         self.panel_state.attached();
     }
 
-    /// Hands one key to what is on top: the model picker, the key map,
-    /// the approval panel, a completion panel, then the input box.
+    /// Hands one key to what is on top: the key map above the model
+    /// picker, the picker, the approval panel, a completion panel,
+    /// then the input box.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         self.copied = false;
+        // The key map opens above the picker: Esc closes whatever is
+        // on top, so its keys never reach the picker underneath.
+        if let Some(effect) = self.keymap_key(&key) {
+            return effect;
+        }
         if let Some(effect) = self.model_picker_key(&key) {
             return effect;
         }
@@ -377,9 +383,6 @@ impl App {
         }
         self.armed_at = None;
         if let Some(effect) = self.rail_key(&key) {
-            return effect;
-        }
-        if let Some(effect) = self.keymap_key(&key) {
             return effect;
         }
         match self.queue.on_key(&key) {
@@ -789,7 +792,10 @@ impl App {
                     .and_then(Value::as_str)
                     .map(|id| SessionId(id.to_owned()));
                 match (self.pending.remove(&id), session) {
-                    (Some((Kind::Start, draft)), Some(session)) => self.started(session, draft),
+                    (Some((Kind::Start, draft)), Some(session)) => {
+                        self.model_picker.start_model = None;
+                        self.started(session, draft)
+                    }
                     _ => Vec::new(),
                 }
             }
@@ -830,6 +836,9 @@ impl App {
     /// back in the box when the box is empty. A rejected `cancel`
     /// shows nothing; after a rejected `start` the next Enter tries again.
     fn rejected(&mut self, id: &str, message: String) {
+        // A refused `model` command drops the writes its acceptance
+        // would have made.
+        self.model_picker_rejected(id);
         match self.pending.get(id) {
             None => {}
             // Another client may have dropped or amended the row first.
@@ -877,6 +886,18 @@ impl App {
             self.request_arrived(envelope);
         }
         let mut send = self.reply_ack(envelope);
+        // A `model` command's acceptance writes what it waited on,
+        // whatever session answered: choosing may span a switch.
+        if envelope.kind == "command_accepted"
+            && let Some(accepted) = read!(envelope, CommandAccepted)
+            && self
+                .model_picker
+                .awaiting
+                .contains_key(&accepted.command_id.0)
+        {
+            let id = accepted.command_id.0.clone();
+            self.model_picker_accepted(&id);
+        }
         // The open delegate's lines fold into the swapped screen, never
         // touching the attached busy flag; their command answers still
         // settle below, as any non-attached session's do.
@@ -933,6 +954,7 @@ impl App {
         }
         send.extend(self.panel_line(envelope));
         self.items_line(envelope);
+        self.output_line(envelope);
         self.session_views_line(envelope);
         self.config_views_line(envelope);
         if envelope.kind == "turn_started"
@@ -1045,7 +1067,7 @@ pub(crate) fn text_of(parts: &[ContentPart]) -> String {
         .iter()
         .filter_map(|part| match part {
             ContentPart::Text { text } => Some(text.as_str()),
-            ContentPart::Image { .. } | ContentPart::Unknown => None,
+            ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown => None,
         })
         .collect()
 }

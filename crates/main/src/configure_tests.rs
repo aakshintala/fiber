@@ -1,5 +1,6 @@
 //! Tests for the terminal's configuration seam: which project's layer it
-//! reads and writes, the rows it builds, and the themes in Fiber home.
+//! reads and writes, the rows it builds, and the themes in Fiber home and
+//! installed extensions.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -186,6 +187,49 @@ fn a_refused_write_writes_nothing_and_says_why() {
     assert!(!one.join(".fiber").join("config.json").exists());
 }
 
+/// Reads the global `config.json` under `home`.
+fn global(home: &Path) -> serde_json::Value {
+    let text = fs::read_to_string(home.join("config.json")).unwrap_or_else(|e| panic!("read: {e}"));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("json: {e}"))
+}
+
+#[test]
+fn drag_widths_write_the_global_file() {
+    let dirs = Dirs::new();
+    let one = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    let saved = seam
+        .set(&one, Layer::Global, "tui.rail.width", "18.4")
+        .unwrap_or_else(|e| panic!("set: {e}"));
+    assert_eq!(saved.file, dirs.home().join("config.json"));
+    assert_eq!(
+        global(&dirs.home()),
+        serde_json::json!({"tui": {"rail": {"width": 18.4}}})
+    );
+    let saved = seam
+        .set(&one, Layer::Global, "tui.panel.width", "25")
+        .unwrap_or_else(|e| panic!("set: {e}"));
+    assert_eq!(saved.file, dirs.home().join("config.json"));
+    assert_eq!(
+        global(&dirs.home()),
+        serde_json::json!({"tui": {"rail": {"width": 18.4}, "panel": {"width": 25}}})
+    );
+}
+
+#[test]
+fn a_width_that_cannot_write_is_an_error() {
+    let root = fakes::TempDir::new("fiber-configure-width-fails");
+    let home = root.path().join("file");
+    write(&home, "not a directory");
+    let workspace = root.path().join("one");
+    fs::create_dir_all(&workspace).unwrap_or_else(|e| panic!("mkdir: {e}"));
+    let seam = Seam::new(home);
+    assert!(
+        seam.set(&workspace, Layer::Global, "tui.rail.width", "18.4")
+            .is_err()
+    );
+}
+
 #[test]
 fn themes_lists_json_files_by_name_sorted() {
     let dirs = Dirs::new();
@@ -195,8 +239,87 @@ fn themes_lists_json_files_by_name_sorted() {
     }
     fs::create_dir_all(themes.join("dir.json")).unwrap_or_else(|e| panic!("mkdir: {e}"));
     let seam = Seam::new(dirs.home());
-    assert_eq!(seam.themes(), ["dusk", "solar"]);
-    assert!(Seam::new(dirs.root.path().join("none")).themes().is_empty());
+    let one = dirs.workspace("one");
+    assert_eq!(seam.themes(&one), ["dusk", "solar"]);
+    assert!(
+        Seam::new(dirs.root.path().join("none"))
+            .themes(&one)
+            .is_empty()
+    );
+}
+
+#[test]
+fn themes_lists_package_themes_once() {
+    let dirs = Dirs::new();
+    write(&dirs.home().join("themes").join("solar.json"), "{}");
+    let pkg = dirs.home().join("extensions").join("acme");
+    write(
+        &pkg.join(".fiber.json"),
+        r#"{"name":"x","version":"1.0.0","requested":true,"source":{"path":"/p"}}"#,
+    );
+    write(&pkg.join("themes").join("solar.json"), "{}");
+    write(&pkg.join("themes").join("tide.json"), "{}");
+    let broken = dirs.home().join("extensions").join("broken");
+    write(&broken.join("themes").join("gone.json"), "{}");
+    let seam = Seam::new(dirs.home());
+    assert_eq!(seam.themes(&dirs.workspace("one")), ["solar", "tide"]);
+}
+
+#[test]
+fn themes_and_theme_follow_each_workspaces_enabled() {
+    let dirs = Dirs::new();
+    let (one, two) = (dirs.workspace("one"), dirs.workspace("two"));
+    let pkg = dirs.home().join("extensions").join("acme");
+    write(
+        &pkg.join(".fiber.json"),
+        r#"{"name":"acme","version":"1.0.0","requested":true,"source":{"path":"/p"}}"#,
+    );
+    write(&pkg.join("themes").join("dusk.json"), "acme");
+    // Only one's project switches `acme` off.
+    write(
+        &dirs.project_file(&one),
+        r#"{"extensions": {"acme": {"enabled": false}}}"#,
+    );
+    let seam = Seam::new(dirs.home());
+    assert!(seam.themes(&one).is_empty());
+    assert_eq!(seam.themes(&two), ["dusk"]);
+    // A `tui.theme` naming a switched-off extension's theme reads as a
+    // missing file: one notice, then the terminal follows its appearance.
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "dusk") else {
+        panic!("not a file");
+    };
+    assert!(text.is_err());
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&two, "dusk") else {
+        panic!("not a file");
+    };
+    assert_eq!(text, Ok("acme".to_owned()));
+}
+
+#[test]
+fn a_workspace_whose_config_fails_to_load_reads_home_themes_only() {
+    let dirs = Dirs::new();
+    let one = dirs.workspace("one");
+    write(&dirs.home().join("themes").join("solar.json"), "{}");
+    let pkg = dirs.home().join("extensions").join("acme");
+    write(
+        &pkg.join(".fiber.json"),
+        r#"{"name":"acme","version":"1.0.0","requested":true,"source":{"path":"/p"}}"#,
+    );
+    write(&pkg.join("themes").join("dusk.json"), "acme");
+    // The project file does not parse, so the workspace's configuration
+    // fails to load and no extension's `enabled` is known.
+    write(&dirs.project_file(&one), "not json");
+    let seam = Seam::new(dirs.home());
+    assert_eq!(seam.themes(&one), ["solar"]);
+    // An extension-only name reads as absent: Fiber home alone is read.
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "dusk") else {
+        panic!("not a file");
+    };
+    assert!(text.is_err());
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "solar") else {
+        panic!("not a file");
+    };
+    assert_eq!(text, Ok("{}".to_owned()));
 }
 
 #[test]
@@ -204,21 +327,28 @@ fn theme_builds_the_setting_as_at_start() {
     let dirs = Dirs::new();
     write(&dirs.home().join("themes").join("solar.json"), "{\"x\": 1}");
     let seam = Seam::new(dirs.home());
-    assert!(matches!(seam.theme("auto"), tui::ThemeSetting::Follow));
-    assert!(matches!(seam.theme("dark"), tui::ThemeSetting::Dark));
-    assert!(matches!(seam.theme("light"), tui::ThemeSetting::Light));
-    let tui::ThemeSetting::File { name, text } = seam.theme("solar") else {
+    let one = dirs.workspace("one");
+    assert!(matches!(
+        seam.theme(&one, "auto"),
+        tui::ThemeSetting::Follow
+    ));
+    assert!(matches!(seam.theme(&one, "dark"), tui::ThemeSetting::Dark));
+    assert!(matches!(
+        seam.theme(&one, "light"),
+        tui::ThemeSetting::Light
+    ));
+    let tui::ThemeSetting::File { name, text } = seam.theme(&one, "solar") else {
         panic!("not a file");
     };
     assert_eq!(
         (name.as_str(), text),
         ("solar", Ok("{\"x\": 1}".to_owned()))
     );
-    let tui::ThemeSetting::File { text, .. } = seam.theme("missing") else {
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "missing") else {
         panic!("not a file");
     };
     assert!(text.is_err());
-    let tui::ThemeSetting::File { text, .. } = seam.theme("../x") else {
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "../x") else {
         panic!("not a file");
     };
     assert_eq!(text, Err("not a theme name".to_owned()));
@@ -358,5 +488,72 @@ fn revoke_maps_global_and_project_to_their_files() {
         fs::read(rules_file(&dirs, &one))
             .unwrap_or_else(|e| panic!("read: {e}"))
             .is_empty()
+    );
+}
+
+#[test]
+fn save_keys_writes_only_the_edits_to_the_global_keys() {
+    use tui::KeyEdit;
+    let dirs = Dirs::new();
+    write(&dirs.home().join("config.json"), r#"{"model": "acme/m1"}"#);
+    let seam = Seam::new(dirs.home());
+    seam.save_keys(&[KeyEdit {
+        id: "new_session".to_owned(),
+        keys: Some(vec!["ctrl+t".to_owned()]),
+    }])
+    .unwrap_or_else(|e| panic!("save: {e}"));
+    assert_eq!(
+        fs::read_to_string(dirs.home().join("config.json")).unwrap_or_else(|e| panic!("read: {e}")),
+        concat!(
+            "{\n",
+            "  \"keys\": {\n",
+            "    \"new_session\": [\n",
+            "      \"ctrl+t\"\n",
+            "    ]\n",
+            "  },\n",
+            "  \"model\": \"acme/m1\"\n",
+            "}\n"
+        )
+    );
+}
+
+#[test]
+fn save_keys_with_no_entry_removes_it() {
+    use tui::KeyEdit;
+    let dirs = Dirs::new();
+    write(
+        &dirs.home().join("config.json"),
+        r#"{"keys": {"new_session": ["ctrl+t"], "copy_focused": "y"}}"#,
+    );
+    let seam = Seam::new(dirs.home());
+    seam.save_keys(&[KeyEdit {
+        id: "new_session".to_owned(),
+        keys: None,
+    }])
+    .unwrap_or_else(|e| panic!("save: {e}"));
+    assert_eq!(
+        fs::read_to_string(dirs.home().join("config.json")).unwrap_or_else(|e| panic!("read: {e}")),
+        "{\n  \"keys\": {\n    \"copy_focused\": \"y\"\n  }\n}\n"
+    );
+}
+
+#[test]
+fn save_keys_refuses_a_keys_that_is_no_object_leaving_the_file() {
+    use tui::KeyEdit;
+    let dirs = Dirs::new();
+    let text = r#"{"keys": "x"}"#;
+    write(&dirs.home().join("config.json"), text);
+    let seam = Seam::new(dirs.home());
+    let error = match seam.save_keys(&[KeyEdit {
+        id: "new_session".to_owned(),
+        keys: Some(vec!["ctrl+t".to_owned()]),
+    }]) {
+        Ok(()) => panic!("a string is no object, but the save succeeded"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("keys"), "{error}");
+    assert_eq!(
+        fs::read_to_string(dirs.home().join("config.json")).unwrap_or_else(|e| panic!("read: {e}")),
+        text
     );
 }

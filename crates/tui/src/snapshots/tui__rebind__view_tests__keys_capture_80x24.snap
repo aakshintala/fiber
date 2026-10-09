@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/rebind_view_tests.rs
+expression: "screen(&app, 80, 24)"
+---
+
+Keys                                                                           ✕
+Enter                       send Send a prompt, or a steering message during a t
+Shift+Enter, Ctrl+J         line_break Insert a line break
+Esc                         close_or_interrupt Close what is on top; interrupt t
+Ctrl+C                      clear_then_quit Clear the draft, then quit
+⌥0                          go_home Go home
+Ctrl+N                      new_session Start a new session
+⌥1 ⌥2 ⌥3 ⌥4 ⌥5 ⌥6 ⌥7 ⌥8 ⌥9  rail_row_n Switch to the session of rail card N
+Delete, Backspace           delete_session Delete the selected exited session in
+↑                           recall_prompt Recall an earlier prompt from the proj
+Ctrl+R                      search_prompts Search those prompts
+⌥← ⌥→, Ctrl+← Ctrl+→, ⌥B ⌥F move_word Move by word
+⌥Backspace                  delete_word Delete a word
+⌘← ⌘→                       line_start_end Start or end of the line
+Ctrl+G                      open_in_editor Open the draft, or a pasted token, in
+Ctrl+V                      paste_image Paste an image
+Ctrl+O                      toggle_ledgers Open or close the ledgers
+Shift+Tab                   navigate Move focus from the input box into the conv
+↓ ↑, j k                    focus_next_prev Move focus to the next or previous i
+Press the key for Start a new session · Esc cancel
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+>
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

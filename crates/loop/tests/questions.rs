@@ -44,6 +44,7 @@ fn asking(name: &'static str, texts: &[&str]) -> TestTool {
     tool.output.control = Some(Control {
         handoff: None,
         questions: Some(texts.iter().map(|text| question(text)).collect()),
+        skill: None,
     });
     tool
 }
@@ -54,6 +55,7 @@ fn handing_off(name: &'static str) -> TestTool {
     tool.output.control = Some(Control {
         handoff: Some("the note".into()),
         questions: None,
+        skill: None,
     });
     tool
 }

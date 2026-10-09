@@ -29,6 +29,7 @@ pub const BUILT_IN_TOOLS: &[&str] = &[
     "read",
     "session_search",
     "shell",
+    "skill",
     "web_fetch",
     "web_search",
     "write",

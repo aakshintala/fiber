@@ -14,6 +14,8 @@ use crate::skill_header::{self, Invalid};
 
 /// A skill found in one place.
 pub(crate) struct Found {
+    /// The `SKILL.md` discovery opened, lossless.
+    pub(crate) file: PathBuf,
     /// The listing entry it would have.
     pub(crate) listed: SkillListed,
     /// Whether the model may load it: its header does not switch that off
@@ -163,8 +165,10 @@ pub(crate) fn discover(inputs: &PromptInputs, top: &Path) -> Discovered {
                     continue;
                 }
             };
+            let file = path.clone();
             let path = path.display().to_string();
             let found = Found {
+                file,
                 listed: SkillListed {
                     name: header.name,
                     description: header.description,

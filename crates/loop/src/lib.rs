@@ -60,6 +60,7 @@ mod rewind;
 mod schema;
 mod shutdown;
 mod skill_header;
+mod skill_reader;
 mod skills;
 mod slash;
 mod status;
@@ -85,6 +86,7 @@ pub use resume::{Resumed, resumed};
 pub use retry::Retry;
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
 pub use rewind::{Rewound, rewind_note};
+pub use skill_reader::SkillReader;
 pub use slash::{FetchPrompt, ServerPrompts};
 pub use switch::{Hosted, NO_SWITCH, Prepare, Prepared, Switchable};
 

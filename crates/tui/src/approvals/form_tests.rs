@@ -591,22 +591,6 @@ fn a_form_resolved_by_fiber_leaves_the_queue() {
 }
 
 #[test]
-fn a_confirm_interaction_is_not_queued() {
-    let options = json!([{"label": "a"}, {"label": "b"}]);
-    for payload in [
-        json!({"request_id": "r_1", "kind": "confirm", "prompt": "Sure?"}),
-        json!({"request_id": "r_2", "kind": "select", "prompt": "One?", "options": options}),
-        json!({"request_id": "r_3", "kind": "multi_select", "prompt": "Some?",
-            "options": options}),
-        json!({"request_id": "r_4", "kind": "text_input", "prompt": "What?"}),
-    ] {
-        let queue = folded(&[envelope("interaction_requested", payload.clone())]);
-        assert!(queue.panel(80).is_none(), "{payload}");
-        assert!(queue.badge(0).is_none(), "{payload}");
-    }
-}
-
-#[test]
 fn a_re_raised_form_keeps_what_was_typed() {
     let mut queue = folded(&[asked("r_4f", json!({"action_ids": ["a_1"]}))]);
     assert_eq!(queue.on_key(&Key::Char('x')), Some(PanelKey::Handled));
@@ -648,7 +632,7 @@ fn decline_names_only_a_form() {
     let mut queue = folded(&[approval("r_1")]);
     assert_eq!(queue.decline("c_1"), None);
     assert_eq!(header(&queue), format!("approval · {S_A} · 1 of 1"));
-    let mut queue = folded(&[asked("r_4f", json!({}))]);
+    let mut queue = folded(&[asked("r_4f", json!({"action_ids": ["a_1"]}))]);
     let line = queue.decline("c_1").unwrap_or_default();
     assert_eq!(
         serde_json::from_str::<Value>(&line).unwrap_or_default(),
@@ -667,6 +651,10 @@ fn decline_names_only_a_form() {
         Some(contract::SessionId(S_A.to_owned()))
     );
     assert_eq!(queue.declined("c_2"), None);
+    // A form no tool call raised names no session: its decline cancels nothing.
+    let mut queue = folded(&[asked("r_4f", json!({}))]);
+    assert!(queue.decline("c_3").is_some());
+    assert_eq!(queue.declined("c_3"), None);
 }
 
 #[test]

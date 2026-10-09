@@ -136,7 +136,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | thiserror | error types in library crates | ~0 | ~0 | ~0 | 6 | 325 |
 | signal-hook | SIGTERM, SIGINT and SIGHUP | ~0 | ~0 | ~0 | 4 | 352 |
 | ring | SHA-256, for PKCE, extension binary checksums, the content hash a repository's approvals pin, and an MCP tool's cut-short name; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server | ~0 | ~0 | ~0 | 8 | 341 |
-| base64 | PKCE, attachments sent to providers, images a client pastes, and the terminal's copy through OSC 52 (`docs/tui.md`, "Selection and copy") | ~0 | ~0 | ~0 | 1 | 328 |
+| base64 | PKCE, attachments sent to providers, images a client pastes, the terminal's copy through OSC 52 (`docs/tui.md`, "Selection and copy"), and the files the hub's `read_file` answers with | ~0 | ~0 | ~0 | 1 | 328 |
 | rustix | the shell tool's pseudo-terminal, new session and process group, and reading a key without echo; `host.exec`'s process groups; signalling MCP servers; killing a `model` or `credential` switch's credential command; signalling a Fiber delegate's process group; the terminal's clipboard read: its process group, its pipe's poll and waiting for its exit; and the test fakes' process and process-group probes | ~0 | ~0 | ~0 | 4 | 330 |
 | libc | macOS only: the peak physical footprint for a `peak_memory` line (`docs/state.md`, "What each part holds") | n/a | n/a | ~0 | 1 | n/a |
 | ignore, grep-searcher, grep-regex, grep-matcher | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search") and `session_search`'s scan (`docs/tools.md`, "Searching past sessions") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
@@ -365,9 +365,11 @@ dependency.
 | cargo-about | tool | the release's third-party notices file |
 | zsh, fish | tool | the completion tests load `fiber completion`'s scripts in each shell (`docs/testing.md`, "Running tests"); bash is on every runner already, and macOS ships zsh. CI installs zsh and fish on Linux and fish on macOS |
 | dash, shellcheck | tool | the install-script test runs `install.sh` under `/bin/dash` (macOS ships it; it is Ubuntu's `/bin/sh`); `scripts/check` runs shellcheck on Linux, and GitHub's `ubuntu-24.04` image ships it |
-| xtask | tool | the workspace's own CI helper, `cargo xtask`: selection, the `CI` verdict and the gate's checks (`docs/ci.md`). It uses serde_json, proc-macro2 and pulldown-cmark, `fakes` in its tests, and no Fiber crate depends on it |
+| xtask | tool | the workspace's own CI helper, `cargo xtask`: selection, the `CI` verdict and the gate's checks (`docs/ci.md`). It uses serde_json, proc-macro2, pulldown-cmark, skrifa and tiny-skia, `fakes` in its tests, and no Fiber crate depends on it |
 | proc-macro2 | xtask dependency | tokenising Rust source for the `unsafe` table check (`docs/code-quality.md`, "`unsafe`") |
 | pulldown-cmark | xtask dependency | reading Markdown for the docs check (`docs/ci.md`, "The docs check"); the terminal's use is in the runtime table |
+| skrifa | xtask dependency | reading JetBrains Mono's outlines for the logo's mask (`cargo xtask logo-mask`) |
+| tiny-skia | xtask dependency | rasterising those outlines into the logo's mask (`cargo xtask logo-mask`) |
 
 ## Supply chain
 

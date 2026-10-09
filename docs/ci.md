@@ -55,9 +55,11 @@ passed alone but break together.
 
 A newer push to a pull request cancels that pull request's older run. A
 label, a change from draft to ready or a reopen at the same head cancels
-nothing: the run in flight finishes, and the new event starts only the jobs
-the earlier run did not select, such as the macOS leg and mutants when a
-draft becomes ready. Pushes
+nothing: the run in flight finishes, then the new event's run, which waited,
+runs the whole selection again at the same head. At most one run waits, and
+a newer event replaces it before it starts. Rerunning everything keeps the
+`CI` check, which is the latest run's, from hiding a failure in the earlier
+run. Pushes
 to `main` share one group that cancels nothing: the running backstop finishes
 and a newer push waits, replacing any older one that waits ("The backstop on
 `main`").
@@ -148,14 +150,18 @@ On Linux x86_64 alone:
 - mutation testing: `cargo-mutants --in-diff`, split across runners. It runs
   on a ready pull request and on a draft pull request
   that carries the label `mutants`, never on a push to `main`; an unlabelled draft skips it, and adding
-  the label starts a run. Shards start once the Linux x86_64 test job passes,
-  so a run whose tests fail starts none. The selection counts the diff's mutants
+  the label starts a run. Shards start once the `test` job passes on every
+  platform the run tests (a job can wait for another job, not one platform's
+  leg of it),
+  so a run whose tests fail starts none, and a run that selects no tests
+  runs no mutants. The selection counts the diff's mutants
   (`cargo mutants --list`) and plans one shard per 15 of them, rounded up, at
   most 16; a diff with no mutants starts none. Recent runs (#1461, #1395)
   tested a mutant in 13 to 27 seconds on a runner and the unmutated baseline
   took 1 to 3.5 minutes, so 15 mutants keep a shard near 10 minutes. Shards
   split the list round-robin, so every shard holds the same mix of crates and
-  the count alone sets its size. Past 240 mutants the cap makes shards larger. Two pull requests at the cap
+  the count alone sets its size. Past 240 mutants the cap makes shards larger,
+  and their time limit grows with them ("Job time limits"). Two pull requests at the cap
   leave 8 of the 40 jobs for everything else.
   Mutants run under nextest's `mutants` profile (`.cargo/mutants.toml`),
   which stops every running test at the first failure. A mutant that makes
@@ -176,8 +182,9 @@ binary comes from the build cache when the backstop stored one for that
 commit, and is built otherwise. The scripts that build and measure both
 binaries are the head's, so a base older than a script still compares. It checks that the stripped head binary is
 under 20 MiB and runs the benchmarks that gate each pull request
-(`docs/performance.md`). A timing gate compares against the base binary
-measured in the same job on the same runner.
+(`docs/performance.md`). The base binary runs the same benchmarks in the
+same job on the same runner: a timing gate compares against it, and a memory
+or exact budget the base fails too does not fail the pull request.
 
 A base that does not build, because `main` is red, does not fail the job. The
 job compares against the nearest first-parent ancestor of the base that has a
@@ -329,8 +336,10 @@ up to a round number, and never under 5 minutes, because runner start-up
 varies. A job with too little history gets a generous bound. The one exception
 is a mutants shard: 8 % of shards take 9 to 12 minutes when a pull request
 changes a widely used function, so its bound is twice that slow group, not
-twice the median. A shard holding more than 15 mutants, past the shard cap,
-has its bound raised in proportion to its count. The median behind each bound is a comment beside its
+twice the median. A shard of up to 15 mutants gets 20 minutes. A larger
+shard, which only the cap makes, gets 20 minutes per 15 of its mutants,
+rounded up, at most 360 minutes, GitHub's limit for a job. The selection
+computes it (`cargo xtask plan`). The median behind each bound is a comment beside its
 `timeout-minutes` line. A job that gains work past its bound has the bound
 raised in its workflow.
 

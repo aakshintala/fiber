@@ -3,14 +3,16 @@
 //! into the conversation area and takes all of it. Esc returns to the
 //! conversation.").
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Instant;
 
-use contract::{Envelope, JobId, SessionId};
+use contract::{ActionId, Envelope, JobId, SessionId};
 
 use super::{App, Effect, Kind, Link, Phase, mint, session_command};
 use crate::home::Level;
+use crate::tty_screen::Output;
 
+pub(crate) mod output;
 pub(crate) mod retry;
 
 /// A click target in the item view (`docs/tui.md`, "Swapped views": every
@@ -54,6 +56,9 @@ pub(super) struct JobRecord {
     delegate: Option<DelegateRun>,
     /// How the job ended and the `job_completed` envelope's `ts`.
     outcome: Option<(String, u64)>,
+    /// The job's live output since the terminal attached; dropped at
+    /// `job_completed` unless the job's view is open.
+    output: Option<Output>,
 }
 
 /// The open item: the job and the attached session's screen while a fiber
@@ -119,6 +124,9 @@ pub(crate) struct Items {
     pub(super) open: Option<Open>,
     /// The delegate subscription wishes, by delegate session.
     pub(super) wants: BTreeMap<SessionId, retry::Want>,
+    /// The tool calls waiting for their `job_started`: their action ids,
+    /// marked by a `shell` call with `tty`.
+    pub(super) tty_marks: HashSet<ActionId>,
     /// The last `items_due` call's `now`: a wake never re-arms on a passed
     /// deadline.
     pub(super) last_due: Option<Instant>,
@@ -132,6 +140,7 @@ impl Default for Items {
             next_serial: 1,
             open: None,
             wants: BTreeMap::new(),
+            tty_marks: HashSet::new(),
             last_due: None,
         }
     }
@@ -154,6 +163,7 @@ impl Items {
                     started_ts: 0,
                     delegate: None,
                     outcome: None,
+                    output: None,
                 },
             );
         }
@@ -659,6 +669,7 @@ impl App {
         self.items.jobs.clear();
         self.items.by_serial.clear();
         self.items.next_serial = 1;
+        self.items.tty_marks.clear();
     }
 
     /// Drops the item state on a lost connection: the hub connection and

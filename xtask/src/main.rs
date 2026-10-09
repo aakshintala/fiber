@@ -13,7 +13,8 @@
 //!   bare name against the whole dependency graph and can be ambiguous), and
 //!   `extension_packages` are first-party package directories with cases
 //! - `plan --mode M --packages "A B" --event E --bug true|false --mutants true|false --mutant-count N`:
-//!   which CI jobs run, as `key=value` lines
+//!   which CI jobs run, the mutant shards and each shard's time limit,
+//!   as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
 //!   if every selected job passed and every other job was skipped
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
@@ -22,11 +23,14 @@
 //!   as tab-separated lines
 //! - `docs-only FILE...`: whether every file is a docs file, as `docs-only: yes` or
 //!   `docs-only: no`
-//! - `bench-report --head FILE [--base FILE] --doc docs/performance.md --event
+//! - `bench-report --head FILE [--base FILE --base-commit SHA] --doc docs/performance.md --event
 //!   pull_request|push --comment FILE`: judges the benchmark result files
 //!   against the budget table and writes the pull request comment; exit 1
 //!   when a budget, a head self-check or the table mapping fails
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `check-docs`, `ci-needs`: the checks
+//! - `logo-mask --font <path> [--out <path>]`: regenerates the logo's alpha
+//!   mask from JetBrains Mono ExtraBold; the font is downloaded by whoever
+//!   regenerates and never committed
 
 #![allow(
     clippy::print_stdout,
@@ -37,6 +41,7 @@
 mod bench;
 mod ci_needs;
 mod docs;
+mod logo;
 mod rules;
 mod select;
 #[cfg(test)]
@@ -107,15 +112,16 @@ fn run(args: &[String]) -> Result<bool, String> {
                 .collect();
             let bug = flag(rest, "--bug")? == "true";
             let mutants = flag(rest, "--mutants")? == "true";
+            let mutant_count: u64 = flag(rest, "--mutant-count")?
+                .parse()
+                .map_err(|e| format!("--mutant-count: {e}"))?;
             let plan = select::plan(
                 &flag(rest, "--mode")?,
                 &packages,
                 &flag(rest, "--event")?,
                 bug,
                 mutants,
-                flag(rest, "--mutant-count")?
-                    .parse()
-                    .map_err(|e| format!("--mutant-count: {e}"))?,
+                mutant_count,
             );
             let shards: Vec<u64> = (0..plan.shards).collect();
             println!(
@@ -128,6 +134,10 @@ fn run(args: &[String]) -> Result<bool, String> {
             );
             println!("shards={}", Value::from(shards));
             println!("shard_total={}", plan.shards);
+            println!(
+                "shard_timeout={}",
+                select::shard_timeout_minutes(mutant_count)
+            );
             Ok(true)
         }
         "verdict" => {
@@ -250,6 +260,7 @@ fn run(args: &[String]) -> Result<bool, String> {
             &ci_needs::check(&read(ci_needs::WORKFLOW)?, &read(ci_needs::CI_DOC)?)?,
             "every job but ci and the report jobs is in the ci job's needs",
         ),
+        "logo-mask" => logo::run(rest),
         "bench-report" => {
             let event = bench::Event::parse(&flag(rest, "--event")?)?;
             let comment_path = flag(rest, "--comment")?;
@@ -258,7 +269,8 @@ fn run(args: &[String]) -> Result<bool, String> {
             // An unreadable base is reported in the comment, not as a usage
             // error: the base only feeds advisory timings.
             let base = optional(rest, "--base").map(|path| read(&path));
-            let out = bench::report(&doc, &head, base, event);
+            let base_commit = optional(rest, "--base-commit").unwrap_or_default();
+            let out = bench::report(&doc, &head, base, event, &base_commit);
             std::fs::write(&comment_path, &out.comment)
                 .map_err(|e| format!("{comment_path}: {e}"))?;
             report(

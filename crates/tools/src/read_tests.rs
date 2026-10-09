@@ -32,7 +32,9 @@ fn run(dir: &Path, value: Value) -> contract::tool::Output {
 fn text(output: &contract::tool::Output) -> String {
     match output.content.first() {
         Some(ContentPart::Text { text }) => text.clone(),
-        Some(ContentPart::Image { .. } | ContentPart::Unknown) | None => String::new(),
+        Some(ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown) | None => {
+            String::new()
+        }
     }
 }
 

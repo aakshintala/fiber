@@ -25,7 +25,7 @@ pub(super) fn launch() -> super::Launch {
         git: false,
         hover: true,
         version: "0.0.1".to_owned(),
-        model: None,
+        model: Some("p/m".to_owned()),
         thinking: None,
         logo_glyph: "⌇".to_owned(),
         keys: crate::KeysSetup::default(),
@@ -146,7 +146,6 @@ pub(super) fn new_loop<B: Backend>(
         copy_command: None,
         open_command: None,
         title: crate::osc::Title::default(),
-        save: None,
         shape: crate::osc::Shape::default(),
         retry: None,
         tick: crate::tick::TickThread::idle(),
@@ -720,6 +719,19 @@ pub(super) fn offering(request: &str) -> Input {
     }))
 }
 
+fn one_question(payload: serde_json::Value) -> Input {
+    Input::Hub(Line::Session(contract::Envelope {
+        kind: "interaction_requested".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }))
+}
+
 #[test]
 fn each_approval_choice_goes_to_the_hub_as_a_reply() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
@@ -777,6 +789,244 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
         assert_eq!(reply["args"], args);
     }
     assert!(lp.app.panel().is_none());
+}
+
+fn connected_loop() -> (Loop<TestBackend>, BufReader<UnixStream>) {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let reader = BufReader::new(theirs);
+    feed(
+        &mut lp,
+        vec![
+            Input::Connected(ours, hello()),
+            Input::Bytes(b"hi\r".to_vec()),
+        ],
+    );
+    let (reader, start) = command(reader, "the start command");
+    let accepted = contract::HubLine {
+        kind: "command_accepted".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"command_id": start["id"],
+            "result": {"session_id": "s_aaaaaaaaaaaaaaaa"}})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    };
+    feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
+    let (reader, _) = command(reader, "the subscribe command");
+    let (reader, commands) = command(reader, "the commands command");
+    assert_eq!(commands["command"], "commands");
+    let (reader, prompt) = command(reader, "the first prompt");
+    assert_eq!(prompt["command"], "prompt");
+    (lp, reader)
+}
+
+#[test]
+fn each_one_question_kind_goes_to_the_hub_as_a_reply() {
+    let (mut lp, mut reader) = connected_loop();
+    feed(
+        &mut lp,
+        vec![
+            one_question(serde_json::json!({"request_id": "r_c", "kind": "confirm",
+                "prompt": "Continue?"})),
+            one_question(serde_json::json!({"request_id": "r_s", "kind": "select",
+                "prompt": "Pick one?", "options": [{"label": "a"}, {"label": "b"}]})),
+            one_question(
+                serde_json::json!({"request_id": "r_m", "kind": "multi_select",
+                "prompt": "Pick some?", "options": [{"label": "a"}, {"label": "b"},
+                    {"label": "c"}]}),
+            ),
+            one_question(
+                serde_json::json!({"request_id": "r_t", "kind": "text_input",
+                "prompt": "What?"}),
+            ),
+        ],
+    );
+    feed(
+        &mut lp,
+        [
+            b"\r".as_slice(),
+            b"\x1b[B\r".as_slice(),
+            b" \x1b[B\x1b[B \r".as_slice(),
+            b"hi\r".as_slice(),
+        ]
+        .map(|bytes| Input::Bytes(bytes.to_vec()))
+        .into_iter()
+        .collect(),
+    );
+    let expected = [
+        serde_json::json!({"request_id": "r_c", "confirmed": true}),
+        serde_json::json!({"request_id": "r_s", "labels": ["b"]}),
+        serde_json::json!({"request_id": "r_m", "labels": ["a", "c"]}),
+        serde_json::json!({"request_id": "r_t", "text": "hi"}),
+    ];
+    for args in expected {
+        let (next, reply) = command(reader, "a one-question reply");
+        reader = next;
+        assert_eq!(reply["command"], "reply");
+        assert_eq!(reply["session_id"], "s_aaaaaaaaaaaaaaaa");
+        assert_eq!(reply["args"], args);
+    }
+    assert!(lp.app.panel().is_none());
+}
+
+#[test]
+fn esc_on_each_one_question_kind_declines_to_the_hub() {
+    let (mut lp, mut reader) = connected_loop();
+    feed(
+        &mut lp,
+        vec![
+            one_question(serde_json::json!({"request_id": "r_c", "kind": "confirm",
+                "prompt": "Continue?"})),
+            one_question(serde_json::json!({"request_id": "r_s", "kind": "select",
+                "prompt": "Pick one?", "options": [{"label": "a"}, {"label": "b"}]})),
+            one_question(
+                serde_json::json!({"request_id": "r_m", "kind": "multi_select",
+                "prompt": "Pick some?", "options": [{"label": "a"}, {"label": "b"},
+                    {"label": "c"}]}),
+            ),
+            one_question(
+                serde_json::json!({"request_id": "r_t", "kind": "text_input",
+                "prompt": "What?"}),
+            ),
+        ],
+    );
+    feed(
+        &mut lp,
+        (0..4).map(|_| Input::Bytes(b"\x1b".to_vec())).collect(),
+    );
+    for request_id in ["r_c", "r_s", "r_m", "r_t"] {
+        let (next, reply) = command(reader, "a declined one-question reply");
+        reader = next;
+        assert_eq!(reply["command"], "reply");
+        assert_eq!(reply["session_id"], "s_aaaaaaaaaaaaaaaa");
+        assert_eq!(
+            reply["args"],
+            serde_json::json!({"request_id": request_id,
+            "declined": true})
+        );
+    }
+    assert!(lp.app.panel().is_none());
+}
+
+/// The hub accepting command `id` from `s_aaaaaaaaaaaaaaaa`.
+fn session_accepted(id: &serde_json::Value) -> Input {
+    Input::Hub(Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"command_id": id})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }))
+}
+
+/// The two-question form `r_c`, plus `extra` keys.
+fn form_with(extra: &serde_json::Value) -> serde_json::Value {
+    let mut payload = serde_json::json!({"request_id": "r_c", "kind": "form",
+        "fields": [
+            {"header": "Base", "question": "Which branch?", "options": [
+                {"label": "main"}, {"label": "dev"}]},
+            {"header": "Name", "question": "What name?"}]});
+    merge(&mut payload, extra);
+    payload
+}
+
+/// The `confirm` `r_c`, plus `extra` keys.
+fn confirm_with(extra: &serde_json::Value) -> serde_json::Value {
+    let mut payload = serde_json::json!({"request_id": "r_c", "kind": "confirm",
+        "prompt": "Continue?"});
+    merge(&mut payload, extra);
+    payload
+}
+
+/// Adds the keys of `extra` to `payload`.
+fn merge(payload: &mut serde_json::Value, extra: &serde_json::Value) {
+    if let (Some(map), Some(more)) = (payload.as_object_mut(), extra.as_object()) {
+        map.extend(more.clone());
+    }
+}
+
+/// Esc on a `confirm`, and Esc and "Chat about this" on a form, each with
+/// `extra` keys: the request and the bytes that decline it.
+fn declines(extra: &serde_json::Value) -> Vec<(serde_json::Value, Vec<u8>)> {
+    vec![
+        (confirm_with(extra), b"\x1b".to_vec()),
+        (form_with(extra), b"\x1b".to_vec()),
+        (form_with(extra), b"\x1b[B\x1b[B\x1b[B\x1b[B\r".to_vec()),
+    ]
+}
+
+/// Declining `payload` with `keys`, with a turn running or not: the
+/// declined reply, its accept, then a prompt typed after it. The command
+/// that follows the reply on the hub's socket.
+fn command_after_decline(
+    running: bool,
+    payload: serde_json::Value,
+    keys: &[u8],
+) -> serde_json::Value {
+    let (mut lp, reader) = connected_loop();
+    if running {
+        feed(
+            &mut lp,
+            vec![Input::Hub(Line::Session(contract::Envelope {
+                kind: "turn_started".to_owned(),
+                session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: None,
+                seq: None,
+                payload: serde_json::json!({"input": [{"type": "message",
+                    "source": "driver",
+                    "content": [{"type": "text", "text": "go"}]}]})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            }))],
+        );
+    }
+    feed(&mut lp, vec![one_question(payload)]);
+    feed(&mut lp, vec![Input::Bytes(keys.to_vec())]);
+    let (reader, reply) = command(reader, "the declined reply");
+    assert_eq!(reply["command"], "reply");
+    assert_eq!(
+        reply["args"],
+        serde_json::json!({"request_id": "r_c", "declined": true})
+    );
+    feed(&mut lp, vec![session_accepted(&reply["id"])]);
+    feed(&mut lp, vec![Input::Bytes(b"next\r".to_vec())]);
+    let (_, after) = command(reader, "the command after the decline");
+    after
+}
+
+#[test]
+fn a_decline_of_a_tool_calls_question_is_followed_by_a_cancel() {
+    let extra = serde_json::json!({"action_ids": ["a_1"]});
+    for running in [false, true] {
+        for (payload, keys) in declines(&extra) {
+            let after = command_after_decline(running, payload, &keys);
+            assert_eq!(after["command"], "cancel", "running {running}");
+            assert_eq!(after["session_id"], "s_aaaaaaaaaaaaaaaa");
+        }
+    }
+}
+
+#[test]
+fn a_decline_of_a_question_no_tool_call_raised_sends_no_cancel() {
+    let extra = serde_json::json!({});
+    for running in [false, true] {
+        for (payload, keys) in declines(&extra) {
+            let after = command_after_decline(running, payload, &keys);
+            assert_ne!(after["command"], "cancel", "running {running}");
+        }
+    }
 }
 
 #[test]
@@ -1614,7 +1864,6 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         copy_command: None,
         open_command: None,
         title: crate::osc::Title::default(),
-        save: None,
         shape: crate::osc::Shape::default(),
         retry: None,
         tick: crate::tick::TickThread::idle(),
@@ -2039,3 +2288,142 @@ fn opening_the_picker_asks_stale_through_the_loop() {
 
 #[path = "lib_motion_tests.rs"]
 mod motion;
+
+/// One installed model with no levels, named to stand out on the
+/// terminal: no other frame draws `qq`.
+fn one_model() -> crate::Catalogue {
+    crate::Catalogue {
+        models: vec![crate::ModelEntry {
+            reference: "zz/qq".to_owned(),
+            provider: "zz".to_owned(),
+            id: "qq".to_owned(),
+            levels: Vec::new(),
+            default_level: None,
+            configured: None,
+            roles: Vec::new(),
+        }],
+        notices: Vec::new(),
+    }
+}
+
+/// Quits a running terminal: Ctrl+C twice, waiting for 0 with one named
+/// deadline.
+fn quit(pair: &mut Pair, finished: &mpsc::Receiver<i32>) {
+    pair.main
+        .write_all(&[0x03, 0x03])
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    pair.main
+        .flush()
+        .unwrap_or_else(|err| panic!("flush: {err}"));
+    let code = finished
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn with_no_model_the_picker_opens_at_start() {
+    let mut pair = open();
+    // The watcher drains the terminal past its markers, so later frames
+    // never fill the pty: the picker at start, its answered row, then
+    // the home chips naming the chosen model.
+    let frames = watch(&pair.main, vec![b"Models", b"qq", b"[zz/qq]"]);
+    let slave = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let seam = std::sync::Arc::new(crate::configure_fake::Fake::new(vec![]));
+    let (release, held) = mpsc::channel();
+    let held = std::sync::Arc::new(std::sync::Mutex::new(held));
+    let held_in = std::sync::Arc::clone(&held);
+    let released = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let released_in = std::sync::Arc::clone(&released);
+    // The first read answers one model once the test releases it after
+    // the first frame; a wider read queued behind it answers at once,
+    // so no reader outlives the test.
+    let read: crate::ReadModels = std::sync::Arc::new(move |_| {
+        if !released_in.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            held_in
+                .lock()
+                .unwrap_or_else(|err| panic!("lock: {err}"))
+                .recv_timeout(DEADLINE)
+                .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the read release: {err}"));
+        }
+        Ok(one_model())
+    });
+    let mut launch = launch();
+    launch.model = None;
+    launch.models = Some(read);
+    launch.configure = Some(seam.clone() as std::sync::Arc<dyn crate::Configure>);
+    let (done, finished) = mpsc::channel();
+    let clock = fakes::clock::FakeClock::new();
+    let (hub, _held) =
+        std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    std::thread::Builder::new()
+        .name("lib-run".to_owned())
+        .spawn(move || {
+            let code = super::run(slave, launch, once(hub, hello()), Box::new(|_| {}), clock);
+            match done.send(code) {
+                Ok(()) | Err(_) => {}
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // The first frame shows the picker, which opened with no keypress.
+    watched(&frames, "the picker at start");
+    // Opening saves nothing: the choice does, once Enter chooses it.
+    assert!(seam.writes().is_empty());
+    release
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    // The cached read answers, and its frame lists the one model: only
+    // then does one Enter choose, as an Enter before the folded answer
+    // keeps the picker open, sending nothing.
+    watched(&frames, "the answered catalogue");
+    pair.main
+        .write_all(b"\r")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    pair.main
+        .flush()
+        .unwrap_or_else(|err| panic!("flush: {err}"));
+    // Choosing writes through the seam before the home chips name the
+    // model, so their frame proves the write went out: one named
+    // deadline for it.
+    watched(&frames, "the chosen home chips");
+    assert_eq!(
+        seam.writes(),
+        vec![(
+            PathBuf::from("/w"),
+            crate::configure::Layer::Global,
+            "model".to_owned(),
+            "zz/qq".to_owned()
+        )]
+    );
+    quit(&mut pair, &finished);
+}
+
+#[test]
+fn with_a_model_home_opens_as_before() {
+    let mut pair = open();
+    let slave = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (done, finished) = mpsc::channel();
+    let clock = fakes::clock::FakeClock::new();
+    let (hub, _held) =
+        std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    std::thread::Builder::new()
+        .name("lib-run".to_owned())
+        .spawn(move || {
+            let code = super::run(slave, launch(), once(hub, hello()), Box::new(|_| {}), clock);
+            match done.send(code) {
+                Ok(()) | Err(_) => {}
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // Home draws with no picker over it: the first frame names the
+    // shortcuts the picker would cover.
+    let frames = watch(&pair.main, vec![b"shortcuts" as &[u8]]);
+    watched(&frames, "home at start");
+    quit(&mut pair, &finished);
+}

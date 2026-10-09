@@ -852,7 +852,7 @@ fn one_job_shows_the_card() {
 }
 
 #[test]
-fn the_jobs_line_is_a_target_and_its_rows_are_not() {
+fn the_jobs_line_and_its_rows_are_targets() {
     use crate::app::panel::Spot;
     let mut app = attached(160, 40);
     fold_job(&mut app, "j_1", "build");
@@ -878,8 +878,29 @@ fn the_jobs_line_is_a_target_and_its_rows_are_not() {
             "▀".repeat(39)
         ]
     );
+    // Each listed job row carries its job's serial.
+    let first = app
+        .serial_of_job(&contract::JobId("j_1".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    let second = app
+        .serial_of_job(&contract::JobId("j_2".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
     let (_, targets) = draw_targets(&app);
-    assert_eq!(targets.len(), 1);
+    assert_eq!(
+        targets.iter().map(|target| target.id).collect::<Vec<_>>(),
+        [
+            crate::mouse::TargetId::Panel(Spot::Jobs),
+            crate::mouse::TargetId::Panel(Spot::Job(first)),
+            crate::mouse::TargetId::Panel(Spot::Job(second)),
+        ]
+    );
+    // The second job row opens the second job.
+    app.on_click(crate::mouse::TargetId::Panel(Spot::Job(second)));
+    assert!(app.item_open());
+    assert_eq!(
+        app.item_view().map(|view| view.description),
+        Some("test".to_owned())
+    );
 }
 
 #[test]

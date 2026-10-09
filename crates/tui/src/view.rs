@@ -104,9 +104,12 @@ pub(crate) fn render(
         return Vec::new();
     }
     // A swapped view takes home's place (`docs/tui.md`, "Swapped
-    // views"): the configuration view or the model picker. Notices float above it (`docs/tui.md`, "Notices"), as
+    // views"): the `/keys` screen, the configuration view or the model
+    // picker. Notices float above it (`docs/tui.md`, "Notices"), as
     // over the conversation.
-    if (app.config_view_open() || app.model_picker_open()) && app.on_home() {
+    if (app.config_view_open() || app.model_picker_open() || app.keys_screen_open())
+        && app.on_home()
+    {
         let mut targets = Vec::new();
         crate::swapped::draw(app, area, buf, &mut targets);
         notices(app, area, buf, &mut targets);
@@ -173,10 +176,15 @@ pub(crate) fn render(
                 .render(conversation, buf);
             overlay_cross(buf, conversation, &mut targets);
         }
-        // A swapped view takes the conversation's place: the configuration
-        // view, model picker or session view. Notices float above it
+        // A swapped view takes the conversation's place: the `/keys`
+        // screen, the configuration view, model picker or session view.
+        // Notices float above it
         // (`docs/tui.md`, "Notices"), as over the conversation.
-        None if app.config_view_open() || app.model_picker_open() || app.session_view_open() => {
+        None if app.config_view_open()
+            || app.model_picker_open()
+            || app.keys_screen_open()
+            || app.session_view_open() =>
+        {
             crate::swapped::draw(app, conversation, buf, &mut targets);
             notices(app, conversation, buf, &mut targets);
         }
@@ -361,6 +369,7 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     if app.chrome().floor_line().is_some()
         || app.config_view_open()
         || app.model_picker_open()
+        || app.keys_screen_open()
         || app.session_view_open()
     {
         return None;
