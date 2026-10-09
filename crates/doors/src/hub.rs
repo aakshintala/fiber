@@ -32,7 +32,7 @@ pub type Hub = (UnixStream, HubLine);
 /// Connects to the hub's socket in `home`, starting one through `start`
 /// when none runs. `start` runs once at most per attempt, so a retry
 /// after the idle-exit race may start a new hub. Returns the stream and the
-/// `hub_hello` it spoke first, which must arrive within [`CONNECT_DEADLINE`]..
+/// `hub_hello` it spoke first, which must arrive within [`CONNECT_DEADLINE`].
 pub fn connect(
     home: &Path,
     start: &mut dyn FnMut() -> io::Result<()>,
