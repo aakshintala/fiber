@@ -15,6 +15,7 @@ use contract::events::{
 };
 
 use super::{App, Effect, Kind, Link, mint};
+use crate::input::Draft;
 use crate::shell;
 
 /// A panel item that does something when clicked (`docs/tui.md`, "The panel", "Git").
@@ -456,10 +457,9 @@ impl App {
                 let id = mint();
                 let line = shell::command(&id, &session, "git --no-optional-locks status", false)
                     .to_string();
-                self.pending.insert(
-                    id,
-                    (Kind::Shell, "!!git --no-optional-locks status".to_owned()),
-                );
+                let mut draft = Draft::default();
+                draft.set("!!git --no-optional-locks status");
+                self.pending.insert(id, (Kind::Shell, draft));
                 Effect::Send(vec![line])
             }
         }

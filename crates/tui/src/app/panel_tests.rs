@@ -540,7 +540,8 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
         | Effect::Editor { .. }
         | Effect::Exit(_)
         | Effect::Copy(_)
-        | Effect::OpenLink(_) => panic!("opening sends"),
+        | Effect::OpenLink(_)
+        | Effect::ReadImage(_) => panic!("opening sends"),
     }
 }
 
