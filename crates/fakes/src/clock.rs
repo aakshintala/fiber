@@ -33,7 +33,7 @@ struct State {
 
 /// Which thread last parked at the instant of an advance, from
 /// [`FakeClock::advance_marked`]: each thread's latest park id, whether
-/// it is still parked or has left it..
+/// it is still parked or has left it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mark(Vec<(ThreadId, u64)>);
 
