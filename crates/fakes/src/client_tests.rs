@@ -15,6 +15,10 @@ use crate::TempDir;
 use crate::clock::FakeClock;
 use crate::within;
 
+/// A wait that must succeed.
+const MUST: Duration = crate::MUST_SUCCEED_WITHIN;
+
+/// A wait that must end with nothing: short, since it always runs out.
 const DEADLINE: Duration = Duration::from_secs(2);
 
 /// `accept` on a thread, so the test's wait is the deadline below.
@@ -23,7 +27,7 @@ fn accept_within(listener: &UnixListener) -> UnixStream {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || if let Ok(()) = tx.send(listener.accept()) {});
     let (stream, _) = rx
-        .recv_timeout(DEADLINE)
+        .recv_timeout(MUST)
         .expect("a client is accepted")
         .unwrap();
     stream
@@ -62,9 +66,7 @@ fn a_paused_client_reads_nothing_until_told() {
         "a paused client reads nothing"
     );
     client.slow(false);
-    let line = client
-        .recv(DEADLINE)
-        .expect("slow(false) starts the reader");
+    let line = client.recv(MUST).expect("slow(false) starts the reader");
     assert_eq!(line["ok"], true);
 }
 
@@ -76,7 +78,7 @@ fn send_writes_the_line_and_a_newline() {
     let client = Client::connect(&path).unwrap();
     let server = accept_within(&listener);
     client.send(r#"{"id":1}"#).unwrap();
-    server.set_read_timeout(Some(DEADLINE)).unwrap();
+    server.set_read_timeout(Some(MUST)).unwrap();
     let mut buf = Vec::new();
     BufReader::new(server)
         .read_until(b'\n', &mut buf)
@@ -99,7 +101,7 @@ fn recv_returns_a_buffered_line_without_waiting_for_the_socket_to_close() {
         },
     );
     let line = rx
-        .recv_timeout(DEADLINE)
+        .recv_timeout(MUST)
         .expect("recv returns when the line is buffered")
         .expect("recv returns the line");
     assert_eq!(line["ok"], true);
@@ -113,7 +115,7 @@ fn a_line_keeps_no_trailing_cr_or_lf() {
     let client = Client::connect(&path).unwrap();
     let mut server = accept_within(&listener);
     server.write_all(b"hello\r\n").unwrap();
-    let line = client.recv(DEADLINE).expect("a line arrives");
+    let line = client.recv(MUST).expect("a line arrives");
     assert_eq!(line, Value::String("hello".into()));
 }
 
@@ -125,7 +127,7 @@ fn a_running_client_stops_reading_once_paused() {
     let client = Client::connect(&path).unwrap();
     let mut server = accept_within(&listener);
     server.write_all(b"{\"n\":0}\n").unwrap();
-    let first = client.recv(DEADLINE).expect("the first line arrives");
+    let first = client.recv(MUST).expect("the first line arrives");
     assert_eq!(first["n"], 0);
     client.slow(true);
     for n in 1..100 {
@@ -151,8 +153,8 @@ fn drop_closes_the_socket() {
     let client = Client::connect(&path).unwrap();
     let mut server = accept_within(&listener);
     server.write_all(b"{\"ok\":true}\n").unwrap();
-    server.set_read_timeout(Some(DEADLINE)).unwrap();
-    client.recv(DEADLINE).expect("the line arrives");
+    server.set_read_timeout(Some(MUST)).unwrap();
+    client.recv(MUST).expect("the line arrives");
     drop(client);
     let mut buf = [0u8; 8];
     let n = server.read(&mut buf).expect("drop closes the socket");
@@ -170,12 +172,12 @@ fn recv_until_skips_non_matching_lines_and_returns_the_match() {
         .write_all(b"{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n{\"n\":4}\n")
         .unwrap();
     let got = client
-        .recv_until(DEADLINE, |line| {
+        .recv_until(MUST, |line| {
             line.get("n").and_then(Value::as_u64) == Some(3)
         })
         .expect("the matching line arrives");
     assert_eq!(got["n"], 3);
-    let next = client.recv(DEADLINE).expect("the line after the match");
+    let next = client.recv(MUST).expect("the line after the match");
     assert_eq!(
         next["n"], 4,
         "lines before the match are dropped, later ones kept"
@@ -192,7 +194,7 @@ fn recv_until_without_a_match_consumes_nothing() {
     server.write_all(b"{\"n\":1}\n{\"n\":2}\n").unwrap();
     let got = client.recv_until(Duration::from_millis(100), |_| false);
     assert!(got.is_none(), "no match returns none");
-    let first = client.recv(DEADLINE).expect("the first queued line");
+    let first = client.recv(MUST).expect("the first queued line");
     assert_eq!(first["n"], 1, "a miss consumes nothing");
 }
 
@@ -258,7 +260,7 @@ fn send_by_delivers_the_line_with_a_newline() {
     let end = clock.origin() + Duration::from_secs(60);
     let read = drain(server, || {});
     let left_clock = Arc::clone(&clock);
-    let client = within("send_by", DEADLINE, move || {
+    let client = within("send_by", MUST, move || {
         client
             .send_by(r#"{"id":1}"#, &|| left_until(&left_clock, end))
             .unwrap();
@@ -266,7 +268,7 @@ fn send_by_delivers_the_line_with_a_newline() {
     });
     drop(client);
     let got = read
-        .recv_timeout(DEADLINE)
+        .recv_timeout(MUST)
         .expect("the peer reads to end-of-file");
     assert_eq!(got, b"{\"id\":1}\n");
 }
@@ -275,13 +277,13 @@ fn send_by_delivers_the_line_with_a_newline() {
 fn send_by_keeps_a_newline_the_line_already_has() {
     let (_dir, client, server) = pair();
     let read = drain(server, || {});
-    let client = within("send_by", DEADLINE, move || {
-        client.send_by("{}\n", &|| DEADLINE).unwrap();
+    let client = within("send_by", MUST, move || {
+        client.send_by("{}\n", &|| MUST).unwrap();
         client
     });
     drop(client);
     let got = read
-        .recv_timeout(DEADLINE)
+        .recv_timeout(MUST)
         .expect("the peer reads to end-of-file");
     assert_eq!(got, b"{}\n");
 }
@@ -306,7 +308,7 @@ fn send_by_does_not_renew_its_deadline_across_partial_writes() {
     });
     drop(client);
     let got = read
-        .recv_timeout(DEADLINE)
+        .recv_timeout(MUST)
         .expect("the peer reads to end-of-file");
     assert_eq!(
         sent.expect_err("the deadline passes before the line is written")
@@ -324,12 +326,12 @@ fn send_by_does_not_renew_its_deadline_across_partial_writes() {
 fn send_by_at_zero_writes_nothing() {
     let (_dir, client, server) = pair();
     let read = drain(server, || {});
-    let (sent, client) = within("send_by", DEADLINE, move || {
+    let (sent, client) = within("send_by", MUST, move || {
         (client.send_by("{}", &|| Duration::ZERO), client)
     });
     drop(client);
     let got = read
-        .recv_timeout(DEADLINE)
+        .recv_timeout(MUST)
         .expect("the peer reads to end-of-file");
     assert_eq!(
         sent.expect_err("no time is left").kind(),
@@ -344,19 +346,19 @@ fn send_by_reads_what_is_left_once_per_4_kib_chunk() {
         let (_dir, client, server) = pair();
         let read = drain(server, || {});
         let line = "x".repeat(len);
-        let (calls, client) = within("send_by", DEADLINE, move || {
+        let (calls, client) = within("send_by", MUST, move || {
             let calls = AtomicUsize::new(0);
             client
                 .send_by(&line, &|| {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    DEADLINE
+                    MUST
                 })
                 .unwrap();
             (calls.into_inner(), client)
         });
         drop(client);
         let got = read
-            .recv_timeout(DEADLINE)
+            .recv_timeout(MUST)
             .expect("the peer reads to end-of-file");
         assert_eq!(got.len(), len + 1, "the whole line and its newline arrive");
         assert_eq!(
@@ -371,7 +373,7 @@ fn send_by_reads_what_is_left_once_per_4_kib_chunk() {
 #[test]
 fn send_by_leaves_the_socket_without_a_write_timeout() {
     let (_dir, client, _server) = pair();
-    client.send_by("{}", &|| DEADLINE).unwrap();
+    client.send_by("{}", &|| MUST).unwrap();
     assert_eq!(
         super::lock(&client.write).write_timeout().unwrap(),
         None,
@@ -417,7 +419,7 @@ fn a_client_dropped_during_an_unwind_keeps_the_first_panic() {
     client.notify_when_blocked(blocked);
     client.slow(false);
     is_blocked
-        .recv_timeout(DEADLINE)
+        .recv_timeout(MUST)
         .expect("the reader to block in read");
     // Without its shutdown stream, `Drop` cannot wake the reader, which
     // stays blocked in `read` and would miss `READER_STOP`.

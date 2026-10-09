@@ -43,7 +43,7 @@ pub use rerun::{rerun, rerun_within};
 pub use scripted_provider::{Scripted, ScriptedProvider, call_usage, reply, unnamed_usage};
 pub use temp_dir::TempDir;
 pub use watchdog::Watchdog;
-pub use within::within;
+pub use within::{MUST_SUCCEED_WITHIN, within};
 
 /// The context window every fake model declares, in tokens: the window
 /// fixtures build sessions with, so size notices and the handoff trigger
