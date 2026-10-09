@@ -1847,23 +1847,33 @@ fn a_web_search_call_decodes_as_a_hosted_call_with_its_query_and_urls() {
     let [ReplyAction::Hosted(hosted), ReplyAction::Text(text)] = reply.actions.as_slice() else {
         panic!("{:?}", reply.actions);
     };
-    assert_eq!(hosted.call.name, "web_search");
-    assert_eq!(hosted.call.provider_id, Some(ProviderCallId("ws_1".into())));
     assert_eq!(
-        hosted.call.arguments,
-        json!({"type": "search", "query": "rust 1.90"})
-    );
-    assert_eq!(hosted.call.provider_item, Some(item.clone()));
-    assert_eq!(hosted.completed.provider_item, Some(item));
-    assert_eq!(
-        hosted.completed.content,
-        vec![contract::shapes::ContentPart::Text {
-            text: "https://a.example\nhttps://b.example".into()
-        }]
-    );
-    assert_eq!(
-        hosted.completed.status,
-        contract::events::CallStatus::Completed
+        hosted,
+        &contract::provider::HostedCall {
+            call: ToolCallRequested {
+                name: "web_search".into(),
+                arguments: json!({"type": "search", "query": "rust 1.90"}),
+                provider_id: Some(ProviderCallId("ws_1".into())),
+                repair: None,
+                ran_by: None,
+                provider_item: Some(item.clone()),
+            },
+            completed: contract::events::ToolCallCompleted {
+                status: contract::events::CallStatus::Completed,
+                reason: None,
+                error: None,
+                process: None,
+                content: vec![contract::shapes::ContentPart::Text {
+                    text: "https://a.example\nhttps://b.example".into(),
+                }],
+                details: None,
+                artifact: None,
+                changes: None,
+                control: None,
+                changed_by: None,
+                provider_item: Some(item),
+            },
+        }
     );
     assert_eq!(text.text, "Rust 1.90 is out.");
     assert_eq!(reply.web_searches, None);
@@ -1921,6 +1931,32 @@ fn a_web_search_calls_urls_come_from_results_then_sources() {
         )),
         "https://a.example"
     );
+    // No action, or a non-object one: arguments are empty, results count.
+    for action in [None, Some(json!("search"))] {
+        let mut item = json!({"type": "web_search_call", "id": "ws_1",
+            "status": "completed",
+            "results": [{"url": "https://b.example"}]});
+        if let Some(action) = action {
+            item["action"] = action;
+        }
+        let reply = decoded(&stream(&[
+            search_done(item.clone()),
+            completed("completed", json!({})),
+        ]))
+        .0
+        .unwrap();
+        let [ReplyAction::Hosted(hosted)] = reply.actions.as_slice() else {
+            panic!("{:?}", reply.actions);
+        };
+        assert_eq!(hosted.call.arguments, json!({}));
+        assert_eq!(hosted.completed.provider_item, Some(item));
+        match hosted.completed.content.as_slice() {
+            [contract::shapes::ContentPart::Text { text }] => {
+                assert_eq!(text, "https://b.example")
+            }
+            other => panic!("{other:?}"),
+        }
+    }
 }
 
 #[test]
