@@ -137,10 +137,23 @@ impl App {
     }
 
     /// The rail's keys (`docs/tui.md`, "Bindings"), ahead of every
-    /// overlay: ⌥1 to ⌥9 switch to the card with that number, and do
-    /// nothing when no card has it, as without home, where no card is
-    /// numbered. `None` for every other key.
+    /// overlay: ⌥R hides a drawn rail and shows one that is not, and does
+    /// nothing without the session screen's layout; ⌥1 to ⌥9 switch to
+    /// the card with that number, and do nothing when no card has it, as
+    /// without home, where no card is numbered. `None` for every other
+    /// key.
     pub(super) fn rail_key(&mut self, key: &Key) -> Option<Effect> {
+        if *key == Key::AltR {
+            let Some(layout) = self.chrome.layout() else {
+                return Some(Effect::None);
+            };
+            if layout.rail.is_some() {
+                self.chrome.hide_rail();
+                self.settle();
+                return Some(Effect::None);
+            }
+            return Some(self.show_rail());
+        }
         let Key::AltDigit(digit) = key else {
             return None;
         };
@@ -152,6 +165,42 @@ impl App {
             .find(|(_, held)| *held == number)
             .map(|(key, _)| *key);
         Some(card.map_or(Effect::None, |key| self.switch_to(key)))
+    }
+
+    /// ⌥R on a hidden rail, or a click on "N waiting": the rail shows,
+    /// and when the screen has no room for it beside a drawn panel, the
+    /// panel hides as ⌥P hides it (`docs/tui.md`, "Shedding"). ⌥P brings
+    /// the panel back, and the rail sheds again.
+    pub(super) fn show_rail(&mut self) -> Effect {
+        self.chrome.show_rail();
+        self.settle();
+        if self
+            .chrome
+            .layout()
+            .is_some_and(|layout| layout.rail.is_none() && layout.panel.is_some())
+        {
+            self.chrome.toggle_panel();
+            self.settle();
+        }
+        Effect::None
+    }
+
+    /// "N waiting" on the Session card while the rail is wanted and not
+    /// drawn: how many live cards wait, the one on screen left out. `None`
+    /// while the rail is drawn or not wanted.
+    pub(crate) fn rail_waiting(&self) -> Option<usize> {
+        self.chrome.layout()?.grip?;
+        let attached = self.session();
+        let home = self.home.as_ref()?;
+        Some(
+            home.sessions
+                .cards()
+                .into_iter()
+                .filter(|row| {
+                    row.left.is_none() && row.state == State::Waiting && Some(&row.id) != attached
+                })
+                .count(),
+        )
     }
 
     /// A click on a rail item.

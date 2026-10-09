@@ -929,3 +929,138 @@ fn a_resolved_request_ends_the_wait() {
     app.on_line(permission(C, "r_c"));
     assert!(app.panel().is_none(), "{}", panel_text(&app));
 }
+
+/// The rail rect, while drawn.
+fn rail_rect(app: &App) -> Option<ratatui::layout::Rect> {
+    app.chrome().layout().and_then(|layout| layout.rail)
+}
+
+/// The panel rect, while drawn.
+fn panel_rect(app: &App) -> Option<ratatui::layout::Rect> {
+    app.chrome().layout().and_then(|layout| layout.panel)
+}
+
+/// `A` and `B` live with `A` on screen, at `width` by 40.
+fn sized(width: u16) -> App {
+    let mut app = opened(&[A, B], A);
+    app.set_size(width, 40);
+    app
+}
+
+#[test]
+fn alt_r_hides_and_shows() {
+    let mut app = sized(200);
+    assert!(rail_rect(&app).is_some());
+    assert_eq!(press(&mut app, Key::AltR), Effect::None);
+    assert!(rail_rect(&app).is_none());
+    assert!(
+        app.chrome()
+            .layout()
+            .and_then(|layout| layout.grip)
+            .is_some()
+    );
+    assert!(panel_rect(&app).is_some());
+    assert_eq!(press(&mut app, Key::AltR), Effect::None);
+    assert!(rail_rect(&app).is_some());
+    // The rail fits beside the panel, so the panel stays.
+    assert!(panel_rect(&app).is_some());
+}
+
+#[test]
+fn a_person_hidden_rail_stays_hidden_on_grow() {
+    let mut app = sized(200);
+    press(&mut app, Key::AltR);
+    app.set_size(300, 40);
+    assert!(rail_rect(&app).is_none());
+}
+
+#[test]
+fn a_rail_hidden_for_width_returns_when_the_screen_grows() {
+    let mut app = sized(130);
+    assert!(rail_rect(&app).is_none());
+    assert!(panel_rect(&app).is_some());
+    app.set_size(136, 40);
+    assert!(rail_rect(&app).is_some());
+    assert!(panel_rect(&app).is_some());
+}
+
+#[test]
+fn alt_r_on_a_rail_hidden_for_width_hides_the_panel_and_shows_the_rail() {
+    let mut app = sized(130);
+    assert_eq!(panel_rect(&app).map(|panel| panel.width), Some(30));
+    press(&mut app, Key::AltR);
+    assert_eq!(rail_rect(&app).map(|rail| rail.width), Some(22));
+    assert!(panel_rect(&app).is_none());
+}
+
+#[test]
+fn alt_r_where_even_the_rail_cannot_fit_leaves_the_panel() {
+    let mut app = sized(100);
+    assert!(panel_rect(&app).is_none());
+    press(&mut app, Key::AltR);
+    assert!(rail_rect(&app).is_none());
+    assert!(panel_rect(&app).is_none());
+    // The panel was never hidden: it shows once the screen has room.
+    app.set_size(200, 40);
+    assert!(panel_rect(&app).is_some());
+}
+
+#[test]
+fn alt_p_after_that_brings_the_panel_back_and_the_rail_sheds() {
+    let mut app = sized(130);
+    press(&mut app, Key::AltR);
+    assert!(panel_rect(&app).is_none());
+    press(&mut app, Key::AltP);
+    assert!(panel_rect(&app).is_some());
+    assert!(rail_rect(&app).is_none());
+}
+
+#[test]
+fn alt_r_on_home_does_nothing() {
+    // ⌥R on home neither hides nor shows the rail of the next attach.
+    let mut app = with(&[A, B]);
+    assert_eq!(press(&mut app, Key::AltR), Effect::None);
+    open(&mut app, A);
+    assert!(rail_rect(&app).is_some());
+    press(&mut app, Key::AltR);
+    assert!(rail_rect(&app).is_none());
+    for ch in "/home".chars() {
+        press(&mut app, Key::Char(ch));
+    }
+    press(&mut app, Key::Enter);
+    assert!(app.home_screen().is_some());
+    assert_eq!(press(&mut app, Key::AltR), Effect::None);
+    open(&mut app, A);
+    assert!(rail_rect(&app).is_none());
+}
+
+#[test]
+fn n_waiting_shows_only_while_the_rail_is_not_drawn() {
+    let mut app = sized(200);
+    assert_eq!(app.rail_waiting(), None);
+    press(&mut app, Key::AltR);
+    assert_eq!(app.rail_waiting(), Some(0));
+    let mut one = opened(&[A], A);
+    one.set_size(200, 40);
+    assert_eq!(one.rail_waiting(), None);
+}
+
+#[test]
+fn n_waiting_counts_waiting_cards_but_not_the_attached_session() {
+    let mut app = opened(&[A, B, C, D], A);
+    app.on_line(live(A, waiting("r_a", 0)));
+    app.on_line(live(B, waiting("r_b", 0)));
+    app.on_line(live(D, waiting("r_d", 0)));
+    app.on_line(left(D, "crashed"));
+    press(&mut app, Key::AltR);
+    assert_eq!(app.rail_waiting(), Some(1));
+}
+
+#[test]
+fn a_click_on_n_waiting_shows_the_rail() {
+    let mut app = sized(200);
+    press(&mut app, Key::AltR);
+    assert!(rail_rect(&app).is_none());
+    app.on_click(TargetId::Panel(crate::app::panel::Spot::Waiting));
+    assert!(rail_rect(&app).is_some());
+}

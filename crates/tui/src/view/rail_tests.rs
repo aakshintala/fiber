@@ -590,3 +590,40 @@ fn rail_crashed_card_has_a_cross() {
     app.on_line(left(B, "crashed"));
     insta::assert_snapshot!("rail_crashed_card_has_a_cross", text(&rail(&app)));
 }
+
+#[test]
+fn session_card_with_n_waiting() {
+    // At 160 columns a 48-column rail does not fit beside the 34-column
+    // panel and the conversation's 84.
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        workspace: PathBuf::from("/Users/you/work/fiber"),
+        project: "-w".to_owned(),
+        rail_share: 30.0,
+        panel_share: 21.0,
+        panel_cards: CARDS.map(str::to_owned).to_vec(),
+        ..Default::default()
+    });
+    app.attach(SessionId(A.to_owned()));
+    app.set_size(160, 40);
+    app.set_wall(WALL);
+    app.on_line(status(A, json!({})));
+    let waiting = json!({"state": "waiting", "waiting": {"request_id": "r_1",
+        "kind": "approval", "summary": "shell ls"}});
+    app.on_line(status(B, waiting.clone()));
+    app.on_line(status(C, waiting));
+    let area = Rect::new(0, 0, 160, 40);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    assert!(
+        app.chrome()
+            .layout()
+            .is_some_and(|layout| layout.rail.is_none())
+    );
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::Panel(crate::app::panel::Spot::Waiting))
+    );
+    insta::assert_snapshot!("session_card_with_n_waiting", text(&buf));
+}
