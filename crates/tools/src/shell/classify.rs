@@ -97,9 +97,7 @@ fn prefix_of(part: &Part) -> Option<String> {
 /// A second word offered in the prefix: no leading `-`, and no `/`, `.`,
 /// `=` or `>` (`docs/tools.md`, "Shell", "Effects").
 fn plain_word(raw: &str) -> bool {
-    !raw.is_empty()
-        && !raw.starts_with('-')
-        && !raw.contains(['\'', '"', '/', '.', '=', '>'])
+    !raw.is_empty() && !raw.starts_with('-') && !raw.contains(['\'', '"', '/', '.', '=', '>'])
 }
 
 enum Outcome {

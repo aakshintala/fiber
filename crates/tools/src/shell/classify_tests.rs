@@ -382,7 +382,12 @@ fn new_git_forms_read() {
         assert_reads(command);
     }
     assert!(classified("git rev-parse HEAD").declared.paths.is_none());
-    assert!(classified("git branch --show-current").declared.paths.is_none());
+    assert!(
+        classified("git branch --show-current")
+            .declared
+            .paths
+            .is_none()
+    );
     assert_eq!(
         classified("git ls-files src").declared.paths,
         Some(vec!["/work/src".to_owned()])
@@ -472,7 +477,9 @@ fn sed_through_the_classifier_declares_its_files() {
         Some(vec!["/work/f".to_owned()])
     );
     assert_eq!(
-        classified("sed -n 1p /home/me/.fiber/credentials/k").declared.paths,
+        classified("sed -n 1p /home/me/.fiber/credentials/k")
+            .declared
+            .paths,
         Some(vec!["/home/me/.fiber/credentials/k".to_owned()])
     );
     assert_reads("sed -n 1p a b");
@@ -514,9 +521,8 @@ fn the_four_quoted_commands_read() {
 #[test]
 fn only_echo_and_pwd_declare_no_paths() {
     for command in COMMANDS {
-        let declares = command.name != "echo"
-            && command.name != "pwd"
-            && command.name != "git rev-parse";
+        let declares =
+            command.name != "echo" && command.name != "pwd" && command.name != "git rev-parse";
         assert_eq!(command.paths, declares, "{}", command.name);
     }
 }

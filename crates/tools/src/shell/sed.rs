@@ -120,7 +120,10 @@ pub(super) fn prints_only(script: &str) -> bool {
 
 /// Blanks and separators, in any order.
 fn skip_run(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
-    while chars.peek().is_some_and(|&ch| ch == ' ' || ch == '\t' || ch == ';' || ch == '\n') {
+    while chars
+        .peek()
+        .is_some_and(|&ch| ch == ' ' || ch == '\t' || ch == ';' || ch == '\n')
+    {
         chars.next();
     }
 }

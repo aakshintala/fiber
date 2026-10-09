@@ -239,21 +239,11 @@ fn a_sed_read_with_stderr_discarded_takes_the_fast_path_with_no_reviewer_call() 
         .collect();
     assert_eq!(models, ["scripted/s.json", "scripted/s.json"]);
     for resolved in run.of("permission_resolved") {
-        assert_ne!(
-            resolved["payload"]["decided_by"],
-            "reviewer",
-            "{resolved}"
-        );
+        assert_ne!(resolved["payload"]["decided_by"], "reviewer", "{resolved}");
     }
     let durable = run.durable();
-    assert!(
-        !durable.contains(&"permission_requested"),
-        "{durable:?}"
-    );
-    assert!(
-        !durable.contains(&"permission_resolved"),
-        "{durable:?}"
-    );
+    assert!(!durable.contains(&"permission_requested"), "{durable:?}");
+    assert!(!durable.contains(&"permission_resolved"), "{durable:?}");
     assert_eq!(
         durable,
         [
@@ -279,7 +269,10 @@ fn a_sed_read_with_stderr_discarded_takes_the_fast_path_with_no_reviewer_call() 
             "fiber_exited",
         ]
     );
-    assert_eq!(run.of("text_completed").last().unwrap()["payload"]["text"], "Done.");
+    assert_eq!(
+        run.of("text_completed").last().unwrap()["payload"]["text"],
+        "Done."
+    );
 }
 
 #[test]

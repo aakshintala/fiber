@@ -200,12 +200,10 @@ fn strip_regex_bodies(script: &str) -> String {
 
 fn alphabet() -> Vec<char> {
     let mut chars: Vec<char> = ('0'..='9').collect();
-    chars.extend(
-        [
-            '$', '/', '\\', ',', 'p', ';', '\n', ' ', '\t', 'w', 'W', 'e', 'E', 'r', 'R', 's',
-            'y', 'i', 'I', 'q', 'd', 'x', '{', '}', '!', '#', '~', '+', '%',
-        ],
-    );
+    chars.extend([
+        '$', '/', '\\', ',', 'p', ';', '\n', ' ', '\t', 'w', 'W', 'e', 'E', 'r', 'R', 's', 'y',
+        'i', 'I', 'q', 'd', 'x', '{', '}', '!', '#', '~', '+', '%',
+    ]);
     chars
 }
 
@@ -243,8 +241,8 @@ fn generated_script() -> impl Strategy<Value = String> {
         Just("\\/".to_owned()),
         Just("\\\\".to_owned()),
     ];
-    let regex = prop::collection::vec(body_piece, 0..4)
-        .prop_map(|pieces| format!("/{}/", pieces.concat()));
+    let regex =
+        prop::collection::vec(body_piece, 0..4).prop_map(|pieces| format!("/{}/", pieces.concat()));
     let address = prop_oneof![
         prop::collection::vec(digit, 1..3)
             .prop_map(|digits| digits.into_iter().collect::<String>()),
@@ -256,15 +254,14 @@ fn generated_script() -> impl Strategy<Value = String> {
         Just(" ".to_owned()),
         Just("\t".to_owned()),
     ];
-    let command = (prop::collection::vec(address, 0..3), blank.clone()).prop_map(
-        |(mut addresses, gap)| {
+    let command =
+        (prop::collection::vec(address, 0..3), blank.clone()).prop_map(|(mut addresses, gap)| {
             // A zero-start range is GNU's `0,/re/` form, never a print.
             if addresses.len() == 2 && addresses[0].chars().all(|ch| ch == '0') {
                 addresses.remove(0);
             }
             format!("{}{gap}p", addresses.join(","))
-        },
-    );
+        });
     let separator = prop_oneof![Just(";".to_owned()), Just("\n".to_owned())];
     (
         prop::collection::vec(command, 1..5),
