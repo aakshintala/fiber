@@ -548,7 +548,7 @@ fn a_form_joins_the_queue_behind_an_approval() {
     // Behind a request put aside, the form waits under the badge.
     assert!(queue.panel(80).is_none());
     assert_eq!(
-        queue.badge(0).as_deref(),
+        queue.badge(0, Some("⌥A")).as_deref(),
         Some("! 2 waiting · /approvals or ⌥A")
     );
     assert!(queue.open_first());
@@ -576,7 +576,7 @@ fn a_resolved_form_leaves_the_queue() {
             "answers": [{"labels": ["main"]}]}),
     ));
     assert!(queue.panel(80).is_none());
-    assert!(queue.badge(0).is_none());
+    assert!(queue.badge(0, Some("⌥A")).is_none());
 }
 
 #[test]
@@ -587,7 +587,7 @@ fn a_form_resolved_by_fiber_leaves_the_queue() {
         json!({"request_id": "r_4f", "by": "fiber", "declined": true}),
     ));
     assert!(queue.panel(80).is_none());
-    assert!(queue.badge(0).is_none());
+    assert!(queue.badge(0, Some("⌥A")).is_none());
 }
 
 #[test]
