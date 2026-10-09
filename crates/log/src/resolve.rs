@@ -21,30 +21,21 @@ use crate::{EVENTS, Error};
 /// id. A missing `sessions` directory holds no candidate.
 pub fn most_recent(sessions: &Path, in_project: &dyn Fn(&str) -> bool) -> Option<SessionId> {
     let entries = std::fs::read_dir(sessions).ok()?;
-    let mut best: Option<(u64, SessionId)> = None;
-    for entry in entries.flatten() {
-        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false)
-            || !entry.path().join(EVENTS).is_file()
-        {
-            continue;
-        }
-        let Some(opening) = opening(&entry.path(), in_project) else {
-            continue;
-        };
-        if opening.delegate {
-            continue;
-        }
-        let activity = crate::last_ts(&entry.path()).unwrap_or(opening.ts);
-        let id = SessionId(entry.file_name().to_string_lossy().into_owned());
-        let newer = match &best {
-            None => true,
-            Some((ts, winner)) => (activity, &id) > (*ts, winner),
-        };
-        if newer {
-            best = Some((activity, id));
-        }
-    }
-    best.map(|(_, id)| id)
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let opening = opening(&entry.path(), in_project)?;
+            if opening.delegate {
+                return None;
+            }
+            let activity = crate::last_ts(&entry.path()).unwrap_or(opening.ts);
+            Some((
+                activity,
+                SessionId(entry.file_name().to_string_lossy().into_owned()),
+            ))
+        })
+        .max()
+        .map(|(_, id)| id)
 }
 
 /// Resolves `selector` to the session it names in `sessions`: a name that
