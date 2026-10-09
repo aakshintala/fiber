@@ -20,14 +20,20 @@ struct Parked {
 struct State {
     offset: Duration,
     parked: Vec<Parked>,
+    /// The latest park id of each thread that ever parked on this clock.
+    /// Written in `wait_until` under the lock that pushes the park; a
+    /// `FakeClock` lives for one test, so this holds at most one entry
+    /// per test thread. `Leave` never touches it.
+    latest: Vec<(ThreadId, u64)>,
     /// Park ids are one per park; wrapping needs 2^64 parks, which a test
     /// process cannot reach, so a later park's id compares greater with `>`.
     next_id: u64,
     wakers: Vec<Weak<dyn Wake>>,
 }
 
-/// Which thread held which park at the instant of an advance, from
-/// [`FakeClock::advance_marked`].
+/// Which thread last parked at the instant of an advance, from
+/// [`FakeClock::advance_marked`]: each thread's latest park id, whether
+/// it is still parked or has left it..
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mark(Vec<(ThreadId, u64)>);
 
@@ -57,6 +63,7 @@ impl FakeClock {
             state: Mutex::new(State {
                 offset: Duration::ZERO,
                 parked: Vec::new(),
+                latest: Vec::new(),
                 next_id: 0,
                 wakers: Vec::new(),
             }),
@@ -75,19 +82,16 @@ impl FakeClock {
         self.advance_marked(d);
     }
 
-    /// [`FakeClock::advance`], returning which thread held which park when
-    /// `now()` moved. The snapshot is taken under the lock that moves it.
+    /// [`FakeClock::advance`], returning each thread's latest park at the
+    /// instant `now()` moved. A thread that left its park before the
+    /// advance still matches its next park in
+    /// [`FakeClock::await_parked_since`]. The snapshot is taken under the
+    /// lock that moves it.
     pub fn advance_marked(&self, d: Duration) -> Mark {
         let (mark, wakers) = {
             let mut state = lock(&self.state);
             state.offset = state.offset.saturating_add(d);
-            let mark = Mark(
-                state
-                    .parked
-                    .iter()
-                    .map(|parked| (parked.thread, parked.id))
-                    .collect(),
-            );
+            let mark = Mark(state.latest.clone());
             let wakers = state
                 .wakers
                 .iter()
@@ -131,9 +135,10 @@ impl FakeClock {
         parked_count(&guard, until) >= count
     }
 
-    /// Waits, at most `within` of real time, until a thread that was parked
-    /// at `mark` is parked again, in a later park, with this `until`
-    /// (`None`: no deadline). True once it is; false at the deadline.
+    /// Waits, at most `within` of real time, until a thread in `mark` is
+    /// parked again, in a later park, with this `until` (`None`: no
+    /// deadline). True once it is; false at the deadline. A thread that
+    /// left its park before the advance matches its next park.
     pub fn await_parked_since(
         &self,
         mark: &Mark,
@@ -210,6 +215,7 @@ impl Clock for FakeClock {
                 state.next_id = state.next_id.wrapping_add(1);
                 let thread = std::thread::current().id();
                 state.parked.push(Parked { id, thread, until });
+                record_latest(&mut state, thread, id);
                 self.parked_cv.notify_all();
                 Some(id)
             }
@@ -245,6 +251,15 @@ impl Drop for Leave<'_> {
 
 fn now_in(state: &State, origin: Instant) -> Instant {
     origin.checked_add(state.offset).unwrap_or(origin)
+}
+
+/// Records `id` as `thread`'s latest park, replacing its earlier entry.
+fn record_latest(state: &mut State, thread: ThreadId, id: u64) {
+    if let Some(entry) = state.latest.iter_mut().find(|(t, _)| *t == thread) {
+        entry.1 = id;
+    } else {
+        state.latest.push((thread, id));
+    }
 }
 
 fn parked_count(state: &State, until: Instant) -> usize {
