@@ -64,7 +64,8 @@ fn sent(effect: Effect) -> Vec<Value> {
         | Effect::Editor { .. }
         | Effect::Exit(_)
         | Effect::Copy(_)
-        | Effect::OpenLink(_) => Vec::new(),
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => Vec::new(),
     }
 }
 
@@ -207,7 +208,7 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
     // The eighth row, still in the first window.
     assert_eq!(
         selected(&app).as_deref(),
-        Some("/close  Stops the session on screen.  command")
+        Some("/reload  Reloads configuration, MCP servers and extensions.  command")
     );
     assert_eq!(app.completions().and_then(|c| c.selected), Some(7));
     app.on_key(Key::Down, now());
@@ -220,6 +221,7 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
             .as_deref(),
         Some("/new  Goes home with the cursor in the input box.  command")
     );
+    app.on_key(Key::Down, now());
     app.on_key(Key::Down, now());
     app.on_key(Key::Down, now());
     assert_eq!(

@@ -276,6 +276,13 @@ pub(crate) const KEYS: &[Key] = &[
     person_files("reviewer.context", Str),
 ];
 
+/// Every key's path that names no `*`, in table order.
+pub(crate) fn plain_paths() -> impl Iterator<Item = &'static str> {
+    KEYS.iter()
+        .map(|key| key.path)
+        .filter(|path| !path.contains('*'))
+}
+
 /// The segments of a key's path; each `*` matches any one name.
 fn segments(key: &Key) -> impl Iterator<Item = &'static str> {
     key.path.split('.')

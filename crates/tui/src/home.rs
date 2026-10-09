@@ -71,6 +71,10 @@ pub struct Launch {
     /// `tui.attention.*`: the notification, the bell and the title
     /// (`docs/tui.md`, "Getting the person's attention").
     pub attention: crate::Attention,
+    /// The seam the configuration views read and write through
+    /// (`docs/tui.md`, "Swapped views"); with none, each says it is not
+    /// available.
+    pub configure: Option<std::sync::Arc<dyn crate::Configure>>,
 }
 
 /// What home draws, built by [`crate::app::App::home_screen`].

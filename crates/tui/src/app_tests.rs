@@ -59,7 +59,8 @@ fn one_line(effect: Effect) -> String {
         | Effect::Editor { .. }
         | Effect::Exit(_)
         | Effect::Copy(_)
-        | Effect::OpenLink(_) => {
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => {
             panic!("expected one line")
         }
     }
@@ -240,7 +241,8 @@ fn esc_busy_sends_cancel() {
         | Effect::Editor { .. }
         | Effect::Exit(_)
         | Effect::Copy(_)
-        | Effect::OpenLink(_) => {
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => {
             panic!("expected cancel")
         }
     }
@@ -475,7 +477,8 @@ fn rejected_cancel_shows_nothing() {
         | Effect::Editor { .. }
         | Effect::Exit(_)
         | Effect::Copy(_)
-        | Effect::OpenLink(_) => {
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => {
             panic!("expected cancel")
         }
     };
@@ -995,6 +998,7 @@ fn sent(effect: Effect) -> Vec<serde_json::Value> {
         | Effect::Exit(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
         | Effect::Quit
         | Effect::ListFiles
         | Effect::ReadImage(_)

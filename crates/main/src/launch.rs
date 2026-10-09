@@ -82,6 +82,8 @@ pub(crate) fn launch(
             bell: on(config, "tui.attention.bell"),
             title: on(config, "tui.attention.title"),
         },
+        // `main` gives the seam once it holds Fiber home.
+        configure: None,
     }
 }
 

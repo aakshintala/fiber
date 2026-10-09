@@ -51,6 +51,7 @@ impl App {
     /// only Esc, which is `close_or_interrupt`'s key everywhere.
     fn key_context(&self) -> Context {
         if self.quit_open()
+            || self.config_view_open()
             || self.home_modal()
             || self.keymap_top().is_some()
             || self.panel().is_some()

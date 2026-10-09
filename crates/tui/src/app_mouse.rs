@@ -65,6 +65,7 @@ impl App {
             TargetId::Home(spot) => self.home_click(spot),
             TargetId::Offer(spot) => self.offer_click(spot),
             TargetId::Form(spot) => self.form_click(spot),
+            TargetId::View(spot) => self.config_view_click(spot),
             TargetId::Panel(spot) => self.panel_click(spot),
             TargetId::Rail(spot) => self.rail_click(spot),
             TargetId::Token(number) => self.open_token(number),

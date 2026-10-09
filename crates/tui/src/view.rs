@@ -88,6 +88,25 @@ pub(crate) fn render(
         chrome::floor(line, area, buf);
         return Vec::new();
     }
+    // A configuration view takes home's place (`docs/tui.md`, "Swapped
+    // views"). Notices float above it (`docs/tui.md`, "Notices"), as
+    // over the conversation.
+    if app.config_view_open() && app.on_home() {
+        let mut targets = Vec::new();
+        crate::swapped::draw(app, area, buf, &mut targets);
+        notices(app, area, buf, &mut targets);
+        if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
+            for target in targets.iter().filter(|target| target.id == id) {
+                buf.set_style(target.rect, HOVER_TINT);
+            }
+        }
+        if let Some(id) = app.focused() {
+            for target in targets.iter().filter(|target| target.id == id) {
+                buf.set_style(target.rect, FOCUS_STYLE);
+            }
+        }
+        return targets;
+    }
     if let Some(screen) = app.home_screen() {
         return home::render(app, &screen, area, buf, pointer);
     }
@@ -166,6 +185,13 @@ pub(crate) fn render(
                 .scroll((to_u16(top), 0))
                 .render(conversation, buf);
             overlay_cross(buf, conversation, &mut targets);
+        }
+        // A configuration view swaps in for the conversation. Notices
+        // float above it (`docs/tui.md`, "Notices"), as over the
+        // conversation.
+        None if app.config_view_open() => {
+            crate::swapped::draw(app, conversation, buf, &mut targets);
+            notices(app, conversation, buf, &mut targets);
         }
         None => {
             // The repository offer swaps in for the conversation.
@@ -360,7 +386,8 @@ fn input_box(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
 /// shown form's caret wins over an open repository offer, which already
 /// gives the panel its keys.
 pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
-    if app.chrome().floor_line().is_some() {
+    // A configuration view draws its own caret.
+    if app.chrome().floor_line().is_some() || app.config_view_open() {
         return None;
     }
     if let Some(screen) = app.home_screen() {

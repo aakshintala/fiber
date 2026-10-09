@@ -1299,6 +1299,7 @@ fn lines(targets: &[crate::mouse::Target]) -> Vec<(crate::app::Target, Rect)> {
             | crate::mouse::TargetId::Link { .. }
             | crate::mouse::TargetId::FindCount
             | crate::mouse::TargetId::FindResult(_)
+            | crate::mouse::TargetId::View(_)
             | crate::mouse::TargetId::MoreNotices => None,
         })
         .collect()
@@ -1803,4 +1804,41 @@ fn input_with_an_image_token() {
     }
     insta::assert_snapshot!("input_with_an_image_token", screen(&app));
     assert_eq!(cursor_at(&app), Some(Position::new(17, 11)));
+}
+
+/// An app on home with no session, as `/settings` finds it.
+fn home_app() -> App {
+    let mut app = empty();
+    app.set_home(crate::home::Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        ..Default::default()
+    });
+    app
+}
+
+#[test]
+fn a_view_target_under_the_pointer_gets_the_hover_tint_alone() {
+    let mut app = home_app();
+    app.open_config_view(crate::app::ConfigView::Settings);
+    let (hovered, _) = pointed(&mut app, WIDTH, HEIGHT, Some((WIDTH - 1, 0)));
+    let tint = super::HOVER_TINT.bg;
+    assert_eq!(hovered.cell((WIDTH - 1, 0)).map(|cell| cell.bg), tint);
+    assert_ne!(hovered.cell((0, 0)).map(|cell| cell.bg), tint);
+}
+
+#[test]
+fn a_focus_the_view_does_not_draw_is_not_drawn_on_it() {
+    let mut app = home_app();
+    let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    app.drawn(&targets);
+    app.on_key(Key::BackTab, fakes::clock::FakeClock::new().now());
+    assert!(app.focused().is_some(), "a focused stop");
+    app.open_config_view(crate::app::ConfigView::Settings);
+    let (buf, _) = pointed(&mut app, WIDTH, HEIGHT, None);
+    assert!(
+        !buf.cell((WIDTH - 1, 0))
+            .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED)),
+        "the header's cross is not focused"
+    );
 }

@@ -37,6 +37,7 @@ mod attention;
 mod chrome;
 #[path = "app_commands.rs"]
 mod commands;
+mod config_views;
 #[path = "copy.rs"]
 pub(crate) mod copy;
 mod delegates;
@@ -62,6 +63,7 @@ mod select;
 
 use screen::Screen;
 
+pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
@@ -141,6 +143,8 @@ pub(crate) enum Effect {
     /// Read an image from the clipboard for this ticket, off the loop
     /// thread: the worker posts the base64 or the notice to show.
     ReadImage(u64),
+    /// Open this file in the editor (`docs/tui.md`, "Swapped views").
+    OpenFile(PathBuf),
 }
 
 /// Which command the terminal sent and waits on.
@@ -261,6 +265,8 @@ pub(crate) struct App {
     /// What the hub's `attention` lines queued (`docs/tui.md`, "Getting
     /// the person's attention").
     attention: attention::State,
+    /// The configuration views (`docs/tui.md`, "Swapped views").
+    config_views: config_views::ConfigViews,
     /// Failures since the hub was last reached (`docs/tui.md`, "A dropped
     /// connection").
     reconnect: reconnect::Reconnect,
@@ -302,6 +308,7 @@ impl App {
             keyboard: keyboard::Keyboard::default(),
             opener: false,
             attention: attention::State::default(),
+            config_views: config_views::ConfigViews::default(),
             reconnect: reconnect::Reconnect::default(),
         }
     }
@@ -320,6 +327,9 @@ impl App {
     /// completion panel, then the input box.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         self.copied = false;
+        if let Some(effect) = self.config_view_key(&key) {
+            return effect;
+        }
         if let Some(effect) = self.home_key(&key) {
             return effect;
         }
@@ -858,6 +868,7 @@ impl App {
                     send.push(self.ask_commands(&envelope.session_id));
                 }
             }
+            "usage_recorded" => self.config_views_usage(envelope),
             "session_named" => {
                 if let Some(named) = read!(envelope, SessionNamed) {
                     self.name = named.name;
