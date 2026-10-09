@@ -84,7 +84,7 @@ nothing in the manifest and an install finds them by looking:
 |---|---|
 | `skills/` | one directory per skill, each with a `SKILL.md` |
 | `prompts/` | one directory per prompt template, in the same format; every skill here is one only a person runs, as if its header set `disable-model-invocation: true` |
-| `themes/` | one file per theme |
+| `themes/` | one file per theme; a switched-off extension's themes are not listed or loaded |
 | `tui/` | the TUI extension's Lua scripts |
 
 What a skill and a prompt template are, and where Fiber finds them besides

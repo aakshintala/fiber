@@ -285,11 +285,13 @@ impl Configure for Fake {
         )
     }
 
-    fn themes(&self) -> Vec<String> {
+    fn themes(&self, workspace: &Path) -> Vec<String> {
+        let _ = workspace;
         self.themes.clone()
     }
 
-    fn theme(&self, name: &str) -> ThemeSetting {
+    fn theme(&self, workspace: &Path, name: &str) -> ThemeSetting {
+        let _ = workspace;
         match name {
             "auto" => ThemeSetting::Follow,
             "dark" => ThemeSetting::Dark,

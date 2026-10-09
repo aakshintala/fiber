@@ -1,5 +1,6 @@
 //! Tests for the terminal's configuration seam: which project's layer it
-//! reads and writes, the rows it builds, and the themes in Fiber home.
+//! reads and writes, the rows it builds, and the themes in Fiber home and
+//! installed extensions.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -238,8 +239,87 @@ fn themes_lists_json_files_by_name_sorted() {
     }
     fs::create_dir_all(themes.join("dir.json")).unwrap_or_else(|e| panic!("mkdir: {e}"));
     let seam = Seam::new(dirs.home());
-    assert_eq!(seam.themes(), ["dusk", "solar"]);
-    assert!(Seam::new(dirs.root.path().join("none")).themes().is_empty());
+    let one = dirs.workspace("one");
+    assert_eq!(seam.themes(&one), ["dusk", "solar"]);
+    assert!(
+        Seam::new(dirs.root.path().join("none"))
+            .themes(&one)
+            .is_empty()
+    );
+}
+
+#[test]
+fn themes_lists_package_themes_once() {
+    let dirs = Dirs::new();
+    write(&dirs.home().join("themes").join("solar.json"), "{}");
+    let pkg = dirs.home().join("extensions").join("acme");
+    write(
+        &pkg.join(".fiber.json"),
+        r#"{"name":"x","version":"1.0.0","requested":true,"source":{"path":"/p"}}"#,
+    );
+    write(&pkg.join("themes").join("solar.json"), "{}");
+    write(&pkg.join("themes").join("tide.json"), "{}");
+    let broken = dirs.home().join("extensions").join("broken");
+    write(&broken.join("themes").join("gone.json"), "{}");
+    let seam = Seam::new(dirs.home());
+    assert_eq!(seam.themes(&dirs.workspace("one")), ["solar", "tide"]);
+}
+
+#[test]
+fn themes_and_theme_follow_each_workspaces_enabled() {
+    let dirs = Dirs::new();
+    let (one, two) = (dirs.workspace("one"), dirs.workspace("two"));
+    let pkg = dirs.home().join("extensions").join("acme");
+    write(
+        &pkg.join(".fiber.json"),
+        r#"{"name":"acme","version":"1.0.0","requested":true,"source":{"path":"/p"}}"#,
+    );
+    write(&pkg.join("themes").join("dusk.json"), "acme");
+    // Only one's project switches `acme` off.
+    write(
+        &dirs.project_file(&one),
+        r#"{"extensions": {"acme": {"enabled": false}}}"#,
+    );
+    let seam = Seam::new(dirs.home());
+    assert!(seam.themes(&one).is_empty());
+    assert_eq!(seam.themes(&two), ["dusk"]);
+    // A `tui.theme` naming a switched-off extension's theme reads as a
+    // missing file: one notice, then the terminal follows its appearance.
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "dusk") else {
+        panic!("not a file");
+    };
+    assert!(text.is_err());
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&two, "dusk") else {
+        panic!("not a file");
+    };
+    assert_eq!(text, Ok("acme".to_owned()));
+}
+
+#[test]
+fn a_workspace_whose_config_fails_to_load_reads_home_themes_only() {
+    let dirs = Dirs::new();
+    let one = dirs.workspace("one");
+    write(&dirs.home().join("themes").join("solar.json"), "{}");
+    let pkg = dirs.home().join("extensions").join("acme");
+    write(
+        &pkg.join(".fiber.json"),
+        r#"{"name":"acme","version":"1.0.0","requested":true,"source":{"path":"/p"}}"#,
+    );
+    write(&pkg.join("themes").join("dusk.json"), "acme");
+    // The project file does not parse, so the workspace's configuration
+    // fails to load and no extension's `enabled` is known.
+    write(&dirs.project_file(&one), "not json");
+    let seam = Seam::new(dirs.home());
+    assert_eq!(seam.themes(&one), ["solar"]);
+    // An extension-only name reads as absent: Fiber home alone is read.
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "dusk") else {
+        panic!("not a file");
+    };
+    assert!(text.is_err());
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "solar") else {
+        panic!("not a file");
+    };
+    assert_eq!(text, Ok("{}".to_owned()));
 }
 
 #[test]
@@ -247,21 +327,28 @@ fn theme_builds_the_setting_as_at_start() {
     let dirs = Dirs::new();
     write(&dirs.home().join("themes").join("solar.json"), "{\"x\": 1}");
     let seam = Seam::new(dirs.home());
-    assert!(matches!(seam.theme("auto"), tui::ThemeSetting::Follow));
-    assert!(matches!(seam.theme("dark"), tui::ThemeSetting::Dark));
-    assert!(matches!(seam.theme("light"), tui::ThemeSetting::Light));
-    let tui::ThemeSetting::File { name, text } = seam.theme("solar") else {
+    let one = dirs.workspace("one");
+    assert!(matches!(
+        seam.theme(&one, "auto"),
+        tui::ThemeSetting::Follow
+    ));
+    assert!(matches!(seam.theme(&one, "dark"), tui::ThemeSetting::Dark));
+    assert!(matches!(
+        seam.theme(&one, "light"),
+        tui::ThemeSetting::Light
+    ));
+    let tui::ThemeSetting::File { name, text } = seam.theme(&one, "solar") else {
         panic!("not a file");
     };
     assert_eq!(
         (name.as_str(), text),
         ("solar", Ok("{\"x\": 1}".to_owned()))
     );
-    let tui::ThemeSetting::File { text, .. } = seam.theme("missing") else {
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "missing") else {
         panic!("not a file");
     };
     assert!(text.is_err());
-    let tui::ThemeSetting::File { text, .. } = seam.theme("../x") else {
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "../x") else {
         panic!("not a file");
     };
     assert_eq!(text, Err("not a theme name".to_owned()));
