@@ -555,10 +555,12 @@ fn concurrent_edits_lose_no_name() {
         })
         .collect();
     drop(done);
-    for (w, writer) in writers.into_iter().enumerate() {
+    for w in 0..writers.len() {
         finished
             .recv_timeout(WRITER_DONE)
             .unwrap_or_else(|_| panic!("writer {w} did not finish its 10 edits in time"));
+    }
+    for writer in writers {
         writer.join().unwrap();
     }
     let root: serde_json::Value =
