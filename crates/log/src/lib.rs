@@ -18,6 +18,7 @@ mod resolve;
 mod scan;
 mod search;
 mod weak_emit;
+mod usage;
 mod write;
 
 use std::io;
@@ -36,6 +37,7 @@ pub use scan::{
 };
 pub use search::{Identity, SessionScan};
 pub use weak_emit::WeakEmit;
+pub use usage::usage;
 pub use write::Log;
 
 /// The log's name in a session directory.
