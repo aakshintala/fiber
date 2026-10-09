@@ -5,7 +5,12 @@
 
 use std::path::Path;
 
-use ab_glyph::{Font, Point, PxScale, ScaleFont};
+use skrifa::{
+    FontRef, MetadataProvider,
+    instance::{LocationRef, Size},
+    outline::OutlinePen,
+};
+use tiny_skia::{FillRule, Mask, PathBuilder, Transform};
 
 /// The mask's width in pixels: 32 cells at 20 pixels a cell.
 pub(crate) const WIDTH: u32 = 640;
@@ -45,6 +50,17 @@ fn alpha(cover: f32) -> u8 {
 )]
 fn at_zero(value: f32) -> u32 {
     value.floor().max(0.0) as u32
+}
+
+/// A glyph bound's far edge in pixels, ceiled at zero, so the coverage
+/// keeps the edge's partial pixel.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "ceiled at zero; glyph bounds are hundreds of pixels at most"
+)]
+fn ceil_at_zero(value: f32) -> u32 {
+    value.ceil().max(0.0) as u32
 }
 
 /// The `logo-mask` arguments.
@@ -135,16 +151,61 @@ pub(crate) fn compose(width: u32, height: u32, glyphs: impl IntoIterator<Item = 
     out
 }
 
+/// Feeds one glyph's outline into a [`PathBuilder`]. Font outlines rise
+/// from the baseline while mask rows grow down, so `y` is flipped around
+/// `dy`; `dx` puts the glyph at its caret past `origin_x`. Flipping keeps
+/// holes holes under the nonzero fill rule: outer and inner contours only
+/// swap sign, never reach zero.
+struct Pen<'a> {
+    /// The path collecting the glyph's contours.
+    builder: &'a mut PathBuilder,
+    /// The caret: added to every outline `x`.
+    dx: f32,
+    /// The baseline row: every outline `y` is taken from below it.
+    dy: f32,
+}
+
+impl OutlinePen for Pen<'_> {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.builder.move_to(x + self.dx, self.dy - y);
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.builder.line_to(x + self.dx, self.dy - y);
+    }
+
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        self.builder
+            .quad_to(cx0 + self.dx, self.dy - cy0, x + self.dx, self.dy - y);
+    }
+
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        self.builder.cubic_to(
+            cx0 + self.dx,
+            self.dy - cy0,
+            cx1 + self.dx,
+            self.dy - cy1,
+            x + self.dx,
+            self.dy - y,
+        );
+    }
+
+    fn close(&mut self) {
+        self.builder.close();
+    }
+}
+
 /// Rasterises [`WORD`] in the font's ExtraBold face into `x >= WAVE_PX`,
 /// sized so the name fills the [`HEIGHT`]-pixel box, and merges it with
 /// [`wave`]. The output is [`WIDTH`] by [`HEIGHT`] bytes, row by row.
 /// Deterministic: the same font bytes give the same bytes.
 pub(crate) fn mask(font: &[u8]) -> Result<Vec<u8>, String> {
-    let face = ab_glyph::FontRef::try_from_slice(font).map_err(|error| format!("font: {error}"))?;
-    let scale = fit_scale(ink_box(&rasterise(&face, PROBE, WAVE_PX + 8, 112.0)));
-    let scaled = face.as_scaled(PxScale::from(scale));
-    let baseline = scaled.ascent() + (HEIGHT as f32 - scaled.ascent()) / 2.0;
-    let mut glyphs = rasterise(&face, scale, WAVE_PX + 8, baseline);
+    let font = FontRef::new(font).map_err(|error| format!("font: {error}"))?;
+    let location = LocationRef::default();
+    let scale = fit_scale(ink_box(&rasterise(&font, PROBE, WAVE_PX + 8, 112.0)));
+    let ascent = font.metrics(Size::new(scale), location).ascent;
+    let baseline = ascent + (HEIGHT as f32 - ascent) / 2.0;
+    let mut glyphs = rasterise(&font, scale, WAVE_PX + 8, baseline);
     if let Some((left, top, width, height)) = ink_box(&glyphs) {
         let spare_w = (WIDTH - WAVE_PX) as f32 - width as f32;
         let spare_h = HEIGHT as f32 - height as f32;
@@ -161,50 +222,66 @@ pub(crate) fn mask(font: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// Rasterises [`WORD`] in the font at `scale` pixels, each glyph at its
-/// origin past `origin_x` on `baseline`.
-fn rasterise(face: &ab_glyph::FontRef<'_>, scale: f32, origin_x: u32, baseline: f32) -> Vec<Glyph> {
-    let scaled = face.as_scaled(PxScale::from(scale));
+/// Rasterises [`WORD`] in the font at `scale` pixels per em, each glyph
+/// at its origin past `origin_x` on `baseline`. The face is monospace, so
+/// the caret steps by each glyph's hmtx advance; no kerning lookup, every
+/// advance is the same width. A glyph with no outline, a failed draw or a
+/// zero-area path is skipped, keeping its advance so the rest of the word
+/// stays where the font puts it.
+fn rasterise(font: &FontRef<'_>, scale: f32, origin_x: u32, baseline: f32) -> Vec<Glyph> {
+    let size = Size::new(scale);
+    let location = LocationRef::default();
+    let charmap = font.charmap();
+    let advances = font.glyph_metrics(size, location);
+    let outlines = font.outline_glyphs();
     let mut glyphs = Vec::new();
     let mut caret = origin_x as f32;
-    let mut previous = None;
     for letter in WORD.chars() {
-        let id = face.glyph_id(letter);
-        if let Some(before) = previous {
-            caret += scaled.kern(before, id);
-        }
-        let positioned = ab_glyph::Glyph {
-            id,
-            scale: PxScale::from(scale),
-            position: Point {
-                x: caret,
-                y: baseline,
-            },
-        };
-        caret += scaled.h_advance(id);
-        previous = Some(id);
-        let Some(outlined) = scaled.outline_glyph(positioned) else {
+        let Some(id) = charmap.map(letter) else {
             continue;
         };
-        let bounds = outlined.px_bounds();
+        let advance = advances.advance_width(id).unwrap_or(0.0);
+        let origin = caret;
+        caret += advance;
+        let Some(outline) = outlines.get(id) else {
+            continue;
+        };
+        let mut builder = PathBuilder::new();
+        {
+            let mut pen = Pen {
+                builder: &mut builder,
+                dx: origin,
+                dy: baseline,
+            };
+            if outline.draw(size, &mut pen).is_err() {
+                continue;
+            }
+        }
+        let Some(path) = builder.finish() else {
+            continue;
+        };
+        let bounds = path.bounds();
         if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
             continue;
         }
-        let origin = (at_zero(bounds.min.x), at_zero(bounds.min.y));
-        let width = at_zero(bounds.width()).max(1);
-        let height = at_zero(bounds.height()).max(1);
-        let mut coverage = vec![0u8; width as usize * height as usize];
-        outlined.draw(|x, y, cover| {
-            if let Some(slot) = coverage.get_mut(y as usize * width as usize + x as usize) {
-                *slot = alpha(cover);
-            }
-        });
+        let (x, y) = (at_zero(bounds.x()), at_zero(bounds.y()));
+        let (right, bottom) = (ceil_at_zero(bounds.right()), ceil_at_zero(bounds.bottom()));
+        let (width, height) = (right.saturating_sub(x), bottom.saturating_sub(y));
+        let Some(mut raster) = Mask::new(width, height) else {
+            continue;
+        };
+        raster.fill_path(
+            &path,
+            FillRule::Winding,
+            true,
+            Transform::from_translate(-(x as f32), -(y as f32)),
+        );
         glyphs.push(Glyph {
-            x: origin.0,
-            y: origin.1,
+            x,
+            y,
             width,
             height,
-            coverage,
+            coverage: raster.data().to_vec(),
         });
     }
     glyphs

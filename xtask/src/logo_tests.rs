@@ -135,6 +135,95 @@ fn fit_scale_fits_the_probe_into_the_name_region() {
     assert_eq!(fit_scale(Some(half)), 2.0 * PROBE);
 }
 
+/// Ink in a mask at `x >= WAVE_PX`: the name's left, top, width and
+/// height. [`None`] when the name region is blank.
+fn name_ink_box(bytes: &[u8]) -> Option<(usize, usize, usize, usize)> {
+    let stride = WIDTH as usize;
+    let wave_px = WAVE_PX as usize;
+    let mut left = usize::MAX;
+    let mut top = usize::MAX;
+    let mut right = 0usize;
+    let mut bottom = 0usize;
+    for (at, ink) in bytes.iter().enumerate() {
+        if *ink == 0 {
+            continue;
+        }
+        let (x, y) = (at % stride, at / stride);
+        if x < wave_px {
+            continue;
+        }
+        left = left.min(x);
+        top = top.min(y);
+        right = right.max(x);
+        bottom = bottom.max(y);
+    }
+    if left > right {
+        return None;
+    }
+    Some((left, top, right - left + 1, bottom - top + 1))
+}
+
+#[test]
+fn mask_centres_the_name_horizontally() {
+    let bytes = mask(&minimal_font()).unwrap();
+    let (left, _top, width, _height) = name_ink_box(&bytes).unwrap();
+    assert_eq!(
+        left, 68,
+        "the name starts 8 pixels past the wave region, centred in it"
+    );
+    let stride = WIDTH as usize;
+    let left_margin = left - WAVE_PX as usize;
+    let right_margin = stride - (left + width);
+    assert!(
+        left_margin.abs_diff(right_margin) <= 1,
+        "margins {left_margin} and {right_margin} differ by more than a pixel"
+    );
+}
+
+#[test]
+fn mask_centres_the_name_vertically() {
+    let bytes = mask(&minimal_font()).unwrap();
+    let (_left, top, _width, height) = name_ink_box(&bytes).unwrap();
+    assert_eq!(top, 11, "the name sits 11 rows down, centred vertically");
+    let stride = HEIGHT as usize;
+    let bottom_margin = stride - (top + height);
+    assert!(
+        top.abs_diff(bottom_margin) <= 1,
+        "margins {top} and {bottom_margin} differ by more than a pixel"
+    );
+}
+
+#[test]
+fn rasterise_skips_a_flat_glyph_and_keeps_its_advance() {
+    let bytes = test_font(&[(500, 0), (500, 700), (500, 700), (500, 700), (500, 700)]);
+    let font = FontRef::new(&bytes).unwrap();
+    let glyphs = rasterise(&font, PROBE, WAVE_PX + 8, 112.0);
+    assert_eq!(glyphs.len(), 4);
+    let before = glyphs.get(1).unwrap();
+    let after = glyphs.get(2).unwrap();
+    let gap = after.x - (before.x + before.width);
+    assert_eq!(gap, 69, "the skipped glyph keeps its advance");
+}
+
+#[test]
+fn rasterise_skips_a_zero_width_glyph() {
+    let bytes = test_font(&[(0, 700), (500, 700), (500, 700), (500, 700), (500, 700)]);
+    let font = FontRef::new(&bytes).unwrap();
+    let glyphs = rasterise(&font, PROBE, WAVE_PX + 8, 112.0);
+    assert_eq!(glyphs.len(), 4);
+}
+
+#[test]
+fn rasterise_keeps_a_hairline_glyph() {
+    let bytes = test_font(&[(1, 1), (500, 700), (500, 700), (500, 700), (500, 700)]);
+    let font = FontRef::new(&bytes).unwrap();
+    let glyphs = rasterise(&font, PROBE, WAVE_PX + 8, 112.0);
+    assert_eq!(glyphs.len(), 5);
+    let hairline = glyphs.get(2).unwrap();
+    assert_eq!(hairline.width, 2);
+    assert_eq!(hairline.height, 1);
+}
+
 #[test]
 fn mask_rejects_garbage_font_bytes() {
     assert!(mask(b"not a font").is_err());
@@ -199,15 +288,36 @@ fn run_writes_a_sized_mask_with_ink_in_both_regions() {
 /// one from its tables: head, hhea, maxp, hmtx, cmap format 12, short
 /// loca and glyf. Checksums are zero, which the parser does not verify.
 fn minimal_font() -> Vec<u8> {
-    /// One 500-by-700 filled rectangle: a single contour through four
-    /// on-curve corners, stored as 16-bit deltas.
-    fn rectangle() -> Vec<u8> {
+    test_font(&[(500, 700), (500, 700), (500, 700), (500, 700), (500, 700)])
+}
+
+/// A font like [`minimal_font`], but each of `b`, `e`, `f`, `i` and `r` in
+/// glyph-id order gets a `width`-by-`height` filled rectangle in font
+/// units. A zero side is a degenerate contour the rasteriser skips; a
+/// one-unit side is a hairline it keeps.
+fn test_font(sizes: &[(i16, i16)]) -> Vec<u8> {
+    /// One `width`-by-`height` filled rectangle: a single contour through
+    /// four on-curve corners, stored as 16-bit deltas.
+    fn rectangle(width_units: i16, height_units: i16) -> Vec<u8> {
         let mut glyph = Vec::new();
-        for word in [1u16, 0, 0, 500, 700, 3, 0] {
+        glyph.extend_from_slice(&1u16.to_be_bytes());
+        for edge in [0i16, 0, width_units, height_units] {
+            glyph.extend_from_slice(&edge.to_be_bytes());
+        }
+        for word in [3u16, 0] {
             glyph.extend_from_slice(&word.to_be_bytes());
         }
         glyph.extend_from_slice(&[1u8, 1, 1, 1]);
-        for delta in [0i16, 500, 0, -500, 0, 0, 700, 0] {
+        for delta in [
+            0i16,
+            width_units,
+            0,
+            -width_units,
+            0,
+            0,
+            height_units,
+            0,
+        ] {
             glyph.extend_from_slice(&delta.to_be_bytes());
         }
         glyph
@@ -282,11 +392,16 @@ fn minimal_font() -> Vec<u8> {
     }
 
     let empty = vec![0u8; 10];
-    let rect = rectangle();
+    let rects: Vec<Vec<u8>> = sizes
+        .iter()
+        .map(|(width, height)| rectangle(*width, *height))
+        .collect();
     let mut glyf = Vec::new();
     let mut loca = Vec::new();
     let mut at = 0u16;
-    for piece in [&empty, &rect, &rect, &rect, &rect, &rect] {
+    let mut pieces: Vec<&[u8]> = vec![&empty];
+    pieces.extend(rects.iter().map(Vec::as_slice));
+    for piece in pieces {
         // Short loca offsets are byte offsets divided by two.
         loca.extend_from_slice(&(at / 2).to_be_bytes());
         glyf.extend_from_slice(piece);
