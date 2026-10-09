@@ -507,6 +507,90 @@ fn no_foot_line_without_a_pointer() {
     assert!(text(&buf).contains("work/hub"));
 }
 
+/// `count` live sessions scrolled to the end at `height` rows.
+fn scrolled_end(count: u64, height: u16) -> App {
+    let mut app = app(15.0);
+    app.set_size(200, height);
+    app.on_line(status(A, json!({})));
+    for n in 1..count {
+        app.on_line(status(&format!("s_{n:016x}"), json!({})));
+    }
+    let down = crate::keys::Mouse {
+        kind: crate::keys::MouseKind::WheelDown,
+        col: 5,
+        row: 10,
+    };
+    for _ in 0..20 {
+        app.on_wheel(&down);
+    }
+    app
+}
+
+#[test]
+fn scrolled_top_card_keeps_its_target() {
+    // Ten cards take 61 rows; at 40 rows the end is scroll 21, three
+    // rows into the fourth card's text.
+    let app = scrolled_end(10, 40);
+    assert_eq!(app.rail_state().scroll(), 21);
+    let third = key(&app, "s_0000000000000003");
+    let (buf, targets) = hovered(&app, None);
+    let rect = Rect::new(0, 0, 29, 3);
+    assert!(rail_targets(&targets).contains(&(Spot::Card(third), rect)));
+    let shown = lines(&buf);
+    assert!(
+        shown[0].starts_with("\u{258c} fix the parser"),
+        "{}",
+        shown[0]
+    );
+    for y in 0..3 {
+        assert!(shown[usize::from(y)].starts_with("\u{258c}"), "row {y}");
+        assert!(rect.contains((5, y).into()), "row {y}");
+    }
+    assert!(!rect.contains((5, 3).into()));
+    let (hovered_buf, _) = hovered(&app, Some((5, 1)));
+    assert!(text(&hovered_buf).contains("fix the parser"));
+}
+
+#[test]
+fn card_ending_at_scroll_has_no_target() {
+    // At 37 rows the end is scroll 24, exactly past the fourth card's
+    // text: its last text row is row 23.
+    let app = scrolled_end(10, 37);
+    assert_eq!(app.rail_state().scroll(), 24);
+    let (_, targets) = hovered(&app, None);
+    let cards = rail_targets(&targets);
+    assert!(
+        !cards
+            .iter()
+            .any(|(spot, _)| *spot == Spot::Card(key(&app, "s_0000000000000003")))
+    );
+    assert_eq!(
+        cards
+            .iter()
+            .find(|(spot, _)| *spot == Spot::Card(key(&app, "s_0000000000000004"))),
+        Some(&(
+            Spot::Card(key(&app, "s_0000000000000004")),
+            Rect::new(0, 2, 29, 4)
+        ))
+    );
+}
+
+#[test]
+fn one_visible_row_keeps_a_one_row_target() {
+    // At 38 rows the end is scroll 23, leaving the fourth card's last
+    // text row alone.
+    let app = scrolled_end(10, 38);
+    assert_eq!(app.rail_state().scroll(), 23);
+    let third = key(&app, "s_0000000000000003");
+    let (buf, targets) = hovered(&app, None);
+    let rect = Rect::new(0, 0, 29, 1);
+    assert!(rail_targets(&targets).contains(&(Spot::Card(third), rect)));
+    let shown = lines(&buf);
+    assert!(shown[0].starts_with("\u{258c} $0.00"), "{}", shown[0]);
+    assert!(rect.contains((5, 0).into()));
+    assert!(!rect.contains((5, 1).into()));
+}
+
 #[test]
 fn rail_scrolled() {
     let mut app = many(10);

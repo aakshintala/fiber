@@ -187,9 +187,8 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
         spots: Vec::new(),
         start: Some(row.key),
     });
-    let wide = u16::try_from(card_w).unwrap_or(u16::MAX);
-    let mut spots = vec![(0, wide, 4, Spot::Card(row.key))];
-    // The ✕ draws after the card's target, so a click on it dismisses.
+    let mut spots = Vec::new();
+    // The ✕ target follows the card's, so a click on it dismisses.
     if row.left == Some(Left::Crashed) {
         let last = u16::try_from(text.saturating_add(1)).unwrap_or(u16::MAX);
         spots.push((last, 1, 1, Spot::Dismiss(row.key)));
@@ -327,9 +326,10 @@ fn cut_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
 
 /// Draws the rail's rows into `area` past its scroll, each row's tint
 /// across the card's columns, with each target cut at the rail's foot.
-/// Styles set the foreground only, so the tint stays. With `pointer` on
-/// a card, the rail's last row shows its full name, workspace and model,
-/// dim.
+/// A card's target is its text rows met with the drawn rows, so a card
+/// cut at the top keeps a target over the rows left. Styles set the
+/// foreground only, so the tint stays. With `pointer` on a card, the
+/// rail's last row shows its full name, workspace and model, dim.
 pub(crate) fn draw(
     app: &App,
     area: Rect,
@@ -341,12 +341,38 @@ pub(crate) fn draw(
     let rows = rows(app, area.width);
     // A screen that grew never shows a gap: a scroll past the end clamps
     // when drawn.
+    let height = usize::from(area.height);
     let skip = app
         .rail_state()
         .scroll()
-        .min(rows.len().saturating_sub(usize::from(area.height)));
+        .min(rows.len().saturating_sub(height));
+    let end = skip.saturating_add(height);
+    // Each card's text rows met with the drawn rows: the top row left
+    // and the rows left, by card key.
+    let mut visible: Vec<(usize, u16, u16, u64)> = Vec::new();
+    for (at, row) in rows.iter().enumerate() {
+        let Some(key) = row.start else {
+            continue;
+        };
+        let first = at.saturating_add(1);
+        let past = at.saturating_add(CARD_ROWS).saturating_sub(1);
+        let top = first.max(skip);
+        let bottom = past.min(end);
+        if top < bottom {
+            let y = area
+                .y
+                .saturating_add(u16::try_from(top.saturating_sub(skip)).unwrap_or(u16::MAX));
+            let high = u16::try_from(bottom.saturating_sub(top)).unwrap_or(u16::MAX);
+            visible.push((top, y, high, key));
+        }
+    }
     let mut hovered = None;
-    for (row, y) in rows.iter().skip(skip).zip(area.y..area.bottom()) {
+    for ((at, row), y) in rows
+        .iter()
+        .enumerate()
+        .skip(skip)
+        .zip(area.y..area.bottom())
+    {
         if let Some(tint) = row.tint {
             buf.set_style(
                 Rect::new(area.x, y, card_w, 1),
@@ -354,6 +380,19 @@ pub(crate) fn draw(
             );
         }
         buf.set_line(area.x, y, &row.line, card_w);
+        if let Some((_, card_y, card_h, key)) =
+            visible.iter().find(|(top, _, _, _)| *top == at).copied()
+        {
+            debug_assert_eq!(card_y, y);
+            let rect = Rect::new(area.x, card_y, card_w, card_h);
+            targets.push(Target {
+                id: TargetId::Rail(Spot::Card(key)),
+                rect,
+            });
+            if pointer.is_some_and(|(x, y)| rect.contains((x, y).into())) {
+                hovered = Some(key);
+            }
+        }
         for (col, wide, high, spot) in &row.spots {
             let rect = Rect::new(
                 area.x.saturating_add(*col),
@@ -365,11 +404,6 @@ pub(crate) fn draw(
                 id: TargetId::Rail(*spot),
                 rect,
             });
-            if let Spot::Card(key) = spot
-                && pointer.is_some_and(|(x, y)| rect.contains((x, y).into()))
-            {
-                hovered = Some(*key);
-            }
         }
     }
     if let Some(row) = hovered.and_then(|key| {
