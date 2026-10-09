@@ -101,6 +101,26 @@ Not probed: no request reached a usage limit. The shape below comes from two ref
 Fiber matches only the two usage-limit codes as `quota_exceeded`. `rate_limit_exceeded` names a rate limit, so it stays
 retryable. pi's free-text match (`isTerminalRateLimitError`, lines 52-54) is not adopted.
 
+## Login
+
+Not probed by Fiber: no login flow ran here. The constants below come from two reference implementations, read on
+2026-10-07, and the package sends them unchanged.
+
+- pi (`@earendil-works/pi-ai` 1.0.0), `dist/auth/oauth/openai-codex.js`:18-30: client id
+  `app_EMoamEEZ73f0CkXaXp7hrann`, the authorize, token and redirect URLs (`http://localhost:1455/auth/callback`),
+  the device user-code, token and page URLs, the device redirect (`https://auth.openai.com/deviceauth/callback`) and
+  the scope `openid profile email offline_access`.
+- pi's authorize parameters (`openai-codex.js`:225-240): `response_type=code`, `code_challenge_method=S256`,
+  `id_token_add_organizations=true`, `codex_cli_simplified_flow=true` and `originator` (Fiber sends `fiber`).
+- pi's token reply (`openai-codex.js`:99): the reply must carry `access_token`, `refresh_token` and a numeric
+  `expires_in`; the account id is read from the access token's `https://api.openai.com/auth` claim
+  `chatgpt_account_id`.
+- pi's device flow (`openai-codex.js`:142-224): the user-code request sends `{"client_id": ...}` as JSON; a poll
+  returning 403 or 404 is still pending; the completed poll returns `authorization_code` and `code_verifier`.
+- codex-cli 0.160.0: `strings` on the binary holds the same client id.
+- The owner's token claims (probed 2026-10-07, local decode only): the access token's `exp - iat` is 864000 s, and
+  the `id_token` carries the email. Fiber takes `expires_at` from the access token's `exp`, never the id token's.
+
 ## Malformed replies
 
 None. All 200 streams ended in `response.completed`; tool arguments parsed as JSON in the streams checked.
