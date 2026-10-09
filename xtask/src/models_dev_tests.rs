@@ -739,6 +739,11 @@ fn zen_leaves_out_google_generative_ai_until_it_is_probed() {
         .iter()
         .find(|package| package.path.ends_with("providers/gemini.json"))
         .unwrap();
-    let (output, _) = generate_one(gemini, &[("gemini-3.8-flash", tool_model(json!({})))]);
+    let models: Vec<(&str, Value)> = gemini
+        .by_model
+        .iter()
+        .map(|(id, _)| (*id, tool_model(json!({}))))
+        .collect();
+    let (output, _) = generate_one(gemini, &models);
     assert!(generated_model(&output, "gemini-3.8-flash").is_some());
 }

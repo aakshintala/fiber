@@ -61,6 +61,10 @@ const ANTHROPIC: Package = Package {
     by_model: &[],
 };
 
+/// The hosted search the probed Gemini models accept (October 9, 2026); a
+/// model not probed declares none.
+const GOOGLE_SEARCH: &str = r#"{"web_search":"google_search"}"#;
+
 /// Gemini's models, all on `google-generative-ai`.
 const GEMINI: Package = Package {
     path: "providers/gemini/providers/gemini.json",
@@ -72,9 +76,20 @@ const GEMINI: Package = Package {
     drop_protocols: &[],
     skip: &[],
     protocol_overrides: &[],
-    every_model: r#"{"web_search":"google_search"}"#,
+    every_model: r#"{}"#,
     by_protocol: &[],
-    by_model: &[],
+    by_model: &[
+        ("gemini-3.1-flash-lite", GOOGLE_SEARCH),
+        ("gemini-3.1-flash-lite-preview", GOOGLE_SEARCH),
+        ("gemini-3.1-pro-preview", GOOGLE_SEARCH),
+        ("gemini-3.1-pro-preview-customtools", GOOGLE_SEARCH),
+        ("gemini-3.5-flash", GOOGLE_SEARCH),
+        ("gemini-3.5-flash-lite", GOOGLE_SEARCH),
+        ("gemini-3.6-flash", GOOGLE_SEARCH),
+        ("gemini-3.7-flash", GOOGLE_SEARCH),
+        ("gemini-3.8-flash", GOOGLE_SEARCH),
+        ("gemini-3-flash-preview", GOOGLE_SEARCH),
+    ],
 };
 
 /// OpenAI's models, all on `openai-responses` with `store: false`.

@@ -26,8 +26,7 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai",
-      "web_search": "google_search"
+      "protocol": "google-generative-ai"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -52,8 +51,7 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai",
-      "web_search": "google_search"
+      "protocol": "google-generative-ai"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -102,8 +100,7 @@
         "image"
       ],
       "max_output_tokens": 4096,
-      "protocol": "google-generative-ai",
-      "web_search": "google_search"
+      "protocol": "google-generative-ai"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -135,8 +132,7 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai",
-      "web_search": "google_search"
+      "protocol": "google-generative-ai"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -289,8 +285,7 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai",
-      "web_search": "google_search"
+      "protocol": "google-generative-ai"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -306,8 +301,7 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai",
-      "web_search": "google_search"
+      "protocol": "google-generative-ai"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -318,8 +312,7 @@
         "image"
       ],
       "max_output_tokens": 32768,
-      "protocol": "google-generative-ai",
-      "web_search": "google_search"
+      "protocol": "google-generative-ai"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -330,8 +323,7 @@
         "image"
       ],
       "max_output_tokens": 32768,
-      "protocol": "google-generative-ai",
-      "web_search": "google_search"
+      "protocol": "google-generative-ai"
     }
   ],
   "name": "gemini",
