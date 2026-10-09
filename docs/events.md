@@ -865,6 +865,7 @@ Durable.
 | `model` | string | yes | the model reference |
 | `context_window` | integer | yes | the model's context window, in tokens |
 | `trigger_at` | integer | no | the context size, in tokens, at which an automatic handoff runs (`docs/handoff.md`, "Automatic"); absent when automatic handoff is off |
+| `budget` | number | no | the session's `budget.usd` in US dollars, after every configuration layer and `-c` (`docs/loop.md`, "Spending budget"); absent when none is set |
 | `thinking` | string | no | the thinking level, where the model takes one (`docs/model-routing.md`, "Thinking") |
 | `tool_choice` | string | yes | the tool choice as sent |
 | `cache_lifetime` | string | yes | `5m` or `1h` |

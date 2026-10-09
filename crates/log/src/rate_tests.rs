@@ -35,6 +35,7 @@ fn built(reason: PreambleReason, system_prompt: &str) -> PreambleBuilt {
         model: "m".into(),
         context_window: 7,
         trigger_at: None,
+        budget: None,
         thinking: None,
         tool_choice: "pick".into(),
         cache_lifetime: CacheLifetime::FiveMinutes,

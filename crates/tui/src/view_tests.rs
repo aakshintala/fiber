@@ -344,7 +344,12 @@ fn draw_folds_an_events_file() {
     let shown = crate::draw(&events, 20, 4).unwrap_or_else(|error| panic!("draw: {error}"));
     assert_eq!(
         shown,
-        format!("Hello.\n{}\n>\n{}\n", "▄".repeat(20), "▀".repeat(20))
+        format!(
+            "{}\n{}\n>\n{}\n",
+            "▀".repeat(20),
+            "▄".repeat(20),
+            "▀".repeat(20)
+        )
     );
     assert_eq!(
         crate::draw("not json", 20, 4).map_err(|e| e.starts_with("line 1:")),
@@ -932,7 +937,8 @@ fn styles_reach_the_screen() {
     use ratatui::style::Modifier;
     let mut app = empty();
     tool_turn(&mut app);
-    let area = Rect::new(0, 0, WIDTH, HEIGHT);
+    // The card's edges add rows, so the bubble needs a taller screen.
+    let area = Rect::new(0, 0, WIDTH, 30);
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
     let rows: Vec<String> = text(&buf).lines().map(str::to_owned).collect();
@@ -957,6 +963,53 @@ fn styles_reach_the_screen() {
     let reset = Some(ratatui::style::Color::Reset);
     assert_ne!(cell(WIDTH - 1, bubble).bg, reset);
     assert_eq!(cell(0, bubble).bg, reset);
+    // The card's surface tint reaches the column's edge: past the end
+    // of a short card row, and on the wrapped rows of a long one
+    // (`docs/tui.md`, "Look"). The time row keeps the background.
+    let surface = Some(crate::theme::Role::Surface.color());
+    assert_eq!(cell(30, row("Fixed.")).bg, surface);
+    assert_eq!(cell(WIDTH - 1, summary + 1).bg, surface);
+    assert_eq!(cell(0, row("00:00")).bg, reset);
+}
+
+#[test]
+fn a_card_row_wrapped_by_the_view_is_tinted_on_every_row() {
+    // The ▣ closing line wraps in the view at 20 columns; every row it
+    // draws carries the card's tint (`docs/tui.md`, "Look").
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(20, 10);
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
+    for action in ["a_1", "a_2", "a_3", "a_4"] {
+        app.on_line(session_line(
+            "s_aaaaaaaaaaaaaaaa",
+            "tool_call_requested",
+            serde_json::json!({"name": "read", "arguments": {"path": "a.rs"}}),
+            Some(action),
+        ));
+    }
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "text_completed",
+        serde_json::json!({ "text": "ok" }),
+        Some("a_m"),
+    ));
+    app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    let area = Rect::new(0, 0, 20, 10);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let shown: Vec<String> = text(&buf).lines().map(str::to_owned).collect();
+    let closing = shown
+        .iter()
+        .position(|row| row.contains("▣"))
+        .expect("a closing line");
+    // "▣ completed · 4 calls" is 21 columns: two view rows.
+    assert!(shown[closing + 1].ends_with("s"), "{shown:?}");
+    let surface = crate::theme::Role::Surface.color();
+    let row = u16::try_from(closing).unwrap_or(u16::MAX);
+    assert_eq!(buf[(0, row)].bg, surface);
+    assert_eq!(buf[(0, row + 1)].bg, surface);
+    assert_eq!(buf[(19, row + 1)].bg, surface);
 }
 
 #[test]
@@ -1338,12 +1391,12 @@ fn a_collapsed_groups_line_is_a_target_over_its_rows() {
     use crate::app::Target;
     let mut app = empty();
     tool_turn(&mut app);
-    // The summary wraps to rows 4 and 5 of `tool_group_collapsed`.
+    // The summary wraps to rows 3 and 4 of `tool_group_collapsed`.
     let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     let group = app.targets().first().map(|(_, target)| *target);
     assert!(matches!(group, Some(Target::Group(_))), "{group:?}");
     let drawn: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
-    assert_eq!(drawn, vec![Rect::new(0, 4, WIDTH, 2)]);
+    assert_eq!(drawn, vec![Rect::new(0, 3, WIDTH, 2)]);
     assert_eq!(
         lines(&targets).first().map(|(target, _)| Some(*target)),
         Some(group)
@@ -1380,11 +1433,11 @@ fn ledger_rows_are_targets_over_their_rows() {
     assert_eq!(
         rects,
         vec![
-            Rect::new(0, 2, WIDTH, 2),
+            Rect::new(0, 1, WIDTH, 2),
+            Rect::new(0, 3, WIDTH, 1),
             Rect::new(0, 4, WIDTH, 1),
             Rect::new(0, 5, WIDTH, 1),
-            Rect::new(0, 6, WIDTH, 1),
-            Rect::new(0, 9, WIDTH, 1),
+            Rect::new(0, 8, WIDTH, 1),
         ]
     );
     let opens: Vec<_> = app
@@ -1401,14 +1454,14 @@ fn a_thought_line_is_a_target_over_its_row() {
     use crate::app::Target;
     let mut app = empty();
     thought_turn(&mut app);
-    // Row 6 of `thought_line`.
+    // Row 5 of `thought_line`.
     let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     let drawn = lines(&targets);
     assert_eq!(drawn.len(), 1);
     assert!(matches!(drawn.first(), Some((Target::Thought(_), _))));
     assert_eq!(
         drawn.first().map(|(_, rect)| *rect),
-        Some(Rect::new(0, 6, WIDTH, 1))
+        Some(Rect::new(0, 5, WIDTH, 1))
     );
 }
 
@@ -1418,11 +1471,11 @@ fn a_line_partly_scrolled_off_targets_only_its_rows_shown() {
     tool_turn(&mut app);
     // Four conversation rows: the summary's second row, the reply and the
     // two-row footer.
-    let (_, targets) = pointed(&mut app, WIDTH, 7, None);
+    let (_, targets) = pointed(&mut app, WIDTH, 8, None);
     let rects: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
     assert_eq!(rects, vec![Rect::new(0, 0, WIDTH, 1)]);
     // Three rows: the summary is wholly out of view.
-    let (_, targets) = pointed(&mut app, WIDTH, 6, None);
+    let (_, targets) = pointed(&mut app, WIDTH, 7, None);
     assert!(lines(&targets).is_empty());
 }
 
@@ -1667,10 +1720,10 @@ fn copied_needs_a_conversation_row_to_show_on() {
     assert!(
         text(&buffer(&app, 30, 10))
             .lines()
-            .nth(5)
+            .nth(4)
             .is_some_and(|row| row.starts_with("rust"))
     );
-    click(&mut app, 30, 10, 27, 5);
+    click(&mut app, 30, 10, 27, 4);
     assert!(app.copied());
     app.set_size(30, 1);
     assert_eq!(text(&buffer(&app, 30, 1)), ">\n");
@@ -1712,7 +1765,9 @@ fn the_focused_target_is_drawn_reversed() {
         json!({"text": "reply"}),
     ));
     app.on_key(Key::BackTab, fakes::clock::FakeClock::new().now());
-    let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
+    // The cards' edges add four rows, so both turns' stops fit on a
+    // taller screen.
+    let (buf, targets) = pointed(&mut app, WIDTH, 16, None);
     app.drawn(&targets);
     let focused = app.focused().expect("focus");
     let rect = targets

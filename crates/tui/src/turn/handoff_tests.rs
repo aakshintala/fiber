@@ -164,8 +164,10 @@ fn the_note_goes_into_the_band_and_the_size_waits_for_the_next_call() {
             " go ▐",
             "▀▀▀▀▀",
             "00:00",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             "Working.",
-            "⇄ Handoff · automatic at 400.0k · ● writing the note…"
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "⇄ Handoff · automatic at 400.0k · ● writing the note…",
         ]
     );
     completed(
@@ -209,22 +211,23 @@ fn the_note_goes_into_the_band_and_the_size_waits_for_the_next_call() {
         json!({"outcome": "completed"}),
     );
     let lines = texts(&app);
-    assert_eq!(lines[6..8], ["  ▸ note", "Continuing."]);
-    assert!(lines[8].starts_with("▣ completed"), "{lines:?}");
+    assert_eq!(lines[8], "  ▸ note");
+    assert_eq!(lines[10], "Continuing.");
+    assert!(lines[11].starts_with("▣ completed"), "{lines:?}");
     // "▸ note" opens the note inside the band.
     let note = app
         .targets()
         .into_iter()
-        .find_map(|(at, target)| (at == 6).then_some(target));
+        .find_map(|(at, target)| (at == 8).then_some(target));
     assert!(matches!(note, Some(Target::Note(_))), "{note:?}");
     if let Some(note) = note {
         app.open(note);
         assert_eq!(
-            texts(&app)[6..9],
+            texts(&app)[8..11],
             ["  ▸ note", "    ## Note", "    keep going"]
         );
         app.open(note);
-        assert_eq!(texts(&app)[7], "Continuing.");
+        assert_eq!(texts(&app)[10], "Continuing.");
     }
 }
 
@@ -305,9 +308,9 @@ fn the_band_ends_the_open_group() {
         json!({"name": "read", "arguments": {"path": "b.rs"}}),
     );
     let lines = texts(&app);
-    assert_eq!(lines.len(), 7, "{lines:?}");
-    assert!(lines[4].starts_with('•') && lines[6].starts_with('•'));
-    assert!(lines[5].starts_with('⇄'));
+    assert_eq!(lines.len(), 11, "{lines:?}");
+    assert!(lines[5].starts_with('•') && lines[9].starts_with('•'));
+    assert!(lines[7].starts_with('⇄'));
 }
 
 #[test]
@@ -330,7 +333,16 @@ fn the_nudge_is_one_dim_line_where_it_happened() {
     );
     assert_eq!(
         texts(&app),
-        [nudge, "▄▄▄▄▄", " go ▐", "▀▀▀▀▀", "00:00", nudge]
+        [
+            "◔ Context at 268.0k, two thirds of the way to the 400.0k handoff. The model was told a handoff keeps the work going.",
+            "▄▄▄▄▄",
+            " go ▐",
+            "▀▀▀▀▀",
+            "00:00",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "◔ Context at 268.0k, two thirds of the way to the 400.0k handoff. The model was told a handoff keeps the work going.",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        ]
     );
     assert!(
         app.lines()

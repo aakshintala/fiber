@@ -424,7 +424,17 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         let skip = top.saturating_sub(start);
         let count = next.min(end).saturating_sub(start.max(top));
         let rect = Rect::new(area.x, y, area.width, to_u16(count));
-        paragraph(line).scroll((to_u16(skip), 0)).render(rect, buf);
+        // A short row and the wrapped rows of a long one fill the column
+        // with the row's own background, so a card's surface tint reaches
+        // the column's edge (`docs/tui.md`, "Look").
+        let fill = Style {
+            bg: line.style.bg,
+            ..Style::default()
+        };
+        paragraph(line)
+            .style(fill)
+            .scroll((to_u16(skip), 0))
+            .render(rect, buf);
         // A marked line spins its cell on the working line's tick; the
         // mark is the builders' promise that the line moves.
         if let Some(col) = spins

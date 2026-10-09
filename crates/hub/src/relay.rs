@@ -23,6 +23,9 @@
 //! relay that saw the exited window, or whose write failed, is retiring:
 //! commands routed to it queue unsent, and its thread passes them on in
 //! the order they were read (`crate::retire`).
+//!
+//! A session that resumes is subscribed again at the level the connection
+//! last held, with no client command (`crate::rejoin`).
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
@@ -92,6 +95,8 @@ pub(crate) struct Relays {
     /// Per session this connection started with `content`, the first
     /// prompt that waits for its `full` subscription (`crate::first`).
     pub(crate) awaiting: Vec<(String, Arc<First>)>,
+    /// What the rejoin sweep needs: each session's opening marks and marks.
+    pub(crate) rejoin: crate::rejoin::Rejoin,
 }
 
 impl Relays {
@@ -111,6 +116,7 @@ impl Relays {
 
     /// Shuts down every relay stream: each session sees this client leave.
     pub(crate) fn close_all(&mut self) {
+        self.rejoin.close();
         for entry in self.entries.drain(..) {
             match entry.writer.shutdown(Shutdown::Both) {
                 Ok(()) | Err(_) => {}
@@ -313,7 +319,7 @@ pub(crate) fn route(
         return;
     };
     let order = lock(relays).order.clone();
-    let kept = {
+    let (kept, _opening) = {
         let mut held = lock(relays);
         if let Some(at) = held.entries.iter().position(|entry| {
             entry.session == session && from.is_none_or(|from| entry.epoch > from)
@@ -383,8 +389,14 @@ pub(crate) fn route(
             }
             return;
         }
-        held.subscription(session)
+        let kept = held.subscription(session);
+        let opening = crate::rejoin::Opening::mark(&mut held, relays, session);
+        (kept, opening)
     };
+    #[cfg(test)]
+    if let Some(before_open) = lock(&hub.before_open).take() {
+        before_open();
+    }
     if from.is_none() {
         crate::retire::enqueue_new(&order, session, id, &stripped);
     }
@@ -420,6 +432,7 @@ pub(crate) fn route(
         relays,
         kept,
         Some((id.clone(), bytes, stripped)),
+        false,
     );
 }
 
@@ -429,7 +442,13 @@ pub(crate) fn route(
 /// rewind redirect, which sends only the subscription (its caller keeps
 /// the level first). A write that fails answers the client's command
 /// `session_not_found` when there is one, in command order; without one
-/// the connection is gone, so nothing is answered.
+/// the connection is gone, so nothing is answered. Exclusive gives up when
+/// the connection already relays the session or is opening it: the sweep's
+/// rejoin, never a client command.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the session, its stream, the hub, the client, the relays, the replay, the command and its exclusivity are one hand-off"
+)]
 pub(crate) fn attach(
     session: &str,
     stream: UnixStream,
@@ -438,14 +457,72 @@ pub(crate) fn attach(
     relays: &Arc<Mutex<Relays>>,
     replay: Option<Map<String, Value>>,
     command: Option<(CommandId, Vec<u8>, Map<String, Value>)>,
+    exclusive: bool,
 ) {
+    attach_inner(
+        session, stream, hub, writer, relays, replay, command, exclusive, None,
+    );
+}
+
+/// Rejoins only if the candidate's mark is still current. It takes the kept
+/// subscription under the relays lock and holds that lock through replay and
+/// admission, so a superseding subscription can neither be missed nor
+/// overwritten by the old candidate.
+pub(crate) fn attach_rejoin(
+    session: &str,
+    stream: UnixStream,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+    candidate_epoch: u64,
+) {
+    attach_inner(
+        session,
+        stream,
+        hub,
+        writer,
+        relays,
+        None,
+        None,
+        true,
+        Some(candidate_epoch),
+    );
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the session, its stream, the hub, the client, the relays, the replay, the command and its admission are one hand-off"
+)]
+fn attach_inner(
+    session: &str,
+    stream: UnixStream,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+    replay: Option<Map<String, Value>>,
+    command: Option<(CommandId, Vec<u8>, Map<String, Value>)>,
+    exclusive: bool,
+    candidate_epoch: Option<u64>,
+) {
+    let mark = crate::rejoin::Mark::now(&hub.home, session);
     let mut replay = replay;
+    let admission = candidate_epoch.map(|_| lock(relays));
+    if let Some(candidate_epoch) = candidate_epoch {
+        let Some(current) = admission
+            .as_ref()
+            .and_then(|held| crate::rejoin::kept_for_candidate(held, session, candidate_epoch))
+        else {
+            return;
+        };
+        replay = Some(current);
+    }
     let replayed: Replayed = Arc::new(Mutex::new(Vec::new()));
     if let Some(line) = replay.as_mut() {
         let minted = crate::start::mint("c_");
         line.insert("id".to_owned(), Value::String(minted.clone()));
         let sent = line_bytes(line).is_some_and(|line| write_all(&stream, &line).is_ok());
         if !sent {
+            drop(admission);
             if let Some((id, _, _)) = &command {
                 crate::retire::refuse_not_found(writer, hub, relays, session, id);
             }
@@ -463,21 +540,33 @@ pub(crate) fn attach(
     if let Some((id, bytes, _)) = &command
         && write_all(&stream, bytes).is_err()
     {
+        drop(admission);
         crate::retire::refuse_not_found(writer, hub, relays, session, id);
         return;
     }
     let reader = match stream.try_clone() {
         Ok(reader) => reader,
         Err(_) => {
+            drop(admission);
             if let Some((id, _, _)) = &command {
                 crate::retire::refuse_not_found(writer, hub, relays, session, id);
             }
             return;
         }
     };
-    let order = lock(relays).order.clone();
-    let mut held = lock(relays);
+    let order = admission
+        .as_ref()
+        .map_or_else(|| lock(relays).order.clone(), |held| held.order.clone());
+    let mut held = match admission {
+        Some(held) => held,
+        None => lock(relays),
+    };
     let epoch = held.mint();
+    if !crate::rejoin::admit(&mut held, session, exclusive, mark, epoch) {
+        drop(held);
+        stream.shutdown(Shutdown::Both).unwrap_or(());
+        return;
+    }
     // The thread may run before its entry is pushed: on session EOF it
     // only removes an entry it finds.
     let relayed = thread::Builder::new().name("hub-relay".to_owned()).spawn({

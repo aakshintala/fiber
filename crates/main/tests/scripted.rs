@@ -207,6 +207,74 @@ fn a_tool_call_step_runs_the_tool_and_the_next_request_takes_the_next_step() {
     assert_eq!(run.of("text_completed")[0]["payload"]["text"], "Done.");
 }
 
+/// A read-only `sed` with stderr discarded takes the permission fast path:
+/// no reviewer call, so every usage names the session script and no
+/// `permission_resolved` is decided by a reviewer.
+#[test]
+fn a_sed_read_with_stderr_discarded_takes_the_fast_path_with_no_reviewer_call() {
+    let setup = Setup::new();
+    let notes: String = (1..=7).map(|n| format!("line {n}\n")).collect();
+    std::fs::write(setup.workspace().join("notes.md"), notes).unwrap();
+    script(
+        &setup,
+        "s.json",
+        &json!({"steps": [
+            {"tool_calls": [{"name": "shell", "arguments": {"command": "sed -n '1,5p' notes.md 2>/dev/null"}}]},
+            {"text": "Done."}
+        ]}),
+    );
+    script(&setup, "r.json", &json!({"steps": []}));
+    reviewed_by_script(&setup, json!({}));
+    let run = ask(&setup);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let completed = run.of("tool_call_completed");
+    assert_eq!(completed.len(), 1);
+    let payload = completed[0].to_string();
+    assert!(payload.contains("line 5"), "{payload}");
+    assert!(!payload.contains("line 6"), "{payload}");
+    let models: Vec<&str> = run
+        .of("usage_recorded")
+        .iter()
+        .map(|line| line["payload"]["model"].as_str().unwrap())
+        .collect();
+    assert_eq!(models, ["scripted/s.json", "scripted/s.json"]);
+    for resolved in run.of("permission_resolved") {
+        assert_ne!(resolved["payload"]["decided_by"], "reviewer", "{resolved}");
+    }
+    let durable = run.durable();
+    assert!(!durable.contains(&"permission_requested"), "{durable:?}");
+    assert!(!durable.contains(&"permission_resolved"), "{durable:?}");
+    assert_eq!(
+        durable,
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    assert_eq!(
+        run.of("text_completed").last().unwrap()["payload"]["text"],
+        "Done."
+    );
+}
+
 #[test]
 fn an_exhausted_script_fails_the_turn_invalid_request() {
     let setup = Setup::new();

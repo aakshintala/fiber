@@ -202,3 +202,70 @@ fn a_light_report_through_the_loop_repaints_light() {
         Color::Rgb(0xfa, 0xfa, 0xfa)
     );
 }
+
+#[test]
+fn the_rail_and_panel_regions_paint_as_the_background() {
+    // The rail's and the panel's regions paint as the theme's
+    // background, not the surface tint (`docs/tui.md`, "Themes").
+    use crate::home::Launch;
+    let mut app = App::new(std::path::PathBuf::from("/w"));
+    app.set_home(Launch {
+        workspace: std::path::PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        git: false,
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        ..Default::default()
+    });
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.set_size(160, 40);
+    // Two live sessions, so the rail draws.
+    for session in ["s_aaaaaaaaaaaaaaaa", "s_bbbbbbbbbbbbbbbb"] {
+        app.on_line(crate::link::Line::Session(contract::Envelope {
+            kind: "session_status".to_owned(),
+            session_id: contract::SessionId(session.to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload: serde_json::json!({
+                "name": "fix the parser", "workspace": "/w",
+                "project": "-w", "state": "idle", "since": 0,
+                "spend": {"tokens": {"input": 1, "cache_read": 0,
+                    "cache_write": {}, "output": 2},
+                    "cost": 0.0, "subscription_cost": 0.0},
+                "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+            })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        }));
+    }
+    let layout = app.chrome().layout().expect("a layout");
+    let panel = layout.panel.expect("a panel");
+    let rail = layout.rail.expect("a rail");
+    let mut screen = Screen::new(TestBackend::new(160, 40), 160, 40).expect("a screen");
+    screen.set_look(look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]));
+    screen
+        .draw_with(&mut app, None, crate::view::render)
+        .expect("a draw");
+    let buf = screen.backend().buffer();
+    // Dark `background` against dark `surface` (`docs/tui.md`, "Themes").
+    let background = Color::Rgb(0x1e, 0x21, 0x27);
+    assert_eq!(
+        buf[(panel.right().saturating_sub(1), panel.y)].bg,
+        background
+    );
+    assert_eq!(
+        buf[(rail.x, rail.bottom().saturating_sub(1))].bg,
+        background
+    );
+}

@@ -93,7 +93,7 @@ impl Loop {
         }
         let unattended = !self.answerable;
         self.set_trigger();
-        let (system_prompt, tools, event) = prompt::build(
+        let (system_prompt, tools, mut event) = prompt::build(
             &self.prompt,
             &self.model.reference,
             unattended,
@@ -103,6 +103,9 @@ impl Loop {
             self.replaced.clone(),
             self.handoff.trigger_at,
         );
+        // The loop owns the effective budget; the builder leaves it
+        // absent and every build passes through here.
+        event.budget = self.budget;
         self.log
             .append(&Event::PreambleBuilt(event.clone()), None, None)?;
         let large = prompt::definitions_notice(&event);

@@ -70,7 +70,7 @@ fn the_time_row_is_a_dim_right_aligned_row_with_no_target() {
     let zone = TimeZone::UTC;
     let turn = Turn::new(vec!["go".to_owned()], 1791468900000);
     let mut out = Rows::default();
-    turn.rows(80, &zone, &mut out);
+    turn.rows(80, &zone, crate::surface::Edges::BOTH, &mut out);
     let (rows, _) = out.into_parts();
     assert_eq!(rows.len(), 4);
     let (line, target) = &rows[3];
@@ -82,7 +82,7 @@ fn the_time_row_is_a_dim_right_aligned_row_with_no_target() {
     // under it.
     let turn = Turn::new(vec!["go".to_owned()], u64::MAX);
     let mut out = Rows::default();
-    turn.rows(80, &zone, &mut out);
+    turn.rows(80, &zone, crate::surface::Edges::BOTH, &mut out);
     let (rows, _) = out.into_parts();
     assert_eq!(rows.len(), 3);
 }

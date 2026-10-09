@@ -619,11 +619,25 @@ fn a_group_line_whose_first_row_is_hidden_asks_nothing() {
             Some(format!("a_{n}").as_str()),
         ));
     }
-    // Two prompts below: sixteen rows, so following hides only the
-    // summary's first row.
+    // Two prompts make the summary scrollable. Find its first drawn row so
+    // this keeps testing the partial-line case when card edges add rows.
     for n in 1..=2 {
         app.on_line(prompt(format!("prompt {n}")));
     }
+    let all = app.shown(0, usize::MAX);
+    let summary = all
+        .lines
+        .iter()
+        .position(|(line, _, _)| line.to_string().starts_with("• Read"))
+        .expect("a group summary");
+    let top = all.first.saturating_add(
+        all.lines
+            .iter()
+            .take(summary)
+            .map(|(_, rows, _)| *rows)
+            .sum::<usize>(),
+    );
+    app.jump(top.saturating_add(1));
     app.set_now(clock.origin(), 0);
     let shown = screen(&app);
     // The later rows still show, without the spinner.

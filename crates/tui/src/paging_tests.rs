@@ -1386,6 +1386,8 @@ fn part() -> Part {
         turns: Vec::new(),
         fold: crate::turn::Fold::default(),
         aside_start: 0,
+        joins_next: false,
+        joins_previous: false,
     }
 }
 
@@ -1776,7 +1778,9 @@ fn a_reloaded_page_shows_the_same_time_row_as_live() {
             " go ▐".to_owned(),
             "▀▀▀▀▀".to_owned(),
             time,
-            "▣ completed".to_owned()
+            "▄".repeat(80),
+            "▣ completed".to_owned(),
+            "▀".repeat(80),
         ]
     );
     drop_all(&mut pages);
@@ -2094,6 +2098,458 @@ fn a_keyless_group_is_drawn_as_is_on_a_search_draw() {
             .all(|line| !line.contains("hidden keyless")),
         "a keyless ledger draws on a search draw"
     );
+}
+
+/// A `turn_started` line starting `text`.
+fn begun(stream: &mut Stream, text: &str) {
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": text}]}]}),
+    );
+}
+
+/// Durable filler lines that fold no row, to reach a page cut.
+fn fill(stream: &mut Stream, n: usize) {
+    for _ in 0..n {
+        stream.durable("step_started", None, json!({}));
+    }
+}
+
+/// A handoff, completed with an empty note.
+fn handed_off(stream: &mut Stream) {
+    stream.durable("handoff_started", None, json!({"trigger": "auto"}));
+    stream.durable(
+        "handoff_completed",
+        None,
+        json!({"outcome": "completed", "tokens_before": 1_000}),
+    );
+}
+
+/// A completed turn.
+fn completed(stream: &mut Stream) {
+    stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+}
+
+/// The session folded live at `width`.
+fn pages_at(lines: &[Envelope], width: u16) -> Pages {
+    let mut pages = Pages::new(width);
+    for line in lines {
+        pages.apply(line);
+    }
+    pages
+}
+
+/// Whether a shown row is a full-width card edge row.
+fn shown_edge(shown: impl AsRef<str>, width: usize, edge: char) -> bool {
+    let shown = shown.as_ref();
+    !shown.is_empty() && shown.chars().count() == width && shown.chars().all(|ch| ch == edge)
+}
+
+/// Whether `line` is a full-width card edge row.
+fn is_edge(line: &ratatui::text::Line<'static>, width: usize, edge: char) -> bool {
+    shown_edge(line.to_string(), width, edge)
+}
+
+/// A resident page's rows as text.
+fn cut_texts(pages: &Pages, at: usize) -> Vec<String> {
+    pages
+        .page_text(at)
+        .map(|(rows, _)| texts(&rows))
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_turn_cut_across_pages_draws_one_card() {
+    // A running turn cut once: neither page draws the edge between them,
+    // so the joined rows hold exactly one card edge pair for the turn
+    // (`docs/tui.md`, "History and paging").
+    let mut stream = Stream::new(false);
+    begun(&mut stream, "go");
+    stream.durable("step_started", None, json!({}));
+    stream.text("a_m", "hello");
+    fill(&mut stream, 62);
+    stream.durable("step_started", None, json!({}));
+    stream.text("a_m", "world");
+    let lines = stream.lines;
+    let mut pages = pages_at(&lines, 40);
+    assert_eq!(pages.index().pages().len(), 2);
+    let first = cut_texts(&pages, 0);
+    let second = cut_texts(&pages, 1);
+    assert!(!shown_edge(
+        first.last().cloned().unwrap_or_default(),
+        40,
+        '▀'
+    ));
+    assert!(!shown_edge(
+        second.first().cloned().unwrap_or_default(),
+        40,
+        '▄'
+    ));
+    let reference = whole(&pages, &lines);
+    let got = joined(&mut pages, &lines);
+    assert_eq!(differs(&got, &reference), None);
+    assert_eq!(
+        got.iter()
+            .filter(|(line, _)| is_edge(line, 40, '▄'))
+            .count(),
+        1
+    );
+    assert_eq!(
+        got.iter()
+            .filter(|(line, _)| is_edge(line, 40, '▀'))
+            .count(),
+        1
+    );
+    drop_all(&mut pages);
+    let got = joined(&mut pages, &lines);
+    assert_eq!(differs(&got, &reference), None);
+}
+
+#[test]
+fn only_the_cut_turn_loses_its_bottom_edge() {
+    // A cut page holding a finished turn and then the running one: the
+    // finished turn's card keeps its bottom edge
+    // (`docs/tui.md`, "History and paging").
+    let mut stream = Stream::new(false);
+    begun(&mut stream, "one");
+    stream.text("a_m", "done");
+    completed(&mut stream);
+    begun(&mut stream, "two");
+    stream.text("a_m", "hello");
+    fill(&mut stream, 62);
+    stream.durable("step_started", None, json!({}));
+    stream.text("a_m", "world");
+    let lines = stream.lines;
+    let mut pages = pages_at(&lines, 40);
+    assert_eq!(pages.index().pages().len(), 2);
+    let first = cut_texts(&pages, 0);
+    let closing = first
+        .iter()
+        .position(|row| row.starts_with("▣ completed"))
+        .expect("the finished turn's closing line");
+    assert!(shown_edge(first[closing + 1].clone(), 40, '▀'));
+    assert!(!shown_edge(
+        first.last().cloned().unwrap_or_default(),
+        40,
+        '▀'
+    ));
+    let reference = whole(&pages, &lines);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
+}
+
+#[test]
+fn a_new_turn_on_a_continuing_page_opens_its_card() {
+    // The page after a cut holds the cut turn's end, then a second turn:
+    // the second card opens with its edge
+    // (`docs/tui.md`, "History and paging").
+    let mut stream = Stream::new(false);
+    begun(&mut stream, "go");
+    stream.text("a_m", "hello");
+    fill(&mut stream, 62);
+    stream.durable("step_started", None, json!({}));
+    stream.text("a_m", "world");
+    begun(&mut stream, "next");
+    stream.text("a_n", "ok");
+    let lines = stream.lines;
+    let mut pages = pages_at(&lines, 40);
+    assert_eq!(pages.index().pages().len(), 2);
+    let (rows, _) = pages.page_text(1).expect("the second page");
+    let shown = texts(&rows);
+    let bubble = shown
+        .iter()
+        .position(|row| row == " next ▐")
+        .expect("the second turn's bubble");
+    // The bubble, its bottom edge, its time row, then the card's top edge.
+    assert!(is_edge(&rows[bubble + 3].0, 40, '▄'));
+    let reference = whole(&pages, &lines);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
+}
+
+#[test]
+fn a_cut_after_a_band_opens_the_next_page_with_an_edge() {
+    // The handoff completes before the candidate step: the page before
+    // the cut ends with the band's rows, and the next page opens with an
+    // edge (`docs/tui.md`, "Handoff", "History and paging").
+    let mut stream = Stream::new(false);
+    begun(&mut stream, "go");
+    stream.text("a_m", "before");
+    handed_off(&mut stream);
+    fill(&mut stream, 60);
+    stream.durable("step_started", None, json!({}));
+    stream.text("a_m", "after");
+    completed(&mut stream);
+    let lines = stream.lines;
+    let mut pages = pages_at(&lines, 40);
+    assert_eq!(pages.index().pages().len(), 2);
+    let first = cut_texts(&pages, 0);
+    assert!(
+        first.last().is_some_and(|row| row.starts_with("⇄ Handoff")),
+        "{first:?}"
+    );
+    let second = cut_texts(&pages, 1);
+    assert!(shown_edge(
+        second.first().cloned().unwrap_or_default(),
+        40,
+        '▄'
+    ));
+    let reference = whole(&pages, &lines);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
+    drop_all(&mut pages);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
+}
+
+#[test]
+fn a_cut_after_a_band_and_a_blank_reply_opens_the_next_page_with_an_edge() {
+    // The band, then whitespace that renders no row, then the candidate
+    // step and visible text: the page before the cut ends with the
+    // band's rows, and the next page opens with an edge, because the
+    // join is decided from the rows the pieces draw, never from entries
+    // (`docs/tui.md`, "Handoff", "History and paging").
+    let mut stream = Stream::new(false);
+    begun(&mut stream, "go");
+    stream.text("a_m", "before");
+    handed_off(&mut stream);
+    stream.text("a_m", "   ");
+    fill(&mut stream, 60);
+    stream.durable("step_started", None, json!({}));
+    stream.text("a_m", "after");
+    completed(&mut stream);
+    let lines = stream.lines;
+    let mut pages = pages_at(&lines, 40);
+    assert_eq!(pages.index().pages().len(), 2);
+    let first = cut_texts(&pages, 0);
+    assert!(
+        first.last().is_some_and(|row| row.starts_with("⇄ Handoff")),
+        "{first:?}"
+    );
+    let second = cut_texts(&pages, 1);
+    assert!(shown_edge(
+        second.first().cloned().unwrap_or_default(),
+        40,
+        '▄'
+    ));
+    let reference = whole(&pages, &lines);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
+    drop_all(&mut pages);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
+}
+
+#[test]
+fn a_blank_reply_cut_then_the_turn_completes_joins_once_it_draws() {
+    // A blank reply confirms the cut while the next page draws nothing
+    // of the card; the turn's completion draws the closing line there,
+    // and only then does the page before lose its edge
+    // (`docs/tui.md`, "History and paging").
+    let mut stream = Stream::new(false);
+    begun(&mut stream, "go");
+    stream.text("a_m", "visible");
+    fill(&mut stream, 62);
+    stream.durable("step_started", None, json!({}));
+    stream.text("a_m", "   ");
+    let cut = stream.lines.len();
+    completed(&mut stream);
+    let lines = stream.lines;
+    // After the cut the page before still has its edge, and the next
+    // page draws nothing of the turn's card.
+    let mut pages = pages_at(&lines[..cut], 40);
+    assert_eq!(pages.index().pages().len(), 2);
+    let before = pages.index().pages()[0].rows;
+    let first = cut_texts(&pages, 0);
+    assert!(shown_edge(
+        first.last().cloned().unwrap_or_default(),
+        40,
+        '▀'
+    ));
+    assert!(cut_texts(&pages, 1).is_empty());
+    // The completion joins: the edge comes off the page before, and the
+    // next page starts with the closing line and no edge.
+    for line in &lines[cut..] {
+        pages.apply(line);
+    }
+    let first = cut_texts(&pages, 0);
+    assert!(!shown_edge(
+        first.last().cloned().unwrap_or_default(),
+        40,
+        '▀'
+    ));
+    let second = cut_texts(&pages, 1);
+    assert!(
+        second
+            .first()
+            .is_some_and(|row| row.starts_with("▣ completed")),
+        "{second:?}"
+    );
+    assert_eq!(pages.index().pages()[0].rows, before - 1);
+    let reference = whole(&pages, &lines);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
+    drop_all(&mut pages);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
+    // A new width keeps the join.
+    pages.set_width(120);
+    drop_all(&mut pages);
+    let reference = whole(&pages, &lines);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
+    // With the page before dropped, the count moves through the index.
+    let mut pages = pages_at(&lines[..cut], 40);
+    let before = pages.index().pages()[0].rows;
+    pages.closed[0] = None;
+    for line in &lines[cut..] {
+        pages.apply(line);
+    }
+    assert!(pages.part(0).is_none());
+    assert_eq!(pages.index().pages()[0].rows, before - 1);
+    let reference = whole(&pages, &lines);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
+}
+
+#[test]
+fn a_cut_before_a_band_closes_the_piece_on_the_page_before() {
+    // A handoff starts between the candidate step and the text that
+    // confirms it: the page before keeps its edge, and the next page
+    // starts with the band (`docs/tui.md`, "Handoff",
+    // "History and paging").
+    let mut stream = Stream::new(false);
+    begun(&mut stream, "go");
+    stream.text("a_m", "before");
+    fill(&mut stream, 62);
+    stream.durable("step_started", None, json!({}));
+    stream.durable("handoff_started", None, json!({"trigger": "auto"}));
+    stream.durable(
+        "handoff_completed",
+        None,
+        json!({"outcome": "completed", "tokens_before": 1_000}),
+    );
+    stream.text("a_m", "after");
+    completed(&mut stream);
+    let lines = stream.lines;
+    let mut pages = pages_at(&lines, 40);
+    assert_eq!(pages.index().pages().len(), 2);
+    let first = cut_texts(&pages, 0);
+    assert!(shown_edge(
+        first.last().cloned().unwrap_or_default(),
+        40,
+        '▀'
+    ));
+    let second = cut_texts(&pages, 1);
+    assert!(
+        second
+            .first()
+            .is_some_and(|row| row.starts_with("⇄ Handoff")),
+        "{second:?}"
+    );
+    let reference = whole(&pages, &lines);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
+    drop_all(&mut pages);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
+}
+
+#[test]
+fn a_running_turn_with_only_its_bubble_does_not_join() {
+    // The candidate step comes before any entry: the page before holds
+    // only the bubble, and the next page opens its card with an edge
+    // (`docs/tui.md`, "History and paging").
+    let mut stream = Stream::new(false);
+    begun(&mut stream, "go");
+    fill(&mut stream, 64);
+    stream.durable("step_started", None, json!({}));
+    stream.text("a_m", "hello");
+    let lines = stream.lines;
+    let mut pages = pages_at(&lines, 40);
+    assert_eq!(pages.index().pages().len(), 2);
+    // The turn drew no piece on the page before the cut.
+    let before = pages.closed[0]
+        .as_ref()
+        .and_then(|part| part.turns.last())
+        .map(|card| {
+            let mut out = Rows::default();
+            let pieces = card.rows(40, &pages.zone, crate::surface::Edges::BOTH, &mut out);
+            (pieces.first, pieces.last)
+        });
+    assert_eq!(before, Some((false, false)));
+    let second = cut_texts(&pages, 1);
+    assert!(shown_edge(
+        second.first().cloned().unwrap_or_default(),
+        40,
+        '▄'
+    ));
+    let reference = whole(&pages, &lines);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
+}
+
+#[test]
+fn a_refolded_page_keeps_its_joins() {
+    // Dropping every page and reloading draws the same rows: the seeds
+    // and the refold restore the joins (`docs/tui.md`,
+    // "History and paging").
+    let mut stream = Stream::new(false);
+    begun(&mut stream, "go");
+    stream.text("a_m", "hello");
+    fill(&mut stream, 62);
+    stream.durable("step_started", None, json!({}));
+    stream.text("a_m", "world");
+    let lines = stream.lines;
+    let mut pages = pages_at(&lines, 40);
+    let live = joined(&mut pages, &lines);
+    assert!(pages.seeds[0].joins_next);
+    assert!(pages.seeds[1].joins_previous);
+    drop_all(&mut pages);
+    let refolded = joined(&mut pages, &lines);
+    assert_eq!(differs(&refolded, &live), None);
+    assert!(pages.seeds[0].joins_next);
+    assert!(pages.seeds[1].joins_previous);
+}
+
+#[test]
+fn a_cut_at_turn_started_joins_nothing() {
+    // A cut at a turn's start leaves both flags false: each card keeps
+    // both edges (`docs/tui.md`, "History and paging").
+    let mut stream = Stream::new(false);
+    begun(&mut stream, "one");
+    stream.text("a_m", "done");
+    completed(&mut stream);
+    fill(&mut stream, 61);
+    begun(&mut stream, "two");
+    stream.text("a_m", "hello");
+    let lines = stream.lines;
+    let mut pages = pages_at(&lines, 40);
+    assert_eq!(pages.index().pages().len(), 2);
+    assert!(!pages.seeds[0].joins_next);
+    assert!(!pages.seeds[1].joins_previous);
+    let first = cut_texts(&pages, 0);
+    assert!(shown_edge(
+        first.last().cloned().unwrap_or_default(),
+        40,
+        '▀'
+    ));
+    let second = cut_texts(&pages, 1);
+    let bubble = second
+        .iter()
+        .position(|row| row == " two ▐")
+        .expect("the second turn's bubble");
+    assert!(shown_edge(&second[bubble + 3], 40, '▄'));
+    let reference = whole(&pages, &lines);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
+}
+
+#[test]
+fn joins_survive_a_new_width() {
+    // Cut pages at 40, reloaded at 120, draw what one fold draws at 120
+    // (`docs/tui.md`, "History and paging").
+    let mut stream = Stream::new(false);
+    begun(&mut stream, "go");
+    stream.text("a_m", "hello");
+    fill(&mut stream, 62);
+    stream.durable("step_started", None, json!({}));
+    stream.text("a_m", "world");
+    let lines = stream.lines;
+    let mut pages = pages_at(&lines, 40);
+    assert_eq!(pages.index().pages().len(), 2);
+    pages.set_width(120);
+    drop_all(&mut pages);
+    let reference = whole(&pages, &lines);
+    assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
 }
 
 #[test]

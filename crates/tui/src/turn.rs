@@ -14,22 +14,22 @@ use contract::Envelope;
 use contract::events::{
     AssistantMessageCompleted, InputItem, MessageOutcome, ReasoningCompleted, RetryScheduled,
     SteeringApplied, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted,
-    ToolCallRequested, TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
+    ToolCallRequested, TurnCompleted, TurnStarted, UsageRecorded,
 };
-use jiff::tz::TimeZone;
 use ratatui::text::Line;
 use serde_json::Value;
 
 use crate::app::{Target, read, text_of};
 use crate::format;
 use crate::markdown;
-use crate::rows::Rows;
 
 mod answers;
+mod card;
 pub(crate) mod crash;
 mod group;
 mod handoff;
 mod live;
+mod steer;
 
 #[cfg(test)]
 use group::Section;
@@ -81,7 +81,7 @@ pub(crate) enum Entry {
         reply: markdown::Reply,
     },
     /// A steering message.
-    Steer(String),
+    Steer(steer::Steered),
     /// A tool group, by its index in the turn's groups.
     Group(usize),
     /// A line that came while the turn ran.
@@ -181,8 +181,9 @@ impl Turn {
     }
 
     /// A steering message, in place; it does not end a group.
-    pub(crate) fn steer(&mut self, text: String) {
-        self.entries.push(Entry::Steer(text));
+    pub(crate) fn steer(&mut self, text: String, ts: u64) {
+        self.entries
+            .push(Entry::Steer(steer::Steered::new(text, ts)));
     }
 
     /// `step_started`.
@@ -556,54 +557,6 @@ impl Turn {
             ts,
         });
     }
-
-    /// The card's lines at `width`, each prompt bubble with the local time
-    /// of day under it (`docs/tui.md`, "Turns").
-    pub(crate) fn rows(&self, width: u16, zone: &TimeZone, out: &mut Rows) {
-        for prompt in &self.prompts {
-            let before = out.len();
-            crate::bubble::rows(prompt, width, out);
-            if out.len() > before
-                && let Some(time) = crate::local_time::time_of_day(self.started, zone)
-            {
-                out.push((format::dim(time).right_aligned(), None));
-            }
-        }
-        for entry in &self.entries {
-            match entry {
-                Entry::Reply { reply, .. } => reply.rows(width, out),
-                Entry::Steer(text) => out.push((Line::raw(format!("steer · {text}")), None)),
-                Entry::Group(at) => {
-                    if let Some(group) = self.groups.get(*at) {
-                        group.rows(self.is_open() && self.open_group == Some(*at), out);
-                    }
-                }
-                Entry::Aside(aside) => aside.rows(out),
-                Entry::Band(band) => band.rows(out),
-                Entry::Answers(answered) => answered.rows(out),
-            }
-        }
-        if let Some((ending, ts)) = &self.ended {
-            let head = match ending {
-                Ending::Done(done) => {
-                    if let (TurnOutcome::Failed, Some(error)) = (done.outcome, &done.error) {
-                        format::failure(error, out);
-                    }
-                    match done.outcome {
-                        TurnOutcome::Completed => "▣ completed",
-                        TurnOutcome::Interrupted => "▣ interrupted",
-                        TurnOutcome::Failed => "▣ failed",
-                    }
-                }
-                Ending::CutShort => "▣ cut short: Fiber stopped",
-            };
-            let ms = ts.saturating_sub(self.started);
-            let closing = format::closing(head, ms, self.calls, &self.spend.usage());
-            out.push((format::dim(closing), None));
-        }
-        // A pending retry draws no conversation row: the working line
-        // counts its wait down (`docs/tui.md`, "The working line").
-    }
 }
 
 /// Folds one line of the attached session's stream into `turns`; false
@@ -671,7 +624,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
         }),
         "steering_applied" => read!(envelope, SteeringApplied).is_some_and(|applied| {
             open(turns).is_some_and(|turn| {
-                turn.steer(text_of(&applied.content));
+                turn.steer(text_of(&applied.content), ts);
                 true
             })
         }),
