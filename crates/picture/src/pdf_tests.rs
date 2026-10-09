@@ -93,10 +93,7 @@ fn pdf_bytes(pages: usize) -> Vec<u8> {
 }
 
 fn load(bytes: &[u8]) -> lopdf::Result<lopdf::Document> {
-    lopdf::Document::load_mem_with_options(
-        bytes,
-        lopdf::LoadOptions::with_max_decompressed_size(super::MAX_DECOMPRESSED_BYTES),
-    )
+    lopdf::Document::load_mem_with_options(bytes, super::load_options())
 }
 
 fn child(arguments: &[OsString]) -> (i32, String, String) {
@@ -193,6 +190,124 @@ fn objstm_pdf(decompressed: usize) -> Vec<u8> {
     let bytes = build(decompressed - overhead);
     if decompressed <= super::MAX_DECOMPRESSED_BYTES {
         assert_eq!(packed_size(&bytes), decompressed);
+    }
+    bytes
+}
+
+// Like `objstm_pdf`, but the writer packs the objects into two Flate
+// object streams: the first holds the catalog, the page tree and two page
+// dicts with small filler objects, and the second holds one padding string
+// alone, sized so the second stream decodes to exactly `decompressed`
+// bytes. The padding sits last, so growing it never moves another object's
+// offset and the sizing overhead stays fixed. A lenient load drops an
+// over-limit second stream and keeps both pages, so without a refusal the
+// file would run with objects silently missing.
+fn objstm_pdf_with_plain_pages(decompressed: usize) -> Vec<u8> {
+    use lopdf::{Document, Object, SaveOptions, dictionary};
+    fn build(pad: usize) -> Vec<u8> {
+        let mut document = Document::with_version("1.5");
+        let catalog_id = document.new_object_id();
+        let pages_id = document.new_object_id();
+        let page1_id = document.new_object_id();
+        let page2_id = document.new_object_id();
+        document.objects.insert(
+            catalog_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Catalog",
+                "Pages" => pages_id,
+            }),
+        );
+        document.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![Object::Reference(page1_id), Object::Reference(page2_id)],
+                "Count" => 2,
+            }),
+        );
+        for page_id in [page1_id, page2_id] {
+            document.objects.insert(
+                page_id,
+                Object::Dictionary(dictionary! {
+                    "Type" => "Page",
+                    "Parent" => pages_id,
+                    "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+                }),
+            );
+        }
+        // Ninety-four fillers and two tails take the first stream to
+        // exactly 100 objects with the four above, so the padding below
+        // fills the second stream alone.
+        for n in 0..94 {
+            let filler_id = document.new_object_id();
+            document.objects.insert(
+                filler_id,
+                Object::string_literal(format!("filler {n}").as_str()),
+            );
+        }
+        for n in 0..2 {
+            let filler_id = document.new_object_id();
+            document.objects.insert(
+                filler_id,
+                Object::string_literal(format!("tail {n}").as_str()),
+            );
+        }
+        let pad_id = document.new_object_id();
+        document
+            .objects
+            .insert(pad_id, Object::string_literal("A".repeat(pad).as_str()));
+        document.trailer.set("Root", catalog_id);
+        let mut bytes = Vec::new();
+        document
+            .save_with_options(
+                &mut bytes,
+                SaveOptions {
+                    use_object_streams: true,
+                    use_xref_streams: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        bytes
+    }
+    fn stream_sizes(bytes: &[u8], pad: usize) -> (usize, usize) {
+        let document = load(bytes).unwrap();
+        let expected = Object::string_literal("A".repeat(pad).as_str());
+        let mut plain = None;
+        let mut padded = None;
+        for object in document.objects.values() {
+            if let Object::Stream(stream) = object {
+                let is_packed = stream.dict.get(b"Type").and_then(Object::as_name).ok()
+                    == Some(b"ObjStm".as_slice());
+                if is_packed {
+                    let size = stream.get_plain_content().unwrap().len();
+                    let holds_pad = lopdf::ObjectStream::new(stream)
+                        .unwrap()
+                        .objects
+                        .values()
+                        .any(|object| object == &expected);
+                    if holds_pad {
+                        assert!(padded.replace(size).is_none());
+                    } else {
+                        assert!(plain.replace(size).is_none());
+                    }
+                }
+            }
+        }
+        (
+            plain.expect("a first stream of pages"),
+            padded.expect("a second stream of padding"),
+        )
+    }
+    // The probe carries a tiny padding: small enough to load under the
+    // limit, so the padded stream's size measures the fixed overhead.
+    let probe_pad = 16;
+    let (_, probe_padded) = stream_sizes(&build(probe_pad), probe_pad);
+    let overhead = probe_padded - probe_pad;
+    let bytes = build(decompressed - overhead);
+    if decompressed <= super::MAX_DECOMPRESSED_BYTES {
+        let (_, padded) = stream_sizes(&bytes, decompressed - overhead);
+        assert_eq!(padded, decompressed);
     }
     bytes
 }
@@ -390,6 +505,50 @@ fn an_object_stream_under_the_limit_loads_and_cuts() {
     assert_eq!(value.get("page_count"), Some(&serde_json::json!(1)));
     let cut = std::fs::read(dir.path().join("p_under.pdf")).unwrap();
     assert_eq!(load(&cut).unwrap().get_pages().len(), 1);
+}
+
+#[test]
+fn an_over_limit_object_stream_beside_two_plain_pages_is_refused_and_writes_nothing() {
+    let bytes = objstm_pdf_with_plain_pages(super::MAX_DECOMPRESSED_BYTES + 1);
+    // Both pages survive the lenient load: without the refusal the file
+    // would run with objects silently missing.
+    assert_eq!(load(&bytes).unwrap().get_pages().len(), 2);
+    let dir = fakes::TempDir::new("fiber-pdf-objstm-over-beside");
+    let input = write_input(dir.path(), "in.pdf", &bytes);
+    let arguments = vec![
+        OsString::from("pdf"),
+        input.into_os_string(),
+        dir.path().as_os_str().to_owned(),
+        OsString::from("p_over_beside"),
+        OsString::from("whole=10"),
+    ];
+    let (code, stdout, stderr) = child(&arguments);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert!(!stderr.is_empty());
+    assert!(!dir.path().join("p_over_beside.pdf").exists());
+}
+
+#[test]
+fn an_object_stream_at_the_limit_beside_two_plain_pages_loads_two_pages() {
+    let bytes = objstm_pdf_with_plain_pages(super::MAX_DECOMPRESSED_BYTES);
+    let dir = fakes::TempDir::new("fiber-pdf-objstm-at-beside");
+    let input = write_input(dir.path(), "in.pdf", &bytes);
+    let arguments = vec![
+        OsString::from("pdf"),
+        input.into_os_string(),
+        dir.path().as_os_str().to_owned(),
+        OsString::from("p_at_beside"),
+        OsString::from("whole=10"),
+    ];
+    let (code, stdout, stderr) = child(&arguments);
+    assert_eq!((code, stderr.as_str()), (0, ""));
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(value.get("page_count"), Some(&serde_json::json!(2)));
+    assert_eq!(
+        std::fs::read(dir.path().join("p_at_beside.pdf")).unwrap(),
+        bytes
+    );
 }
 
 #[test]

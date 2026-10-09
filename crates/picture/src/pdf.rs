@@ -16,10 +16,40 @@ const WRITE_FAILED: i32 = 3;
 pub(crate) const TOO_MANY: i32 = 4;
 
 /// The most bytes one object or cross-reference stream may decompress to
-/// while the PDF loads (`docs/tools.md`, "read"). It equals the 64 MiB file
-/// cap, so a small file cannot peak far past what the cap bounds: object and
-/// cross-reference streams are the only streams lopdf decodes while loading.
+/// while the PDF loads (`docs/tools.md`, "read"). This is defense in depth
+/// per stream, separate from the 100 MiB file-size cap: only object and
+/// cross-reference streams are decoded while loading, and each is bounded
+/// on its own, with no aggregate bound.
 const MAX_DECOMPRESSED_BYTES: usize = 67_108_864;
+
+/// Options for loading an untrusted PDF: each object and cross-reference
+/// stream's decompressed size is bounded, and anything else parses
+/// leniently. `strict` stays off on purpose: it would also reject readable
+/// but non-conforming files, such as 19-byte xref entries or a header line
+/// with trailing bytes, which today load. A dropped object stream is refused
+/// by [`dropped_packed_object`] instead: the lenient load skips a stream it
+/// cannot decode where `strict` would fail it, so `run` compares the packed
+/// objects the cross-reference table promises against the ones that loaded
+/// and refuses the file when any is missing. An over-limit cross-reference
+/// stream already fails the load itself.
+fn load_options() -> lopdf::LoadOptions {
+    lopdf::LoadOptions {
+        max_decompressed_size: Some(MAX_DECOMPRESSED_BYTES),
+        ..Default::default()
+    }
+}
+
+/// Whether any object the cross-reference table packs into an object stream
+/// is missing from the loaded document. The lenient load drops a stream it
+/// cannot decode, such as one past [`MAX_DECOMPRESSED_BYTES`], instead of
+/// failing, which would serve the file with objects silently missing, so
+/// any load error, including one such stream, fails the whole file.
+fn dropped_packed_object(document: &lopdf::Document) -> bool {
+    document.reference_table.entries.iter().any(|(id, entry)| {
+        matches!(entry, lopdf::xref::XrefEntry::Compressed { .. })
+            && !document.objects.contains_key(&(*id, 0))
+    })
+}
 
 /// What the caller asked for.
 #[derive(Debug, PartialEq, Eq)]
@@ -75,15 +105,20 @@ pub(crate) fn run(
             return REFUSED;
         }
     };
-    let mut document = match lopdf::Document::load_mem_with_options(
-        &bytes,
-        lopdf::LoadOptions::with_max_decompressed_size(MAX_DECOMPRESSED_BYTES),
-    ) {
+    let mut document = match lopdf::Document::load_mem_with_options(&bytes, load_options()) {
         Ok(document) => document,
         Err(error) => {
             writeln!(stderr, "{error}").unwrap_or(());
             return REFUSED;
         }
+    };
+    if dropped_packed_object(&document) {
+        writeln!(
+            stderr,
+            "an object stream could not be decoded, so the file would run with objects missing"
+        )
+        .unwrap_or(());
+        return REFUSED;
     };
     let total = document.get_pages().len();
     let Ok(total_u32) = u32::try_from(total) else {
