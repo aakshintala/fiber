@@ -151,7 +151,11 @@ fn characters_outside_the_plain_set_are_unreadable() {
         "echo \"unterminated",
         "echo \"a$b\"",
         "echo \"a`b\"",
-        "echo \"a\\b\"",
+        "echo \"\\$\"",
+        "echo \"\\`\"",
+        "echo \"a\\\"",
+        "echo \"a\\\\\"",
+        "echo \"a\\\n b\"",
         "ls ;; ls",
         "ls;;ls",
         ";;",
@@ -174,6 +178,95 @@ fn characters_outside_the_plain_set_are_unreadable() {
         "",
         "   ",
         "\t",
+    ] {
+        assert_unreadable(command);
+    }
+}
+
+#[test]
+fn a_backslash_before_a_plain_character_inside_double_quotes_is_literal() {
+    assert_eq!(
+        lexed("echo \"a\\b\""),
+        vec![Part {
+            words: vec![plain("echo"), quoted("\"a\\b\"", "a\\b"),]
+        }]
+    );
+    assert_eq!(
+        lexed("echo \"a\\|b\""),
+        vec![Part {
+            words: vec![plain("echo"), quoted("\"a\\|b\"", "a\\|b"),]
+        }]
+    );
+}
+
+#[test]
+fn a_stderr_redirect_lexes_as_one_word() {
+    assert_eq!(
+        lexed("ls 2>/dev/null"),
+        vec![Part {
+            words: vec![plain("ls"), plain("2>/dev/null")]
+        }]
+    );
+    assert_eq!(
+        lexed("ls 2>&1 | head"),
+        vec![
+            Part {
+                words: vec![plain("ls"), plain("2>&1")]
+            },
+            Part {
+                words: vec![plain("head")]
+            },
+        ]
+    );
+    assert_eq!(
+        lexed("cat '2>&1'"),
+        vec![Part {
+            words: vec![plain("cat"), quoted("'2>&1'", "2>&1")]
+        }]
+    );
+    assert_reads("git 2>/dev/null status");
+    assert_eq!(
+        classified("cat '2>&1'").declared.paths,
+        Some(vec!["/work/2>&1".to_owned()])
+    );
+}
+
+#[test]
+fn a_stderr_redirect_reads_at_each_boundary() {
+    assert_reads("ls 2>/dev/null");
+    assert_reads("ls 2>/dev/null | head");
+    assert_reads("ls 2>/dev/null\t| head");
+    assert_reads("ls 2>/dev/null||head");
+    assert_reads("ls 2>/dev/null&&pwd");
+    assert_reads("ls 2>/dev/null;pwd");
+    assert_reads("ls 2>&1");
+    assert_reads("git 2>&1 status");
+}
+
+#[test]
+fn anything_but_the_two_exact_redirects_is_unreadable() {
+    for command in [
+        "ls 2> /dev/null",
+        "ls 12>/dev/null",
+        "ls 1>/dev/null",
+        "ls x2>/dev/null",
+        "ls \"2\">/dev/null",
+        "ls 2>>/dev/null",
+        "ls 2>&-",
+        "ls 2>&2",
+        "ls 2>/dev/nullx",
+        "ls 2>&12",
+        "2>/dev/null ls",
+        "2>&1 ls",
+        "echo 2>(x)",
+        "ls 2>/dev/null/x",
+        "ls 2>/dev/zero",
+        "ls >/dev/null",
+        "ls 1>/dev/null",
+        "ls 2>file",
+        "ls >file",
+        "ls &>file",
+        "ls 2>\tfile",
     ] {
         assert_unreadable(command);
     }
@@ -269,9 +362,167 @@ fn assert_closed(command: &str) {
 }
 
 #[test]
+fn new_git_forms_read() {
+    for command in [
+        "git log --oneline -8",
+        "git log -1",
+        "git log -10",
+        "git log -p",
+        "git show --stat HEAD",
+        "git status",
+        "git diff",
+        "git rev-parse HEAD",
+        "git rev-parse --show-toplevel",
+        "git rev-parse --abbrev-ref HEAD",
+        "git ls-files src",
+        "git blame -L 10,20 f",
+        "git branch --show-current",
+        "git branch '--show-current'",
+    ] {
+        assert_reads(command);
+    }
+    assert!(classified("git rev-parse HEAD").declared.paths.is_none());
+    assert!(
+        classified("git branch --show-current")
+            .declared
+            .paths
+            .is_none()
+    );
+    assert_eq!(
+        classified("git ls-files src").declared.paths,
+        Some(vec!["/work/src".to_owned()])
+    );
+    assert_eq!(
+        classified("git blame -L 10,20 f").declared.paths,
+        Some(vec!["/work/f".to_owned()])
+    );
+}
+
+#[test]
+fn hostile_git_forms_execute() {
+    for command in [
+        "git -c a=b log",
+        "git -c diff.external=x diff",
+        "git --exec-path=/x log",
+        "git --exec-path log",
+        "git -p log",
+        "git --paginate log",
+        "git --git-dir=/x log",
+        "git --git-dir /x status",
+        "git --work-tree=/x status",
+        "git log --ext-diff",
+        "git show --ext-diff",
+        "git diff --ext-diff",
+        "git blame --ext-diff",
+        "git log --textconv",
+        "git show --textconv",
+        "git log --output=f",
+        "git log --output f",
+        "git show --output=f",
+        "git log -",
+        "git log -8x",
+        "git log -x8",
+        "git show -8",
+        "git diff -8",
+        "git rev-parse --short=7",
+        "git rev-parse --git-dir",
+        "git ls-files --exclude-from=f",
+        "git blame --contents f x",
+        "git branch",
+        "git branch foo",
+        "git branch -D foo",
+        "git branch -a",
+        "git branch --list",
+        "git branch --show-current x",
+        "git branch --show-current --show-current",
+        "git checkout x",
+        "git stash",
+        "git config x",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn echo_reads_text_and_only_n_counts_as_a_flag() {
+    for command in [
+        "echo ---",
+        "echo -",
+        "echo -x",
+        "echo -nx",
+        "echo -n",
+        "echo -nn",
+        "echo --not-listed",
+    ] {
+        assert_reads(command);
+    }
+    for command in ["echo -e", "echo -E", "echo -ne"] {
+        assert_closed(command);
+    }
+    assert_closed("pwd ---");
+}
+
+#[test]
+fn sed_through_the_classifier_declares_its_files() {
+    assert_eq!(
+        classified("sed -n 1p a b").declared.paths,
+        Some(vec!["/work/a".to_owned(), "/work/b".to_owned()])
+    );
+    assert_eq!(
+        classified("sed -n 1p").declared.paths,
+        Some(vec!["/work".to_owned()])
+    );
+    assert_eq!(
+        classified("sed -e 1p f").declared.paths,
+        Some(vec!["/work/f".to_owned()])
+    );
+    assert_eq!(
+        classified("sed -n 1p /home/me/.fiber/credentials/k")
+            .declared
+            .paths,
+        Some(vec!["/home/me/.fiber/credentials/k".to_owned()])
+    );
+    assert_reads("sed -n 1p a b");
+    assert_reads("'sed' -n 1p f");
+    assert_reads("sed -n 1p f 2>/dev/null");
+    for command in [
+        "sed -n 1p /proc/self/environ",
+        "/usr/bin/sed -n 1p f",
+        "sed -n 1p f > out",
+        "sed -n 1p f >/dev/null",
+        "sed -n 1p f 2>file",
+        "sed -n '1w out' f",
+        "sed -i 1p f",
+        "sed --in-place 1p f",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn the_four_quoted_commands_read() {
+    assert_reads("sed -n '320,520p' crates/main/src/switch.rs");
+    assert_reads("sed -n 1,120p docs/testing.md 2>/dev/null || ls docs/");
+    assert_reads("git log --oneline -8; echo ---; git show --stat HEAD");
+    assert_reads(
+        "grep -rn \"command_id\\|command_accepted\\|command_rejected\" crates/ --include=\"*.rs\" | head -n 80",
+    );
+    assert_closed("git log --oneline -8; echo ---; git show --stat HEAD; ...");
+    assert_eq!(
+        classified(
+            "grep -rn \"command_id\\|command_accepted\\|command_rejected\" crates/ --include=\"*.rs\" | head -n 80",
+        )
+        .declared
+        .paths,
+        Some(vec!["/work/crates/".to_owned(), "/work".to_owned()])
+    );
+}
+
+#[test]
 fn only_echo_and_pwd_declare_no_paths() {
     for command in COMMANDS {
-        let declares = command.name != "echo" && command.name != "pwd";
+        let declares =
+            command.name != "echo" && command.name != "pwd" && command.name != "git rev-parse";
         assert_eq!(command.paths, declares, "{}", command.name);
     }
 }
@@ -280,6 +531,8 @@ fn only_echo_and_pwd_declare_no_paths() {
 fn denied_flags_are_absent_from_every_allowed_list() {
     const DENIED: &[&str] = &[
         "--output",
+        "--ext-diff",
+        "--textconv",
         "--pre",
         "--compress-program",
         "-exec",
@@ -475,6 +728,11 @@ fn a_writing_or_executing_flag_is_not_read_only() {
 #[test]
 fn an_unlisted_flag_is_not_read_only() {
     for command in COMMANDS {
+        // bash's `echo` reads any other word as text, so it stays read-only.
+        if command.name == "echo" {
+            assert_reads("echo --not-listed");
+            continue;
+        }
         assert_closed(&format!("{} --not-listed", command.name));
         assert_closed(&format!("{} --not-listed=1", command.name));
     }
@@ -518,6 +776,9 @@ fn every_command_states_whether_double_dash_ends_flags() {
         ("git diff", true),
         ("git log", true),
         ("git show", true),
+        ("git rev-parse", true),
+        ("git ls-files", true),
+        ("git blame", true),
     ];
     assert_eq!(COMMANDS.len(), stated.len());
     for (command, (name, ends_flags)) in COMMANDS.iter().zip(stated) {

@@ -408,7 +408,8 @@ Fiber.
   review: the credential deny sees only the paths a call names, never a
   link below them. Any read-only command added later follows the same rule.
   `grep -r` stays read-only, because it follows only links named on the
-  command line, and the deny canonicalises those.
+  command line, and the deny canonicalises those. The built-in list is
+  under "Shell", "Effects".
 
 - A tool that must stay warm between calls, such as an index kept current by
   a file watcher or a language server, is an extension that registers a tool
@@ -558,7 +559,46 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   against `workdir`. Otherwise it declares `executes`, with no paths.
 - It declares `executes` whenever it finds something it cannot read
   plainly: command substitution (`$( )` or backticks), process
-  substitution, a redirect, or anything else outside the list.
+  substitution, a redirect other than `2>/dev/null` or `2>&1`, or anything else outside the list.
+- The only redirects a read-only part may carry are `2>/dev/null` and
+  `2>&1`, each written as a word of its own after the command name. Any
+  other redirect (`>/dev/null`, `1>/dev/null`, `2>file`, `>file`,
+  `&>file`, `2>>/dev/null`), and either accepted redirect first in a part
+  or joined to another word, makes the call `executes`.
+- Inside double quotes a backslash before any character other than `$`, a
+  backtick, `"`, `\` or a newline is literal, as bash reads it. Before
+  one of those five the command is not read plainly.
+- `sed` is read-only with only `-n`, `-E`, `-r` and `-e`, where every
+  script is addresses (line numbers, `$`, `/regex/`, ranges) followed by
+  `p`. A short-flag cluster may hold only those letters, with `-e` taking
+  the rest of its word as the script or the next word; any `--long` flag
+  (including `--in-place` and `--expression=...`), any other letter, a
+  lone `-`, a flag after the first operand, and `--` followed by a word
+  that is not a script all make the call `executes`. A script is one or
+  more commands separated by `;` or a newline, each an optional one- or
+  two-address range whose first address is never zero followed by `p`, with
+  blanks allowed around the command but not inside an address or around
+  `,`; a regex address is `/.../` where `\` escapes the next character. A
+  script that is empty, a comment, or holds any other command letter (`w`,
+  `e`, `r`, `s`, `d`, `q` and the rest), a write or execute, a GNU address
+  extension, or anything the classifier cannot parse makes the call
+  `executes`. The script is never a path; with `-e` every operand is a
+  file, otherwise the first operand is the script and the rest are files,
+  and with no file the workdir is declared, as `cat` with no operand does.
+- `git log`, `git show`, `git diff`, `git status`, `git rev-parse`,
+  `git ls-files`, `git blame` and `git branch --show-current` are read-only.
+  `git log` also accepts `-<number>`, such as `-8`. A global flag before
+  the subcommand (`-c`, `--exec-path`, `-p`/`--paginate`, `--git-dir`,
+  `--work-tree`), a subcommand flag `--ext-diff`, `--textconv`, `--output`
+  or `--output=<file>`, any other `git branch` form, and any other
+  subcommand make the call `executes`. Operands of `git rev-parse` are
+  revisions, not paths, so they declare no paths. Repository git config can
+  make `diff`, `log -p`, `show`, `blame` and `status` run a program, and
+  the `.git/` review covers it (`docs/permissions.md`, "Fast paths").
+- `echo` reads a word as an option only when it is `-` followed by one or
+  more of `n`, `e`, `E`; every other word is text, and of the option words
+  only `-n` (and clusters of `n`, such as `-nn`) is accepted, so `echo ---`
+  reads while `echo -e` does not.
 - A part with a path under `/proc/`, resolved against `workdir`, is not
   read-only, so the call is reviewed: `/proc/<pid>/environ` holds the
   process's environment, a key from an `env` source among it
@@ -572,10 +612,10 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - A command of one part, with nothing the classifier cannot read plainly,
   has the command as its subject. The prefix offered is its first word, and
   the second word too when it is a plain word, starting with no `-` and
-  holding no `/`, `.` or `=`: `npm test -- --watch` offers `npm test`, and
+  holding no `/`, `.`, `=` or `>`: `npm test -- --watch` offers `npm test`, and
   `rm -rf build` offers `rm`. Any other command has no subject, so no allow
   rule or session grant matches it, and an approval of it cannot be
-  remembered.
+  remembered. A redirect stays in the subject as written.
 - The credential deny (`docs/permissions.md`, "Credentials") sees paths
   only for commands the recogniser understands. A command it does not
   understand, such as `python -c` opening a file, declares no paths, so
