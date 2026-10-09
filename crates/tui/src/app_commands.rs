@@ -488,6 +488,9 @@ impl App {
         self.phase = Phase::Starting;
         self.clear_selection();
         self.attached_screen_mut().clear();
+        // Home keeps no session's images: a late answer or viewer
+        // completion from it is dropped.
+        self.forget_images();
         self.panel_state.reset();
         self.session_views_reset();
         self.offer = crate::offer::Offer::default();

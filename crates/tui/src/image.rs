@@ -148,6 +148,23 @@ fn cut(label: &str, max: usize) -> String {
     out
 }
 
+/// One image the viewer opens: its file name, the session it came
+/// from, its bytes in base64, and the session generation that asked,
+/// so a stale completion after a session change is dropped.
+pub(crate) struct View {
+    pub(crate) name: String,
+    pub(crate) session: String,
+    pub(crate) data: String,
+    pub(crate) generation: u64,
+}
+
+/// What the app queues for the loop: the terminal never writes to the
+/// tty itself.
+#[derive(Default)]
+pub(crate) struct Out {
+    pub(crate) view: Vec<View>,
+}
+
 #[cfg(test)]
 #[path = "image_tests.rs"]
 mod tests;

@@ -76,6 +76,7 @@ mod turn;
 mod turn_text;
 mod usage_view;
 mod view;
+mod viewer;
 mod window;
 mod working;
 
@@ -149,6 +150,17 @@ pub(crate) enum Input {
         ticket: u64,
         /// The image in base64, or the notice.
         result: Result<String, String>,
+    },
+    /// A viewer worker finished opening `name`: nothing on success, or
+    /// why the open failed. A completion from an earlier session is
+    /// dropped (`docs/tui.md`, "Images").
+    Viewed {
+        /// The file's name.
+        name: String,
+        /// The session generation that asked.
+        generation: u64,
+        /// Nothing, or why the open failed.
+        result: Result<(), String>,
     },
     /// A model-list read answered: the installed models, or why they
     /// could not be read. An answer for a closed loop is dropped.

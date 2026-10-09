@@ -46,6 +46,11 @@ impl Pages {
         }
     }
 
+    /// The image `id` names, on any page.
+    pub(crate) fn image(&self, id: u32) -> Option<&image::Part> {
+        self.images.parts.get(&id)
+    }
+
     /// The conversation's width in columns: what an image's line is cut
     /// to (`docs/tui.md`, "Images").
     pub(crate) fn column_width(&self) -> u16 {

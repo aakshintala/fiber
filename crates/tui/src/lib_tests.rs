@@ -145,6 +145,8 @@ pub(super) fn new_loop<B: Backend>(
         var: Box::new(|_| None),
         copy_command: None,
         open_command: None,
+        viewer: Vec::new(),
+        images_dir: PathBuf::new(),
         title: crate::osc::Title::default(),
         shape: crate::osc::Shape::default(),
         retry: None,
@@ -1863,6 +1865,8 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         var: Box::new(|_| None),
         copy_command: None,
         open_command: None,
+        viewer: Vec::new(),
+        images_dir: PathBuf::new(),
         title: crate::osc::Title::default(),
         shape: crate::osc::Shape::default(),
         retry: None,
@@ -1978,7 +1982,8 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
             | Input::Resize
             | Input::Files { .. }
             | Input::Models(_)
-            | Input::Image { .. } => panic!("a pause sent something else"),
+            | Input::Image { .. }
+            | Input::Viewed { .. } => panic!("a pause sent something else"),
         }
     }
     generations.sort();

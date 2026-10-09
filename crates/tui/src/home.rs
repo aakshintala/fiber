@@ -58,6 +58,9 @@ pub struct Launch {
     /// `tui.logo_glyph`: the one-row logo's mark, "⌇" or "≈". The
     /// four-row logo's wave is drawn pixels, and never changes.
     pub logo_glyph: String,
+    /// Where the viewer writes the copies it opens: `cache/images` in
+    /// Fiber home (`docs/tui.md`, "Images").
+    pub images: PathBuf,
     /// `tui.rail.width`: the rail's share of the screen's width, in
     /// percent (`docs/tui.md`, "Layout").
     pub rail_share: f64,

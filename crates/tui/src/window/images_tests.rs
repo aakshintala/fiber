@@ -65,48 +65,48 @@ fn ids_follow_first_sight_and_survive_a_refold() {
     // Two paths take 1 and 2, in the order first seen.
     pages.apply(&started(&["artifacts/b.png", "artifacts/a.png"]));
     assert_eq!(
-        pages.images.parts.get(&1u32).map(|part| part.path.clone()),
+        pages.image(1).map(|part| part.path.clone()),
         Some("artifacts/b.png".to_owned())
     );
     assert_eq!(
-        pages.images.parts.get(&2u32).map(|part| part.path.clone()),
+        pages.image(2).map(|part| part.path.clone()),
         Some("artifacts/a.png".to_owned())
     );
     // A repeated path keeps its id; a new one takes the next.
     pages.apply(&completed("artifacts/a.png"));
     pages.apply(&completed("artifacts/c.png"));
     assert_eq!(
-        pages.images.parts.get(&2u32).map(|part| part.path.clone()),
+        pages.image(2).map(|part| part.path.clone()),
         Some("artifacts/a.png".to_owned())
     );
     assert_eq!(
-        pages.images.parts.get(&3u32).map(|part| part.path.clone()),
+        pages.image(3).map(|part| part.path.clone()),
         Some("artifacts/c.png".to_owned())
     );
     // A steering message's image is noted too.
     pages.apply(&steered("artifacts/s.png"));
     assert_eq!(
-        pages.images.parts.get(&4u32).map(|part| part.path.clone()),
+        pages.image(4).map(|part| part.path.clone()),
         Some("artifacts/s.png".to_owned())
     );
     // A page refold notes the same paths again and keeps every id:
     // `load` notes each line it folds, and seen paths keep their ids.
     pages.load(&[started(&["artifacts/b.png", "artifacts/a.png"])]);
     assert_eq!(
-        pages.images.parts.get(&1u32).map(|part| part.path.clone()),
+        pages.image(1).map(|part| part.path.clone()),
         Some("artifacts/b.png".to_owned())
     );
     assert_eq!(
-        pages.images.parts.get(&2u32).map(|part| part.path.clone()),
+        pages.image(2).map(|part| part.path.clone()),
         Some("artifacts/a.png".to_owned())
     );
-    assert_eq!(pages.images.parts.get(&5u32), None);
+    assert_eq!(pages.image(5), None);
     // `clear` restarts at 1 with the new session.
     pages.clear();
-    assert_eq!(pages.images.parts.get(&1u32), None);
+    assert_eq!(pages.image(1), None);
     pages.apply(&started(&["artifacts/z.png"]));
     assert_eq!(
-        pages.images.parts.get(&1u32).map(|part| part.path.clone()),
+        pages.image(1).map(|part| part.path.clone()),
         Some("artifacts/z.png".to_owned())
     );
 }

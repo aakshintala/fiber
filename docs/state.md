@@ -39,6 +39,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
   recent.jsonl                    recently exited sessions, a rebuildable index
   cache/models/<provider>.json    discovered model list
   cache/mcp/<server>.json         an MCP server's last tool and prompt lists
+  cache/images/<session>-<file>    an image the terminal opened in the system viewer (docs/tui.md, "Images")
   crashes/<id>-<ms>.txt           one report per panic (docs/code-quality.md)
   logs/hub.log, logs/hub.log.1    the hub's diagnostic log and its previous file
   logs/<kind>-<id>.log            one other process's diagnostic log

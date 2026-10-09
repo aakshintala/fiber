@@ -49,6 +49,7 @@ mod form;
 #[path = "history.rs"]
 mod history;
 mod home;
+mod images;
 pub(crate) mod items;
 mod keyboard;
 mod links;
@@ -216,6 +217,9 @@ pub(crate) struct App {
     paste: paste::Paste,
     phase: Phase,
     link: Link,
+    /// The attached session's image fetches and queued viewer opens
+    /// (`docs/tui.md`, "Images").
+    images: images::Images,
     /// Lines held until the hub connects: the `start` of an early Enter.
     held: Vec<String>,
     /// Commands waiting for their answer: kind and the draft they carried.
@@ -307,6 +311,7 @@ impl App {
             paste: paste::Paste::default(),
             phase: Phase::Starting,
             link: Link::Waiting,
+            images: images::Images::default(),
             held: Vec::new(),
             pending: HashMap::new(),
             notices: Notices::default(),
@@ -352,6 +357,9 @@ impl App {
             busy: false,
         };
         self.panel_state.attached();
+        // A new session's images start over: a late answer or viewer
+        // completion from the last one is dropped.
+        self.forget_images();
     }
 
     /// Hands one key to what is on top: the key map above the model
@@ -512,6 +520,7 @@ impl App {
         // the hub connection and its levels are gone.
         self.drop_items();
         self.sessions_dropped();
+        self.images_disconnected();
         self.find_lost();
         self.abandon_copy();
         self.settle();
@@ -788,6 +797,11 @@ impl App {
                 if let Some(lines) = self.history_answered(&id, hub.payload.get("result")) {
                     return lines;
                 }
+                // A `read_file` for a viewer open answers here, never
+                // in the pages: its bytes go to the loop's worker.
+                if self.image_answered(&id, hub.payload.get("result")) {
+                    return Vec::new();
+                }
                 let session = hub
                     .payload
                     .get("result")
@@ -805,6 +819,9 @@ impl App {
             "command_rejected" => {
                 if let Some(id) = command_id {
                     let message = hub_string(&hub.payload, "message").unwrap_or_default();
+                    if self.image_rejected(&id, &message) {
+                        return Vec::new();
+                    }
                     self.config_views_refused(&id, &message);
                     self.session_views_refused(&id, &message);
                     if !self.history_rejected(&id, &message) {
