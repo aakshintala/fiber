@@ -1122,20 +1122,32 @@ fn the_conversation_area_is_the_drawn_rect() {
         ("the approval panel", panel),
     ] {
         let area = app.conversation_area();
-        assert_eq!(drawn_origin(&mut app), (area.x, area.y), "{name}");
+        // The empty prompt draws no bubble, so the card's top edge is
+        // the first drawn row and "first" sits one row below it.
+        assert_eq!(drawn_origin(&mut app), (area.x, area.y + 1), "{name}");
         assert_eq!(
             usize::from(area.height),
             app.conversation_height(),
             "{name}"
         );
-        // Following, the conversation's last row is the area's last.
+        // Following, the conversation's last row is the area's last:
+        // the card's bottom edge, with the ▣ line above it.
         app.on_key(Key::End, now());
         let screen = rows(&app);
         let last = screen
             .get(usize::from(area.bottom() - 1))
             .cloned()
             .unwrap_or_default();
-        assert!(last.contains("▣ completed"), "{name}: {last:?}");
+        let before = screen
+            .get(usize::from(area.bottom() - 2))
+            .cloned()
+            .unwrap_or_default();
+        assert!(before.contains("▣ completed"), "{name}: {before:?}");
+        let edge = last.trim();
+        assert!(
+            !edge.is_empty() && edge.chars().all(|cell| cell == '▀'),
+            "{name}: {last:?}"
+        );
         let below = screen
             .get(usize::from(area.bottom()))
             .cloned()

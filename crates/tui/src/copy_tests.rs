@@ -141,11 +141,13 @@ fn the_overlay_row_hides_a_copy_target_under_it() {
     // the code header, five rows from the end, on the bottom row.
     assert_eq!(app.conversation_height(), 5);
     app.on_key(Key::PageUp, now);
-    assert_eq!(row_of(&app, 30, 8, "rust"), Some(4));
-    assert_eq!(click(&mut app, 27, 4), Effect::Copy(code.to_owned()));
+    assert_eq!(row_of(&app, 30, 8, "rust"), Some(3));
+    assert_eq!(click(&mut app, 27, 3), Effect::Copy(code.to_owned()));
     app.on_line(turn_started("more"));
     assert!(app.has_new());
-    assert_eq!(row_of(&app, 30, 8, "rust"), None);
+    // The card's edges leave the code header on screen, with the
+    // overlay over the row below it, hiding the copy target under it.
+    assert_eq!(row_of(&app, 30, 8, "rust"), Some(3));
     assert_eq!(click(&mut app, 27, 4), Effect::None);
 }
 
@@ -182,7 +184,7 @@ fn a_click_maps_past_a_prompt_that_wraps() {
         Some("a_1"),
     ));
     let header = row_of(&app, 30, 12, "rust").expect("header");
-    assert_eq!(header, 7);
+    assert_eq!(header, 6);
     assert_eq!(
         click(&mut app, 27, header),
         Effect::Copy("let a = 1;".to_owned())

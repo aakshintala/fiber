@@ -121,6 +121,11 @@ fn texts(app: &App) -> Vec<String> {
 }
 
 /// The rows of the "you answered" rules, each rule from its first row.
+/// A card edge row carries no text: the card's half-block edges.
+fn is_edge(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|ch| ch == '▄' || ch == '▀')
+}
+
 fn rules(app: &App) -> Vec<Vec<String>> {
     let texts = texts(app);
     texts
@@ -131,7 +136,7 @@ fn rules(app: &App) -> Vec<Vec<String>> {
             texts
                 .iter()
                 .skip(at)
-                .take_while(|text| !text.starts_with('▣'))
+                .take_while(|text| !text.starts_with('▣') && !is_edge(text))
                 .cloned()
                 .collect()
         })

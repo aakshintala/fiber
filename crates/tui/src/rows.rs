@@ -115,7 +115,6 @@ impl Rows {
     /// background; with `edges`, an `edge_row` (`width` cells,
     /// decoration) is inserted at `from` and pushed after the last. No
     /// rows from `from`: nothing (`docs/tui.md`, "Look").
-    #[allow(dead_code, reason = "the turn card's surface (task 3.3) calls this")]
     pub(crate) fn on_surface(&mut self, from: usize, width: u16, tint: Role, edges: Edges) {
         let Some(body) = self.rows.get_mut(from..) else {
             return;

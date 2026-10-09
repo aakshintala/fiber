@@ -65,10 +65,6 @@ pub(crate) fn edged(rows: usize, room: usize) -> usize {
 /// Which of a surface's edge rows draw: a card cut across pages draws no
 /// edge at the cut (`docs/tui.md`, "Look", "History and paging").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "the turn card's surface (task 3.3) threads this through"
-)]
 pub(crate) struct Edges {
     pub(crate) top: bool,
     pub(crate) bottom: bool,
@@ -76,10 +72,6 @@ pub(crate) struct Edges {
 
 impl Edges {
     /// Both edge rows draw.
-    #[allow(
-        dead_code,
-        reason = "the turn card's surface (task 3.3) threads this through"
-    )]
     pub(crate) const BOTH: Self = Self {
         top: true,
         bottom: true,

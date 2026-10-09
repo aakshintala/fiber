@@ -686,13 +686,13 @@ fn the_first_match_at_or_after_the_top_row_is_current() {
     // The top row between the two matches: only the one below can become
     // current. The smaller conversation no longer shows it, so the view
     // scrolls to reveal it, and nothing scrolls back.
-    app.jump(5);
-    assert_eq!(app.top(), Some(5));
+    app.jump(6);
+    assert_eq!(app.top(), Some(6));
     let ranges = search_all(&mut app, &log, "needle");
     assert!(ranges.is_empty());
     assert_eq!(count(&app), "2 of 2");
     assert_eq!(current_text(&app).as_deref(), Some("needle below"));
-    assert_eq!(app.top(), Some(13));
+    assert_eq!(app.top(), Some(14));
 }
 
 #[test]
@@ -1306,8 +1306,8 @@ fn rescanning_keeps_the_current_match_when_an_earlier_one_appears() {
     replies.push("needle two");
     let refs: Vec<&str> = replies.clone();
     text_turn(&mut log, &mut seq, &mut app, &refs);
-    app.jump(5);
-    assert_eq!(app.top(), Some(5));
+    app.jump(6);
+    assert_eq!(app.top(), Some(6));
     search_all(&mut app, &log, "needle");
     assert_eq!(current_text(&app).as_deref(), Some("needle two"));
     let current = app.find.current().cloned().expect("a current match");
@@ -1700,12 +1700,12 @@ fn revealing_scrolls_only_when_the_match_is_not_shown() {
     replies.push("needle far");
     let refs: Vec<&str> = replies.clone();
     text_turn(&mut log, &mut seq, &mut app, &refs);
-    app.jump(2);
-    assert_eq!(app.top(), Some(2));
+    app.jump(3);
+    assert_eq!(app.top(), Some(3));
     search_all(&mut app, &log, "needle");
     // The first match shows: no scroll.
     assert_eq!(current_text(&app).as_deref(), Some("needle five"));
-    assert_eq!(app.top(), Some(2));
+    assert_eq!(app.top(), Some(3));
     // The next does not: the view scrolls to it.
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert_eq!(current_text(&app).as_deref(), Some("needle far"));
