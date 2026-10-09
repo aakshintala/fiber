@@ -60,6 +60,9 @@ pub(crate) type Line = Arc<[u8]>;
 /// A rejected feed command: its code and sentence.
 pub(crate) type Refusal = (ErrorCode, String);
 
+/// Called at the end of every scan of `run/` with the names it found.
+pub(crate) type ScanHook = Box<dyn Fn(&BTreeSet<String>) + Send + Sync>;
+
 /// The feed: its registry, the scanner and the summary connections.
 pub(crate) struct Feed {
     home: PathBuf,
@@ -77,7 +80,7 @@ pub(crate) struct Feed {
     /// Called at the end of every scan of `run/` with the names it found,
     /// set once by the hub serving it: the rejoin sweep collects resumed
     /// sessions there. Never under the state lock.
-    pub(crate) on_scan: OnceLock<Box<dyn Fn(&BTreeSet<String>) + Send + Sync>>,
+    pub(crate) on_scan: OnceLock<ScanHook>,
     #[cfg(test)]
     settle_pause: Mutex<Option<SettlePause>>,
 }

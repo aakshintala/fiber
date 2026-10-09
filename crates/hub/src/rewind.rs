@@ -173,7 +173,16 @@ pub(crate) fn follow(
     let Some(stream) = reach(hub, &from, &next) else {
         return;
     };
-    attach(&next.0, stream, hub, writer, relays, Some(replay), None, false);
+    attach(
+        &next.0,
+        stream,
+        hub,
+        writer,
+        relays,
+        Some(replay),
+        None,
+        false,
+    );
 }
 
 /// `next`'s lock in [`Hub::starting`]: one mutex per next session, so two

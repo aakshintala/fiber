@@ -10,14 +10,17 @@
 //! plan): on the scanner thread it only collects candidates, and a single
 //! `hub-rejoin` worker reads the logs, connects and attaches.
 
-#![allow(dead_code, reason = "the red commit holds inert signatures; later commits fill them")]
+#![allow(
+    dead_code,
+    reason = "the red commit holds inert signatures; later commits fill them"
+)]
 
 use std::collections::{BTreeSet, HashMap};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, Weak};
 #[cfg(test)]
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex, Weak};
 
 use serde_json::{Map, Value};
 
@@ -76,15 +79,41 @@ impl Rejoin {
 /// Exclusive: false when the connection is closed, any relay for `session`
 /// exists, or `session` is opening. Otherwise (and always when not
 /// exclusive) records `mark` at `epoch` and returns true.
-pub(crate) fn admit(held: &mut Relays, session: &str, exclusive: bool, mark: Mark, epoch: u64) -> bool {
-    let _ = (held, session, mark, epoch);
-    !exclusive
+pub(crate) fn admit(
+    held: &mut Relays,
+    session: &str,
+    exclusive: bool,
+    mark: Mark,
+    epoch: u64,
+) -> bool {
+    if exclusive
+        && (held.rejoin.closed
+            || held.entries.iter().any(|entry| entry.session == session)
+            || held
+                .rejoin
+                .opening
+                .get(session)
+                .is_some_and(|open| *open > 0))
+    {
+        return false;
+    }
+    let mut mark = mark;
+    mark.epoch = epoch;
+    held.rejoin.marks.insert(session.to_owned(), mark);
+    true
 }
 
 /// Writes `mark` back for `session` only when its epoch is the stored one:
 /// a write-back for an older epoch changes nothing.
 pub(crate) fn store_back(held: &mut Relays, session: &str, mark: Mark) {
-    let _ = (held, session, mark);
+    if held
+        .rejoin
+        .marks
+        .get(session)
+        .is_some_and(|stored| stored.epoch == mark.epoch)
+    {
+        held.rejoin.marks.insert(session.to_owned(), mark);
+    }
 }
 
 /// Marks `session` opening on this connection; Drop removes one
@@ -97,7 +126,7 @@ pub(crate) struct Opening {
 
 impl Opening {
     pub(crate) fn mark(held: &mut Relays, relays: &Arc<Mutex<Relays>>, session: &str) -> Opening {
-        let _ = held;
+        *held.rejoin.opening.entry(session.to_owned()).or_insert(0) += 1;
         Opening {
             relays: Arc::clone(relays),
             session: session.to_owned(),
@@ -107,7 +136,13 @@ impl Opening {
 
 impl Drop for Opening {
     fn drop(&mut self) {
-        let _ = (&self.relays, &self.session);
+        let mut held = lock(&self.relays);
+        match held.rejoin.opening.get_mut(&self.session) {
+            Some(open) if *open > 1 => *open -= 1,
+            _ => {
+                held.rejoin.opening.remove(&self.session);
+            }
+        }
     }
 }
 
@@ -123,9 +158,34 @@ pub(crate) struct Candidate {
 /// What one sweep collects on the scanner thread, with no IO: each live
 /// connection's sessions with a kept subscription, no relay, a mark, a name
 /// in `names`, not opening and not closed.
-pub(crate) fn candidates(held: &Relays, names: &BTreeSet<String>) -> Vec<(String, Mark, Map<String, Value>)> {
-    let _ = (held, names);
-    Vec::new()
+pub(crate) fn candidates(
+    held: &Relays,
+    names: &BTreeSet<String>,
+) -> Vec<(String, Mark, Map<String, Value>)> {
+    if held.rejoin.closed {
+        return Vec::new();
+    }
+    held.subscribed
+        .iter()
+        .filter_map(|(session, kept)| {
+            if !names.contains(session) {
+                return None;
+            }
+            if held.entries.iter().any(|entry| entry.session == *session) {
+                return None;
+            }
+            if held
+                .rejoin
+                .opening
+                .get(session)
+                .is_some_and(|open| *open > 0)
+            {
+                return None;
+            }
+            let mark = held.rejoin.marks.get(session)?.clone();
+            Some((session.clone(), mark, kept.clone()))
+        })
+        .collect()
 }
 
 /// Hub-wide: every served connection's writer and relays, held weakly.
@@ -140,25 +200,30 @@ pub(crate) struct Connections {
     pub(crate) pass_done: Mutex<Option<mpsc::Sender<()>>>,
 }
 
+/// One served connection as the sweep holds it: its number, its writer
+/// and its relays, the last two weakly so a gone connection drops out.
+type Held = (u64, Weak<Mutex<UnixStream>>, Weak<Mutex<Relays>>);
+
 #[derive(Default)]
 struct Inner {
-    conns: Vec<(u64, Weak<Mutex<UnixStream>>, Weak<Mutex<Relays>>)>,
+    conns: Vec<Held>,
     busy: bool,
 }
 
 impl Connections {
-    pub(crate) fn register(&self, n: u64, writer: &Arc<Mutex<UnixStream>>, relays: &Arc<Mutex<Relays>>) {
-        lock(&self.inner).conns.push((
-            n,
-            Arc::downgrade(writer),
-            Arc::downgrade(relays),
-        ));
+    pub(crate) fn register(
+        &self,
+        n: u64,
+        writer: &Arc<Mutex<UnixStream>>,
+        relays: &Arc<Mutex<Relays>>,
+    ) {
+        lock(&self.inner)
+            .conns
+            .push((n, Arc::downgrade(writer), Arc::downgrade(relays)));
     }
 
     pub(crate) fn unregister(&self, n: u64) {
-        lock(&self.inner)
-            .conns
-            .retain(|(id, _, _)| *id != n);
+        lock(&self.inner).conns.retain(|(id, _, _)| *id != n);
     }
 
     /// The registered connection numbers, pruning dead entries first.

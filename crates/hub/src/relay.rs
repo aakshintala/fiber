@@ -445,6 +445,10 @@ pub(crate) fn route(
 /// the connection is gone, so nothing is answered. Exclusive gives up when
 /// the connection already relays the session or is opening it: the sweep's
 /// rejoin, never a client command.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the session, its stream, the hub, the client, the relays, the replay, the command and its exclusivity are one hand-off"
+)]
 pub(crate) fn attach(
     session: &str,
     stream: UnixStream,
