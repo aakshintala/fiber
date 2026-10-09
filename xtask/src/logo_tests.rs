@@ -308,16 +308,7 @@ fn test_font(sizes: &[(i16, i16)]) -> Vec<u8> {
             glyph.extend_from_slice(&word.to_be_bytes());
         }
         glyph.extend_from_slice(&[1u8, 1, 1, 1]);
-        for delta in [
-            0i16,
-            width_units,
-            0,
-            -width_units,
-            0,
-            0,
-            height_units,
-            0,
-        ] {
+        for delta in [0i16, width_units, 0, -width_units, 0, 0, height_units, 0] {
             glyph.extend_from_slice(&delta.to_be_bytes());
         }
         glyph
