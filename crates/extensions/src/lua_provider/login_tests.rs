@@ -151,6 +151,40 @@ fn an_expired_stored_value_is_credential_failed() {
 }
 
 #[test]
+fn a_stored_value_expiring_this_instant_is_credential_failed() {
+    // Equal to the wall is already expired: the write refuses it before
+    // anything is stored, so the slot stays empty.
+    let wall = 1_700_000_000u64;
+    let root = fakes::TempDir::new("fiber-provider-login-boundary");
+    let home = root.path().join("home");
+    let dir = root.path().join("ext");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("init.lua"),
+        format!(
+            r#"fiber.provider("p", {{
+              credential = {{ timeout = 60000, run = function(arg)
+                local fresh = host.oauth.refresh(function(stored)
+                  return {{ token = "t", expires_at = {wall}, refresh_token = "rt" }}
+                end)
+                return {{ token = fresh.token, expires_at = fresh.expires_at }}
+              end }}
+            }})"#
+        ),
+    )
+    .unwrap();
+    let extension = Arc::new(LuaExtension::new("ext", dir, home, FakeClock::new()));
+    let provider = LuaProvider::new(extension, "p");
+    let error = provider.login("p", None, LoginMethod::Browser).unwrap_err();
+    assert_eq!(
+        error.code(),
+        contract::ErrorCode::CredentialFailed,
+        "{error:?}"
+    );
+}
+
+#[test]
 fn an_expired_write_inside_a_login_is_credential_failed() {
     let (_root, provider) = provider("fiber-provider-login-expired-write", FAILING, "\"expired\"");
     let error = provider.login("p", None, LoginMethod::Browser).unwrap_err();

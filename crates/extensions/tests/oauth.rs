@@ -1662,6 +1662,7 @@ fn poll_pending_that_is_not_a_status_list_is_a_calling_code_error() {
         ("{ 99 }", "must be a list"),
         ("{ 600 }", "must be a list"),
         ("{ [2] = 403 }", "must be a list"),
+        ("{ [0] = 403 }", "must be a list"),
     ] {
         let opts = format!(
             "{{ url = \"{}/device/token\", pending = {pending} }}",
@@ -1673,6 +1674,19 @@ fn poll_pending_that_is_not_a_status_list_is_a_calling_code_error() {
         assert!(message.contains(wanted), "{pending}: {message}");
     }
     assert!(server.requests().is_empty());
+}
+
+#[test]
+fn poll_pending_at_the_status_boundaries_passes_validation() {
+    // 100 and 599 are statuses, so the poll runs past validation and fails
+    // at its first request instead: a refused loopback port answers nothing.
+    let env = Env::new();
+    let ext = env.extension();
+    let opts = "{ url = \"http://127.0.0.1:1/device/token\", pending = { 100, 599 } }";
+    let caught = run(&ext, "poll_pending_caught", opts).unwrap();
+    let (kind, message) = caught.split_once('\n').unwrap();
+    assert_eq!(kind, "table", "{caught}");
+    assert!(message.contains("host.http"), "{message}");
 }
 
 // ------------------------------------------------------- callback with path

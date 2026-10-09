@@ -558,6 +558,43 @@ impl Browser for ShowBrowser {
 }
 
 #[test]
+fn device_on_a_declared_secret_is_a_usage_error() {
+    let setup = Setup::new();
+    let dir = setup.home().join("extensions").join("acme");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "secrets": ["api_key"]})
+            .to_string(),
+    )
+    .unwrap();
+    let providers = setup.providers();
+    let mut err = Vec::new();
+    let mut keys = Plain;
+    let result = login(
+        Some("api_key"),
+        None,
+        &mut LoginIo {
+            home: &setup.home(),
+            providers: &providers,
+            terminal: false,
+            stdin: &mut Cursor::new(String::new()),
+            err: &mut err,
+            keys: &mut keys,
+            device: true,
+            clock: setup.clock(),
+        },
+    );
+    let error = result.unwrap_err();
+    assert_eq!(error.code, ErrorCode::Usage);
+    assert!(
+        error.message.contains("--device"),
+        "{message}",
+        message = error.message
+    );
+}
+
+#[test]
 fn fiber_login_is_attended_whatever_stdin_is() {
     assert!(Attended::attached().attended());
 }

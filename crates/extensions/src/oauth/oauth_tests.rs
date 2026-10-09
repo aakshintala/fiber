@@ -686,12 +686,21 @@ fn a_login_hold_reads_nil_and_keeps_writes_in_its_slot() {
         let values: mlua::MultiValue = lua.load(format!("return {method}")).eval().unwrap();
         values.into_vec()
     };
-    let unusable = returned("held:write({ token = 't' })");
+    // An empty token and a missing expiry both fail the usable check.
+    let unusable = returned("held:write({ token = '', expires_at = 1700003600 })");
     let [mlua::Value::Nil, mlua::Value::String(message)] = unusable.as_slice() else {
         panic!("an unusable write returned no string failure: {unusable:?}");
     };
     let message = message.to_str().unwrap().to_owned();
     assert!(message.contains("`token` string"), "{message}");
+    let missing = returned("held:write({ token = 't' })");
+    let [mlua::Value::Nil, mlua::Value::String(missing)] = missing.as_slice() else {
+        panic!("a missing expiry returned no string failure: {missing:?}");
+    };
+    assert!(
+        missing.to_str().unwrap().contains("`token` string"),
+        "{missing:?}"
+    );
     let expired = returned(&format!(
         "held:write({{ token = 't', expires_at = {wall} }})"
     ));
