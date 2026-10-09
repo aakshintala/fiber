@@ -162,6 +162,15 @@ impl Tool for Read {
                 }
                 return output;
             }
+            // A PDF over the cap never reaches the child. `pages` does not
+            // apply: the file cannot be read at all, grammar errors aside
+            // (parsed before inspection).
+            Ok(Inspected::PdfOverCap { size }) => {
+                return failed(
+                    ErrorCode::UnsupportedFile,
+                    crate::pdf::over_cap_message(&path, size),
+                );
+            }
             Ok(Inspected::Unsupported { kind, size, hint }) => {
                 if let Err(output) = reject_pages(&path, pages) {
                     return output;

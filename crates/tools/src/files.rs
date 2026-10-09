@@ -73,6 +73,14 @@ pub(crate) enum Inspected {
         /// The hash of the bytes read, for the stale-file check.
         hash: u64,
     },
+    /// A PDF over the 64 MiB cap, by its metadata length and first bytes.
+    /// Its bytes were never loaded, so there is no hash and no stale-file
+    /// check: `read` refuses it before the child loads it
+    /// (`docs/tools.md`, "read").
+    PdfOverCap {
+        /// Size in bytes, from the file's metadata.
+        size: u64,
+    },
 }
 
 /// Why inspection failed.
@@ -209,6 +217,23 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
     if let Some((kind, hint)) = kind_of(meta.file_type()) {
         return Ok(unsupported(kind, size, hint));
     }
+    // A PDF over the cap is refused from its metadata length and first
+    // bytes, before its whole bytes are read below or loaded by the child.
+    if crate::pdf::pdf_over_cap(size) {
+        match pdf_magic(path) {
+            Ok(true) => return Ok(Inspected::PdfOverCap { size }),
+            Ok(false) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(InspectError::NotFound);
+            }
+            Err(error) => {
+                return Err(InspectError::Tool(format!(
+                    "`{}` could not be read: {error}.",
+                    path.display()
+                )));
+            }
+        }
+    }
     let bytes = read_regular(path)?;
     let size = u64::try_from(bytes.len()).map_err(|_| {
         InspectError::Tool(format!(
@@ -235,6 +260,19 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
     match String::from_utf8(bytes) {
         Ok(text) => Ok(Inspected::Text { text }),
         Err(_) => Ok(unsupported("not UTF-8 text", size, "")),
+    }
+}
+
+/// Whether `path` starts with PDF magic, reading at most its first four
+/// bytes. A shorter file is not a PDF. Errors are the caller's to report,
+/// so `inspect` and `write` keep their own sentences.
+pub(crate) fn pdf_magic(path: &Path) -> io::Result<bool> {
+    use std::io::Read as _;
+    let mut head = [0u8; 4];
+    match fs::File::open(path)?.read_exact(&mut head) {
+        Ok(()) => Ok(head == *b"%PDF"),
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(error) => Err(error),
     }
 }
 

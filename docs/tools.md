@@ -239,7 +239,10 @@ path's directory, ending in `/`.
   and `pages` on a file that is not a PDF each fail with `invalid_arguments`,
   the message saying which. A range past the end fails with
   `invalid_arguments` and names the page count, and an unreadable PDF fails
-  with `unsupported_file` and the message. When rendering fails for another
+  with `unsupported_file` and the message. A PDF of more than 64 MiB
+  (67,108,864 bytes) fails with `unsupported_file`, naming the cap and the
+  file's size; `read` checks the file's size before the child loads it.
+  When rendering fails for another
   reason the part has no `pages` and the result says why. The
   provider module sends the PDF natively where its protocol accepts a PDF in a
   tool result, and otherwise sends the pages rendered as images, which go

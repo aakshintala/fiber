@@ -15,6 +15,7 @@ use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Map, Value, json};
 
 use super::page_range;
+use super::{PDF_MAX_BYTES, pdf_over_cap};
 use crate::Files;
 
 /// How long a cancel test waits for the renderer to start, and for the call
@@ -104,6 +105,65 @@ fn pdf_part(output: &Output) -> Option<(String, u32, Option<usize>)> {
 
 fn pages_argument(text: &str) -> Map<String, Value> {
     arguments(json!({"path": "a.pdf", "pages": text}))
+}
+
+#[test]
+fn the_pdf_cap_fails_over_not_at() {
+    for (len, over) in [
+        (0, false),
+        (PDF_MAX_BYTES - 1, false),
+        (PDF_MAX_BYTES, false),
+        (PDF_MAX_BYTES + 1, true),
+    ] {
+        assert_eq!(pdf_over_cap(len), over, "{len}");
+    }
+    assert_eq!(PDF_MAX_BYTES, 67_108_864);
+}
+
+/// A sparse PDF of `len` bytes: PDF magic up front, zeros after. Instant
+/// to make at any size, and reading it touches no clock.
+fn sparse_pdf(path: &Path, len: u64) {
+    fs::write(path, b"%PDF-1.4 sparse").unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_len(len)
+        .unwrap();
+}
+
+#[test]
+fn a_pdf_one_byte_over_the_cap_never_reaches_the_child() {
+    let dir = TempDir::new("fiber-pdf-cap-over");
+    sparse_pdf(&dir.path().join("big.pdf"), PDF_MAX_BYTES + 1);
+    let fiber = fiber_stub(dir.path(), r#"touch "$(dirname "$0")/ran""#, IMAGE_BODY);
+    let ppm = ppm_stub(dir.path(), PPM_OK);
+    let output = run(dir.path(), &fiber, &ppm, json!({"path": "big.pdf"}));
+    assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile));
+    let text = message(&output);
+    assert!(text.contains("64 MiB"), "{text}");
+    assert!(text.contains(&PDF_MAX_BYTES.to_string()), "{text}");
+    assert!(text.contains(&(PDF_MAX_BYTES + 1).to_string()), "{text}");
+    assert!(!dir.path().join("ran").exists());
+}
+
+#[test]
+fn a_pdf_exactly_at_the_cap_reaches_the_child() {
+    let dir = TempDir::new("fiber-pdf-cap-exact");
+    sparse_pdf(&dir.path().join("edge.pdf"), PDF_MAX_BYTES);
+    let fiber = fiber_stub(
+        dir.path(),
+        r#"touch "$(dirname "$0")/ran"
+printf '{"file":"%s.pdf","page_count":2,"total":2}\n' "$5""#,
+        IMAGE_BODY,
+    );
+    let ppm = ppm_stub(dir.path(), PPM_OK);
+    let output = run(dir.path(), &fiber, &ppm, json!({"path": "edge.pdf"}));
+    assert!(
+        dir.path().join("ran").exists(),
+        "the child was called: {}",
+        message(&output)
+    );
 }
 
 #[test]

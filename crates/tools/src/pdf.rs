@@ -25,6 +25,26 @@ const RANGE_MAX: u32 = 20;
 /// "Image limits").
 const RENDER_SIDE: u32 = 2000;
 
+/// The most bytes a PDF may hold (`docs/tools.md`, "read"). A PDF over the
+/// cap fails before its bytes are loaded, so the child never holds more
+/// than about 2.1 times this (`docs/dependencies.md`).
+pub(crate) const PDF_MAX_BYTES: u64 = 67_108_864;
+
+/// Whether `len`, a file's metadata length in bytes, is over the PDF cap. A
+/// PDF of exactly [`PDF_MAX_BYTES`] is accepted.
+pub(crate) fn pdf_over_cap(len: u64) -> bool {
+    len > PDF_MAX_BYTES
+}
+
+/// The `unsupported_file` message for a PDF over the cap: it names the cap
+/// and the file's size.
+pub(crate) fn over_cap_message(path: &Path, size: u64) -> String {
+    format!(
+        "`{}` is a PDF of {size} bytes, over the 64 MiB cap ({PDF_MAX_BYTES} bytes).",
+        path.display()
+    )
+}
+
 /// Why the pages could not be rendered when `pdftoppm` is not installed.
 const MISSING_RENDERER: &str = "pdftoppm is not installed. It comes with poppler (poppler-utils on Debian and Ubuntu, brew install poppler on macOS)";
 

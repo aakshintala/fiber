@@ -163,6 +163,27 @@ fn existing(path: &Path) -> Result<Option<Vec<u8>>, (ErrorCode, String)> {
             unsupported_message(path, kind, meta.len(), hint),
         ));
     }
+    // A PDF over the read cap is never readable, so it is never seen and
+    // never writable: refuse it before its whole bytes are loaded below
+    // (`docs/tools.md`, "read").
+    if crate::pdf::pdf_over_cap(meta.len()) {
+        match crate::files::pdf_magic(path) {
+            Ok(true) => {
+                return Err((
+                    ErrorCode::UnsupportedFile,
+                    crate::pdf::over_cap_message(path, meta.len()),
+                ));
+            }
+            Ok(false) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err((
+                    ErrorCode::ToolError,
+                    format!("`{}` could not be written: {error}.", path.display()),
+                ));
+            }
+        }
+    }
     read_present(path)
 }
 
