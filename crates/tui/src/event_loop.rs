@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -78,12 +79,23 @@ pub fn run(
     // first frame: saving the choice writes the config default. It stays
     // shut when attaching to a session.
     let pick_at_start = launch.model.is_none() && launch.open_at == crate::OpenAt::Home;
+    // The viewer's copies live under Fiber home, taken before home
+    // keeps the launch description.
+    let images_dir = launch.images.clone();
     app.set_home(launch);
     if pick_at_start {
         app.open_model_picker(crate::model_picker::Mode::Choose);
     }
     app.set_size(width, height);
     let retry = Retry::new(&clock);
+    let open_command = crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
+        .map(|argv| argv.into_iter().map(str::to_owned).collect());
+    // The viewer opens what an opener opens with: none over SSH or
+    // with no opener on PATH, where a click says why.
+    let viewer = open_command
+        .as_ref()
+        .map(|_| crate::viewer::command(cfg!(target_os = "macos")))
+        .unwrap_or_default();
     let mut terminal = Loop {
         app,
         parser: Parser::default(),
@@ -103,13 +115,14 @@ pub fn run(
         var: Box::new(|name| std::env::var(name).ok()),
         copy_command: clipboard::command(|name| std::env::var_os(name), clipboard::on_path)
             .map(|argv| argv.into_iter().map(str::to_owned).collect()),
+        open_command,
+        viewer,
+        images_dir,
         paste_reader: crate::paste_image::command(
             cfg!(target_os = "macos"),
             |name| std::env::var_os(name),
             clipboard::on_path,
         ),
-        open_command: crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
-            .map(|argv| argv.into_iter().map(str::to_owned).collect()),
         title: osc::Title::default(),
         shape: osc::Shape::default(),
         retry: Some(Arc::clone(&retry)),
@@ -223,6 +236,12 @@ struct Loop<B: Backend> {
     /// The program a link click runs with the URL appended, or none over
     /// SSH or with no opener on `PATH` (`docs/tui.md`, "Links").
     open_command: Option<Vec<String>>,
+    /// The program a viewer worker runs with the copy appended, or none
+    /// where nothing opens (`docs/tui.md`, "Images").
+    viewer: Vec<String>,
+    /// Where the viewer writes its copies: `cache/images` in Fiber home
+    /// (`docs/state.md`).
+    images_dir: PathBuf,
     /// The window title last written.
     title: osc::Title,
     /// The pointer shape last written.
@@ -407,6 +426,12 @@ impl<B: Backend> Loop<B> {
                 }
             }
             Input::Image { ticket, result } => self.app.on_image(ticket, result),
+            Input::Viewed {
+                id,
+                name,
+                generation,
+                result,
+            } => self.app.image_viewed(id, &name, generation, result),
             Input::FindDue(generation) => {
                 let lines = self.app.find_due(generation);
                 self.send(&lines);
@@ -450,6 +475,9 @@ impl<B: Backend> Loop<B> {
         if let Some(text) = self.app.take_copy() {
             clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
         }
+        // The viewer opens the loop queued: one worker per view, each
+        // answering once with `Input::Viewed`.
+        self.drain_images();
         if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
             return Some(1);
         }
@@ -460,6 +488,18 @@ impl<B: Backend> Loop<B> {
         self.write_shape();
         self.write_alerts();
         None
+    }
+
+    /// Opens the queued viewer copies: one worker per view, each
+    /// answering once with `Input::Viewed`. Nothing is queued while
+    /// the loop has no channel to answer on.
+    fn drain_images(&mut self) {
+        let Some(out) = self.files_out.clone() else {
+            return;
+        };
+        for view in self.app.take_image_out().view {
+            crate::viewer::spawn(&self.viewer, &self.images_dir, view, &out);
+        }
     }
 
     /// Saves the shares a drag's release queued, in order, through the
@@ -615,6 +655,7 @@ impl<B: Backend> Loop<B> {
                 | Input::Resize
                 | Input::FindDue(_)
                 | Input::Image { .. }
+                | Input::Viewed { .. }
                 | Input::Models(_)
                 | Input::Files { .. }) => self.stash.push_back(other),
             }
@@ -765,6 +806,10 @@ impl<B: Backend> Drop for Loop<B> {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "lib_image_tests.rs"]
+mod image_tests;
 
 #[cfg(test)]
 #[path = "lib_focus_tests.rs"]

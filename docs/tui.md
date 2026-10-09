@@ -1507,7 +1507,9 @@ images show inline: an image a tool returned, in its ledger row, and a pasted
 image, in the prompt bubble.
 
 - An image is at most 40% of the conversation's width and 12 rows tall,
-  keeping its proportions. A click opens it in the system viewer.
+  keeping its proportions. A click opens it in the system viewer, from a
+  copy the terminal writes to `cache/images/` in Fiber home
+  (`docs/state.md`).
 - The terminal holds the image and moves it with the text, through kitty's
   Unicode placeholders. Fiber keeps no decoded image and sends nothing again
   on a scroll.
@@ -1515,6 +1517,9 @@ image, in the prompt bubble.
   rows without decoding it.
 
 Elsewhere an image is one clickable line, `▣ screenshot.png · 1280×800`.
+An image the terminal cannot show, because its file is missing or too
+large or the terminal refused it, is its one line, with a notice saying
+why, and is not asked for again in that session.
 iTerm2's protocol and Sixel make the client redraw an image on every scroll,
 so only the logo, drawn once, uses them. `tui.inline_images` turns inline
 images off.

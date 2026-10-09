@@ -31,6 +31,7 @@ fn an_identity_equal_to_the_workspace_is_not_git() {
         &identity,
         &config,
         tui::ThemeSetting::Follow,
+        dir.path(),
     );
     assert_eq!(launch.workspace, workspace);
     assert_eq!(launch.project, log::project_key(&identity));
@@ -51,6 +52,7 @@ fn an_identity_elsewhere_is_git_and_names_the_project() {
         &identity,
         &config,
         tui::ThemeSetting::Follow,
+        dir.path(),
     );
     assert_eq!(launch.workspace, workspace);
     assert_eq!(launch.project, log::project_key(&identity));
@@ -78,6 +80,7 @@ fn model_thinking_and_logo_glyph_come_from_config() {
         &identity,
         &set_config,
         tui::ThemeSetting::Follow,
+        dir.path(),
     );
     assert_eq!(set.model.as_deref(), Some("openai/gpt-5"));
     assert_eq!(set.thinking.as_deref(), Some("low"));
@@ -89,6 +92,7 @@ fn model_thinking_and_logo_glyph_come_from_config() {
         &identity,
         &plain_config,
         tui::ThemeSetting::Follow,
+        dir.path(),
     );
     assert_eq!(unset.model, None);
     assert_eq!(unset.thinking, None);
@@ -105,7 +109,8 @@ fn tui_hover_defaults_to_on_and_reads_off() {
             workspace.clone(),
             &workspace,
             &on,
-            tui::ThemeSetting::Follow
+            tui::ThemeSetting::Follow,
+            dir.path(),
         )
         .hover
     );
@@ -115,7 +120,8 @@ fn tui_hover_defaults_to_on_and_reads_off() {
             workspace.clone(),
             &workspace,
             &off,
-            tui::ThemeSetting::Follow
+            tui::ThemeSetting::Follow,
+            dir.path(),
         )
         .hover
     );
@@ -131,7 +137,8 @@ fn reduced_motion_comes_from_config_default_off() {
             workspace.clone(),
             &workspace,
             &off,
-            tui::ThemeSetting::Follow
+            tui::ThemeSetting::Follow,
+            dir.path(),
         )
         .reduced_motion
     );
@@ -145,7 +152,8 @@ fn reduced_motion_comes_from_config_default_off() {
             workspace.clone(),
             &workspace,
             &on,
-            tui::ThemeSetting::Follow
+            tui::ThemeSetting::Follow,
+            dir.path(),
         )
         .reduced_motion
     );
@@ -161,6 +169,7 @@ fn shares_and_cards_come_from_config_with_defaults() {
         &workspace,
         &plain,
         tui::ThemeSetting::Follow,
+        dir.path(),
     );
     assert_eq!((unset.rail_share, unset.panel_share), (15.0, 21.0));
     assert_eq!(
@@ -181,6 +190,7 @@ fn shares_and_cards_come_from_config_with_defaults() {
         &workspace,
         &set_config,
         tui::ThemeSetting::Follow,
+        dir.path(),
     );
     assert_eq!((set.rail_share, set.panel_share), (18.5, 30.0));
     assert_eq!(set.panel_cards, ["jobs", "session"]);
@@ -208,6 +218,7 @@ fn an_out_of_range_share_reads_as_the_default() {
             &workspace,
             &set_config,
             tui::ThemeSetting::Follow,
+            dir.path(),
         );
         assert_eq!(
             (set.rail_share, set.panel_share),
@@ -227,7 +238,8 @@ fn without_keys_anywhere_launch_keys_user_is_empty() {
             workspace.clone(),
             &workspace,
             &plain,
-            tui::ThemeSetting::Follow
+            tui::ThemeSetting::Follow,
+            dir.path(),
         )
         .keys
         .user
@@ -257,6 +269,7 @@ fn global_and_project_keys_merge_as_written() {
         &workspace,
         &config,
         tui::ThemeSetting::Follow,
+        dir.path(),
     )
     .keys
     .user;
@@ -279,7 +292,7 @@ fn the_theme_setting_is_passed_through() {
         text: Ok("{}".to_owned()),
     };
     let tui::ThemeSetting::File { name, text } =
-        launch(workspace.clone(), &workspace, &plain, setting).theme
+        launch(workspace.clone(), &workspace, &plain, setting, dir.path()).theme
     else {
         panic!("not a theme file");
     };
@@ -290,6 +303,7 @@ fn the_theme_setting_is_passed_through() {
         &workspace,
         &plain,
         tui::ThemeSetting::Light,
+        dir.path(),
     );
     assert!(matches!(light.theme, tui::ThemeSetting::Light));
 }
@@ -304,6 +318,7 @@ fn attention_switches_come_from_config_with_defaults() {
         &workspace,
         &plain,
         tui::ThemeSetting::default(),
+        dir.path(),
     );
     assert!(unset.attention.notification);
     assert!(unset.attention.bell);
@@ -319,6 +334,7 @@ fn attention_switches_come_from_config_with_defaults() {
             &workspace,
             &set_config,
             tui::ThemeSetting::default(),
+            dir.path(),
         );
         assert_eq!(
             (
@@ -349,6 +365,7 @@ fn scoped_models_come_from_config() {
         &identity,
         &set_config,
         tui::ThemeSetting::Follow,
+        dir.path(),
     );
     assert_eq!(set.scoped_models, ["openai/gpt-5"]);
     assert!(set.models.is_none());
@@ -359,6 +376,25 @@ fn scoped_models_come_from_config() {
         &identity,
         &plain_config,
         tui::ThemeSetting::Follow,
+        dir.path(),
     );
     assert!(unset.scoped_models.is_empty());
+}
+
+#[test]
+fn images_dir_is_under_home_cache() {
+    let dir = fakes::TempDir::new("fiber-launch-images");
+    let workspace = dir.path().to_path_buf();
+    let identity = workspace
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("canonical: {err}"));
+    let config = config(dir.path(), &workspace, Vec::new());
+    let launch = launch(
+        workspace,
+        &identity,
+        &config,
+        tui::ThemeSetting::Follow,
+        dir.path(),
+    );
+    assert_eq!(launch.images, dir.path().join("cache").join("images"));
 }
