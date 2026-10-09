@@ -593,9 +593,23 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     assert!(is_cooked(&before));
     assert!(!is_cooked(&raw));
     // Ctrl+C twice quits with 0 while the reader is still blocked: the
-    // master stays open and nothing is closed to wake it.
+    // master stays open and nothing is closed to wake it. The first
+    // press must visibly arm first: waiting for its hint proves the
+    // reader delivered a byte and the loop drew again, and drains the
+    // master, so the second press quits with no frame between and the
+    // return wait cannot stall behind an undrained pty.
     pair.main
-        .write_all(&[0x03, 0x03])
+        .write_all(&[0x03])
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    pair.main
+        .flush()
+        .unwrap_or_else(|err| panic!("flush: {err}"));
+    // The armed frame foots the quit hint, which no earlier frame
+    // holds. Only its first run is matched: the incremental redraw
+    // splits the hint around the cells the unarmed foot already holds.
+    read_until(&pair.main, b"Press Ctrl+C again to", "the armed quit hint");
+    pair.main
+        .write_all(&[0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
     pair.main
         .flush()
