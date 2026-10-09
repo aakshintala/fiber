@@ -52,3 +52,12 @@ The rail (#692), at a window of at least 150 columns so rail, conversation and p
 - Hidden: with the rail hidden, "N waiting" should join the status rows (narrow) or the panel's Session card (clicking it brings the rail back).
 - Scope: in A, click "+1 other · show all". The long-named pi-rig session should appear under an "other projects" divider, truncated with …, and the row should offer "show less". B shows every project with no scope line.
 - Hover: run with `--hover` and hover a B card. The whole card should brighten; in compact a dim footer at the rail's bottom should name the full session, workspace, model and spend. In A one tooltip line should show the full name, workspace and spend.
+
+Home (#1628), one `cargo run --release -- fixtures/session.jsonl --static --home <case>` per case, in Ghostty itself at 160 by 48.
+
+- empty: the logo should read as pixel letters four rows tall (⌇ in accent, the name in the accent gradient, `0.0.1` dim on the last row); under it the large input box with `/? for shortcuts`, the chip row and `enter starts a session`; under the box one dim `No sessions yet` line; the key hint at the foot.
+- sessions: six exited rows, each `○ name · spend`, the three outside the launch project with their workspace's last segment; the long pi-rig name should fit without pushing the spend off the row.
+- hover-workspace, hover-model, hover-thinking: the one chip should sit lighter than its neighbours while keeping its own text colour; hover-worktree: the switch chip lighter with its ● still blue.
+- worktree-on: the switch should read `[● new worktree]` in blue; worktree-off: `[○ new worktree]` dim.
+- picker-recent: the picker should float over home with even ▄ ▀ edges, four recent workspaces, the first row marked with ▌ on the lighter tint.
+- picker-typed: the typed row should read `› ~/work/fi█` with `fiber` and `fiber-worktrees` under it, the first marked; the recents below dimmed.
