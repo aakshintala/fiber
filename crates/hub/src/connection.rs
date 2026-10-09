@@ -590,7 +590,7 @@ fn on_start(
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<Relays>>,
 ) {
-    let Some((workspace, model, content)) = start_args(args) else {
+    let Some(args) = start_args(args) else {
         reject(
             writer,
             hub,
@@ -600,7 +600,15 @@ fn on_start(
         );
         return;
     };
-    let (session_id, held) = match start::run(hub, id, workspace, model, content) {
+    let (session_id, held) = match start::run(
+        hub,
+        id,
+        args.workspace,
+        args.model,
+        &args.overrides,
+        args.worktree,
+        args.content,
+    ) {
         Outcome::Accepted { session_id, first } => (session_id, first),
         Outcome::Rejected { code, message } => {
             reject(writer, hub, Some(id), &code, &message);
@@ -668,17 +676,30 @@ fn on_status(
 }
 
 /// `start`'s `args`: `workspace` (required string), `model` (optional
-/// string), `content` (optional, passed through as JSON once it fits
-/// `prompt`'s `content`). A wrong, missing or extra key, or an explicit
-/// `null`, is `None`.
-fn start_args(args: &Map<String, Value>) -> Option<(&str, Option<&str>, Option<&Value>)> {
+/// string), `overrides` (optional array of strings, each one a
+/// `key=value` the session takes as `-c`), `worktree` (optional boolean,
+/// absent is false), `content` (optional, passed through as JSON once it
+/// fits `prompt`'s `content`). A wrong, missing or extra key, or an
+/// explicit `null`, is `None`.
+struct StartArgs<'a> {
+    workspace: &'a str,
+    model: Option<&'a str>,
+    overrides: Vec<&'a str>,
+    worktree: bool,
+    content: Option<&'a Value>,
+}
+
+fn start_args(args: &Map<String, Value>) -> Option<StartArgs<'_>> {
     if contains_null(&Value::Object(args.clone())) {
         return None;
     }
-    if args
-        .keys()
-        .any(|key| key != "workspace" && key != "model" && key != "content")
-    {
+    if args.keys().any(|key| {
+        key != "workspace"
+            && key != "model"
+            && key != "overrides"
+            && key != "worktree"
+            && key != "content"
+    }) {
         return None;
     }
     let workspace = args.get("workspace")?.as_str()?;
@@ -687,13 +708,35 @@ fn start_args(args: &Map<String, Value>) -> Option<(&str, Option<&str>, Option<&
         Some(Value::String(model)) => Some(model.as_str()),
         Some(_) => return None,
     };
+    let overrides = match args.get("overrides") {
+        None => Vec::new(),
+        Some(Value::Array(items)) => {
+            let mut overrides = Vec::with_capacity(items.len());
+            for item in items {
+                overrides.push(item.as_str()?);
+            }
+            overrides
+        }
+        Some(_) => return None,
+    };
+    let worktree = match args.get("worktree") {
+        None => false,
+        Some(Value::Bool(worktree)) => *worktree,
+        Some(_) => return None,
+    };
     let content = args.get("content");
     if let Some(content) = content
         && serde_json::from_value::<Vec<SentPart>>(content.clone()).is_err()
     {
         return None;
     }
-    Some((workspace, model, content))
+    Some(StartArgs {
+        workspace,
+        model,
+        overrides,
+        worktree,
+        content,
+    })
 }
 
 pub(crate) fn accept_result(

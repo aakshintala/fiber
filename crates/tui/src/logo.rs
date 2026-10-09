@@ -4,7 +4,9 @@
 //! short for four rows, home draws the one-row logo instead.
 
 use ratatui::buffer::Buffer;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
+
+use crate::theme::Role;
 
 /// The wave before the name, two pixels wide and eight tall.
 const WAVE: [&str; 8] = ["# ", " #", "# ", " #", "# ", " #", "# ", " #"];
@@ -36,25 +38,20 @@ const LETTERS: [&[&str; 8]; 5] = [&F, &I, &B, &E, &R];
 const GAP: usize = 1;
 
 /// The wave's colour: the accent colour.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-const WAVE_COLOUR: Color = Color::Rgb(86, 182, 194);
+const WAVE_COLOUR: Role = Role::Accent;
 
-/// Each letter's step of the name's gradient, one per letter.
-/// debt: fixed colours, not theme roles; upgrade when colour roles land
-/// (see #685).
-const GRADIENT: [Color; 5] = [
-    Color::Rgb(97, 175, 239),
-    Color::Rgb(86, 182, 194),
-    Color::Rgb(152, 195, 121),
-    Color::Rgb(229, 192, 123),
-    Color::Rgb(198, 120, 221),
+/// Each letter's step of the name's gradient, one per letter: the
+/// theme's accents (`docs/tui.md`, "The logo").
+const GRADIENT: [Role; 5] = [
+    Role::Heading,
+    Role::Accent,
+    Role::String,
+    Role::Type,
+    Role::Keyword,
 ];
 
 /// The counters' shade.
-/// debt: a fixed colour, not a theme role; upgrade when colour roles land
-/// (see #685).
-const COUNTER_SHADE: Color = Color::Rgb(106, 115, 130);
+const COUNTER_SHADE: Role = Role::Muted;
 
 /// What a pixel is: empty, ink of one glyph, or a letter's counter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,7 +68,7 @@ enum Pixel {
 
 impl Pixel {
     /// The pixel's colour, if it has ink.
-    fn colour(self) -> Option<Color> {
+    fn colour(self) -> Option<Role> {
         match self {
             Pixel::Empty => None,
             Pixel::Wave => Some(WAVE_COLOUR),
@@ -153,13 +150,13 @@ pub(super) fn draw(buf: &mut Buffer, x: u16, y: u16, version: &str) {
             let mark = cell(mark_of(upper), mark_of(lower), same);
             let style = match (upper.colour(), lower.colour()) {
                 (None, None) => Style::default(),
-                (Some(top), None) => Style::new().fg(top),
-                (None, Some(bottom)) => Style::new().fg(bottom),
+                (Some(top), None) => Style::new().fg(top.color()),
+                (None, Some(bottom)) => Style::new().fg(bottom.color()),
                 (Some(top), Some(bottom)) => {
                     if mark == '█' {
-                        Style::new().fg(top)
+                        Style::new().fg(top.color())
                     } else {
-                        Style::new().fg(top).bg(bottom)
+                        Style::new().fg(top.color()).bg(bottom.color())
                     }
                 }
             };

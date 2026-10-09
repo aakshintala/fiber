@@ -4,12 +4,32 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::text::Line;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use super::{ALERT_TINT, APPROVAL_TINT, paragraph, rows, to_u16};
-use crate::approvals::Panel;
+use crate::approvals::{IRREVERSIBLE, Panel};
 use crate::mouse::{Target, TargetId};
+use crate::theme::Role;
+
+/// "irreversible" in an approval's header: bold, in the error colour, on
+/// whatever tint asked (`docs/tui.md`, "An approval").
+const LOUD: Style = Style::new()
+    .fg(Role::Error.color())
+    .add_modifier(Modifier::BOLD);
+
+/// Panel line `line`, `text`: the header's "irreversible" loud.
+fn styled(line: usize, text: &str) -> Line<'_> {
+    match text.strip_suffix(IRREVERSIBLE) {
+        Some(head) if line == 0 => Line::from(vec![
+            Span::raw(head),
+            Span::raw(" · "),
+            Span::styled("irreversible", LOUD),
+        ]),
+        Some(_) | None => Line::raw(text),
+    }
+}
 
 /// Where the panel's lines land in the rows above `bottom`.
 struct Layout {
@@ -88,7 +108,7 @@ pub(super) fn draw(
     );
     for (line, text) in panel.lines.iter().enumerate() {
         if let Some((rect, skip)) = layout.place(line, area) {
-            paragraph(Line::raw(text.as_str()))
+            paragraph(styled(line, text))
                 .scroll((to_u16(skip), 0))
                 .render(rect, buf);
         }

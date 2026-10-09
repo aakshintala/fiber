@@ -588,6 +588,7 @@ fn sized(name: &str, place: &str, bytes: usize) -> Found {
         model_invocable: true,
         argument_hint: None,
         place: place.into(),
+        extension: None,
     }
 }
 
@@ -1027,7 +1028,7 @@ fn the_session_commands_are_read_from_the_repository_top_level() {
     inputs.skills_disabled = vec!["gone".into()];
     skill(&tree.home().join("skills"), "a", "gone", "d");
     assert_eq!(
-        crate::commands(&inputs, &workspace),
+        crate::commands(&inputs, &workspace, &[]).rows,
         [row("top", "d", None, "skill")]
     );
 }

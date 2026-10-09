@@ -17,6 +17,7 @@ Usage: fiber <command> [arguments]
 Sessions:
   ask [--model <model>] [--resume <id>] [--worktree] [<prompt>] [-]  Run one session of one turn; its events go to stdout
   sessions [--all] [--json]                                          List sessions: id, state, name, what it waits on, spend
+  sessions search [--all] [--json] <text>                            Search the logs of past and running sessions for the text
   sessions delete [--cascade] [--yes] <id>                           Delete a session, and with --cascade the sessions that continue it
   sessions export <id> [<path>]                                      Write the session's log and its artifacts to <path>
   sessions prune [--older-than <duration>] [--dry-run]               Delete old sessions, worktrees and diagnostic logs
@@ -286,6 +287,18 @@ pub(crate) enum SessionsCommands {
         #[arg(long)]
         force: bool,
     },
+    /// Search the logs of past and running sessions for the text
+    Search {
+        /// Search every project, not only this repository's.
+        #[arg(long)]
+        all: bool,
+        /// Print each hit as one JSON object per line.
+        #[arg(long)]
+        json: bool,
+        /// The text to find, as a literal.
+        #[arg(value_name = "text", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        text: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -405,6 +418,12 @@ pub(crate) struct SessionArgs {
     #[arg(long, value_name = "model")]
     pub(crate) model: Option<String>,
 
+    /// One configuration key for this run, `<key>=<value>`: the value is
+    /// JSON, or a bare string when it does not parse as JSON. May repeat;
+    /// a later one wins, and every one wins over `--model`.
+    #[arg(short = 'c', value_name = "key>=<value", value_parser = parse_override)]
+    pub(crate) overrides: Vec<String>,
+
     /// The first prompt. With none the session waits for a client.
     #[arg(long, value_name = "text")]
     pub(crate) prompt: Option<String>,
@@ -429,7 +448,7 @@ pub(crate) struct SessionArgs {
         value_name = "session_id",
         value_parser = parse_session_id,
         hide = true,
-        conflicts_with_all = ["resume", "prompt", "model", "worktree", "parent", "delegate_id"]
+        conflicts_with_all = ["resume", "prompt", "model", "overrides", "worktree", "parent", "delegate_id"]
     )]
     pub(crate) rewound_from: Option<String>,
 
@@ -461,6 +480,12 @@ pub(crate) struct AskArgs {
     /// The model for this run, as a person types it.
     #[arg(long, value_name = "model")]
     pub(crate) model: Option<String>,
+
+    /// One configuration key for this run, `<key>=<value>`: the value is
+    /// JSON, or a bare string when it does not parse as JSON. May repeat;
+    /// a later one wins, and every one wins over `--model`.
+    #[arg(short = 'c', value_name = "key>=<value", value_parser = parse_override)]
+    pub(crate) overrides: Vec<String>,
 
     /// Resume the session: sends the prompt to an existing session instead
     /// of starting a new one (`docs/invocation.md`, "Lifecycle").
@@ -499,6 +524,17 @@ fn parse_session_id(text: &str) -> Result<String, String> {
         Ok(text.to_owned())
     } else {
         Err("a session id is `s_` followed by 16 lowercase hex digits".to_owned())
+    }
+}
+
+/// One `-c` override: a dotted key and a value, as in
+/// `-c handoff.tokens=200000`. The parser checks only for the `=`; the
+/// configuration load checks the key path and the value's type.
+fn parse_override(text: &str) -> Result<String, String> {
+    if text.contains('=') {
+        Ok(text.to_owned())
+    } else {
+        Err("expected a dotted key and a value, as in `-c handoff.tokens=200000`".to_owned())
     }
 }
 

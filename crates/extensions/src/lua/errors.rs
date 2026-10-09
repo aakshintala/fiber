@@ -27,12 +27,14 @@ pub(super) fn not_registered(name: &str, target: &Target) -> Error {
             extension: name.to_owned(),
             command: command.clone(),
         },
-        Target::Provider { .. } | Target::Hook { .. } | Target::Timer { .. } => {
-            Error::UnknownCallback {
-                extension: name.to_owned(),
-                callback: target.to_string(),
-            }
-        }
+        Target::Provider { .. }
+        | Target::Hook { .. }
+        | Target::Timer { .. }
+        | Target::Tool(_)
+        | Target::Effects(_) => Error::UnknownCallback {
+            extension: name.to_owned(),
+            callback: target.to_string(),
+        },
     }
 }
 

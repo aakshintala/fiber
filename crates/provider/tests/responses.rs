@@ -1480,3 +1480,134 @@ fn sent_tools_are_sent_verbatim_in_order() {
     .unwrap();
     assert_eq!(sent_body(&server, 0)["tools"], Value::Array(sent));
 }
+
+/// Adds the account-id header a codex `credential()` returns.
+struct AccountId;
+
+impl contract::signing::Signer for AccountId {
+    fn sign(
+        &self,
+        _: &contract::signing::SignRequest<'_>,
+    ) -> Result<Vec<(String, String)>, contract::signing::Error> {
+        Ok(vec![(
+            "chatgpt-account-id".to_owned(),
+            "acct_123".to_owned(),
+        )])
+    }
+}
+
+fn codex_endpoint(server: &ProviderServer) -> Endpoint {
+    Endpoint {
+        provider: "codex".into(),
+        model: "gpt-6-luna".into(),
+        base_url: server.url(),
+        key: None,
+        headers: vec![("originator".to_owned(), "fiber".to_owned())],
+        signer: Some(Arc::new(AccountId)),
+        compat: Compat {
+            store: Some(false),
+            ..Compat::default()
+        },
+        direct: true,
+        ..Endpoint::default()
+    }
+}
+
+#[test]
+fn a_codex_request_carries_the_codex_headers_and_body() {
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    run(Box::new(
+        Responses::new(codex_endpoint(&server))
+            .cache_key_header("session_id")
+            .request(&request()),
+    ))
+    .0
+    .unwrap();
+    let sent = &server.requests()[0];
+    assert_eq!(sent.method, "POST");
+    assert_eq!(sent.path, "/responses");
+    assert_eq!(sent.header("session_id"), Some("s_root"));
+    assert_eq!(sent.header("originator"), Some("fiber"));
+    assert_eq!(sent.header("chatgpt-account-id"), Some("acct_123"));
+    assert_eq!(sent.header("openai-beta"), None);
+    let body = sent_body(&server, 0);
+    assert_eq!(body["model"], "gpt-6-luna");
+    assert_eq!(body["instructions"], "You are terse.");
+    assert_eq!(body["store"], false);
+    assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+    assert_eq!(body.get("temperature"), None);
+    assert_eq!(body.get("service_tier"), None);
+}
+
+// unprobed: shape from pi `parseErrorResponse` and codex-cli strings,
+// `research/codex-responses-probe`, "The usage-limit error body".
+fn usage_limit_response(status: u16) -> Response {
+    Response::status(
+        status,
+        json!({"error": {
+            "type": "usage_limit_reached",
+            "message": "The usage limit has been reached",
+            "plan_type": "plus",
+            "resets_at": 1_791_396_000,
+        }})
+        .to_string(),
+    )
+    .header("date", "Wed, 07 Oct 2026 16:00:00 GMT")
+}
+
+#[test]
+fn a_usage_limit_status_is_quota_exceeded_with_its_reset_wait() {
+    let server =
+        ProviderServer::start([usage_limit_response(429), usage_limit_response(400)]).unwrap();
+    let responses = Responses::new(codex_endpoint(&server)).cache_key_header("session_id");
+    for status in [429, 400] {
+        let Err(CallError::Failed {
+            failure,
+            should_retry,
+            ..
+        }) = run(Box::new(responses.request(&request()))).0
+        else {
+            panic!("a usage-limit {status} was not a failure");
+        };
+        assert_eq!(failure.code, ErrorCode::QuotaExceeded, "{status}");
+        assert_eq!(failure.retry_after_ms, Some(7_200_000), "{status}");
+        assert_eq!(should_retry, None, "{status}: never retried");
+        assert!(
+            failure.message.contains("2026-10-07 18:00 UTC"),
+            "{status}: {}",
+            failure.message
+        );
+    }
+    assert_eq!(server.requests().len(), 2);
+}
+
+#[test]
+fn a_usage_limit_in_the_stream_is_quota_exceeded() {
+    let failed = |error: Value| {
+        stream(&[json!({"type": "response.failed",
+            "response": {"id": "resp_1", "status": "failed", "error": error}})])
+    };
+    for error in [
+        json!({"code": "usage_not_included", "message": "Not included."}),
+        json!({"type": "usage_limit_reached", "message": "Limited."}),
+    ] {
+        assert_eq!(
+            error_code(decoded(&failed(error)).0).0,
+            ErrorCode::QuotaExceeded
+        );
+    }
+    let event = json!({"type": "error", "code": "usage_limit_reached", "message": "Limited."});
+    assert_eq!(
+        error_code(decoded(&stream(&[event])).0).0,
+        ErrorCode::QuotaExceeded
+    );
+    let limited = json!({"code": "rate_limit_exceeded", "message": "Slow down."});
+    assert_eq!(
+        error_code(decoded(&failed(limited)).0).0,
+        ErrorCode::RateLimited
+    );
+}

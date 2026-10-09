@@ -113,17 +113,23 @@ pub(crate) fn hosted(kind: &str) -> Result<(Arc<dyn Tool>, ToolInfo), Failure> {
 
 /// One tool and what the `tools` command answers for it.
 fn registered(tool: impl Tool + 'static) -> Result<(Arc<dyn Tool>, ToolInfo), Failure> {
+    let info = info(&tool, ToolSource::Builtin)?;
+    Ok((Arc::new(tool), info))
+}
+
+/// What the `tools` command answers for `tool`, declared in full, which
+/// `source` registered.
+pub(crate) fn info(tool: &dyn Tool, source: ToolSource) -> Result<ToolInfo, Failure> {
     let definition = tool.definition();
     let encoded = serde_json::to_vec(&definition)
         .map_err(|error| failed(ErrorCode::IoFailed, format!("a tool definition: {error}")))?;
-    let info = ToolInfo {
+    Ok(ToolInfo {
         name: definition.name,
-        source: ToolSource::Builtin,
+        source,
         state: ToolState::Full,
         bytes: u64::try_from(encoded.len()).unwrap_or(u64::MAX),
         tokens: None,
-    };
-    Ok((Arc::new(tool), info))
+    })
 }
 
 #[cfg(test)]

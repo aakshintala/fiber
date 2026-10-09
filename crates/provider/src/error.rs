@@ -22,7 +22,8 @@ pub enum Error {
         status: u16,
         /// The response body, as text.
         body: String,
-        /// The seconds a `retry-after` header asked Fiber to wait.
+        /// The seconds a `retry-after` header asked Fiber to wait, or the
+        /// usage limit's reset measured from the reply's `Date` header.
         retry_after: Option<f64>,
         /// The `x-should-retry` header, when the response carried one.
         should_retry: Option<bool>,
@@ -138,6 +139,17 @@ impl Error {
         };
         let message = match (self, &code) {
             (Self::Sign(sign), _) => sign_sentence(provider, sign, secrets),
+            // A usage-limit reply names its reset time; any other quota or
+            // billing shape keeps the provider's wording.
+            (Self::Status { body, .. }, ErrorCode::QuotaExceeded) if usage_limit_body(body) => {
+                match resets_at_of(body) {
+                    Some(resets) => format!(
+                        "{provider} reached its usage limit; it resets at {}.",
+                        reset_time(resets)
+                    ),
+                    None => format!("{provider} reached its usage limit."),
+                }
+            }
             (Self::Status { status, .. }, ErrorCode::AuthenticationFailed) => format!(
                 "{provider} rejected the credential (HTTP {status}). Check the key it is \
                  configured with, or log in again with `fiber login {provider}`."
@@ -208,11 +220,14 @@ fn sign_sentence(provider: &str, error: &contract::signing::Error, secrets: &Sec
 }
 
 /// The code for an HTTP status, reading the body where the status alone
-/// cannot classify. Authentication wins over everything; a documented quota
-/// or billing shape wins over every other code (`docs/errors.md`,
+/// cannot classify. A ChatGPT/codex usage-limit body wins over everything,
+/// on any status (`docs/model-routing.md`, "Protocols and providers");
+/// authentication wins over every other shape; a documented quota or
+/// billing shape wins over every other code (`docs/errors.md`,
 /// "Recognising a quota or billing error").
 fn status_code(status: u16, retry_after: Option<f64>, body: &str) -> ErrorCode {
     match status {
+        _ if usage_limit_body(body) => ErrorCode::QuotaExceeded,
         401 => ErrorCode::AuthenticationFailed,
         // Gemini answers a bad key with 400 `API_KEY_INVALID`
         // (`research/google-generative-ai-probe`, `raw/auth-badheader.json`).
@@ -230,6 +245,70 @@ fn status_code(status: u16, retry_after: Option<f64>, body: &str) -> ErrorCode {
         }
         _ => ErrorCode::InvalidRequest,
     }
+}
+
+/// Whether an error object is a ChatGPT/codex usage-limit shape: its
+/// `error.code` or `error.type` is `usage_limit_reached` or
+/// `usage_not_included`, whatever the HTTP status
+/// (`docs/model-routing.md`, "Protocols and providers"). Only the codes
+/// are matched.
+pub(crate) fn usage_limit(error: &Value) -> bool {
+    matches!(
+        error.get("code").and_then(Value::as_str),
+        Some("usage_limit_reached" | "usage_not_included")
+    ) || matches!(
+        error.get("type").and_then(Value::as_str),
+        Some("usage_limit_reached" | "usage_not_included")
+    )
+}
+
+/// Whether a status body carries the usage-limit shape.
+fn usage_limit_body(body: &str) -> bool {
+    let value: Value = match serde_json::from_str(body) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    value.get("error").is_some_and(usage_limit)
+}
+
+/// A usage-limit body's integer `resets_at` (Unix seconds), when it has one.
+fn resets_at_of(body: &str) -> Option<u64> {
+    let value: Value = serde_json::from_str(body).ok()?;
+    value.get("error")?.get("resets_at")?.as_u64()
+}
+
+/// `unix` seconds as `YYYY-MM-DD HH:MM UTC`, from the timestamp alone; no
+/// clock is read (`docs/model-routing.md`, "Protocols and providers").
+fn reset_time(unix: u64) -> String {
+    let days = unix / 86_400;
+    let rest = unix % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
+        rest / 3_600,
+        (rest % 3_600) / 60
+    )
+}
+
+/// The civil date of `days` days after the epoch, as year, month and day
+/// (Howard Hinnant's algorithm: shift to the civil era starting March).
+/// The inputs fit `u64` many times over: the largest day count below
+/// `u64::MAX` seconds still leaves every product far from overflowing.
+fn civil_from_days(days: u64) -> (u64, u64, u64) {
+    let shifted = days + 719_468;
+    let era = shifted / 146_097;
+    let ordinal = shifted - era * 146_097;
+    let year_of_era = (ordinal - ordinal / 1_460 + ordinal / 36_524 - ordinal / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = ordinal - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_part = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_part + 2) / 5 + 1;
+    let month = if month_part < 10 {
+        month_part + 3
+    } else {
+        month_part - 9
+    };
+    (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
 /// Whether a status body carries a documented quota or billing shape

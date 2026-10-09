@@ -154,7 +154,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `tui.panel.cards` | `["session", "changed_files", "delegates", "jobs", "quota"]` | no | The cards the terminal's panel shows, in order; an extension widget is listed as `"<extension>/<widget>"`, and a widget the list does not name shows after the listed cards (`docs/tui.md`, "The panel"). The status line of the narrow layout follows the same order. |
 | `tui.rail.width` | 15 | no | The rail's share of the screen's width, in percent, kept from 22 to 48 columns; dragging its edge writes it (`docs/tui.md`, "Layout"). |
 | `tui.panel.width` | 21 | no | The panel's share of the screen's width, in percent, kept from 30 to 60 columns; dragging its edge writes it. |
-| `tui.theme` | none | no | The theme's name: `dark`, `light` or a theme file in Fiber home. With none, the theme follows the terminal's light or dark appearance (`docs/tui.md`, "Themes"). |
+| `tui.theme` | none | no | The theme's name: `auto`, `dark`, `light` or the name of a theme file in Fiber home's `themes/`. With none or `auto`, the theme follows the terminal's light or dark appearance (`docs/tui.md`, "Themes"). |
 | `tui.reduced_motion` | false | no | Whether every animation takes its still form. On whenever a screen reader is detected (`docs/tui.md`, "Reduced motion"). |
 | `tui.screen_reader` | detected | no | Forces the flat screen-reader mode on or off; `--screen-reader` sets it true (`docs/tui.md`, "Screen readers"). |
 | `tui.attention.notification` | true | no | Whether the terminal sends an OSC 9 desktop notification when a session starts waiting on the person (`docs/tui.md`, "Getting the person's attention"). |

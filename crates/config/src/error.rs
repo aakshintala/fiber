@@ -43,7 +43,9 @@ pub enum ConfigError {
     FiberHome(&'static str),
     /// A `-c` argument that is not `key=value`, or a key that is not a dotted
     /// path.
-    #[error("`{arg}` is not a dotted key and a value, as in `-c handoff.tokens=200000`.")]
+    #[error(
+        "`{arg}` is not a dotted key and a value, as in `-c handoff.tokens=200000`. Run `fiber --help` for usage."
+    )]
     Override {
         /// The argument as given, up to any `=`.
         arg: String,

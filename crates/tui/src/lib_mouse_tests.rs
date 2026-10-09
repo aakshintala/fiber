@@ -302,7 +302,9 @@ fn hover_over_a_group_line_tints_only_its_row() {
     for y in 0..12 {
         for x in 0..60 {
             let bg = buf.cell((x, y)).map(|cell| cell.bg);
-            let tinted = bg == crate::view::HOVER_TINT.bg;
+            // The written frame is painted: the hover role's colour.
+            let hover = crate::look::Look::default().colour(crate::theme::Role::Hover);
+            let tinted = bg == Some(hover);
             assert_eq!(tinted, y == group, "cell {x},{y}");
         }
     }

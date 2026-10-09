@@ -154,7 +154,7 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
         drop(setup_done.send(super::parts_in(
             setup_home,
             setup_workspace,
-            None,
+            Vec::new(),
             None,
             None,
             None,

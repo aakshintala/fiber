@@ -447,7 +447,10 @@ failure there is signal.
   exposes has a public-API test.
 - **A bug fix:** a test that reproduces the report at the level it was
   observed and fails on the code before the fix, which CI checks. A bug seen on screen gets a
-  screen test; a bug in the JSON lines gets a binary-level test.
+  screen test; a bug in the JSON lines gets a binary-level test. A race
+  the binary cannot be made to lose on every run, because its pause point
+  sits inside a crate and the shipped binary takes no test-only switch, is
+  reproduced at crate level through that pause point ("Waits and timeouts").
 - **A new event kind:** a binary-level test in which a consumer sees it.
 - **A breaking log format change:** its migration and the migration's test
   (`docs/events.md`, "Versioning").

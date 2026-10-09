@@ -84,14 +84,21 @@ fn is_hex_id(id: &str) -> bool {
 
 /// Runs `start` on a thread: calling code that blocks is a wait, so the
 /// test receives its result with a wall-clock deadline.
-fn started(hub: Hub, workspace: String, model: Option<String>, content: Option<Value>) -> Outcome {
-    started_before(hub, workspace, model, content, DEADLINE)
+fn started(
+    hub: Hub,
+    workspace: String,
+    model: Option<String>,
+    worktree: bool,
+    content: Option<Value>,
+) -> Outcome {
+    started_before(hub, workspace, model, worktree, content, DEADLINE)
 }
 
 fn started_before(
     hub: Hub,
     workspace: String,
     model: Option<String>,
+    worktree: bool,
     content: Option<Value>,
     deadline: Duration,
 ) -> Outcome {
@@ -104,6 +111,8 @@ fn started_before(
                 &CommandId("c_start".to_owned()),
                 &workspace,
                 model.as_deref(),
+                &[],
+                worktree,
                 content.as_ref(),
             );
             done_tx.send(outcome).unwrap_or(());
@@ -118,7 +127,7 @@ fn started_before(
 fn a_relative_workspace_is_invalid_arguments() {
     let temp = Temp::new();
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
-    let outcome = started(hub, "relative/path".to_owned(), None, None);
+    let outcome = started(hub, "relative/path".to_owned(), None, false, None);
     let Outcome::Rejected { code, .. } = outcome else {
         panic!("a relative workspace is rejected");
     };
@@ -137,6 +146,7 @@ fn a_workspace_that_is_no_directory_is_invalid_arguments() {
             temp.hub(FakeStarter::hang(&temp.dir)),
             workspace.clone(),
             None,
+            false,
             None,
         );
         let Outcome::Rejected { code, .. } = outcome else {
@@ -151,7 +161,7 @@ fn an_accepted_start_mints_a_session_id_and_binds_its_socket() {
     let temp = Temp::new();
     let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
     let workspace = temp.workspace();
-    let outcome = started(hub, workspace, None, None);
+    let outcome = started(hub, workspace, None, false, None);
     let Outcome::Accepted { session_id, first } = outcome else {
         panic!("the start is accepted");
     };
@@ -161,12 +171,24 @@ fn an_accepted_start_mints_a_session_id_and_binds_its_socket() {
 }
 
 #[test]
+fn worktree_reaches_the_starter() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let workspace = temp.workspace();
+    let outcome = started(temp.hub(starter.clone()), workspace, None, true, None);
+    let Outcome::Accepted { .. } = outcome else {
+        panic!("the start is accepted");
+    };
+    assert_eq!(starter.started_worktrees(), [true]);
+}
+
+#[test]
 fn a_session_that_exits_first_rejects_with_its_fiber_exited() {
     let temp = Temp::new();
     let exited = failure(ErrorCode::NoModel, "No model is configured.");
     let hub = temp.hub(FakeStarter::exit_with(&temp.dir, exited));
     let workspace = temp.workspace();
-    let outcome = started(hub, workspace, None, None);
+    let outcome = started(hub, workspace, None, false, None);
     let Outcome::Rejected { code, message } = outcome else {
         panic!("the start is rejected");
     };
@@ -179,7 +201,7 @@ fn a_session_that_neither_binds_nor_exits_is_rejected_io_failed() {
     let temp = Temp::new();
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
     let workspace = temp.workspace();
-    let outcome = started(hub, workspace, None, None);
+    let outcome = started(hub, workspace, None, false, None);
     let Outcome::Rejected { code, .. } = outcome else {
         panic!("the start is rejected");
     };
@@ -197,7 +219,7 @@ fn an_unreachable_socket_error_fails_without_retrying() {
     fs::write(temp.dir.join("run"), b"x").unwrap();
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
     let workspace = temp.workspace();
-    let outcome = started(hub, workspace, None, None);
+    let outcome = started(hub, workspace, None, false, None);
     let Outcome::Rejected { code, .. } = outcome else {
         panic!("the start is rejected");
     };
@@ -216,6 +238,8 @@ impl crate::Starter for FailStarter {
         _id: &SessionId,
         _workspace: &Path,
         _model: Option<&str>,
+        _overrides: &[&str],
+        _worktree: bool,
     ) -> io::Result<Box<dyn crate::Started>> {
         Err(io::Error::other(self.message.clone()))
     }
@@ -243,7 +267,7 @@ fn a_starter_error_keeps_its_detail_out_of_the_log() {
     };
     let hub = temp.hub_with(starter);
     let workspace = temp.workspace();
-    let outcome = started(hub, workspace, Some(SECRET.to_owned()), None);
+    let outcome = started(hub, workspace, Some(SECRET.to_owned()), false, None);
     let Outcome::Rejected { code, message } = outcome else {
         panic!("the start is rejected");
     };
@@ -273,6 +297,7 @@ fn an_unexpected_connect_error_keeps_its_detail_out_of_the_log() {
         hub,
         workspace.to_string_lossy().into_owned(),
         Some(SECRET.to_owned()),
+        false,
         None,
     );
     let Outcome::Rejected { code, message } = outcome else {
@@ -299,7 +324,7 @@ fn a_failed_start_logs_the_code_and_a_fixed_sentence() {
     let exited = failure(ErrorCode::NoModel, "No model is configured.");
     let hub = temp.hub(FakeStarter::exit_with(&temp.dir, exited));
     let workspace = temp.workspace();
-    let outcome = started(hub, workspace, None, None);
+    let outcome = started(hub, workspace, None, false, None);
     let Outcome::Rejected { code, message } = outcome else {
         panic!("the start is rejected");
     };
@@ -317,7 +342,7 @@ fn an_exited_failure_keeps_session_text_out_of_the_log() {
     let exited = failure(ErrorCode::NoModel, &format!("No model for {SECRET}."));
     let hub = temp.hub(FakeStarter::exit_with(&temp.dir, exited));
     let workspace = temp.workspace();
-    let outcome = started(hub, workspace, Some(SECRET.to_owned()), None);
+    let outcome = started(hub, workspace, Some(SECRET.to_owned()), false, None);
     let Outcome::Rejected { code, message } = outcome else {
         panic!("the start is rejected");
     };
@@ -342,6 +367,7 @@ fn session_started_keeps_workspace_and_model_out_of_the_log() {
         hub,
         workspace.to_string_lossy().into_owned(),
         Some(SECRET.to_owned()),
+        false,
         None,
     );
     let Outcome::Accepted { .. } = outcome else {
@@ -379,6 +405,8 @@ fn held(temp: &Temp, starter: FakeStarter, content: &Value) -> (Arc<Hub>, Box<He
                 &CommandId("c_start".to_owned()),
                 &workspace,
                 None,
+                &[],
+                false,
                 Some(&content),
             );
             done_tx.send(outcome).unwrap_or(());

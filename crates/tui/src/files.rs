@@ -7,7 +7,6 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::thread;
 
 use crate::Input;
 
@@ -111,30 +110,28 @@ impl Search {
         let current = Arc::new(AtomicU64::new(0));
         let newest = Arc::clone(&current);
         let failed = out.clone();
-        let worker = thread::Builder::new()
-            .name("tui-files".to_owned())
-            .spawn(move || {
-                let listed = listing();
-                while let Ok(mut job) = inbox.recv() {
-                    while let Ok(next) = inbox.try_recv() {
-                        job = next;
-                    }
-                    let (generation, query) = job;
-                    let result = match &listed {
-                        Ok(paths) => {
-                            let cancelled = || newest.load(Ordering::Relaxed) != generation;
-                            let Some(found) = rank(paths, &query, cancelled) else {
-                                continue;
-                            };
-                            Ok(found)
-                        }
-                        Err(error) => Err(error.clone()),
-                    };
-                    if out.send(Input::Files { generation, result }).is_err() {
-                        return;
-                    }
+        let worker = crate::sources::builder("tui-files").spawn(move || {
+            let listed = listing();
+            while let Ok(mut job) = inbox.recv() {
+                while let Ok(next) = inbox.try_recv() {
+                    job = next;
                 }
-            });
+                let (generation, query) = job;
+                let result = match &listed {
+                    Ok(paths) => {
+                        let cancelled = || newest.load(Ordering::Relaxed) != generation;
+                        let Some(found) = rank(paths, &query, cancelled) else {
+                            continue;
+                        };
+                        Ok(found)
+                    }
+                    Err(error) => Err(error.clone()),
+                };
+                if out.send(Input::Files { generation, result }).is_err() {
+                    return;
+                }
+            }
+        });
         match worker {
             Ok(_) => Self {
                 jobs,

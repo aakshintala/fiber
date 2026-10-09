@@ -26,6 +26,7 @@ fn home() -> App {
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),
+        ..Default::default()
     });
     app.set_size(80, 24);
     app
@@ -1939,6 +1940,7 @@ fn git_home() -> App {
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),
+        ..Default::default()
     });
     app.set_size(80, 24);
     app
@@ -3401,4 +3403,213 @@ fn the_next_page_in_git_names_the_launch_project() {
     assert_eq!(line["command"], "recent");
     assert_eq!(line["args"]["before"], "s_bbbbbbbbbbbbbbbb");
     assert_eq!(line["args"]["project"], "-w");
+}
+
+/// A live `session_status` for `session` in `workspace`, in git on
+/// `main`.
+fn git_live(session: &str, name: &str, workspace: &str) -> Line {
+    live(
+        session,
+        name,
+        workspace,
+        "-w",
+        json!({"state": "idle", "git": {"branch": "main"}}),
+    )
+}
+
+/// Whether home draws the new worktree switch.
+fn shows_switch(app: &App) -> bool {
+    chips(app).iter().any(|chip| chip.contains("new worktree"))
+}
+
+#[test]
+fn the_switch_is_hidden_outside_git() {
+    // Even with a git row in the launch workspace: outside git the
+    // launch directory decides, and it is not in git.
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(git_live("s_aaaaaaaaaaaaaaaa", "fix the parser", "/w"));
+    assert!(!shows_switch(&app));
+    assert_eq!(
+        chips(&app),
+        [
+            "[w]",
+            "[no model]",
+            "[thinking: default]",
+            "enter starts a session",
+        ]
+    );
+}
+
+#[test]
+fn a_chosen_row_workspace_takes_its_git_flag() {
+    let mut app = git_home();
+    linked(&mut app);
+    app.on_line(git_live("s_aaaaaaaaaaaaaaaa", "git work", "/git-ws"));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "plain work",
+        "/plain-ws",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    // The launch directory is in git, so the switch shows, off.
+    assert_eq!(
+        chips(&app),
+        [
+            "[w]",
+            "[ ] new worktree",
+            "[no model]",
+            "[thinking: default]",
+            "enter starts a session",
+        ]
+    );
+    // Turning it on, then choosing the workspace without git: hidden,
+    // and the choice turns the switch off.
+    assert_eq!(app.home_click(Spot::Worktree), Effect::None);
+    assert_eq!(chips(&app)[1], "[x] new worktree");
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(chips(&app)[0], "[plain-ws]");
+    assert!(!shows_switch(&app));
+    // Choosing the workspace with git shows the switch again, off: the
+    // earlier choice turned it off.
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(chips(&app)[0], "[git-ws]");
+    assert_eq!(chips(&app)[1], "[ ] new worktree");
+}
+
+#[test]
+fn choosing_the_launch_workspace_with_no_rows_keeps_the_switch() {
+    // No row names the launch directory, so reading the feed would
+    // lose the flag: the choice keeps the launch flag.
+    let mut app = git_home();
+    linked(&mut app);
+    assert!(shows_switch(&app));
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(chips(&app)[0], "[w]");
+    assert!(shows_switch(&app));
+}
+
+#[test]
+fn a_chosen_workspace_keeps_the_switch_after_its_row_leaves() {
+    // The flag is read when the workspace is chosen, so dropping its
+    // backing row keeps the switch.
+    let mut app = git_home();
+    linked(&mut app);
+    app.on_line(git_live("s_aaaaaaaaaaaaaaaa", "git work", "/git-ws"));
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    assert_eq!(app.home_click(Spot::Pick(1)), Effect::None);
+    assert_eq!(chips(&app)[0], "[git-ws]");
+    assert!(shows_switch(&app));
+    app.home
+        .as_mut()
+        .unwrap_or_else(|| panic!("home"))
+        .sessions
+        .remove(&contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    assert!(rows(&app).is_empty());
+    assert_eq!(chips(&app)[0], "[git-ws]");
+    assert!(shows_switch(&app));
+}
+
+#[test]
+fn outside_git_choosing_a_plain_workspace_hides_the_switch() {
+    // The launch directory is outside git, and a git row elsewhere
+    // must not leak its flag into the chosen workspace.
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(git_live("s_aaaaaaaaaaaaaaaa", "git work", "/git-ws"));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "plain work",
+        "/plain-ws",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    assert!(!shows_switch(&app));
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(chips(&app)[0], "[plain-ws]");
+    assert!(!shows_switch(&app));
+}
+
+#[test]
+fn clicking_a_picker_row_resets_the_switch_off() {
+    let mut app = git_home();
+    linked(&mut app);
+    app.on_line(git_live("s_aaaaaaaaaaaaaaaa", "git work", "/git-ws"));
+    assert_eq!(app.home_click(Spot::Worktree), Effect::None);
+    assert_eq!(chips(&app)[1], "[x] new worktree");
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    assert_eq!(app.home_click(Spot::Pick(1)), Effect::None);
+    assert_eq!(chips(&app)[0], "[git-ws]");
+    assert_eq!(chips(&app)[1], "[ ] new worktree");
+}
+
+#[test]
+fn clicking_the_switch_toggles_it() {
+    let mut app = git_home();
+    assert_eq!(chips(&app)[1], "[ ] new worktree");
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::Home(Spot::Worktree)),
+        Effect::None
+    );
+    assert_eq!(chips(&app)[1], "[x] new worktree");
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::Home(Spot::Worktree)),
+        Effect::None
+    );
+    assert_eq!(chips(&app)[1], "[ ] new worktree");
+    // The switch copies and opens nothing.
+    assert_eq!(app.home_text(Spot::Worktree), None);
+}
+
+#[test]
+fn enter_on_the_focused_switch_toggles_it() {
+    let mut app = git_home();
+    drawn(&mut app);
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Worktree));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(chips(&app)[1], "[x] new worktree");
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(chips(&app)[1], "[ ] new worktree");
+}
+
+#[test]
+fn start_sends_worktree_only_when_the_switch_is_on_and_shown() {
+    // Shown and on: the key goes out with the picked workspace.
+    let mut app = git_home();
+    app.on_line(hello());
+    assert_eq!(app.home_click(Spot::Worktree), Effect::None);
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in "hi".chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter sends the start");
+    };
+    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
+    assert_eq!(line["command"], "start");
+    assert_eq!(line["args"]["workspace"], "/w");
+    assert_eq!(line["args"]["worktree"], true);
+    // Shown and off: the key is absent.
+    let mut app = git_home();
+    assert!(app.start_args().get("worktree").is_none());
+    // Hidden, even with the switch on: the key is absent.
+    let mut app = home();
+    app.home.as_mut().unwrap_or_else(|| panic!("home")).worktree = true;
+    let args = app.start_args();
+    assert_eq!(args["workspace"], "/w");
+    assert!(args.get("worktree").is_none());
 }

@@ -131,17 +131,19 @@ impl hub::Starter for SpawnStarter {
         id: &SessionId,
         workspace: &Path,
         model: Option<&str>,
+        overrides: &[&str],
+        worktree: bool,
     ) -> std::io::Result<Box<dyn hub::Started>> {
         spawn(
             id,
-            session_command(&self.exe, id, workspace, model, false, None),
+            start_command(&self.exe, id, workspace, model, overrides, worktree),
         )
     }
 
     fn resume(&self, id: &SessionId, workspace: &Path) -> std::io::Result<Box<dyn hub::Started>> {
         spawn(
             id,
-            session_command(&self.exe, id, workspace, None, true, None),
+            session_command(&self.exe, id, workspace, None, false, true, None),
         )
     }
 
@@ -153,20 +155,39 @@ impl hub::Starter for SpawnStarter {
     ) -> std::io::Result<Box<dyn hub::Started>> {
         spawn(
             id,
-            session_command(&self.exe, id, workspace, None, false, Some(from)),
+            session_command(&self.exe, id, workspace, None, false, false, Some(from)),
         )
     }
 }
 
+/// The session command a `start` spawns: `session_command` with one `-c
+/// <override>` per override, in order. An override is passed unchanged,
+/// as one value of `-c`, so it never becomes another flag.
+fn start_command(
+    exe: &Path,
+    id: &SessionId,
+    workspace: &Path,
+    model: Option<&str>,
+    overrides: &[&str],
+    worktree: bool,
+) -> Command {
+    let mut command = session_command(exe, id, workspace, model, worktree, false, None);
+    for override_text in overrides {
+        command.arg("-c").arg(override_text);
+    }
+    command
+}
+
 /// `exe session --id <id> --workspace <workspace>`, with `--model` when
-/// one is named, `--resume` for a resume and `--rewound-from` for a
-/// rewind's new session, in its own process group with stdout piped for
-/// the drain.
+/// one is named, `--worktree` for a new worktree, `--resume` for a resume
+/// and `--rewound-from` for a rewind's new session, in its own process
+/// group with stdout piped for the drain.
 fn session_command(
     exe: &Path,
     id: &SessionId,
     workspace: &Path,
     model: Option<&str>,
+    worktree: bool,
     resume: bool,
     rewound_from: Option<&SessionId>,
 ) -> Command {
@@ -179,6 +200,9 @@ fn session_command(
         .arg(workspace);
     if let Some(model) = model {
         command.arg("--model").arg(model);
+    }
+    if worktree {
+        command.arg("--worktree");
     }
     if resume {
         command.arg("--resume");

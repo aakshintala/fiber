@@ -84,3 +84,26 @@ fn full_blocks_carry_no_background_and_two_tone_halves_carry_both() {
     assert!(full > 0, "the letters draw full blocks");
     assert!(half > 0, "the counters shade two-tone halves");
 }
+
+#[test]
+fn the_logo_draws_in_the_themes_accents() {
+    use super::Pixel;
+    use crate::theme::Role;
+
+    assert_eq!(Pixel::Empty.colour(), None);
+    assert_eq!(Pixel::Wave.colour(), Some(Role::Accent));
+    assert_eq!(Pixel::Counter(1).colour(), Some(Role::Muted));
+    let gradient: Vec<Option<Role>> = (0..5).map(|at| Pixel::Ink(at).colour()).collect();
+    assert_eq!(
+        gradient,
+        [
+            Role::Heading,
+            Role::Accent,
+            Role::String,
+            Role::Type,
+            Role::Keyword
+        ]
+        .map(Some)
+    );
+    assert_eq!(Pixel::Ink(5).colour(), None);
+}

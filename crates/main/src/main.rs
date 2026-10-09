@@ -33,6 +33,7 @@ mod session_extensions;
 mod settings;
 mod shutdown;
 mod switch;
+mod theme_setting;
 
 #[cfg(test)]
 #[path = "live_tests.rs"]
@@ -165,7 +166,7 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::Ask(args))) => {
             match cli::ask_parts(&args.prompt) {
                 Ok((prompt, dash)) => ask(
-                    args.model,
+                    per_run(args.model, args.overrides),
                     args.resume
                         .map(|id| resume::Resuming::new(id, args.credential)),
                     args.worktree,
@@ -190,6 +191,9 @@ fn run() -> i32 {
                 sessions_delete(&id, cascade, yes, clock.as_ref(), fiber)
             }
             Some(cli::SessionsCommands::Export { id, path }) => ::cli::export(&id, path.as_deref()),
+            Some(cli::SessionsCommands::Search { all, json, text }) => {
+                ::cli::sessions_search(&text, all, json)
+            }
             Some(cli::SessionsCommands::Prune {
                 older_than,
                 cascade,
@@ -301,7 +305,7 @@ fn fail(e: Failure) -> i32 {
 
 /// `fiber ask`: one session, one turn, its events on stdout.
 fn ask(
-    model: Option<String>,
+    overrides: Vec<String>,
     resume: Option<resume::Resuming>,
     worktree: bool,
     arg: Option<String>,
@@ -322,14 +326,14 @@ fn ask(
         Err(e) => return ask_failed(e),
     };
     match resume {
-        Some(resuming) => resume::ask_resume(resuming, model, prompt, clock, &signals, fiber),
-        None => ask_new(model, prompt, worktree, clock, &signals, fiber),
+        Some(resuming) => resume::ask_resume(resuming, overrides, prompt, clock, &signals, fiber),
+        None => ask_new(overrides, prompt, worktree, clock, &signals, fiber),
     }
 }
 
 /// `fiber ask` on a new session.
 fn ask_new(
-    model: Option<String>,
+    overrides: Vec<String>,
     prompt: String,
     worktree: bool,
     clock: Arc<dyn contract::clock::Clock>,
@@ -338,7 +342,7 @@ fn ask_new(
 ) -> i32 {
     session_command::new_session(
         SessionId(doors::mint("s_")),
-        model,
+        overrides,
         Some(prompt),
         true,
         worktree,
@@ -466,16 +470,28 @@ fn stop_and_fail(servers: mcp_servers::SessionServers, e: Failure) -> i32 {
     ask_failed(e)
 }
 
+/// The per-run layer: `--model <m>` reads as a `-c model=<m>` given before
+/// every `-c`, so an explicit `-c model=` wins, and among `-c` flags the
+/// later one wins.
+pub(crate) fn per_run(model: Option<String>, overrides: Vec<String>) -> Vec<String> {
+    model
+        .map(|model| format!("model={model}"))
+        .into_iter()
+        .chain(overrides)
+        .collect()
+}
+
 /// Fiber home, configuration, the chosen model, its credential and its
-/// provider: everything a failure of which leaves no session. `model` is
-/// `--model`. `recorded` is the resumed session's model, from the log's last
+/// provider: everything a failure of which leaves no session. `overrides`
+/// is the per-run layer: `model=<m>` from `--model` first, then each `-c`,
+/// so a later entry wins. `recorded` is the resumed session's model, from the log's last
 /// `usage_recorded`, and `recorded_credential` its credential label:
 /// `--credential` on a resume, else the recorded one; each beats configuration
 /// (`docs/model-routing.md`, "Choosing the model"). A log with no
 /// `usage_recorded` uses `--model`, then the configured default. A recorded
 /// model or label that no longer resolves fails before any line is written.
 fn parts_with(
-    model: Option<String>,
+    overrides: Vec<String>,
     recorded: Option<&str>,
     recorded_credential: Option<&str>,
     recorded_thinking: Option<ThinkingLevel>,
@@ -488,7 +504,7 @@ fn parts_with(
     parts_in(
         home,
         workspace,
-        model,
+        overrides,
         recorded,
         recorded_credential,
         recorded_thinking,
@@ -509,7 +525,7 @@ fn parts_with(
 fn parts_in(
     home: PathBuf,
     workspace: PathBuf,
-    model: Option<String>,
+    overrides: Vec<String>,
     recorded: Option<&str>,
     recorded_credential: Option<&str>,
     recorded_thinking: Option<ThinkingLevel>,
@@ -522,7 +538,7 @@ fn parts_in(
         home: home.clone(),
         workspace: workspace.clone(),
         project: project.clone(),
-        overrides: model.map(|m| format!("model={m}")).into_iter().collect(),
+        overrides,
     })
     .map_err(|e| failed(e.code(), e))?;
     let budget = config
@@ -817,13 +833,14 @@ fn terminal(fiber: Result<PathBuf, String>) -> i32 {
         Ok(tty) => std::fs::File::from(tty),
         Err(e) => return fail(failed(ErrorCode::IoFailed, format!("the terminal: {e}"))),
     };
+    let theme = theme_setting::setting(&home, &config, &|path| std::fs::read_to_string(path));
     let hub_clock = Arc::clone(&clock);
     let connect: tui::Connect = Box::new(move || {
         let mut start = || start_hub(fiber.clone());
         doors::hub::connect(&home, &mut start, hub_clock.as_ref())
     });
     let identity = doors::project(&workspace);
-    let launch = launch::launch(workspace, &identity, &config);
+    let launch = launch::launch(workspace, &identity, &config, theme);
     tui::run(tty, launch, connect, Box::new(crash::attach), clock)
 }
 

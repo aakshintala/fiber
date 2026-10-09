@@ -156,7 +156,7 @@ impl Table {
             }
             if at == 0 {
                 lines.push((
-                    Line::from(Span::styled("─".repeat(total), style(Role::Dim))),
+                    Line::from(Span::styled("─".repeat(total), style(Role::Muted))),
                     Vec::new(),
                 ));
             }

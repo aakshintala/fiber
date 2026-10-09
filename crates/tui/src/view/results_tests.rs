@@ -201,6 +201,59 @@ fn results_on_an_empty_area_draw_nothing() {
     assert!(targets.is_empty());
 }
 
+/// Under `NO_COLOR` a result's match keeps its underline and the
+/// selected entry its reversal: the role colours paint to the default.
+#[test]
+fn no_color_keeps_results_marks_distinct() {
+    use crate::look::{Look, ThemeSetting};
+    use crate::theme::Role;
+    use ratatui::style::{Color, Modifier};
+
+    let mut app = attached(80, 24);
+    reply(&mut app, "a_m", "the first needle here");
+    reply(&mut app, "a_m", "a second needle");
+    searched(&mut app, "needle");
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let marked = Role::Match.color();
+    let (mut hit, mut selected) = (None, None);
+    for y in 0..24 {
+        for x in 0..80 {
+            let cell = buf.cell((x, y)).expect("in the area");
+            if cell.bg == marked && !cell.modifier.contains(Modifier::REVERSED) {
+                hit.get_or_insert((x, y));
+            }
+            if cell.modifier.contains(Modifier::REVERSED) && cell.bg != marked {
+                selected.get_or_insert((x, y));
+            }
+        }
+    }
+    let (hit, selected) = (
+        hit.expect("a matched cell"),
+        selected.expect("a selected cell"),
+    );
+    let vars: Vec<(String, String)> = vec![("NO_COLOR".to_owned(), "1".to_owned())];
+    let (look, notice) = Look::new(ThemeSetting::Dark, &|name: &str| {
+        vars.iter()
+            .find(|(set, _)| set == name)
+            .map(|(_, value)| value.clone())
+    });
+    assert_eq!(notice, None);
+    look.paint(&mut buf);
+    let cell = |at| buf.cell(at).expect("in the area").clone();
+    for at in [hit, selected] {
+        assert_eq!((cell(at).fg, cell(at).bg), (Color::Reset, Color::Reset));
+    }
+    assert_eq!(cell(hit).modifier, Modifier::UNDERLINED);
+    assert_eq!(cell(selected).modifier, Modifier::REVERSED);
+    assert_ne!(
+        cell(hit).modifier,
+        cell(selected).modifier,
+        "the match and the selection stay apart with no colour"
+    );
+}
+
 /// The widths every drawn-row test runs at: either side of the
 /// narrowest view a match shows whole in, and of the common terminal.
 const WIDTHS: [u16; 6] = [7, 8, 13, 40, 80, 81];

@@ -26,6 +26,7 @@ fn home() -> App {
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),
+        ..Default::default()
     });
     app.set_size(80, 24);
     app

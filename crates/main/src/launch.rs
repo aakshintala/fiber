@@ -18,8 +18,14 @@ fn user_keys(config: &Config) -> serde_json::Map<String, serde_json::Value> {
 }
 
 /// Builds the terminal's launch description from the launch directory,
-/// its identity path, and the loaded configuration.
-pub(crate) fn launch(workspace: PathBuf, identity: &Path, config: &Config) -> tui::Launch {
+/// its identity path, the loaded configuration and the theme `tui.theme`
+/// names.
+pub(crate) fn launch(
+    workspace: PathBuf,
+    identity: &Path,
+    config: &Config,
+    theme: tui::ThemeSetting,
+) -> tui::Launch {
     // The project key names the identity path: git's shared directory
     // inside a repository, else the launch directory itself.
     let project = log::project_key(identity);
@@ -69,7 +75,22 @@ pub(crate) fn launch(workspace: PathBuf, identity: &Path, config: &Config) -> tu
         keys: tui::KeysSetup {
             user: user_keys(config),
         },
+        theme,
+        attention: tui::Attention {
+            notification: on(config, "tui.attention.notification"),
+            bell: on(config, "tui.attention.bell"),
+            title: on(config, "tui.attention.title"),
+        },
     }
+}
+
+/// The boolean at `key`, true when absent (`docs/configuration.md`,
+/// "Keys").
+fn on(config: &Config, key: &str) -> bool {
+    config
+        .get(key, None)
+        .and_then(|(value, _)| value.as_bool())
+        .unwrap_or(true)
 }
 
 /// A share of the screen's width, in percent, from `key`; `default` when

@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 /// The launch description `run` tests start from: `/w`, outside git.
-fn launch() -> super::Launch {
+pub(super) fn launch() -> super::Launch {
     super::Launch {
         workspace: PathBuf::from("/w"),
         project: "-w".to_owned(),
@@ -31,22 +31,23 @@ fn launch() -> super::Launch {
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: Vec::new(),
+        ..Default::default()
     }
 }
 
 /// One named wall-clock deadline for every blocking wait.
-const DEADLINE: Duration = Duration::from_secs(10);
+pub(super) const DEADLINE: Duration = Duration::from_secs(10);
 
 /// A pty pair: the main side and the slave as a file.
-struct Pair {
+pub(super) struct Pair {
     /// The main side.
-    main: File,
+    pub(super) main: File,
     /// The slave side, the injected tty.
-    slave: File,
+    pub(super) slave: File,
 }
 
 /// Opens a pty pair with a 60x12 window.
-fn open() -> Pair {
+pub(super) fn open() -> Pair {
     let main =
         rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
             .unwrap_or_else(|err| panic!("openpt: {err}"));
@@ -109,7 +110,7 @@ fn is_cooked(termios: &rustix::termios::Termios) -> bool {
 
 /// Reads until `marker` appears with one named deadline, returning
 /// everything up to and including it.
-fn read_until(main: &File, marker: &[u8], what: &str) -> Vec<u8> {
+pub(super) fn read_until(main: &File, marker: &[u8], what: &str) -> Vec<u8> {
     let mut dup = main.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
     let marker = marker.to_vec();
     let (done, finished) = mpsc::channel();

@@ -18,7 +18,7 @@ use crate::socket::{bind, remove_socket};
 use crate::{failure, mint};
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
-use contract::events::{Clients, CommandInfo, Event, ToolInfo};
+use contract::events::{Clients, CommandInfo, Event, SkillInfo, ToolInfo};
 use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
 use contract::tool::Tool;
@@ -62,6 +62,9 @@ pub(crate) struct Gate {
     /// What the `commands` command answers with, set by
     /// [`Session::commands`]; empty until then.
     commands: Mutex<Vec<CommandInfo>>,
+    /// What the `skills` command answers with, set by [`Session::skills`];
+    /// empty until then.
+    skills: Mutex<Vec<SkillInfo>>,
     /// The id of every command this process accepted or is running, across
     /// connections, so a repeat is rejected `duplicate_command` (`docs/invocation.md`).
     accepted: Mutex<HashSet<String>>,
@@ -181,21 +184,42 @@ impl Session {
 
     /// Runs `fiber ask`'s one turn: sends `prompt` then `close`, so the
     /// loop finishes that turn and exits. A client attached to the socket
-    /// neither keeps the session alive nor starts a second turn.
+    /// neither keeps the session alive nor starts a second turn. When the
+    /// loop rejects the first prompt, that rejection is the run's failure
+    /// (`docs/invocation.md`, "What each command does"); `run`'s own
+    /// failure wins.
     pub fn ask(
         &self,
         prompt: String,
         cancel: Arc<dyn Fn() -> bool + Send + Sync>,
         run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
-        self.run(
+        let (done, rejection) = mpsc::channel();
+        let ack = Ack(Box::new(move |answer| {
+            if let Err(rejection) = answer {
+                done.send(rejection).unwrap_or(());
+            }
+        }));
+        let outcome = self.run(
             vec![
-                Delivery::Prompt(prompt_message(prompt), ignore()),
+                Delivery::Prompt(prompt_message(prompt), ack),
                 Delivery::Close(ignore()),
             ],
             cancel,
             run,
-        )
+        );
+        match outcome {
+            Err(failure) => Err(failure),
+            Ok(()) => match rejection.try_recv() {
+                Ok(rejection) => Err(Failure {
+                    code: rejection.code,
+                    message: rejection.message,
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+                Err(_) => Ok(()),
+            },
+        }
     }
 
     /// Runs the internal session command: queues `prompt` when one was
@@ -226,6 +250,15 @@ impl Session {
     /// empty list.
     pub fn commands(&self, commands: Vec<CommandInfo>) {
         *lock(&self.gate.commands) = commands;
+    }
+
+    /// Every skill discovery read, switched-off and shadowed ones included
+    /// and marked, which the `skills` driver command answers with
+    /// verbatim (`docs/invocation.md`, "What each command does"). Set
+    /// before [`Session::run`]; with none set, the answer is an empty
+    /// list.
+    pub fn skills(&self, skills: Vec<SkillInfo>) {
+        *lock(&self.gate.skills) = skills;
     }
 
     /// The session's jobs, which the `job_stop` and `background` driver
@@ -431,6 +464,10 @@ impl Gate {
         lock(&self.commands).clone()
     }
 
+    pub(crate) fn skills(&self) -> Vec<SkillInfo> {
+        lock(&self.skills).clone()
+    }
+
     pub(crate) fn door(&self) -> Option<Arc<dyn contract::extension::ExtensionDoor>> {
         lock(&self.door).clone()
     }
@@ -514,6 +551,7 @@ fn open_in(
         session_id,
         tools: Mutex::new(tools),
         commands: Mutex::new(Vec::new()),
+        skills: Mutex::new(Vec::new()),
         accepted: Mutex::new(HashSet::new()),
         inbox: Mutex::new(None),
         cancel: Mutex::new(None),

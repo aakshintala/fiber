@@ -8,6 +8,10 @@ use std::path::PathBuf;
 use crate::tool::Cancel;
 use crate::{Seq, SessionId};
 
+/// The most hits a search returns when the caller names none
+/// (`docs/tools.md`, "Searching past sessions").
+pub const LIMIT: usize = 20;
+
 /// One search.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Query {

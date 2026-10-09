@@ -261,8 +261,8 @@ fn diff_lines_take_roles_by_their_first_characters() {
             Role::Keyword,
             Role::Keyword,
             Role::Type,
-            Role::Constant,
-            Role::String,
+            Role::Removed,
+            Role::Added,
             Role::CodeText
         ]
     );

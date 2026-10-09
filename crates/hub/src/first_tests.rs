@@ -78,6 +78,8 @@ fn held(setup: &Setup) -> (String, Held) {
             &CommandId("c_start".to_owned()),
             &workspace,
             None,
+            &[],
+            false,
             Some(&content),
         );
         done_tx.send(outcome).unwrap_or(());

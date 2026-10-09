@@ -290,6 +290,12 @@ When two skills share a name, the more specific source wins: the repository,
 then personal, then an extension, then built-in. A `notice` with code
 `skill_shadowed` names both paths.
 
+An MCP server's prompt named like a skill is left out, whatever the skill's
+source, and of two servers' prompts with one name, the server first in name
+order wins. A `notice` with code `skill_shadowed` names the prompt left out
+and what won. A name in `skills.disabled` switches off an MCP prompt of that
+name too.
+
 With `docs/` missing from Fiber home, as for a binary copied without the
 installer, there are no built-in skills.
 

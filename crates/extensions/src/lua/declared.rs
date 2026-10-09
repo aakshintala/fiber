@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use mlua::Table;
 
-use super::Target;
+use super::{DeclaredTool, Target};
 
 /// One command the entry script registered.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,13 +16,14 @@ pub(super) struct DeclaredCommand {
     pub(super) description: String,
 }
 
-/// What the entry script registered: commands, provider functions and hooks,
-/// in separate maps so a shared name cannot collide.
+/// What the entry script registered: commands, provider functions, hooks
+/// and tools, in separate maps so a shared name cannot collide.
 #[derive(Default)]
 pub(super) struct CallbackTimeouts {
     pub(super) commands: BTreeMap<String, DeclaredCommand>,
     pub(super) providers: BTreeMap<String, BTreeMap<String, Duration>>,
     pub(super) hooks: DeclaredHooks,
+    pub(super) tools: BTreeMap<String, DeclaredTool>,
 }
 
 impl CallbackTimeouts {
@@ -45,6 +46,10 @@ impl CallbackTimeouts {
             // start; it is never a queued call the timeout is looked up
             // for.
             Target::Timer { .. } => None,
+            // A tool's effects function runs under the tool's own timeout.
+            Target::Tool(name) | Target::Effects(name) => {
+                self.tools.get(name).map(|tool| tool.timeout)
+            }
         }
     }
 

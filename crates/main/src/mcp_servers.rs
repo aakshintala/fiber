@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use config::{Config, Source};
 use contract::ErrorCode;
-use contract::events::{McpServerFailed, Notice, ToolInfo};
+use contract::events::{McpServerFailed, Notice, ToolInfo, ToolSource};
 use contract::shapes::Failure;
 use contract::tool::Tool;
 use serde_json::Value;
@@ -53,6 +53,9 @@ pub(crate) struct SessionServers {
     pub failed: Vec<McpServerFailed>,
     /// The running servers, stopped when the session ends.
     pub servers: mcp::Servers,
+    /// Every runnable prompt of every server that listed, tagged with its
+    /// server's name (`docs/mcp.md`, "Prompts and resources").
+    pub prompts: mcp::Prompts,
     /// Run on every completed handoff: clears what the file tools have seen.
     pub forget: Arc<dyn Fn() + Send + Sync>,
     /// The image child's driver, which pasted images are processed through.
@@ -60,8 +63,9 @@ pub(crate) struct SessionServers {
 }
 
 /// The tools one session registers: the built-ins, every MCP server's
-/// tools after them, and the driver shell, with the failures for the log
-/// and the running servers for the session's end.
+/// tools after them, the extensions' `extension_tools` after those, and the
+/// driver shell, with the failures for the log and the running servers for
+/// the session's end.
 #[allow(
     clippy::type_complexity,
     reason = "one session's tools, as builtin's tuple carries them"
@@ -81,6 +85,7 @@ pub(crate) fn session_tools(
     specs: Vec<mcp::ServerSpec>,
     web_search: Option<&str>,
     delegates: &crate::delegates::Delegates,
+    extension_tools: Vec<(String, Arc<dyn Tool>)>,
 ) -> Result<
     (
         Vec<(String, Arc<dyn Tool>)>,
@@ -117,14 +122,42 @@ pub(crate) fn session_tools(
     }
     tools.extend(started.tools);
     infos.extend(started.infos);
-    infos.sort_by(|left, right| left.name.cmp(&right.name));
+    if let Err(failure) = add_extension_tools(&mut tools, &mut infos, extension_tools) {
+        started.servers.stop();
+        return Err(failure);
+    }
     let servers = SessionServers {
         failed: started.failed,
         servers: started.servers,
+        prompts: started.prompts,
         forget,
         images,
     };
     Ok((tools, infos, driver, servers))
+}
+
+/// Adds the extensions' tools after the built-in and MCP tools, so one
+/// named like either replaces it when the loop registers them, and the
+/// replacement is recorded (`docs/architecture.md`, "Tool seam"). No two
+/// of them share a name: the extensions settled that. The `tools` answer
+/// lists the tool that is declared, so a replaced row goes. Infos end
+/// sorted by name.
+fn add_extension_tools(
+    tools: &mut Vec<(String, Arc<dyn Tool>)>,
+    infos: &mut Vec<ToolInfo>,
+    extension_tools: Vec<(String, Arc<dyn Tool>)>,
+) -> Result<(), Failure> {
+    for (extension, tool) in extension_tools {
+        let source = ToolSource::Extension {
+            extension: extension.clone(),
+        };
+        let info = crate::builtin::info(tool.as_ref(), source)?;
+        infos.retain(|row| row.name != info.name);
+        infos.push(info);
+        tools.push((extension, tool));
+    }
+    infos.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(())
 }
 
 /// The spec for the server `name`, or `None` when it is skipped.

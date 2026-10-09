@@ -285,6 +285,162 @@ fn models_runs_a_lua_providers_models_with_no_cached_copy() {
     assert!(run.stdout.contains("fixture/m1"), "stdout: {}", run.stdout);
 }
 
+/// Installs the copied OpenRouter package with `https://openrouter.ai`
+/// rewritten to the fake server, and stores its credential:
+/// `Setup::fiber` clears the environment, so no env key reaches the child.
+fn openrouter(setup: &Setup, server: &fakes::ProviderServer) {
+    let copied = setup.root.path().join("pkg-openrouter");
+    support::package::copy_package(
+        "openrouter",
+        &copied,
+        "https://openrouter.ai",
+        &server.url(),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(copied),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    config::store_credential(
+        &setup.home(),
+        "openrouter",
+        "default",
+        &config::Secret::new("k-openrouter".into()),
+    )
+    .unwrap();
+}
+
+/// The `openrouter/<id>` references `fiber models --json` prints, in order.
+fn listed_ids(run: &Run) -> Vec<String> {
+    run.stdout
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .unwrap()
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+}
+
+#[test]
+fn models_lists_openrouter_models_from_a_refresh_once_cached() {
+    let setup = Setup::new();
+    let server = fakes::ProviderServer::start([fakes::Response::status(
+        200,
+        support::package::openrouter_listing(),
+    )])
+    .unwrap();
+    openrouter(&setup, &server);
+    let first = setup.fiber(&["models", "--json"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(first.stderr, "");
+    assert_eq!(
+        listed_ids(&first),
+        [
+            "openrouter/anthropic/claude-sonnet-5.5",
+            "openrouter/z-ai/glm-5.3-flash",
+            "openrouter/openrouter/free",
+            "openrouter/qwen/qwen3-max",
+            "openrouter/openrouter/auto",
+        ]
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let only = requests.first().unwrap();
+    assert_eq!(only.method.as_str(), "GET");
+    assert_eq!(only.path.as_str(), "/api/v1/models");
+    assert_eq!(only.header("authorization"), None);
+    assert!(setup.home().join("cache/models/openrouter.json").is_file());
+
+    let second = setup.fiber(&["models", "--json"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(second.stdout, first.stdout);
+    assert_eq!(server.requests().len(), 1);
+}
+
+#[test]
+fn a_failed_openrouter_refresh_keeps_the_cached_list() {
+    let setup = Setup::new();
+    // Declared after `setup`, so it drops first: a failing run kills this
+    // test's refresh child before its directory is removed.
+    let refresh_guard = Watchdog::matching(&setup.refresh_pattern());
+    let server = fakes::ProviderServer::start([
+        fakes::Response::status(200, support::package::openrouter_listing()),
+        fakes::Response::status(500, "{}"),
+    ])
+    .unwrap();
+    openrouter(&setup, &server);
+    let first = setup.fiber(&["models", "--json"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    // A stale cached copy: an ancient mtime is older than any
+    // `model_lists.refresh_after`, without reading the clock.
+    let file = setup.home().join("cache/models/openrouter.json");
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1))
+        .unwrap();
+    let cached = std::fs::read(&file).unwrap();
+
+    let second = setup.fiber(&["models", "--json"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(second.stdout, first.stdout);
+
+    // The second run returns without waiting: the failed refresh leaves
+    // the cache as it was, once the detached child has exited.
+    await_refresh_exit(setup.deadline, &setup.refresh_pattern());
+    assert_eq!(std::fs::read(&file).unwrap(), cached);
+    assert_eq!(server.requests().len(), 2);
+
+    let third = setup.fiber(&["models", "--json"]);
+    assert_eq!(third.code, Some(0), "stderr: {}", third.stderr);
+    assert_eq!(third.stdout, first.stdout);
+    await_refresh_exit(setup.deadline, &setup.refresh_pattern());
+    refresh_guard.stand_down(setup.deadline.cleanup());
+}
+
+#[test]
+fn models_lists_a_thousand_openrouter_models_within_the_memory_cap() {
+    let setup = Setup::new();
+    let body: Value = serde_json::from_slice(&support::package::openrouter_listing()).unwrap();
+    let template = body["data"][0].clone();
+    let data: Vec<Value> = (0..1000)
+        .map(|i| {
+            let mut model = template.clone();
+            model["id"] = json!(format!("anthropic/m{i}"));
+            model
+        })
+        .collect();
+    let server = fakes::ProviderServer::start([fakes::Response::status(
+        200,
+        json!({"data": data}).to_string(),
+    )])
+    .unwrap();
+    openrouter(&setup, &server);
+    let run = setup.fiber(&["models", "--json"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.stderr, "");
+    let ids = listed_ids(&run);
+    assert_eq!(ids.len(), 1000);
+    assert_eq!(
+        ids.first().map(String::as_str),
+        Some("openrouter/anthropic/m0")
+    );
+    assert_eq!(
+        ids.last().map(String::as_str),
+        Some("openrouter/anthropic/m999")
+    );
+}
+
 /// Waits until this test's refresh child is gone, under the test's
 /// [`Deadline`]: the detached child exits after it rewrites the cache, and
 /// a rewritten cache alone never proves it did. On expiry it kills the

@@ -2,7 +2,6 @@
 //! with GFM tables and strikethrough. Every line the renderer returns fits
 //! the width it was given, so each draws as exactly one row.
 
-mod roles;
 mod table;
 mod text;
 
@@ -14,7 +13,7 @@ use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-pub(crate) use roles::Role;
+pub(crate) use crate::theme::Role;
 
 use crate::app::Target;
 use crate::highlight;
@@ -134,7 +133,7 @@ pub(crate) fn style(role: Role) -> Style {
 
 /// The foreground of `role` on the code tint.
 fn tinted(role: Role) -> Style {
-    style(role).bg(Role::CodeTint.color())
+    style(role).bg(Role::Code.color())
 }
 
 /// Renders `text` at `width` columns. Pure: the same input gives the same
@@ -226,7 +225,7 @@ impl Writer {
                 self.flush();
                 self.block();
                 let rule = "─".repeat(usize::from(self.inner_width()));
-                self.put(Line::from(Span::styled(rule, style(Role::Dim))), false);
+                self.put(Line::from(Span::styled(rule, style(Role::Muted))), false);
             }
             Event::TaskListMarker(_) => {}
         }
@@ -410,7 +409,7 @@ impl Writer {
     /// `│ ` once per open block quote.
     fn quote_prefix(&self) -> Vec<Span<'static>> {
         (0..self.quote)
-            .map(|_| Span::styled("│ ", style(Role::Dim)))
+            .map(|_| Span::styled("│ ", style(Role::Muted)))
             .collect()
     }
 
@@ -552,10 +551,10 @@ impl Writer {
                 }
             }
             let number = format!("{:>digits$} │ ", at.saturating_add(1));
-            let first = [Span::styled(number, tinted(Role::Dim))];
+            let first = [Span::styled(number, tinted(Role::Muted))];
             let rest = [Span::styled(
                 format!("{:digits$} │ ", ""),
-                tinted(Role::Dim),
+                tinted(Role::Muted),
             )];
             let gutter =
                 u16::try_from(cells_width(&format!("{:digits$} │ ", ""))).unwrap_or(u16::MAX);
@@ -592,8 +591,8 @@ fn header(label: &str, width: usize) -> Line<'static> {
     let shown = truncate(label, room);
     let pad = width.saturating_sub(cells_width(&shown).saturating_add(copy.len()));
     Line::from(vec![
-        Span::styled(shown, tinted(Role::Dim)),
-        Span::styled(" ".repeat(pad), tinted(Role::Dim)),
+        Span::styled(shown, tinted(Role::Muted)),
+        Span::styled(" ".repeat(pad), tinted(Role::Muted)),
         Span::styled(copy, tinted(Role::Accent)),
     ])
 }

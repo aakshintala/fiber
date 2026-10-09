@@ -63,7 +63,7 @@ pub(crate) fn session_rewound(
     let worktree = forked.worktree.clone();
     match super::session_command::run_new(
         new,
-        None,
+        Vec::new(),
         None,
         false,
         worktree.clone(),
