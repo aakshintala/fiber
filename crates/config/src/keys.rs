@@ -198,6 +198,7 @@ pub(crate) const KEYS: &[Key] = &[
         Some("\"24h\""),
     ),
     key("model", Str, YES, None),
+    key("scoped_models", StrList, YES, None),
     key("roles.*", Str, YES, None),
     key("hub.idle_exit_ms", Count, NO, Some("1800000")),
     key("hub.port", CountBelow(65536), NO, None),
