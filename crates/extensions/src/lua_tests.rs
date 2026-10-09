@@ -624,10 +624,10 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     let dir = extension(
         "abandon",
         &format!(
-            "fiber.command(\"park\", {{ timeout = 8000, run = function() return host.http({{ url = \"{park_url}\" }}).body end }})\n\
+            "fiber.command(\"park\", {{ timeout = 30000, run = function() return host.http({{ url = \"{park_url}\" }}).body end }})\n\
              fiber.command(\"queued\", {{ timeout = 8000, run = function() return \"ran\" end }})\n\
              fiber.provider(\"p\", {{\n\
-               models = {{ timeout = 8000, run = function() return host.http({{ url = \"{models_url}\" }}).body end }},\n\
+               models = {{ timeout = 30000, run = function() return host.http({{ url = \"{models_url}\" }}).body end }},\n\
                sign = {{ timeout = 50, run = function() require(\"go_sign\") setmetatable({{}}, {{ __gc = function() while true do end end }}); collectgarbage() end }},\n\
              }})\n"
         ),

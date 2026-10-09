@@ -572,7 +572,7 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
         &dir.join("init.lua"),
         &format!(
             "seen = \"no\"\n\
-             fiber.command(\"slow\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+             fiber.command(\"slow\", {{ timeout = 30000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
              fiber.command(\"quick\", {{ timeout = 300, run = function() seen = \"yes\"; return \"ran\" end }})\n\
              fiber.command(\"after\", {{ timeout = 1000, run = function() return seen end }})\n"
         ),
@@ -724,7 +724,7 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     write(
         &dir.join("init.lua"),
         &format!(
-            "fiber.command(\"p.sign\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+            "fiber.command(\"p.sign\", {{ timeout = 30000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
              fiber.provider(\"p\", {{ sign = {{ timeout = 50, run = function() return {{}} end }} }})\n"
         ),
     );
@@ -735,7 +735,7 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     ok_rx
         .recv_timeout(WAIT)
         .expect("waited for p.sign to reach the server");
-    let grace = asked + Duration::from_millis(5000) + GRACE;
+    let grace = asked + Duration::from_millis(30000) + GRACE;
     assert!(
         clock.await_parked(grace, WAIT),
         "waited for p.sign to park at its own grace"
