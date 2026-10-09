@@ -673,7 +673,8 @@ fn turn_started_sets_busy_and_completed_clears_it() {
             " hi ▐".to_owned(),
             "▀▀▀▀▀".to_owned(),
             "00:00".to_owned(),
-            "steer · more".to_owned(),
+            format!("steer · 00:00 {}", "─".repeat(66)),
+            "more".to_owned(),
             "▣ completed".to_owned(),
             "▄▄▄▄▄▄▄".to_owned(),
             " next ▐".to_owned(),
@@ -760,7 +761,8 @@ fn steering_applied_is_a_line() {
         serde_json::json!({"content": [{"type": "text", "text": "use x"}], "source": "driver"}),
         None,
     ));
-    assert!(texts(&app).contains(&"steer · use x".to_owned()));
+    assert!(texts(&app).contains(&format!("steer · 00:00 {}", "─".repeat(66))));
+    assert!(texts(&app).contains(&"use x".to_owned()));
 }
 
 #[test]

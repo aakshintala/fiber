@@ -296,6 +296,7 @@ fn text_splits_groups_and_steering_does_not() {
     call(&mut app, "a_4", "read", json!({"path": "d.rs"}), 0);
     text(&mut app, "a_n", "More.", 0);
     end(&mut app, "completed", 0);
+    let rule = format!("steer · 00:00 {}", "─".repeat(46));
     assert_eq!(
         texts(&app),
         vec![
@@ -304,11 +305,51 @@ fn text_splits_groups_and_steering_does_not() {
             "▀▀▀▀▀",
             "00:00",
             "• Read 2 files",
-            "steer · also b",
+            rule.as_str(),
+            "also b",
             "Read them.",
             "• Read 2 files",
             "More.",
             "▣ completed · 4 calls",
+        ]
+    );
+}
+
+#[test]
+fn a_steer_is_timed_by_its_own_line() {
+    // Each steering rule reads its own line's time, not the turn's start
+    // (`docs/tui.md`, "Turns").
+    let mut app = app();
+    start(&mut app, "go", 0);
+    feed(
+        &mut app,
+        "steering_applied",
+        None,
+        3_600_000,
+        json!({"content": [{"type": "text", "text": "first"}], "source": "driver"}),
+    );
+    feed(
+        &mut app,
+        "steering_applied",
+        None,
+        7_200_000,
+        json!({"content": [{"type": "text", "text": "second"}], "source": "driver"}),
+    );
+    end(&mut app, "completed", 0);
+    let first_rule = format!("steer · 01:00 {}", "─".repeat(46));
+    let second_rule = format!("steer · 02:00 {}", "─".repeat(46));
+    assert_eq!(
+        texts(&app),
+        vec![
+            "▄▄▄▄▄".to_owned(),
+            " go ▐".to_owned(),
+            "▀▀▀▀▀".to_owned(),
+            "00:00".to_owned(),
+            first_rule,
+            "first".to_owned(),
+            second_rule,
+            "second".to_owned(),
+            "▣ completed".to_owned(),
         ]
     );
 }

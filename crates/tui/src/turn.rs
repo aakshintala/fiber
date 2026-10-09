@@ -29,6 +29,7 @@ mod answers;
 pub(crate) mod crash;
 mod group;
 mod handoff;
+mod steer;
 
 #[cfg(test)]
 use group::Section;
@@ -79,7 +80,7 @@ pub(crate) enum Entry {
         reply: markdown::Reply,
     },
     /// A steering message.
-    Steer(String),
+    Steer(steer::Steered),
     /// A tool group, by its index in the turn's groups.
     Group(usize),
     /// A line that came while the turn ran.
@@ -179,8 +180,9 @@ impl Turn {
     }
 
     /// A steering message, in place; it does not end a group.
-    pub(crate) fn steer(&mut self, text: String) {
-        self.entries.push(Entry::Steer(text));
+    pub(crate) fn steer(&mut self, text: String, ts: u64) {
+        self.entries
+            .push(Entry::Steer(steer::Steered::new(text, ts)));
     }
 
     /// `step_started`.
@@ -566,7 +568,7 @@ impl Turn {
         for entry in &self.entries {
             match entry {
                 Entry::Reply { reply, .. } => reply.rows(width, out),
-                Entry::Steer(text) => out.push((Line::raw(format!("steer · {text}")), None)),
+                Entry::Steer(steered) => steered.rows(width, zone, out),
                 Entry::Group(at) => {
                     if let Some(group) = self.groups.get(*at) {
                         group.rows(self.is_open() && self.open_group == Some(*at), out);
@@ -665,7 +667,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
         }),
         "steering_applied" => read!(envelope, SteeringApplied).is_some_and(|applied| {
             open(turns).is_some_and(|turn| {
-                turn.steer(text_of(&applied.content));
+                turn.steer(text_of(&applied.content), ts);
                 true
             })
         }),

@@ -347,20 +347,26 @@ fn a_bubble_copies_without_its_padding() {
 
 #[test]
 fn a_wrapped_tool_line_keeps_the_space_ratatui_dropped() {
+    // The ▣ closing line wraps in the view at 20 columns; the copy keeps
+    // the space the wrap dropped (`docs/tui.md`, "Selection and copy").
     let mut app = attached(20, 10);
-    prompt(&mut app, " ");
-    app.on_line(line(
-        "steering_applied",
-        json!({"content": [{"type": "text", "text": "aaaaaa bbbbbbbbbb"}], "source": "driver"}),
-        None,
-        None,
-    ));
-    let first = find(&app, "steer");
-    let last = find(&app, "bbbb");
+    prompt(&mut app, "hi");
+    for action in ["a_1", "a_2", "a_3", "a_4"] {
+        app.on_line(line(
+            "tool_call_requested",
+            json!({"name": "read", "arguments": {"path": "a.rs"}}),
+            Some(action),
+            None,
+        ));
+    }
+    reply(&mut app, "a_m", "ok");
+    done(&mut app);
+    let first = find(&app, "▣");
+    let last = find(&app, "calls");
     assert_eq!(last.1, first.1 + 1, "wrapped once: {:#?}", rows(&app));
     assert_eq!(
         select(&mut app, (0, first.1), (19, last.1)),
-        Effect::Copy("steer · aaaaaa bbbbbbbbbb".to_owned())
+        Effect::Copy("▣ completed · 4 calls".to_owned())
     );
 }
 
