@@ -924,6 +924,23 @@ fn one_line_alone_counts_its_page_at_once() {
 }
 
 #[test]
+fn a_batch_with_no_changed_line_counts_nothing() {
+    let (mut lp, _, tx, rx) = counting();
+    let mut seq = 0u64;
+    let mut step = || {
+        let envelope = line("step_started", Some(seq), None, json!({}));
+        seq += 1;
+        Input::Hub(Line::Session(envelope))
+    };
+    let inputs = vec![step(), step()];
+    let before = lp.app.pages().recounts;
+    assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+    // Neither line changed a card, so the batch marks nothing and
+    // counts nothing.
+    assert_eq!(lp.app.pages().recounts - before, 0);
+}
+
+#[test]
 fn lines_a_key_and_lines_draw_three_frames() {
     let (mut lp, flushes, tx, rx) = counting();
     let mut seq = 0u64;
