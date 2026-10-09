@@ -618,6 +618,20 @@ fn the_narrow_delegate_rows_carry_their_serials_as_targets() {
 }
 
 #[test]
+fn a_zero_width_delegate_row_has_no_click_target() {
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(started("j_1", "alpha"));
+    app.on_line(delegated("j_1"));
+    let area = Rect::new(0, 0, 0, 10);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    super::draw_delegates(&app, area, &mut buf, &mut bottom, &mut targets);
+    assert!(targets.is_empty());
+}
+
+#[test]
 fn narrow_with_delegates_and_widget() {
     let mut app = attached(100, 30);
     app.on_line(idle(SESSION, "one"));
