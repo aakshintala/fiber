@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/usage_view_tests.rs
+expression: screen
+---
+Usage                                                                          ✕
+session
+tokens  in 1,234 · cache read 5,678 · cache write 100 · out 1,000
+cost  billed $0.12 · on subscription $0.00
+budget left  $4.88 of $5.00
+by turn
+turn 1
+tokens  in 1,234 · cache read 5,678 · cache write 100 · out 1,000
+cost  billed $0.12 · on subscription $0.00
+by model
+anthropic/claude-x
+tokens  in 1,234 · cache read 5,678 · cache write 100 · out 1,000
+cost  billed $0.12 · on subscription $0.00
+by delegate
+this session
+tokens  in 1,234 · cache read 5,678 · cache write 100 · out 1,000
+cost  billed $0.12 · on subscription $0.00
+
+
+
+
+
+
+↑↓ scroll · Esc close

@@ -111,6 +111,9 @@ impl App {
         if let Some(effect) = self.config_view_edit(&edit) {
             return effect;
         }
+        if self.session_view_open() {
+            return Effect::None;
+        }
         // Delete on a focused home row asks to delete it when it
         // exited, ahead of the focus early return below.
         if let Some(effect) = self.home_edit(&edit) {
@@ -437,6 +440,10 @@ impl App {
             "settings" => self.open_config_view(super::ConfigView::Settings),
             "tools" => self.open_config_view(super::ConfigView::Tools),
             "skills" => self.open_config_view(super::ConfigView::Skills),
+            "usage" => {
+                self.draft.clear();
+                self.open_session_view(super::SessionView::Usage)
+            }
             "rules" => self.open_config_view(super::ConfigView::Rules),
             "login" => self.open_config_view(super::ConfigView::Login),
             // `?` and `help`.
@@ -462,6 +469,7 @@ impl App {
         self.clear_selection();
         self.screen.clear();
         self.panel_state.reset();
+        self.session_views_reset();
         self.offer = crate::offer::Offer::default();
         self.overlays.slash_rows = slash::rows(&[]);
         self.overlays.commands_id = None;
@@ -510,6 +518,11 @@ impl App {
     /// The key map overlay's top row, while it is open.
     pub(crate) fn keymap_top(&self) -> Option<usize> {
         self.overlays.keymap
+    }
+
+    /// Closes the key map before a swapped view takes the conversation.
+    pub(super) fn close_keymap(&mut self) {
+        self.overlays.keymap = None;
     }
 
     /// Opens the key map overlay at its top.

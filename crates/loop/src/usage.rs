@@ -225,39 +225,7 @@ impl Ledger {
 
     /// The docs' `usage` shape over the lines kept.
     pub(crate) fn usage(&self) -> Usage {
-        let mut tokens = Tokens {
-            input: 0,
-            cache_read: 0,
-            cache_write: BTreeMap::new(),
-            output: 0,
-        };
-        let mut billed = 0usize;
-        let mut cost = None;
-        let mut subscription_cost = 0.0;
-        for call in self.calls.values() {
-            tokens.input = tokens.input.saturating_add(call.tokens.input);
-            tokens.cache_read = tokens.cache_read.saturating_add(call.tokens.cache_read);
-            tokens.output = tokens.output.saturating_add(call.tokens.output);
-            for (lifetime, n) in &call.tokens.cache_write {
-                let total = tokens.cache_write.entry(lifetime.clone()).or_default();
-                *total = total.saturating_add(*n);
-            }
-            if call.subscription == Some(true) {
-                subscription_cost += call.cost.unwrap_or(0.0);
-            } else {
-                billed += 1;
-                if let Some(known) = call.cost {
-                    *cost.get_or_insert(0.0) += known;
-                }
-            }
-        }
-        Usage {
-            tokens,
-            // `docs/events.md`, `usage`: 0 with no billed call, null when
-            // billed calls exist and none had a known cost.
-            cost: if billed == 0 { Some(0.0) } else { cost },
-            subscription_cost,
-        }
+        log::usage(self.calls.values())
     }
 
     /// US dollars billed per token. A `cost` still null counts as zero

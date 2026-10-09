@@ -17,6 +17,7 @@ mod read;
 mod resolve;
 mod scan;
 mod search;
+mod usage;
 mod weak_emit;
 mod write;
 
@@ -35,6 +36,7 @@ pub use scan::{
     Hold, SessionLock, Started, last_ts, remaining, session_bytes, started_sessions, try_hold,
 };
 pub use search::{Identity, SessionScan};
+pub use usage::usage;
 pub use weak_emit::WeakEmit;
 pub use write::Log;
 

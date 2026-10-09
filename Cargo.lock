@@ -2819,6 +2819,7 @@ dependencies = [
  "fakes",
  "insta",
  "jiff",
+ "log 0.0.0",
  "proptest",
  "pulldown-cmark",
  "ratatui",

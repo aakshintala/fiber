@@ -349,11 +349,16 @@ fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
         server.await_requests(1, setup.deadline.left()),
         "the extension-driven turn requested its provider response"
     );
+    // Close only after the turn completes: a close sent while the turn
+    // streams is admitted either side of `turn_completed`.
+    let done = until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let tail = until_close(&client);
-    let stream = [lines.clone(), tail.clone()].concat();
+    let stream = [lines.clone(), done.clone(), tail.clone()].concat();
     // The complete ordered kinds: the extension command is admitted, then
-    // its driven prompt runs its turn.
+    // its driven prompt runs its turn, then the close is admitted.
     assert_eq!(
         kinds(&stream),
         [
@@ -373,8 +378,8 @@ fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "command_accepted",
             "turn_completed",
+            "command_accepted",
             "fiber_exited",
         ]
     );

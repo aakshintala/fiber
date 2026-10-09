@@ -30,6 +30,9 @@ pub(crate) enum Spot {
     /// The Session card's "N waiting" while the rail is not drawn: shows
     /// the rail (`docs/tui.md`, "Shedding").
     Waiting,
+    /// The Session card's spend rows: opens the usage view (`docs/tui.md`,
+    /// "The panel").
+    Usage,
     /// The Session card's tools line: opens the tools view (`docs/tui.md`,
     /// "The panel").
     Tools,
@@ -533,6 +536,7 @@ impl App {
                 Effect::Send(vec![line])
             }
             Spot::Waiting => self.show_rail(),
+            Spot::Usage => self.open_session_view(super::SessionView::Usage),
             Spot::Tools => self.open_config_view(super::ConfigView::Tools),
             Spot::Widget => self.toggle_widget_row(),
         }
