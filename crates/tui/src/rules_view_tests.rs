@@ -475,6 +475,31 @@ fn the_x_stays_clickable_with_a_long_prefix() {
 }
 
 #[test]
+fn moving_down_past_the_first_row_keeps_three_rows_in_view() {
+    // Five rows in a three-row window, two past it: moving to row 2
+    // keeps the window at the top, while a one-row window scrolls.
+    let fake = fake(vec![full(), hand()], Ok(vec![full()]));
+    let ctx = Ctx {
+        seam: &fake,
+        workspace: Path::new("/w"),
+        height: 5,
+        usage: None,
+    };
+    let mut rules = Rules::open(&ctx);
+    rules.key(&Key::Down, &ctx);
+    rules.key(&Key::Down, &ctx);
+    assert_eq!(rules.list.selected(), 2);
+    assert_eq!(rules.list.top(), 0);
+    let rows: Vec<String> = drawn(&rules, 80, 5).lines().map(str::to_owned).collect();
+    assert_eq!(rows[1], "Global rules  /home/rules");
+    assert_eq!(
+        rows[2],
+        "\u{2715} allow  shell  npm test  2026-10-07 00:00 UTC  s_01"
+    );
+    assert_eq!(rows[3], "\u{2715} deny  shell  (any)");
+}
+
+#[test]
 fn rules_80x24() {
     let fake = fake(vec![full(), hand()], Err("/home/projects/-w/rules:2: bad"));
     let rules = open(&fake);

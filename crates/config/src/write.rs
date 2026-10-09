@@ -273,11 +273,8 @@ pub(crate) fn remove_line(file: &Path, line: usize, text: &str) -> Result<bool, 
         return Ok(false);
     }
     let _lock = locked(file)?;
-    let current = match fs::read(file) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
-        Err(source) => return Err(io(source)),
-    };
+    // A file deleted after the check above reports the missing read as an I/O error.
+    let current = fs::read(file).map_err(io)?;
     let segments: Vec<&[u8]> = current.split_inclusive(|b| *b == b'\n').collect();
     let Some(segment) = line.checked_sub(1).and_then(|index| segments.get(index)) else {
         return Ok(false);
