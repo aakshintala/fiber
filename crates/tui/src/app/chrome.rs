@@ -84,8 +84,9 @@ impl Chrome {
         self.floor.as_deref()
     }
 
-    /// The width the conversation and everything drawn in the column wraps
-    /// at: the column's, or `screen` without the layout.
+    /// The width the column takes: the column's, or `screen` without the
+    /// layout. The conversation's rows wrap one column narrower, leaving
+    /// the last column to the scroll bar.
     pub(crate) fn column_width(&self, screen: u16) -> u16 {
         self.layout.map_or(screen, |layout| layout.column.width)
     }
@@ -145,7 +146,9 @@ impl App {
         &self.chrome
     }
 
-    /// The width everything drawn in the conversation column wraps at.
+    /// The width the conversation column takes. The conversation's rows
+    /// wrap one column narrower, leaving the last column to the scroll
+    /// bar.
     pub(crate) fn column_width(&self) -> u16 {
         self.chrome.column_width(self.screen.width())
     }
@@ -181,9 +184,10 @@ impl App {
     }
 
     /// Lays the screen out from its size and home's counts and wraps the
-    /// pages at the column's width, so a change that shows or hides a
-    /// region rewraps before the next frame. Where the panel and the rail
-    /// are is recorded when they move.
+    /// pages at the rows' width, one column narrower than the column, so
+    /// a change that shows or hides a region rewraps before the next
+    /// frame. Where the panel and the rail are is recorded when they
+    /// move.
     pub(super) fn relayout(&mut self) {
         let home = self.home.as_ref().map(|home| HomeState {
             shares: Shares {
@@ -196,7 +200,7 @@ impl App {
         let moved = self
             .chrome
             .lay_out(self.screen.width(), self.screen.height(), home);
-        let width = self.column_width();
+        let width = crate::view::scroll_bar::text_width(self.column_width());
         // A new width moves every row, so a selection clears.
         if self.screen.wrap_at(width) {
             self.clear_selection();
