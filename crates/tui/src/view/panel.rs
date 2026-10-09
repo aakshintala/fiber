@@ -10,6 +10,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::App;
+use crate::changed_files_view;
 use crate::app::panel::{Branch, Spot};
 use crate::format;
 use crate::markdown::{Role, style};
@@ -492,15 +493,7 @@ fn changed_files_rows(app: &App, text: usize) -> Vec<Row> {
     if changes.is_empty() {
         return Vec::new();
     }
-    let mut paths: Vec<(&str, u64, u64)> = changes
-        .iter()
-        .map(|(path, (added, removed))| (path.as_str(), *added, *removed))
-        .collect();
-    paths.sort_by(|a, b| {
-        b.1.saturating_add(b.2)
-            .cmp(&a.1.saturating_add(a.2))
-            .then_with(|| a.0.cmp(b.0))
-    });
+    let paths = changed_files_view::ranked(changes);
     let mut out = Vec::new();
     for (path, added, removed) in paths.iter().take(5) {
         let counts = format!("+{added} \u{2212}{removed}");

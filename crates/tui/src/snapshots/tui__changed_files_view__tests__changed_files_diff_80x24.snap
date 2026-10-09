@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/changed_files_view_tests.rs
+expression: "screen(&frame(&changes, Some((\"src/a.rs\", &diff)), List::default()))"
+---
+Changed files › src/a.rs · diff against HEAD                                   ✕
+diff --git a/src/a.rs b/src/a.rs
+@@ -1 +1 @@
+-old
++new
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+↑↓ scroll · ← files · Esc close
