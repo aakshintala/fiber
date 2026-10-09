@@ -188,8 +188,7 @@ fn a_refused_write_writes_nothing_and_says_why() {
 
 /// Reads the global `config.json` under `home`.
 fn global(home: &Path) -> serde_json::Value {
-    let text =
-        fs::read_to_string(home.join("config.json")).unwrap_or_else(|e| panic!("read: {e}"));
+    let text = fs::read_to_string(home.join("config.json")).unwrap_or_else(|e| panic!("read: {e}"));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("json: {e}"))
 }
 
@@ -225,8 +224,7 @@ fn a_width_that_cannot_write_is_an_error() {
     fs::create_dir_all(&workspace).unwrap_or_else(|e| panic!("mkdir: {e}"));
     let seam = Seam::new(home);
     assert!(
-        seam
-            .set(&workspace, Layer::Global, "tui.rail.width", "18.4")
+        seam.set(&workspace, Layer::Global, "tui.rail.width", "18.4")
             .is_err()
     );
 }

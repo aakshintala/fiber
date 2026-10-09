@@ -362,5 +362,3 @@ fn scoped_models_come_from_config() {
     );
     assert!(unset.scoped_models.is_empty());
 }
-
-

@@ -170,11 +170,7 @@ fn a_save_warning_is_a_notice() {
     lp.app.on_line(live(A));
     lp.app.on_line(live(B));
     feed(&mut lp, drag());
-    assert!(
-        shown(&lp).contains("the width moved"),
-        "{}",
-        shown(&lp)
-    );
+    assert!(shown(&lp).contains("the width moved"), "{}", shown(&lp));
 }
 
 #[test]
