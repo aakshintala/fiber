@@ -11,7 +11,7 @@ use ratatui::style::Color;
 use serde_json::Value;
 
 /// How many roles a theme gives a colour.
-pub(crate) const ROLES: usize = 30;
+pub(crate) const ROLES: usize = 37;
 
 /// A colour role: what a colour is for. The order is the doc table's
 /// (`docs/tui.md`, "Themes"), and each role's index is its marker's.
@@ -57,16 +57,30 @@ pub(crate) enum Role {
     Constant,
     /// Operators.
     Operator,
+    /// Inline code, a call's kind, the input box's ›.
+    Info,
+    /// The git branch, the handoff band's label, the delegates' ◆.
+    Secondary,
+    /// Rules, line numbers, a bar's empty cells.
+    Rule,
+    /// The scroll bar's thumb.
+    Scroll,
     /// Every cell no surface covers.
     Background,
+    /// The rail's and the panel's regions.
+    Panel,
     /// The input box, cards, notices, the handoff band.
     Surface,
     /// The card on screen, a hovered card, pickers.
     SurfaceRaised,
+    /// A turn's card.
+    Turn,
     /// The person's prompt bubble.
     Prompt,
     /// Code blocks and inline code.
     Code,
+    /// The handoff band.
+    Handoff,
     /// The approval panel for a standing ask.
     Approval,
     /// The approval panel for a reviewer's escalation.
@@ -103,11 +117,18 @@ impl Role {
         Self::Type,
         Self::Constant,
         Self::Operator,
+        Self::Info,
+        Self::Secondary,
+        Self::Rule,
+        Self::Scroll,
         Self::Background,
+        Self::Panel,
         Self::Surface,
         Self::SurfaceRaised,
+        Self::Turn,
         Self::Prompt,
         Self::Code,
+        Self::Handoff,
         Self::Approval,
         Self::Alert,
         Self::Hover,
@@ -144,11 +165,18 @@ impl Role {
             Self::Type => "type",
             Self::Constant => "constant",
             Self::Operator => "operator",
+            Self::Info => "info",
+            Self::Secondary => "secondary",
+            Self::Rule => "rule",
+            Self::Scroll => "scroll",
             Self::Background => "background",
+            Self::Panel => "panel",
             Self::Surface => "surface",
             Self::SurfaceRaised => "surface_raised",
+            Self::Turn => "turn",
             Self::Prompt => "prompt",
             Self::Code => "code",
+            Self::Handoff => "handoff",
             Self::Approval => "approval",
             Self::Alert => "alert",
             Self::Hover => "hover",
@@ -162,10 +190,13 @@ impl Role {
     pub(crate) fn tint(self) -> bool {
         match self {
             Self::Background
+            | Self::Panel
             | Self::Surface
             | Self::SurfaceRaised
+            | Self::Turn
             | Self::Prompt
             | Self::Code
+            | Self::Handoff
             | Self::Approval
             | Self::Alert
             | Self::Hover
@@ -190,7 +221,11 @@ impl Role {
             | Self::Function
             | Self::Type
             | Self::Constant
-            | Self::Operator => false,
+            | Self::Operator
+            | Self::Info
+            | Self::Secondary
+            | Self::Rule
+            | Self::Scroll => false,
         }
     }
 
@@ -199,8 +234,10 @@ impl Role {
     pub(crate) fn grey(self) -> bool {
         match self {
             Self::Background
+            | Self::Panel
             | Self::Surface
             | Self::SurfaceRaised
+            | Self::Turn
             | Self::Prompt
             | Self::Code
             | Self::Hover
@@ -224,6 +261,11 @@ impl Role {
             | Self::Type
             | Self::Constant
             | Self::Operator
+            | Self::Info
+            | Self::Secondary
+            | Self::Rule
+            | Self::Scroll
+            | Self::Handoff
             | Self::Approval
             | Self::Alert
             | Self::Match
@@ -269,11 +311,18 @@ impl Theme {
             (0xe5, 0xc0, 0x7b), // type
             (0xe0, 0x6c, 0x75), // constant
             (0x56, 0xb6, 0xc2), // operator
+            (0x7d, 0xd3, 0xfc), // info
+            (0xb3, 0x9d, 0xdb), // secondary
+            (0x3a, 0x3a, 0x4a), // rule
+            (0x80, 0x80, 0x80), // scroll
             (0x1e, 0x21, 0x27), // background
+            (0x0c, 0x0c, 0x11), // panel
             (0x28, 0x2c, 0x34), // surface
             (0x32, 0x38, 0x42), // surface_raised
+            (0x10, 0x10, 0x17), // turn
             (0x26, 0x34, 0x4a), // prompt
             (0x21, 0x25, 0x2b), // code
+            (0x1f, 0x1a, 0x2e), // handoff
             (0x1c, 0x28, 0x40), // approval
             (0x50, 0x1c, 0x20), // alert
             (0x3e, 0x44, 0x51), // hover
@@ -305,11 +354,18 @@ impl Theme {
             (0xc1, 0x84, 0x01), // type
             (0xe4, 0x56, 0x49), // constant
             (0x01, 0x84, 0xbc), // operator
+            (0x7d, 0xd3, 0xfc), // info
+            (0xb3, 0x9d, 0xdb), // secondary
+            (0x3a, 0x3a, 0x4a), // rule
+            (0x80, 0x80, 0x80), // scroll
             (0xfa, 0xfa, 0xfa), // background
+            (0x0c, 0x0c, 0x11), // panel
             (0xf0, 0xf0, 0xf1), // surface
             (0xe5, 0xe5, 0xe6), // surface_raised
+            (0x10, 0x10, 0x17), // turn
             (0xe2, 0xea, 0xf6), // prompt
             (0xea, 0xea, 0xeb), // code
+            (0x1f, 0x1a, 0x2e), // handoff
             (0xe0, 0xe8, 0xf8), // approval
             (0xfc, 0xde, 0xde), // alert
             (0xdb, 0xdb, 0xde), // hover

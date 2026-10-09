@@ -172,6 +172,23 @@ jobs:
         run: scripts/check --base "$BASE" --shared-only
       - name: cargo-deny licences, sources and bans
         run: cargo deny check licenses sources bans
+      # No install-action tool installs actionlint, so this downloads the release
+      # and checks its digest (docs/ci.md, "On every pull request that changes code").
+      - name: actionlint, when a workflow changed
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          if ! git diff --name-only "$BASE...HEAD" | grep -q '^\.github/workflows/'; then
+            echo "no workflow file changed"
+            exit 0
+          fi
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "$ACTIONLINT_SHA256  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color
       - name: cargo-deny advisories, when Cargo.lock changed
         run: |
           if git diff --name-only "$BASE...HEAD" | grep -qx Cargo.lock; then
@@ -209,7 +226,9 @@ jobs:
       - name: Install zsh and fish
         if: runner.os == 'Linux'
         timeout-minutes: 5
-        run: sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
+        run: |
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
+          sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
       - name: Install fish
         if: runner.os == 'macOS'
         run: brew install fish
@@ -234,7 +253,8 @@ jobs:
         timeout-minutes: 5
         run: |
           sudo loginctl enable-linger "$USER"
-          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export XDG_RUNTIME_DIR
           state=""
           for _ in $(seq 1 30); do
             state=$(systemctl --user is-system-running 2>/dev/null || true)
@@ -279,7 +299,9 @@ jobs:
       # and fish (crates/main/tests/completion.rs).
       - name: Install zsh and fish
         timeout-minutes: 5
-        run: sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
+        run: |
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
+          sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
       - name: cargo mutants --in-diff
         run: |
           git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
@@ -337,7 +359,9 @@ jobs:
         timeout-minutes: 5
         run: |
           rustup target add x86_64-unknown-linux-musl
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
           sudo apt-get $APT_OPTS update
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
           sudo apt-get $APT_OPTS install -y --no-install-recommends musl-tools time
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:

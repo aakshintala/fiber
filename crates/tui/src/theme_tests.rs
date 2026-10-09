@@ -9,7 +9,7 @@ fn all_lists_every_role_once_in_index_order() {
         assert_eq!(Role::from_index(index), Some(role));
         assert_eq!(role.color(), ratatui::style::Color::Indexed(index));
     }
-    assert_eq!(Role::from_index(30), None);
+    assert_eq!(Role::from_index(37), None);
     assert_eq!(Role::from_index(255), None);
 }
 
@@ -171,11 +171,18 @@ fn tint_and_grey_per_role() {
         (Role::Type, false, false),
         (Role::Constant, false, false),
         (Role::Operator, false, false),
+        (Role::Info, false, false),
+        (Role::Secondary, false, false),
+        (Role::Rule, false, false),
+        (Role::Scroll, false, false),
         (Role::Background, true, true),
+        (Role::Panel, true, true),
         (Role::Surface, true, true),
         (Role::SurfaceRaised, true, true),
+        (Role::Turn, true, true),
         (Role::Prompt, true, true),
         (Role::Code, true, true),
+        (Role::Handoff, true, false),
         (Role::Approval, true, false),
         (Role::Alert, true, false),
         (Role::Hover, true, true),
@@ -192,7 +199,13 @@ fn tint_and_grey_per_role() {
 
 #[test]
 fn dark_and_light_differ_in_every_background_role() {
-    for role in Role::ALL.into_iter().filter(|role| role.tint()) {
+    // `panel`, `turn` and `handoff` carry the dark value in both themes until
+    // #1617 gives the light theme its own.
+    let pending = [Role::Panel, Role::Turn, Role::Handoff];
+    for role in Role::ALL
+        .into_iter()
+        .filter(|role| role.tint() && !pending.contains(role))
+    {
         assert_ne!(
             Theme::DARK.rgb(role),
             Theme::LIGHT.rgb(role),

@@ -17,7 +17,7 @@ mod support;
 
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
@@ -289,25 +289,11 @@ impl Run {
         let (tx, rx) = mpsc::channel();
         let output = Arc::new(Mutex::new(Vec::new()));
         let appended = Arc::clone(&output);
-        let mut dup = main.try_clone().unwrap();
-        thread::Builder::new()
-            .name("terminal-read".to_owned())
-            .spawn(move || {
-                let mut buf = [0u8; 4096];
-                loop {
-                    match dup.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            appended.lock().unwrap().extend_from_slice(&buf[..n]);
-                            if tx.send(()).is_err() {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
-            })
-            .unwrap();
+        let dup = main.try_clone().unwrap();
+        fakes::pty::read_to_eof(dup, move |bytes| {
+            appended.lock().unwrap().extend_from_slice(bytes);
+            tx.send(()).unwrap_or(());
+        });
         Self {
             child,
             hub_socket: setup.home().join("run").join("hub"),

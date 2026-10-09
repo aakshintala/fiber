@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use config::{Config, SettingValue, Source, Sources};
 use contract::shapes::Failure;
 use tui::{
-    ConfigureError, Layer, LoginTarget, Revoked, RuleRow, RulesScope, RulesSection, Saved,
+    ConfigureError, KeyEdit, Layer, LoginTarget, Revoked, RuleRow, RulesScope, RulesSection, Saved,
     SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolSwitches, WriteScope,
 };
 
@@ -302,6 +302,24 @@ impl tui::Configure for Seam {
 
     fn skill_text(&self, path: &Path) -> Result<String, ConfigureError> {
         self.read_skill_text(path)
+    }
+
+    fn save_keys(&self, edits: &[KeyEdit]) -> Result<(), ConfigureError> {
+        let entries: Vec<(String, Option<serde_json::Value>)> = edits
+            .iter()
+            .map(|edit| {
+                let keys = edit.keys.as_ref().map(|names| {
+                    serde_json::Value::Array(
+                        names
+                            .iter()
+                            .map(|name| serde_json::Value::String(name.clone()))
+                            .collect(),
+                    )
+                });
+                (edit.id.clone(), keys)
+            })
+            .collect();
+        config::update_global_entries(&self.home, "keys", &entries).map_err(from_config)
     }
 }
 
