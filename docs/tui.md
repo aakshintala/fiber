@@ -389,7 +389,9 @@ The rail sheds before the panel. When the screen is too narrow for the rail's
 floor, the conversation's minimum and the panel, the rail hides, and "N
 waiting" joins the Session card, or the status line in the narrow layout; a
 click on it shows the rail. A hidden rail leaves its grip at the screen's left
-edge, and dragging the grip out shows the rail again, as does ⌥R. A rail hidden
+edge, and dragging the grip out shows the rail again, as does ⌥R. Shown while the
+width has no room for it, the rail hides the panel, as ⌥P does; ⌥P brings the
+panel back and the rail sheds again. A rail hidden
 for width returns when the screen grows; one the person hid, by ⌥R or by
 dragging it below its floor, stays hidden until shown. Below the narrow layout, which
 has already dropped the panel, the screen sheds the status rows, then the
@@ -399,13 +401,16 @@ keeps running, nothing is lost, and the screen redraws on resize.
 
 ### A dropped connection
 
-A session that exits while on screen stays on screen, because its
-conversation is its log. Sending a prompt resumes it through the hub, with no
-banner.
+A session that exits while on screen stays on screen until the connection is
+lost, because its conversation is its log. Sending a prompt resumes it
+through the hub, with no banner. On reconnect the terminal reopens the
+attached session; it resumes idle and takes nothing until a prompt.
 
 When the hub cannot be reached, a banner replaces the working line:
 "Connection lost · reconnecting (attempt 2)…". The terminal retries with backoff while the conversation and the
-draft stay.
+draft stay. After reconnecting, the terminal sends `sessions` once and drops
+every live row its answer does not list, unless a feed line for that row
+arrived after `sessions` was sent.
 
 ## The conversation
 

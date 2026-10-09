@@ -590,7 +590,7 @@ impl App {
         let text = self.draft.expand();
         // A command sent after the connection is lost goes nowhere, so the
         // draft stays. An empty draft stays too, unless it holds an image.
-        if self.link == Link::Down {
+        if matches!(self.link, Link::Down | Link::Refused) {
             return Effect::None;
         }
         if !has_image && text.trim().is_empty() {

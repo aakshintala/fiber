@@ -100,17 +100,20 @@ impl CaseRun {
     }
 
     /// Starts the event driver before the loop writes its first event.
+    /// The event watcher is registered before this returns, so no event
+    /// the session writes afterwards is lost.
     pub(crate) fn start(
         self: &Arc<Self>,
         driver: Arc<dyn Drive>,
         log: Arc<Log>,
         cancel: Arc<r#loop::TurnCancel>,
     ) -> std::io::Result<JoinHandle<()>> {
+        let watcher = log.watch_all();
         let case = Arc::clone(self);
         thread::Builder::new()
             .name("fiber-case-driver".to_owned())
             .spawn(move || {
-                let verdict = case.drive(driver, log, cancel);
+                let verdict = case.drive(driver, watcher, cancel);
                 *lock(&case.verdict) = Some(verdict);
             })
     }
@@ -129,7 +132,7 @@ impl CaseRun {
     fn drive(
         &self,
         driver: Arc<dyn Drive>,
-        log: Arc<Log>,
+        mut watcher: Watcher,
         cancel: Arc<r#loop::TurnCancel>,
     ) -> Vec<String> {
         let deadline = self
@@ -137,7 +140,6 @@ impl CaseRun {
             .now()
             .checked_add(self.waits.until)
             .unwrap_or_else(|| self.process_clock.now());
-        let mut watcher = log.watch_all();
         let mut events = Vec::new();
         let mut failures = Vec::new();
         let mut seen = BTreeMap::<String, usize>::new();

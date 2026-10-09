@@ -325,9 +325,11 @@ Fiber says no to a newer client's key instead of ignoring it.
 
 A session remembers the id of every command it accepted for as long as its
 process runs, and rejects a second command with the same id
-`duplicate_command`. A client that lost its connection resends every
+`duplicate_command`. A client that lost its connection resends each session
 command it had no answer for, with the same id, so a command that had
-already arrived is never applied twice.
+already arrived is rejected `duplicate_command` and never applied twice. A
+hub command with no answer when the connection dropped is not resent: it
+settles as "No answer before the connection was lost."
 
 `content` is content parts (`docs/events.md`, "Content parts"). A client sends
 an image part as `type`, `data`, the image's bytes in base64, and `mime_type`,
@@ -810,8 +812,10 @@ each session sees its clients leave. Neither stops a session.
 On SIGTERM, SIGINT or SIGHUP the hub sends each websocket a close message
 saying it is stopping, closes its local connections and exits. It does not
 drain, because it holds no session. A client reconnects and resends, with the
-same id, every command it had no answer for; a session that already accepted
-one rejects the copy `duplicate_command` ("The command line").
+same id, each session command it had no answer for; a session that already
+accepted one rejects the copy `duplicate_command` ("The command line"). A
+hub command with no answer is not resent: in the terminal it settles as "No
+answer before the connection was lost." and its text returns to the draft.
 
 ## The hub
 

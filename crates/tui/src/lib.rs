@@ -43,6 +43,7 @@ mod pages;
 mod paste_image;
 #[cfg(test)]
 mod results_support;
+mod retry;
 mod rows;
 mod screen;
 mod settings_view;
@@ -82,8 +83,8 @@ pub use jigs::{draw, hover_frames, measure_paging};
 pub use event_loop::run;
 
 /// Connects to the hub, starting one when none runs: the stream and the
-/// `hub_hello` it spoke first.
-pub type Connect = Box<dyn FnOnce() -> io::Result<(UnixStream, HubLine)> + Send>;
+/// `hub_hello` it spoke first. Called again for each reconnect.
+pub type Connect = Box<dyn FnMut() -> io::Result<(UnixStream, HubLine)> + Send>;
 
 /// Called once with the session id when `start` is accepted.
 pub type OnAttach = Box<dyn Fn(&SessionId) + Send>;
