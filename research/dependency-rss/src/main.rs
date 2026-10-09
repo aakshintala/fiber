@@ -473,6 +473,40 @@ fn main() {
     }
     #[cfg(feature = "lopdf")]
     {
+        // With PDF_FIXTURE set, the workload is what the image child does
+        // for a PDF input (crates/picture/src/pdf.rs, `pages=1-20`): read the
+        // file, load it, count its pages, cut the range, write a temp file.
+        // run.sh sets PDF_FIXTURE to one scanned-document-like fixture per
+        // row (research/dependency-rss/gen). Without it, the small
+        // in-memory workload below is the `lopdf` row of the main table.
+        if let Ok(path) = std::env::var("PDF_FIXTURE") {
+            let bytes = std::fs::read(&path).unwrap();
+            let mut document = lopdf::Document::load_mem(&bytes).unwrap();
+            let total = document.get_pages().len();
+            let total_u32 = u32::try_from(total).unwrap();
+            assert!(total_u32 >= 20, "{path} has only {total_u32} pages");
+            let (first, last) = (1u32, 20u32);
+            let remove: Vec<u32> = (1..=total_u32)
+                .filter(|page| *page < first || *page > last)
+                .collect();
+            document.delete_pages(&remove);
+            document.prune_objects();
+            let mut cut = Vec::new();
+            document.save_to(&mut cut).unwrap();
+            let out = std::env::temp_dir()
+                .join(format!("dep-rss-pdf-{}.pdf", std::process::id()));
+            std::fs::write(&out, &cut).unwrap();
+            assert_eq!(
+                lopdf::Document::load_mem(&cut).unwrap().get_pages().len() as u32,
+                last - first + 1
+            );
+            eprintln!(
+                "{path}: {} -> {} bytes, {total_u32} pages, deterministic",
+                bytes.len(),
+                cut.len()
+            );
+            black_box(cut);
+        } else {
         // The image child: build a 20-page PDF in memory, load it,
         // count its pages, cut pages 3 to 7, and save the cut to a `Vec`.
         use lopdf::content::{Content, Operation};
@@ -540,6 +574,7 @@ fn main() {
         loaded.save_to(&mut cut).unwrap();
         assert_eq!(Document::load_mem(&cut).unwrap().get_pages().len(), 5);
         black_box(cut);
+        }
     }
     #[cfg(feature = "arborium")]
     {
