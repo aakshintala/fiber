@@ -75,16 +75,17 @@ impl Retry {
         self.changed.notify_all();
     }
 
-    /// Watches `stream` for [`Retry::quit`]: false when the loop already
-    /// quit, so the caller ends without reading. The watch ends at
-    /// [`Retry::untrack`].
-    pub(crate) fn track(&self, stream: &UnixStream) -> bool {
+    /// Watches `stream` for [`Retry::quit`]: `Ok(false)` when the loop
+    /// already quit, so the caller ends without reading. `Err` when the
+    /// watch's clone fails, so the caller reports instead of starting a
+    /// read no quit can end. The watch ends at [`Retry::untrack`].
+    pub(crate) fn track(&self, stream: &UnixStream) -> std::io::Result<bool> {
         let mut gate = self.lock();
         if gate.quit {
-            return false;
+            return Ok(false);
         }
-        gate.watched = stream.try_clone().ok();
-        true
+        gate.watched = Some(stream.try_clone()?);
+        Ok(true)
     }
 
     /// Forgets the stream [`Retry::track`] watches.

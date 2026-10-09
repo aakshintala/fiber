@@ -188,15 +188,18 @@ pub(crate) fn spawn_hub(
             // wait below. The read is watched so quitting before the loop
             // adopts the connection still ends it.
             match connected {
-                Ok((stream, reader, hello)) => {
-                    if !retry.track(&reader) {
-                        return;
+                Ok((stream, reader, hello)) => match retry.track(&reader) {
+                    Ok(false) => return,
+                    Err(error) => {
+                        drop(tx.send(Input::ConnectFailed(error.to_string())));
                     }
-                    if tx.send(Input::Connected(stream, hello)).is_ok() {
-                        link::read_lines(reader, &tx);
+                    Ok(true) => {
+                        if tx.send(Input::Connected(stream, hello)).is_ok() {
+                            link::read_lines(reader, &tx);
+                        }
+                        retry.untrack();
                     }
-                    retry.untrack();
-                }
+                },
                 Err(error) => drop(tx.send(Input::ConnectFailed(error.to_string()))),
             }
             if !retry.wait(clock.as_ref()) {
