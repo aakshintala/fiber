@@ -73,9 +73,12 @@ pub(crate) struct Hub {
     /// Tests only: a one-shot pause before an accepted `subscribe` is kept.
     #[cfg(test)]
     pub(crate) before_accepted: ForwardHook,
-    /// Tests only: a one-shot pause after a failed write, before the reconnect reads the kept subscription.
+    /// Tests only: runs after a client command's route returns.
     #[cfg(test)]
-    pub(crate) before_join: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    pub(crate) after_relay: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: runs handing a queued command over, or clearing it.
+    #[cfg(test)]
+    pub(crate) on_pass_on: PassOnHook,
 }
 
 /// The open connections and the idle timer. `zero_since` is `Some` exactly
@@ -138,7 +141,9 @@ impl Hub {
             #[cfg(test)]
             before_accepted: Mutex::new(None),
             #[cfg(test)]
-            before_join: Mutex::new(None),
+            after_relay: Mutex::new(None),
+            #[cfg(test)]
+            on_pass_on: Mutex::new(None),
         }
     }
 
@@ -305,6 +310,9 @@ type ForwardHook = Mutex<Option<Box<dyn FnOnce(&[u8], &Arc<Mutex<Relays>>) + Sen
 #[cfg(test)]
 type ReplayFilterHook = Mutex<Option<Box<dyn FnOnce(&[u8], bool) + Send>>>;
 
+/// Tests only: a relay thread's handover hook.
+#[cfg(test)]
+type PassOnHook = Mutex<Option<Box<dyn FnOnce(crate::retire::PassOn) + Send>>>;
 /// What `poll_accept` decided for one accepted stream.
 pub(crate) enum Accept {
     /// Counted under the connection lock: serve it as `n`.

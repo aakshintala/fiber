@@ -54,6 +54,9 @@ pub(crate) struct FakeStarter {
     /// as a resumed process writing its durable start does.
     append_started: bool,
     received: Arc<Received>,
+    /// How many `subscribe` lines the fake sessions have accepted, and a
+    /// wake for each new one: raised only after the acceptance write.
+    accepted: Arc<Accepted>,
     /// Each `resume` call's session and workspace, in order.
     resumed: Arc<Mutex<Vec<(SessionId, PathBuf)>>>,
     /// Each `rewind` call's new session, workspace and old session, in order.
@@ -72,13 +75,28 @@ pub(crate) struct FakeStarter {
 struct Received {
     lines: Mutex<Vec<String>>,
     grew: Condvar,
+    /// The same lines grouped by the connection that sent them, in accept
+    /// order: only connections that sent at least one line appear.
+    by_conn: Mutex<Vec<Vec<String>>>,
 }
 
 impl Received {
-    fn push(&self, line: String) {
-        lock(&self.lines).push(line);
+    fn push(&self, index: usize, line: String) {
+        lock(&self.lines).push(line.clone());
+        let mut by_conn = lock(&self.by_conn);
+        while by_conn.len() <= index {
+            by_conn.push(Vec::new());
+        }
+        by_conn[index].push(line);
         self.grew.notify_all();
     }
+}
+
+/// How many `subscribe` lines the fake sessions have accepted.
+#[derive(Debug, Default)]
+struct Accepted {
+    count: Mutex<usize>,
+    grew: Condvar,
 }
 
 /// The connections the fake sessions serve: a clone of each, to shut it
@@ -159,6 +177,7 @@ impl FakeStarter {
             closing: Closing::Never,
             append_started: false,
             received: Arc::new(Received::default()),
+            accepted: Arc::new(Accepted::default()),
             resumed: Arc::new(Mutex::new(Vec::new())),
             rewound: Arc::new(Mutex::new(Vec::new())),
             started_worktrees: Arc::new(Mutex::new(Vec::new())),
@@ -170,6 +189,24 @@ impl FakeStarter {
     /// Every line the fake session received, in order.
     pub(crate) fn received(&self) -> Vec<String> {
         lock(&self.received.lines).clone()
+    }
+
+    /// Every line the fake sessions received, grouped by the connection
+    /// that sent it, in accept order.
+    pub(crate) fn received_by_connection(&self) -> Vec<Vec<String>> {
+        lock(&self.received.by_conn).clone()
+    }
+
+    /// Waits, at most `within` of real time, until the fake sessions have
+    /// accepted `count` subscribes. True once they have.
+    pub(crate) fn await_accepted(&self, count: usize, within: Duration) -> bool {
+        let count_now = lock(&self.accepted.count);
+        let (count_now, _) = self
+            .accepted
+            .grew
+            .wait_timeout_while(count_now, within, |count_now| *count_now < count)
+            .unwrap_or_else(PoisonError::into_inner);
+        *count_now >= count
     }
 
     /// Waits, at most `within` of real time, until the fake sessions have
@@ -229,13 +266,18 @@ impl FakeStarter {
             let socket = run.join(&id.0);
             let listener = UnixListener::bind(&socket).map_err(|error| refused(&socket, &error))?;
             let received = Arc::clone(&self.received);
+            let accepted = Arc::clone(&self.accepted);
             let handshake = Arc::clone(&self.handshake);
             let serving = Arc::clone(&self.serving);
             let closing = self.closing;
             // The listener lives in the accept loop's thread.
             thread::Builder::new()
                 .name("fake-session".to_owned())
-                .spawn(move || accept_loop(listener, &received, &handshake, &serving, closing))
+                .spawn(move || {
+                    accept_loop(
+                        listener, &received, &accepted, &handshake, &serving, closing,
+                    )
+                })
                 .map_err(|error| {
                     std::io::Error::new(error.kind(), format!("fake session: {error}"))
                 })?;
@@ -339,10 +381,12 @@ fn append_started(home: &Path, id: &SessionId) {
 fn accept_loop(
     listener: UnixListener,
     received: &Arc<Received>,
+    accepted: &Arc<Accepted>,
     handshake: &Arc<Mutex<Option<Handshake>>>,
     serving: &Arc<Serving>,
     closing: Closing,
 ) {
+    let mut next_conn = 0;
     loop {
         let Ok((stream, _)) = listener.accept() else {
             return;
@@ -353,26 +397,31 @@ fn accept_loop(
         lock(&serving.streams).push(clone);
         *lock(&serving.live) += 1;
         let received = Arc::clone(received);
+        let accepted = Arc::clone(accepted);
+        let index = next_conn;
         let handshake = Arc::clone(handshake);
         let serving = Arc::clone(serving);
         let spawned = thread::Builder::new()
             .name("fake-session-conn".to_owned())
             .spawn(move || {
-                serve_one(stream, &received, &handshake, closing);
+                serve_one(stream, &received, &accepted, &handshake, closing, index);
                 *lock(&serving.live) -= 1;
                 serving.ended.notify_all();
             });
         if spawned.is_err() {
             return;
         }
+        next_conn += 1;
     }
 }
 
 fn serve_one(
     stream: UnixStream,
     received: &Arc<Received>,
+    accepted: &Arc<Accepted>,
     handshake: &Arc<Mutex<Option<Handshake>>>,
     closing: Closing,
+    index: usize,
 ) {
     if stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -405,16 +454,18 @@ fn serve_one(
                     // Answered before it is recorded, so a test that saw it
                     // received knows the answer is sent.
                     write_ack(&mut writer, &text, &closing_reply());
-                    received.push(text);
+                    received.push(index, text);
                     continue;
                 }
-                received.push(text.clone());
+                received.push(index, text.clone());
                 match command.as_deref() {
                     // The hub's handshake subscribes before its first prompt.
                     Some("subscribe") => {
                         let level = subscribe_level(&text);
                         if level.as_deref() == Some("summary") || level.as_deref() == Some("full") {
                             write_accepted(&mut writer, &text);
+                            *lock(&accepted.count) += 1;
+                            accepted.grew.notify_all();
                         } else {
                             write_ack(&mut writer, &text, &invalid_arguments());
                         }

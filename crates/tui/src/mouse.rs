@@ -51,6 +51,8 @@ pub(crate) enum TargetId {
     Form(crate::approvals::form::Spot),
     /// A configuration view's ✕ or row (`docs/tui.md`, "Swapped views").
     View(crate::swapped::Spot),
+    /// A panel item: what a click there does.
+    Panel(crate::app::panel::Spot),
 }
 
 /// One click target as drawn: what it does and the cells it covers.

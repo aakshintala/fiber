@@ -156,7 +156,7 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
             setup_workspace,
             Vec::new(),
             None,
-            None,
+            crate::credential::Labels::default(),
             None,
             setup_clock,
             None,

@@ -491,10 +491,10 @@ pub(crate) fn per_run(model: Option<String>, overrides: Vec<String>) -> Vec<Stri
 /// (`docs/model-routing.md`, "Choosing the model"). A log with no
 /// `usage_recorded` uses `--model`, then the configured default. A recorded
 /// model or label that no longer resolves fails before any line is written.
-fn parts_with(
+fn parts_with<'a>(
     overrides: Vec<String>,
     recorded: Option<&str>,
-    recorded_credential: Option<&str>,
+    recorded_credential: impl Into<crate::credential::Labels<'a>>,
     recorded_thinking: Option<ThinkingLevel>,
     clock: Arc<dyn contract::clock::Clock>,
     host: Option<Arc<extensions::HostScript>>,
@@ -507,7 +507,7 @@ fn parts_with(
         workspace,
         overrides,
         recorded,
-        recorded_credential,
+        recorded_credential.into(),
         recorded_thinking,
         clock,
         host,
@@ -528,7 +528,7 @@ fn parts_in(
     workspace: PathBuf,
     overrides: Vec<String>,
     recorded: Option<&str>,
-    recorded_credential: Option<&str>,
+    labels: crate::credential::Labels<'_>,
     recorded_thinking: Option<ThinkingLevel>,
     clock: Arc<dyn contract::clock::Clock>,
     host: Option<Arc<extensions::HostScript>>,
@@ -578,12 +578,11 @@ fn parts_in(
         .choose(recorded, &config)
         .map_err(|e| failed(e.code(), e))?;
     let context_window = settings::context_window(model.model, &model.reference())?;
-    let label =
-        recorded_credential.map_or_else(|| config.credential_label(model.provider), str::to_owned);
+    let label = labels.label(&config, model.provider)?;
     let lua = providers.lua(&model.provider.name);
     let lua_providers::Access { key, signer, .. } = scripted::access(model.provider, || {
         lua_providers::session_credential(lua, model.provider, &label, || {
-            crate::credential::session_credential(&config, model.provider, recorded_credential)
+            crate::credential::session_credential(&config, model.provider, Some(&label))
                 .map(|(_, key)| key)
         })
         .map(|read| lua_providers::Access::new(lua, read))
@@ -690,7 +689,7 @@ fn parts_in(
     prompt.extension_dirs = extensions.dirs();
     prompt.extension_sections = extensions.sections(&project);
     prompt.skills_disabled = config.union_list("skills.disabled");
-    prompt.credential = Some(label);
+    prompt.credential = crate::scripted::credential(model.provider, label);
     prompt.cache_lifetime = settings::cache_lifetime(&config, &model.reference());
     prompt.thinking = thinking;
     // The thinking notice is written with the MCP notices, after

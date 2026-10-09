@@ -1957,15 +1957,15 @@ fn a_read_cancelled_in_progress_publishes_nothing() {
     watchdog.stand_down(Duration::from_secs(5));
 }
 
-/// A scripted session's switch to a label fails at `connect` when the
+/// A scripted session's switch with no label fails at `connect` when the
 /// script cannot be read, publishing neither key nor selected label; with
-/// the script restored the same switch prepares under the old label.
+/// the script restored the same switch prepares with no credential.
 #[test]
 fn a_scripted_credential_switch_publishes_only_after_connect() {
     let fixture = fixture("fiber-switch-credential-scripted-connect");
     let switching = scripted_switching(&fixture, &["model=scripted/s.json"]);
     std::fs::remove_file(fixture.workspace.join("s.json")).unwrap();
-    let rejection = rejected_with(&switching, &args("scripted/s.json"), Some("x"), None);
+    let rejection = rejected(&switching, &args("scripted/s.json"), None);
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
     assert!(!keys(&switching).contains(&"scripted".to_owned()));
     assert_eq!(selected(&switching, "scripted"), None);
@@ -1975,18 +1975,25 @@ fn a_scripted_credential_switch_publishes_only_after_connect() {
     )
     .unwrap();
     let made = prepared(&switching, &args("scripted/s.json"), None);
-    assert_eq!(made.credential, Some("default".to_owned()));
+    assert_eq!(made.credential, None);
 }
 
-/// A scripted provider takes no credential, so it accepts any label and
-/// reads nothing (`docs/model-routing.md`, "The scripted provider").
+/// A scripted provider takes no credential, so any asked label is
+/// `credential_missing` naming no labels, publishing nothing and reading
+/// nothing (`docs/model-routing.md`, "The scripted provider").
 #[test]
-fn a_scripted_provider_accepts_any_label() {
+fn a_scripted_provider_rejects_any_label() {
     let fixture = fixture("fiber-switch-credential-scripted-any");
     let switching = scripted_switching(&fixture, &["model=scripted/s.json"]);
-    let made = prepared_with(&switching, &args("scripted/s.json"), Some("anything"), None);
-    assert_eq!(made.credential, Some("anything".to_owned()));
-    assert!(made.credential_files.is_empty());
+    let rejection = rejected_with(&switching, &args("scripted/s.json"), Some("anything"), None);
+    assert_eq!(rejection.code, ErrorCode::CredentialMissing);
+    assert!(
+        rejection.message.ends_with("are: none"),
+        "{}",
+        rejection.message
+    );
+    assert!(!keys(&switching).contains(&"scripted".to_owned()));
+    assert_eq!(selected(&switching, "scripted"), None);
 }
 
 /// On a Lua `credential()` provider the label reaches `credential()`: the

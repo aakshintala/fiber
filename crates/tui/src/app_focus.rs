@@ -245,6 +245,7 @@ impl App {
             | TargetId::MoreNotices
             | TargetId::CloseOverlay
             | TargetId::Offer(_)
+            | TargetId::Panel(_)
             | TargetId::Form(_)
             | TargetId::View(_) => None,
         }

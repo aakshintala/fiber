@@ -720,6 +720,8 @@ order:
 4. `providers."<name>".credential`, from any layer except a repository's.
 5. Otherwise `default`, the source the provider's data declares.
 
+The order applies to a provider that takes a credential: a scripted session has no label ("The scripted provider"), so any label asked for one fails with `credential_missing`.
+
 A label that names no credential fails with `credential_missing`, naming the
 labels the provider has.
 

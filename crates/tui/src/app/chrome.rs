@@ -139,7 +139,7 @@ impl App {
     }
 
     /// The attached session's feed row.
-    fn attached_row(&self) -> Option<&crate::home::Row> {
+    pub(super) fn attached_row(&self) -> Option<&crate::home::Row> {
         let session = self.session()?;
         self.home.as_ref()?.sessions.row(session)
     }
