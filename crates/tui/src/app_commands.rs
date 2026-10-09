@@ -476,12 +476,17 @@ impl App {
     pub(super) fn go_home(&mut self) {
         self.draft.clear();
         self.close_find();
+        // Leaving the parent closes the item view first, swapping the
+        // screen back before anything clears it; outstanding `summary`
+        // wishes are marked detached, so their lowering waits behind a
+        // `full` still in flight without a running check.
+        self.leave_item();
         if matches!(self.phase, Phase::Pending { .. }) {
             return;
         }
         self.phase = Phase::Starting;
         self.clear_selection();
-        self.screen.clear();
+        self.attached_screen_mut().clear();
         self.panel_state.reset();
         self.session_views_reset();
         self.offer = crate::offer::Offer::default();
@@ -616,6 +621,14 @@ impl App {
     /// or `steer`, never as a built-in or a `!` command.
     pub(super) fn on_enter(&mut self) -> Effect {
         if let Some(effect) = self.built_in() {
+            return effect;
+        }
+        // In an item view Enter steers the open delegate; a `/`
+        // built-in already ran above, and anything it leaves (such as
+        // `/close`) falls through to the attached session.
+        if self.item_open()
+            && let Some(effect) = self.item_enter()
+        {
             return effect;
         }
         let has_image = self.draft.has_image();

@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 
 use super::Row;
 use crate::app::App;
+use crate::app::panel::Spot;
 use crate::format;
 use crate::markdown::{Role, style};
 
@@ -27,6 +28,9 @@ pub(crate) fn rows(app: &App, text: usize) -> Vec<Row> {
         .min(running.len().saturating_sub(DELEGATES_SHOWN));
     let mut out = Vec::new();
     for (started, description) in running.into_iter().skip(skip).take(DELEGATES_SHOWN) {
+        // Either row opens the delegate: the rows are named by the job's
+        // serial, never by position.
+        let spot = app.serial_of_job(&started.job_id).map(Spot::Delegate);
         if let Some(row) = app.delegate_row(&started.delegate_session_id) {
             // A subscribed delegate's own summary names its state, and
             // its glyph spins while it works (`docs/tui.md`, "State
@@ -47,7 +51,7 @@ pub(crate) fn rows(app: &App, text: usize) -> Vec<Row> {
                     Span::raw("  "),
                     Span::raw(started.model.clone()),
                 ]),
-                spot: None,
+                spot,
                 tint: None,
                 edge: false,
             });
@@ -64,14 +68,14 @@ pub(crate) fn rows(app: &App, text: usize) -> Vec<Row> {
                     Span::raw("  "),
                     Span::raw(started.model.clone()),
                 ]),
-                spot: None,
+                spot,
                 tint: None,
                 edge: false,
             });
         }
         out.push(Row {
             line: Line::raw(format::cut(&format!("  {description}"), text)),
-            spot: None,
+            spot,
             tint: None,
             edge: false,
         });

@@ -235,11 +235,12 @@ pub(crate) fn widget(app: &App, width: u16) -> Vec<Line<'static>> {
 }
 
 /// The running delegates' rows at `width`, at most 4: the Delegates
-/// card's rows at the column's width, the first four.
-pub(crate) fn delegates(app: &App, width: u16) -> Vec<Line<'static>> {
+/// card's rows at the column's width, the first four, each with the spot
+/// a click opens (`docs/tui.md`, "The narrow layout").
+pub(crate) fn delegates(app: &App, width: u16) -> Vec<(Line<'static>, Option<Spot>)> {
     super::panel::delegates::rows(app, usize::from(width))
         .into_iter()
-        .map(|row| row.line)
+        .map(|row| (row.line, row.spot))
         .take(4)
         .collect()
 }
@@ -315,16 +316,32 @@ pub(super) fn draw_widget(
 }
 
 /// Draws the running delegates rows above the steering queue, keeping
-/// the narrow layout's fit of them.
-pub(super) fn draw_delegates(app: &App, area: Rect, buf: &mut Buffer, bottom: &mut u16) {
+/// the narrow layout's fit of them. Each row with a spot is a click
+/// target opening that delegate.
+pub(super) fn draw_delegates(
+    app: &App,
+    area: Rect,
+    buf: &mut Buffer,
+    bottom: &mut u16,
+    targets: &mut Vec<Target>,
+) {
     let keep = app.narrow_fit().map_or(0, |fit| fit.delegates);
     // A drawn state row's spinner moves on the tick.
     super::panel::delegates::ask(app, 0..keep);
-    for line in delegates(app, area.width).into_iter().take(keep).rev() {
+    for (line, spot) in delegates(app, area.width).into_iter().take(keep).rev() {
         let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) else {
             continue;
         };
         buf.set_line(area.x, y, &line, area.width);
+        if let Some(spot) = spot {
+            let wide = u16::try_from(line.width().min(usize::from(area.width))).unwrap_or(u16::MAX);
+            if wide > 0 {
+                targets.push(Target {
+                    id: TargetId::Panel(spot),
+                    rect: Rect::new(area.x, y, wide, 1),
+                });
+            }
+        }
         *bottom = y;
     }
 }
