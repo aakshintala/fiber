@@ -20,7 +20,7 @@ Protocols are native Rust in the `provider` module. Five speak to vendors:
 | `anthropic-messages` | Anthropic, OpenCode, OpenRouter, Databricks, muse, AWS Bedrock (Claude), Google Vertex (Claude), Azure (Foundry Claude) |
 | `openai-completions` | OpenCode, OpenRouter, Databricks, muse, Azure |
 | `openai-responses` | OpenAI, ChatGPT/codex, OpenCode, Databricks, muse, Azure |
-| `google-generative-ai` | the Gemini API, Google Vertex (Gemini), OpenCode (Zen's Gemini models) |
+| `google-generative-ai` | the Gemini API, Google Vertex (Gemini) |
 | `bedrock-converse` | AWS Bedrock (models other than Claude) |
 
 A sixth, `scripted`, speaks to no vendor: it reads a script file
@@ -322,6 +322,8 @@ For each model:
   size notices are measured against it
 - output token limit, input kinds and cost
 - whether a subscription login covers it ("Cost")
+
+A first-party package's `models` list is generated, except `openrouter`'s, which its `models()` reads from OpenRouter ("Model discovery"). `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. The `opencode-zen` package also leaves out its `google-generative-ai` models until that route is probed. It derives each model's protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
 
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
 needs is declared, or it is not set.

@@ -544,7 +544,7 @@ provider extension declares") lists:
   | `reasoning_object` | boolean | `openai-completions` | the thinking level goes in `reasoning: {effort}`, as OpenRouter takes it; absent, it goes in `reasoning_effort` |
   | `anthropic` | boolean | `openai-completions` | the model is Anthropic's, behind a gateway such as OpenRouter: requests carry Anthropic's `cache_control` markers on content parts, and Anthropic's strict-tool limits apply |
   | `cache_key_field` | string | `openai-completions` | a body field that also carries the cache key, such as OpenRouter's `session_id` |
-  | `cache_key_header` | string | `openai-responses`, `google-generative-ai` | a header that carries the cache key, such as OpenCode's `x-opencode-session` |
+  | `cache_key_header` | string | `openai-responses`, `openai-completions`, `anthropic-messages`, `google-generative-ai` | a header that carries the cache key, such as OpenCode's `x-opencode-session` |
 
   `openai-completions` always sends `stream_options.include_usage: true`,
   because OpenAI sends no usage without it (`docs/model-routing.md`,
