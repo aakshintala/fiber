@@ -1786,33 +1786,23 @@ fn a_fresh_hub_lists_the_parent_and_never_the_running_delegate() {
         guard_lines.last().unwrap()["payload"]["parent"],
         parent.as_str()
     );
-    // The listing holds the parent and never the delegate. The fresh hub
-    // tracks the parent on its rescan, which load can delay past one
-    // listing's settle: ask again until the parent appears, each answer
-    // naming no delegate. Every wait ends at the test's deadline.
-    let mut n = 0;
-    let answer = loop {
-        n += 1;
-        let id = format!("c_sess{n}");
-        fresh.send(&format!(r#"{{"id":"{id}","command":"sessions"}}"#));
-        let listing = support::until(&fresh, "the sessions answer", |line| is_answer(line, &id));
-        let answer = answered(&listing, &id);
-        assert_eq!(answer["kind"], "command_accepted", "{answer}");
-        assert!(
-            !serde_json::to_string(&answer).unwrap().contains(&delegate),
-            "the listing named the delegate: {answer}"
-        );
-        let live = answer["payload"]["result"]["live"].as_array().unwrap();
-        if live.iter().any(|row| row["session_id"] == parent.as_str()) {
-            break answer;
-        }
-    };
+    // The listing holds the parent and never the delegate.
+    fresh.send(r#"{"id":"c_sess","command":"sessions"}"#);
+    let listing = support::until(&fresh, "the sessions answer", |line| {
+        is_answer(line, "c_sess")
+    });
+    let answer = answered(&listing, "c_sess");
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
     let live = answer["payload"]["result"]["live"].as_array().unwrap();
     let live_ids: Vec<&str> = live
         .iter()
         .map(|row| row["session_id"].as_str().unwrap())
         .collect();
     assert_eq!(live_ids, [parent.as_str()]);
+    assert!(
+        !serde_json::to_string(&answer).unwrap().contains(&delegate),
+        "the listing named the delegate: {answer}"
+    );
     // The feed collects to the fresh hub's stop.
     let feed = watch_feed(&setup, &hub);
     // The old subscriptions died with the old hub: subscribing again folds
@@ -1865,8 +1855,6 @@ fn a_fresh_hub_lists_the_parent_and_never_the_running_delegate() {
     guard.wait_gone();
     stop_hub(&hub);
     let feed_lines = feed.collect();
-    // The snapshot and every later line list the parent and never the
-    // delegate.
     // The snapshot and every later line list the parent and never the
     // delegate.
     assert!(
