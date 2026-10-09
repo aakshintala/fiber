@@ -2360,17 +2360,29 @@ fn recorded(name: &str) -> Vec<u8> {
 /// readable text.
 struct RecordedSearch {
     search: Vec<Value>,
-    calls: Vec<Value>,
-    responses: Vec<Value>,
     grounding: Option<Value>,
     text: String,
+}
+
+impl RecordedSearch {
+    /// The recording's `toolCall` parts, in arrival order.
+    fn calls(&self) -> impl Iterator<Item = &Value> {
+        self.search
+            .iter()
+            .filter(|part| part.get("toolCall").is_some())
+    }
+
+    /// The recording's `toolResponse` parts, in arrival order.
+    fn responses(&self) -> impl Iterator<Item = &Value> {
+        self.search
+            .iter()
+            .filter(|part| part.get("toolResponse").is_some())
+    }
 }
 
 fn recorded_search(bytes: &[u8]) -> RecordedSearch {
     let mut out = RecordedSearch {
         search: Vec::new(),
-        calls: Vec::new(),
-        responses: Vec::new(),
         grounding: None,
         text: String::new(),
     };
@@ -2385,12 +2397,8 @@ fn recorded_search(bytes: &[u8]) -> RecordedSearch {
             .into_iter()
             .flatten()
         {
-            if part.get("toolCall").is_some() {
+            if part.get("toolCall").is_some() || part.get("toolResponse").is_some() {
                 out.search.push(part.clone());
-                out.calls.push(part.clone());
-            } else if part.get("toolResponse").is_some() {
-                out.search.push(part.clone());
-                out.responses.push(part.clone());
             } else if part.get("thought").and_then(Value::as_bool) != Some(true) {
                 out.text
                     .push_str(part.get("text").and_then(Value::as_str).unwrap_or(""));
@@ -2427,7 +2435,10 @@ fn hosted_actions(reply: &Reply) -> Vec<&HostedCall> {
 fn the_recorded_search_decodes_each_call_and_response_as_a_hosted_call() {
     let bytes = recorded("gemini-web-search.sse");
     let want = recorded_search(&bytes);
-    assert!(!want.calls.is_empty(), "the recording holds a search");
+    assert!(
+        want.calls().next().is_some(),
+        "the recording holds a search"
+    );
     assert!(want.grounding.is_some(), "the recording holds a grounding");
     let (reply, deltas) = decoded(&bytes);
     let reply = reply.unwrap();
@@ -2438,8 +2449,8 @@ fn the_recorded_search_decodes_each_call_and_response_as_a_hosted_call() {
         "a hosted search streams no arguments"
     );
     let hosted = hosted_actions(&reply);
-    assert_eq!(hosted.len(), want.calls.len());
-    for (n, (pair, call)) in hosted.iter().zip(&want.calls).enumerate() {
+    assert_eq!(hosted.len(), want.calls().count());
+    for (n, (pair, call)) in hosted.iter().zip(want.calls()).enumerate() {
         assert_eq!(pair.call.name, "web_search");
         assert_eq!(pair.call.arguments, call["toolCall"]["args"]);
         assert_eq!(
@@ -2452,8 +2463,7 @@ fn the_recorded_search_decodes_each_call_and_response_as_a_hosted_call() {
         );
         assert_eq!(pair.call.provider_item, Some(call.clone()));
         let response = want
-            .responses
-            .iter()
+            .responses()
             .find(|response| response["toolResponse"]["id"] == call["toolCall"]["id"])
             .unwrap();
         // The result block is tens of kilobytes: compare without printing

@@ -23,6 +23,7 @@ name = "decode"
 
 [[example]]
 name = "record"
+path = "examples/record/main.rs"
 test = true
 
 [lints]
