@@ -673,35 +673,57 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
     rig.start(&shell, BOUND, 1024);
     let member = pid_in_file(&member_pid);
     // The runner waits for the drain past the poll horizon: the only
-    // test that needs fake time past the drain wait. One advance to the
-    // drain park's own `until`, then one bounded receive for the notice
-    // (docs/testing.md, "Waits and timeouts": one deadline for the
-    // whole wait).
-    wake_until_draining(&rig.clock, BOUND);
-    let drain_until = {
-        let parked = rig.clock.parked();
-        let now = rig.clock.now();
-        let ahead: Vec<std::time::Instant> = parked
-            .iter()
-            .flatten()
-            .filter(|until| **until > now + super::POLL)
-            .copied()
-            .collect();
-        assert_eq!(
-            ahead.len(),
-            1,
-            "the runner waits for the drain past the poll; parked={parked:?}"
-        );
-        ahead[0]
-    };
-    rig.clock.advance(drain_until - rig.clock.now());
-    let Ok(Delivery::Job(notice)) = rig.inbox.recv_timeout(DEADLINE) else {
-        panic!(
-            "the drain's end did not report; now={:?} parked={:?}",
-            rig.clock.now(),
-            rig.clock.parked()
-        );
-    };
+    // test that needs fake time past the drain wait. A scoped driver
+    // walks it there, then makes one advance to the drain park's own
+    // `until`; the single receive below is the one wall-clock deadline
+    // for the drain wait and the report together (docs/testing.md,
+    // "Waits and timeouts": one deadline for the whole wait). The stop
+    // flag is set on every outcome of that receive, before the result
+    // is inspected, so the driver always ends within `DEADLINE` and the
+    // scope never outlives the wait.
+    let stop = Arc::new(AtomicBool::new(false));
+    let driver_stop = Arc::clone(&stop);
+    let clock = Arc::clone(&rig.clock);
+    let notice = thread::scope(|scope| {
+        scope.spawn(move || {
+            loop {
+                if driver_stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                let parked = clock.parked();
+                let now = clock.now();
+                // At the drain wait, one advance to its own `until`
+                // ends the driving; the report follows on the test
+                // thread's receive.
+                let drain: Vec<std::time::Instant> = parked
+                    .iter()
+                    .flatten()
+                    .filter(|until| **until >= now + BOUND)
+                    .copied()
+                    .collect();
+                if drain.len() == 1 {
+                    clock.advance(drain[0].saturating_duration_since(clock.now()));
+                    return;
+                }
+                if !parked.is_empty() && parked.iter().flatten().all(|until| *until > now) {
+                    clock.advance(Duration::from_secs(1));
+                } else {
+                    thread::yield_now();
+                }
+            }
+        });
+        let result = rig.inbox.recv_timeout(DEADLINE);
+        stop.store(true, Ordering::Relaxed);
+        match result {
+            Ok(Delivery::Job(notice)) => notice,
+            Ok(other) => panic!("expected the runner's report, got {other:?}"),
+            Err(_) => panic!(
+                "the drain's end did not report; now={:?} parked={:?}",
+                rig.clock.now(),
+                rig.clock.parked()
+            ),
+        }
+    });
     assert_eq!(notice.completed.status, Outcome::Failed);
     assert_eq!(
         notice
@@ -806,9 +828,7 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
         notice.delegate.as_ref().map(|finish| finish.text.clone()),
         Some("Bound.".into())
     );
-    // The report is sent from `retire`: waiting on the runner's return
-    // proves the watch stays at rest (docs/testing.md, "Waits and
-    // timeouts": every wait has a deadline on the wall clock).
+    // Waiting for the runner to return rules out later watches and timer signals.
     done.recv_timeout(DEADLINE)
         .expect("the runner returns after `fiber_exited`");
     assert_eq!(
@@ -875,9 +895,7 @@ fn the_watch_is_not_called_again_after_fiber_exited() {
     release_fifo(&fifo, b"go\n");
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Completed);
-    // The report is sent from `retire`: waiting on the runner's return
-    // proves the watch stays at rest (docs/testing.md, "Waits and
-    // timeouts": every wait has a deadline on the wall clock).
+    // Waiting for the runner to return rules out later watches and timer signals.
     done.recv_timeout(DEADLINE)
         .expect("the runner returns after `fiber_exited`");
     assert_eq!(rig.script.calls().len(), 1);
@@ -919,9 +937,7 @@ fn a_stop_on_a_term_trap_cancels_without_sigkill() {
             .and_then(|process| process.exit_code),
         Some(143)
     );
-    // The report is sent from `retire`: waiting on the runner's return
-    // proves no timer can still fire (docs/testing.md, "Waits and
-    // timeouts": every wait has a deadline on the wall clock).
+    // Waiting for the runner to return rules out later watches and timer signals.
     done.recv_timeout(DEADLINE)
         .expect("the runner returns after the trap's exit");
     assert!(
@@ -1125,9 +1141,7 @@ fn a_child_that_exits_in_the_stop_timer_sends_no_kill() {
     assert_eq!(rig.registry.stop_delegates(), 1);
     let notice = reported_before(&rig, Some(kill_at));
     assert_eq!(notice.completed.status, Outcome::Cancelled);
-    // The report is sent from `retire`: waiting on the runner's return
-    // proves no timer can still fire (docs/testing.md, "Waits and
-    // timeouts": every wait has a deadline on the wall clock).
+    // Waiting for the runner to return rules out later watches and timer signals.
     done.recv_timeout(DEADLINE)
         .expect("the runner returns after the quick exit");
     assert!(
@@ -1332,9 +1346,7 @@ fn a_blocked_watch_still_lets_a_stop_through() {
                 && *signal == rustix::process::Signal::KILL),
         "SIGKILL went out once the bound passed"
     );
-    // The report is sent from `retire`: waiting on the runner's return
-    // proves no timer can still fire (docs/testing.md, "Waits and
-    // timeouts": every wait has a deadline on the wall clock).
+    // Waiting for the runner to return rules out later watches and timer signals.
     done.recv_timeout(DEADLINE)
         .expect("the runner returns after the stop");
     assert_eq!(
