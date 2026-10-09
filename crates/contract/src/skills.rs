@@ -1,10 +1,12 @@
-//! The skills the model may load (`docs/tools.md`, "Skills"), as discovery
-//! finds them at the call. `loop` implements it; `main` injects it.
+//! The skills the model may load (`docs/tools.md`, "Skills"), as the
+//! session's maintained set holds them. `loop` implements it; `main`
+//! injects it.
 
 use std::path::{Path, PathBuf};
 
-/// The skills the model may load (`docs/tools.md`, "Skills"), as discovery
-/// finds them at the call. `loop` implements it; `main` injects it.
+/// The skills the model may load (`docs/tools.md`, "Skills"), as the
+/// session's maintained set holds them. `loop` implements it; `main`
+/// injects it.
 pub trait Skills: Send + Sync {
     /// The `SKILL.md` discovery opened for the skill the listing holds under
     /// `name` now, lossless. `None` when the listing holds no such name.

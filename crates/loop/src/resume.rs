@@ -318,12 +318,14 @@ impl Loop {
             contract::SessionId(session.clone()),
             Arc::clone(log.clock()),
         );
+        let skills = crate::skill_set::SkillSet::new(prompt.clone(), &workspace);
         let mut resumed = Self {
             log,
             diag,
             provider,
             model,
             prompt,
+            skills,
             preamble_reason: contract::events::PreambleReason::Resume,
             preamble: None,
             inbox,

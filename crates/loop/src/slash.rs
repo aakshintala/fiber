@@ -47,7 +47,8 @@ impl Loop {
     /// Switches off the skills and prompts these names name, as
     /// `skills.disabled` does (`docs/system-prompt.md`, "Skills").
     pub fn skills_disabled(mut self, names: Vec<String>) -> Self {
-        self.prompt.skills_disabled = names;
+        self.prompt.skills_disabled = names.clone();
+        self.skills.set_disabled(names);
         self
     }
 
@@ -71,23 +72,17 @@ impl Loop {
         let (name, args) = (name.to_owned(), args.to_owned());
         // A name in `skills.disabled` expands nothing, an MCP prompt of
         // that name included (`docs/system-prompt.md`, "Skills").
-        if self.prompt.skills_disabled.iter().any(|off| off == &name) {
+        if self.skills.is_disabled(&name) {
             return Ok(Ok(message));
         }
-        // The repository's top level, as the opening message reads it
-        // (`opening::collect`): a skill under a parent repository is found
-        // from a subdirectory workspace.
-        let (chain, _) = crate::opening::repo_chain(&self.workspace);
-        let top = chain.first().unwrap_or(&self.workspace);
         // Any skill wins over an MCP prompt, from every source
         // (`docs/system-prompt.md`, "Skills").
-        let skill = skills::discover(&self.prompt, top)
-            .skills
-            .into_iter()
-            .find(|found| found.listed.name == name);
+        let skill = self.skills.command(&name);
         if skill.is_some() {
             let mut message = message;
-            if let Some(content) = skills::expand(&self.prompt, top, &message.content) {
+            if let Some(file) = skill
+                && let Some(content) = skills::expand(&file, &message.content)
+            {
                 message.content = content;
             }
             return Ok(Ok(message));
