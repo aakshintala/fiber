@@ -4,6 +4,7 @@ use super::{Input, Loop, Screen};
 use crate::app::App;
 use crate::keys::Event;
 use crate::link::Line;
+use crate::pty_watch::{watch, watched};
 use crate::stroke::{Code, Mods, Stroke};
 use contract::clock::Clock;
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
@@ -146,48 +147,6 @@ fn read_until_with_timeout(main: &File, marker: &[u8], what: &str, timeout: Dura
         Ok(buf) => buf,
         Err(_) => panic!("waited {timeout:?} for {what}"),
     }
-}
-
-/// Watches `main` without stopping: sends cumulative bytes through each marker,
-/// then keeps reading and discarding so the terminal's output cannot fill.
-fn watch(main: &File, markers: Vec<&'static [u8]>) -> Receiver<Vec<u8>> {
-    let mut dup = main.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
-    let (done, finished) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("lib-watch".to_owned())
-        .spawn(move || {
-            let mut buf = Vec::new();
-            let mut at = 0usize;
-            let mut byte = [0u8; 1];
-            'markers: while at < markers.len() {
-                match dup.read(&mut byte) {
-                    Ok(0) | Err(_) => return,
-                    Ok(_) => {
-                        buf.push(byte[0]);
-                        while at < markers.len()
-                            && buf
-                                .windows(markers[at].len())
-                                .any(|window| window == markers[at])
-                        {
-                            if done.send(buf.clone()).is_err() {
-                                break 'markers;
-                            }
-                            at += 1;
-                        }
-                    }
-                }
-            }
-            let mut discard = [0u8; 4096];
-            while dup.read(&mut discard).is_ok_and(|read| read > 0) {}
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
-    finished
-}
-
-fn watched_with_timeout(frames: &Receiver<Vec<u8>>, what: &str, timeout: Duration) -> Vec<u8> {
-    frames
-        .recv_timeout(timeout)
-        .unwrap_or_else(|err| panic!("waited {timeout:?} for {what}: {err}"))
 }
 
 /// Every byte the backend wrote, shared with the test.
@@ -619,6 +578,12 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),
     };
+    // The watcher starts before `run`, and is the only reader from the
+    // first frame to end of file.
+    let frames = watch(
+        &pair.main,
+        vec![b"shortcuts", b"Press Ctrl+C again to", RESTORE],
+    );
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-run".to_owned())
@@ -629,32 +594,21 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    // The terminal bytes at start: alternate screen, bracketed paste, the mouse
-    // modes, the
-    // two queries, then the first frame before anything is written to the
-    // master.
-    let expected =
-        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
-    let start = read_exact(&pair.main, expected.len(), "the start bytes");
-    assert_eq!(start, expected);
     // On home the input line is not on the last row: the first frame is
     // read through the placeholder, whose letters are written together.
-    let frames = crate::pty_watch::watch(&pair.main, vec![
-        b"shortcuts",
-        b"Press Ctrl+C again to",
-        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h",
-    ]);
-    crate::pty_watch::watched(&frames, "the first frame");
+    // The start bytes are checked inside the first marker's chunk.
+    let first = watched(&frames, "the first frame");
+    assert!(
+        first.starts_with(START),
+        "the first chunk starts with the start bytes: {first:?}"
+    );
     // The slave is in raw mode while running.
     let raw = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&before));
     assert!(!is_cooked(&raw));
-    // Ctrl+C twice quits with 0 while the reader is still blocked: the
-    // master stays open and nothing is closed to wake it. The first
+    // "Reader blocked" means the terminal's input thread: the test writes only two 0x03 bytes, and the return wait below bounds the block. The watcher keeps draining the output, so the test's own reader adds no second block. The first
     // press must visibly arm first: waiting for its hint proves the
-    // reader delivered a byte and the loop drew again. The watcher is the
-    // only pty reader and keeps draining while the second press quits with
-    // no frame between, so the return wait cannot stall behind a full pty.
+    // reader delivered a byte and the loop drew again.
     pair.main
         .write_all(&[0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
@@ -664,7 +618,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     // The armed frame foots the quit hint, which no earlier frame
     // holds. Only its first run is matched: the incremental redraw
     // splits the hint around the cells the unarmed foot already holds.
-    crate::pty_watch::watched(&frames, "the armed quit hint");
+    watched(&frames, "the armed quit hint");
     pair.main
         .write_all(&[0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
@@ -678,12 +632,10 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     let after = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&after));
     // After the last frame the output holds the restore bytes.
-    let marker =
-        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
-    let tail = crate::pty_watch::watched(&frames, "the restore bytes");
+    let tail = watched(&frames, "the restore bytes");
     assert_eq!(
-        tail.get(tail.len().saturating_sub(marker.len())..),
-        Some(marker.as_slice())
+        tail.get(tail.len().saturating_sub(RESTORE.len())..),
+        Some(RESTORE)
     );
 }
 
@@ -694,6 +646,9 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
         .slave
         .try_clone()
         .unwrap_or_else(|err| panic!("dup: {err}"));
+    // The watcher starts before `run`, and is the only reader from the
+    // first frame to end of file.
+    let frames = watch(&pair.main, vec![b"refused" as &[u8], b"mark" as &[u8]]);
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-run".to_owned())
@@ -709,7 +664,12 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     // Unchanged cells are skipped, spaces included, so one word is matched.
-    read_until(&pair.main, b"refused", "the connect notice");
+    // The start bytes are checked inside the first marker's chunk.
+    let notice = watched(&frames, "the connect notice");
+    assert!(
+        notice.starts_with(START),
+        "the first chunk starts with the start bytes: {notice:?}"
+    );
     pair.main
         .write_all(&[0x03, 0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
@@ -717,11 +677,6 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
         .recv_timeout(DEADLINE)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
     assert_eq!(code, 0);
-    read_until(
-        &pair.main,
-        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h",
-        "the restore bytes",
-    );
     assert!(is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
@@ -730,7 +685,12 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
     (&pair.slave)
         .write_all(b"mark")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    assert_eq!(read_exact(&pair.main, 4, "the mark"), b"mark");
+    let tail = watched(&frames, "the mark");
+    let expected = [RESTORE, b"mark".as_slice()].concat();
+    assert_eq!(
+        tail.get(tail.len().saturating_sub(expected.len())..),
+        Some(expected.as_slice())
+    );
 }
 
 #[test]
@@ -740,6 +700,12 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
         .slave
         .try_clone()
         .unwrap_or_else(|err| panic!("dup: {err}"));
+    // The watcher starts before `run`, and is the only reader from the
+    // first frame to end of file.
+    let frames = watch(
+        &pair.main,
+        vec![b"refused" as &[u8], b"\x1b[10;1H" as &[u8], "↓".as_bytes()],
+    );
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-run".to_owned())
@@ -755,7 +721,12 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     // The notice is drawn after the first frame, so SIGWINCH is caught.
-    read_until(&pair.main, b"refused", "the connect notice");
+    // The start bytes are checked inside the first marker's chunk.
+    let notice = watched(&frames, "the connect notice");
+    assert!(
+        notice.starts_with(START),
+        "the first chunk starts with the start bytes: {notice:?}"
+    );
     rustix::termios::tcsetwinsize(
         &pair.slave,
         rustix::termios::Winsize {
@@ -773,8 +744,8 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     // The foot hint sits on the new last row, wider than the screen and
     // cut: the cursor goes to column 1, and the next character printed,
     // after any colour change, is its `↓`.
-    read_until(&pair.main, b"\x1b[10;1H", "the move to row 10");
-    let next = read_until(&pair.main, "↓".as_bytes(), "the foot hint on row 10");
+    watched(&frames, "the move to row 10");
+    let next = watched(&frames, "the foot hint on row 10");
     let between = next
         .get(..next.len().saturating_sub("↓".len()))
         .unwrap_or_default();
@@ -1378,14 +1349,24 @@ fn hub_status(session: &str, state: &str) -> String {
     .unwrap_or_else(|err| panic!("status: {err}"))
 }
 
+/// The terminal's start bytes, before its first frame.
+const START: &[u8] =
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
+
 /// The terminal's restore bytes, after its last frame.
 const RESTORE: &[u8] =
     b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
 /// Runs the terminal on a pty with `hub` as its hub stream: the pty pair,
-/// and the exit code once it quits.
-fn spawn_run(hub: UnixStream) -> (Pair, mpsc::Receiver<i32>) {
+/// the exit code once it quits, and the watched pty chunks. The watcher
+/// starts before `run`, and is the only reader from the first frame to
+/// end of file.
+fn spawn_run(
+    hub: UnixStream,
+    markers: Vec<&'static [u8]>,
+) -> (Pair, mpsc::Receiver<i32>, Receiver<Vec<u8>>) {
     let pair = open();
+    let frames = watch(&pair.main, markers);
     let slave = pair
         .slave
         .try_clone()
@@ -1407,29 +1388,28 @@ fn spawn_run(hub: UnixStream) -> (Pair, mpsc::Receiver<i32>) {
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    (pair, finished)
-}
-
-/// Reads the start bytes and the first frame.
-fn first_frame(pair: &Pair) {
-    let expected =
-        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
-    assert_eq!(
-        read_exact(&pair.main, expected.len(), "the start bytes"),
-        expected
-    );
-    read_until(&pair.main, b"shortcuts", "the first frame");
+    (pair, finished, frames)
 }
 
 #[test]
 fn run_prints_a_resume_line_per_live_session_after_restoring() {
+    let line = b"s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa";
     let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    let (mut pair, finished) = spawn_run(hub);
-    first_frame(&pair);
+    let (mut pair, finished, frames) = spawn_run(hub, vec![b"parser" as &[u8], line as &[u8]]);
     crate::link::write_line(&held, &hub_status("s_aaaaaaaaaaaaaaaa", "idle"))
         .unwrap_or_else(|err| panic!("write: {err}"));
     // The test waits for the session's name on screen before quitting.
-    read_until(&pair.main, b"parser", "the session row");
+    // The start bytes are checked inside the first marker's chunk.
+    let row = watched(&frames, "the session row");
+    assert!(
+        row.starts_with(START),
+        "the first chunk starts with the start bytes: {row:?}"
+    );
+    assert!(
+        row.windows(b"shortcuts".len())
+            .any(|window| window == b"shortcuts"),
+        "the first chunk holds the first frame: {row:?}"
+    );
     // An idle session works nothing: Ctrl+C twice quits at once.
     pair.main
         .write_all(&[0x03, 0x03])
@@ -1443,12 +1423,17 @@ fn run_prints_a_resume_line_per_live_session_after_restoring() {
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}")),
         0
     );
-    read_until(&pair.main, RESTORE, "the restore bytes");
-    let line = b"s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa";
-    let tail = read_until(&pair.main, line, "the resume line");
+    let tail = watched(&frames, "the resume line");
+    let Some(at) = tail
+        .windows(RESTORE.len())
+        .position(|window| window == RESTORE)
+    else {
+        panic!("the restore bytes before the resume line: {tail:?}");
+    };
     assert_eq!(
-        tail.get(tail.len().saturating_sub(line.len())..),
-        Some(line.as_slice())
+        tail.get(at + RESTORE.len()..),
+        Some(line.as_slice()),
+        "exactly the resume line follows the restore bytes"
     );
     drop(held);
 }
@@ -1457,11 +1442,16 @@ fn run_prints_a_resume_line_per_live_session_after_restoring() {
 fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
     let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let write = held.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
-    let (mut pair, finished) = spawn_run(hub);
-    first_frame(&pair);
+    let (mut pair, finished, frames) =
+        spawn_run(hub, vec![b"parser" as &[u8], b"ENDMARK" as &[u8]]);
     crate::link::write_line(&write, &hub_status("s_aaaaaaaaaaaaaaaa", "streaming"))
         .unwrap_or_else(|err| panic!("write: {err}"));
-    read_until(&pair.main, b"parser", "the session row");
+    // The start bytes are checked inside the first marker's chunk.
+    let row = watched(&frames, "the session row");
+    assert!(
+        row.starts_with(START),
+        "the first chunk starts with the start bytes: {row:?}"
+    );
     // Ctrl+C twice asks while the session works, and `c` closes all:
     // one write, so the loop asks before it closes.
     pair.main
@@ -1470,17 +1460,33 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
     pair.main
         .flush()
         .unwrap_or_else(|err| panic!("flush: {err}"));
-    // Every read runs under DEADLINE through `command`: the far end
-    // reads the close lines the quit question sent.
+    // All four reads run under one deadline: the far end reads the close
+    // lines the quit question sent.
     let hub = BufReader::new(held);
-    let (hub, feed) = command(hub, "the feed command");
+    let (feed, recent, subscribe, close) = within("the close commands", move || {
+        let mut hub = hub;
+        let mut lines = Vec::new();
+        for _ in 0..4 {
+            let mut line = String::new();
+            hub.read_line(&mut line)
+                .unwrap_or_else(|err| panic!("read: {err}"));
+            lines.push(
+                serde_json::from_str::<serde_json::Value>(&line)
+                    .unwrap_or_else(|err| panic!("{line:?}: {err}")),
+            );
+        }
+        let mut lines = lines.into_iter();
+        (
+            lines.next().expect("the feed command"),
+            lines.next().expect("the recent command"),
+            lines.next().expect("the subscribe command"),
+            lines.next().expect("the close command"),
+        )
+    });
     assert_eq!(feed["command"], "feed");
-    let (hub, recent) = command(hub, "the recent command");
     assert_eq!(recent["command"], "recent");
-    let (hub, subscribe) = command(hub, "the subscribe command");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["args"]["level"], "summary");
-    let (_, close) = command(hub, "the close command");
     assert_eq!(close["command"], "close");
     assert_eq!(close["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(close["args"], serde_json::json!({"now": true}));
@@ -1490,30 +1496,48 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}")),
         0
     );
-    read_until(&pair.main, RESTORE, "the restore bytes");
     // A closed session prints no resume line: the mark bounds the bytes
     // after the restore, and none names the session.
     (&pair.slave)
         .write_all(b"ENDMARK")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let tail = read_until(&pair.main, b"ENDMARK", "the mark");
-    assert!(!tail.windows(12).any(|window| window == b"fiber resume"));
+    let tail = watched(&frames, "the mark");
+    let Some(at) = tail
+        .windows(RESTORE.len())
+        .position(|window| window == RESTORE)
+    else {
+        panic!("the restore bytes before the mark: {tail:?}");
+    };
+    assert!(
+        !tail[at..]
+            .windows(12)
+            .any(|window| window == b"fiber resume"),
+        "no resume line follows the restore bytes: {tail:?}"
+    );
 }
 
 #[test]
 fn run_close_all_with_a_lost_hub_still_prints_the_resume_line() {
+    let line = b"s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa";
     let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let write = held.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
-    let (mut pair, finished) = spawn_run(hub);
-    first_frame(&pair);
+    let (mut pair, finished, frames) = spawn_run(
+        hub,
+        vec![b"parser" as &[u8], b"lost" as &[u8], line as &[u8]],
+    );
     crate::link::write_line(&write, &hub_status("s_aaaaaaaaaaaaaaaa", "streaming"))
         .unwrap_or_else(|err| panic!("write: {err}"));
-    read_until(&pair.main, b"parser", "the session row");
+    // The start bytes are checked inside the first marker's chunk.
+    let row = watched(&frames, "the session row");
+    assert!(
+        row.starts_with(START),
+        "the first chunk starts with the start bytes: {row:?}"
+    );
     // The hub is lost fast: its far end drops after the status draws, and
     // the test waits for `lost` on screen.
     drop(write);
     drop(held);
-    read_until(&pair.main, b"lost", "the lost notice");
+    watched(&frames, "the lost notice");
     // Ctrl+C twice asks, and `c` with the link down quits and closes
     // nothing: one write, so the loop asks before it closes. The session
     // keeps its resume line.
@@ -1529,12 +1553,20 @@ fn run_close_all_with_a_lost_hub_still_prints_the_resume_line() {
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}")),
         0
     );
-    read_until(&pair.main, RESTORE, "the restore bytes");
-    let line = b"s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa";
-    let tail = read_until(&pair.main, line, "the resume line");
+    let tail = watched(&frames, "the resume line");
+    let Some(at) = tail
+        .windows(RESTORE.len())
+        .position(|window| window == RESTORE)
+    else {
+        panic!("the restore bytes before the resume line: {tail:?}");
+    };
     assert_eq!(
         tail.get(tail.len().saturating_sub(line.len())..),
         Some(line.as_slice())
+    );
+    assert!(
+        at + RESTORE.len() <= tail.len() - line.len(),
+        "the restore bytes come before the resume line: {tail:?}"
     );
 }
 
@@ -1947,11 +1979,15 @@ fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
 #[test]
 fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
     let mut pair = open();
-    const START: &[u8] =
-        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
+    // Each chunk is the bytes after the previous marker, up to and
+    // including this one.
     let frames = watch(
         &pair.main,
-        vec![START, b"shortcuts", b"the lists", b"are in"],
+        vec![
+            b"shortcuts" as &[u8],
+            b"the lists" as &[u8],
+            b"are in" as &[u8],
+        ],
     );
     let slave = pair
         .slave
@@ -2002,32 +2038,32 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let mut output = watched_with_timeout(&frames, "terminal start", DEADLINE);
-    assert_eq!(output, START);
-    output = watched_with_timeout(&frames, "the first frame", DEADLINE);
+    let first = watched(&frames, "the first frame");
     assert!(
-        output
-            .windows(b"shortcuts".len())
-            .any(|window| window == b"shortcuts")
+        first.starts_with(START),
+        "the first chunk starts with the start bytes: {first:?}"
     );
-    // The cached read cannot answer until the first frame is seen. Its
-    // notice may already be in the cumulative output when this wait starts.
+    assert!(
+        first
+            .windows(b"shortcuts".len())
+            .any(|window| window == b"shortcuts"),
+        "the first chunk holds the first frame: {first:?}"
+    );
+    // The cached read cannot answer until the first frame is seen.
     release
         .send(())
         .unwrap_or_else(|err| panic!("release the cached read: {err}"));
-    // The two text runs are separated by cursor and style controls in the
-    // terminal stream, so both are checked in the cumulative output.
-    output = watched_with_timeout(&frames, "the cached read's notice text", DEADLINE);
+    // Both halves sit on one notice row, drawn in row-major order, so
+    // `the lists` comes first and `are in` follows it.
+    let lists = watched(&frames, "the cached read's notice text");
     assert!(
-        output
-            .windows(b"the lists".len())
-            .any(|window| window == b"the lists")
+        lists.ends_with(b"the lists"),
+        "the chunk ends with the notice text: {lists:?}"
     );
-    output = watched_with_timeout(&frames, "the cached read's notice ending", DEADLINE);
+    let ending = watched(&frames, "the cached read's notice ending");
     assert!(
-        output
-            .windows(b"are in".len())
-            .any(|window| window == b"are in")
+        ending.ends_with(b"are in"),
+        "the chunk ends with the notice ending: {ending:?}"
     );
     assert_eq!(*seen.lock().unwrap(), [crate::Refresh::Cached]);
     pair.main
