@@ -37,7 +37,7 @@ reachable() {
   # One more than the cap: a full page means pull requests may be missing.
   prs=$(gh pr list --state open --limit 1001 --json number --jq '.[].number') || return 1
   if [ "$(wc -l <<<"$prs")" -gt 1000 ]; then
-    echo "::warning::more than 1000 open pull requests"
+    echo "::warning::more than 1000 open pull requests" >&2
     return 1
   fi
   for pr in $prs; do
