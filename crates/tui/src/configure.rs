@@ -276,7 +276,8 @@ pub trait Configure: Send + Sync {
 
     // The `tui.theme` row.
 
-    /// The theme files in Fiber home's `themes/`, by name, sorted.
+    /// The theme files `tui.theme` can name, by name, sorted: Fiber home's
+    /// `themes/` and each installed extension's.
     fn themes(&self) -> Vec<String>;
 
     /// The theme `name` gives `tui.theme`, built as at start.

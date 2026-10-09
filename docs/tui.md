@@ -1058,7 +1058,8 @@ fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
 ### Themes
 
 Fiber ships a dark and a light theme. A person adds their own as files in
-Fiber home and picks one in `/settings`, which writes `tui.theme`. With no
+Fiber home, an installed extension can carry more, and either is picked in
+`/settings`, which writes `tui.theme`. With no
 theme set, the theme follows the terminal's light or dark appearance and
 switches when the terminal reports a change.
 
@@ -1104,8 +1105,9 @@ The roles, in order:
 A stripe takes its state's colour, and the logo's five letters step through
 `heading`, `accent`, `string`, `type` and `keyword`.
 
-A theme is a file, `themes/<name>.json` in Fiber home, and `tui.theme` names it
-by `<name>`; `dark` and `light` always name the built-ins:
+A theme is a file, `themes/<name>.json` in Fiber home or in an installed
+extension (`docs/extensions.md`, "What a package holds"), and `tui.theme`
+names it by `<name>`; `dark` and `light` always name the built-ins:
 
 ```json
 {"base": "light", "roles": {"accent": "#0b7285", "alert": "#5f1e22"}}
@@ -1116,7 +1118,11 @@ keeps working when a role is added. `roles` maps role names to `#rrggbb`. The
 file is strict: any other key, an unknown role or a value that is not
 `#rrggbb` refuses the whole file. A file that is missing or refused shows one
 notice naming the theme and the reason, and the theme follows the terminal's
-appearance. Nothing writes the bad name back. Colours are given once, in 24
+appearance. Nothing writes the bad name back. Fiber home's file wins over an
+extension's, and between extensions the first by directory name in
+`extensions/` wins; `/settings` lists each name once. Only a missing file
+passes the name on: a file that is there but cannot be read or is refused is
+the theme. A damaged extension's themes are left out. Colours are given once, in 24
 bits, and the 256-colour form is computed ("Look").
 
 ### Reduced motion
