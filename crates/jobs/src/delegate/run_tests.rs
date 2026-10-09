@@ -1094,6 +1094,14 @@ fn a_blocked_watch_still_lets_a_stop_through() {
     let pgid = pid_in_file(&pidfile);
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
+    within("the first watch call", DEADLINE, {
+        let script = Arc::clone(&rig.script);
+        move || {
+            while script.calls().is_empty() {
+                thread::yield_now();
+            }
+        }
+    });
     assert_eq!(rig.registry.stop_delegates(), 1);
     for _ in 0..12 {
         rig.clock.advance(Duration::from_millis(500));
