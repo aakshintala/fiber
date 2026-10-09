@@ -108,6 +108,11 @@ impl App {
     pub(crate) fn on_edit(&mut self, edit: Edit) -> Effect {
         self.armed_at = None;
         self.history.cancel();
+        // The open picker owns every edit but Ctrl+C, which never
+        // arrives as one.
+        if let Some(effect) = self.model_picker_edit(&edit) {
+            return effect;
+        }
         // Delete on a focused home row asks to delete it when it
         // exited, ahead of the focus early return below.
         if let Some(effect) = self.home_edit(&edit) {
@@ -416,6 +421,10 @@ impl App {
         let effect = match name {
             "home" | "new" => self.leave(),
             "resume" => self.resume_list(),
+            "model" => {
+                self.draft.clear();
+                self.open_model_picker(crate::model_picker::Mode::Choose)
+            }
             "panel" => {
                 self.draft.clear();
                 self.toggle_panel()

@@ -1919,3 +1919,28 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
     assert_eq!(code, 0);
 }
+
+#[test]
+fn opening_the_picker_asks_stale_through_the_loop() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_in = Arc::clone(&seen);
+    let read: crate::ReadModels = Arc::new(move |refresh: crate::Refresh| {
+        seen_in.lock().unwrap().push(refresh);
+        Ok(crate::Catalogue::default())
+    });
+    lp.model_reader = crate::catalogue::Reader::new(Some(read));
+    let (tx, rx) = mpsc::channel();
+    lp.files_out = Some(tx);
+    let (_, idle) = mpsc::channel();
+    assert_eq!(lp.step(Input::Bytes(vec![0x0c]), &idle), None);
+    assert!(lp.app.model_picker_open());
+    let answer = rx
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the stale read: {err}"));
+    assert!(matches!(answer, Input::Models(Ok(_))));
+    assert_eq!(*seen.lock().unwrap(), [crate::Refresh::Stale]);
+    // The answer folds with no read owed.
+    assert_eq!(lp.step(answer, &idle), None);
+    assert_eq!(lp.app.take_reads(), None);
+}

@@ -4,6 +4,8 @@
 
 use super::App;
 use crate::catalogue::{Catalogue, Refresh};
+use crate::keys::{Edit, Key};
+use crate::model_picker::Mode;
 
 impl App {
     /// Folds a model-list read's answer: each catalogue notice shows once,
@@ -25,6 +27,109 @@ impl App {
     /// The model-list read the loop owes, if one is owed.
     pub(crate) fn take_reads(&mut self) -> Option<Refresh> {
         self.model_picker.take_read()
+    }
+
+    /// Opens the model picker: each open starts fresh, on the on-screen
+    /// model's row on home, else the first row. Each open asks `Stale`.
+    pub(crate) fn open_model_picker(&mut self, mode: Mode) -> super::Effect {
+        // On home the selection starts on the home chips' model; attached,
+        // the panel fold names it once drawing lands, so until then the
+        // first row.
+        let on_screen = self
+            .home
+            .as_ref()
+            .filter(|_| self.on_home())
+            .and_then(|home| {
+                home.launch
+                    .model
+                    .as_deref()
+                    .map(|model| (model, home.launch.thinking.as_deref()))
+            });
+        self.model_picker.open(mode, on_screen);
+        super::Effect::None
+    }
+
+    /// Whether the model picker is open.
+    pub(crate) fn model_picker_open(&self) -> bool {
+        self.model_picker.is_open()
+    }
+
+    /// A key for the open picker; `None` while it is closed, for Ctrl+C,
+    /// and while the quit question is up, so quitting keeps every key.
+    /// Enter and `s` choose in the next task; here every other key but
+    /// the picker's own does nothing, and no key cycles.
+    pub(in crate::app) fn model_picker_key(&mut self, key: &Key) -> Option<super::Effect> {
+        if !self.model_picker_open() || self.quit_open() {
+            return None;
+        }
+        match key {
+            Key::CtrlC => None,
+            Key::Up => {
+                self.model_picker.move_row(-1);
+                Some(super::Effect::None)
+            }
+            Key::Down => {
+                self.model_picker.move_row(1);
+                Some(super::Effect::None)
+            }
+            Key::Tab => {
+                self.model_picker.toggle_show_all();
+                Some(super::Effect::None)
+            }
+            Key::CtrlR => {
+                self.model_picker.refresh();
+                Some(super::Effect::None)
+            }
+            Key::Esc => {
+                self.model_picker.close();
+                Some(super::Effect::None)
+            }
+            // Enter and `s` choose in the next task; here they do nothing,
+            // as every other key does.
+            Key::Char(_)
+            | Key::Backspace
+            | Key::Enter
+            | Key::CtrlO
+            | Key::PageUp
+            | Key::PageDown
+            | Key::End
+            | Key::AltA
+            | Key::BackTab
+            | Key::F1
+            | Key::CtrlG
+            | Key::CtrlF
+            | Key::CtrlV
+            | Key::CtrlL
+            | Key::AltUp
+            | Key::AltDown
+            | Key::AltX
+            | Key::AltP
+            | Key::AltR
+            | Key::AltDigit(_) => Some(super::Effect::None),
+        }
+    }
+
+    /// An edit for the open picker: the arrows move the selected row's
+    /// chip, and every other edit does nothing. `None` while it is closed
+    /// and while the quit question is up.
+    pub(in crate::app) fn model_picker_edit(&mut self, edit: &Edit) -> Option<super::Effect> {
+        if !self.model_picker_open() || self.quit_open() {
+            return None;
+        }
+        match edit {
+            Edit::Left => self.model_picker.move_chip(-1),
+            Edit::Right => self.model_picker.move_chip(1),
+            Edit::ShiftEnter
+            | Edit::CtrlJ
+            | Edit::WordLeft
+            | Edit::WordRight
+            | Edit::DeleteWord
+            | Edit::LineStart
+            | Edit::LineEnd
+            | Edit::Delete
+            | Edit::Paste(_) => {}
+        }
+        Some(super::Effect::None)
     }
 }
 

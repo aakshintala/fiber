@@ -808,10 +808,10 @@ Every action acts in some of five contexts, and the terminal is in exactly one
 of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
-  home screen's delete question or workspace picker, the key map, an approval or
-  question, an offer, or the Ctrl+R panel; or the `/` or `@` completion
-  panel while focus is not in the conversation. An overlay's own keys, such as
-  an approval's ↑ and ↓, are not bindings.
+  home screen's delete question or workspace picker, the key map, the model
+  picker, an approval or question, an offer, or the Ctrl+R panel; or the `/`
+  or `@` completion panel while focus is not in the conversation. An overlay's
+  own keys, such as an approval's ↑ and ↓, are not bindings.
 - Search: conversation search is open.
 - Conversation: focus is in the conversation.
 - Steering: a queued steering message is selected.

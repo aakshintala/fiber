@@ -299,10 +299,18 @@ impl App {
         };
     }
 
-    /// Hands one key to what is on top: the key map, the approval panel, a
-    /// completion panel, then the input box.
+    /// Hands one key to what is on top: the model picker, the key map,
+    /// the approval panel, a completion panel, then the input box.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         self.copied = false;
+        if let Some(effect) = self.model_picker_key(&key) {
+            return effect;
+        }
+        // Ctrl+L opens the picker ahead of home, except while the quit
+        // question is up, which keeps every key.
+        if key == Key::CtrlL && !self.quit_open() {
+            return self.open_model_picker(crate::model_picker::Mode::Choose);
+        }
         if let Some(effect) = self.home_key(&key) {
             return effect;
         }
@@ -374,7 +382,10 @@ impl App {
             Key::AltR | Key::AltDigit(_) => Effect::None,
             Key::CtrlR => self.open_search(),
             Key::CtrlV => self.paste.press(self.draft.serial()),
-            Key::CtrlF | Key::CtrlL => Effect::None,
+            Key::CtrlF => Effect::None,
+            // Ctrl+L opens the picker ahead of `home_key`, so it never
+            // reaches here.
+            Key::CtrlL => Effect::None,
             Key::CtrlG => self.open_in_editor(),
             Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),
         }
