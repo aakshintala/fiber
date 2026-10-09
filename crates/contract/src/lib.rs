@@ -2,9 +2,8 @@
 //!
 //! It holds the event envelope and every event kind (`docs/events.md`), every
 //! driver command (`docs/invocation.md`), the loop's inbox message and every error code
-//! (`docs/errors.md`), the provider and tool seams (`docs/architecture.md`), and shared
-//! secret redaction (`docs/errors.md`). It contains no behaviour beyond serialisation
-//! and redaction of its secret values.
+//! (`docs/errors.md`), and the provider and tool seams (`docs/architecture.md`). It
+//! contains no behaviour beyond serialisation.
 
 pub mod clock;
 mod codes;
@@ -22,7 +21,6 @@ pub mod inbox;
 pub mod jobs;
 mod pre_session;
 pub mod provider;
-pub mod redact;
 pub mod repository;
 pub mod thinking;
 
