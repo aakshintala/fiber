@@ -2,6 +2,8 @@
 //! into the panel rect (`docs/tui.md`, "The panel"). Card text starts past
 //! the draggable edge Part 1 draws, with one margin column each side.
 
+use std::ops::Range;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -82,6 +84,11 @@ pub(crate) struct Row {
 /// Every card's rows, top to bottom, with one blank row between cards;
 /// `width` is the panel rect's.
 pub(crate) fn rows(app: &App, width: u16) -> Vec<Row> {
+    rows_and_delegates(app, width).0
+}
+
+/// [`rows`], with the Delegates card's row indices when it draws.
+pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Range<usize>>) {
     let widgets = app.panel_state().widgets();
     let names: Vec<(&str, &str)> = widgets
         .iter()
@@ -89,6 +96,7 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<Row> {
         .collect();
     let text = text_width(width);
     let mut out = Vec::new();
+    let mut span = None;
     for card in cards(app.panel_cards(), &names) {
         let mut drawn = card_rows(app, &card, text);
         if drawn.is_empty() {
@@ -100,9 +108,12 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<Row> {
                 spot: None,
             });
         }
+        if card == Card::Delegates {
+            span = Some(out.len()..out.len().saturating_add(drawn.len()));
+        }
         out.append(&mut drawn);
     }
-    out
+    (out, span)
 }
 
 /// Draws every card's rows into the panel rect: card text at `area.x + 2`,

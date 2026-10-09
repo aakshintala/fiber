@@ -309,3 +309,79 @@ fn delegates_card_at_the_panel_floor() {
     let (buf, _) = draw_targets(&app);
     insta::assert_snapshot!("delegates_card_at_the_panel_floor", crate::view::text(&buf));
 }
+
+/// Scrolls the card down `steps` delegates with the wheel over its first
+/// row.
+fn scroll_card(app: &mut App, steps: usize) {
+    let rect = app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.panel)
+        .unwrap_or_else(|| panic!("a panel rect"));
+    for _ in 0..steps {
+        app.on_wheel(&crate::keys::Mouse {
+            kind: crate::keys::MouseKind::WheelDown,
+            col: rect.x.saturating_add(4),
+            row: rect.y.saturating_add(1),
+        });
+    }
+}
+
+#[test]
+fn the_card_shows_from_its_scroll_offset() {
+    let mut app = attached_with(160, 40, &["delegates"]);
+    fold_delegates(&mut app, 5);
+    scroll_card(&mut app, 2);
+    assert_eq!(app.panel_state().delegate_scroll(), 2);
+    let descriptions: Vec<String> = card_texts(&app).into_iter().skip(1).step_by(2).collect();
+    assert_eq!(descriptions, vec!["  task 3", "  task 4", "  task 5"]);
+    // Two delegates finish while scrolled: the offset clamps when drawn.
+    for job in ["j_4", "j_5"] {
+        app.on_line(session_line(
+            "job_completed",
+            serde_json::json!({"job_id": job, "status": "completed"}),
+        ));
+    }
+    let descriptions: Vec<String> = card_texts(&app).into_iter().skip(1).step_by(2).collect();
+    assert_eq!(descriptions, vec!["  task 1", "  task 2", "  task 3"]);
+}
+
+#[test]
+fn the_span_covers_only_the_card_rows() {
+    let mut app = attached_with(160, 40, &["session", "delegates", "jobs"]);
+    app.on_line(session_line(
+        "session_status",
+        serde_json::json!({
+            "name": "work", "workspace": "/w", "project": "-w",
+            "state": "idle", "since": 0,
+            "spend": {"tokens": {"input": 0, "cache_read": 0, "cache_write": {},
+                "output": 0}, "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 2, "jobs": 3, "clients": 0,
+        }),
+    ));
+    fold_job(&mut app, "j_0", "build");
+    fold_delegates(&mut app, 2);
+    let (drawn, span) = crate::view::panel::rows_and_delegates(&app, panel_width(&app));
+    let texts: Vec<String> = drawn.iter().map(|row| row.line.to_string()).collect();
+    let start = texts
+        .iter()
+        .position(|row| row == "● fiber  test/model")
+        .unwrap_or_else(|| panic!("the card's first row"));
+    assert!(start > 1);
+    assert_eq!(span, Some(start..start + 4));
+    assert_eq!(texts.get(start - 1).map(String::as_str), Some(""));
+    assert_eq!(texts.get(start + 4).map(String::as_str), Some(""));
+    assert_eq!(
+        texts.get(start + 5).map(String::as_str),
+        Some("1 job running")
+    );
+}
+
+#[test]
+fn delegates_card_scrolled() {
+    let mut app = attached(160, 40);
+    fold_delegates(&mut app, 5);
+    scroll_card(&mut app, 1);
+    let (buf, _) = draw_targets(&app);
+    insta::assert_snapshot!("delegates_card_scrolled", crate::view::text(&buf));
+}

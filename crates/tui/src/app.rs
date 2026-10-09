@@ -39,6 +39,7 @@ mod chrome;
 mod commands;
 #[path = "copy.rs"]
 pub(crate) mod copy;
+mod delegates;
 mod find;
 #[path = "app_focus.rs"]
 mod focus;

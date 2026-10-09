@@ -17,6 +17,7 @@ use contract::events::{
 use super::{App, Effect, Kind, Link, mint};
 use crate::input::Draft;
 use crate::shell;
+use crate::view::panel::delegates::DELEGATES_SHOWN;
 
 /// A panel item that does something when clicked (`docs/tui.md`, "The panel", "Git").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +73,7 @@ pub(crate) struct PanelState {
     baseline: Option<bool>,
     branch: Option<Branch>,
     scroll: usize,
+    delegate_scroll: usize,
 }
 
 impl PanelState {
@@ -292,6 +294,27 @@ impl PanelState {
     /// How many rows the panel has scrolled.
     pub(crate) fn scroll(&self) -> usize {
         self.scroll
+    }
+
+    /// How many delegates the Delegates card has scrolled.
+    pub(crate) fn delegate_scroll(&self) -> usize {
+        self.delegate_scroll
+    }
+
+    /// Clamps the Delegates card's offset to the running delegates less
+    /// [`DELEGATES_SHOWN`], then moves it one delegate: down to the clamp,
+    /// up saturating at 0 (`docs/tui.md`, "The panel").
+    pub(super) fn scroll_delegates(&mut self, up: bool) {
+        let max = self
+            .running_delegates()
+            .len()
+            .saturating_sub(DELEGATES_SHOWN);
+        let clamped = self.delegate_scroll.min(max);
+        self.delegate_scroll = if up {
+            clamped.saturating_sub(1)
+        } else {
+            clamped.saturating_add(1).min(max)
+        };
     }
 
     /// Folds the branch query's answer: the first line trimmed is the

@@ -13,17 +13,18 @@ use crate::markdown::{Role, style};
 /// rows (`docs/tui.md`, "The panel").
 pub(crate) const DELEGATES_SHOWN: usize = 3;
 
-/// The card's rows at `text` columns, in job start order: `<glyph> <word>
-/// <model>`, then the job's description. No delegate running draws no
-/// row.
+/// The card's rows at `text` columns, in job start order from its scroll
+/// offset: `<glyph> <word>  <model>`, then the job's description. No
+/// delegate running draws no row.
 pub(super) fn rows(app: &App, text: usize) -> Vec<Row> {
+    let panel = app.panel_state();
+    let running = panel.running_delegates();
+    // A stored offset past the end clamps when drawn, as the panel's does.
+    let skip = panel
+        .delegate_scroll()
+        .min(running.len().saturating_sub(DELEGATES_SHOWN));
     let mut out = Vec::new();
-    for (started, description) in app
-        .panel_state()
-        .running_delegates()
-        .into_iter()
-        .take(DELEGATES_SHOWN)
-    {
+    for (started, description) in running.into_iter().skip(skip).take(DELEGATES_SHOWN) {
         // debt: a still glyph, not the spinner; upgrade trigger: #686's tick lands.
         let state = Span::styled(format!("● {}", started.harness), style(Role::Accent));
         out.push(Row {

@@ -81,7 +81,8 @@ impl App {
     }
 
     /// The mouse wheel scrolls what it is over (`docs/tui.md`, "Turns",
-    /// "The panel", "Layout"): over the panel it scrolls only the panel;
+    /// "The panel", "Layout"): over the panel it scrolls only the panel, or
+    /// over the Delegates card only that card;
     /// over the conversation's visible rows it scrolls the conversation by
     /// [`WHEEL_ROWS`] rows, but only while a session is on screen and no
     /// swapped view covers the conversation. Over the rail, the header, or
@@ -102,7 +103,7 @@ impl App {
             .and_then(|layout| layout.panel)
             .is_some_and(|panel| panel.contains(at))
         {
-            self.scroll_panel(up);
+            self.wheel_panel(mouse.row, up);
         } else if self.session().is_some()
             && self.keymap_top().is_none()
             && !self.offer_open()
