@@ -12,6 +12,7 @@ mod appearance;
 mod approvals;
 mod attention;
 mod bindings;
+mod bubble;
 mod cells;
 mod clipboard;
 mod editor;

@@ -152,9 +152,11 @@ fn the_overlay_row_hides_a_copy_target_under_it() {
 #[test]
 fn a_click_below_the_conversation_or_on_a_plain_line_copies_nothing() {
     let mut app = with_reply(30, 12, TWO_BLOCKS);
-    let prompt = row_of(&app, 30, 12, " hi").expect("prompt");
-    assert_eq!(click(&mut app, 27, prompt), Effect::None);
-    assert_eq!(click(&mut app, 27, 11), Effect::None);
+    // The plain line between the two code blocks has no target, and
+    // neither does the input box.
+    let plain = row_of(&app, 30, 12, "text").expect("plain line");
+    assert_eq!(click(&mut app, 27, plain), Effect::None);
+    assert_eq!(click(&mut app, 27, 10), Effect::None);
     assert_eq!(click(&mut app, 27, 200), Effect::None);
 }
 

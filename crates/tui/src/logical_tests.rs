@@ -175,3 +175,18 @@ fn a_logical_line_takes_the_scopes_of_its_first_row() {
     assert_eq!(lines[0].text, "alpha beta");
     assert_eq!(lines[0].scopes, vec![Target::Group(3)]);
 }
+
+#[test]
+fn tail_cells_are_not_text() {
+    let tailed = RowText {
+        skip: 1,
+        tail: 2,
+        ..RowText::plain()
+    };
+    assert_eq!(
+        line_text(&Line::raw(" hi ▐"), &tailed),
+        (1, "hi".to_owned())
+    );
+    // A glyph is never split: a tail past its start keeps the glyph.
+    assert_eq!(line_text(&Line::raw(" 界 "), &tailed), (1, "界".to_owned()));
+}

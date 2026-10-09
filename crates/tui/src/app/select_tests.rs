@@ -1007,8 +1007,11 @@ fn overlapping_pending_copies_keep_each_others_pins() {
     app.focus = Some(TargetId::Turn(0));
     assert_eq!(app.on_key(Key::Char('y'), now()), Effect::None);
     load_needed(&mut app, &lines);
+    // The selection covers the bubble's rows, edges included; the copy
+    // holds only its text.
+    assert_eq!(shown, ["▄▄▄▄▄", "go ▐", "▀▀▀▀▀"]);
     let text = app.take_copy().expect("the selection copies");
-    assert!(text.contains(&shown[0]), "{text:?} from {shown:?}");
+    assert_eq!(text, "go", "{text:?} from {shown:?}");
     // The turn copy still pins its pages: page 0 stays.
     assert!(app.pages().pinned() > prior);
     app.on_key(Key::End, now());

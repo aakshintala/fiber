@@ -267,11 +267,15 @@ fn a_frame_fetches_a_dropped_page_in_answers_of_256_and_draws_it() {
         assert!(to - from < 256, "{from}..={to}");
     }
     let screen = shown(&lp);
+    let rows: Vec<&str> = screen.lines().collect();
+    // To the top: the first turn's bubble starts the screen, its text
+    // on the next row.
     assert!(
-        screen
-            .lines()
-            .next()
-            .is_some_and(|row| row.contains("first")),
+        rows.first().is_some_and(|row| row.trim_start().starts_with('▄')),
+        "{screen}"
+    );
+    assert!(
+        rows.get(1).is_some_and(|row| row.contains("first")),
         "{screen}"
     );
     assert_eq!(lp.app.scroll().0, 0);
@@ -493,8 +497,8 @@ fn the_paging_report_counts_every_loaded_line() {
     let report = crate::measure_paging(&events(&session()), 60, 12, fakes::clock::FakeClock::new())
         .unwrap_or_else(|error| panic!("{error}"));
     // Every page loaded while paging up keeps its first line: dropping one
-    // draws fewer rows. Six turns draw one time row each.
-    assert!(report.contains("rows: 319\n"), "{report}");
+    // draws fewer rows. Six turns draw one time row and two edge rows each.
+    assert!(report.contains("rows: 331\n"), "{report}");
 }
 
 #[test]

@@ -146,7 +146,10 @@ fn prompt_bubble_shows_the_local_time_under_it() {
     // 2026-10-08T14:15Z, 10:15 in New York.
     app.on_line(turn_started_at("s_aaaaaaaaaaaaaaaa", "go", 1791468900000));
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
-    assert_eq!(texts, vec![" go ".to_owned(), "10:15".to_owned()]);
+    assert_eq!(
+        texts,
+        vec!["▄▄▄▄▄".to_owned(), " go ▐".to_owned(), "▀▀▀▀▀".to_owned(), "10:15".to_owned()]
+    );
     let time = app
         .lines()
         .into_iter()
@@ -163,7 +166,15 @@ fn prompt_bubble_shows_the_local_time_under_it() {
         .find(|y| row_text(&buf, *y).contains("10:15"))
         .expect("the time row is drawn");
     assert!(row_text(&buf, at).ends_with("10:15"));
-    assert!(row_text(&buf, at.saturating_sub(1)).contains(" go "));
+    // The time sits under the bubble's bottom edge, its text row above
+    // that.
+    assert!(
+        row_text(&buf, at.saturating_sub(1))
+            .trim_start()
+            .chars()
+            .all(|ch| ch == '▀')
+    );
+    assert!(row_text(&buf, at.saturating_sub(2)).contains(" go ▐"));
     insta::assert_snapshot!("prompt_bubble_with_time", screen(&app));
 }
 
@@ -173,7 +184,10 @@ fn prompt_bubble_defaults_to_utc() {
     attach(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started_at("s_aaaaaaaaaaaaaaaa", "go", 1791468900000));
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
-    assert_eq!(texts, vec![" go ".to_owned(), "14:15".to_owned()]);
+    assert_eq!(
+        texts,
+        vec!["▄▄▄▄▄".to_owned(), " go ▐".to_owned(), "▀▀▀▀▀".to_owned(), "14:15".to_owned()]
+    );
 }
 
 #[test]
@@ -249,16 +263,16 @@ fn page_down_to_the_bottom_follows_again() {
         app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", &format!("prompt {n}")));
     }
     let bottom = screen(&app);
-    // The bottom shows prompt 26's time through prompt 30: two rows a
-    // turn over sixty rows, nine of conversation. A page is those 9
+    // The bottom shows prompt 28's time through prompt 30: four rows a
+    // turn over 120 rows, nine of conversation. A page is those 9
     // rows less one, and the top stops at the first row.
     let time = format!("{:>60}", "00:00");
-    let prompt = |n: u32| format!("{:>59}", format!("prompt {n}"));
     app.on_key(Key::PageUp, now);
     let shown = screen(&app);
     let shown: Vec<&str> = shown.lines().collect();
     assert_eq!(shown[0], time, "one page up moves eight rows");
-    assert_eq!(shown[1], prompt(23));
+    assert_eq!(shown[1], format!("{:>60}", "▄".repeat(12)));
+    assert!(shown[2].contains("prompt 27"), "{shown:?}");
     // One page down lands exactly on the bottom, which follows again: new
     // output scrolls in with no overlay.
     app.on_key(Key::PageDown, now);
@@ -266,27 +280,28 @@ fn page_down_to_the_bottom_follows_again() {
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "prompt 31"));
     let followed = screen(&app);
     assert!(!followed.contains("↓ New messages below"));
-    assert!(followed.contains(format!("{}\n{}", prompt(31), time).as_str()));
-    // Seven pages up reaches the top, where another stops: 45, 37, 29,
-    // 21, 13, 5, then clamped to 0.
-    for _ in 0..7 {
+    assert!(followed.contains("prompt 31"));
+    // Fifteen pages up reaches the top, where another stops.
+    for _ in 0..15 {
         app.on_key(Key::PageUp, now);
     }
-    assert!(screen(&app).starts_with(format!("{}\n", prompt(1)).as_str()));
+    assert_eq!(app.top(), Some(0));
+    let top = screen(&app);
+    let top: Vec<&str> = top.lines().collect();
+    assert!(top[0].trim_start().starts_with('▄'), "{top:?}");
+    assert!(top[1].contains("prompt 1"), "{top:?}");
     app.on_key(Key::PageUp, now);
-    assert!(screen(&app).starts_with(format!("{}\n", prompt(1)).as_str()));
-    // Seven pages down lands exactly on the bottom: 8, 16, 24, 32, 40,
-    // 48, then clamped to 53. Even tops show a turn's bubble first: row
-    // 8 is prompt 5's bubble.
+    assert_eq!(app.top(), Some(0));
+    // Fifteen pages down lands exactly on the bottom.
     app.on_key(Key::PageDown, now);
-    assert!(screen(&app).starts_with(format!("{}\n", prompt(5)).as_str()));
-    for _ in 0..6 {
+    assert_eq!(app.top(), Some(8));
+    for _ in 0..14 {
         app.on_key(Key::PageDown, now);
     }
-    assert!(screen(&app).contains(format!("{}\n{}", prompt(31), time).as_str()));
+    assert!(screen(&app).contains("prompt 31"));
     // PageDown while following does nothing.
     app.on_key(Key::PageDown, now);
-    assert!(screen(&app).contains(format!("{}\n{}", prompt(31), time).as_str()));
+    assert!(screen(&app).contains("prompt 31"));
 }
 
 #[test]
@@ -1216,7 +1231,7 @@ fn the_badge_is_a_target_over_the_cells_it_drew() {
     // the badge.
     let turn = Target {
         id: TargetId::Turn(0),
-        rect: Rect::new(0, 6, 40, 2),
+        rect: Rect::new(0, 4, 40, 4),
     };
     assert_eq!(targets, vec![badge, turn]);
     // Narrower than its text, it takes the whole row.
@@ -1651,12 +1666,21 @@ fn copied_needs_a_conversation_row_to_show_on() {
 
 #[test]
 fn the_focused_target_is_drawn_reversed() {
+    use serde_json::json;
     let mut app = empty();
-    tool_turn(&mut app);
-    tool_turn(&mut app);
-    // A third turn leaves another turn's group line above the focused
-    // turn, outside it.
-    tool_turn(&mut app);
+    // Two small turns: the first with a group, completed, the second
+    // open. Both fit with the first's group line above the focused turn,
+    // outside it.
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "a"));
+    app.on_line(at("tool_call_requested", Some("a_1"), 0,
+        json!({"name": "read", "arguments": {"path": "src/a.rs"}})));
+    app.on_line(at("tool_call_completed", Some("a_1"), 0,
+        json!({"status": "completed",
+            "content": [{"type": "text", "text": "fn a() {}"}]})));
+    app.on_line(at("turn_completed", None, 0, json!({"outcome": "completed"})));
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "b"));
+    app.on_line(at("text_completed", Some("a_m"), 0, json!({"text": "reply"})));
     app.on_key(Key::BackTab, fakes::clock::FakeClock::new().now());
     let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     app.drawn(&targets);
@@ -1771,7 +1795,7 @@ fn a_turn_spanning_drawn_lines_sums_their_heights() {
         .iter()
         .find(|target| target.id == TargetId::Turn(0))
         .expect("turn 0 is drawn");
-    assert_eq!(turn.rect, Rect::new(0, 2, WIDTH, 7));
+    assert_eq!(turn.rect, Rect::new(0, 0, WIDTH, 9));
 }
 
 #[test]
@@ -1809,3 +1833,4 @@ fn input_with_an_image_token() {
     insta::assert_snapshot!("input_with_an_image_token", screen(&app));
     assert_eq!(cursor_at(&app), Some(Position::new(17, 10)));
 }
+

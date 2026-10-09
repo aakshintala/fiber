@@ -225,12 +225,26 @@ fn header_drops_controls_to_spaces_and_prefers_a_nonempty_row() {
     assert_eq!(header(None, None), "");
 }
 
+fn started_with_reply(app: &mut App, prompt: &str, reply: &str) {
+    app.on_line(turn_started(prompt));
+    app.on_line(session_line(
+        SESSION,
+        "assistant_message_started",
+        serde_json::json!({}),
+    ));
+    app.on_line(session_line(
+        SESSION,
+        "assistant_message_delta",
+        serde_json::json!({"text": reply}),
+    ));
+}
+
 #[test]
 fn conversation_height_equals_the_drawn_rows() {
     let long: String = std::iter::repeat_n('w', 20_000).collect();
     for (width, height) in [(160, 40), (100, 30), (114, 12), (300, 20), (60, 10)] {
         let mut app = attached(width, height);
-        app.on_line(turn_started(&long));
+        started_with_reply(&mut app, "prompt", &long);
         let (screen, _) = draw(&app, width, height);
         let drawn = screen
             .lines()
@@ -272,7 +286,7 @@ fn conversation_height_counts_the_panel_edges_where_they_fit() {
     let prefix: String = std::iter::repeat_n('p', 200).collect();
     for height in [10, 11, 13] {
         let mut app = attached(60, height);
-        app.on_line(turn_started(&long));
+        started_with_reply(&mut app, "prompt", &long);
         app.on_line(session_line(
             SESSION,
             "permission_requested",
@@ -291,7 +305,7 @@ fn conversation_height_counts_the_panel_edges_where_they_fit() {
     // rows + 4 (edges).
     for height in [10, 11, 13] {
         let mut app = attached(60, height);
-        app.on_line(turn_started(&long));
+        started_with_reply(&mut app, "prompt", &long);
         app.on_line(session_line(
             SESSION,
             "interaction_requested",
@@ -434,3 +448,4 @@ fn title_parts_are_left_out_when_empty() {
     assert_eq!(title(true, Some("!"), ""), "! · fiber");
     assert_eq!(title(true, Some("!"), "n"), "! n · fiber");
 }
+

@@ -686,13 +686,13 @@ fn the_first_match_at_or_after_the_top_row_is_current() {
     // The top row between the two matches: only the one below can become
     // current. The smaller conversation no longer shows it, so the view
     // scrolls to reveal it, and nothing scrolls back.
-    app.jump(3);
-    assert_eq!(app.top(), Some(3));
+    app.jump(5);
+    assert_eq!(app.top(), Some(5));
     let ranges = search_all(&mut app, &log, "needle");
     assert!(ranges.is_empty());
     assert_eq!(count(&app), "2 of 2");
     assert_eq!(current_text(&app).as_deref(), Some("needle below"));
-    assert_eq!(app.top(), Some(11));
+    assert_eq!(app.top(), Some(13));
 }
 
 #[test]
@@ -1306,8 +1306,8 @@ fn rescanning_keeps_the_current_match_when_an_earlier_one_appears() {
     replies.push("needle two");
     let refs: Vec<&str> = replies.clone();
     text_turn(&mut log, &mut seq, &mut app, &refs);
-    app.jump(3);
-    assert_eq!(app.top(), Some(3));
+    app.jump(5);
+    assert_eq!(app.top(), Some(5));
     search_all(&mut app, &log, "needle");
     assert_eq!(current_text(&app).as_deref(), Some("needle two"));
     let current = app.find.current().cloned().expect("a current match");
@@ -1451,7 +1451,7 @@ fn up_and_shift_enter_move_back_and_wrap() {
 }
 
 #[test]
-fn the_count_reads_3_of_41() {
+fn the_count_wraps_past_the_last_match() {
     let mut app = attached(40, 10);
     let mut log = Vec::new();
     let mut seq = 0u64;
@@ -1462,15 +1462,13 @@ fn the_count_reads_3_of_41() {
     }
     let ranges = search_all(&mut app, &log, "needle");
     assert!(ranges.is_empty());
-    let index: usize = count(&app)
-        .split(' ')
-        .next()
-        .and_then(|first| first.parse().ok())
-        .expect("an index");
-    assert!(count(&app).ends_with(" of 41"));
+    // Following at the bottom, the current match starts on the last one;
+    // Enter wraps to the first and on.
+    assert_eq!(count(&app), "41 of 41");
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(count(&app), "1 of 41");
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
-    assert_eq!(count(&app), format!("{} of 41", index + 2));
+    assert_eq!(count(&app), "2 of 41");
 }
 
 #[test]

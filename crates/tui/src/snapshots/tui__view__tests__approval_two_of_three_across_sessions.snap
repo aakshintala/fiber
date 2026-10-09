@@ -3,9 +3,9 @@ source: crates/tui/src/view_tests.rs
 expression: wide(&mut app).0
 ---
 
-
-
-                                                                         run it
+                                                                       ▄▄▄▄▄▄▄▄▄
+                                                                        run it ▐
+                                                                       ▀▀▀▀▀▀▀▀▀
                                                                            00:00
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ approval · s_bbbbbbbbbbbbbbbb · 2 of 3

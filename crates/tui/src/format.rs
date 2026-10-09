@@ -1,7 +1,7 @@
 //! The figures a card prints: durations, token counts, money and the
 //! usage behind them, the ▣ line, a tool group's summary line and ledger,
-//! the kinds a summary line counts, a call's arguments in brief, thinking
-//! headings and the prompt bubble (`docs/tui.md`, "Turns", "Tool groups and
+//! the kinds a summary line counts, a call's arguments in brief and
+//! thinking headings (`docs/tui.md`, "Turns", "Tool groups and
 //! the ledger", "Thinking").
 
 use std::collections::BTreeMap;
@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::app::Target;
 use crate::markdown::style;
-use crate::rows::{Join, RowText, Rows};
+use crate::rows::{Join, Rows};
 use crate::theme::Role;
 use crate::turn::{Group, Thought, target_id};
 
@@ -335,29 +335,6 @@ pub(crate) fn seconds(ms: u64) -> Option<String> {
 
 pub(crate) fn dim(text: String) -> Line<'static> {
     Line::styled(text, Style::default().add_modifier(Modifier::DIM))
-}
-
-/// The prompt as a tinted block on the right, at most 70% of `width`, with
-/// a column of padding each side. The left pad is not text, and a wrapped
-/// row joins the one before as the wrap broke it.
-pub(crate) fn bubble(text: &str, columns: u16, out: &mut Rows) {
-    if text.trim().is_empty() {
-        return;
-    }
-    let max = (usize::from(columns).saturating_mul(7) / 10).max(3);
-    let rows = wrap_joined(text, max.saturating_sub(2));
-    let wide = rows.iter().map(|(row, _)| width(row)).max().unwrap_or(0);
-    let tint = Style::default().bg(Role::Prompt.color());
-    for (row, join) in rows {
-        let pad = " ".repeat(wide.saturating_sub(width(&row)));
-        let span = Span::styled(format!(" {row}{pad} "), tint);
-        let text = RowText {
-            join,
-            skip: 1,
-            ..RowText::plain()
-        };
-        out.push_text((Line::from(span).right_aligned(), None), text);
-    }
 }
 
 /// The latest `usage_recorded` per `generation_id`, so a copy of a copy, or

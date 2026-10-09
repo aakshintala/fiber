@@ -123,7 +123,7 @@ fn wheeling_down_three_rows_from_three_above_the_bottom_follows_again() {
 #[test]
 fn wheeling_up_pages_history_like_page_up() {
     let mut wheeled = following();
-    feed(&mut wheeled, (0..120).map(|_| wheel_up(10, 5)).collect());
+    feed(&mut wheeled, (0..200).map(|_| wheel_up(10, 5)).collect());
     let mut paged = following();
     feed(&mut paged, (0..80).map(|_| page_up()).collect());
     assert_eq!(wheeled.app.top(), Some(0));

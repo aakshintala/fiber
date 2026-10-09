@@ -874,18 +874,27 @@ impl Pages {
             .filter_map(|(at, part)| part.as_ref().map(|part| (at, part)))
             .chain(std::iter::once((self.closed.len(), &self.open)))
         {
-            let (rows, _, _, turns) = self.draw_data(at, part, Draw::Shown);
+            let (rows, texts, _, turns) = self.draw_data(at, part, Draw::Shown);
             for (_, range) in turns.into_iter().filter(|(id, _)| *id == turn) {
-                if let Some(turn_rows) = rows.get(range) {
-                    text.extend(turn_rows.iter().filter(|(_, target)| target.is_none()).map(
-                        |(line, _)| {
-                            if line.alignment == Some(ratatui::layout::Alignment::Right) {
-                                line.to_string().trim().to_owned()
-                            } else {
-                                line.to_string().trim_end().to_owned()
-                            }
-                        },
-                    ));
+                if let (Some(turn_rows), Some(turn_texts)) =
+                    (rows.get(range.clone()), texts.get(range))
+                {
+                    // The rows with no target of their own, in logical
+                    // text: decoration adds nothing, and a wrapped row
+                    // joins its line (`docs/tui.md`, "Selection and
+                    // copy"). A row with a target copies through its own
+                    // stop.
+                    let (kept, kept_texts): (Vec<Row>, Vec<RowText>) = turn_rows
+                        .iter()
+                        .zip(turn_texts)
+                        .filter(|((_, target), _)| target.is_none())
+                        .map(|(row, text)| (row.clone(), text.clone()))
+                        .unzip();
+                    text.extend(
+                        crate::logical::logical(&kept, &kept_texts)
+                            .into_iter()
+                            .map(|logical| logical.text),
+                    );
                 }
             }
         }

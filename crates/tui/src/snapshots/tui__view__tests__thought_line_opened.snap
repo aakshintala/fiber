@@ -2,9 +2,9 @@
 source: crates/tui/src/view_tests.rs
 expression: screen(&app)
 ---
-
-
-                                                        why
+                                                      ▄▄▄▄▄▄
+                                                       why ▐
+                                                      ▀▀▀▀▀▀
                                                        00:00
 + Thought: Plan the fix · 22s
 # Plan the fix
