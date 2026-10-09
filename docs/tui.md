@@ -557,11 +557,11 @@ arrived after `sessions` was sent.
   conversation's last column is its scroll bar and never holds text:
   while the conversation has more rows than it shows, a thumb of ┃ in
   `scroll`, with no track, shows where the rows on screen sit among all of
-  them. Either pauses following when it scrolls up. While scrolled up, a pill
-  centred on the conversation's bottom row reads " ↓ 214 lines below · End "
-  in `attention` on the `rule` tint, its ends rounded by ▐ and ▌ in `rule`,
-  and jumps to the end on a click or End. The count comes from the exact row
-  counts ("History and paging"). Nothing is added to the input box.
+  them. Either pauses following when it scrolls up. When new output arrives
+  while scrolled up, a pill centred on the conversation's bottom row reads
+  " ↓ New messages below · End " in `attention` on the `rule` tint, its ends
+  rounded by ▐ and ▌ in `rule`, and jumps to the end on a click or End. It
+  gives no count. Nothing is added to the input box.
 
 ### Tool groups and the ledger
 
@@ -1096,7 +1096,7 @@ search box and the draft shows without a cursor.
 | Search | `search` | Ctrl+F; Cmd+F where forwarded | |
 | Open the search results | `search_results` | Ctrl+F with search open | click the match count |
 | Next or previous match | `search_next_prev` | Enter or ↓, Shift+Enter or ↑, with search open | |
-| Jump to the end | `jump_to_end` | End | click the "↓ … below · End" pill |
+| Jump to the end | `jump_to_end` | End | click "↓ New messages below" |
 | Select a queued steering message | `select_steering` | ⌥↑ ⌥↓ | its mouse target |
 | Amend it | `amend_steering` | Enter | its mouse target |
 | Drop it | `drop_steering` | ⌥X | its mouse target |
