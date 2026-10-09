@@ -751,17 +751,9 @@ pub(crate) fn pdfs(content: &[ContentPart]) -> Vec<PdfRef> {
             ContentPart::Pdf(part) => Some(PdfRef {
                 path: part.path().to_owned(),
                 page_count: part.page_count(),
-                pages: part.pages().map(|pages| {
-                    pages
-                        .iter()
-                        .map(|page| ImageRef {
-                            path: page.path.clone(),
-                            mime_type: page.mime_type.clone(),
-                            width: page.width,
-                            height: page.height,
-                        })
-                        .collect()
-                }),
+                pages: part
+                    .pages()
+                    .map(|pages| pages.iter().cloned().map(ImageRef::from).collect()),
             }),
             ContentPart::Text { .. } | ContentPart::Image { .. } | ContentPart::Unknown => None,
         })

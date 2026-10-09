@@ -110,7 +110,7 @@ impl From<ImagePart> for ContentPart {
 }
 
 impl TryFrom<ContentPart> for ImagePart {
-    type Error = String;
+    type Error = ImagePartError;
 
     fn try_from(part: ContentPart) -> Result<Self, Self::Error> {
         match part {
@@ -125,11 +125,25 @@ impl TryFrom<ContentPart> for ImagePart {
                 width,
                 height,
             }),
-            ContentPart::Text { .. } => Err("expected an image part, found text".to_owned()),
-            ContentPart::Pdf(_) => Err("expected an image part, found pdf".to_owned()),
-            ContentPart::Unknown => Err("expected an image part, found unknown".to_owned()),
+            ContentPart::Text { .. } => Err(ImagePartError::Text),
+            ContentPart::Pdf(_) => Err(ImagePartError::Pdf),
+            ContentPart::Unknown => Err(ImagePartError::Unknown),
         }
     }
+}
+
+/// Why a content part is not an image part.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ImagePartError {
+    /// The part holds text.
+    #[error("expected an image part, found text")]
+    Text,
+    /// The part holds a PDF.
+    #[error("expected an image part, found pdf")]
+    Pdf,
+    /// The part is one this build does not know.
+    #[error("expected an image part, found unknown")]
+    Unknown,
 }
 
 impl From<ImagePart> for crate::provider::ImageRef {
@@ -227,11 +241,13 @@ impl<'de> Deserialize<'de> for PdfPart {
 }
 
 /// Why a PDF part could not be built.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PdfPartError {
     /// The page count is 0.
+    #[error("a PDF part holds at least one page")]
     NoPages,
     /// The rendered pages do not match the page count.
+    #[error("a PDF part of {page_count} pages holds {pages} rendered pages")]
     CountMismatch {
         /// The page count the part claims.
         page_count: u32,
@@ -239,20 +255,6 @@ pub enum PdfPartError {
         pages: usize,
     },
 }
-
-impl std::fmt::Display for PdfPartError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoPages => f.write_str("a PDF part holds at least one page"),
-            Self::CountMismatch { page_count, pages } => write!(
-                f,
-                "a PDF part of {page_count} pages holds {pages} rendered pages"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for PdfPartError {}
 
 /// One effect a tool call declares (`docs/permissions.md`, "Effects").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
