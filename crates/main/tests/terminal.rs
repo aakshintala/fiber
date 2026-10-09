@@ -327,10 +327,27 @@ impl Run {
     /// Reads until the output after the last match holds `needle`, under
     /// one named deadline for the whole wait, however much other output
     /// arrives. On expiry the panic names what it waited for and shows the
-    /// output, so a stall says how far the journey got.
+    /// output, so a stall says how far the journey got. A needle with
+    /// spaces waits for each word in order: unchanged cells are never
+    /// rewritten, so a space can arrive as a cursor move rather than a
+    /// byte, and a style change can split words with SGR.
     fn read_until(&mut self, needle: &str) {
+        let mut words = needle.split_whitespace();
+        match words.next() {
+            Some(first) => {
+                self.read_word(first, needle);
+                for word in words {
+                    self.read_word(word, needle);
+                }
+            }
+            None => self.read_word(needle, needle),
+        }
+    }
+
+    /// Reads until the output after the last match holds `word`.
+    fn read_word(&mut self, word: &str, needle: &str) {
         let (output, wakes, seen) = (Arc::clone(&self.output), Arc::clone(&self.wakes), self.seen);
-        let wanted = needle.as_bytes().to_vec();
+        let wanted = word.as_bytes().to_vec();
         let (done, found) = mpsc::channel();
         thread::spawn(move || {
             let wakes = wakes.lock().unwrap();
@@ -624,9 +641,10 @@ fn resize_redraws_the_input_line_on_the_new_last_row() {
     setup.provider(&server);
     let mut run = Run::terminal(&setup);
     run.read_until(">");
-    // The first frame paints every cell on the theme's background, so it
-    // is read through its last row before the resize.
-    run.read_until("\x1b[12;1H");
+    // Default-background cells stay unpainted, so no row is addressed
+    // whole; the footer's last word proves the last row drew before
+    // the resize.
+    run.read_until("quit");
     let marked = run.output().len();
     rustix::termios::tcsetwinsize(
         &run.main,
