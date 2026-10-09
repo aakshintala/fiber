@@ -144,6 +144,12 @@ fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
 fn session_rows(app: &App, text: usize) -> Vec<Row> {
     let panel = app.panel_state();
     let mut out = Vec::new();
+    if let Some(waiting) = app.rail_waiting() {
+        out.push(Row {
+            line: Line::raw(format::cut(&format!("{waiting} waiting"), text)),
+            spot: Some(Spot::Waiting),
+        });
+    }
     if let Some(status) = panel.status() {
         out.push(plain(format!(
             "directory  {}",

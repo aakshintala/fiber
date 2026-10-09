@@ -1,0 +1,17 @@
+---
+source: crates/tui/src/view/rail_tests.rs
+expression: text(&rail(&app))
+---
+  fiber                        $1.35 +
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ 1 ✓ READY                         0s
+▌ fix the parser
+▌
+▌ $0.00
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ 2 ! NEEDS INPUT                  16s
+▌ fix flaky lock test
+▌ question: which branch do I rebase o
+▌ $1.35 ▆▆▆░░░░░░░░░░░░░░░░░░░░░░░ 12%
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -227,6 +227,8 @@ impl<B: Backend> Loop<B> {
     /// Handles one input, loads the pages the frame needs, and draws what
     /// changed. Returns the exit code when the terminal quits.
     fn step(&mut self, input: Input, rx: &Receiver<Input>) -> Option<i32> {
+        self.app
+            .set_wall(contract::clock::wall_ms(self.clock.wall()));
         let before = self.app.session().cloned();
         match input {
             Input::Bytes(bytes) => {
@@ -650,6 +652,9 @@ mod mouse_tests;
 #[cfg(test)]
 #[path = "lib_panel_tests.rs"]
 mod panel_tests;
+#[cfg(test)]
+#[path = "lib_rail_tests.rs"]
+mod rail_tests;
 
 #[cfg(test)]
 #[path = "lib_attention_tests.rs"]

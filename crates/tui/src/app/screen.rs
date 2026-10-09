@@ -124,7 +124,13 @@ impl Screen {
 
     /// PageUp and PageDown move by `height` less one, at least one row.
     pub(super) fn page(&mut self, up: bool, height: usize) {
-        let step = height.saturating_sub(1).max(1);
+        self.scroll_rows(up, height.saturating_sub(1).max(1), height);
+    }
+
+    /// Scrolls by `step` rows: up from the top row, or from the bottom
+    /// while following, saturating at the top; down follows again on
+    /// reaching the bottom (`docs/tui.md`, "History and paging").
+    pub(super) fn scroll_rows(&mut self, up: bool, step: usize, height: usize) {
         let bottom = self.bottom_top(height);
         if up {
             self.scroll.up(step, bottom);

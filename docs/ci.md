@@ -134,12 +134,16 @@ On Linux x86_64 alone:
 - cargo-deny's licence, source and ban checks
 - the built-in tool definitions within their byte budget, with each
   definition's size printed
-- mutation testing: `cargo-mutants --in-diff`, split across 6 runners. It runs
+- mutation testing: `cargo-mutants --in-diff`, split across runners. It runs
   on a ready pull request, on a push to `main`, and on a draft pull request
   that carries the label `mutants`; an unlabelled draft skips it, and adding
-  the label starts a run. Each
-  lists its own share of the diff's mutants and stops when it has none. The
-  number was picked, not measured; it is reset from the first real runs.
+  the label starts a run. The selection counts the diff's mutants
+  (`cargo mutants --list`) and plans one shard per 15 of them, rounded up, at
+  most 32; a diff with no mutants starts none. Recent runs (#1461, #1395)
+  tested a mutant in 13 to 27 seconds on a runner and the unmutated baseline
+  took 1 to 3.5 minutes, so 15 mutants keep a shard near 10 minutes. Shards
+  split the list round-robin, so every shard holds the same mix of crates and
+  the count alone sets its size. Past 480 mutants the cap makes shards larger.
   Mutants run under nextest's `mutants` profile (`.cargo/mutants.toml`),
   which stops every running test at the first failure. A mutant that makes
   one test hang until its deadline is then caught by a faster test, not

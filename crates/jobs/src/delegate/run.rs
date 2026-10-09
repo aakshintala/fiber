@@ -334,9 +334,11 @@ impl Runner {
         // means this parent is gone, so it stays open until the job ends.
         let _lifeline = child.stdin.take();
         let (drain_tx, drain_rx) = mpsc::channel();
+        let wake = Arc::clone(&self.park) as Arc<dyn Wake>;
         match child.stdout.take() {
             Some(stdout) => {
-                thread::spawn(move || drain(stdout, drain_tx));
+                let drain_wake = Arc::clone(&wake);
+                thread::spawn(move || drain(stdout, drain_tx, drain_wake.as_ref()));
             }
             None => {
                 let _sent = drain_tx.send(None);
@@ -347,7 +349,6 @@ impl Runner {
         // blocking socket read: this thread never waits on the socket
         // and always reaches the reap and the stop timer.
         let fold = Arc::new(Mutex::new(Fold::default()));
-        let wake = Arc::clone(&self.park) as Arc<dyn Wake>;
         let mut backoff = START_BACKOFF;
         let mut next_retry = self.clock.now();
         let mut exited_seen = false;
@@ -562,7 +563,11 @@ fn over_cap(output_path: &PathBuf, cap: u64) -> bool {
 /// The drain: reads stdout to EOF and keeps only the last `fiber_exited`
 /// line, a pre-session one included. The pipe reaches EOF once every
 /// writer in the group is gone.
-fn drain(read: impl Read + Send + 'static, done: mpsc::Sender<Option<FiberExited>>) {
+fn drain(
+    read: impl Read + Send + 'static,
+    done: mpsc::Sender<Option<FiberExited>>,
+    wake: &dyn Wake,
+) {
     let mut kept = None;
     for line in BufReader::new(read).lines() {
         let Ok(line) = line else {
@@ -573,6 +578,7 @@ fn drain(read: impl Read + Send + 'static, done: mpsc::Sender<Option<FiberExited
         }
     }
     let _sent = done.send(kept);
+    wake.wake();
 }
 
 /// A stdout line's `fiber_exited`, when the line is one.

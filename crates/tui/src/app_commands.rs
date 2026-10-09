@@ -429,7 +429,7 @@ impl App {
             "quit" => self.quit(),
             "approvals" => {
                 self.draft.clear();
-                self.open_first()
+                self.next_request()
             }
             // `?` and `help`.
             _ => {

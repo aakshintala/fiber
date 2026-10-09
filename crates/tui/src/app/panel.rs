@@ -25,6 +25,9 @@ pub(crate) enum Spot {
     Jobs,
     /// The Session card's branch row: runs `git status`.
     Branch,
+    /// The Session card's "N waiting" while the rail is not drawn: shows
+    /// the rail (`docs/tui.md`, "Shedding").
+    Waiting,
 }
 
 /// What the branch query last answered.
@@ -437,9 +440,9 @@ impl App {
         let max = rows.len().saturating_sub(height);
         let clamped = self.panel_state.scroll.min(max);
         if up {
-            self.panel_state.scroll = clamped.saturating_sub(3);
+            self.panel_state.scroll = clamped.saturating_sub(super::mouse::WHEEL_ROWS);
         } else {
-            self.panel_state.scroll = clamped.saturating_add(3).min(max);
+            self.panel_state.scroll = clamped.saturating_add(super::mouse::WHEEL_ROWS).min(max);
         }
     }
 
@@ -462,6 +465,7 @@ impl App {
                 self.pending.insert(id, (Kind::Shell, draft));
                 Effect::Send(vec![line])
             }
+            Spot::Waiting => self.show_rail(),
         }
     }
 }
