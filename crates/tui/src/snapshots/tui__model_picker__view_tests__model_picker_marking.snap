@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/model_picker_view_tests.rs
+expression: "text"
+---
+Models                                                                         ✕
+↻ refresh
+acme
+[x] m1 · deep, review
+[ ] m2
+zeta
+[ ] z1
+[x] z2 · chat
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Space mark · Enter save · Esc back
