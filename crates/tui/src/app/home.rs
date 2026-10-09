@@ -22,6 +22,7 @@ use contract::SessionId;
 
 mod exit;
 mod open_at;
+mod reset;
 
 /// Home's state: the launch description, and whether a `start` went out in
 /// this run, which hides the input box's placeholder.
@@ -411,12 +412,26 @@ impl App {
                         }
                         return Some(Vec::new());
                     }
+                    if accepted {
+                        let result = hub.payload.get("result");
+                        let result = result.unwrap_or(&serde_json::Value::Null);
+                        if self.sessions_accepted(id, result) {
+                            return Some(Vec::new());
+                        }
+                    } else if self.sessions_rejected(id) {
+                        return Some(Vec::new());
+                    }
                     None
                 }
                 _ => None,
             },
             Line::Session(envelope) => {
                 if envelope.kind == "session_status" {
+                    // A delegate's own summary is for its parent's panel,
+                    // never the session list (`docs/tui.md`, "The panel").
+                    if self.delegate_status(envelope) {
+                        return Some(Vec::new());
+                    }
                     let session = envelope.session_id.clone();
                     let was_left = self
                         .home
@@ -427,6 +442,7 @@ impl App {
                     if let Some(home) = self.home.as_mut() {
                         home.sessions.status(row);
                     }
+                    self.note_feed(&session);
                     if was_left {
                         self.reconcile(&session);
                     }
@@ -493,6 +509,15 @@ impl App {
             home.subs.sent(id, session.clone(), level);
         }
         line
+    }
+
+    /// The level this connection holds or asks for `session` at, if any:
+    /// a delegate is subscribed once per attachment (`docs/invocation.md`,
+    /// `subscribe`).
+    pub(super) fn subscribed_level(&self, session: &SessionId) -> Option<Level> {
+        self.home
+            .as_ref()
+            .and_then(|home| home.subs.expected(session))
     }
 
     /// Leaves the session on screen for home: the conversation cleared

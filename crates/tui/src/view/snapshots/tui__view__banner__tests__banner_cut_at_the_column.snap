@@ -1,0 +1,16 @@
+---
+source: crates/tui/src/view/banner_tests.rs
+expression: "screen(&app, 24)"
+---
+               Connect ✕
+               ion
+               lost.
+
+
+
+                     hi
+                   00:00
+Connection lost · reconn
+↳ use the parser       ✕
+↳ and test it          ✕
+>

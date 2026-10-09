@@ -2,6 +2,8 @@
 //! into the panel rect (`docs/tui.md`, "The panel"). Card text starts past
 //! the draggable edge Part 1 draws, with one margin column each side.
 
+use std::ops::Range;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -11,6 +13,8 @@ use crate::app::panel::{Branch, Spot};
 use crate::format;
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
+
+pub(crate) mod delegates;
 
 /// One card the panel draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +27,8 @@ pub(crate) enum Card {
     ChangedFiles,
     /// How many jobs run, listed while open (`docs/tui.md`, "The panel").
     Jobs,
+    /// The running delegates, two rows each (`docs/tui.md`, "The panel").
+    Delegates,
     /// An extension's widget, by its index among the widgets in arrival
     /// order.
     Widget(usize),
@@ -35,9 +41,8 @@ pub(crate) enum Card {
 pub(crate) fn cards(list: &[String], widgets: &[(&str, &str)]) -> Vec<Card> {
     let mut out = Vec::new();
     for name in list {
-        // debt: the Delegates card draws nothing until it is built; upgrade trigger: its lane on #669.
         // debt: the Quota card draws nothing until a client can read quota; upgrade trigger: #1200 lands.
-        // `delegates`, `quota` and unknown names fall through and place nothing.
+        // `quota` and unknown names fall through and place nothing.
         if name == "session" && !out.contains(&Card::Session) {
             out.push(Card::Session);
             continue;
@@ -48,6 +53,10 @@ pub(crate) fn cards(list: &[String], widgets: &[(&str, &str)]) -> Vec<Card> {
         }
         if name == "jobs" && !out.contains(&Card::Jobs) {
             out.push(Card::Jobs);
+            continue;
+        }
+        if name == "delegates" && !out.contains(&Card::Delegates) {
+            out.push(Card::Delegates);
             continue;
         }
         if let Some(at) = widgets
@@ -75,6 +84,11 @@ pub(crate) struct Row {
 /// Every card's rows, top to bottom, with one blank row between cards;
 /// `width` is the panel rect's.
 pub(crate) fn rows(app: &App, width: u16) -> Vec<Row> {
+    rows_and_delegates(app, width).0
+}
+
+/// [`rows`], with the Delegates card's row indices when it draws.
+pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Range<usize>>) {
     let widgets = app.panel_state().widgets();
     let names: Vec<(&str, &str)> = widgets
         .iter()
@@ -82,6 +96,7 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<Row> {
         .collect();
     let text = text_width(width);
     let mut out = Vec::new();
+    let mut span = None;
     for card in cards(app.panel_cards(), &names) {
         let mut drawn = card_rows(app, &card, text);
         if drawn.is_empty() {
@@ -93,9 +108,12 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<Row> {
                 spot: None,
             });
         }
+        if card == Card::Delegates {
+            span = Some(out.len()..out.len().saturating_add(drawn.len()));
+        }
         out.append(&mut drawn);
     }
-    out
+    (out, span)
 }
 
 /// Draws every card's rows into the panel rect: card text at `area.x + 2`,
@@ -136,6 +154,7 @@ fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
         Card::Session => session_rows(app, text),
         Card::ChangedFiles => changed_files_rows(app, text),
         Card::Jobs => jobs_rows(app, text),
+        Card::Delegates => delegates::rows(app, text),
         Card::Widget(at) => widget_rows(app, *at, text),
     }
 }
@@ -416,7 +435,7 @@ fn jobs_rows(app: &App, text: usize) -> Vec<Row> {
     let running: Vec<&str> = panel
         .jobs()
         .iter()
-        .filter(|(id, _)| !panel.delegate_jobs().contains(id))
+        .filter(|(id, _)| !panel.delegate_jobs().contains_key(id))
         .map(|(_, description)| description.as_str())
         .collect();
     if running.is_empty() {

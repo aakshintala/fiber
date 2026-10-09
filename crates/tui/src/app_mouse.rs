@@ -83,11 +83,11 @@ impl App {
 
     /// The mouse wheel scrolls what it is over (`docs/tui.md`, "Turns",
     /// "The panel", "The rail", "Layout"): over the panel it scrolls only
-    /// the panel; over the rail, only the rail; over the conversation's
-    /// visible rows it scrolls the conversation by [`WHEEL_ROWS`] rows, but
-    /// only while a session is on screen and no swapped view covers the
-    /// conversation. Over the header or below the conversation it scrolls
-    /// the conversation not at all.
+    /// the panel, or over the Delegates card only that card; over the rail,
+    /// only the rail; over the conversation's visible rows it scrolls the
+    /// conversation by [`WHEEL_ROWS`] rows, but only while a session is on
+    /// screen and no swapped view covers the conversation. Over the header
+    /// or below the conversation it scrolls the conversation not at all.
     pub(crate) fn on_wheel(&mut self, mouse: &Mouse) {
         let up = match mouse.kind {
             MouseKind::WheelUp => true,
@@ -103,7 +103,7 @@ impl App {
             .and_then(|layout| layout.panel)
             .is_some_and(|panel| panel.contains(at))
         {
-            self.scroll_panel(up);
+            self.wheel_panel(mouse.row, up);
         } else if self.session().is_some()
             && self.keymap_top().is_none()
             && !self.offer_open()

@@ -18,7 +18,7 @@ impl App {
     /// resumes an exited session at the level last held and a lone
     /// `full` would be refused as already held. The last subscribe's
     /// acknowledgement ends the gate.
-    pub(super) fn open_session(
+    pub(in crate::app) fn open_session(
         &mut self,
         session: SessionId,
         expected: Option<Level>,
