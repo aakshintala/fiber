@@ -144,3 +144,24 @@ fn a_right_aligned_line_stays_right_aligned() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0.alignment, Some(Alignment::Right));
 }
+
+#[test]
+fn a_line_names_its_own_paths_id() {
+    let mut layout = Layout::default();
+    let first = super::Part {
+        path: "artifacts/a.png".to_owned(),
+        width: 10,
+        height: 20,
+    };
+    let second = super::Part {
+        path: "artifacts/b.png".to_owned(),
+        ..first.clone()
+    };
+    layout.note(&first);
+    layout.note(&second);
+    let mut out = Rows::default();
+    super::rows(&second, &layout, 60, Align::Left { indent: 0 }, &mut out);
+    let (rows, _) = out.into_parts();
+    assert!(matches!(rows[0].1, Some(Target::Image(2))));
+    assert_eq!(layout.id("artifacts/c.png"), None);
+}
