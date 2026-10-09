@@ -65,6 +65,14 @@ An event-stream test asserts two things:
   reordered event fails
 - the fields under test, on the lines under test
 
+A line the contract writes on its own trigger, with no position relative to
+the session's other lines, is set aside from the ordered list rather than
+placed in it: `clients`, written when a connection attaches; `session_status`
+and the hub's `attention`, written when the session's summary changes. Where
+its count is fixed, such as one `clients` line per attach, the test asserts
+the count, so a duplicate or a missing line still fails. Otherwise the test
+asserts it only when it is the line under test.
+
 It ignores fields it is not testing, as a conforming consumer must: adding a
 field is a compatible change (`docs/events.md`, "Versioning"), so a test that
 failed on one would be stricter than the contract.
