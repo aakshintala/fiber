@@ -317,7 +317,7 @@ fn echoes(terminal: &fs::File) -> bool {
 /// What `fiber` wrote to its terminal, read on a thread so a wait can have a
 /// deadline.
 struct Screen {
-    chunks: Receiver<Option<String>>,
+    chunks: Receiver<String>,
     typed: fs::File,
     seen: String,
     deadline: Deadline,
@@ -328,10 +328,10 @@ impl Screen {
         let reader = fs::File::from(terminal.main.try_clone().unwrap());
         let (send, chunks) = mpsc::channel();
         // A read error is the end of the terminal, on Linux as well as
-        // on macOS. The channel's disconnect when the reader ends
-        // replaces a trailing `None`: `wait_for` treats both alike.
+        // on macOS. The channel's disconnect when the reader ends is the
+        // end of the terminal.
         fakes::pty::read_to_eof(reader, move |bytes| {
-            send.send(Some(String::from_utf8_lossy(bytes).into()))
+            send.send(String::from_utf8_lossy(bytes).into())
                 .unwrap_or(());
         });
         Self {
@@ -349,8 +349,8 @@ impl Screen {
         while !self.seen[mark..].contains(text) {
             // Each chunk has the deadline: a terminal that goes quiet fails.
             match self.chunks.recv_timeout(self.deadline.left()) {
-                Ok(Some(chunk)) => self.seen.push_str(&chunk),
-                Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Ok(chunk) => self.seen.push_str(&chunk),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
                     panic!(
                         "the terminal ended before {text:?}: {:?}",
                         &self.seen[mark..]

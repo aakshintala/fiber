@@ -49,12 +49,14 @@ impl Read for Script {
 
 /// Every value sent, in order, up to the end of file: the collector ends when
 /// the reader thread drops the callback. The whole wait has one deadline.
-fn collect_to_eof<T: Send + 'static>(rx: mpsc::Receiver<T>) -> Vec<T> {
+fn collect_to_eof<T: Send + 'static>(rx: mpsc::Receiver<T>, what: &str) -> Vec<T> {
     let (done_tx, done_rx) = mpsc::channel();
     thread::spawn(move || {
         done_tx.send(rx.iter().collect::<Vec<T>>()).unwrap_or(());
     });
-    done_rx.recv_timeout(WAIT).unwrap()
+    done_rx
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|err| panic!("waited {WAIT:?} for {what}: {err}"))
 }
 
 fn disconnected<T: std::fmt::Debug>(result: Result<T, mpsc::RecvTimeoutError>, what: &str) {
@@ -75,7 +77,7 @@ fn delivers_every_chunk_in_order_up_to_eof() {
     read_to_eof(script, move |bytes: &[u8]| {
         tx.send(bytes.to_vec()).unwrap();
     });
-    let got = collect_to_eof(rx);
+    let got = collect_to_eof(rx, "every chunk up to end of file");
     assert_eq!(got, vec![b"foo".to_vec(), b"bar".to_vec(), b"baz".to_vec()]);
 }
 
@@ -91,7 +93,10 @@ fn keeps_reading_after_the_consumer_is_gone() {
         gone_tx.send(bytes.to_vec()).unwrap_or(());
         read_tx.send(bytes.len()).unwrap_or(());
     });
-    assert_eq!(collect_to_eof(read_rx), vec![3, 3]);
+    assert_eq!(
+        collect_to_eof(read_rx, "both reads and end of file"),
+        vec![3, 3]
+    );
 }
 
 #[test]
@@ -101,22 +106,20 @@ fn retries_an_interrupted_read() {
     read_to_eof(script, move |bytes: &[u8]| {
         tx.send(bytes.to_vec()).unwrap();
     });
-    assert_eq!(collect_to_eof(rx), vec![b"hi".to_vec()]);
+    assert_eq!(
+        collect_to_eof(rx, "the chunk and end of file"),
+        vec![b"hi".to_vec()]
+    );
 }
 
 #[test]
 fn a_non_interrupted_error_ends_the_thread() {
-    struct Gone;
-
-    impl Read for Gone {
-        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::other("the slave closed"))
-        }
-    }
-
     let (alive_tx, alive_rx) = mpsc::channel::<()>();
-    read_to_eof(Gone, move |_bytes: &[u8]| {
-        alive_tx.send(()).unwrap_or(());
-    });
+    read_to_eof(
+        Script::of(vec![Step::Fail(ErrorKind::Other)]),
+        move |_bytes: &[u8]| {
+            alive_tx.send(()).unwrap_or(());
+        },
+    );
     disconnected(alive_rx.recv_timeout(WAIT), "the error");
 }
