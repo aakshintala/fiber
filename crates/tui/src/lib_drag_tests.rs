@@ -156,7 +156,10 @@ fn without_a_seam_a_drag_saves_nothing_silently() {
     let mut lp = wide(None);
     lp.app.on_line(live(A));
     lp.app.on_line(live(B));
+    // Draw the frame before the drag, so the comparison is of two frames.
+    feed(&mut lp, vec![Input::Bytes(Vec::new())]);
     let before = shown(&lp);
+    assert!(!before.trim().is_empty(), "the first frame is drawn");
     feed(&mut lp, drag());
     assert_ne!(shown(&lp), before, "the drag moved the rail's edge");
     assert!(!shown(&lp).contains("Could not save"), "{}", shown(&lp));
