@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Stands in for sha256sum in the release-size test: the system's where there
+# is one, shasum where there is none (macOS).
+for real in /usr/bin/sha256sum /bin/sha256sum /sbin/sha256sum; do
+  if [ -x "$real" ]; then exec "$real" "$@"; fi
+done
+if [ "${1:-}" = --check ]; then
+  exec shasum -a 256 --check "${@:3}"
+fi
+exec shasum -a 256 "$@"
