@@ -71,6 +71,26 @@ impl Setup {
     }
 
     fn provider_with(&self, model_extra: &Value, server: &ProviderServer) {
+        self.provider_full(model_extra, server, None);
+    }
+
+    /// [`Setup::provider_with`], with the fake model declaring thinking
+    /// levels and the panel pinned to `panel_width` percent of the
+    /// screen (`docs/tui.md`, "Layout").
+    fn provider_with_panel(&self, server: &ProviderServer, panel_width: f64) {
+        self.provider_full(
+            &json!({"thinking_levels": ["low", "high"], "thinking_default": "high"}),
+            server,
+            Some(panel_width),
+        );
+    }
+
+    fn provider_full(
+        &self,
+        model_extra: &Value,
+        server: &ProviderServer,
+        panel_width: Option<f64>,
+    ) {
         let source = self.root.path().join("src");
         write(
             &source.join("extension.json"),
@@ -99,10 +119,11 @@ impl Setup {
         .unwrap()
         .commit()
         .unwrap();
-        write(
-            &self.home().join("config.json"),
-            &json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}}),
-        );
+        let mut config = json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}});
+        if let Some(width) = panel_width {
+            config["tui"] = json!({"panel": {"width": width}});
+        }
+        write(&self.home().join("config.json"), &config);
     }
 
     /// The project's sessions directory, through the canonical workspace,
@@ -164,7 +185,7 @@ impl Setup {
     }
 }
 
-/// A pseudo-terminal at 60x12. The main side stays open while the run uses
+/// A pseudo-terminal. The main side stays open while the run uses
 /// the terminal side.
 struct Terminal {
     main: OwnedFd,
@@ -172,7 +193,13 @@ struct Terminal {
 }
 
 impl Terminal {
+    /// A 60x12 terminal.
     fn open() -> Self {
+        Self::sized(60, 12)
+    }
+
+    /// A `cols` by `rows` terminal, as `open` is 60 by 12.
+    fn sized(cols: u16, rows: u16) -> Self {
         let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY).unwrap();
         // Not inherited: a hub `fiber` starts would hold the master open.
         rustix::io::fcntl_setfd(&main, rustix::io::FdFlags::CLOEXEC).unwrap();
@@ -188,8 +215,8 @@ impl Terminal {
         rustix::termios::tcsetwinsize(
             &terminal,
             rustix::termios::Winsize {
-                ws_col: 60,
-                ws_row: 12,
+                ws_col: cols,
+                ws_row: rows,
                 ws_xpixel: 0,
                 ws_ypixel: 0,
             },
@@ -263,10 +290,22 @@ impl Run {
         Self::terminal_full(setup, &[], args)
     }
 
-    /// Spawns `fiber` as [`terminal`] does, with `env` added to the
+    /// Spawns `fiber` as `terminal` does, with `env` added to the
     /// child's environment and `args` after the binary.
     fn terminal_full(setup: &Setup, env: &[(&str, &str)], args: &[&str]) -> Self {
-        let terminal = Terminal::open();
+        Self::terminal_full_sized(setup, env, args, 60, 12)
+    }
+
+    /// Spawns `fiber` as `terminal_full` does, on a `cols` by `rows`
+    /// terminal.
+    fn terminal_full_sized(
+        setup: &Setup,
+        env: &[(&str, &str)],
+        args: &[&str],
+        cols: u16,
+        rows: u16,
+    ) -> Self {
+        let terminal = Terminal::sized(cols, rows);
         let sessions = Watchdog::matching(setup.workspace().to_str().unwrap());
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -874,6 +913,306 @@ fn ctrl_v_pastes_an_image_that_the_session_stores() {
     run.write(b"\x03\x03\r");
     run.read_until("\x1b[?25h");
     run.read_until("fiber resume");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
+/// The final screen rebuilt from the pty's bytes: one cell per column
+/// and row.
+struct Screen {
+    cells: Vec<Vec<char>>,
+}
+
+impl Screen {
+    /// Rebuilds the `cols` by `rows` screen from every pty byte: only
+    /// what the fixture emits is tracked (CUP, mode sets, the alternate
+    /// screen's entry and leave, OSC, and printable text); every other
+    /// sequence is skipped.
+    fn rebuild(output: &[u8], cols: u16, rows: u16) -> Self {
+        let (cols, rows) = (cols as usize, rows as usize);
+        let mut screen = Self {
+            cells: vec![vec![' '; cols]; rows],
+        };
+        let (mut row, mut col) = (0usize, 0usize);
+        let text = String::from_utf8_lossy(output);
+        let mut chars = text.chars();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '\x1b' => match chars.next() {
+                    Some('[') => {
+                        let mut params = String::new();
+                        let mut final_ = '\0';
+                        for ch in chars.by_ref() {
+                            if ('@'..='~').contains(&ch) {
+                                final_ = ch;
+                                break;
+                            }
+                            params.push(ch);
+                        }
+                        // A missing row or column addresses the first.
+                        let number = |at: usize| {
+                            params
+                                .split(';')
+                                .nth(at)
+                                .and_then(|n| {
+                                    n.trim_start_matches(['?', ' ']).parse::<usize>().ok()
+                                })
+                                .unwrap_or(0)
+                        };
+                        match final_ {
+                            'H' => {
+                                row = number(0).saturating_sub(1).min(rows.saturating_sub(1));
+                                col = number(1).saturating_sub(1).min(cols.saturating_sub(1));
+                            }
+                            'h' | 'l' if params.contains("1049") => {
+                                if final_ == 'h' {
+                                    for dead in screen.cells.iter_mut() {
+                                        dead.fill(' ');
+                                    }
+                                    (row, col) = (0, 0);
+                                } else {
+                                    // The quit's leave: what follows is the
+                                    // resume lines, not screen.
+                                    return screen;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(']') => {
+                        let osc = chars.by_ref();
+                        while let Some(ch) = osc.next() {
+                            if ch == '\x07' {
+                                break;
+                            }
+                            if ch == '\x1b' && osc.next() == Some('\\') {
+                                break;
+                            }
+                        }
+                    }
+                    Some(_) | None => {}
+                },
+                ch if ch.is_control() => {}
+                _ => {
+                    if row < rows && col < cols {
+                        screen.cells[row][col] = ch;
+                        col += 1;
+                        if col >= cols {
+                            col = 0;
+                            row = row.saturating_add(1);
+                        }
+                    }
+                }
+            }
+        }
+        screen
+    }
+
+    /// The panel's text columns, one right-trimmed row per screen row:
+    /// the card text at the panel's second column, three narrower than
+    /// the panel (`panel.rs`).
+    fn panel_rows(&self, panel_x: usize, text: usize) -> Vec<String> {
+        self.cells
+            .iter()
+            .map(|row| {
+                row[panel_x + 2..panel_x + 2 + text]
+                    .iter()
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    /// Asserts the Session card's exact text rows in a `panel`-column
+    /// panel at the screen's right: every row is at most the card's text
+    /// width, a row too long ends in `…`, and a row that fits is whole
+    /// (`docs/tui.md`, "The panel").
+    fn assert_session_cut(&self, cols: u16, panel: u16, workspace: &str) {
+        let (panel_x, text) = (cols as usize - panel as usize, panel as usize - 3);
+        let rows = self.panel_rows(panel_x, text);
+        // The Session card is the panel's only card: its text rows sit
+        // between its top and bottom half-block edges, with no second
+        // card after.
+        let is_edge = |row: &str, edge: char| !row.is_empty() && row.chars().all(|ch| ch == edge);
+        let top = rows
+            .iter()
+            .position(|row| is_edge(row, '▄'))
+            .unwrap_or_else(|| panic!("no Session card top edge at {cols} columns"));
+        let bottom = rows
+            .iter()
+            .skip(top + 1)
+            .position(|row| is_edge(row, '▀'))
+            .map(|at| at + top + 1)
+            .unwrap_or_else(|| panic!("no Session card bottom edge at {cols} columns"));
+        assert!(
+            !rows[bottom + 1..].iter().any(|row| is_edge(row, '▄')),
+            "a second card follows the Session card at {cols} columns"
+        );
+        let card: Vec<&str> = rows[top + 1..bottom]
+            .iter()
+            .filter(|row| !row.is_empty())
+            .map(String::as_str)
+            .collect();
+        // The card's one-column right padding is the panel's last
+        // column (text starts at the second column and is three
+        // narrower than the panel): no text row may hold a glyph there.
+        // Edge rows span the card, so only text rows count.
+        for (at, cells) in self.cells.iter().enumerate() {
+            if at <= top || at >= bottom {
+                continue;
+            }
+            let text_range: String = cells[panel_x + 2..panel_x + 2 + text].iter().collect();
+            let trimmed = text_range.trim_end();
+            if trimmed.is_empty() || is_edge(trimmed, '▄') || is_edge(trimmed, '▀') {
+                continue;
+            }
+            assert_eq!(
+                cells[cols as usize - 1],
+                ' ',
+                "a card text row reaches the panel's last column at {cols} columns: {trimmed:?}"
+            );
+        }
+        // The speed value tracks elapsed time, so only its shape is
+        // pinned: at the floor its digits never reach the cut, so the
+        // row is one fixed string; at the ceiling the whole row is
+        // `output speed, last reply  N tokens/s`.
+        let speed_at = card
+            .iter()
+            .position(|row| row.starts_with("output speed, last reply  "))
+            .unwrap_or_else(|| panic!("no speed row at {cols} columns: {card:?}"));
+        let speed = if panel == 30 {
+            "output speed, last reply  …".to_owned()
+        } else {
+            let tail = &card[speed_at]["output speed, last reply  ".len()..];
+            let digits = tail.chars().take_while(|ch| ch.is_ascii_digit()).count();
+            assert!(
+                digits > 0 && tail[digits..] == *" tokens/s",
+                "the speed row is not whole at {cols} columns: {:?}",
+                card[speed_at]
+            );
+            format!("output speed, last reply  {} tokens/s", &tail[..digits])
+        };
+        let mut expected = expected_card(workspace, text, panel);
+        expected.insert(speed_at, speed);
+        assert_eq!(
+            card,
+            expected.iter().map(String::as_str).collect::<Vec<_>>(),
+            "Session card rows at {cols} columns"
+        );
+    }
+}
+
+/// The Session card's exact rows at `text` columns, without the speed
+/// row: the scripted turn's fixed usage reads `tokens in / out  10 /
+/// 3` with 40% cache hits, the context sits at 0% with the handoff
+/// marker at 70.0k, the cost is still unknown, and one turn ran
+/// (`panel.rs`).
+fn expected_card(workspace: &str, text: usize, panel: u16) -> Vec<String> {
+    let mut rows = vec![
+        format!(
+            "directory  {}",
+            cut_left_path(workspace, text - "directory  ".len())
+        ),
+        fit_row("model  fake/m · thinking high", text),
+    ];
+    // The new context rows: the 17-cell bar with its marker and size,
+    // then the handoff rows. The trigger reads 70.0k.
+    match panel {
+        30 => rows.extend([
+            "░░░░░░░░░░░░░░░░░│       13".to_owned(),
+            "handoff at 70… 0% of window".to_owned(),
+            fit_row("then a summary, fresh context", text),
+        ]),
+        60 => rows.extend([
+            format!("{}│{}13", "░".repeat(17), " ".repeat(37)),
+            format!("handoff at 70.0k{}0% of window", " ".repeat(29)),
+            "then a summary, fresh context".to_owned(),
+        ]),
+        _ => panic!("unexpected panel width {panel}"),
+    }
+    rows.extend([
+        fit_row("tokens in / out  10 / 3", text),
+        fit_row("cache hits  40%", text),
+        fit_row("cost billed  unknown", text),
+        fit_row("turns  1", text),
+    ]);
+    rows
+}
+
+/// `panel.rs` `cut_left` over the ASCII workspace path: at most `max`
+/// columns, cut from the left with a leading `…`.
+fn cut_left_path(path: &str, max: usize) -> String {
+    if path.chars().count() <= max {
+        return path.to_owned();
+    }
+    let kept: String = path
+        .chars()
+        .rev()
+        .take(max - 1)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    format!("…{kept}")
+}
+
+/// `panel.rs` `fit_rows` for a single-span row: whole when it fits,
+/// else cut to `text` columns with `…` last. Every glyph here is one
+/// column wide.
+fn fit_row(row: &str, text: usize) -> String {
+    if row.chars().count() <= text {
+        row.to_owned()
+    } else {
+        row.chars().take(text - 1).collect::<String>() + "…"
+    }
+}
+
+#[test]
+fn session_card_rows_are_cut_with_an_ellipsis() {
+    // `docs/tui.md` "Layout": the panel is `tui.panel.width` percent
+    // of the screen, kept from 30 to 60 columns. The terminal stays at
+    // 160 by 48; 10.0% (16 columns) lands the panel on its 30-column
+    // floor and 50.0% (80 columns) on its 60-column ceiling, beside a
+    // conversation of at least 84 either way.
+    for (panel, share) in [(30u16, 10.0), (60u16, 50.0)] {
+        session_card_cut_with_an_ellipsis(panel, share);
+    }
+}
+
+/// Drives one turn with the panel pinned to `share` percent of a
+/// 160-by-48 screen and asserts the Session card's exact rows: a row
+/// too long for the card is cut with `…`, a row that fits is whole.
+fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
+    let setup = Setup::new();
+    let server = ProviderServer::start([reply("Hello.")]).unwrap();
+    // Thinking levels declared, the default in force, so the card shows
+    // the `model fake/m thinking high` row; the reply's fixed usage
+    // gives the card its spend, context and speed rows.
+    setup.provider_with_panel(&server, share);
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
+    let mut run = Run::terminal_full_sized(&setup, &[], &[], 160, 48);
+    run.read_until(">");
+    run.write(b"say hi\r");
+    // The reply streams in two deltas, so only the first delta's text
+    // arrives whole; the turn's close says it finished. The updated
+    // status (with the turn's usage) can arrive before or after the
+    // close line, so only wait when its bytes are not here.
+    run.read_until("Hel");
+    run.read_until("completed");
+    if !contains(&run.output(), "cache hits") {
+        run.read_until("cache hits");
+    }
+    run.write(b"\x03\x03\r");
+    run.read_until("\x1b[?25h");
+    run.read_until("fiber resume");
+    // The quit's bytes come after every panel byte, so the screen
+    // rebuilt now holds each frame whole: no row is read mid-frame.
+    Screen::rebuild(&run.output(), 160, 48).assert_session_cut(
+        160,
+        panel,
+        workspace.to_str().unwrap(),
+    );
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
