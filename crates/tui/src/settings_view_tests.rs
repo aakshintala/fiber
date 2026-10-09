@@ -631,3 +631,32 @@ fn settings_editing() {
     press(&mut settings, &fake, &[Key::Enter, Key::Tab]);
     insta::assert_snapshot!("settings_editing", drawn(&settings, None, 80, 24));
 }
+
+#[test]
+fn debug_of_a_field_names_its_parts_and_hides_the_draft() {
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "providers.openai.credentials.work");
+    press(&mut settings, &fake, &[Key::Enter]);
+    typed(&mut settings, &fake, "s3cr3t-k3y-xyz");
+    let super::Mode::Field(field) = &settings.mode else {
+        panic!("the field is open");
+    };
+    let shown = format!("{field:?}");
+    assert!(shown.starts_with("Field {"), "{shown}");
+    assert!(shown.contains("draft: \"redacted\""), "{shown}");
+    assert!(shown.contains("redacted: true"), "{shown}");
+    assert!(!shown.contains("s3cr3t"), "{shown}");
+}
+
+#[test]
+fn shown_is_the_height_less_the_header_the_line_below_and_footer() {
+    let fake = Fake::new(rows());
+    let settings = Settings::open(&ctx(&fake));
+    for (height, want) in [(0, 0), (2, 0), (3, 0), (4, 1), (5, 2)] {
+        let sized = Ctx {
+            height,
+            ..ctx(&fake)
+        };
+        assert_eq!(settings.shown(&sized), want, "height {height}");
+    }
+}

@@ -16,7 +16,7 @@ use crate::Configure;
 use crate::configure::{Layer, Shown, WriteScope};
 use crate::configure_fake::{Fake, file, row};
 use crate::home::Launch;
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::mouse::TargetId;
 use crate::swapped::Spot;
@@ -380,4 +380,71 @@ fn the_reload_cost_is_the_session_on_screens_only() {
         app.config_view_screen().map(|frame| frame.below),
         Some(vec!["Applies on each session's next /reload.".to_owned()])
     );
+}
+
+#[test]
+fn a_save_says_the_reload_cost_of_the_session_on_screen() {
+    for (on_home, said) in [
+        (
+            false,
+            "Applies on /reload, which rebuilds the cache: about 201,034 tokens.",
+        ),
+        (true, "Applies on each session's next /reload."),
+    ] {
+        let mut app = attached(Some(fake()));
+        app.on_line(session_line(
+            "usage_recorded",
+            serde_json::json!({"generation_id": "g_1", "model": "a/b",
+                "tokens": {"input": 1000, "cache_read": 200000,
+                    "cache_write": {"1h": 34}, "output": 5000},
+                "input_bytes": 1, "cost": null}),
+        ));
+        if on_home {
+            app.go_home();
+        }
+        app.open_config_view(ConfigView::Settings);
+        app.on_key(Key::Enter, now());
+        for _ in 0..6 {
+            app.on_key(Key::Backspace, now());
+        }
+        for ch in "200000".chars() {
+            app.on_key(Key::Char(ch), now());
+        }
+        app.on_key(Key::Enter, now());
+        let below = app
+            .config_view_screen()
+            .map(|frame| frame.below)
+            .unwrap_or_default();
+        assert!(
+            below.iter().any(|line| line == said),
+            "on_home {on_home}: {below:?}"
+        );
+    }
+}
+
+#[test]
+fn an_edit_goes_to_the_open_field_not_the_input_box() {
+    let mut app = attached(Some(fake()));
+    slash_settings(&mut app);
+    app.on_key(Key::Enter, now());
+    app.on_edit(Edit::Paste("9".to_owned()));
+    let text = app
+        .config_view_screen()
+        .and_then(|frame| frame.field)
+        .map(|(text, _)| text);
+    assert!(
+        text.is_some_and(|text| text.ends_with('9')),
+        "the field takes the paste"
+    );
+    assert!(app.input().is_empty());
+}
+
+#[test]
+fn without_a_seam_only_esc_closes_the_view() {
+    let mut app = attached(None);
+    slash_settings(&mut app);
+    app.on_key(Key::Char('x'), now());
+    assert!(app.config_view_open(), "a key other than Esc keeps it open");
+    app.on_key(Key::Esc, now());
+    assert!(!app.config_view_open());
 }

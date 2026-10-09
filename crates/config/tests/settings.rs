@@ -182,3 +182,20 @@ fn each_keys_write_scope() {
         assert_eq!(row(&rows, key).scope, scope, "{key}");
     }
 }
+
+#[test]
+fn an_mcp_server_named_credentials_shows_its_env_names() {
+    // The `providers.*.credentials.*` arm needs both its names to match;
+    // a server called `credentials` matches the second alone, and its
+    // env still shows names only.
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"mcp": {"servers": {"credentials": {"env": {"TOKEN": "ghp-secret"}}}}}"#,
+    );
+    let rows = setup.load(&[]).unwrap().settings();
+    assert_eq!(
+        row(&rows, "mcp.servers.credentials.env").value,
+        SettingValue::Redacted("names TOKEN".to_owned(), Source::Global(setup.global()))
+    );
+}

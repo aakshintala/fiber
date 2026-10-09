@@ -171,3 +171,44 @@ fn the_field_scrolls_to_show_its_caret() {
     assert_eq!(text(&buf, 2), "> fghijkl");
     assert!(buf[(9, 2)].modifier.contains(Modifier::REVERSED));
 }
+
+#[test]
+fn the_field_takes_a_line_from_the_rows() {
+    let mut shown = frame(0);
+    shown.below.clear();
+    assert_eq!(rows_height(&shown, 6), 4);
+    shown.field = Some(("x".to_owned(), 0));
+    assert_eq!(rows_height(&shown, 6), 3);
+}
+
+#[test]
+fn a_field_never_draws_over_the_footer() {
+    let area = Rect::new(0, 0, 20, 3);
+    let mut buf = Buffer::empty(area);
+    let mut shown = frame(0);
+    shown.below = vec!["one".to_owned(), "two".to_owned()];
+    shown.field = Some(("abcdef".to_owned(), 6));
+    render(&shown, area, &mut buf, &mut Vec::new());
+    assert_eq!(text(&buf, 1), "one");
+    assert_eq!(text(&buf, 2), "keys");
+}
+
+#[test]
+fn a_one_row_view_draws_no_footer_over_its_header() {
+    let area = Rect::new(0, 0, 20, 1);
+    let mut buf = Buffer::empty(area);
+    render(&frame(0), area, &mut buf, &mut Vec::new());
+    assert_eq!(text(&buf, 0), "Settings           ✕");
+}
+
+#[test]
+fn a_caret_past_the_field_is_not_drawn() {
+    // Two columns hold `> ` and no text, so the caret has no cell here.
+    let mut buf = Buffer::empty(Rect::new(0, 0, 6, 4));
+    let mut shown = frame(0);
+    shown.below.clear();
+    shown.field = Some(("abc".to_owned(), 0));
+    render(&shown, Rect::new(0, 0, 2, 4), &mut buf, &mut Vec::new());
+    assert_eq!(text(&buf, 2), ">");
+    assert!(!buf[(2, 2)].modifier.contains(Modifier::REVERSED));
+}
