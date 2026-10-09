@@ -639,12 +639,12 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     assert_eq!(start, expected);
     // On home the input line is not on the last row: the first frame is
     // read through the placeholder, whose letters are written together.
-    let frames = super::reconnect_tests::watch(&pair.main, vec![
+    let frames = crate::pty_watch::watch(&pair.main, vec![
         b"shortcuts",
         b"Press Ctrl+C again to",
         b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h",
     ]);
-    super::reconnect_tests::watched(&frames, "the first frame");
+    crate::pty_watch::watched(&frames, "the first frame");
     // The slave is in raw mode while running.
     let raw = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&before));
@@ -664,7 +664,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     // The armed frame foots the quit hint, which no earlier frame
     // holds. Only its first run is matched: the incremental redraw
     // splits the hint around the cells the unarmed foot already holds.
-    super::reconnect_tests::watched(&frames, "the armed quit hint");
+    crate::pty_watch::watched(&frames, "the armed quit hint");
     pair.main
         .write_all(&[0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
@@ -680,7 +680,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     // After the last frame the output holds the restore bytes.
     let marker =
         b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
-    let tail = super::reconnect_tests::watched(&frames, "the restore bytes");
+    let tail = crate::pty_watch::watched(&frames, "the restore bytes");
     assert_eq!(
         tail.get(tail.len().saturating_sub(marker.len())..),
         Some(marker.as_slice())
