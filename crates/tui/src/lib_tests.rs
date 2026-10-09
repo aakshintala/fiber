@@ -145,6 +145,8 @@ pub(super) fn new_loop<B: Backend>(
         var: Box::new(|_| None),
         copy_command: None,
         open_command: None,
+        viewer: Vec::new(),
+        images_dir: PathBuf::new(),
         title: crate::osc::Title::default(),
         shape: crate::osc::Shape::default(),
         retry: None,
@@ -1551,6 +1553,17 @@ fn spawn_run(
     hub: UnixStream,
     markers: Vec<&'static [u8]>,
 ) -> (Pair, mpsc::Receiver<i32>, Receiver<Vec<u8>>) {
+    spawn_run_with_launch(hub, markers, launch())
+}
+
+/// Runs the terminal on a pty from `started`, for a launch carrying the
+/// person's `keys`: the pty pair, the exit code once it quits, and the
+/// watched pty chunks.
+fn spawn_run_with_launch(
+    hub: UnixStream,
+    markers: Vec<&'static [u8]>,
+    started: super::Launch,
+) -> (Pair, mpsc::Receiver<i32>, Receiver<Vec<u8>>) {
     let pair = open();
     let frames = watch(&pair.main, markers);
     let slave = pair
@@ -1564,7 +1577,7 @@ fn spawn_run(
         .spawn(move || {
             let code = super::run(
                 slave,
-                launch(),
+                started,
                 once(hub, hello),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
@@ -1575,6 +1588,42 @@ fn spawn_run(
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     (pair, finished, frames)
+}
+
+#[test]
+fn run_home_names_the_key_maps_bound_key() {
+    let mut keys = serde_json::Map::new();
+    keys.insert("key_map".to_owned(), serde_json::json!("f2"));
+    let mut started = launch();
+    started.keys = crate::KeysSetup { user: keys };
+    let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let (mut pair, finished, frames) =
+        spawn_run_with_launch(hub, vec![b"F2 the key map" as &[u8]], started);
+    let first = watched(&frames, "the first frame");
+    assert!(
+        first.starts_with(START),
+        "the first chunk starts with the start bytes: {first:?}"
+    );
+    assert!(
+        first
+            .windows(b"F2 the key map".len())
+            .any(|window| window == b"F2 the key map"),
+        "home names the rebound key: {first:?}"
+    );
+    // Nothing works: Ctrl+C twice quits at once.
+    pair.main
+        .write_all(&[0x03, 0x03])
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    pair.main
+        .flush()
+        .unwrap_or_else(|err| panic!("flush: {err}"));
+    assert_eq!(
+        finished
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}")),
+        0
+    );
+    drop(held);
 }
 
 #[test]
@@ -1863,6 +1912,8 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         var: Box::new(|_| None),
         copy_command: None,
         open_command: None,
+        viewer: Vec::new(),
+        images_dir: PathBuf::new(),
         title: crate::osc::Title::default(),
         shape: crate::osc::Shape::default(),
         retry: None,
@@ -1978,7 +2029,8 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
             | Input::Resize
             | Input::Files { .. }
             | Input::Models(_)
-            | Input::Image { .. } => panic!("a pause sent something else"),
+            | Input::Image { .. }
+            | Input::Viewed { .. } => panic!("a pause sent something else"),
         }
     }
     generations.sort();

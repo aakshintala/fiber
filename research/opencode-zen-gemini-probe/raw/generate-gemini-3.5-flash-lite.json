@@ -1,0 +1,65 @@
+{
+ "url": "https://opencode.ai/zen/v1/models/gemini-3.5-flash-lite:generateContent",
+ "status": 200,
+ "request_headers": [
+  "authorization",
+  "content-type",
+  "user-agent",
+  "x-goog-api-key",
+  "x-opencode-session"
+ ],
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Reply with the single word: ok"
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 16
+  }
+ },
+ "response_headers": {
+  "Content-Type": "application/json"
+ },
+ "body": {
+  "createTime": "2026-10-09T22:31:18.989082Z",
+  "responseId": "NmvJapqvPMeZotQPn4qQuQw",
+  "modelVersion": "gemini-3.5-flash-lite",
+  "candidates": [
+   {
+    "finishReason": "STOP",
+    "content": {
+     "role": "model",
+     "parts": [
+      {
+       "text": "ok",
+       "thoughtSignature": "AY89a1+qwcGyjaJ5t/EX4mbFNkZPCjb3HRyA9Mmf8sxcG3o4douoEko9O0DEyhv1AzZHpX6+dZuyxq6bIxcr1cLUmFDa+6ZGtWRTf7kWWSkh4LFPe5pW09eX/+4="
+      }
+     ]
+    }
+   }
+  ],
+  "usageMetadata": {
+   "candidatesTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 1
+    }
+   ],
+   "promptTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 7
+    }
+   ],
+   "candidatesTokenCount": 1,
+   "promptTokenCount": 7,
+   "totalTokenCount": 8
+  }
+ }
+}

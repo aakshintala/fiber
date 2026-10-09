@@ -804,6 +804,351 @@ fn a_write_that_typed_less_than_it_was_given_says_so() {
     drop(opened.end);
 }
 
+/// Runs the [`Jobs`] seam's `write` on its own thread and returns the
+/// answer's channel.
+fn seam_writing(
+    registry: &Arc<Registry>,
+    id: &str,
+    input: String,
+) -> mpsc::Receiver<Result<(), contract::jobs::WriteError>> {
+    let registry = Arc::clone(registry);
+    let id = id.to_owned();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = tx.send(seam_write(&registry, &JobId(id), &input));
+    });
+    rx
+}
+
+/// Waits for `cancel` on `clock`, as a terminal whose queue stays full
+/// does: parked inside the clock's wait, past the writer's own clock
+/// check, woken whenever the clock moves. Every caller moves the clock, so
+/// the wait always ends. True when the cancel fired: a hang-guard expiry
+/// reports false, so the write fails instead of resolving to the timeout.
+fn wait_for_cancel(
+    clock: &dyn contract::clock::Clock,
+    cancel: &dyn contract::tool::Cancel,
+) -> bool {
+    struct Nudge(mpsc::Sender<()>);
+    impl contract::clock::Wake for Nudge {
+        fn wake(&self) {
+            let _sent = self.0.send(());
+        }
+    }
+    let (tx, rx) = mpsc::channel();
+    let wake: Arc<dyn contract::clock::Wake> = Arc::new(Nudge(tx));
+    clock.subscribe(Arc::downgrade(&wake));
+    loop {
+        // The writer's own clock check: past it before parking.
+        if cancel.is_cancelled() {
+            return true;
+        }
+        let mut expired = false;
+        clock.wait_until(None, &mut |_| {
+            // Bounded in real time: every path below moves the clock first.
+            if rx.recv_timeout(Duration::from_secs(10)).is_err() {
+                expired = true;
+            }
+        });
+        if expired {
+            return false;
+        }
+    }
+}
+
+fn open_stuck(registry: &Arc<Registry>) -> (String, contract::jobs::Opened, mpsc::Receiver<()>) {
+    let (entry_tx, entry_rx) = mpsc::channel();
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "sleep infinity".into(),
+            stop: Stop(Box::new(|| {})),
+            lines: false,
+            input: Some(contract::jobs::Input(Box::new(move |_, clock, cancel| {
+                let _sent = entry_tx.send(());
+                if wait_for_cancel(clock, cancel) {
+                    Ok(0)
+                } else {
+                    Err(std::io::Error::other(
+                        "hang guard expired without the clock moving",
+                    ))
+                }
+            }))),
+        })
+        .unwrap();
+    (opened.started.job_id.0.clone(), opened, entry_rx)
+}
+
+#[test]
+fn seam_write_times_out_once_the_deadline_passes_and_not_before() {
+    let (_dir, clock, registry) = clocked_world();
+    let (id, opened, entered) = open_stuck(&registry);
+    let rx = seam_writing(&registry, &id, "hi".to_owned());
+    entered
+        .recv_timeout(DEADLINE)
+        .expect("the write reached the terminal");
+    // Parked inside the clock wait, past the writer's own check.
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "the write did not park on the clock"
+    );
+    // The writer processes the pre-deadline advance and parks again
+    // before the test asserts it is still waiting.
+    let mark = clock.advance_marked(Duration::from_millis(999));
+    assert!(
+        clock.await_parked_since(&mark, None, DEADLINE),
+        "the write did not park again after the pre-deadline advance"
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "the write returned before its deadline"
+    );
+    // At the deadline it reports that the terminal never took the input.
+    clock.advance(Duration::from_millis(1));
+    let err = rx
+        .recv_timeout(DEADLINE)
+        .expect("the write returned at its deadline");
+    assert!(
+        matches!(&err, Err(contract::jobs::WriteError::Io(error))
+            if error.kind() == std::io::ErrorKind::TimedOut
+                && error.to_string() == "The job's terminal did not take the input."),
+        "{err:?}"
+    );
+    drop(opened.end);
+}
+
+#[test]
+fn seam_write_behind_another_writer_still_times_out_at_the_deadline() {
+    let (_dir, clock, registry) = clocked_world();
+    // Another writer holds the terminal while the write arrives.
+    let held = Arc::new(Mutex::new(()));
+    let guard = held.lock().unwrap();
+    let waiting = Arc::clone(&held);
+    let (entry_tx, entry_rx) = mpsc::channel();
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "sleep infinity".into(),
+            stop: Stop(Box::new(|| {})),
+            lines: false,
+            input: Some(contract::jobs::Input(Box::new(move |_, clock, cancel| {
+                let _sent = entry_tx.send(());
+                let _other = waiting.lock().unwrap();
+                if wait_for_cancel(clock, cancel) {
+                    Ok(0)
+                } else {
+                    Err(std::io::Error::other(
+                        "hang guard expired without the clock moving",
+                    ))
+                }
+            }))),
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    let rx = seam_writing(&registry, &id, "hi".to_owned());
+    entry_rx
+        .recv_timeout(DEADLINE)
+        .expect("the write reached the terminal");
+    // The other writer releases, long after, on the wall clock: the
+    // deadline on the session clock still bounds the write.
+    drop(guard);
+    // Parked inside the clock wait, past the writer's own check, before
+    // the clock moves past the deadline.
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "the write did not park on the clock"
+    );
+    clock.advance(Duration::from_millis(1001));
+    let err = rx
+        .recv_timeout(DEADLINE)
+        .expect("the write returned at its deadline");
+    assert!(
+        matches!(&err, Err(contract::jobs::WriteError::Io(error))
+            if error.kind() == std::io::ErrorKind::TimedOut),
+        "{err:?}"
+    );
+    drop(opened.end);
+}
+
+#[test]
+fn seam_write_wakes_through_the_deadline_subscription_alone() {
+    let (_dir, clock, registry) = clocked_world();
+    let (entry_tx, entry_rx) = mpsc::channel();
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "sleep infinity".into(),
+            stop: Stop(Box::new(|| {})),
+            lines: false,
+            input: Some(contract::jobs::Input(Box::new(move |_, clock, cancel| {
+                struct Nudge(mpsc::Sender<()>);
+                impl contract::clock::Wake for Nudge {
+                    fn wake(&self) {
+                        let _sent = self.0.send(());
+                    }
+                }
+                let _sent = entry_tx.send(());
+                let (tx, rx) = mpsc::channel();
+                let wake: Arc<dyn contract::clock::Wake> = Arc::new(Nudge(tx));
+                // Only the cancel is subscribed: waking here proves the
+                // deadline forwards to the clock.
+                cancel.subscribe(Arc::downgrade(&wake));
+                loop {
+                    if cancel.is_cancelled() {
+                        break;
+                    }
+                    let mut expired = false;
+                    clock.wait_until(Some(clock.now() + Duration::from_secs(3600)), &mut |_| {
+                        // Bounded in real time: expiry fails the
+                        // test with another error.
+                        if rx.recv_timeout(Duration::from_secs(10)).is_err() {
+                            expired = true;
+                        }
+                    });
+                    if expired {
+                        return Err(std::io::Error::other(
+                            "hang guard expired without the clock moving",
+                        ));
+                    }
+                }
+                Ok(0)
+            }))),
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    let rx = seam_writing(&registry, &id, "hi".to_owned());
+    entry_rx
+        .recv_timeout(DEADLINE)
+        .expect("the write reached the terminal");
+    // Parked inside the clock wait, past the writer's own check, before
+    // the clock moves.
+    let due = clock.origin() + Duration::from_secs(3600);
+    assert!(
+        clock.await_parked(due, DEADLINE),
+        "the write did not park on the clock"
+    );
+    // The only wake is the clock passing the deadline: no second
+    // advance, no cancel call.
+    clock.advance(Duration::from_secs(2));
+    let err = rx
+        .recv_timeout(DEADLINE)
+        .expect("the write returned at its deadline");
+    assert!(
+        matches!(&err, Err(contract::jobs::WriteError::Io(error))
+            if error.kind() == std::io::ErrorKind::TimedOut
+                && error.to_string() == "The job's terminal did not take the input."),
+        "{err:?}"
+    );
+    drop(opened.end);
+}
+
+#[test]
+fn seam_write_reports_a_short_write_as_a_timeout() {
+    let (_dir, _clock, registry) = clocked_world();
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "cat".into(),
+            stop: Stop(Box::new(|| {})),
+            lines: false,
+            input: Some(contract::jobs::Input(Box::new(|_, _, _| Ok(1)))),
+        })
+        .unwrap();
+    assert!(
+        matches!(
+            seam_write(&registry, &opened.started.job_id, "abc"),
+            Err(contract::jobs::WriteError::Io(error))
+                if error.kind() == std::io::ErrorKind::TimedOut
+        ),
+        "a partial write is still a timeout"
+    );
+    drop(opened.end);
+}
+
+#[test]
+fn seam_write_succeeds_when_the_terminal_drains_before_the_deadline() {
+    let (_dir, clock, registry) = clocked_world();
+    let tick = Arc::clone(&clock);
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "cat".into(),
+            stop: Stop(Box::new(|| {})),
+            lines: false,
+            input: Some(contract::jobs::Input(Box::new(move |bytes, _, _| {
+                tick.advance(Duration::from_millis(500));
+                Ok(bytes.len())
+            }))),
+        })
+        .unwrap();
+    seam_write(&registry, &opened.started.job_id, "hi").unwrap();
+    drop(opened.end);
+}
+/// Types through the [`Jobs`] seam, not the inherent `write` that waits:
+/// the driver command is accepted once written.
+fn seam_write(
+    registry: &Arc<Registry>,
+    job_id: &JobId,
+    text: &str,
+) -> Result<(), contract::jobs::WriteError> {
+    <Registry as Jobs>::write(registry.as_ref(), job_id, text)
+}
+
+#[test]
+fn seam_write_types_into_a_running_tty_job_at_once() {
+    let (_dir, _clock, registry) = clocked_world();
+    let (id, opened, typed) = open_tty(&registry, b"");
+    seam_write(&registry, &JobId(id.clone()), "hi\x1b[A").unwrap();
+    assert_eq!(*typed.lock().unwrap(), b"hi\x1b[A");
+    drop(opened.end);
+}
+
+#[test]
+fn seam_write_misses_a_non_tty_an_unknown_or_an_ended_job() {
+    let (_dir, _clock, registry) = clocked_world();
+    let plain = registry.open(opening("ls")).unwrap();
+    assert!(matches!(
+        seam_write(&registry, &plain.started.job_id, "x"),
+        Err(contract::jobs::WriteError::NotTty)
+    ));
+    assert!(matches!(
+        seam_write(&registry, &JobId("j_missing".into()), "x"),
+        Err(contract::jobs::WriteError::NotRunning)
+    ));
+    let (id, tty, typed) = open_tty(&registry, b"");
+    (tty.end.0)(ended_ok(&id));
+    assert!(matches!(
+        seam_write(&registry, &JobId(id), "x"),
+        Err(contract::jobs::WriteError::NotRunning)
+    ));
+    assert!(
+        typed.lock().unwrap().is_empty(),
+        "a write reached an ended job"
+    );
+    drop(plain.end);
+}
+
+#[test]
+fn seam_write_reports_a_failed_terminal_write_as_io() {
+    let (_dir, _clock, registry) = clocked_world();
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "cat".into(),
+            stop: Stop(Box::new(|| {})),
+            lines: false,
+            input: Some(contract::jobs::Input(Box::new(|_, _, _| {
+                Err(std::io::Error::other("the terminal is closed"))
+            }))),
+        })
+        .unwrap();
+    assert!(matches!(
+        seam_write(&registry, &opened.started.job_id, "x"),
+        Err(contract::jobs::WriteError::Io(_))
+    ));
+    drop(opened.end);
+}
+
 #[test]
 fn an_ended_job_drops_its_input() {
     let (_dir, _clock, registry) = clocked_world();

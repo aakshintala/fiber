@@ -20,6 +20,7 @@ use crate::rows::{RowText, Rows};
 use crate::surface::Edges;
 use crate::turn::{Fold, Row, Turn};
 
+mod images;
 mod live;
 mod pins;
 
@@ -252,6 +253,8 @@ pub(crate) struct Pages {
     failed: BTreeSet<usize>,
     /// Dropped pages a pending copy asked for, kept until it runs.
     pins: pins::Pins,
+    /// The session's images, one id per path (`docs/tui.md`, "Images").
+    images: crate::image::Layout,
     width: u16,
     /// The zone the time of day under a prompt bubble shows
     /// (`docs/tui.md`, "Turns").
@@ -283,6 +286,7 @@ impl Pages {
             stale: BTreeSet::new(),
             failed: BTreeSet::new(),
             pins: pins::Pins::default(),
+            images: crate::image::Layout::default(),
             width,
             zone: TimeZone::UTC,
             wrapped: HashMap::new(),
@@ -292,18 +296,22 @@ impl Pages {
     }
 
     /// Empties the conversation; the ledger default and the zone stay.
+    /// The image sizing stays too, while its ids go with the session.
     pub(crate) fn clear(&mut self) {
         let ledgers = self.fold.ledgers;
         let zone = self.zone.clone();
+        let sizing = self.images.sizing;
         *self = Self::new(self.width);
         self.fold.ledgers = ledgers;
         self.open.fold.ledgers = ledgers;
         self.zone = zone;
+        self.images.sizing = sizing;
     }
 
     /// Folds one live line into the open page and the turn's totals,
     /// cutting a page where the index says.
     pub(crate) fn apply(&mut self, envelope: &Envelope) -> Applied {
+        self.note_images(envelope);
         let kind = envelope.kind.as_str();
         let action = envelope.action_id.as_ref();
         // A turn or step cut is decided before its line is folded; the
@@ -484,15 +492,27 @@ impl Pages {
         // (`docs/tui.md`, "History and paging"). The page before the cut
         // is closed and never folds another line, so whether its last
         // piece drew is final here.
-        let width = self.width;
         let before_drew = before.turns.last().map(|card| {
             let mut scratch = Rows::default();
-            card.rows(width, &self.zone, Edges::BOTH, &mut scratch).last
+            card.rows(
+                self.column_width(),
+                &self.zone,
+                Edges::BOTH,
+                &self.images,
+                &mut scratch,
+            )
+            .last
         });
         let next_drew = next.turns.first().map(|card| {
             let mut scratch = Rows::default();
-            card.rows(width, &self.zone, Edges::BOTH, &mut scratch)
-                .first
+            card.rows(
+                self.column_width(),
+                &self.zone,
+                Edges::BOTH,
+                &self.images,
+                &mut scratch,
+            )
+            .first
         });
         let joins = before_drew.unwrap_or(false) && next_drew.unwrap_or(false);
         next.joins_previous = before_drew.unwrap_or(false);
@@ -532,11 +552,16 @@ impl Pages {
         if self.seeds.get(before).is_some_and(|seed| seed.joins_next) {
             return;
         }
-        let width = self.width;
         let drew = self.open.turns.first().map(|card| {
             let mut scratch = Rows::default();
-            card.rows(width, &self.zone, Edges::BOTH, &mut scratch)
-                .first
+            card.rows(
+                self.column_width(),
+                &self.zone,
+                Edges::BOTH,
+                &self.images,
+                &mut scratch,
+            )
+            .first
         });
         if !drew.unwrap_or(false) {
             return;
@@ -559,6 +584,7 @@ impl Pages {
     pub(crate) fn load(&mut self, lines: &[Envelope]) {
         let mut folding: Option<(usize, Part)> = None;
         for line in lines {
+            self.note_images(line);
             let Some(at) = line.seq.and_then(|seq| self.index.page_of(seq)) else {
                 continue;
             };
@@ -1102,7 +1128,13 @@ impl Pages {
                 top: !(at == 0 && part.joins_previous),
                 bottom: !(at + 1 == part.turns.len() && part.joins_next),
             };
-            card.rows(self.width, &self.zone, edges, &mut out);
+            card.rows(
+                self.column_width(),
+                &self.zone,
+                edges,
+                &self.images,
+                &mut out,
+            );
             if first < out.len() {
                 turns.push((after, first..out.len()));
             }

@@ -95,7 +95,13 @@ fn done(cards: &mut Cards) {
 /// The card's rows at `width` with `edges`, and which pieces drew.
 fn draw(turn: &Turn, width: u16, edges: Edges) -> (Vec<Row>, Vec<RowText>, Pieces) {
     let mut out = Rows::default();
-    let pieces = turn.rows(width, &TimeZone::UTC, edges, &mut out);
+    let pieces = turn.rows(
+        width,
+        &TimeZone::UTC,
+        edges,
+        &crate::image::Layout::default(),
+        &mut out,
+    );
     let (rows, texts) = out.into_parts();
     (rows, texts, pieces)
 }

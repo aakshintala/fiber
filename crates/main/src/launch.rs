@@ -18,13 +18,14 @@ fn user_keys(config: &Config) -> serde_json::Map<String, serde_json::Value> {
 }
 
 /// Builds the terminal's launch description from the launch directory,
-/// its identity path, the loaded configuration and the theme `tui.theme`
-/// names.
+/// its identity path, the loaded configuration, the theme `tui.theme`
+/// names, and Fiber home, under which the viewer writes its copies.
 pub(crate) fn launch(
     workspace: PathBuf,
     identity: &Path,
     config: &Config,
     theme: tui::ThemeSetting,
+    home: &Path,
 ) -> tui::Launch {
     // The project key names the identity path: git's shared directory
     // inside a repository, else the launch directory itself.
@@ -101,6 +102,10 @@ pub(crate) fn launch(
             bell: on(config, "tui.attention.bell"),
             title: on(config, "tui.attention.title"),
         },
+        // The viewer's copies live under Fiber home's cache, which is
+        // always safe to delete (`docs/state.md`, `docs/tui.md`,
+        // "Images").
+        images: home.join("cache").join("images"),
         // `main` gives the seam once it holds Fiber home.
         configure: None,
     }

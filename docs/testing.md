@@ -404,8 +404,9 @@ Every wait has a deadline on the wall clock, also in a test that drives a fake
 clock: fake time passes only when the test advances it. On expiry the test
 fails with an assertion naming what it waited for. Calling code that blocks is a wait too, so the test runs
 it on a thread and receives its result with a deadline. A fake's own sleep or poll
-loop is a wait too, with a deadline on the wall clock. nextest's per-test timeout is at least twice the sum of the
-test's own deadlines, so a hang reports which wait expired, not a harness kill.
+loop is a wait too, with a deadline on the wall clock. nextest's per-test timeout is at least twice the test's longest
+single deadline plus its normal run time, so a hang, which fails at the first wait
+that expires, reports that wait, not a harness kill.
 
 A wait that takes several lines has one deadline for the whole wait, never one
 per line, and needs no clock: a scoped thread reads the lines and sends them

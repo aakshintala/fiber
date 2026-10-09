@@ -280,6 +280,7 @@ host.status(text) / host.widget(id, lines)
 host.emit(data)                    -- data for this extension's own TUI extension
 host.log(msg)                      -- write a diagnostic line (see below)
 host.oauth.open(url)               -- open the browser at url, and show the URL to copy
+host.oauth.show(url, code)         -- show the device code to enter at url; opens nothing
 host.oauth.callback(opts)          -- serve one request on localhost; returns its query parameters
 host.oauth.pkce()                  -- returns { verifier, challenge }
 host.oauth.poll(opts)              -- poll a device-code token endpoint; returns the token reply
@@ -342,8 +343,15 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   credential, `credentials/<credential>/<label>` for the provider and label
   the call was made for, and re-reads it. It calls `fn` only if the token still needs
   refreshing, then stores what `fn` returns, so two sessions never refresh
-  one token twice. With nobody attached to answer, `open`, `callback` and
-  `poll` fail with `authentication_failed` before they open, listen or send
+  one token twice. A value already expired is refused before anything is
+  stored, by a refresh or a login. During `fiber login` there is no file to
+  lock yet, so `refresh` holds none: `fn` sees `nil`, and what it returns is
+  kept for `fiber login`, which stores it under the chosen label's lock.
+  `callback` serves only its `path`, when one is given, and answers any
+  other path with 404 while it keeps waiting. `poll` waits through the
+  statuses its `pending` lists, as well as `authorization_pending`. With
+  nobody attached to answer, `open`, `show`, `callback` and `poll` fail with
+  `authentication_failed` before they open, show, listen or send
   anything (`docs/model-routing.md`, "Keys, tokens and OAuth").
 - **`host.sha256`** and **`host.hmac_sha256`** exist so `sign()` never needs
   crypto written in Lua. `host.hmac_sha256` returns raw bytes because a

@@ -129,3 +129,18 @@ fn credential_headers_treats_null_like_absent_and_a_failed_lookup_like_a_clash()
         .unwrap();
     assert!(!credential_headers_are_strings(&value));
 }
+
+#[test]
+fn an_unattended_show_keeps_authentication_failed_when_uncaught() {
+    let error = pending_error(
+        "acme",
+        pending(
+            "host.oauth.show needs a person to log in, and nobody is attached",
+            Boundary::Unattended {
+                call: "show".to_owned(),
+            },
+        ),
+    );
+    assert!(matches!(&error, Error::Unattended { call, .. } if call == "show"));
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed);
+}

@@ -78,6 +78,19 @@ fn labels_show_the_current_keys_grouped() {
 }
 
 #[test]
+fn first_label_names_the_first_bound_key() {
+    let keys = keyset(&[]);
+    assert_eq!(keys.first_label("key_map"), Some("F1".to_owned()));
+    let rebound = keyset(&[("key_map", json!("f2"))]);
+    assert_eq!(rebound.first_label("key_map"), Some("F2".to_owned()));
+    let unbound = keyset(&[("key_map", json!([]))]);
+    assert_eq!(unbound.first_label("key_map"), None);
+    let multi = keyset(&[]);
+    assert_eq!(multi.first_label("move_word"), Some("⌥←".to_owned()));
+    assert_eq!(keys.first_label("no_such_action"), None);
+}
+
+#[test]
 fn variant_names_each_variant_and_none_for_one_variant() {
     assert_eq!(Keyset::variant("move_word", 0), Some("left".to_owned()));
     assert_eq!(Keyset::variant("move_word", 1), Some("right".to_owned()));
