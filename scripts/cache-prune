@@ -28,15 +28,17 @@ usage() {
   gh api "repos/$GITHUB_REPOSITORY/actions/cache/usage" --jq .active_caches_size_in_bytes
 }
 
-# The commits a stored release binary can still serve, one per line.
+# The commits a stored release binary can still serve, one per line. Runs in
+# an `||` list, where errexit is off, so every command checks itself.
 reachable() {
-  local main_head pr base
-  main_head=$(git rev-parse HEAD)
-  git rev-list --first-parent -n 10 "$main_head"
-  for pr in $(gh pr list --state open --json number --jq '.[].number'); do
-    git fetch --quiet --no-tags origin "refs/pull/$pr/head"
-    base=$(git merge-base "$main_head" FETCH_HEAD)
-    git rev-list --first-parent -n 10 "$base"
+  local main_head prs pr base
+  main_head=$(git rev-parse HEAD) || return 1
+  git rev-list --first-parent -n 10 "$main_head" || return 1
+  prs=$(gh pr list --state open --limit 1000 --json number --jq '.[].number') || return 1
+  for pr in $prs; do
+    git fetch --quiet --no-tags origin "refs/pull/$pr/head" || return 1
+    base=$(git merge-base "$main_head" FETCH_HEAD) || return 1
+    git rev-list --first-parent -n 10 "$base" || return 1
   done
 }
 
