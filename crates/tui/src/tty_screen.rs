@@ -65,7 +65,7 @@ impl Parser {
 
     /// Feeds one delta's text: every char is consumed once, either drawn
     /// or dropped as part of a sequence.
-    pub(crate) fn feed<S: Sink>(&mut self, text: &str, sink: &mut S) {
+    fn feed<S: Sink>(&mut self, text: &str, sink: &mut S) {
         for ch in text.chars() {
             self.step(ch, sink);
         }
@@ -519,11 +519,6 @@ impl Output {
     /// Any other job's output: capped lines.
     pub(crate) fn plain() -> Self {
         Self::Lines(Parser::new(), Lines::new())
-    }
-
-    /// Whether this is a `tty` job's grid.
-    pub(crate) fn is_tty(&self) -> bool {
-        matches!(self, Self::Grid(..))
     }
 
     /// Feeds one delta's text.

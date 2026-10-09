@@ -295,6 +295,9 @@ impl PanelState {
     }
 
     /// The jobs started in start order: their ids and descriptions.
+    /// Only tests read the whole fold; the cards read `running_jobs` and
+    /// `running_delegates`.
+    #[cfg(test)]
     pub(crate) fn jobs(&self) -> &[(JobId, String)] {
         &self.jobs
     }
