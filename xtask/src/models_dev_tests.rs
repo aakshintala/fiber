@@ -610,6 +610,30 @@ fn trim_keeps_every_model_and_only_the_fields_read() {
     assert_eq!(trimmed, twice);
 }
 
+#[test]
+fn trim_keeps_only_the_modality_keys_read() {
+    let mut sources = Map::new();
+    for package in &PACKAGES {
+        let mut models = Map::new();
+        models.insert(
+            "m".to_owned(),
+            json!({
+                "modalities": {"input": ["text"], "output": ["text"], "audio_only": true},
+            }),
+        );
+        let mut provider = Map::new();
+        provider.insert("models".to_owned(), Value::Object(models));
+        sources.insert(package.source.to_owned(), Value::Object(provider));
+    }
+    let trimmed = trim(&Value::Object(sources)).unwrap();
+    for package in &PACKAGES {
+        assert_eq!(
+            trimmed[package.source]["models"]["m"]["modalities"],
+            json!({"input": ["text"], "output": ["text"]}),
+        );
+    }
+}
+
 /// Production `curl`'s argv for `url`: asserting every flag keeps `fetch`
 /// honest, so adding, dropping or reordering one fails both cases below.
 fn assert_curl_argv(url: &str) {
