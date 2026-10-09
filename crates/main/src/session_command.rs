@@ -274,6 +274,8 @@ pub(crate) fn run_new(
     // binary, leaves no session line; every server starts with the session too.
     let skills: Arc<dyn contract::skills::Skills> =
         Arc::new(r#loop::SkillReader::new(prompt_inputs.clone(), &workspace));
+    let web_search =
+        crate::builtin::web_search(web_search.as_deref(), extensions.search_backend().as_ref())?;
     let (tools, infos, driver, session_servers) = mcp_servers::session_tools(
         fiber,
         &home,
@@ -283,7 +285,7 @@ pub(crate) fn run_new(
         &jobs,
         &locks,
         mcp.specs,
-        web_search.as_deref(),
+        web_search,
         &delegates,
         skills,
         extensions.tools(),
@@ -340,6 +342,7 @@ pub(crate) fn run_new(
     let door = crate::switch::Door {
         declare: session.declarer(),
         hosted_stands,
+        backend: extensions.search_backend(),
     };
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: nothing was written, so nothing more is.
