@@ -592,6 +592,39 @@ fn offset_and_limit_are_ignored_for_a_pdf() {
 }
 
 #[test]
+fn a_child_that_reports_zero_pages_is_tool_error() {
+    let dir = workspace("fiber-pdf-zeropages");
+    let fiber = fiber_stub(
+        dir.path(),
+        r#"printf '{"file":"%s.pdf","page_count":0,"total":2}\n' "$5""#,
+        IMAGE_BODY,
+    );
+    let ppm = ppm_stub(dir.path(), PPM_OK);
+    let output = run(dir.path(), &fiber, &ppm, json!({"path": "a.pdf"}));
+    assert_eq!(code(&output), Some(ErrorCode::ToolError));
+    assert!(
+        message(&output).contains("page count of zero"),
+        "{}",
+        message(&output)
+    );
+}
+
+#[test]
+fn a_renderer_that_writes_no_file_keeps_the_pdf_with_the_reason() {
+    let dir = workspace("fiber-pdf-nowrite");
+    let fiber = fiber_stub(dir.path(), PDF_TWO_PAGES, IMAGE_BODY);
+    let ppm = ppm_stub(dir.path(), "exit 0");
+    let output = run(dir.path(), &fiber, &ppm, json!({"path": "a.pdf"}));
+    assert_eq!(code(&output), None);
+    assert!(
+        message(&output).contains("wrote no file"),
+        "{}",
+        message(&output)
+    );
+    assert_eq!(pdf_part(&output).map(|part| part.2), Some(None));
+}
+
+#[test]
 fn a_child_that_names_another_file_is_tool_error() {
     let dir = workspace("fiber-pdf-names");
     for (label, body) in [
