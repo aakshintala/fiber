@@ -8,7 +8,8 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
-ab_glyph = "0.2.32"
+skrifa = "0.48"
+tiny-skia = { version = "0.12", default-features = false, features = ["std"] }
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 serde = { version = "1", features = ["derive"] }
