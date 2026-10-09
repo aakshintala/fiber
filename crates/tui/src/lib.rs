@@ -14,6 +14,7 @@ mod attention;
 mod bindings;
 mod bubble;
 mod cells;
+mod changed_files_view;
 mod clipboard;
 mod configure;
 #[cfg(test)]
