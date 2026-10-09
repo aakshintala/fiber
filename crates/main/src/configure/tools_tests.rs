@@ -240,7 +240,7 @@ fn a_name_holding_a_quote_is_left_out() {
     let workspace = dirs.workspace("one");
     write(
         &dirs.home().join("config.json"),
-        r#"{"mcp": {"servers": {"a\"b": {"tools": {"disabled": ["x"]}}}, "extensions": {"a\"b": {"tools": {"disabled": ["x"]}}}}}"#,
+        r#"{"mcp": {"servers": {"a\"b": {"tools": {"disabled": ["x"]}}}}, "extensions": {"a\"b": {"tools": {"disabled": ["x"]}}}}"#,
     );
     let seam = Seam::new(dirs.home());
     let groups: Vec<ToolGroup> = switches(&seam, &workspace)
