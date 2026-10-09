@@ -18,6 +18,8 @@ const WAIT: Duration = Duration::from_secs(3);
 enum Step {
     Data(&'static [u8]),
     Fail(ErrorKind),
+    /// Fails with this kind on every read, never reaching end of file.
+    Forever(ErrorKind),
 }
 
 /// A `Read` replaying `steps` in order, then `Ok(0)`.
@@ -43,6 +45,10 @@ impl Read for Script {
                 Ok(n)
             }
             Some(Step::Fail(kind)) => Err(std::io::Error::new(kind, "scripted")),
+            Some(Step::Forever(kind)) => {
+                self.steps.push_front(Step::Forever(kind));
+                Err(std::io::Error::new(kind, "scripted"))
+            }
         }
     }
 }
@@ -116,7 +122,7 @@ fn retries_an_interrupted_read() {
 fn a_non_interrupted_error_ends_the_thread() {
     let (alive_tx, alive_rx) = mpsc::channel::<()>();
     read_to_eof(
-        Script::of(vec![Step::Fail(ErrorKind::Other)]),
+        Script::of(vec![Step::Forever(ErrorKind::Other)]),
         move |_bytes: &[u8]| {
             alive_tx.send(()).unwrap_or(());
         },
