@@ -196,6 +196,9 @@ pub(crate) enum Target {
     Login,
     /// A handoff's note.
     Note(usize),
+    /// An image's line: clicking it, or Enter on it while focused,
+    /// opens it in the system viewer (`docs/tui.md`, "Images").
+    Image(u32),
     /// The jobs a resumed process marked orphaned.
     Orphans(usize),
     /// A reply's `block`th code block's `copy` cells: they copy its code.

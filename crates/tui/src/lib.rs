@@ -28,6 +28,7 @@ mod focus;
 mod format;
 mod highlight;
 mod home;
+mod image;
 mod input;
 mod jigs;
 mod keymap;

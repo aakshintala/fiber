@@ -510,8 +510,16 @@ impl Group {
     }
 
     /// Its lines. A finished group with no call is its thinking, one line
-    /// a block; otherwise a summary line, and the ledger when open.
-    pub(crate) fn rows(&self, running: bool, out: &mut Rows) {
+    /// a block; otherwise a summary line, and the ledger when open. A
+    /// call's images draw as their one line each under its ledger row
+    /// (`docs/tui.md`, "Images").
+    pub(crate) fn rows(
+        &self,
+        running: bool,
+        width: u16,
+        layout: &crate::image::Layout,
+        out: &mut Rows,
+    ) {
         if !running && !self.has_ledger() {
             for thought in self.thoughts() {
                 thought_rows(thought, "", out);
@@ -579,13 +587,13 @@ impl Group {
         match self.key.as_deref().map(|key| Target::Group(target_id(key))) {
             Some(target) => {
                 if out.open_scope(target, draws) {
-                    self.ledger(out);
+                    self.ledger(width, layout, out);
                 }
                 out.end_scope();
             }
             None => {
                 if draws {
-                    self.ledger(out);
+                    self.ledger(width, layout, out);
                 }
             }
         }
@@ -593,7 +601,8 @@ impl Group {
 
     /// One row per call, split by step: the step's number in the gutter on
     /// its first row, the model calls that failed first, then its thinking.
-    fn ledger(&self, out: &mut Rows) {
+    /// Each call's images draw under its row, before its opened detail.
+    fn ledger(&self, width: u16, layout: &crate::image::Layout, out: &mut Rows) {
         for section in &self.sections {
             let mut gutter = format!("{:>3} ", section.step);
             for (code, attempt) in &section.failed {
@@ -647,6 +656,7 @@ impl Group {
                     .style(Style::default().add_modifier(Modifier::BOLD))
                 };
                 out.push((line, Some(Target::Call(call.id))));
+                crate::turn::images::call_rows(&call.images, width, layout, out);
                 if out.open_scope(Target::Call(call.id), call.open) {
                     if call.changes.is_empty() {
                         opened(&call.detail, GAP, out);
