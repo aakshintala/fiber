@@ -151,13 +151,15 @@ fn a_watch_folds_then_streams_then_returns_at_fiber_exited() {
     // latest a thread scheduled behind the watch could start.
     let (attached_tx, attached_rx) = mpsc::channel::<()>();
     // Live lines go out only once the watch subscribed: its attach writes
-    // the `clients` line this watcher waits for. The lines go out either
-    // way, so a missed attach fails the test instead of hanging the watch.
+    // the `clients` line this watcher waits for. The `clients` line is
+    // ephemeral, so the watcher is registered here, before the watch can
+    // attach, rather than in the thread. The lines go out either way, so
+    // a missed attach fails the test instead of hanging the watch.
+    let mut watcher = log.watch();
     let live = thread::spawn(move || {
         attached_rx
             .recv_timeout(ATTACH_DEADLINE)
             .expect("the watch attached");
-        let mut watcher = log.watch();
         let saw_clients = loop {
             match watcher.recv_timeout(ATTACH_DEADLINE) {
                 Some(Ok(Some(line))) if line.kind == "clients" => break true,
