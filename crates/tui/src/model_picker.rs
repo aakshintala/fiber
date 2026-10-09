@@ -1,17 +1,43 @@
 //! The model picker's state (`docs/tui.md`, "Swapped views"): the
-//! installed models, the scope they show under, and the read the loop
-//! owes. Each open starts fresh; choosing and saving is Part 2.
+//! installed models, the scope they show under, the choice it sends and
+//! the writes it waits on, and the read the loop owes. Each open starts
+//! fresh; choosing sends one `model` command, and attached choices write
+//! only when the session accepts it.
+
+use std::collections::HashMap;
+
+use serde_json::{Value, json};
 
 use crate::catalogue::{Catalogue, ModelEntry, Refresh};
 use crate::keys::Key;
 use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
 
-/// What the picker was opened for. Choosing and scoping are later tasks;
-/// only choosing exists yet.
+/// What the picker was opened for: choosing a model and its level, or
+/// choosing a level for the current model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
     /// Choosing a model, and its thinking level.
     Choose,
+}
+
+/// One choice: the model and level under the cursor, whether the level
+/// was picked out, whether the global `model` is saved, and whether the
+/// choice holds for this session only, saving nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Choice {
+    /// The chosen model's reference, byte for byte.
+    pub(crate) reference: String,
+    /// The chosen level, `None` for a model with no levels.
+    pub(crate) level: Option<String>,
+    /// Whether the level was picked out: a chip click, or Enter or `s`
+    /// on a touched row. Only then is the level saved.
+    pub(crate) level_chosen: bool,
+    /// Whether the global `model` is saved: false only for a level
+    /// picked for the current model.
+    pub(crate) save_model: bool,
+    /// Whether the choice holds for this session only: then nothing is
+    /// saved.
+    pub(crate) session_only: bool,
 }
 
 /// One open picker: the selection, each row's chip, and the scope toggle.
@@ -65,6 +91,12 @@ pub(crate) struct ModelPicker {
     /// The read the loop owes: `Stale` each time the picker opens,
     /// `Every` from its refresh button.
     pub(crate) want: Option<Refresh>,
+    /// The writes each sent `model` command waits on, by its id: what
+    /// the session's acceptance writes, in order. An answer touches only
+    /// its own entry.
+    pub(crate) awaiting: HashMap<String, Vec<(String, String)>>,
+    /// The session-only choice on home: the next `start` carries it.
+    pub(crate) start_model: Option<Choice>,
     /// The open picker, if one is open.
     pub(crate) open: Option<Open>,
 }
@@ -331,42 +363,92 @@ impl ModelPicker {
         }
     }
 
+    /// The open picker's choice at the selection: the row's reference at
+    /// its chip, `level_chosen` exactly when the row was touched. `None`
+    /// while closed, or with no scoped row to choose.
+    pub(crate) fn choice(&self, session_only: bool) -> Option<Choice> {
+        let open = self.open.as_ref()?;
+        let (rows, _) = visible(&self.catalogue.models, &self.scoped, open.show_all);
+        if rows.is_empty() {
+            return None;
+        }
+        let entry = self.catalogue.models.get(open.selected)?;
+        let level = open
+            .chips
+            .get(open.selected)
+            .copied()
+            .flatten()
+            .and_then(|chip| entry.levels.get(chip).cloned());
+        let level_chosen = open.touched.get(open.selected).copied().unwrap_or(false);
+        Some(Choice {
+            reference: entry.reference.clone(),
+            level,
+            level_chosen,
+            save_model: true,
+            session_only,
+        })
+    }
+
     /// Clicks `cell` of `row`: the refresh button refreshes every list,
-    /// the scope line toggles it, a name or roles cell selects its row,
-    /// and a chip selects its row at that level, marking it touched.
-    /// Choosing is the next task's; here a click only selects.
-    pub(crate) fn click_cell(&mut self, row: usize, cell: usize) {
-        let Some((layout, _)) = self.layout() else {
-            return;
-        };
+    /// the scope line toggles it, a roles cell selects its row, a name
+    /// cell chooses its row at its chip, and a chip chooses its row at
+    /// that level. Choosing from a click always saves: `s` is the only
+    /// path to a session-only choice.
+    pub(crate) fn click_cell(&mut self, row: usize, cell: usize) -> Option<Choice> {
+        let (layout, _) = self.layout()?;
         match layout.get(row) {
-            Some(RowAt::Buttons) => match cell {
-                0 => self.refresh(),
-                1 => self.toggle_show_all(),
-                _ => {}
-            },
-            Some(RowAt::Heading(_)) | None => {}
+            Some(RowAt::Buttons) => {
+                match cell {
+                    0 => self.refresh(),
+                    1 => self.toggle_show_all(),
+                    _ => {}
+                }
+                None
+            }
+            Some(RowAt::Heading(_)) | None => None,
             Some(RowAt::Model(index)) => {
                 let index = *index;
-                let Some(entry) = self.catalogue.models.get(index) else {
-                    return;
-                };
+                let entry = self.catalogue.models.get(index)?;
                 // The chips start past the name, and past the roles when
-                // the row shows any; earlier cells only select the row.
+                // the row shows any; a click on the name chooses the row
+                // at its chip, while the roles cell only selects.
                 let chips_at = if entry.roles.is_empty() { 1 } else { 2 };
                 let levels = entry.levels.len();
-                if let Some(open) = self.open.as_mut() {
-                    open.selected = index;
-                    if let Some(level) = cell.checked_sub(chips_at)
-                        && level < levels
-                    {
-                        if let Some(chip) = open.chips.get_mut(index) {
-                            *chip = Some(level);
-                        }
-                        if let Some(touched) = open.touched.get_mut(index) {
-                            *touched = true;
-                        }
+                let open = self.open.as_mut()?;
+                open.selected = index;
+                if cell == 0 {
+                    let level = open
+                        .chips
+                        .get(index)
+                        .copied()
+                        .flatten()
+                        .and_then(|chip| entry.levels.get(chip).cloned());
+                    let level_chosen = open.touched.get(index).copied().unwrap_or(false);
+                    Some(Choice {
+                        reference: entry.reference.clone(),
+                        level,
+                        level_chosen,
+                        save_model: true,
+                        session_only: false,
+                    })
+                } else if let Some(level) = cell.checked_sub(chips_at)
+                    && level < levels
+                {
+                    if let Some(chip) = open.chips.get_mut(index) {
+                        *chip = Some(level);
                     }
+                    if let Some(touched) = open.touched.get_mut(index) {
+                        *touched = true;
+                    }
+                    Some(Choice {
+                        reference: entry.reference.clone(),
+                        level: entry.levels.get(level).cloned(),
+                        level_chosen: true,
+                        save_model: true,
+                        session_only: false,
+                    })
+                } else {
+                    None
                 }
             }
         }
@@ -514,6 +596,49 @@ impl ModelPicker {
         }
         Vec::new()
     }
+}
+
+/// What a choice writes through the configuration seam, in order: the
+/// global `model` when the model is saved, then the model's thinking
+/// level when one was picked out. A session-only choice saves nothing.
+/// A key's reference is the entry's `reference` byte for byte.
+pub(crate) fn saves(choice: &Choice) -> Vec<(String, String)> {
+    if choice.session_only {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if choice.save_model {
+        out.push(("model".to_owned(), choice.reference.clone()));
+    }
+    if choice.level_chosen
+        && let Some(level) = &choice.level
+    {
+        out.push((
+            format!("models.\"{}\".thinking", choice.reference),
+            level.clone(),
+        ));
+    }
+    out
+}
+
+/// A choice as the `model` command's args: `thinking` rides along
+/// exactly when the choice names a level.
+pub(crate) fn command_args(choice: &Choice) -> Value {
+    match &choice.level {
+        Some(level) => json!({"model": choice.reference, "thinking": level}),
+        None => json!({"model": choice.reference}),
+    }
+}
+
+/// A session-only choice on home as the next `start` carries it: the
+/// model exactly, and the level as a per-run override, outranking every
+/// file. No `:level` suffix: the session tries the exact string first.
+pub(crate) fn start_args(choice: &Choice) -> (String, Option<String>) {
+    let override_text = choice
+        .level
+        .as_ref()
+        .map(|level| format!("models.\"{}\".thinking={level}", choice.reference));
+    (choice.reference.clone(), override_text)
 }
 
 /// The rows in scope, by catalogue index, and the scope line: with no

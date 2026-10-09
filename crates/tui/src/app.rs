@@ -760,7 +760,10 @@ impl App {
                     .and_then(Value::as_str)
                     .map(|id| SessionId(id.to_owned()));
                 match (self.pending.remove(&id), session) {
-                    (Some((Kind::Start, draft)), Some(session)) => self.started(session, draft),
+                    (Some((Kind::Start, draft)), Some(session)) => {
+                        self.model_picker.start_model = None;
+                        self.started(session, draft)
+                    }
                     _ => Vec::new(),
                 }
             }
@@ -801,6 +804,9 @@ impl App {
     /// back in the box when the box is empty. A rejected `cancel`
     /// shows nothing; after a rejected `start` the next Enter tries again.
     fn rejected(&mut self, id: &str, message: String) {
+        // A refused `model` command drops the writes its acceptance
+        // would have made.
+        self.model_picker_rejected(id);
         match self.pending.get(id) {
             None => {}
             // Another client may have dropped or amended the row first.
@@ -848,6 +854,18 @@ impl App {
             self.request_arrived(envelope);
         }
         let mut send = self.reply_ack(envelope);
+        // A `model` command's acceptance writes what it waited on,
+        // whatever session answered: choosing may span a switch.
+        if envelope.kind == "command_accepted"
+            && let Some(accepted) = read!(envelope, CommandAccepted)
+            && self
+                .model_picker
+                .awaiting
+                .contains_key(&accepted.command_id.0)
+        {
+            let id = accepted.command_id.0.clone();
+            self.model_picker_accepted(&id);
+        }
         if self.session() != Some(&envelope.session_id) {
             // A resent command for another session settles its pending
             // entry when its answer arrives, as on screen

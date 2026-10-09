@@ -641,7 +641,9 @@ impl App {
             }
             (Phase::Pending { .. }, None) => return Effect::None,
             (Phase::Starting, None) => {
-                let args = self.start_args();
+                let mut args = self.start_args();
+                // A session-only choice on home rides this `start`.
+                self.with_start_model(&mut args);
                 let line = json!({"id": id, "command": "start", "args": args});
                 (Kind::Start, line)
             }

@@ -97,6 +97,11 @@ impl App {
         self.config_views.seam = seam;
     }
 
+    /// The seam the views and the model picker write through, if any.
+    pub(in crate::app) fn configure_seam(&self) -> Option<Arc<dyn Configure>> {
+        self.config_views.seam.clone()
+    }
+
     /// Opens `view`, closing any open, its unsaved edit dropped. With no
     /// seam the view says it is not available.
     pub(crate) fn open_config_view(&mut self, view: ConfigView) -> Effect {

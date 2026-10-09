@@ -1,7 +1,7 @@
 //! Tests for the model picker's state: the rows in scope, the preselected
 //! chips, and the movement clamps. The app's keys are tested beside them.
 
-use super::{Mode, ModelPicker, preselect, visible};
+use super::{Choice, Mode, ModelPicker, command_args, preselect, saves, start_args, visible};
 use crate::catalogue::{Catalogue, ModelEntry};
 use crate::keys::Key;
 
@@ -457,7 +457,7 @@ fn the_header_names_the_rebuild_size_only_with_a_usage() {
 }
 
 #[test]
-fn clicks_select_rows_chips_and_buttons() {
+fn frame_row_clicks_select_without_choosing() {
     let mut models = catalogue();
     models[0].roles = vec!["review".to_owned()];
     let mut picker = ModelPicker {
@@ -475,47 +475,18 @@ fn clicks_select_rows_chips_and_buttons() {
     // A heading selects nothing.
     picker.select_frame_row(1);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
-    picker.click_cell(3, 0);
-    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     // The buttons row selects nothing either.
     picker.select_frame_row(0);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
-    // A name cell selects its row.
-    picker.click_cell(4, 0);
+    // A model row is a selection stop.
+    picker.select_frame_row(4);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(4));
-    // A roles cell selects its row without touching its chip.
-    picker.click_cell(2, 1);
-    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
-    assert!(
-        picker
-            .open
-            .as_ref()
-            .is_some_and(|open| open.touched.iter().all(|touched| !touched))
-    );
-    // A chip selects its row at that level, marking it touched:
-    // `acme/m1` declares `low` then `high`, past its roles cell.
-    picker.click_cell(2, 3);
-    let open = picker.open.as_ref().unwrap();
-    assert_eq!(open.selected, 0);
-    assert_eq!(open.chips.first().copied().flatten(), Some(1));
-    assert!(open.touched.first().copied().unwrap_or(false));
-    // The first cell after the last chip only selects the row.
-    picker.click_cell(2, 4);
-    let open = picker.open.as_ref().unwrap();
-    assert_eq!(open.selected, 0);
-    assert_eq!(open.chips.first().copied().flatten(), Some(1));
     // The refresh button asks `Every`; the scope line toggles.
-    picker.click_cell(0, 0);
+    let _ = picker.click_cell(0, 0);
     assert_eq!(picker.want, Some(crate::catalogue::Refresh::Every));
     assert!(picker.open.as_ref().is_some_and(|open| !open.show_all));
-    picker.click_cell(0, 1);
+    let _ = picker.click_cell(0, 1);
     assert!(picker.open.as_ref().is_some_and(|open| open.show_all));
-    // A row past the frame selects nothing.
-    picker.click_cell(40, 0);
-    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
-    // A model row is a selection stop.
-    picker.select_frame_row(5);
-    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(2));
 }
 
 #[test]
@@ -548,4 +519,188 @@ fn each_chip_target_advances_one_cell() {
 
     let frame = picker.frame(24, None).unwrap();
     assert_eq!(frame.rows[2][2].1, Some(crate::swapped::Spot::Cell(2, 2)));
+}
+
+/// A choice of `reference` at `level`, picked out or not.
+fn choice(reference: &str, level: Option<&str>, level_chosen: bool) -> Choice {
+    Choice {
+        reference: reference.to_owned(),
+        level: level.map(str::to_owned),
+        level_chosen,
+        save_model: true,
+        session_only: false,
+    }
+}
+
+#[test]
+fn saves_are_model_then_thinking_when_a_level_was_chosen() {
+    assert_eq!(
+        saves(&choice("acme/m1", Some("high"), true)),
+        [
+            ("model".to_owned(), "acme/m1".to_owned()),
+            ("models.\"acme/m1\".thinking".to_owned(), "high".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn an_untouched_chip_saves_model_only() {
+    // The chip's level rides the command, but without `level_chosen`
+    // only the model is saved.
+    assert_eq!(
+        saves(&choice("acme/m1", Some("high"), false)),
+        [("model".to_owned(), "acme/m1".to_owned())]
+    );
+}
+
+#[test]
+fn a_chip_moved_away_and_back_still_saves_the_level() {
+    // Touching marks the row: moving back onto the preselected level
+    // keeps `level_chosen`, so the level is saved.
+    let mut picker = open_over(catalogue());
+    picker.move_chip(-1);
+    picker.move_chip(1);
+    let choice = picker.choice(false).expect("a choice");
+    assert!(choice.level_chosen);
+    assert_eq!(choice.level.as_deref(), Some("high"));
+    assert_eq!(saves(&choice).len(), 2);
+}
+
+#[test]
+fn a_model_without_levels_saves_model_only() {
+    assert_eq!(
+        saves(&choice("zeta/z1", None, false)),
+        [("model".to_owned(), "zeta/z1".to_owned())]
+    );
+    assert_eq!(
+        saves(&choice("zeta/z1", None, true)),
+        [("model".to_owned(), "zeta/z1".to_owned())]
+    );
+}
+
+#[test]
+fn save_model_false_saves_only_the_level() {
+    let choice = Choice {
+        save_model: false,
+        ..choice("acme/m1", Some("high"), true)
+    };
+    assert_eq!(
+        saves(&choice),
+        [("models.\"acme/m1\".thinking".to_owned(), "high".to_owned())]
+    );
+}
+
+#[test]
+fn session_only_saves_nothing() {
+    let choice = Choice {
+        session_only: true,
+        ..choice("acme/m1", Some("high"), true)
+    };
+    assert!(saves(&choice).is_empty());
+}
+
+#[test]
+fn command_args_carry_thinking_exactly_when_there_is_a_level() {
+    assert_eq!(
+        command_args(&choice("acme/m1", Some("high"), false)),
+        serde_json::json!({"model": "acme/m1", "thinking": "high"})
+    );
+    assert_eq!(
+        command_args(&choice("zeta/z1", None, false)),
+        serde_json::json!({"model": "zeta/z1"})
+    );
+}
+
+#[test]
+fn start_args_carry_the_model_exactly_with_a_level_override() {
+    // No `:level` suffix: the session tries the exact string first, and
+    // the per-run override outranks every file.
+    assert_eq!(
+        start_args(&choice("acme/m1", Some("high"), true)),
+        (
+            "acme/m1".to_owned(),
+            Some("models.\"acme/m1\".thinking=high".to_owned())
+        )
+    );
+    assert_eq!(
+        start_args(&choice("zeta/z1", None, false)),
+        ("zeta/z1".to_owned(), None)
+    );
+}
+
+#[test]
+fn choice_is_none_while_closed_or_with_no_scoped_row() {
+    let closed = ModelPicker {
+        catalogue: Catalogue {
+            models: catalogue(),
+            notices: Vec::new(),
+        },
+        ..ModelPicker::default()
+    };
+    assert!(closed.choice(false).is_none());
+    let mut picker = ModelPicker {
+        catalogue: Catalogue {
+            models: catalogue(),
+            notices: Vec::new(),
+        },
+        scoped: vec!["gone/x".to_owned()],
+        ..ModelPicker::default()
+    };
+    picker.open(Mode::Choose, None);
+    assert!(picker.choice(false).is_none());
+}
+
+#[test]
+fn clicks_choose_at_the_row_and_chip() {
+    let mut models = catalogue();
+    models[0].roles = vec!["review".to_owned()];
+    let mut picker = ModelPicker {
+        catalogue: Catalogue {
+            models,
+            notices: Vec::new(),
+        },
+        scoped: vec!["acme/m1".to_owned(), "zeta/z3".to_owned()],
+        ..ModelPicker::default()
+    };
+    picker.open(Mode::Choose, None);
+    // Frame rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1` with
+    // its roles cell, 3 the `zeta` heading, 4 `zeta/z3`.
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    // A heading chooses nothing.
+    assert_eq!(picker.click_cell(1, 0), None);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    // The buttons choose nothing either.
+    assert_eq!(picker.click_cell(0, 0), None);
+    // A name cell chooses its row at its chip: untouched, so only the
+    // model is saved.
+    let choice = picker.click_cell(4, 0).expect("a choice");
+    assert_eq!(choice.reference, "zeta/z3");
+    assert!(!choice.level_chosen);
+    assert!(choice.save_model);
+    assert!(!choice.session_only);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(4));
+    // A roles cell selects its row without choosing.
+    assert_eq!(picker.click_cell(2, 1), None);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    assert!(
+        picker
+            .open
+            .as_ref()
+            .is_some_and(|open| open.touched.iter().all(|touched| !touched))
+    );
+    // A chip chooses its row at that level: `acme/m1` declares `low`
+    // then `high`, past its roles cell.
+    let choice = picker.click_cell(2, 3).expect("a choice");
+    assert_eq!(choice.reference, "acme/m1");
+    assert_eq!(choice.level.as_deref(), Some("high"));
+    assert!(choice.level_chosen);
+    let open = picker.open.as_ref().unwrap();
+    assert_eq!(open.selected, 0);
+    assert_eq!(open.chips.first().copied().flatten(), Some(1));
+    assert!(open.touched.first().copied().unwrap_or(false));
+    // The first cell past the last chip only selects the row.
+    assert_eq!(picker.click_cell(2, 4), None);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    // A row past the frame chooses nothing.
+    assert_eq!(picker.click_cell(40, 0), None);
 }
