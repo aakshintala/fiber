@@ -1346,3 +1346,180 @@ fn on_rewound_ignores_anything_but_a_rewound_last_line() {
         "only a rewound last line starts a session"
     );
 }
+
+#[test]
+fn a_second_hub_lists_a_session_the_first_hub_already_followed() {
+    use std::collections::HashSet;
+    use std::io::Write as _;
+    use std::os::unix::net::UnixListener;
+    use std::sync::Condvar;
+
+    /// A session socket that answers `subscribe` like `Gate`: the first
+    /// command id is accepted, a repeated id is rejected
+    /// `duplicate_command`, and only accepted connections get status.
+    struct Shared {
+        ids: HashSet<String>,
+        received: Vec<String>,
+        writers: Vec<UnixStream>,
+        subscribed: usize,
+    }
+
+    const WAIT: Duration = Duration::from_secs(5);
+
+    let temp = Temp::new();
+    let id = temp.session(1, "p", "turn_completed");
+    let socket = temp.dir.join("run").join(&id);
+    let shared: Arc<(Mutex<Shared>, Condvar)> = Arc::new((
+        Mutex::new(Shared {
+            ids: HashSet::new(),
+            received: Vec::new(),
+            writers: Vec::new(),
+            subscribed: 0,
+        }),
+        Condvar::new(),
+    ));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let serving = Arc::clone(&shared);
+    // Exactly the two follows below connect: each blocking receive runs
+    // on a thread, and the test awaits their results with a deadline
+    // (`await_subscribed`, `await_received`), so a missing follow fails
+    // there instead of blocking the test.
+    thread::spawn(move || {
+        for _ in 0..2 {
+            let Ok((stream, _)) = listener.accept() else {
+                return;
+            };
+            let serving = Arc::clone(&serving);
+            thread::spawn(move || {
+                let Ok(writer) = stream.try_clone() else {
+                    return;
+                };
+                let mut read = BufReader::new(stream);
+                let mut buf = Vec::new();
+                // A probe that sends nothing closes; only a subscriber is held.
+                match read.read_until(b'\n', &mut buf) {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {}
+                }
+                let text = String::from_utf8_lossy(&buf).into_owned();
+                let Some(got) = serde_json::from_str::<Value>(&text)
+                    .ok()
+                    .and_then(|line| line.get("id").cloned())
+                    .and_then(|got| got.as_str().map(str::to_owned))
+                else {
+                    return;
+                };
+                let mut writer = writer;
+                let duplicate = {
+                    let (state, grew) = &*serving;
+                    let mut state = lock(state);
+                    state.received.push(got.clone());
+                    let duplicate = !state.ids.insert(got.clone());
+                    let ack = if duplicate {
+                        json!({
+                            "kind": "command_rejected", "ts": 1, "schema_version": 1,
+                            "payload": {
+                                "code": "duplicate_command",
+                                "command_id": got,
+                                "message": "A command with this id was already accepted.",
+                            },
+                        })
+                    } else {
+                        state.writers.push(writer.try_clone().unwrap());
+                        state.subscribed += 1;
+                        json!({
+                            "kind": "command_accepted", "ts": 1, "schema_version": 1,
+                            "payload": { "command_id": got },
+                        })
+                    };
+                    let mut bytes = serde_json::to_vec(&ack).unwrap();
+                    bytes.push(b'\n');
+                    writer
+                        .write_all(&bytes)
+                        .and_then(|()| writer.flush())
+                        .unwrap_or(());
+                    grew.notify_all();
+                    duplicate
+                };
+                let _ = duplicate;
+                // Held open, as a live session holds its summary connection:
+                // the feed sees no close either way.
+                loop {
+                    buf.clear();
+                    match read.read_until(b'\n', &mut buf) {
+                        Ok(0) | Err(_) => return,
+                        Ok(_) => {}
+                    }
+                }
+            });
+        }
+    });
+    let say = |line: &str| {
+        let (state, _) = &*shared;
+        let state = lock(state);
+        for conn in &state.writers {
+            let mut conn = conn;
+            conn.write_all(line.as_bytes()).unwrap_or(());
+        }
+    };
+    let await_subscribed = |count: usize| {
+        let (state, grew) = &*shared;
+        let (state, _) = grew
+            .wait_timeout_while(lock(state), WAIT, |state| state.subscribed < count)
+            .unwrap();
+        assert!(
+            state.subscribed >= count,
+            "the session accepted {count} subscribes"
+        );
+    };
+    let await_received = |count: usize| {
+        let (state, grew) = &*shared;
+        let (state, _) = grew
+            .wait_timeout_while(lock(state), WAIT, |state| state.received.len() < count)
+            .unwrap();
+        assert!(
+            state.received.len() >= count,
+            "the session received {count} subscribes"
+        );
+    };
+
+    let (first, first_clock) = new_feed(&temp);
+    let mut first_sub = Sub::new(&first);
+    start(&first, &first_clock);
+    await_subscribed(1);
+    let line = status_line(&id, &status("n", "/w", "idle", None));
+    say(&line);
+    assert_eq!(first_sub.raw("the session's status"), line);
+    assert_eq!(entry_of(&first, &id), Some("running"));
+
+    let (second, second_clock) = new_feed(&temp);
+    let mut second_sub = Sub::new(&second);
+    start(&second, &second_clock);
+    await_received(2);
+    let ids = lock(&shared.0).received.clone();
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], ids[1], "two follows use different command ids");
+    let again = status_line(&id, &status("n2", "/w", "idle", None));
+    say(&again);
+    {
+        let watched = Arc::clone(&second);
+        let named = id.clone();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            while entry_of(&watched, &named) != Some("running") {
+                thread::yield_now();
+            }
+            tx.send(()).unwrap_or(());
+        });
+        assert!(
+            rx.recv_timeout(WAIT).is_ok(),
+            "the second hub lists the session"
+        );
+    }
+    assert_eq!(
+        second_sub.raw("the session's status on the second hub"),
+        again
+    );
+    stop_within(&second);
+    stop_within(&first);
+}
