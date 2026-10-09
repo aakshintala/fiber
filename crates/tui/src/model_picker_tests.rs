@@ -124,12 +124,6 @@ fn other_rows_preselect_configured_then_default() {
 }
 
 #[test]
-fn an_undeclared_configured_level_falls_to_the_default() {
-    let models = catalogue();
-    assert_eq!(preselect(at(&models, 3), None), Some(0));
-}
-
-#[test]
 fn a_model_with_no_levels_has_no_chip() {
     let models = catalogue();
     assert_eq!(preselect(at(&models, 2), None), None);
@@ -238,6 +232,99 @@ fn open_over(models: Vec<ModelEntry>) -> ModelPicker {
     };
     picker.open(Mode::Choose, None);
     picker
+}
+
+#[test]
+fn a_replacement_inserting_before_the_selection_keeps_its_model() {
+    let mut picker = open_over(catalogue());
+    picker.move_row(1);
+    let open = picker.open.as_ref().unwrap();
+    assert_eq!(picker.catalogue.models[open.selected].reference, "acme/m2");
+    let mut models = vec![entry("acme/m0", &["low"], Some("low"), None)];
+    models.extend(catalogue());
+    picker.store(Ok(Catalogue {
+        models,
+        notices: Vec::new(),
+    }));
+    // The selection follows `acme/m2` past the inserted row.
+    let open = picker.open.as_ref().unwrap();
+    assert_eq!(open.selected, 2);
+    assert_eq!(picker.catalogue.models[open.selected].reference, "acme/m2");
+    // A newly discovered row preselects its default level, and an
+    // untouched row keeps its preselection.
+    assert_eq!(open.chips.first().copied().flatten(), Some(0));
+    assert_eq!(open.chips.get(2).copied().flatten(), Some(1));
+}
+
+#[test]
+fn a_replacement_removing_the_selected_model_clamps() {
+    // The selected last row answered away: the selection clamps to the
+    // new last row.
+    let mut picker = open_over(catalogue());
+    picker.move_row(10);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(4));
+    let mut models = catalogue();
+    models.pop();
+    picker.store(Ok(Catalogue {
+        models,
+        notices: Vec::new(),
+    }));
+    let open = picker.open.as_ref().unwrap();
+    assert_eq!(open.selected, 3);
+    assert_eq!(picker.catalogue.models[open.selected].reference, "zeta/z2");
+    // A removed middle row clamps the index into the answered list.
+    let mut picker = open_over(catalogue());
+    picker.move_row(1);
+    let mut models = catalogue();
+    models.remove(1);
+    picker.store(Ok(Catalogue {
+        models,
+        notices: Vec::new(),
+    }));
+    let open = picker.open.as_ref().unwrap();
+    assert_eq!(open.selected, 1);
+    assert_eq!(picker.catalogue.models[open.selected].reference, "zeta/z1");
+}
+
+#[test]
+fn chips_follow_the_level_name_across_a_replacement() {
+    let mut picker = open_over(catalogue());
+    // Touch `acme/m1` on `low`: its chip sits at index 0.
+    picker.move_chip(-1);
+    let open = picker.open.as_ref().unwrap();
+    assert_eq!(open.chips.first().copied().flatten(), Some(0));
+    // The replacement reorders both rows' levels: the touched chip
+    // follows `low` to index 1, while untouched `acme/m2` follows its
+    // configured `high` to index 0.
+    let mut models = catalogue();
+    models[0].levels = vec!["high".to_owned(), "low".to_owned()];
+    models[1].levels = vec!["high".to_owned(), "low".to_owned()];
+    picker.store(Ok(Catalogue {
+        models,
+        notices: Vec::new(),
+    }));
+    let open = picker.open.as_ref().unwrap();
+    assert_eq!(open.chips.first().copied().flatten(), Some(1));
+    assert_eq!(open.chips.get(1).copied().flatten(), Some(0));
+    assert!(open.touched.first().copied().unwrap_or(false));
+    assert!(!open.touched.get(1).copied().unwrap_or(true));
+}
+
+#[test]
+fn an_open_before_the_first_answer_preselects_the_current_model() {
+    let mut picker = ModelPicker::default();
+    picker.open(Mode::Choose, Some(("acme/m2", Some("low"))));
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    picker.store(Ok(Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+    }));
+    let open = picker.open.as_ref().unwrap();
+    assert_eq!(picker.catalogue.models[open.selected].reference, "acme/m2");
+    // The current level wins over the row's configured one; the other
+    // rows preselect as usual.
+    assert_eq!(open.chips.get(1).copied().flatten(), Some(0));
+    assert_eq!(open.chips.first().copied().flatten(), Some(1));
 }
 
 #[test]

@@ -30,6 +30,9 @@ pub(crate) struct Open {
     pub(crate) chips: Vec<Option<usize>>,
     /// Each row touched by the chip keys, by catalogue index.
     pub(crate) touched: Vec<bool>,
+    /// The on-screen model and level the open is for, kept until a read
+    /// answers: an open before the first catalogue still lands on it.
+    pub(crate) target: Option<(String, Option<String>)>,
     /// The scope toggle shows every installed model.
     pub(crate) show_all: bool,
 }
@@ -70,23 +73,92 @@ impl ModelPicker {
     /// Stores a read's answer: the catalogue, or the error with the old
     /// catalogue kept. What the loop owes is taken, never cleared here:
     /// an answer to the startup read must not drop a meanwhile opened
-    /// picker's `Stale`.
+    /// picker's `Stale`. A replacement reconciles the open picker by
+    /// model reference: the selection stays on its model, each touched
+    /// chip stays on its level's name, every other row preselects, and
+    /// a removed selection clamps into the answered catalogue.
     pub(crate) fn store(&mut self, result: Result<Catalogue, String>) {
         self.refreshing = false;
-        match result {
-            Ok(catalogue) => {
-                self.catalogue = catalogue;
-                self.error = None;
-            }
+        let incoming = match result {
+            Ok(catalogue) => catalogue,
             Err(error) => {
                 self.error = Some(error);
+                return;
             }
+        };
+        let target = self.open.as_ref().and_then(|open| open.target.clone());
+        let old = std::mem::replace(&mut self.catalogue, incoming);
+        self.error = None;
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        let on_screen = target
+            .as_ref()
+            .map(|(model, level)| (model.as_str(), level.as_deref()));
+        let models = &self.catalogue.models;
+        let mut chips = Vec::with_capacity(models.len());
+        let mut touched = Vec::with_capacity(models.len());
+        for entry in models {
+            let old_at = old
+                .models
+                .iter()
+                .position(|old_entry| old_entry.reference == entry.reference);
+            let was_touched = old_at
+                .and_then(|at| open.touched.get(at).copied())
+                .unwrap_or(false);
+            let chip = if !was_touched {
+                preselect(entry, on_screen)
+            } else {
+                let level = old_at.and_then(|at| {
+                    open.chips
+                        .get(at)
+                        .copied()
+                        .flatten()
+                        .and_then(|chip| {
+                            old.models
+                                .get(at)
+                                .and_then(|old_entry| old_entry.levels.get(chip))
+                        })
+                        .cloned()
+                });
+                level
+                    .as_ref()
+                    .and_then(|level| entry.levels.iter().position(|declared| declared == level))
+                    .or_else(|| preselect(entry, on_screen))
+            };
+            chips.push(chip);
+            touched.push(was_touched);
         }
-        let len = self.catalogue.models.len();
-        if let Some(open) = self.open.as_mut() {
-            open.chips.resize(len, None);
-            open.touched.resize(len, false);
-        }
+        let selected_reference = old
+            .models
+            .get(open.selected)
+            .map(|entry| entry.reference.clone());
+        let selected = selected_reference
+            .and_then(|reference| models.iter().position(|entry| entry.reference == reference))
+            .unwrap_or_else(|| {
+                if old.models.is_empty() {
+                    // An open before the first catalogue answered has no
+                    // model to keep: it lands on the on-screen model, else
+                    // the first row.
+                    let (rows, _) = visible(&self.catalogue.models, &self.scoped, open.show_all);
+                    on_screen
+                        .and_then(|(model, _)| {
+                            rows.iter().copied().find(|index| {
+                                self.catalogue
+                                    .models
+                                    .get(*index)
+                                    .is_some_and(|entry| entry.reference == model)
+                            })
+                        })
+                        .or(rows.first().copied())
+                        .unwrap_or(0)
+                } else {
+                    open.selected.min(models.len().saturating_sub(1))
+                }
+            });
+        open.selected = selected;
+        open.chips = chips;
+        open.touched = touched;
     }
 
     /// The read the loop owes, if one is owed.
@@ -128,6 +200,7 @@ impl ModelPicker {
             chips,
             touched: vec![false; self.catalogue.models.len()],
             show_all: false,
+            target: on_screen.map(|(model, level)| (model.to_owned(), level.map(str::to_owned))),
         });
         self.want = Some(match self.want {
             Some(Refresh::Every) => Refresh::Every,
