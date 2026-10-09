@@ -200,8 +200,9 @@ Measured on October 1, 2026 with one OpenCode key (`research/opencode-probe`).
   `opencode-zen` is billed per token at `https://opencode.ai/zen`, and its
   models carry prices only.
 - Both serve `openai-responses` at `/v1/responses`, `openai-completions` at
-  `/v1/chat/completions` and `anthropic-messages` at `/v1/messages`. Zen also
-  serves `google-generative-ai` for its Gemini models.
+  `/v1/chat/completions` and `anthropic-messages` at `/v1/messages`. Zen lists
+  `google-generative-ai` models, but the one request probed on that route was
+  refused (`research/opencode-zen-gemini-probe`).
 - A model speaks one protocol. `muse-spark-1.3-contributor` on Go answered on
   `/v1/responses`, and on the other two it answered 400 with
   `ModelProtocolUnsupported`. Each model declares its protocol.
@@ -316,7 +317,7 @@ For each model:
 - output token limit, input kinds and cost
 - whether a subscription login covers it ("Cost")
 
-A first-party package's `models` list is generated, except `openrouter`'s, which its `models()` reads from OpenRouter ("Model discovery"). `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. The `opencode-zen` package also leaves out its `google-generative-ai` models until that route is probed. It derives each model's protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
+A first-party package's `models` list is generated, except `openrouter`'s, which its `models()` reads from OpenRouter ("Model discovery"). `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. The `opencode-zen` package also leaves out its `google-generative-ai` models: the one request probed on that route, to `gemini-3.5-flash-lite`, answered 403 "Model access is disabled" (`research/opencode-zen-gemini-probe`). It derives each model's protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
 
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
 needs is declared, or it is not set.
