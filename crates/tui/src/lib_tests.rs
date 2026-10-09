@@ -640,6 +640,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     // read through the placeholder, whose letters are written together.
     let frames = super::reconnect_tests::watch(&pair.main, vec![
         b"shortcuts",
+        b"Press Ctrl+C again to",
         b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h",
     ]);
     super::reconnect_tests::watched(&frames, "the first frame");
@@ -650,9 +651,9 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     // Ctrl+C twice quits with 0 while the reader is still blocked: the
     // master stays open and nothing is closed to wake it. The first
     // press must visibly arm first: waiting for its hint proves the
-    // reader delivered a byte and the loop drew again, and drains the
-    // master, so the second press quits with no frame between and the
-    // return wait cannot stall behind an undrained pty.
+    // reader delivered a byte and the loop drew again. The watcher is the
+    // only pty reader and keeps draining while the second press quits with
+    // no frame between, so the return wait cannot stall behind a full pty.
     pair.main
         .write_all(&[0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
@@ -662,7 +663,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     // The armed frame foots the quit hint, which no earlier frame
     // holds. Only its first run is matched: the incremental redraw
     // splits the hint around the cells the unarmed foot already holds.
-    read_until(&pair.main, b"Press Ctrl+C again to", "the armed quit hint");
+    super::reconnect_tests::watched(&frames, "the armed quit hint");
     pair.main
         .write_all(&[0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
@@ -1944,7 +1945,7 @@ fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
 fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
     let mut pair = open();
     const START: &[u8] =
-        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
     let frames = watch(&pair.main, vec![START, b"shortcuts", b"the lists are in"]);
     let slave = pair
         .slave
@@ -1993,7 +1994,7 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
     watched_with_timeout(&frames, "the first frame", DEADLINE);
     // Asked after the first frame, the cached read answers: its notice
     // draws, so the catalogue it came with is held.
-    watched_with_timeout(&frames, "the cached read's notice", Duration::from_secs(2));
+    watched_with_timeout(&frames, "the cached read's notice", DEADLINE);
     assert_eq!(*seen.lock().unwrap(), [crate::Refresh::Cached]);
     pair.main
         .write_all(&[0x03, 0x03])

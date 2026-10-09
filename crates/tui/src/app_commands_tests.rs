@@ -202,6 +202,17 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
         selected(&app).as_deref(),
         Some("/home  Goes home.  command")
     );
+    // One Down from `/home` selects `/new`; `/quit` is the thirteenth row.
+    app.on_key(Key::Down, now());
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("/new  Goes home with the cursor in the input box.  command")
+    );
+    app.on_key(Key::Up, now());
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("/home  Goes home.  command")
+    );
     for _ in 0..7 {
         app.on_key(Key::Down, now());
     }
