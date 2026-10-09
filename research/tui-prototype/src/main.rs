@@ -4449,6 +4449,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 }
                 Act::Context => {
                     ui.search = None;
+                    ui.picker = None;
                     ui.ctx_view = true;
                     ui.vscroll = 0;
                 }
