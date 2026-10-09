@@ -307,7 +307,15 @@ the conversation. The views are:
   again every 500 ms.
 - **A job running under a pseudo-terminal** has a live view of its screen. The
   input box types into it as raw keys, as `jobs write` does for the model, so
-  the person can finish an interactive step the model started.
+  the person can finish an interactive step the model started. The screen is
+  80 columns by 24 rows, drawn from the job's output since the terminal
+  attached. Carriage return, line feed, backspace, tab, cursor movement and
+  erasing in a line or the display are applied; other escape sequences are
+  dropped.
+- **The running delegates or jobs,** from "N delegates running" or "N jobs
+  running" in the narrow layout: the Delegates card's two rows for each
+  delegate, or one row for each job, in the order they started. A row opens
+  that item's view.
 - **The model picker:** models by provider with roles marked, a chip for each
   thinking level the model supports, and the size of the prompt-cache rebuild
   a switch costs. Choosing a model saves the global `model`, and choosing a

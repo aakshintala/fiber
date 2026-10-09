@@ -284,7 +284,7 @@ impl App {
     pub(in crate::app) fn config_view_click(&mut self, spot: Spot) -> Effect {
         let act = match (self.config_views.seam.clone(), spot) {
             (_, Spot::Close) => Act::Close,
-            (Some(seam), Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_)) => {
+            (Some(seam), Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)) => {
                 let workspace = self.workspace();
                 let ctx = self.config_ctx(seam.as_ref(), &workspace);
                 match &mut self.config_views.open {
@@ -296,7 +296,9 @@ impl App {
                     Some(Open::Unavailable(_)) | None => Act::Stay,
                 }
             }
-            (None, Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_)) => Act::Stay,
+            (None, Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)) => {
+                Act::Stay
+            }
             // Only the model picker draws cells with targets of their
             // own; here a cell is never pushed.
             (_, Spot::Cell(_, _)) => Act::Stay,

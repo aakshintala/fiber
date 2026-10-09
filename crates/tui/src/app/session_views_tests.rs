@@ -1110,3 +1110,217 @@ fn clicking_a_file_list_row_chooses_that_file() {
             .contains(&format!("Changed files › {expected}"))
     );
 }
+
+/// Folds a plain job as `job`.
+fn start_job(app: &mut App, job: &str) {
+    app.on_line(session_line(
+        SESSION,
+        "job_started",
+        None,
+        json!({"job_id": job, "description": format!("task {job}"),
+            "output_path": "/tmp/out"}),
+    ));
+}
+
+/// Folds a fiber delegate as `job` with session `delegate`.
+fn start_delegate(app: &mut App, job: &str, delegate: &str) {
+    start_job(app, job);
+    app.on_line(session_line(
+        SESSION,
+        "delegate_started",
+        None,
+        json!({"job_id": job,
+            "delegate_session_id": delegate,
+            "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+    ));
+}
+
+/// Completes `job`.
+fn complete_job(app: &mut App, job: &str) {
+    app.on_line(session_line(
+        SESSION,
+        "job_completed",
+        None,
+        json!({"job_id": job, "status": "completed"}),
+    ));
+}
+
+/// Opens the running delegates list.
+fn open_delegates(app: &mut App) {
+    assert_eq!(app.open_session_view(SessionView::Delegates), Effect::None);
+    assert!(app.session_view_open());
+}
+
+/// Opens the running jobs list.
+fn open_jobs(app: &mut App) {
+    assert_eq!(app.open_session_view(SessionView::Jobs), Effect::None);
+    assert!(app.session_view_open());
+}
+
+/// The open list's selected row.
+fn selected(app: &App) -> usize {
+    app.session_view_screen(0)
+        .map(|frame| frame.list.selected())
+        .unwrap_or_else(|| panic!("a list frame"))
+}
+
+#[test]
+fn delegates_list_draws_two_rows_per_delegate() {
+    let mut app = attached(80, 24);
+    start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+    start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
+    open_delegates(&mut app);
+    let (shown, _) = screen(&app, 80, 24);
+    assert!(shown.contains("Running delegates"));
+    assert!(shown.contains("task j_1"));
+    assert!(shown.contains("task j_2"));
+    insta::assert_snapshot!("delegates_list", shown);
+}
+
+#[test]
+fn down_then_enter_opens_the_second_item_and_closes_the_list() {
+    let mut app = attached(80, 24);
+    start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+    start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
+    open_delegates(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app), 2);
+    // The link is down, so opening sends nothing; the view still swaps
+    // in and the list closes.
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.item_open());
+    assert!(!app.session_view_open());
+    assert_eq!(
+        app.item_view().map(|view| view.description),
+        Some("task j_2".to_owned())
+    );
+}
+
+#[test]
+fn clicking_a_delegate_row_opens_it_and_a_blank_tail_only_selects() {
+    let mut app = attached(80, 24);
+    start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+    start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
+    open_delegates(&mut app);
+    let serial = app
+        .serial_of_job(&contract::JobId("j_1".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    // The second row is the first delegate's description: its text opens it.
+    // The link is down, so opening sends nothing.
+    assert_eq!(
+        app.on_click(TargetId::View(ViewSpot::Item(serial))),
+        Effect::None
+    );
+    assert!(app.item_open());
+    assert!(!app.session_view_open());
+}
+
+#[test]
+fn clicking_a_row_tail_only_selects_the_row() {
+    let mut app = attached(80, 24);
+    start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+    start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
+    open_delegates(&mut app);
+    assert_eq!(app.on_click(TargetId::View(ViewSpot::Row(3))), Effect::None);
+    assert!(!app.item_open());
+    assert!(app.session_view_open());
+    assert_eq!(selected(&app), 3);
+}
+
+#[test]
+fn esc_and_the_cross_close_the_lists() {
+    for view in [SessionView::Delegates, SessionView::Jobs] {
+        let mut app = attached(80, 24);
+        start_job(&mut app, "j_1");
+        assert_eq!(app.open_session_view(view), Effect::None);
+        assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+        assert!(!app.session_view_open());
+        assert_eq!(app.open_session_view(view), Effect::None);
+        assert_eq!(app.on_click(TargetId::View(ViewSpot::Close)), Effect::None);
+        assert!(!app.session_view_open());
+    }
+}
+
+#[test]
+fn an_empty_list_says_nothing_running_and_enter_does_nothing() {
+    let mut app = attached(80, 24);
+    open_jobs(&mut app);
+    let (shown, _) = screen(&app, 80, 24);
+    assert!(shown.contains("Nothing running."));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.session_view_open());
+    assert!(!app.item_open());
+}
+
+#[test]
+fn jobs_list_draws_one_row_per_job_and_opens_on_click() {
+    let mut app = attached(80, 24);
+    start_job(&mut app, "j_1");
+    start_job(&mut app, "j_2");
+    open_jobs(&mut app);
+    let (shown, _) = screen(&app, 80, 24);
+    assert!(shown.contains("Running jobs"));
+    assert!(shown.contains("task j_1"));
+    insta::assert_snapshot!("jobs_list", shown);
+    let serial = app
+        .serial_of_job(&contract::JobId("j_2".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    assert_eq!(
+        app.on_click(TargetId::View(ViewSpot::Item(serial))),
+        Effect::None
+    );
+    assert!(app.item_open());
+    assert!(!app.session_view_open());
+    assert_eq!(
+        app.item_view().map(|view| view.description),
+        Some("task j_2".to_owned())
+    );
+}
+
+#[test]
+fn a_list_press_and_release_on_different_serials_opens_nothing() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    let mut app = attached(80, 24);
+    start_job(&mut app, "j_1");
+    start_job(&mut app, "j_2");
+    open_jobs(&mut app);
+    let (_, before) = screen(&app, 80, 24);
+    let first = before
+        .iter()
+        .find(|target| matches!(target.id, TargetId::View(ViewSpot::Item(_))))
+        .cloned()
+        .unwrap_or_else(|| panic!("an item target"));
+    let (col, row) = (first.rect.x, first.rect.y);
+    let mut pointer = crate::mouse::Pointer::default();
+    // A press on the first job's text, its `job_completed`, a redraw that
+    // puts the second job on that row, and a release on it: the ids
+    // differ, so no click.
+    assert_eq!(
+        pointer.on_mouse(
+            &Mouse {
+                kind: MouseKind::Press(Button::Left),
+                col,
+                row
+            },
+            &before,
+            false
+        ),
+        None
+    );
+    complete_job(&mut app, "j_1");
+    let (_, after) = screen(&app, 80, 24);
+    assert_eq!(
+        pointer.on_mouse(
+            &Mouse {
+                kind: MouseKind::Release,
+                col,
+                row
+            },
+            &after,
+            false
+        ),
+        None
+    );
+    assert!(!app.item_open());
+}

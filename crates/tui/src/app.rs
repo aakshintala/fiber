@@ -933,6 +933,7 @@ impl App {
         }
         send.extend(self.panel_line(envelope));
         self.items_line(envelope);
+        self.output_line(envelope);
         self.session_views_line(envelope);
         self.config_views_line(envelope);
         if envelope.kind == "turn_started"

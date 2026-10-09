@@ -202,7 +202,7 @@ impl Tools {
     pub(crate) fn click(&mut self, spot: Spot, ctx: &Ctx<'_>) -> Act {
         match spot {
             Spot::Close => Act::Close,
-            Spot::Revoke(_) | Spot::Cell(_, _) => Act::Stay,
+            Spot::Revoke(_) | Spot::Cell(_, _) | Spot::Item(_) => Act::Stay,
             Spot::Row(at) => {
                 let shown = self.shown(ctx);
                 self.list.select(at, self.rows.len(), shown);

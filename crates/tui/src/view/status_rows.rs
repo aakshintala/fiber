@@ -50,6 +50,12 @@ fn row_one(app: &App, width: usize) -> Option<StatusRow> {
     if text.is_empty() {
         return None;
     }
+    Some(cut_row(text, spots, width))
+}
+
+/// A status row cut to `width`: its line and its targets clamped to the
+/// visible columns, so a cut row keeps only the visible part.
+fn cut_row(text: String, spots: Vec<(u16, u16, Spot)>, width: usize) -> StatusRow {
     let line = Line::raw(format::cut(&text, width));
     let spots = spots
         .into_iter()
@@ -61,7 +67,7 @@ fn row_one(app: &App, width: usize) -> Option<StatusRow> {
         })
         .filter(|(_, wide, _)| *wide > 0)
         .collect();
-    Some(StatusRow { line, spots })
+    StatusRow { line, spots }
 }
 
 /// Appends `segments` to `text`, joined by ` · `, recording the spots at
@@ -167,27 +173,33 @@ fn widget_segment(app: &App, at: usize) -> Vec<(String, Option<Spot>)> {
 }
 
 /// Row 2: "N delegates running" and "N jobs running", each while its card
-/// is listed and its count is above zero. Neither opens anything yet, so
-/// the row holds no targets.
+/// is listed and its count is above zero. Each opens its running list
+/// (`docs/tui.md`, "The narrow layout").
 fn row_two(app: &App, width: usize) -> Option<StatusRow> {
     let listed = |name: &str| app.panel_cards().iter().any(|card| card == name);
     let panel = app.panel_state();
     let delegates = panel.running_delegates().len();
-    let jobs = panel.jobs().len().saturating_sub(delegates);
-    let mut segments = Vec::new();
+    let jobs = panel.running_jobs().len();
+    let mut text = String::new();
+    let mut spots = Vec::new();
     if listed("delegates") && delegates > 0 {
-        segments.push(running(delegates, "delegate"));
+        push_segments(
+            &mut text,
+            &mut spots,
+            vec![(running(delegates, "delegate"), Some(Spot::DelegateList))],
+        );
     }
     if listed("jobs") && jobs > 0 {
-        segments.push(running(jobs, "job"));
+        push_segments(
+            &mut text,
+            &mut spots,
+            vec![(running(jobs, "job"), Some(Spot::JobList))],
+        );
     }
-    if segments.is_empty() {
+    if text.is_empty() {
         return None;
     }
-    Some(StatusRow {
-        line: Line::raw(format::cut(&segments.join(" · "), width)),
-        spots: Vec::new(),
-    })
+    Some(cut_row(text, spots, width))
 }
 
 /// `n` running delegates or jobs: "1 job running", "2 delegates running".
