@@ -822,11 +822,12 @@ fn seam_writing(
 
 /// Waits for `cancel` on `clock`, as a terminal whose queue stays full
 /// does: woken whenever the clock moves. Every caller moves the clock, so
-/// the wait always ends.
-/// Waits for `cancel` on `clock`, as a terminal whose queue stays full
-/// does: woken whenever the clock moves. Every caller moves the clock, so
-/// the wait always ends.
-fn wait_for_cancel(clock: &dyn contract::clock::Clock, cancel: &dyn contract::tool::Cancel) {
+/// the wait always ends. True when the cancel fired: a hang-guard expiry
+/// reports false, so the write fails instead of resolving to the timeout.
+fn wait_for_cancel(
+    clock: &dyn contract::clock::Clock,
+    cancel: &dyn contract::tool::Cancel,
+) -> bool {
     struct Nudge(mpsc::Sender<()>);
     impl contract::clock::Wake for Nudge {
         fn wake(&self) {
@@ -839,9 +840,10 @@ fn wait_for_cancel(clock: &dyn contract::clock::Clock, cancel: &dyn contract::to
     while !cancel.is_cancelled() {
         // Bounded in real time: every path below moves the clock first.
         if rx.recv_timeout(Duration::from_secs(10)).is_err() {
-            break;
+            return false;
         }
     }
+    true
 }
 
 fn open_stuck(registry: &Arc<Registry>) -> (String, contract::jobs::Opened, mpsc::Receiver<()>) {
@@ -854,8 +856,13 @@ fn open_stuck(registry: &Arc<Registry>) -> (String, contract::jobs::Opened, mpsc
             lines: false,
             input: Some(contract::jobs::Input(Box::new(move |_, clock, cancel| {
                 let _sent = entry_tx.send(());
-                wait_for_cancel(clock, cancel);
-                Ok(0)
+                if wait_for_cancel(clock, cancel) {
+                    Ok(0)
+                } else {
+                    Err(std::io::Error::other(
+                        "hang guard expired without the clock moving",
+                    ))
+                }
             }))),
         })
         .unwrap();
@@ -907,8 +914,13 @@ fn seam_write_behind_another_writer_still_times_out_at_the_deadline() {
             input: Some(contract::jobs::Input(Box::new(move |_, clock, cancel| {
                 let _sent = entry_tx.send(());
                 let _other = waiting.lock().unwrap();
-                wait_for_cancel(clock, cancel);
-                Ok(0)
+                if wait_for_cancel(clock, cancel) {
+                    Ok(0)
+                } else {
+                    Err(std::io::Error::other(
+                        "hang guard expired without the clock moving",
+                    ))
+                }
             }))),
         })
         .unwrap();

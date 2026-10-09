@@ -2619,16 +2619,21 @@ impl Jobs for WritableJobs {
                     let _sent = self.0.send(());
                 }
             }
-            let _sent = entered.send(());
             let (tx, rx) = mpsc::channel();
             let wake: Arc<dyn Wake> = Arc::new(Nudge(tx));
             self.clock.subscribe(Arc::downgrade(&wake));
             let until = self.clock.now() + Duration::from_secs(1);
+            // The test moves the clock only after this fires, so the
+            // deadline is computed and the waker subscribed before any
+            // advance.
+            let _sent = entered.send(());
             while self.clock.now() < until {
-                // Bounded in real time: the test moves the clock past the
-                // wait before anything else.
+                // Bounded in real time: a hang-guard expiry fails the
+                // test with another error instead of the timeout.
                 if rx.recv_timeout(Duration::from_secs(10)).is_err() {
-                    break;
+                    return Err(contract::jobs::WriteError::Io(std::io::Error::other(
+                        "hang guard expired without the clock moving",
+                    )));
                 }
             }
             return Err(contract::jobs::WriteError::Io(std::io::Error::new(
