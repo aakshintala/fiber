@@ -577,8 +577,19 @@ mod tests {
         let ink: Vec<_> = picked.spans.iter().filter(|s| !s.content.trim().is_empty()).collect();
         assert!(!ink.is_empty());
         assert!(ink.iter().all(|s| s.style.bg == Some(BLUE)), "bar is not full width");
-        // Provider sections split on a blank row.
+        // Only the focused model rides the bar.
+        let barred = rows
+            .iter()
+            .filter(|r| r.spans.iter().any(|s| s.style.bg == Some(BLUE)))
+            .count();
+        assert_eq!(barred, 1, "more than the focus is barred");
+        // Provider sections split on a blank row under a dim header.
         let b = body(&for_case("list"), 90);
+        let provider = b.iter().find(|r| plain(r).contains("openai-codex")).unwrap();
+        assert!(
+            provider.spans[0].style.add_modifier.contains(ratatui::style::Modifier::DIM),
+            "section header is not dim"
+        );
         let pi = b.iter().position(|r| plain(r).contains("openai-codex")).unwrap();
         assert!(plain(&b[pi - 1]).trim().is_empty(), "no blank before the section");
         // The foot is a bold-key legend.

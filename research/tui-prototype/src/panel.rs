@@ -27,7 +27,9 @@ pub(crate) fn inner_w(panel_w: usize) -> usize {
 /// The panel width for content this wide in an area this wide: content plus
 /// padding, clamped between MIN_W and MAX_W, never wider than the area.
 pub(crate) fn width_for(content_w: usize, area_w: usize) -> usize {
-    (content_w + STRIPE_W + PAD_R).clamp(MIN_W, MAX_W).min(area_w.max(1))
+    (content_w + STRIPE_W + PAD_R)
+        .clamp(MIN_W, MAX_W)
+        .min(area_w.max(1))
 }
 
 /// The panel width for content that wraps: wrap at `prefer`, then size to
@@ -63,11 +65,6 @@ pub(crate) fn title_row(title: &str, right: Option<Span<'static>>, inner: usize)
         None => spans.push(sp("", Style::new())),
     }
     row(fit(&spans, inner))
-}
-
-/// A section header: dim, never bold beside the title.
-pub(crate) fn section_row(head: &str, inner: usize) -> Row {
-    row(fit(&[sp(head, dim())], inner))
 }
 
 /// A hint line: dim, aligned left with the body, never centred, and never
@@ -120,7 +117,11 @@ fn flow(
     let pre = width(&indent) as u16;
     out.into_iter()
         .enumerate()
-        .map(|(i, r)| Row { cont: i > 0, pre: if i > 0 { pre } else { 0 }, ..r })
+        .map(|(i, r)| Row {
+            cont: i > 0,
+            pre: if i > 0 { pre } else { 0 },
+            ..r
+        })
         .collect()
 }
 
@@ -133,7 +134,11 @@ pub(crate) fn choice_row(
     key_w: usize,
     inner: usize,
 ) -> Vec<Row> {
-    let marker = if focused { sp("› ", bold()) } else { sp("  ", Style::new()) };
+    let marker = if focused {
+        sp("› ", bold())
+    } else {
+        sp("  ", Style::new())
+    };
     let key = if focused {
         sp(pad_key(key, key_w), bold())
     } else {
@@ -148,8 +153,7 @@ pub(crate) fn choice_row(
 /// A full-width selection bar over rows: the accent behind, dark ink over
 /// it, emphasis kept. Click targets and copy flags ride along untouched.
 pub(crate) fn bar(rows: Vec<Row>) -> Vec<Row> {
-    rows
-        .into_iter()
+    rows.into_iter()
         .map(|r| Row {
             spans: r
                 .spans
@@ -187,8 +191,11 @@ fn stripe(r: Row, inner: usize) -> Row {
     }
     let dx = STRIPE_W as u16;
     Row {
-        spans: [vec![sp("▌", fg(BLUE)), sp("  ", Style::new())], fit(&r.spans, inner)]
-            .concat(),
+        spans: [
+            vec![sp("▌", fg(BLUE)), sp("  ", Style::new())],
+            fit(&r.spans, inner),
+        ]
+        .concat(),
         hot: r.hot.iter().map(|&(a, b, k)| (a + dx, b + dx, k)).collect(),
         pre: r.pre + dx,
         ..r
@@ -198,7 +205,12 @@ fn stripe(r: Row, inner: usize) -> Row {
 /// Stripes content rows and edges the panel. Blank rows stay blank.
 pub(crate) fn slab_rows(rows: Vec<Row>, panel_w: usize) -> Vec<Row> {
     let inner = inner_w(panel_w);
-    slab(rows.into_iter().map(|r| stripe(r, inner)).collect(), BI, None, panel_w)
+    slab(
+        rows.into_iter().map(|r| stripe(r, inner)).collect(),
+        BI,
+        None,
+        panel_w,
+    )
 }
 
 /// Assembles a panel: the title, a blank row, the body, a blank row, the
@@ -228,8 +240,7 @@ pub(crate) fn frame(
 /// and every click target moves with its text.
 pub(crate) fn centre(rows: Vec<Row>, panel_w: usize, area_w: usize) -> Vec<Row> {
     let m = x_for(panel_w, area_w);
-    rows
-        .into_iter()
+    rows.into_iter()
         .map(|r| {
             let dx = m as u16;
             Row {
@@ -306,11 +317,11 @@ mod tests {
         let plain = text(&demo(None));
         assert!(plain.split('\n').nth(1).unwrap().trim().is_empty());
         // Two blank columns after the stripe and at the row's end.
-        for i in 1..lines.len() - 1 {
-            if lines[i].trim().is_empty() {
+        for (i, l) in lines.iter().enumerate().skip(1).take(lines.len() - 2) {
+            if l.trim().is_empty() {
                 continue;
             }
-            let cells: Vec<char> = lines[i].chars().collect();
+            let cells: Vec<char> = l.chars().collect();
             assert_eq!(&cells[1..3], &[' ', ' '], "row {i} touches the stripe");
             assert_eq!(
                 &cells[cells.len() - 2..],
@@ -351,8 +362,7 @@ mod tests {
         let title = title_row("Key map", Some(sp("✕", dim())), inner);
         assert!(title.spans[0].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(title.spans[0].style.fg, Some(BLUE));
-        let section = section_row("Session", inner);
-        assert!(!section.spans[0].style.add_modifier.contains(Modifier::BOLD));
+        // Section headers dim too; the pickers assert their own dim sections.
         // A subtitle in the normal weight never stands bold beside the title.
         let sub = row(fit(&[sp("2 sessions working", Style::new())], inner));
         assert!(!sub.spans[0].style.add_modifier.contains(Modifier::BOLD));
@@ -392,9 +402,16 @@ mod tests {
     #[test]
     fn the_legend_pairs_bold_keys_with_muted_labels() {
         let f = footer_legend(&[("↑↓", "move"), ("esc", "closes")], 40);
-        let keys: Vec<&Span> = f.spans.iter().filter(|s| s.content == "↑↓" || s.content == "esc").collect();
+        let keys: Vec<&Span> = f
+            .spans
+            .iter()
+            .filter(|s| s.content == "↑↓" || s.content == "esc")
+            .collect();
         assert_eq!(keys.len(), 2);
-        assert!(keys.iter().all(|s| s.style.add_modifier.contains(Modifier::BOLD)));
+        assert!(
+            keys.iter()
+                .all(|s| s.style.add_modifier.contains(Modifier::BOLD))
+        );
         for lab in ["move", "closes"] {
             let s = f.spans.iter().find(|s| s.content == lab).unwrap();
             assert!(s.style.add_modifier.contains(Modifier::DIM));

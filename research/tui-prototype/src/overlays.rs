@@ -253,9 +253,9 @@ fn binding_row(b: &Binding, selected: bool, gw: usize, aw: usize, kw: usize) -> 
         let mut s = if i == 0 { gutter.clone() } else { vec![sp("  ", Style::new())] };
         s.push(sp(if i == 0 { format!("{:<gw$}", b.area) } else { " ".repeat(gw) }, dim()));
         s.push(sp("  ", Style::new()));
-        s.extend(fit(a.get(i).map_or(&vec![], |v| v), aw));
+        s.extend(fit(a.get(i).map(|v| v.as_slice()).unwrap_or(&[]), aw));
         s.push(sp("  ", Style::new()));
-        s.extend(fit(k.get(i).map_or(&vec![], |v| v), kw));
+        s.extend(fit(k.get(i).map(|v| v.as_slice()).unwrap_or(&[]), kw));
         out.push(row(s));
     }
     if selected { panel::bar(out) } else { out }
@@ -330,13 +330,9 @@ fn keymap_panel(c: &Look, cols: usize, rows: usize) -> Vec<super::Row> {
     let off = if c.narrow { clamp_scroll(NARROW_SCROLL, total, cap) } else { 0 };
     let rest = total.saturating_sub(off + cap);
     let mut shown: Vec<super::Row> = body.drain(off..).take(cap).collect();
-    if total > off + shown.len() {
-        // More below: an arrow in the gutter of the last shown line.
-        if let Some(last) = shown.last_mut() {
-            if last.bg.is_none() {
-                last.spans[0] = sp("↓ ", dim());
-            }
-        }
+    // More below: an arrow in the gutter of the last shown line.
+    if total > off + shown.len() && let Some(last) = shown.last_mut().filter(|r| r.bg.is_none()) {
+        last.spans[0] = sp("↓ ", dim());
     }
     chrome.append(&mut shown);
     if c.narrow && rest > 0 {
@@ -876,6 +872,9 @@ mod tests {
         let buf = buffer(&c, 160, 48);
         let y = t.split('\n').position(|l| l.contains("leave them running")).unwrap();
         assert!((0..160).any(|x| buf[(x, y as u16)].bg == crate::BLUE), "no bar on enter");
+        // Only the default rides the bar.
+        let barred = (0..48).filter(|&y| (0..160).any(|x| buf[(x, y)].bg == crate::BLUE)).count();
+        assert_eq!(barred, 1, "more than enter is barred");
     }
 
     #[test]

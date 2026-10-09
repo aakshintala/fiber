@@ -490,7 +490,7 @@ mod tests {
         let fr = frame(&c, 160, 48);
         let edge = fr
             .iter()
-            .flat_map(|ps| ps)
+            .flatten()
             .find(|p| p.row.spans.iter().any(|s| s.content.contains("▄▄")))
             .unwrap();
         assert!(edge.x > 0, "picker flush left");
