@@ -47,6 +47,9 @@ mod read_only;
 #[path = "shell/classify.rs"]
 mod classify;
 
+#[path = "shell/sed.rs"]
+mod sed;
+
 use classify::classify;
 use command::{Finished, StopKind};
 pub use groups::kill_every_group;
