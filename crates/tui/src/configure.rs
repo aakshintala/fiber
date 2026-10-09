@@ -172,6 +172,45 @@ impl fmt::Display for ConfigureError {
     }
 }
 
+/// An MCP server or an extension, whose tools a `/tools` switch turns on
+/// or off. Extensions sort before servers, each by name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ToolGroup {
+    /// The extension's full name.
+    Extension(String),
+    /// The server's name.
+    Mcp(String),
+}
+
+/// Which file a switch writes: the project's or the global `config.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchScope {
+    /// The project's `config.json` in Fiber home.
+    Project,
+    /// The global `config.json`.
+    Everywhere,
+}
+
+/// A layer's `tools.enabled` and `tools.disabled`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolLists {
+    /// The names to declare, when the layer sets a list.
+    pub enabled: Option<Vec<String>>,
+    /// The names to leave out.
+    pub disabled: Vec<String>,
+}
+
+/// One group's lists: the effective ones for the workspace, and the global file's own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolSwitches {
+    /// The server or extension.
+    pub group: ToolGroup,
+    /// The lists in force for the workspace.
+    pub project: ToolLists,
+    /// The global file's own lists.
+    pub everywhere: ToolLists,
+}
+
 /// Reads and writes configuration for the views, about the session on
 /// screen's workspace. Its methods are grouped by the view that calls
 /// them.
@@ -232,6 +271,21 @@ pub trait Configure: Send + Sync {
 
     /// The theme `name` gives `tui.theme`, built as at start.
     fn theme(&self, name: &str) -> ThemeSetting;
+
+    // `/tools`.
+
+    /// Every MCP server and extension whose configuration holds tool lists, with them.
+    fn tool_switches(&self, workspace: &Path) -> Result<Vec<ToolSwitches>, ConfigureError>;
+
+    /// Switches `tool` (its own name) of `group` on or off in `scope`'s file.
+    fn switch_tool(
+        &self,
+        workspace: &Path,
+        group: &ToolGroup,
+        tool: &str,
+        scope: SwitchScope,
+        on: bool,
+    ) -> Result<(), ConfigureError>;
 }
 
 #[cfg(test)]

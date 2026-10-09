@@ -5,11 +5,11 @@ expression: "screen(&app, 80, 24)"
 /home  Goes home.  command
 /new  Goes home with the cursor in the input box.  command
 /resume  Opens home at the session list.  command
-/panel  Shows or hides the panel.  command█▀▀▀▀ █▀▀▀▄
-/rules  Opens the standing rules.  command████  █▄▄▄▀
-/settings  Opens the configuration keys.  command ▀▄
-/handoff [instructions]  Starts a handoff.  command █ 0.0.1
-/name <text>  Names the session.  command
+/tools  Opens the tools view.  command▀█  █▀▀▀▀ █▀▀▀▄
+/panel  Shows or hides the panel.  command████  █▄▄▄▀
+/rules  Opens the standing rules.  command█▀▀▀▀ █ ▀▄
+/settings  Opens the configuration keys.  command   █ 0.0.1
+/handoff [instructions]  Starts a handoff.  command
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 > /
 

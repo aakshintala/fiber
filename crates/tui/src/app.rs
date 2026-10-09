@@ -739,6 +739,7 @@ impl App {
             "command_rejected" => {
                 if let Some(id) = command_id {
                     let message = hub_string(&hub.payload, "message").unwrap_or_default();
+                    self.config_views_refused(&id, &message);
                     if !self.history_rejected(&id, &message) {
                         self.rejected(&id, message);
                     }
@@ -851,6 +852,7 @@ impl App {
             return send;
         }
         send.extend(self.panel_line(envelope));
+        self.config_views_line(envelope);
         if envelope.kind == "turn_started"
             && let Some(started) = read!(envelope, TurnStarted)
         {

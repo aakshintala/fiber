@@ -343,6 +343,7 @@ pub(crate) fn info(declared: &Declared) -> ToolInfo {
         name: definition.name,
         source: ToolSource::Mcp {
             server: declared.registered_by.clone(),
+            tool: declared.tool.tool_name().to_owned(),
         },
         state: ToolState::Full,
         bytes,

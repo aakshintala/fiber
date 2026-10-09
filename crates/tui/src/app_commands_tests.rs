@@ -202,28 +202,34 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
         selected(&app).as_deref(),
         Some("/home  Goes home.  command")
     );
-    for _ in 0..7 {
+    for _ in 0..8 {
         app.on_key(Key::Down, now());
     }
-    // The eighth row, still in the first window.
+    // The name command, after the added configuration commands.
     assert_eq!(
         selected(&app).as_deref(),
         Some("/name <text>  Names the session.  command")
     );
     assert_eq!(app.completions().and_then(|c| c.selected), Some(7));
     app.on_key(Key::Down, now());
-    // The ninth row: the window moves down by one.
+    // The next row: the window moves down by one.
     let completions = app.completions();
     assert_eq!(completions.as_ref().and_then(|c| c.selected), Some(7));
     assert_eq!(
         completions
             .and_then(|c| c.lines.first().cloned())
             .as_deref(),
-        Some("/new  Goes home with the cursor in the input box.  command")
+        Some("/resume  Opens home at the session list.  command")
     );
     app.on_key(Key::Down, now());
     app.on_key(Key::Down, now());
     app.on_key(Key::Down, now());
+    for _ in 0..16 {
+        if selected(&app).as_deref() == Some("/quit  Quits.  command") {
+            break;
+        }
+        app.on_key(Key::Down, now());
+    }
     assert_eq!(selected(&app).as_deref(), Some("/quit  Quits.  command"));
     app.on_key(Key::Down, now());
     assert_eq!(

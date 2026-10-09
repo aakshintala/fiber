@@ -121,6 +121,7 @@ impl Rules {
         let shown = self.shown(ctx);
         match spot {
             Spot::Close => Act::Close,
+            Spot::Switch { .. } => Act::Stay,
             Spot::Row(at) => {
                 self.list.select(at, self.items.len(), shown);
                 self.said.clear();

@@ -50,8 +50,8 @@ pub use secret::{
 };
 pub use settings::{SettingInfo, SettingValue, WriteScope};
 pub use write::{
-    Layer, Scope, get_global, remove_extension_settings, replace_global, set, set_global,
-    set_global_if_unset, write_atomic,
+    Layer, ListChange, ListEdit, Scope, edit_list, get_global, remove_extension_settings,
+    replace_global, set, set_global, set_global_if_unset, write_atomic,
 };
 
 pub use keys::{diagnostics_debug, parse_duration, refresh_after};

@@ -78,6 +78,26 @@ fn an_empty_list_ignores_every_key() {
 }
 
 #[test]
+fn a_cell_with_a_spot_gets_a_target_over_its_text() {
+    let area = Rect::new(0, 0, 20, 3);
+    let mut buf = Buffer::empty(area);
+    let mut shown = frame(0);
+    shown.below.clear();
+    shown.rows = vec![vec![
+        ("ab".to_owned(), None),
+        ("[x]".to_owned(), Some(Spot::Switch { row: 0, at: 0 })),
+    ]];
+    let mut targets = Vec::new();
+    render(&shown, area, &mut buf, &mut targets);
+    let switch = targets
+        .iter()
+        .find(|target| target.id == TargetId::View(Spot::Switch { row: 0, at: 0 }))
+        .unwrap_or_else(|| panic!("no switch target in {targets:?}"));
+    assert_eq!(switch.rect.x, 2);
+    assert_eq!(switch.rect.width, 3);
+}
+
+#[test]
 fn zero_height_keeps_the_selection() {
     let mut list = List::default();
     list.key(&Key::Down, 5, 3);

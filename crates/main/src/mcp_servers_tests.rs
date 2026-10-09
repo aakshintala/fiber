@@ -240,6 +240,7 @@ fn extension_tools_follow_the_built_in_and_mcp_tools_and_replace_their_rows() {
             "search",
             ToolSource::Mcp {
                 server: "docs".to_owned(),
+                tool: "search".to_owned(),
             },
         ),
         row("write", ToolSource::Builtin),
