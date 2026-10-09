@@ -586,3 +586,346 @@ fn switching_scrolls_the_card_into_view() {
     press(&mut app, Key::AltDigit(1));
     assert_eq!(app.rail_state().scroll(), 1);
 }
+
+/// A waiting `session_status` field set: request `request` since `since`.
+fn waiting(request: &str, since: u64) -> Value {
+    json!({"state": "waiting", "since": since, "waiting": {"request_id": request,
+        "kind": "approval", "summary": "shell ls"}})
+}
+
+/// A linked app showing `A`, with `B` and `C` waiting on `r_b` since 200
+/// and `r_c` since 100.
+fn two_waiting() -> App {
+    let mut app = opened(&[A, B, C], A);
+    app.on_line(live(B, waiting("r_b", 200)));
+    app.on_line(live(C, waiting("r_c", 100)));
+    app
+}
+
+/// The approval panel's text, or nothing while it is closed.
+fn panel_text(app: &App) -> String {
+    app.panel()
+        .map(|panel| panel.lines.join("\n"))
+        .unwrap_or_default()
+}
+
+/// Puts aside the request the approval panel shows.
+fn put_aside(app: &mut App) {
+    assert!(app.panel().is_some());
+    press(app, Key::Esc);
+    assert!(app.panel().is_none());
+}
+
+/// An `interaction_requested` form from `session` for `request`.
+fn question(session: &str, request: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "interaction_requested".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"request_id": request, "kind": "form", "action_ids": ["a_1"],
+            "fields": [{"header": "Name", "question": "What name?"}]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+#[test]
+fn alt_a_opens_the_queue_first() {
+    let mut app = two_waiting();
+    app.on_line(permission(A, "r_a"));
+    put_aside(&mut app);
+    assert_eq!(press(&mut app, Key::AltA), Effect::None);
+    assert!(panel_text(&app).contains(A), "{}", panel_text(&app));
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn alt_a_reopens_a_put_aside_offer_first() {
+    let mut app = two_waiting();
+    let items = [json!({"kind": "mcp_server", "name": "a", "hash": "h",
+        "required": false, "summary": "MCP server: a"})];
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "repository_code_offered".to_owned(),
+        session_id: contract::SessionId(A.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"request_id": "r_o", "items": items})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }));
+    assert!(app.offer_open());
+    press(&mut app, Key::Esc);
+    assert!(!app.offer_open());
+    assert_eq!(press(&mut app, Key::AltA), Effect::None);
+    assert!(app.offer_open());
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn alt_a_switches_to_the_oldest_waiting_row_and_opens_its_request_on_arrival() {
+    let mut app = two_waiting();
+    let out = sent(press(&mut app, Key::AltA));
+    assert!(
+        out.contains(&subscribe(&out[1]["id"], C, "full")),
+        "{out:?}"
+    );
+    assert_eq!(on_screen(&app), Some(C));
+    // The replay follows the subscribe's acknowledgement.
+    ack(&mut app, &out);
+    // Another session's request is put aside, so the queue would not
+    // surface the replay by itself.
+    app.on_line(permission(B, "r_b"));
+    put_aside(&mut app);
+    app.on_line(permission(C, "r_c"));
+    assert!(panel_text(&app).contains(C), "{}", panel_text(&app));
+}
+
+#[test]
+fn alt_a_opens_a_waiting_question_on_arrival() {
+    let mut app = two_waiting();
+    let out = sent(press(&mut app, Key::AltA));
+    ack(&mut app, &out);
+    app.on_line(permission(B, "r_b"));
+    put_aside(&mut app);
+    app.on_line(question(C, "r_c"));
+    assert!(panel_text(&app).contains(C), "{}", panel_text(&app));
+}
+
+#[test]
+fn alt_a_with_equal_since_takes_the_earlier_card() {
+    let mut app = opened(&[A, B, C], A);
+    app.on_line(live(B, waiting("r_b", 100)));
+    app.on_line(live(C, waiting("r_c", 100)));
+    press(&mut app, Key::AltA);
+    assert_eq!(on_screen(&app), Some(B));
+}
+
+#[test]
+fn alt_a_skips_the_attached_session() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(live(A, waiting("r_a", 0)));
+    app.on_line(live(B, waiting("r_b", 100)));
+    press(&mut app, Key::AltA);
+    assert_eq!(on_screen(&app), Some(B));
+}
+
+#[test]
+fn alt_a_skips_a_crashed_card() {
+    let mut app = opened(&[A, B, C], A);
+    app.on_line(live(B, waiting("r_b", 0)));
+    app.on_line(left(B, "crashed"));
+    app.on_line(live(C, waiting("r_c", 100)));
+    press(&mut app, Key::AltA);
+    assert_eq!(on_screen(&app), Some(C));
+}
+
+#[test]
+fn alt_a_with_nothing_waiting_says_so() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(press(&mut app, Key::AltA), Effect::None);
+    assert_eq!(app.notice(), Some("No requests waiting."));
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn the_badge_and_slash_approvals_do_what_alt_a_does() {
+    let mut app = two_waiting();
+    app.on_click(TargetId::Badge);
+    assert_eq!(on_screen(&app), Some(C));
+    let mut app = two_waiting();
+    for ch in "/approvals".chars() {
+        press(&mut app, Key::Char(ch));
+    }
+    press(&mut app, Key::Enter);
+    assert_eq!(on_screen(&app), Some(C));
+}
+
+#[test]
+fn a_request_from_another_session_with_the_same_id_does_not_open() {
+    let mut app = two_waiting();
+    let out = sent(press(&mut app, Key::AltA));
+    ack(&mut app, &out);
+    app.on_line(permission(A, "r_a"));
+    put_aside(&mut app);
+    app.on_line(permission(B, "r_c"));
+    assert!(app.panel().is_none());
+    app.on_line(permission(C, "r_c"));
+    assert!(panel_text(&app).contains(C), "{}", panel_text(&app));
+}
+
+#[test]
+fn another_request_from_that_session_does_not_open() {
+    let mut app = two_waiting();
+    let out = sent(press(&mut app, Key::AltA));
+    ack(&mut app, &out);
+    app.on_line(permission(A, "r_a"));
+    put_aside(&mut app);
+    app.on_line(permission(C, "r_other"));
+    assert!(app.panel().is_none());
+    app.on_line(permission(C, "r_c"));
+    assert!(panel_text(&app).contains(C), "{}", panel_text(&app));
+}
+
+#[test]
+fn a_request_already_answered_does_not_reopen() {
+    let mut app = two_waiting();
+    // `C`'s request is answered while `A` is on screen; its reply waits
+    // for the hub.
+    app.on_line(permission(C, "r_c"));
+    assert!(panel_text(&app).contains(C));
+    press(&mut app, Key::Enter);
+    assert!(app.panel().is_none());
+    let out = sent(press(&mut app, Key::AltA));
+    assert_eq!(on_screen(&app), Some(C));
+    ack(&mut app, &out);
+    app.on_line(permission(C, "r_c"));
+    assert!(app.panel().is_none(), "{}", panel_text(&app));
+}
+
+/// A hub answer of `kind` for command `id`, refusing with `message`.
+fn hub_answer(kind: &str, id: &str, message: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: kind.to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: json!({"command_id": id, "code": "invalid_arguments", "message": message})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+/// A linked app showing `A`, with `B` crashed and `C` live.
+fn crashed() -> App {
+    let mut app = opened(&[A, B, C], A);
+    app.on_line(left(B, "crashed"));
+    app
+}
+
+/// Clicks `session`'s ✕.
+fn cross(app: &mut App, session: &str) -> Vec<Value> {
+    let key = key(app, session);
+    sent(app.on_click(TargetId::Rail(Spot::Dismiss(key))))
+}
+
+/// Whether `session` has a card.
+fn carded(app: &App, session: &str) -> bool {
+    app.rail_cards()
+        .is_some_and(|(cards, _)| cards.iter().any(|row| row.id.0 == session))
+}
+
+#[test]
+fn x_sends_dismiss_and_an_accept_removes_the_card() {
+    let mut app = crashed();
+    let out = cross(&mut app, B);
+    assert_eq!(
+        out,
+        vec![json!({"id": out[0]["id"], "command": "dismiss", "args": {"session": B}})]
+    );
+    let id = out[0]["id"].as_str().unwrap_or_default().to_owned();
+    assert!(
+        app.on_line(hub_answer("command_accepted", &id, ""))
+            .is_empty()
+    );
+    assert!(!carded(&app, B));
+    assert!(carded(&app, C));
+}
+
+#[test]
+fn a_refused_dismiss_notes_the_row_and_adds_a_notice() {
+    let mut app = crashed();
+    let out = cross(&mut app, B);
+    let id = out[0]["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(hub_answer("command_rejected", &id, "still running"));
+    assert!(carded(&app, B));
+    assert_eq!(app.notice(), Some("still running"));
+    let note = app.rail_cards().and_then(|(cards, _)| {
+        cards
+            .iter()
+            .find(|row| row.id.0 == B)
+            .and_then(|row| row.note.clone())
+    });
+    assert_eq!(note.as_deref(), Some("still running"));
+    // The answer is taken: a second one is no dismiss's.
+    app.on_line(hub_answer("command_accepted", &id, ""));
+    assert!(carded(&app, B));
+}
+
+#[test]
+fn an_unrelated_hub_answer_is_not_a_dismiss() {
+    let mut app = crashed();
+    let out = cross(&mut app, B);
+    app.on_line(hub_answer("command_accepted", "c_unrelated", ""));
+    assert!(carded(&app, B));
+    let id = out[0]["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(hub_answer("command_accepted", &id, ""));
+    assert!(!carded(&app, B));
+}
+
+#[test]
+fn x_with_the_link_down_sends_nothing() {
+    let mut app = crashed();
+    app.disconnected();
+    assert!(cross(&mut app, B).is_empty());
+}
+
+#[test]
+fn x_on_a_live_card_sends_nothing() {
+    let mut app = crashed();
+    assert!(cross(&mut app, C).is_empty());
+}
+
+#[test]
+fn a_dismissed_card_leaves_a_gap_until_a_new_session_fills_it() {
+    let mut app = crashed();
+    let out = cross(&mut app, B);
+    let id = out[0]["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(hub_answer("command_accepted", &id, ""));
+    assert_eq!(number(&app, C), Some(3));
+    app.on_line(live(D, json!({})));
+    assert_eq!(number(&app, D), Some(2));
+    assert_eq!(number(&app, A), Some(1));
+}
+
+#[test]
+fn plus_goes_home_with_that_projects_workspace() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(live(
+        B,
+        json!({"workspace": "/Users/you/work/hub", "project": "-hub"}),
+    ));
+    let key = key(&app, B);
+    let out = sent(app.on_click(TargetId::Rail(Spot::Start(key))));
+    assert_eq!(out, vec![subscribe(&out[0]["id"], A, "summary")]);
+    assert_eq!(on_screen(&app), None);
+    let chip = app
+        .home_screen()
+        .and_then(|screen| screen.chips.first().map(|(_, chip)| chip.clone()));
+    assert_eq!(chip.as_deref(), Some("[hub]"));
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn a_resolved_request_ends_the_wait() {
+    let mut app = two_waiting();
+    let out = sent(press(&mut app, Key::AltA));
+    ack(&mut app, &out);
+    app.on_line(permission(A, "r_a"));
+    put_aside(&mut app);
+    let Line::Session(mut resolved) = permission(C, "r_c") else {
+        panic!("a session line");
+    };
+    resolved.kind = "permission_resolved".to_owned();
+    app.on_line(Line::Session(resolved));
+    app.on_line(permission(C, "r_c"));
+    assert!(app.panel().is_none(), "{}", panel_text(&app));
+}

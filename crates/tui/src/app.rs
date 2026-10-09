@@ -377,7 +377,7 @@ impl App {
             Key::Char(_) | Key::Backspace | Key::Up | Key::Down | Key::Tab => Effect::None,
             Key::BackTab if self.completions().is_none() => self.navigate(),
             Key::BackTab => Effect::None,
-            Key::AltA => self.open_first(),
+            Key::AltA => self.next_request(),
             Key::AltP => self.toggle_panel(),
             Key::AltR | Key::AltDigit(_) => Effect::None,
             Key::CtrlR => self.open_search(),
@@ -750,27 +750,13 @@ impl App {
         }
     }
 
-    /// `/approvals` and Alt+A with the panel closed: a put-aside offer
-    /// opens again, else the panel opens at the first request waiting, or a
-    /// notice says none waits.
-    fn open_first(&mut self) -> Effect {
-        // The offer holds its session before its first request, so it
-        // reopens first.
-        if self.offer.reopen() {
-            return Effect::None;
-        }
-        if !self.queue.open_first() {
-            self.notices.push("No requests waiting.".to_owned());
-        }
-        Effect::None
-    }
-
     /// Folds one session line, returning command lines to send.
     fn on_session(&mut self, envelope: &Envelope) -> Vec<String> {
         // The queue takes every session's requests; everything else is the
         // attached session's alone.
         if approvals::KINDS.contains(&envelope.kind.as_str()) {
             self.queue.fold(envelope);
+            self.request_arrived(envelope);
         }
         let mut send = self.reply_ack(envelope);
         if self.session() != Some(&envelope.session_id) {

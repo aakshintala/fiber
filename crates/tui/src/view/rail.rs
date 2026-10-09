@@ -135,17 +135,25 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<RailRow> {
     let card_w = width.saturating_sub(1);
     let text = usize::from(card_w).saturating_sub(3);
     let mut out = Vec::new();
+    // The text's last column: a header's "+" and a crashed card's ✕.
+    let last = u16::try_from(text.saturating_add(1)).unwrap_or(u16::MAX);
     for group in groups(&cards, launch_project) {
         let mut header = vec![Span::raw("  ")];
         header.extend(sides(
             vec![Span::raw(group.name.clone())],
-            vec![Span::raw(format::money(group.spend))],
+            vec![Span::raw(format!("{} +", format::money(group.spend)))],
             text,
         ));
+        let spots = group
+            .cards
+            .first()
+            .map(|card| (last, 1, 1, Spot::Start(card.key)))
+            .into_iter()
+            .collect();
         out.push(RailRow {
             line: Line::from(header),
             tint: None,
-            spots: Vec::new(),
+            spots,
             start: None,
         });
         for row in &group.cards {
@@ -181,6 +189,11 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
     });
     let wide = u16::try_from(card_w).unwrap_or(u16::MAX);
     let mut spots = vec![(0, wide, 4, Spot::Card(row.key))];
+    // The ✕ draws after the card's target, so a click on it dismisses.
+    if row.left == Some(Left::Crashed) {
+        let last = u16::try_from(text.saturating_add(1)).unwrap_or(u16::MAX);
+        spots.push((last, 1, 1, Spot::Dismiss(row.key)));
+    }
     for spans in texts {
         let mut line = vec![stripe.clone(), Span::raw(" ")];
         line.extend(spans);

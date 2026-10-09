@@ -472,7 +472,11 @@ fn targets_cover_each_card() {
             (Spot::Card(*key), Rect::new(0, top, 29, (40 - top).min(4)))
         })
         .collect();
-    assert_eq!(rail_targets(&targets), expected);
+    let cards: Vec<(Spot, Rect)> = rail_targets(&targets)
+        .into_iter()
+        .filter(|(spot, _)| matches!(spot, Spot::Card(_)))
+        .collect();
+    assert_eq!(cards, expected);
 }
 
 #[test]
@@ -546,4 +550,43 @@ fn on_home_no_rail_is_drawn() {
     let targets = render(&app, area, &mut buf, None);
     assert!(app.home_screen().is_some());
     assert!(rail_targets(&targets).is_empty());
+}
+
+#[test]
+fn targets_cover_each_card_its_cross_and_plus() {
+    // `A` and `C` share the launch project; `B` is alone in its own and
+    // crashed. A 40-column rail's text ends on column 37.
+    let mut app = app(20.0);
+    app.on_line(status(A, json!({})));
+    app.on_line(status(
+        B,
+        json!({"workspace": "/Users/you/work/hub", "project": "-hub"}),
+    ));
+    app.on_line(status(C, json!({})));
+    app.on_line(left(B, "crashed"));
+    let (a, b, c) = (key(&app, A), key(&app, B), key(&app, C));
+    let (_, targets) = hovered(&app, None);
+    assert_eq!(
+        rail_targets(&targets),
+        vec![
+            (Spot::Start(a), Rect::new(37, 0, 1, 1)),
+            (Spot::Card(a), Rect::new(0, 2, 39, 4)),
+            (Spot::Card(c), Rect::new(0, 8, 39, 4)),
+            (Spot::Start(b), Rect::new(37, 13, 1, 1)),
+            (Spot::Card(b), Rect::new(0, 15, 39, 4)),
+            (Spot::Dismiss(b), Rect::new(37, 15, 1, 1)),
+        ]
+    );
+    let lines = lines(&rail(&app));
+    assert!(lines[0].ends_with("$0.00 +"), "{}", lines[0]);
+    assert!(lines[15].ends_with('✕'), "{}", lines[15]);
+    assert_eq!(lines[15].chars().count(), 38, "{}", lines[15]);
+}
+
+#[test]
+fn rail_crashed_card_has_a_cross() {
+    let mut app = two(20.0, json!({"name": "deploy", "spend": spend(2.0)}));
+    app.on_line(status(C, json!({})));
+    app.on_line(left(B, "crashed"));
+    insta::assert_snapshot!("rail_crashed_card_has_a_cross", text(&rail(&app)));
 }

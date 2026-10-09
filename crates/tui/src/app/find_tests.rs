@@ -378,7 +378,7 @@ fn a_paste_with_an_approval_open_goes_to_its_feedback() {
     let mut app = attached(40, 10);
     search(&mut app, "a");
     app.on_line(request("a_1", "r_1"));
-    assert_eq!(app.open_first(), Effect::None);
+    assert_eq!(app.next_request(), Effect::None);
     assert!(app.panel().is_some());
     assert_eq!(app.on_edit(Edit::Paste("yes".to_owned())), Effect::None);
     assert_eq!(query(&app), "a");

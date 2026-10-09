@@ -18,7 +18,7 @@ impl App {
         self.history.cancel();
         self.copied = false;
         let effect = match target {
-            TargetId::Badge => self.open_first(),
+            TargetId::Badge => self.next_request(),
             TargetId::Link { .. } => self.follow_link(target),
             TargetId::FindCount => {
                 self.open_results();

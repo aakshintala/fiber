@@ -2,8 +2,12 @@
 //! elapsed times read, and the glue between the app and the rail
 //! (`docs/tui.md`, "The rail"). Drawing lives in `crate::view::rail`.
 
-use super::{App, Effect, Link, Phase};
-use crate::home::{Row, State};
+use contract::events::SessionState;
+use contract::{Envelope, RequestId, SessionId};
+use serde_json::{Map, Value, json};
+
+use super::{App, Effect, Link, Phase, mint};
+use crate::home::{Left, Row, State};
 use crate::keys::Key;
 use crate::view::rail::{CARD_ROWS, rows};
 
@@ -13,6 +17,12 @@ use crate::view::rail::{CARD_ROWS, rows};
 pub(crate) enum Spot {
     /// A card, by its row's key: switches to its session.
     Card(u64),
+    /// A crashed card's ✕, by its row's key: dismisses it through the
+    /// hub.
+    Dismiss(u64),
+    /// A project header's "+", by its first card's key: home, with that
+    /// card's workspace chosen for the next `start`.
+    Start(u64),
 }
 
 /// The rail's state behind a small interface.
@@ -27,6 +37,12 @@ pub(crate) struct RailState {
     /// A card to scroll into view once the rail is drawn, by its row's
     /// key.
     reveal: Option<u64>,
+    /// The `dismiss` commands waiting for their answers: command id and
+    /// session.
+    dismissing: Vec<(String, SessionId)>,
+    /// The request to show when it arrives: the session a switch opened
+    /// while it waited, and what it waits on.
+    arrival: Option<(SessionId, RequestId)>,
 }
 
 impl RailState {
@@ -142,7 +158,130 @@ impl App {
     pub(super) fn rail_click(&mut self, spot: Spot) -> Effect {
         match spot {
             Spot::Card(key) => self.switch_to(key),
+            Spot::Dismiss(key) => self.dismiss_card(key),
+            Spot::Start(key) => self.start_in(key),
         }
+    }
+
+    /// ⌥A, the badge and `/approvals` (`docs/tui.md`, "Bindings"): a
+    /// put-aside offer opens again, else the approval panel opens at the
+    /// first request waiting. With neither, the oldest card waiting other
+    /// than the one on screen is switched to, and its request opens when
+    /// it arrives; with none, a notice says so.
+    pub(super) fn next_request(&mut self) -> Effect {
+        // The offer holds its session before its first request, so it
+        // reopens first.
+        if self.offer.reopen() || self.queue.open_first() {
+            return Effect::None;
+        }
+        let attached = self.session();
+        let oldest = self.home.as_ref().and_then(|home| {
+            home.sessions
+                .cards()
+                .into_iter()
+                .filter(|row| {
+                    row.left.is_none() && row.state == State::Waiting && Some(&row.id) != attached
+                })
+                .min_by_key(|row| row.status.as_ref().map_or(u64::MAX, |status| status.since))
+                .map(|row| row.key)
+        });
+        match oldest {
+            Some(key) => self.switch_to(key),
+            None => {
+                self.notices.push("No requests waiting.".to_owned());
+                Effect::None
+            }
+        }
+    }
+
+    /// A request line from any session, already folded into the queue:
+    /// the request a switch waits for opens on the approval panel, once.
+    /// Its resolution, folded first, has left the queue, so it ends the
+    /// wait and opens nothing.
+    pub(super) fn request_arrived(&mut self, envelope: &Envelope) {
+        let request = envelope.payload.get("request_id").and_then(Value::as_str);
+        let awaited = self
+            .rail_state
+            .arrival
+            .as_ref()
+            .is_some_and(|(session, id)| {
+                *session == envelope.session_id && request == Some(id.0.as_str())
+            });
+        if awaited {
+            self.queue
+                .open_request(&envelope.session_id, request.unwrap_or_default());
+            self.rail_state.arrival = None;
+        }
+    }
+
+    /// The hub's answer to a `dismiss` this rail sent; `None` for any
+    /// other command. An accepted dismiss drops the card, leaving a gap
+    /// in the numbers; a refusal becomes the card's note and a notice.
+    pub(super) fn rail_answered(
+        &mut self,
+        id: &str,
+        accepted: bool,
+        payload: &Map<String, Value>,
+    ) -> Option<Vec<String>> {
+        let at = self
+            .rail_state
+            .dismissing
+            .iter()
+            .position(|(sent, _)| sent == id)?;
+        let (_, session) = self.rail_state.dismissing.remove(at);
+        if accepted {
+            if let Some(home) = self.home.as_mut() {
+                home.sessions.remove(&session);
+            }
+        } else {
+            let message = super::home::refusal(payload);
+            if let Some(home) = self.home.as_mut() {
+                home.sessions.note(&session, message.clone());
+            }
+            self.notices.push(message);
+        }
+        Some(Vec::new())
+    }
+
+    /// A crashed card's ✕: `dismiss` through the hub, so every client
+    /// agrees (`docs/tui.md`, "The rail"). Nothing goes out with the link
+    /// not up or for a card that is not crashed.
+    fn dismiss_card(&mut self, key: u64) -> Effect {
+        if self.link != Link::Up {
+            return Effect::None;
+        }
+        let Some(session) = self
+            .home
+            .as_ref()
+            .and_then(|home| home.sessions.by_key(key))
+            .filter(|row| row.left == Some(Left::Crashed))
+            .map(|row| row.id.clone())
+        else {
+            return Effect::None;
+        };
+        let id = mint();
+        let line = json!({"id": id, "command": "dismiss", "args": {"session": session.0}});
+        self.rail_state.dismissing.push((id, session));
+        Effect::Send(vec![line.to_string()])
+    }
+
+    /// A project header's "+": home, with the workspace of the card with
+    /// `key` chosen for the next `start` and focus in the input box.
+    fn start_in(&mut self, key: u64) -> Effect {
+        let Some(workspace) = self
+            .home
+            .as_ref()
+            .and_then(|home| home.sessions.by_key(key))
+            .map(|row| row.workspace.clone())
+        else {
+            return Effect::None;
+        };
+        let effect = self.leave();
+        if let Some(home) = self.home.as_mut() {
+            home.choose(workspace);
+        }
+        self.focus = None;
+        effect
     }
 
     /// Switches the conversation and the panel to the card with `key`:
@@ -171,9 +310,18 @@ impl App {
         if row.state == State::Unreadable {
             return self.open_entry(key);
         }
+        // A switch to a waiting card opens its request when it arrives.
+        let arrival = row.status.as_ref().and_then(|status| {
+            if let SessionState::Waiting { waiting } = &status.state {
+                Some((row.id.clone(), waiting.request_id.clone()))
+            } else {
+                None
+            }
+        });
         let mut lines = sent(self.leave());
         lines.extend(sent(self.open_entry(key)));
         self.rail_state.reveal = Some(key);
+        self.rail_state.arrival = arrival;
         Effect::Send(lines)
     }
 

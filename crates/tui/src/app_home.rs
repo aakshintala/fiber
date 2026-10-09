@@ -357,6 +357,9 @@ impl App {
                     if let Some(ask) = self.take_ask(id) {
                         return Some(self.answer_ask(ask, accepted, &hub.payload));
                     }
+                    if let Some(lines) = self.rail_answered(id, accepted, &hub.payload) {
+                        return Some(lines);
+                    }
                     // A rejected `start` is home's blocker text, above the
                     // box until the next `start` goes out. Reading
                     // `pending` first, it still reaches the rejection
@@ -1329,7 +1332,7 @@ impl Home {
     /// new worktree switch off and keeping whether it is in git: the
     /// launch flag for the launch directory, else whether some row in
     /// that workspace is then.
-    fn choose(&mut self, workspace: String) {
+    pub(super) fn choose(&mut self, workspace: String) {
         self.chosen_git = if workspace == self.launch.workspace.display().to_string() {
             self.launch.git
         } else {
@@ -1381,7 +1384,7 @@ fn refusal_parts(payload: &serde_json::Map<String, Value>) -> (&str, String) {
     (code, refusal(payload))
 }
 /// A hub refusal's message, for a notice.
-fn refusal(payload: &serde_json::Map<String, Value>) -> String {
+pub(super) fn refusal(payload: &serde_json::Map<String, Value>) -> String {
     payload
         .get("message")
         .and_then(Value::as_str)
