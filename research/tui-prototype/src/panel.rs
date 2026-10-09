@@ -5,9 +5,7 @@
 //! edge below, a raised surface, every content row opened by a ▌ stripe.
 //! No new frame style lives here; surfaces that need one say so in the PR.
 
-use super::{
-    BI, BLUE, CYAN, ORANGE, Row, bold, dim, fg, fit, row, slab, sp, t, width, wrap_rows,
-};
+use super::{BI, BLUE, Row, bold, dim, fg, fit, row, slab, sp, t, width};
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
@@ -126,29 +124,8 @@ fn flow(
         .collect()
 }
 
-/// One key with its description: the key in a fixed-width column, the
-/// description starting in the same column on every row, wrapping with a
-/// hanging indent. `other` paths get their own dim line under it.
-pub(crate) fn key_block(
-    key: &str,
-    other: &str,
-    desc: Vec<Span<'static>>,
-    key_w: usize,
-    inner: usize,
-) -> Vec<Row> {
-    let hang = key_w + 2;
-    let first = vec![sp(pad_key(key, key_w), fg(CYAN)), sp("  ", Style::new())];
-    let rest = vec![sp(" ".repeat(hang), Style::new())];
-    let mut out = flow(first, desc, rest, inner);
-    if !other.is_empty() {
-        let first = vec![sp(" ".repeat(hang), Style::new())];
-        out.extend(wrap_rows(vec![sp(other, dim())], inner, first.clone(), first));
-    }
-    out
-}
-
-/// One choice: the focused one marked like the approval card, `▸` in the
-/// attention colour with its key bold, the rest two blanks and plain.
+/// One choice: the focused one carries the gutter marker and a bold key.
+/// The caller draws the bar over the focused rows with [`bar`].
 pub(crate) fn choice_row(
     focused: bool,
     key: &str,
@@ -156,7 +133,7 @@ pub(crate) fn choice_row(
     key_w: usize,
     inner: usize,
 ) -> Vec<Row> {
-    let marker = if focused { sp("▸ ", fg(ORANGE)) } else { sp("  ", Style::new()) };
+    let marker = if focused { sp("› ", bold()) } else { sp("  ", Style::new()) };
     let key = if focused {
         sp(pad_key(key, key_w), bold())
     } else {
@@ -166,6 +143,39 @@ pub(crate) fn choice_row(
     let first = vec![marker, key, sp("  ", Style::new())];
     let rest = vec![sp(" ".repeat(hang), Style::new())];
     flow(first, vec![sp(desc, dim())], rest, inner)
+}
+
+/// A full-width selection bar over rows: the accent behind, dark ink over
+/// it, emphasis kept. Click targets and copy flags ride along untouched.
+pub(crate) fn bar(rows: Vec<Row>) -> Vec<Row> {
+    rows
+        .into_iter()
+        .map(|r| Row {
+            spans: r
+                .spans
+                .into_iter()
+                .map(|s| Span::styled(s.content, s.style.fg(Color::Black).bg(BLUE)))
+                .collect(),
+            bg: Some(BLUE),
+            ..r
+        })
+        .collect()
+}
+
+/// A footer legend: keys bold, labels muted, `·` between items.
+pub(crate) fn footer_legend(items: &[(&str, &str)], inner: usize) -> Row {
+    let mut spans = vec![];
+    for (i, (key, label)) in items.iter().enumerate() {
+        if i > 0 {
+            spans.push(sp(" · ", dim()));
+        }
+        if !key.is_empty() {
+            spans.push(sp(*key, bold()));
+            spans.push(sp(" ", Style::new()));
+        }
+        spans.push(sp(*label, dim()));
+    }
+    row(fit(&spans, inner))
 }
 
 /// Opens a content row with the stripe and its padding. Blank rows stay
@@ -185,15 +195,21 @@ fn stripe(r: Row, inner: usize) -> Row {
     }
 }
 
+/// Stripes content rows and edges the panel. Blank rows stay blank.
+pub(crate) fn slab_rows(rows: Vec<Row>, panel_w: usize) -> Vec<Row> {
+    let inner = inner_w(panel_w);
+    slab(rows.into_iter().map(|r| stripe(r, inner)).collect(), BI, None, panel_w)
+}
+
 /// Assembles a panel: the title, a blank row, the body, a blank row, the
 /// footer, striped and edged. The body's section gaps are the body's own.
+/// Panels with custom chrome assemble their own rows and call [`slab_rows`].
 pub(crate) fn frame(
     title: Option<Row>,
     body: Vec<Row>,
     footer: Option<Row>,
     panel_w: usize,
 ) -> Vec<Row> {
-    let inner = inner_w(panel_w);
     let mut rows = vec![];
     if let Some(t) = title {
         rows.push(t);
@@ -204,7 +220,7 @@ pub(crate) fn frame(
     if let Some(f) = footer {
         rows.push(f);
     }
-    slab(rows.into_iter().map(|r| stripe(r, inner)).collect(), BI, None, panel_w)
+    slab_rows(rows, panel_w)
 }
 
 /// Centres panel rows in a wider area, for surfaces painted full width: the
@@ -233,16 +249,6 @@ pub(crate) fn search_row(spans: Vec<Span<'static>>, panel_w: usize) -> Row {
     stripe(row(spans), inner_w(panel_w))
 }
 
-/// The panel's colours, for the mouse-closing case and the tests.
-pub(crate) fn surface() -> Color {
-    BI
-}
-pub(crate) fn stripe_colour() -> Color {
-    BLUE
-}
-pub(crate) fn attention() -> Color {
-    ORANGE
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,55 +365,47 @@ mod tests {
     }
 
     #[test]
-    fn key_columns_line_every_description_up() {
+    fn the_fixed_key_column_is_computed_once() {
         let keys = ["Enter", "⌥1 to ⌥9", "Ctrl+C"];
-        let key_w = key_width(&keys);
-        assert_eq!(key_w, "⌥1 to ⌥9".width());
-        let rows: Vec<Row> = keys
-            .iter()
-            .flat_map(|k| {
-                key_block(
-                    k,
-                    "/new",
-                    vec![sp("does a thing", Style::new())],
-                    key_w,
-                    60,
-                )
-            })
-            .collect();
-        // The description's cell column, not its byte offset, is the same.
-        let cols: Vec<usize> = rows
-            .iter()
-            .filter(|r| plain(r).contains("does a thing"))
-            .map(|r| {
-                let mut n = 0;
-                for s in &r.spans {
-                    if s.content.starts_with("does") {
-                        return n;
-                    }
-                    n += s.content.width();
-                }
-                panic!("lost the description");
-            })
-            .collect();
-        assert_eq!(cols.len(), 3);
-        assert_eq!(cols, vec![key_w + 2; 3], "descriptions drift: {cols:?}");
-        // The other paths sit dim on their own line, under the description.
-        let other = rows.iter().find(|r| plain(r).contains("/new")).unwrap();
-        let path = other.spans.iter().find(|s| s.content.contains("/new")).unwrap();
-        assert!(path.style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(key_width(&keys), "⌥1 to ⌥9".width());
+        assert_eq!(key_width(&[]), 0);
     }
 
     #[test]
-    fn choices_mark_the_focus_like_the_approval() {
+    fn choices_carry_the_gutter_marker_and_a_bold_key() {
         let rows = choice_row(true, "enter", "leave them running", 5, 40);
-        let t = text(&rows);
-        assert!(t.contains("▸ "));
-        assert_eq!(rows[0].spans[0].style.fg, Some(ORANGE));
+        assert!(text(&rows).contains("› "));
         assert!(rows[0].spans[1].style.add_modifier.contains(Modifier::BOLD));
         let rest = choice_row(false, "c", "close all", 5, 40);
         assert!(text(&rest).starts_with("  "));
         assert!(!rest[0].spans[1].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn the_bar_is_full_width_accent_with_dark_ink() {
+        let rows = bar(choice_row(true, "enter", "leave them running", 5, 40));
+        for r in &rows {
+            assert_eq!(r.bg, Some(BLUE));
+            for s in &r.spans {
+                assert_eq!(s.style.fg, Some(ratatui::style::Color::Black));
+                assert_eq!(s.style.bg, Some(BLUE));
+            }
+        }
+        // Emphasis survives the bar: the key stays bold.
+        assert!(rows[0].spans[1].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn the_legend_pairs_bold_keys_with_muted_labels() {
+        let f = footer_legend(&[("↑↓", "move"), ("esc", "closes")], 40);
+        let keys: Vec<&Span> = f.spans.iter().filter(|s| s.content == "↑↓" || s.content == "esc").collect();
+        assert_eq!(keys.len(), 2);
+        assert!(keys.iter().all(|s| s.style.add_modifier.contains(Modifier::BOLD)));
+        for lab in ["move", "closes"] {
+            let s = f.spans.iter().find(|s| s.content == lab).unwrap();
+            assert!(s.style.add_modifier.contains(Modifier::DIM));
+        }
+        assert!(plain(&f).contains(" · "));
     }
 
     #[test]
@@ -443,13 +441,7 @@ mod tests {
     fn tiny_terminals_clamp_without_panicking() {
         let rows = frame(
             Some(title_row("Key map", None, inner_w(MIN_W))),
-            key_block(
-                "Enter or ↓, Shift+Enter or ↑",
-                "",
-                vec![sp("next match", Style::new())],
-                30,
-                inner_w(30),
-            ),
+            choice_row(false, "esc", "stay", 5, inner_w(MIN_W)),
             None,
             width_for(200, 30),
         );
