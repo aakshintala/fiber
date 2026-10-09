@@ -275,10 +275,7 @@ fn cost_against_a_budget() {
         let mut app = attached(160, 40);
         app.on_line(budget_preamble(5.0));
         app.on_line(status_line(spend(1, 0, 0, 2, cost, 0.0), None));
-        assert!(
-            texts(&app, 40).iter().any(|drawn| drawn == row),
-            "{row}"
-        );
+        assert!(texts(&app, 40).iter().any(|drawn| drawn == row), "{row}");
     }
     // Without a budget the row keeps its rule: hidden at zero,
     // plain above it.

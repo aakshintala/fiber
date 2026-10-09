@@ -610,8 +610,7 @@ fn definitions_at_exactly_ten_percent_of_the_window_write_no_notice() {
 
 #[test]
 fn a_budget_reaches_preamble_built() {
-    let mut session =
-        Session::new(vec![Scripted::text("Done.")], None).budget(Some(2.5));
+    let mut session = Session::new(vec![Scripted::text("Done.")], None).budget(Some(2.5));
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let built = session

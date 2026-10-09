@@ -294,10 +294,7 @@ fn the_spend_segment_reads_against_the_budget() {
     app.on_line(spend_status(serde_json::json!(1.25)));
     let (screen, _) = draw(&app, 100, 30);
     let rows: Vec<&str> = screen.lines().collect();
-    assert!(
-        rows[rows.len() - 1].contains("$1.25 of $5.00"),
-        "{screen}"
-    );
+    assert!(rows[rows.len() - 1].contains("$1.25 of $5.00"), "{screen}");
 
     let mut app = attached(100, 30);
     app.on_line(spend_status(serde_json::json!(1.25)));
