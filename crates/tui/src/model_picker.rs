@@ -167,7 +167,7 @@ impl ModelPicker {
             .models
             .get(open.selected)
             .map(|entry| entry.reference.clone());
-        let selected = selected_reference
+        let mut selected = selected_reference
             .and_then(|reference| models.iter().position(|entry| entry.reference == reference))
             .unwrap_or_else(|| {
                 if old.models.is_empty() {
@@ -196,6 +196,22 @@ impl ModelPicker {
                     open.selected.min(models.len().saturating_sub(1))
                 }
             });
+        // A refresh that drops the selected row can leave the selection
+        // on a hidden catalogue index while the frame highlights the
+        // first shown row: move it onto the shown rows, so choosing
+        // takes the highlighted row.
+        let (rows, _) = shown_in(
+            &self.catalogue.models,
+            &self.scoped,
+            open.show_all,
+            open.mode,
+            open.target.as_ref(),
+        );
+        if !rows.contains(&selected)
+            && let Some(first) = rows.first()
+        {
+            selected = *first;
+        }
         open.selected = selected;
         open.chips = chips;
         open.touched = touched;
@@ -420,17 +436,21 @@ impl ModelPicker {
     pub(crate) fn choice(&self, session_only: bool) -> Option<Choice> {
         let open = self.open.as_ref()?;
         let (rows, _) = self.shown_rows(open);
-        if rows.is_empty() {
-            return None;
-        }
-        let entry = self.catalogue.models.get(open.selected)?;
+        // The selection can sit off the shown rows: choosing takes the
+        // first shown row, the one the frame highlights.
+        let selected = if rows.contains(&open.selected) {
+            open.selected
+        } else {
+            rows.first().copied()?
+        };
+        let entry = self.catalogue.models.get(selected)?;
         let level = open
             .chips
-            .get(open.selected)
+            .get(selected)
             .copied()
             .flatten()
             .and_then(|chip| entry.levels.get(chip).cloned());
-        let level_chosen = open.touched.get(open.selected).copied().unwrap_or(false);
+        let level_chosen = open.touched.get(selected).copied().unwrap_or(false);
         Some(choice_at(entry, open, level, level_chosen, session_only))
     }
 

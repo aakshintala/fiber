@@ -1381,6 +1381,54 @@ fn s_does_nothing_on_the_empty_scoped_view() {
     assert!(app.model_picker_open());
 }
 
+/// A scoped app attached to [`SESSION`] with the picker open on
+/// `acme/m1`, after a refresh answer that drops it for an unscoped row
+/// in its place.
+fn dropped_selection_app() -> App {
+    let mut app = scoped_home(&["acme/m1", "acme/m2"]);
+    app.on_line(hello());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.on_models(Ok(three()));
+    open(&mut app);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+    let mut answered = three();
+    answered.models[0] = entry("other/u");
+    app.on_models(Ok(answered));
+    app
+}
+
+#[test]
+fn a_refresh_that_drops_the_selected_model_moves_the_selection_onto_the_shown_rows() {
+    let mut app = dropped_selection_app();
+    // Index 0 now hides the unscoped `other/u`: the selection moves to
+    // the first shown row, `acme/m2`.
+    assert_eq!(selected(&app).as_deref(), Some("acme/m2"));
+    // The frame highlights that same row: the buttons, the heading,
+    // then `m2`.
+    let frame = app.model_picker_frame(24).expect("open");
+    assert_eq!(frame.rows[2][0].0, "m2   ".to_owned());
+    assert_eq!(frame.list.selected(), 2);
+    // Enter takes the highlighted row, not the hidden model.
+    let line = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(line["args"], json!({"model": "acme/m2"}));
+}
+
+#[test]
+fn choosing_with_a_hidden_selection_takes_the_highlighted_row() {
+    let mut app = dropped_selection_app();
+    // Park the selection back on the hidden row: the frame still
+    // highlights the first shown row.
+    app.model_picker.open.as_mut().expect("open").selected = 0;
+    let frame = app.model_picker_frame(24).expect("open");
+    assert_eq!(frame.rows[2][0].0, "m2   ".to_owned());
+    assert_eq!(frame.list.selected(), 2);
+    // `s` takes the highlighted row for this session only, leaving
+    // nothing to save.
+    let line = sent(app.on_key(Key::Char('s'), now()));
+    assert_eq!(line["args"], json!({"model": "acme/m2"}));
+    assert!(app.model_picker.awaiting.is_empty());
+}
+
 #[test]
 fn the_footer_reads_enter_set_as_default_s_this_session_only() {
     let (mut app, _) = choosing_app();
