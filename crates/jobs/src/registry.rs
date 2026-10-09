@@ -726,9 +726,10 @@ impl contract::jobs::Jobs for Registry {
         Registry::open(self, opening)
     }
 
-    /// Writes `text` to a running job started with `tty`, at once, with a
-    /// cancel that never fires: no wait for output, as the driver command
-    /// is accepted once written.
+    /// Writes `text` to a running job started with `tty`, waiting at most
+    /// [`WRITE_TIMEOUT`] on the session clock for the terminal to take it:
+    /// a job that never reads stdin cannot hold the connection's reader
+    /// thread past that wait (`docs/architecture.md`, "One inbox").
     fn write(&self, job_id: &JobId, text: &str) -> Result<(), contract::jobs::WriteError> {
         let (typer, _) = match self.typer_of(&job_id.0) {
             Ok(found) => found,
@@ -738,9 +739,18 @@ impl contract::jobs::Jobs for Registry {
             Err(WriteError::NotTty) => return Err(contract::jobs::WriteError::NotTty),
             Err(WriteError::Io(error)) => return Err(contract::jobs::WriteError::Io(error)),
         };
-        typer(text.as_bytes(), self.clock.as_ref(), &Never)
-            .map(|_| ())
-            .map_err(contract::jobs::WriteError::Io)
+        // `checked_add` is `None` when the wait does not fit on the clock.
+        // That write has no deadline, as a `wait` with no deadline does.
+        let until = self.clock.now().checked_add(WRITE_TIMEOUT);
+        let cancel = Deadline {
+            clock: Arc::clone(&self.clock),
+            until,
+        };
+        match typer(text.as_bytes(), self.clock.as_ref(), &cancel) {
+            Ok(written) if written >= text.len() => Ok(()),
+            Ok(_) => Err(write_timed_out()),
+            Err(error) => Err(contract::jobs::WriteError::Io(error)),
+        }
     }
 
     fn stop(&self, job_id: &JobId) -> bool {
@@ -811,16 +821,35 @@ fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
     inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// A cancel that never fires: [`contract::jobs::Jobs::write`] types at
-/// once, with no wait for output.
-struct Never;
+/// How long [`contract::jobs::Jobs::write`] waits on the session clock for
+/// the terminal to take the input before it reports the timeout. Picked,
+/// not measured.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
-impl Cancel for Never {
+/// The timeout [`contract::jobs::Jobs::write`] reports when the terminal
+/// did not take the input within [`WRITE_TIMEOUT`], whole or in part.
+fn write_timed_out() -> contract::jobs::WriteError {
+    contract::jobs::WriteError::Io(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "The job's terminal did not take the input.",
+    ))
+}
+
+/// A cancel that fires once `until` passes on the session clock, bounding
+/// [`contract::jobs::Jobs::write`]. `None` never fires.
+struct Deadline {
+    clock: Arc<dyn Clock>,
+    until: Option<Instant>,
+}
+
+impl Cancel for Deadline {
     fn is_cancelled(&self) -> bool {
-        false
+        self.until.is_some_and(|until| self.clock.now() >= until)
     }
 
-    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
+    fn subscribe(&self, waker: Weak<dyn Wake>) {
+        self.clock.subscribe(waker);
+    }
 }
 
 #[cfg(test)]

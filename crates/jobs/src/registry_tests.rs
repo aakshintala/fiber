@@ -804,6 +804,129 @@ fn a_write_that_typed_less_than_it_was_given_says_so() {
     drop(opened.end);
 }
 
+/// Runs the [`Jobs`] seam's `write` on its own thread and returns the
+/// answer's channel.
+fn seam_writing(
+    registry: &Arc<Registry>,
+    id: &str,
+    input: String,
+) -> mpsc::Receiver<Result<(), contract::jobs::WriteError>> {
+    let registry = Arc::clone(registry);
+    let id = id.to_owned();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = tx.send(seam_write(&registry, &JobId(id), &input));
+    });
+    rx
+}
+
+/// A `tty` job whose terminal never takes another byte: waits for the
+/// clock to move until the write is cancelled, then reports nothing
+/// written, as a full queue does. The paired receiver fires once the
+/// write reaches the terminal.
+fn open_stuck(registry: &Arc<Registry>) -> (String, contract::jobs::Opened, mpsc::Receiver<()>) {
+    struct Nudge(mpsc::Sender<()>);
+    impl contract::clock::Wake for Nudge {
+        fn wake(&self) {
+            let _sent = self.0.send(());
+        }
+    }
+    let (entry_tx, entry_rx) = mpsc::channel();
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "sleep infinity".into(),
+            stop: Stop(Box::new(|| {})),
+            lines: false,
+            input: Some(contract::jobs::Input(Box::new(move |_, clock, cancel| {
+                let _sent = entry_tx.send(());
+                let (tx, rx) = mpsc::channel();
+                let wake: Arc<dyn contract::clock::Wake> = Arc::new(Nudge(tx));
+                clock.subscribe(Arc::downgrade(&wake));
+                while !cancel.is_cancelled() {
+                    // Bounded in real time: every path below moves the
+                    // clock first.
+                    if rx.recv_timeout(Duration::from_secs(10)).is_err() {
+                        break;
+                    }
+                }
+                Ok(0)
+            }))),
+        })
+        .unwrap();
+    (opened.started.job_id.0.clone(), opened, entry_rx)
+}
+
+#[test]
+fn seam_write_times_out_once_the_deadline_passes_and_not_before() {
+    let (_dir, clock, registry) = clocked_world();
+    let (id, opened, entered) = open_stuck(&registry);
+    let rx = seam_writing(&registry, &id, "hi".to_owned());
+    entered
+        .recv_timeout(DEADLINE)
+        .expect("the write reached the terminal");
+    // Just before the deadline the write is still parked.
+    clock.advance(Duration::from_millis(999));
+    assert!(
+        rx.try_recv().is_err(),
+        "the write returned before its deadline"
+    );
+    // At the deadline it reports that the terminal never took the input.
+    clock.advance(Duration::from_millis(1));
+    let err = rx
+        .recv_timeout(DEADLINE)
+        .expect("the write returned at its deadline");
+    assert!(
+        matches!(&err, Err(contract::jobs::WriteError::Io(error))
+            if error.kind() == std::io::ErrorKind::TimedOut
+                && error.to_string() == "The job's terminal did not take the input."),
+        "{err:?}"
+    );
+    drop(opened.end);
+}
+
+#[test]
+fn seam_write_reports_a_short_write_as_a_timeout() {
+    let (_dir, _clock, registry) = clocked_world();
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "cat".into(),
+            stop: Stop(Box::new(|| {})),
+            lines: false,
+            input: Some(contract::jobs::Input(Box::new(|_, _, _| Ok(1)))),
+        })
+        .unwrap();
+    assert!(
+        matches!(
+            seam_write(&registry, &opened.started.job_id, "abc"),
+            Err(contract::jobs::WriteError::Io(error))
+                if error.kind() == std::io::ErrorKind::TimedOut
+        ),
+        "a partial write is still a timeout"
+    );
+    drop(opened.end);
+}
+
+#[test]
+fn seam_write_succeeds_when_the_terminal_drains_before_the_deadline() {
+    let (_dir, clock, registry) = clocked_world();
+    let tick = Arc::clone(&clock);
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "cat".into(),
+            stop: Stop(Box::new(|| {})),
+            lines: false,
+            input: Some(contract::jobs::Input(Box::new(move |bytes, _, _| {
+                tick.advance(Duration::from_millis(500));
+                Ok(bytes.len())
+            }))),
+        })
+        .unwrap();
+    seam_write(&registry, &opened.started.job_id, "hi").unwrap();
+    drop(opened.end);
+}
 /// Types through the [`Jobs`] seam, not the inherent `write` that waits:
 /// the driver command is accepted once written.
 fn seam_write(

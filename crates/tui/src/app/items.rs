@@ -479,14 +479,17 @@ impl App {
     /// `job_input` to the attached session, which owns the job. The same
     /// fall-throughs as [`App::item_job_key`].
     pub(super) fn item_job_edit(&mut self, edit: &Edit) -> Option<Effect> {
-        let text = keys::encode_edit(edit)?;
-        self.item_job_send(text)
+        self.item_job_send(keys::encode_edit(edit))
     }
 
     /// Sends `text` as `job_input` for the open job: `None` for a finished
     /// job, a non-`tty` job, a delegate, or a link that is down, so each
-    /// falls through as today.
+    /// falls through as today. `None` too while an approval or question
+    /// takes keys and edits, as [`crate::input::route`] does for the draft.
     fn item_job_send(&mut self, text: String) -> Option<Effect> {
+        if self.queue.open() {
+            return None;
+        }
         let open = self.items.open.as_ref()?;
         let record = self.items.jobs.get(&open.job_id)?;
         if record.delegate.is_some() || record.outcome.is_some() || !keys::is_tty(record) {

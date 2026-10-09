@@ -31,26 +31,28 @@ pub(super) fn encode(key: &Key) -> Option<String> {
         Key::CtrlF => "\x06".to_owned(),
         Key::CtrlV => "\x16".to_owned(),
         Key::CtrlL => "\x0c".to_owned(),
-        Key::Esc
-        | Key::CtrlC
-        | Key::BackTab
-        | Key::F1
-        | Key::AltA
-        | Key::AltUp
-        | Key::AltDown
-        | Key::AltX
-        | Key::AltP
-        | Key::AltR
-        | Key::AltDigit(_) => return None,
+        Key::BackTab => "\x1b[Z".to_owned(),
+        Key::F1 => "\x1bOP".to_owned(),
+        Key::AltA => "\x1ba".to_owned(),
+        Key::AltUp => "\x1b[1;3A".to_owned(),
+        Key::AltDown => "\x1b[1;3B".to_owned(),
+        Key::AltX => "\x1bx".to_owned(),
+        Key::AltP => "\x1bp".to_owned(),
+        Key::AltR => "\x1br".to_owned(),
+        Key::AltDigit(digit) => format!("\x1b{digit}"),
+        // Esc closes the view and Ctrl+C keeps the app's quit gesture.
+        // Ctrl+L never reaches here: it opens the model picker earlier in
+        // `route_key`.
+        Key::Esc | Key::CtrlC => return None,
     };
     Some(text)
 }
 
 /// The bytes `edit` types into the job: the edit as typed, escape
-/// sequences included. Every variant sends; a pasted line break goes as a
-/// carriage return, as Enter does.
-pub(super) fn encode_edit(edit: &Edit) -> Option<String> {
-    let text = match edit {
+/// sequences included. A pasted line break goes as a carriage return, as
+/// Enter does.
+pub(super) fn encode_edit(edit: &Edit) -> String {
+    match edit {
         Edit::Left => "\x1b[D".to_owned(),
         Edit::Right => "\x1b[C".to_owned(),
         Edit::WordLeft => "\x1b[1;5D".to_owned(),
@@ -62,8 +64,7 @@ pub(super) fn encode_edit(edit: &Edit) -> Option<String> {
         Edit::CtrlJ => "\n".to_owned(),
         Edit::DeleteWord => "\x1b\x7f".to_owned(),
         Edit::Paste(text) => text.replace('\n', "\r"),
-    };
-    Some(text)
+    }
 }
 
 /// Whether `record` is a `tty` job: the one whose output is a screen grid.

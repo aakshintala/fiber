@@ -297,6 +297,15 @@ fn every_key_encodes_to_the_bytes_the_job_reads() {
         (Key::CtrlF, "\x06"),
         (Key::CtrlV, "\x16"),
         (Key::CtrlL, "\x0c"),
+        (Key::BackTab, "\x1b[Z"),
+        (Key::F1, "\x1bOP"),
+        (Key::AltA, "\x1ba"),
+        (Key::AltUp, "\x1b[1;3A"),
+        (Key::AltDown, "\x1b[1;3B"),
+        (Key::AltX, "\x1bx"),
+        (Key::AltP, "\x1bp"),
+        (Key::AltR, "\x1br"),
+        (Key::AltDigit(3), "\x1b3"),
     ];
     for (key, expected) in rows {
         assert_eq!(encode(&key).as_deref(), Some(expected), "{key:?}");
@@ -304,20 +313,8 @@ fn every_key_encodes_to_the_bytes_the_job_reads() {
 }
 
 #[test]
-fn esc_ctrl_c_and_keys_the_enum_cannot_name_send_nothing() {
-    for key in [
-        Key::Esc,
-        Key::CtrlC,
-        Key::BackTab,
-        Key::F1,
-        Key::AltA,
-        Key::AltUp,
-        Key::AltDown,
-        Key::AltX,
-        Key::AltP,
-        Key::AltR,
-        Key::AltDigit(3),
-    ] {
+fn only_esc_and_ctrl_c_send_nothing() {
+    for key in [Key::Esc, Key::CtrlC] {
         assert_eq!(encode(&key), None, "{key:?}");
     }
 }
@@ -338,7 +335,7 @@ fn every_edit_encodes_to_the_bytes_the_job_reads() {
         (Edit::Paste("a\nb".to_owned()), "a\rb"),
     ];
     for (edit, expected) in rows {
-        assert_eq!(encode_edit(&edit).as_deref(), Some(expected), "{edit:?}");
+        assert_eq!(encode_edit(&edit).as_str(), expected, "{edit:?}");
     }
 }
 
@@ -498,4 +495,42 @@ fn edits_with_the_link_down_edit_the_draft() {
     app.connect_failed("down".to_owned());
     assert!(job_inputs(app.on_edit(Edit::Paste("xy".to_owned()))).is_empty());
     assert_eq!(app.draft(), "xy");
+}
+
+/// An approval request on the attached session, opening the approval panel.
+fn approval(app: &mut App) {
+    app.on_line(session_line(
+        "permission_requested",
+        json!({"request_id": "r_1", "effects": ["executes"], "reversible": true,
+            "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "p"}}),
+    ));
+}
+
+#[test]
+fn edits_with_the_approval_panel_open_reach_the_panel() {
+    let mut app = home();
+    opened(&mut app);
+    open_tty(&mut app, "j_9");
+    approval(&mut app);
+    assert!(app.panel().is_some());
+    assert!(job_inputs(app.on_edit(Edit::Left)).is_empty());
+    assert!(job_inputs(app.on_edit(Edit::Paste("xy".to_owned()))).is_empty());
+    // The paste went to the panel's feedback, not the draft or the job.
+    assert!(app.draft.is_empty());
+    assert!(app.panel().is_some());
+}
+
+#[test]
+fn keys_with_the_approval_panel_open_do_not_send() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    open_tty(&mut app, "j_9");
+    approval(&mut app);
+    assert!(app.panel().is_some());
+    // End falls through the panel to the screen behind: without the
+    // guard it would type into the job.
+    assert!(job_inputs(app.on_key(Key::End, clock.now())).is_empty());
+    assert!(app.panel().is_some());
 }

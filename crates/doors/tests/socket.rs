@@ -2539,18 +2539,32 @@ fn job_input_line(id: &str, job_id: &str, text: &str) -> String {
 
 /// Jobs whose `write` types into the inner fake's terminal, as the registry
 /// does: accepted while the job runs with one, `NotTty` while it runs
-/// without one, `NotRunning` for an unknown id or once it ended.
+/// without one, `NotRunning` for an unknown id or once it ended. A job
+/// passed to [`WritableJobs::stick`] never takes another byte instead:
+/// its write parks until the session clock moves a second on, then reports
+/// the timeout the registry reports.
 struct WritableJobs {
     inner: Arc<FakeJobs>,
     clock: Arc<FakeClock>,
+    stuck: Mutex<Vec<(contract::JobId, mpsc::Sender<()>)>>,
 }
 
 impl WritableJobs {
-    fn wrap(jobs: Arc<FakeJobs>) -> Arc<Self> {
+    /// Wraps `jobs`, parking stuck writes on the session clock.
+    fn wrap(jobs: Arc<FakeJobs>, clock: Arc<FakeClock>) -> Arc<Self> {
         Arc::new(Self {
             inner: jobs,
-            clock: FakeClock::new(),
+            clock,
+            stuck: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Parks the next `write` to `job_id` until the session clock moves a
+    /// second on. Returns a receiver that fires once the write parks.
+    fn stick(&self, job_id: &contract::JobId) -> mpsc::Receiver<()> {
+        let (tx, rx) = mpsc::channel();
+        self.stuck.lock().unwrap().push((job_id.clone(), tx));
+        rx
     }
 }
 
@@ -2591,6 +2605,37 @@ impl Jobs for WritableJobs {
         if !self.inner.running().contains(job_id) {
             return Err(contract::jobs::WriteError::NotRunning);
         }
+        if let Some(entered) = self
+            .stuck
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(stuck, _)| stuck == job_id)
+            .map(|(_, entered)| entered.clone())
+        {
+            struct Nudge(mpsc::Sender<()>);
+            impl Wake for Nudge {
+                fn wake(&self) {
+                    let _sent = self.0.send(());
+                }
+            }
+            let _sent = entered.send(());
+            let (tx, rx) = mpsc::channel();
+            let wake: Arc<dyn Wake> = Arc::new(Nudge(tx));
+            self.clock.subscribe(Arc::downgrade(&wake));
+            let until = self.clock.now() + Duration::from_secs(1);
+            while self.clock.now() < until {
+                // Bounded in real time: the test moves the clock past the
+                // wait before anything else.
+                if rx.recv_timeout(Duration::from_secs(10)).is_err() {
+                    break;
+                }
+            }
+            return Err(contract::jobs::WriteError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "The job's terminal did not take the input.",
+            )));
+        }
         match self.inner.type_into(
             job_id,
             text.as_bytes(),
@@ -2627,7 +2672,9 @@ fn job_input_is_answered_on_the_reader_thread_while_the_loop_is_blocked() {
     let job = open_tty_job(&jobs, Arc::clone(&typed));
     let job_id = job.started.job_id.0.clone();
     let opened = Opened::open(vec![]);
-    opened.session.jobs(WritableJobs::wrap(jobs));
+    opened
+        .session
+        .jobs(WritableJobs::wrap(jobs, opened.clock.clone()));
     let socket = opened.socket.clone();
     let dir = opened.dir.clone();
     opened
@@ -2668,7 +2715,9 @@ fn job_input_for_an_unknown_or_ended_job_is_rejected_stale() {
         output_tail: None,
     });
     let opened = Opened::open(vec![]);
-    opened.session.jobs(WritableJobs::wrap(jobs));
+    opened
+        .session
+        .jobs(WritableJobs::wrap(jobs, opened.clock.clone()));
     let socket = opened.socket.clone();
     opened
         .session
@@ -2698,7 +2747,9 @@ fn job_input_to_a_job_without_a_terminal_is_rejected_invalid_arguments() {
     let job = open_job(&jobs, fired_tx);
     let job_id = job.started.job_id.0.clone();
     let opened = Opened::open(vec![]);
-    opened.session.jobs(WritableJobs::wrap(jobs));
+    opened
+        .session
+        .jobs(WritableJobs::wrap(jobs, opened.clock.clone()));
     let socket = opened.socket.clone();
     opened
         .session
@@ -2734,7 +2785,9 @@ fn job_input_to_a_closed_terminal_is_rejected_io_failed() {
         .unwrap();
     let job_id = job.started.job_id.0.clone();
     let opened = Opened::open(vec![]);
-    opened.session.jobs(WritableJobs::wrap(jobs));
+    opened
+        .session
+        .jobs(WritableJobs::wrap(jobs, opened.clock.clone()));
     let socket = opened.socket.clone();
     opened
         .session
@@ -2749,6 +2802,50 @@ fn job_input_to_a_closed_terminal_is_rejected_io_failed() {
                     "Writing to the job's terminal failed: the terminal is closed."
                 )
             );
+            Ok(())
+        })
+        .unwrap();
+    drop(job);
+    opened.close();
+}
+
+#[test]
+fn job_stop_is_answered_after_a_stuck_job_input_times_out() {
+    let temp = Temp::new();
+    let jobs = FakeJobs::new(&temp.0);
+    let job = open_tty_job(&jobs, Arc::new(Mutex::new(Vec::new())));
+    let job_id = job.started.job_id.0.clone();
+    let opened = Opened::open(vec![]);
+    let writable = WritableJobs::wrap(jobs, opened.clock.clone());
+    let parked = writable.stick(&contract::JobId(job_id.clone()));
+    opened.session.jobs(writable);
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    let clock = opened.clock.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &job_input_line("c_in", &job_id, "x"));
+            // The reader is stuck in the write: move the session clock
+            // past the 1 s wait with no wall-clock sleep.
+            parked
+                .recv_timeout(DEADLINE)
+                .expect("the write parked in the terminal");
+            clock.advance(Duration::from_secs(2));
+            let rejected = response(&client, "c_in");
+            assert_eq!(
+                rejection(&rejected),
+                ("io_failed", "The job's terminal did not take the input.")
+            );
+            assert_eq!(command_id(&rejected), Some("c_in"));
+            // The same connection keeps reading.
+            send(&client, &job_stop_line("c_stop", &job_id));
+            let accepted = response(&client, "c_stop");
+            assert_eq!(kind(&accepted), "command_accepted");
+            assert_eq!(command_id(&accepted), Some("c_stop"));
+            no_durable(&dir);
             Ok(())
         })
         .unwrap();

@@ -43,6 +43,8 @@ const NO_TURN: &str = "No turn is running.";
 const NO_JOB: &str = "That job is not running.";
 /// A `job_input` names a job that was not started with `tty`.
 const NOT_TTY: &str = "That job was not started with `tty`.";
+/// A `job_input` whose terminal never took the input within the wait.
+const NOT_TAKEN: &str = "The job's terminal did not take the input.";
 /// A `background` finds no shell call in the foreground.
 const NO_CALL: &str = "No shell call is running.";
 const HISTORY: usize = 256;
@@ -356,12 +358,14 @@ fn job_input(conn: &mut Conn, id: CommandId, args: &contract::commands::JobInput
             reject(conn, Some(id), ErrorCode::InvalidArguments, NOT_TTY);
         }
         Err(contract::jobs::WriteError::Io(error)) => {
-            reject(
-                conn,
-                Some(id),
-                ErrorCode::IoFailed,
-                &format!("Writing to the job's terminal failed: {error}."),
-            );
+            // A terminal that never took the input reports the wait; any
+            // other failure reports its cause.
+            let message = if error.kind() == std::io::ErrorKind::TimedOut {
+                NOT_TAKEN.to_owned()
+            } else {
+                format!("Writing to the job's terminal failed: {error}.")
+            };
+            reject(conn, Some(id), ErrorCode::IoFailed, &message);
         }
     }
 }
