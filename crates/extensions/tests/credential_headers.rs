@@ -333,6 +333,11 @@ fn credential_header_shapes() {
             "{ token = \"tok-1\", expires_at = 4102444800, headers = {} }",
             Some(&[]),
         ),
+        (
+            "{ token = \"tok-1\", expires_at = 4102444800, \
+             headers = json.decode(\"[]\") }",
+            Some(&[]),
+        ),
         // A null carried over from a host call is no headers, as for `sign()`.
         (
             "{ token = \"tok-1\", expires_at = 4102444800, \
@@ -1019,6 +1024,7 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
         let provider = LuaProvider::new(extension, "p");
         let signer = signer_of(&provider);
         let (done, finished) = mpsc::channel();
+        let mut threads = Vec::with_capacity(calls);
         for round in 1..=calls {
             // The advance comes before the spawn: a clock move between a
             // thread's spawn and its call's start would end that call at
@@ -1029,17 +1035,20 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
             }
             let signing = Arc::clone(&signer);
             let completed = done.clone();
-            std::thread::spawn(move || {
+            threads.push(std::thread::spawn(move || {
                 let url = "http://127.0.0.1:1/v1/responses".to_owned();
                 completed
-                    .send(signing.sign(&SignRequest {
-                        method: "POST",
-                        url: &url,
-                        headers: &[],
-                        body: b"{}",
-                    }))
+                    .send((
+                        round,
+                        signing.sign(&SignRequest {
+                            method: "POST",
+                            url: &url,
+                            headers: &[],
+                            body: b"{}",
+                        }),
+                    ))
                     .unwrap_or(());
-            });
+            }));
             // The new call fetches its own token and blocks before the next
             // round, so every call is in flight at once.
             assert!(
@@ -1059,12 +1068,15 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
 
         blocking.release();
         for _ in 0..calls {
-            finished
-                .recv_timeout(CALL_DEADLINE)
-                .unwrap_or_else(|_| {
-                    panic!("calls {calls}: every sign returns within {CALL_DEADLINE:?}")
-                })
-                .unwrap();
+            let (_, result) = finished.recv_timeout(CALL_DEADLINE).unwrap_or_else(|_| {
+                panic!("calls {calls}: every sign returns within {CALL_DEADLINE:?}")
+            });
+            result.unwrap();
+        }
+        for (index, thread) in threads.into_iter().enumerate() {
+            thread
+                .join()
+                .unwrap_or_else(|_| panic!("calls {calls}: sign thread {} exits", index + 1));
         }
         let mut values: Vec<String> = signer
             .credentials()
@@ -1072,10 +1084,23 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
             .map(|secret| secret.expose().to_owned())
             .collect();
         values.sort();
+        if values.len() > want {
+            let cached = provider.token(&pair(provider.name())).unwrap();
+            assert_eq!(
+                values.len(),
+                want + 1,
+                "only the current cache may add a distinct value: {values:?}"
+            );
+            assert!(
+                values.contains(&cached.expose().to_owned()),
+                "the extra value is the current cache: {values:?}"
+            );
+            values.retain(|value| value != cached.expose());
+        }
         assert_eq!(
             values.len(),
             want,
-            "calls {calls}: bounded once quiescent: {values:?}"
+            "calls {calls}: completed history is bounded once quiescent: {values:?}"
         );
         assert!(!values.contains(&"never-used-token".to_owned()));
         if calls == 16 {

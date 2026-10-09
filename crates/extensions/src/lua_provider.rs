@@ -107,10 +107,8 @@ impl UsedState {
                 .retain(|known| known.expose() != value.expose());
             self.completed.push(value.clone());
         }
-        if self.completed.len() > USED_BOUND {
-            let excess = self.completed.len() - USED_BOUND;
-            self.completed.drain(..excess);
-        }
+        let excess = self.completed.len().saturating_sub(USED_BOUND);
+        self.completed.drain(..excess);
     }
 }
 
@@ -132,6 +130,30 @@ impl Drop for UsedGuard {
 struct TokenState {
     current: Option<Token>,
     refreshing: bool,
+}
+
+fn parse_credential_headers(
+    headers: Option<&Value>,
+) -> Result<Vec<(String, Secret)>, &'static str> {
+    match headers {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(list)) if list.is_empty() => Ok(Vec::new()),
+        Some(Value::Object(map)) => map
+            .iter()
+            .map(|(name, value)| {
+                let Value::String(value) = value else {
+                    return Err("`headers` with a value that is not a string");
+                };
+                Ok((name.clone(), Secret::new(value.clone())))
+            })
+            .collect(),
+        Some(Value::Array(_))
+        | Some(Value::Bool(_))
+        | Some(Value::Number(_))
+        | Some(Value::String(_)) => {
+            Err("something other than a table of header names to values for `headers`")
+        }
+    }
 }
 
 impl LuaProvider {
@@ -479,32 +501,8 @@ impl LuaProvider {
             // an array, so `returned` refuses those before conversion, and
             // this refuses the shapes that survive it (`docs/extensions.md`,
             // "What writing a provider looks like").
-            let headers = match returned.get("headers") {
-                None | Some(Value::Null) => Vec::new(),
-                Some(Value::Array(list)) if list.is_empty() => Vec::new(),
-                Some(Value::Object(map)) => map
-                    .iter()
-                    .map(|(name, value)| {
-                        let Value::String(value) = value else {
-                            return Err(self.bad_return(
-                                "credential",
-                                "`headers` with a value that is not a string".into(),
-                            ));
-                        };
-                        Ok((name.clone(), Secret::new(value.clone())))
-                    })
-                    .collect::<Result<Vec<_>, Error>>()?,
-                Some(Value::Array(_))
-                | Some(Value::Bool(_))
-                | Some(Value::Number(_))
-                | Some(Value::String(_)) => {
-                    return Err(self.bad_return(
-                        "credential",
-                        "something other than a table of header names to values for `headers`"
-                            .into(),
-                    ));
-                }
-            };
+            let headers = parse_credential_headers(returned.get("headers"))
+                .map_err(|why| self.bad_return("credential", why.to_owned()))?;
             Ok(Token {
                 secret: Secret::new(token.to_owned()),
                 expires,
