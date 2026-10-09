@@ -259,6 +259,45 @@ fn a_rejected_sessions_keeps_the_rows() {
 }
 
 #[test]
+fn a_rejected_sessions_ends_the_wait() {
+    let mut app = home();
+    linked(&mut app);
+    fold(&mut app, live(S_B, "tidy docs"));
+    let out = reconnect(&mut app);
+    let id = sessions_id(&out);
+    fold(
+        &mut app,
+        hub(
+            "command_rejected",
+            json!({"command_id": id, "code": "internal", "message": "nope"}),
+        ),
+    );
+    assert_eq!(rows(&app), ["✓  tidy docs"]);
+    // The wait is off, so a later answer with the same id deletes nothing.
+    fold(&mut app, sessions_answer(&id, &[]));
+    assert_eq!(rows(&app), ["✓  tidy docs"]);
+}
+
+#[test]
+fn a_rejection_with_another_id_leaves_the_wait() {
+    let mut app = home();
+    linked(&mut app);
+    fold(&mut app, live(S_B, "tidy docs"));
+    let out = reconnect(&mut app);
+    let id = sessions_id(&out);
+    fold(
+        &mut app,
+        hub(
+            "command_rejected",
+            json!({"command_id": "c_other", "code": "internal", "message": "nope"}),
+        ),
+    );
+    // The wait is still on, so the answer with its id drops the row.
+    fold(&mut app, sessions_answer(&id, &[]));
+    assert!(rows(&app).is_empty());
+}
+
+#[test]
 fn a_sessions_answer_without_live_drops_everything() {
     let mut app = home();
     linked(&mut app);
