@@ -312,7 +312,9 @@ impl KeysScreen {
                 }
                 Outcome::Nothing
             }
-            Spot::Cell(_, _) | Spot::Switch { .. } | Spot::Revoke(_) => Outcome::Nothing,
+            Spot::Cell(_, _) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_) => {
+                Outcome::Nothing
+            }
         }
     }
 
