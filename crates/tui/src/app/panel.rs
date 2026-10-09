@@ -26,6 +26,9 @@ pub(crate) enum Spot {
     Jobs,
     /// The Session card's branch row: runs `git status`.
     Branch,
+    /// The Session card's "N waiting" while the rail is not drawn: shows
+    /// the rail (`docs/tui.md`, "Shedding").
+    Waiting,
 }
 
 /// What the branch query last answered.
@@ -499,6 +502,7 @@ impl App {
                 self.pending.insert(id, (Kind::Shell, draft));
                 Effect::Send(vec![line])
             }
+            Spot::Waiting => self.show_rail(),
         }
     }
 }

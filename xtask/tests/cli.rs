@@ -266,12 +266,14 @@ fn plan_prints_the_jobs_and_shards() {
         "true",
         "--mutants",
         "true",
+        "--mutant-count",
+        "40",
     ];
     let (code, out) = xtask(&dir, &args, &[], "");
     assert_eq!(code, 0);
     assert_eq!(
         out,
-        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"test\":true}\nshards=[0,1,2,3,4,5]\nshard_total=6\n"
+        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"test\":true}\nshards=[0,1,2]\nshard_total=3\n"
     );
     let skipped = [
         "plan",
@@ -285,6 +287,8 @@ fn plan_prints_the_jobs_and_shards() {
         "false",
         "--mutants",
         "false",
+        "--mutant-count",
+        "40",
     ];
     let (code, out) = xtask(&dir, &skipped, &[], "");
     assert_eq!(code, 0);
@@ -300,6 +304,9 @@ fn plan_prints_the_jobs_and_shards() {
         "push",
     ];
     assert_eq!(xtask(&dir, &bad, &[], "").0, 2);
+    let mut not_a_count = args.to_vec();
+    *not_a_count.last_mut().unwrap() = "many";
+    assert_eq!(xtask(&dir, &not_a_count, &[], "").0, 2);
 }
 
 #[test]

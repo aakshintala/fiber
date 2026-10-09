@@ -27,6 +27,8 @@ pub(crate) struct HomeState {
 pub(crate) struct Chrome {
     /// ⌥P or `/panel` hid the panel.
     panel_hidden: bool,
+    /// ⌥R hid the rail: it stays hidden until shown.
+    rail_hidden: bool,
     /// The session screen's regions; `None` without home state, on home,
     /// or below the floor.
     layout: Option<Layout>,
@@ -41,9 +43,19 @@ impl Chrome {
         self.panel_hidden = !self.panel_hidden;
     }
 
+    /// The person hides the rail.
+    pub(crate) fn hide_rail(&mut self) {
+        self.rail_hidden = true;
+    }
+
+    /// The person shows the rail: it returns wherever the width allows.
+    pub(crate) fn show_rail(&mut self) {
+        self.rail_hidden = false;
+    }
+
     /// Lays a `width` by `height` screen out, returning whether the
     /// regions moved. The rail is wanted while two or more sessions are
-    /// live.
+    /// live and the person has not hidden it.
     pub(crate) fn lay_out(&mut self, width: u16, height: u16, home: Option<HomeState>) -> bool {
         let before = self.layout;
         self.floor = home.and_then(|_| layout::floor_line(width, height));
@@ -52,7 +64,7 @@ impl Chrome {
             .map(|home| {
                 let by_count = home.live >= 2;
                 let want = Want {
-                    rail: by_count,
+                    rail: by_count && !self.rail_hidden,
                     rail_by_count: by_count,
                     panel: !self.panel_hidden,
                 };
@@ -192,6 +204,7 @@ impl App {
         if moved {
             self.set_regions(self.chrome.regions());
         }
+        self.sync_rail();
     }
 
     /// ⌥P and `/panel`: shows or hides the panel.

@@ -562,6 +562,7 @@ fn a_note_replaces_the_detail() {
         delegates: 0,
         clients: 0,
         note: Some("held by another process".to_owned()),
+        status: None,
     };
     assert_eq!(
         line(&row, PROJECT),
@@ -586,6 +587,7 @@ fn named(name: &str) -> Row {
         delegates: 0,
         clients: 0,
         note: None,
+        status: None,
     }
 }
 
