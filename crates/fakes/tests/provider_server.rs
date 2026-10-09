@@ -20,9 +20,7 @@ use fakes::{ProviderServer, Request, Response, fingerprint};
 
 /// The deadline on each wait: one exchange (connecting, writing the whole
 /// request, reading the whole reply) is one wait, and a stall fails naming the
-/// step. A test makes at most 3 exchanges and an `await_requests` test adds one
-/// wait: 40 s, at most half of nextest's 120 s kill (`docs/testing.md`,
-/// "Waits and timeouts").
+/// step (`docs/testing.md`, "Waits and timeouts").
 const DEADLINE: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 fn addr(server: &ProviderServer) -> SocketAddr {
