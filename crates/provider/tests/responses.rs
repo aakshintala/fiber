@@ -1611,3 +1611,188 @@ fn a_usage_limit_in_the_stream_is_quota_exceeded() {
         ErrorCode::RateLimited
     );
 }
+
+fn hosted_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "web_search".into(),
+        description: String::new(),
+        input_schema: json!({}),
+        deferred: false,
+        hosted: Some("web_search".into()),
+    }
+}
+
+fn search_item(id: &str) -> Value {
+    json!({"type": "web_search_call", "id": id, "status": "completed",
+        "action": {"type": "search", "query": "rust 1.90"}})
+}
+
+fn answer_item() -> Value {
+    json!({"id": "msg_1", "type": "message", "role": "assistant",
+        "content": [{"type": "output_text", "text": "Rust 1.90 is out."}]})
+}
+
+fn hosted_assistant(model: &str, item: Value) -> Input {
+    Input::Assistant {
+        model: model.into(),
+        text: String::new(),
+        provider_item: Some(item),
+    }
+}
+
+fn sent_input(conversation: Vec<Input>) -> Value {
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    let request = ModelRequest {
+        conversation,
+        ..request()
+    };
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    sent_body(&server, 0)["input"].clone()
+}
+
+const HOSTED_REFERENCE: &str = "opencode/muse-spark-1.3-contributor";
+
+#[test]
+fn a_hosted_tool_is_sent_as_its_type_alone() {
+    let tools = vec![weather_tool(), hosted_tool()];
+    let wired: Vec<Value> = Responses::new(Endpoint::default())
+        .wire_tools(&tools)
+        .into_iter()
+        .map(Value::Object)
+        .collect();
+    assert_eq!(
+        wired,
+        vec![
+            json!({"type": "function", "name": "get_weather",
+                "description": "Weather for a city.",
+                "parameters": weather_tool().input_schema, "strict": true}),
+            json!({"type": "web_search"}),
+        ]
+    );
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    let responses = Responses::new(endpoint(&server));
+    let mut sent = request();
+    sent.tools = tools;
+    run(Box::new(responses.request(&sent))).0.unwrap();
+    assert_eq!(sent_body(&server, 0)["tools"], Value::Array(wired));
+}
+
+#[test]
+fn a_hosted_item_goes_back_once_unchanged_to_the_model_that_produced_it() {
+    let ws = search_item("ws_1");
+    let msg = answer_item();
+    let input = sent_input(vec![
+        Input::User {
+            text: "Which Rust is new?".into(),
+            images: Vec::new(),
+        },
+        hosted_assistant(HOSTED_REFERENCE, ws.clone()),
+        hosted_assistant(HOSTED_REFERENCE, ws.clone()),
+        Input::Assistant {
+            model: HOSTED_REFERENCE.into(),
+            text: "Rust 1.90 is out.".into(),
+            provider_item: Some(msg.clone()),
+        },
+        Input::User {
+            text: "Thanks.".into(),
+            images: Vec::new(),
+        },
+    ]);
+    assert_eq!(
+        input,
+        json!([
+            {"role": "user", "content": "Which Rust is new?"},
+            ws,
+            msg,
+            {"role": "user", "content": "Thanks."},
+        ])
+    );
+}
+
+#[test]
+fn an_equal_hosted_item_after_another_input_goes_back_again() {
+    let ws = search_item("ws_1");
+    let input = sent_input(vec![
+        hosted_assistant(HOSTED_REFERENCE, ws.clone()),
+        Input::User {
+            text: "Again?".into(),
+            images: Vec::new(),
+        },
+        hosted_assistant(HOSTED_REFERENCE, ws.clone()),
+    ]);
+    assert_eq!(
+        input,
+        json!([
+            ws,
+            {"role": "user", "content": "Again?"},
+            ws,
+        ])
+    );
+}
+
+#[test]
+fn two_different_hosted_items_in_a_row_both_go_back() {
+    let first = search_item("ws_1");
+    let second = search_item("ws_2");
+    let input = sent_input(vec![
+        hosted_assistant(HOSTED_REFERENCE, first.clone()),
+        hosted_assistant(HOSTED_REFERENCE, second.clone()),
+    ]);
+    assert_eq!(input, json!([first, second]));
+}
+
+#[test]
+fn two_equal_message_items_in_a_row_both_go_back() {
+    let msg = answer_item();
+    let input = sent_input(vec![
+        Input::Assistant {
+            model: HOSTED_REFERENCE.into(),
+            text: "Rust 1.90 is out.".into(),
+            provider_item: Some(msg.clone()),
+        },
+        Input::Assistant {
+            model: HOSTED_REFERENCE.into(),
+            text: "Rust 1.90 is out.".into(),
+            provider_item: Some(msg.clone()),
+        },
+    ]);
+    assert_eq!(input, json!([msg, msg]));
+}
+
+#[test]
+fn a_hosted_pair_is_left_out_for_another_model() {
+    let ws = search_item("ws_1");
+    let msg = answer_item();
+    let input = sent_input(vec![
+        Input::User {
+            text: "Which Rust is new?".into(),
+            images: Vec::new(),
+        },
+        hosted_assistant("openai/gpt-6-luna", ws.clone()),
+        hosted_assistant("openai/gpt-6-luna", ws),
+        Input::Assistant {
+            model: "openai/gpt-6-luna".into(),
+            text: "Rust 1.90 is out.".into(),
+            provider_item: Some(msg),
+        },
+    ]);
+    assert_eq!(
+        input,
+        json!([
+            {"role": "user", "content": "Which Rust is new?"},
+            {"role": "assistant", "content": "Rust 1.90 is out."},
+        ])
+    );
+}

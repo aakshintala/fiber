@@ -171,14 +171,21 @@ impl ModelCall for Call {
     }
 }
 
-/// Each tool in Responses' shape, in name order. This is the tools Fiber
-/// builds.
+/// Each tool in Responses' shape, in name order: a hosted tool is the
+/// vendor's own type alone, with no name or schema (`docs/tools.md`,
+/// "Hosted by the provider"). This is the tools Fiber builds.
 fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
     let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
     sorted
         .into_iter()
         .map(|tool| {
+            if let Some(kind) = &tool.hosted {
+                return json!({"type": kind})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default();
+            }
             // debt: deferred tools are sent in full until tool search is built
             // (#368); nothing defers a tool yet.
             json!({
@@ -276,7 +283,8 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     request
         .conversation
         .iter()
-        .filter_map(|input| match input {
+        .enumerate()
+        .filter_map(|(index, input)| match input {
             Input::User { text, images } => {
                 let prepared =
                     crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
@@ -290,6 +298,22 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 if *model == reference
                     && let Some(item) = provider_item
                 {
+                    // A hosted pair logs the same item twice, as two
+                    // adjacent inputs, but the request carries it once
+                    // (`docs/tools.md`, "Hosted by the provider").
+                    if item.get("type").and_then(Value::as_str) == Some("web_search_call")
+                        && let Some(Input::Assistant {
+                            model: before_model,
+                            provider_item: Some(before),
+                            ..
+                        }) = index
+                            .checked_sub(1)
+                            .and_then(|at| request.conversation.get(at))
+                        && *before_model == reference
+                        && *before == *item
+                    {
+                        return None;
+                    }
                     Some(item.clone())
                 } else if text.is_empty() {
                     None
