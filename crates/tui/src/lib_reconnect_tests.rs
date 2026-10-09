@@ -16,7 +16,7 @@ use fakes::clock::FakeClock;
 use ratatui::backend::TestBackend;
 
 use super::Input;
-use super::tests::{DEADLINE, Pair, command, hello, launch, new_loop, open, read_until};
+use super::tests::{DEADLINE, Pair, command, hello, launch, new_loop, open};
 use crate::retry::Retry;
 use crate::sources::spawn_hub;
 
@@ -95,17 +95,48 @@ fn spawn_run(connect: crate::Connect, clock: &Arc<FakeClock>) -> (Pair, Receiver
     (pair, finished)
 }
 
-/// Reads and discards everything the terminal writes from now on, so a
-/// full pty never blocks its frames.
-fn drain(main: &File) {
+/// Watches the pty from now on without ever stopping: one thread reads
+/// the main side to EOF, sending the bytes since the previous match up
+/// to and including each marker in order, then keeps reading and
+/// discards. A test takes each marker with one `recv_timeout` so a full
+/// pty never blocks the terminal's frames.
+fn watch(main: &File, markers: Vec<&'static [u8]>) -> Receiver<Vec<u8>> {
     let mut dup = main.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
+    let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
-        .name("lib-drain".to_owned())
+        .name("lib-watch".to_owned())
         .spawn(move || {
-            let mut buf = [0u8; 4096];
-            while dup.read(&mut buf).is_ok_and(|read| read > 0) {}
+            let mut buf = Vec::new();
+            let mut at = 0usize;
+            let mut byte = [0u8; 1];
+            while at < markers.len() {
+                match dup.read(&mut byte) {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {
+                        buf.push(byte[0]);
+                        let marker = markers[at];
+                        if buf.len() >= marker.len() && buf[buf.len() - marker.len()..] == *marker {
+                            let chunk = std::mem::take(&mut buf);
+                            if done.send(chunk).is_err() {
+                                break;
+                            }
+                            at += 1;
+                        }
+                    }
+                }
+            }
+            let mut discard = [0u8; 4096];
+            while dup.read(&mut discard).is_ok_and(|read| read > 0) {}
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
+    finished
+}
+
+/// Takes one watched marker within [`DEADLINE`].
+fn watched(frames: &Receiver<Vec<u8>>, what: &str) -> Vec<u8> {
+    frames
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for {what}: {err}"))
 }
 
 /// Ctrl+C twice, then the exit code within [`DEADLINE`].
@@ -125,7 +156,8 @@ fn run_reconnects_after_a_drop_with_backoff_on_the_fake_clock() {
     let clock = FakeClock::new();
     let (connect, called, _gone) = dial(vec![(ours, hello()), (again, hello())]);
     let (mut pair, finished) = spawn_run(connect, &clock);
-    read_until(&pair.main, b"shortcuts", "the first frame");
+    let frames = watch(&pair.main, vec![b"shortcuts" as &[u8], b"lost" as &[u8]]);
+    watched(&frames, "the first frame");
     signalled(&called, "the first connect");
     let reader = BufReader::new(
         theirs
@@ -137,8 +169,7 @@ fn run_reconnects_after_a_drop_with_backoff_on_the_fake_clock() {
     // The hub hangs up: home has no working line, so its notice says so.
     drop(reader);
     drop(theirs);
-    read_until(&pair.main, b"lost", "the drop notice");
-    drain(&pair.main);
+    watched(&frames, "the drop notice");
     assert!(
         clock.await_parked(clock.origin() + HALF, DEADLINE),
         "waited {DEADLINE:?} for the backoff to park on the clock"
@@ -175,8 +206,8 @@ fn a_prompt_in_flight_is_resent_after_reconnecting() {
     let clock = FakeClock::new();
     let (connect, called, _gone) = dial(vec![(ours, hello()), (again, hello())]);
     let (mut pair, finished) = spawn_run(connect, &clock);
-    read_until(&pair.main, b"shortcuts", "the first frame");
-    drain(&pair.main);
+    let frames = watch(&pair.main, vec![b"shortcuts" as &[u8]]);
+    watched(&frames, "the first frame");
     signalled(&called, "the first connect");
     let reader = BufReader::new(
         theirs
@@ -227,10 +258,10 @@ fn run_stops_retrying_after_a_refused_schema() {
     let clock = FakeClock::new();
     let (connect, called, gone) = dial(vec![(ours, newer)]);
     let (mut pair, finished) = spawn_run(connect, &clock);
-    read_until(&pair.main, b"shortcuts", "the first frame");
+    let frames = watch(&pair.main, vec![b"shortcuts" as &[u8], b"schema" as &[u8]]);
+    watched(&frames, "the first frame");
     signalled(&called, "the first connect");
-    read_until(&pair.main, b"schema", "the refusal notice");
-    drain(&pair.main);
+    watched(&frames, "the refusal notice");
     // No permit: the thread never waits on the clock or connects again.
     assert!(!clock.await_parked(clock.origin() + HALF, QUIET));
     assert!(clock.parked().is_empty());
@@ -245,13 +276,13 @@ fn quitting_during_backoff_ends_the_hub_thread() {
     let clock = FakeClock::new();
     let (connect, called, gone) = dial(Vec::new());
     let (mut pair, finished) = spawn_run(connect, &clock);
-    read_until(&pair.main, b"shortcuts", "the first frame");
+    let frames = watch(&pair.main, vec![b"shortcuts" as &[u8]]);
+    watched(&frames, "the first frame");
     signalled(&called, "the first connect");
     assert!(
         clock.await_parked(clock.origin() + HALF, DEADLINE),
         "waited {DEADLINE:?} for the backoff to park on the clock"
     );
-    drain(&pair.main);
     assert_eq!(quit(&mut pair, &finished), 0);
     signalled(&gone, "the hub thread to end");
     assert_eq!(clock.now(), clock.origin());
