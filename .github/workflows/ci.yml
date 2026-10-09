@@ -36,8 +36,8 @@ jobs:
   select:
     name: Selection
     runs-on: ubuntu-24.04
-    # Median 44 s; the slowest of 25 runs took 65 s, so the 5-minute floor covers
-    # a cold run (docs/ci.md, "Job time limits").
+    # Median 44 s; no cold run identified; the slowest of 25 runs took 65 s, so the
+    # 5-minute floor covers twice it (docs/ci.md, "Job time limits").
     timeout-minutes: 5
     permissions:
       contents: read
@@ -158,7 +158,7 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).lint
     runs-on: ubuntu-24.04
-    # Median 55 s, slowest of 11 runs 69 s; the 5-minute floor covers a cold run.
+    # Median 55 s, slowest of 11 runs 69 s, no cold run identified; the 5-minute floor covers twice it.
     timeout-minutes: 5
     env:
       BASE: ${{ needs.select.outputs.base }}
@@ -208,8 +208,9 @@ jobs:
         # A draft runs Linux x86_64 only; marking it ready runs all three (docs/ci.md).
         runner: ${{ github.event.pull_request.draft && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "ubuntu-24.04-arm", "macos-26"]') }}
     runs-on: ${{ matrix.runner }}
-    # Warm medians: Linux 4 min, macOS 7 min. Slowest runs: Linux 9 min, macOS
-    # 12 min (cold); the bound is twice the cold run (docs/ci.md, "Job time limits").
+    # Warm medians: Linux 4 min, macOS 7 min. Slowest of 8-12 runs: Linux 9 min,
+    # macOS 12 min; no cold run was identified, so the bound is twice the slowest
+    # (docs/ci.md, "Job time limits").
     timeout-minutes: ${{ matrix.runner == 'macos-26' && 25 || 20 }}
     env:
       BASE: ${{ needs.select.outputs.base }}
@@ -320,7 +321,7 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).bug_red
     runs-on: ubuntu-24.04
-    # One run, 3 min; the slowest of 2 runs took 3.5 min, so 10 minutes covers a cold run.
+    # One run, 3 min; the slowest of 2 runs took 3.5 min, no cold run identified; 10 minutes covers twice it.
     timeout-minutes: 10
     env:
       BASE: ${{ needs.select.outputs.base }}
