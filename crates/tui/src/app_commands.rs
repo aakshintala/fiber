@@ -445,6 +445,7 @@ impl App {
                 self.next_request()
             }
             "settings" => self.open_config_view(super::ConfigView::Settings),
+            "rules" => self.open_config_view(super::ConfigView::Rules),
             // `?` and `help`.
             _ => {
                 self.draft.clear();

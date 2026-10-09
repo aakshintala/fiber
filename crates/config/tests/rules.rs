@@ -126,3 +126,260 @@ fn remember_appends_an_allow_line_and_reads_back() {
     assert_eq!(read.project[1].prefix, "npm run");
     assert!(read.project[1].added.is_some());
 }
+
+fn allow(prefix: &str) -> String {
+    format!("{{\"decision\":\"allow\",\"tool\":\"shell\",\"prefix\":\"{prefix}\"}}")
+}
+
+fn project_key() -> config::ProjectKey {
+    ProjectKey::new("proj").unwrap()
+}
+
+#[test]
+fn listing_keeps_physical_line_numbers_across_blank_lines() {
+    let home = home();
+    let first = allow("a");
+    let second = allow("b");
+    write(
+        &home.path().join("rules"),
+        &format!("{first}\n\n{second}\n"),
+    );
+    let (global, _) = config::list_rules(home.path(), &project_key());
+    let lines = global.lines.unwrap();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].line, 1);
+    assert_eq!(lines[0].text, first);
+    assert_eq!(lines[0].rule.prefix, "a");
+    assert_eq!(lines[1].line, 3);
+    assert_eq!(lines[1].text, second);
+    assert_eq!(lines[1].rule.prefix, "b");
+}
+
+#[test]
+fn a_bad_line_is_the_files_error_naming_its_line_and_the_other_file_still_lists() {
+    let home = home();
+    write(
+        &home.path().join("rules"),
+        "{\"decision\":\"allow\",\"tool\":\"shell\",\"prefix\":\"ok\"}\n{\"decision\":\"maybe\"}\n",
+    );
+    write(
+        &home.path().join("projects/proj/rules"),
+        &format!("{}\n", allow("p")),
+    );
+    let expected = files(&home, "proj").read().unwrap_err().to_string();
+    assert!(expected.contains(":2:"), "{expected}");
+    let (global, project) = config::list_rules(home.path(), &project_key());
+    let message = global.lines.unwrap_err().to_string();
+    assert_eq!(message, expected);
+    let lines = project.lines.unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].rule.prefix, "p");
+}
+
+#[test]
+fn missing_and_empty_files_list_no_lines() {
+    let home = home();
+    let (global, project) = config::list_rules(home.path(), &project_key());
+    assert_eq!(global.file, home.path().join("rules"));
+    assert!(global.lines.unwrap().is_empty());
+    assert_eq!(project.file, home.path().join("projects/proj/rules"));
+    assert!(project.lines.unwrap().is_empty());
+    write(&home.path().join("rules"), "");
+    write(&home.path().join("projects/proj/rules"), "\n\n");
+    let (global, project) = config::list_rules(home.path(), &project_key());
+    assert!(global.lines.unwrap().is_empty());
+    assert!(project.lines.unwrap().is_empty());
+}
+
+#[test]
+fn a_crlf_line_lists_without_its_cr() {
+    let home = home();
+    let line = allow("a");
+    write(&home.path().join("rules"), &format!("{line}\r\n"));
+    let (global, _) = config::list_rules(home.path(), &project_key());
+    let lines = global.lines.unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].line, 1);
+    assert_eq!(lines[0].text, line);
+}
+
+#[test]
+fn remove_deletes_only_the_selected_occurrence() {
+    let home = home();
+    let line = allow("same");
+    write(
+        &home.path().join("projects/proj/rules"),
+        &format!("{line}\n{line}\n"),
+    );
+    let project = project_key();
+    assert!(
+        config::remove_rule(home.path(), &project, config::RulesScope::Project, 2, &line).unwrap()
+    );
+    let left = std::fs::read_to_string(home.path().join("projects/proj/rules")).unwrap();
+    assert_eq!(left, format!("{line}\n"));
+    let (global, listing) = config::list_rules(home.path(), &project);
+    assert!(global.lines.unwrap().is_empty());
+    let lines = listing.lines.unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].line, 1);
+}
+
+#[test]
+fn remove_keeps_every_other_byte() {
+    let home = home();
+    let first = allow("a");
+    let unknown = "{\"decision\":\"deny\",\"tool\":\"shell\",\"prefix\":\"b\",\"extra\":1}";
+    let crlf = allow("c");
+    let last = allow("d");
+    let before = format!("{first}\n\n{unknown}\n{crlf}\r\n{last}");
+    write(&home.path().join("projects/proj/rules"), &before);
+    let project = project_key();
+    assert!(
+        config::remove_rule(home.path(), &project, config::RulesScope::Project, 4, &crlf).unwrap()
+    );
+    let after = std::fs::read(home.path().join("projects/proj/rules")).unwrap();
+    assert_eq!(after, format!("{first}\n\n{unknown}\n{last}").into_bytes());
+}
+
+#[test]
+fn removing_the_only_line_leaves_an_empty_file() {
+    let home = home();
+    let line = allow("a");
+    write(
+        &home.path().join("projects/proj/rules"),
+        &format!("{line}\n"),
+    );
+    let project = project_key();
+    assert!(
+        config::remove_rule(home.path(), &project, config::RulesScope::Project, 1, &line).unwrap()
+    );
+    let after = std::fs::read(home.path().join("projects/proj/rules")).unwrap();
+    assert!(after.is_empty());
+}
+
+#[test]
+fn removing_an_unterminated_final_line_is_exact() {
+    let rows: &[(&str, usize, &str, Option<&str>)] = &[
+        ("a\nb", 2, "b", Some("a\n")),
+        ("b", 1, "b", Some("")),
+        ("a\r\nb\r", 2, "b\r", Some("a\r\n")),
+        ("a\nb", 3, "b", None),
+        ("a\nb", 4, "b", None),
+    ];
+    for (before, line, text, expected) in rows {
+        let home = home();
+        write(&home.path().join("projects/proj/rules"), before);
+        let project = project_key();
+        let removed = config::remove_rule(
+            home.path(),
+            &project,
+            config::RulesScope::Project,
+            *line,
+            text,
+        )
+        .unwrap();
+        let after = std::fs::read(home.path().join("projects/proj/rules")).unwrap();
+        match expected {
+            Some(want) => {
+                assert!(removed, "line {line} of {before:?}");
+                assert_eq!(after, want.as_bytes(), "line {line} of {before:?}");
+            }
+            None => {
+                assert!(!removed, "line {line} of {before:?}");
+                assert_eq!(after, before.as_bytes(), "line {line} of {before:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_changed_line_is_stale_and_writes_nothing() {
+    let home = home();
+    let line = allow("a");
+    let file = home.path().join("projects/proj/rules");
+    write(&file, &format!("{line}\n"));
+    let before = std::fs::read(&file).unwrap();
+    let project = project_key();
+    assert!(
+        !config::remove_rule(
+            home.path(),
+            &project,
+            config::RulesScope::Project,
+            1,
+            &allow("b")
+        )
+        .unwrap()
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+}
+
+#[test]
+fn line_zero_and_lines_past_the_end_are_stale() {
+    let home = home();
+    let rows = [allow("a"), allow("b"), allow("c")];
+    let file = home.path().join("projects/proj/rules");
+    write(&file, &format!("{}\n{}\n{}\n", rows[0], rows[1], rows[2]));
+    let project = project_key();
+    for line in [0, 4, 5] {
+        assert!(
+            !config::remove_rule(home.path(), &project, config::RulesScope::Project, line, "")
+                .unwrap(),
+            "line {line}"
+        );
+    }
+    assert!(
+        config::remove_rule(
+            home.path(),
+            &project,
+            config::RulesScope::Project,
+            3,
+            &rows[2]
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        format!("{}\n{}\n", rows[0], rows[1]).into_bytes()
+    );
+}
+
+#[test]
+fn a_deleted_file_is_stale_and_creates_nothing() {
+    let home = home();
+    let project = project_key();
+    assert!(
+        !config::remove_rule(home.path(), &project, config::RulesScope::Project, 1, "x").unwrap()
+    );
+    assert!(!home.path().join("projects/proj").exists());
+    assert!(!home.path().join("projects/proj/rules.lock").exists());
+}
+
+#[test]
+fn remove_rule_picks_the_scopes_file() {
+    let home = home();
+    let line = allow("same");
+    write(&home.path().join("rules"), &format!("{line}\n"));
+    write(
+        &home.path().join("projects/proj/rules"),
+        &format!("{line}\n"),
+    );
+    let project = project_key();
+    assert!(
+        config::remove_rule(home.path(), &project, config::RulesScope::Global, 1, &line).unwrap()
+    );
+    assert_eq!(
+        std::fs::read(home.path().join("rules")).unwrap(),
+        Vec::<u8>::new()
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.path().join("projects/proj/rules")).unwrap(),
+        format!("{line}\n")
+    );
+    assert!(
+        config::remove_rule(home.path(), &project, config::RulesScope::Project, 1, &line).unwrap()
+    );
+    assert_eq!(
+        std::fs::read(home.path().join("projects/proj/rules")).unwrap(),
+        Vec::<u8>::new()
+    );
+}

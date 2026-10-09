@@ -232,3 +232,131 @@ fn the_global_file_is_fiber_homes_config() {
         dirs.home().join("config.json")
     );
 }
+
+/// One allow line for `prefix`.
+fn allow_line(prefix: &str) -> String {
+    format!("{{\"decision\":\"allow\",\"tool\":\"shell\",\"prefix\":\"{prefix}\"}}")
+}
+
+/// The project's rules file for `workspace`.
+fn rules_file(dirs: &Dirs, workspace: &Path) -> PathBuf {
+    let (_, project) = ::cli::project_of(&dirs.home(), workspace)
+        .unwrap_or_else(|e| panic!("project: {}", e.message));
+    dirs.home()
+        .join("projects")
+        .join(project.as_str())
+        .join("rules")
+}
+
+#[test]
+fn rules_reads_the_session_workspaces_project_file() {
+    let dirs = Dirs::new();
+    let (one, two) = (dirs.workspace("one"), dirs.workspace("two"));
+    assert_ne!(rules_file(&dirs, &one), rules_file(&dirs, &two));
+    write(
+        &dirs.home().join("rules"),
+        &format!("{}\nbad\n", allow_line("g")),
+    );
+    write(
+        &rules_file(&dirs, &one),
+        &format!("{}\n", allow_line("one")),
+    );
+    write(
+        &rules_file(&dirs, &two),
+        &format!("{}\n", allow_line("two")),
+    );
+    let seam = Seam::new(dirs.home());
+    let (global, project) = seam.rules(&one).unwrap_or_else(|e| panic!("rules: {e}"));
+    assert_eq!(global.file, dirs.home().join("rules"));
+    let message = global.rows.unwrap_err();
+    assert!(
+        message.contains(&format!("{}:2:", dirs.home().join("rules").display())),
+        "{message}"
+    );
+    assert_eq!(project.file, rules_file(&dirs, &one));
+    let rows = project.rows.unwrap_or_else(|e| panic!("rows: {e}"));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].rule.prefix, "one");
+    assert_eq!(rows[0].line, 1);
+    let (global, project) = seam.rules(&two).unwrap_or_else(|e| panic!("rules: {e}"));
+    assert_eq!(global.file, dirs.home().join("rules"));
+    assert_eq!(project.file, rules_file(&dirs, &two));
+    let rows = project.rows.unwrap_or_else(|e| panic!("rows: {e}"));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].rule.prefix, "two");
+}
+
+#[test]
+fn revoke_then_the_next_read_lacks_the_rule() {
+    let dirs = Dirs::new();
+    let one = dirs.workspace("one");
+    let line = allow_line("npm test");
+    write(&rules_file(&dirs, &one), &format!("{line}\n"));
+    let seam = Seam::new(dirs.home());
+    assert_eq!(
+        seam.revoke(&one, tui::RulesScope::Project, 1, &line)
+            .unwrap_or_else(|e| panic!("revoke: {e}")),
+        tui::Revoked::Removed
+    );
+    let (_, project) = seam.rules(&one).unwrap_or_else(|e| panic!("rules: {e}"));
+    assert!(
+        project
+            .rows
+            .unwrap_or_else(|e| panic!("rows: {e}"))
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_stale_revoke_writes_nothing() {
+    let dirs = Dirs::new();
+    let one = dirs.workspace("one");
+    let line = allow_line("npm test");
+    let file = rules_file(&dirs, &one);
+    write(&file, &format!("{line}\n"));
+    let before = fs::read(&file).unwrap_or_else(|e| panic!("read: {e}"));
+    let seam = Seam::new(dirs.home());
+    assert_eq!(
+        seam.revoke(&one, tui::RulesScope::Project, 1, &allow_line("other"))
+            .unwrap_or_else(|e| panic!("revoke: {e}")),
+        tui::Revoked::Stale
+    );
+    assert_eq!(
+        fs::read(&file).unwrap_or_else(|e| panic!("read: {e}")),
+        before
+    );
+}
+
+#[test]
+fn revoke_maps_global_and_project_to_their_files() {
+    let dirs = Dirs::new();
+    let one = dirs.workspace("one");
+    let line = allow_line("same");
+    write(&dirs.home().join("rules"), &format!("{line}\n"));
+    write(&rules_file(&dirs, &one), &format!("{line}\n"));
+    let seam = Seam::new(dirs.home());
+    assert_eq!(
+        seam.revoke(&one, tui::RulesScope::Global, 1, &line)
+            .unwrap_or_else(|e| panic!("revoke: {e}")),
+        tui::Revoked::Removed
+    );
+    assert!(
+        fs::read(dirs.home().join("rules"))
+            .unwrap_or_else(|e| panic!("read: {e}"))
+            .is_empty()
+    );
+    assert_eq!(
+        fs::read_to_string(rules_file(&dirs, &one)).unwrap_or_else(|e| panic!("read: {e}")),
+        format!("{line}\n")
+    );
+    assert_eq!(
+        seam.revoke(&one, tui::RulesScope::Project, 1, &line)
+            .unwrap_or_else(|e| panic!("revoke: {e}")),
+        tui::Revoked::Removed
+    );
+    assert!(
+        fs::read(rules_file(&dirs, &one))
+            .unwrap_or_else(|e| panic!("read: {e}"))
+            .is_empty()
+    );
+}
