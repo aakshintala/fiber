@@ -136,22 +136,14 @@ fn cut(label: &str, max: usize) -> String {
     if max == 0 {
         return String::new();
     }
-    let mut out = String::new();
-    for ch in label.chars() {
-        let mut buf = [0u8; 4];
-        if format::width(&out) + format::width(ch.encode_utf8(&mut buf)) + 1 > max {
-            break;
-        }
-        out.push(ch);
-    }
-    out.push('…');
-    out
+    format!("{}…", format::cut(label, max - 1))
 }
 
-/// One image the viewer opens: its file name, the session it came
-/// from, its bytes in base64, and the session generation that asked,
-/// so a stale completion after a session change is dropped.
+/// One image the viewer opens: its id, its file name, the session it
+/// came from, its bytes in base64, and the session generation that
+/// asked, so a stale completion after a session change is dropped.
 pub(crate) struct View {
+    pub(crate) id: u32,
     pub(crate) name: String,
     pub(crate) session: String,
     pub(crate) data: String,

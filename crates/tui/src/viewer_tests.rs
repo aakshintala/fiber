@@ -17,6 +17,7 @@ const DEADLINE: Duration = Duration::from_secs(5);
 /// A view of `bytes` under `name`.
 fn view(name: &str, bytes: &[u8]) -> View {
     View {
+        id: 1,
         name: name.to_owned(),
         session: "s_aaaaaaaaaaaaaaaa".to_owned(),
         data: base64::engine::general_purpose::STANDARD.encode(bytes),

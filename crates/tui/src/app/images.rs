@@ -89,6 +89,7 @@ impl App {
             return true;
         };
         self.images.out.view.push(image::View {
+            id: fetch.id,
             name,
             session: fetch.session,
             data: data.to_owned(),
@@ -109,14 +110,22 @@ impl App {
         true
     }
 
-    /// A viewer worker finished opening `name`: nothing on success, or
-    /// the notice saying why. A completion from an earlier session is
+    /// A viewer worker finished opening image `id`: nothing on success,
+    /// or the notice saying why, and the image refused so it is not
+    /// asked for again. A completion from an earlier session is
     /// dropped, even for the same file name.
-    pub(crate) fn image_viewed(&mut self, name: &str, generation: u64, result: Result<(), String>) {
+    pub(crate) fn image_viewed(
+        &mut self,
+        id: u32,
+        name: &str,
+        generation: u64,
+        result: Result<(), String>,
+    ) {
         if generation != self.images.generation {
             return;
         }
         if let Err(reason) = result {
+            self.images.refused.insert(id);
             self.cant_open(name, &reason);
         }
     }

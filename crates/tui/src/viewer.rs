@@ -37,10 +37,12 @@ pub(crate) fn spawn(argv: &[String], dir: &Path, view: View, out: &Sender<Input>
     // The worker outlives the frame that asked: it answers on the
     // loop's channel, which a closed loop drops.
     drop(crate::sources::builder("tui-viewer").spawn(move || {
+        let id = view.id;
         let name = view.name.clone();
         let generation = view.generation;
         let result = open(&argv, &dir, &view);
         drop(out.send(Input::Viewed {
+            id,
             name,
             generation,
             result,

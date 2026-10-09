@@ -427,10 +427,11 @@ impl<B: Backend> Loop<B> {
             }
             Input::Image { ticket, result } => self.app.on_image(ticket, result),
             Input::Viewed {
+                id,
                 name,
                 generation,
                 result,
-            } => self.app.image_viewed(&name, generation, result),
+            } => self.app.image_viewed(id, &name, generation, result),
             Input::FindDue(generation) => {
                 let lines = self.app.find_due(generation);
                 self.send(&lines);

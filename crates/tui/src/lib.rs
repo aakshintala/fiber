@@ -151,10 +151,12 @@ pub(crate) enum Input {
         /// The image in base64, or the notice.
         result: Result<String, String>,
     },
-    /// A viewer worker finished opening `name`: nothing on success, or
-    /// why the open failed. A completion from an earlier session is
+    /// A viewer worker finished opening image `id`: nothing on success,
+    /// or why the open failed. A completion from an earlier session is
     /// dropped (`docs/tui.md`, "Images").
     Viewed {
+        /// The image's id, so a failed open is not asked for again.
+        id: u32,
         /// The file's name.
         name: String,
         /// The session generation that asked.

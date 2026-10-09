@@ -156,6 +156,7 @@ fn the_answer_queues_a_view_with_the_bytes() {
     let mut out = app.take_image_out();
     assert_eq!(out.view.len(), 1);
     let view = out.view.pop().unwrap_or_else(|| panic!("a view"));
+    assert_eq!(view.id, 1);
     assert_eq!(view.name, "shot.png");
     assert_eq!(view.session, SESSION);
     assert_eq!(view.data, bytes);
@@ -268,8 +269,28 @@ fn a_stale_viewer_completion_is_dropped() {
     started_with_image(&mut app, "artifacts/shot.png");
     let generation = app.images.generation;
     app.attach(contract::SessionId(OTHER.to_owned()));
-    app.image_viewed("shot.png", generation, Err("boom".to_owned()));
+    app.image_viewed(1, "shot.png", generation, Err("boom".to_owned()));
     assert_eq!(app.notice(), None);
+}
+
+#[test]
+fn a_failed_viewer_completion_refuses_the_image() {
+    let mut app = app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let generation = app.images.generation;
+    app.image_viewed(1, "shot.png", generation, Err("boom".to_owned()));
+    assert_eq!(app.notice(), Some("Could not open shot.png: boom."));
+    assert_eq!(app.view_image(1), Effect::None);
+}
+
+#[test]
+fn a_stale_viewer_failure_does_not_refuse() {
+    let mut app = app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let generation = app.images.generation;
+    app.image_viewed(1, "shot.png", generation + 1, Err("boom".to_owned()));
+    assert_eq!(app.notice(), None);
+    assert!(matches!(app.view_image(1), Effect::Send(_)));
 }
 
 #[test]
