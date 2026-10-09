@@ -893,3 +893,34 @@ fn the_question_caret_sits_inside_the_panel_above_the_status_row() {
     assert!(rows[rows.len() - 3].contains("Chat about this"), "{rows:?}");
     assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
 }
+
+#[test]
+fn row_two_spots_cover_each_running_segment() {
+    use crate::app::panel::Spot;
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(started("j_1", "build"));
+    app.on_line(started("j_2", "test"));
+    app.on_line(started("j_3", "lint"));
+    app.on_line(delegated("j_2"));
+    app.on_line(delegated("j_3"));
+    // "2 delegates running · 1 job running": each segment opens its list.
+    let rows = crate::view::status_rows::status(&app, 100);
+    let row = rows.last().unwrap_or_else(|| panic!("row two"));
+    assert_eq!(row.line.to_string(), "2 delegates running · 1 job running");
+    assert_eq!(
+        row.spots,
+        [(0, 19, Spot::DelegateList), (22, 13, Spot::JobList),]
+    );
+    // A cut row keeps only the visible part: the job segment cut to
+    // nothing leaves no target, the delegate segment keeps its width.
+    let rows = crate::view::status_rows::status(&app, 22);
+    let row = rows.last().unwrap_or_else(|| panic!("row two"));
+    assert_eq!(row.spots, [(0, 19, Spot::DelegateList)]);
+    let rows = crate::view::status_rows::status(&app, 30);
+    let row = rows.last().unwrap_or_else(|| panic!("row two"));
+    assert_eq!(
+        row.spots,
+        [(0, 19, Spot::DelegateList), (22, 8, Spot::JobList),]
+    );
+}

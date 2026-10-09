@@ -582,6 +582,95 @@ fn the_window_reader_makes_a_parents_steering_and_tool_result_images_absolute() 
 }
 
 #[test]
+fn the_window_reader_makes_a_parent_pdf_and_its_pages_absolute() {
+    use contract::shapes::{ImagePart, PdfPart};
+    let pdf = ContentPart::Pdf(
+        PdfPart::new(
+            "artifacts/p_3f2a9c0d1e4b5a67.pdf".into(),
+            2,
+            Some(vec![
+                ImagePart {
+                    path: "artifacts/i_0a1b2c3d4e5f6071.png".into(),
+                    mime_type: "image/png".into(),
+                    width: 1,
+                    height: 1,
+                },
+                ImagePart {
+                    path: "/already/absolute.png".into(),
+                    mime_type: "image/png".into(),
+                    width: 1,
+                    height: 1,
+                },
+            ]),
+        )
+        .unwrap(),
+    );
+    let result = Event::ToolCallCompleted(ToolCallCompleted {
+        status: CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![pdf],
+        details: None,
+        artifact: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        provider_item: None,
+    });
+    let (_home, sessions) = sessions("pdf-rewrite");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, Some("t_1"), Some("a_1"), &result),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[envelope(B, 0, None, None, &started("/w", Some((A, 1))))],
+    );
+    let folded = resumed(&sessions.join(B)).unwrap();
+    let log = Log::open(
+        &sessions,
+        SessionId(B.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = read_window(&log, folded.window, folded.end).unwrap();
+    let completed = lines
+        .iter()
+        .find(|line| line.kind == "tool_call_completed")
+        .unwrap();
+    let content = completed.payload["content"].as_array().unwrap();
+    assert_eq!(
+        content[0]["path"],
+        json!(
+            sessions
+                .join(A)
+                .join("artifacts/p_3f2a9c0d1e4b5a67.pdf")
+                .display()
+                .to_string()
+        )
+    );
+    let pages = content[0]["pages"].as_array().unwrap();
+    assert_eq!(
+        pages[0]["path"],
+        json!(
+            sessions
+                .join(A)
+                .join("artifacts/i_0a1b2c3d4e5f6071.png")
+                .display()
+                .to_string()
+        )
+    );
+    // An already-absolute page path is kept.
+    assert_eq!(pages[1]["path"], json!("/already/absolute.png"));
+}
+
+#[test]
 fn the_window_reader_leaves_image_shaped_tool_arguments_alone() {
     // Only the content parts a protocol reads as images are rewritten:
     // a tool call whose arguments happen to be shaped like an image

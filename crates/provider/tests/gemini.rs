@@ -629,6 +629,7 @@ fn after(reply: &Reply, model: &str) -> Vec<Input> {
     for (n, action) in reply.actions.iter().enumerate() {
         if let ReplyAction::ToolCall(_) = action {
             conversation.push(Input::ToolResult {
+                pdfs: Vec::new(),
                 action_id: ActionId(format!("a_{n}")),
                 text: "18 C, clear".into(),
                 is_error: false,
@@ -1484,6 +1485,7 @@ fn a_failed_tool_result_sends_an_error_key_and_a_success_sends_output() {
                 model: REFERENCE.into(),
             },
             Input::ToolResult {
+                pdfs: Vec::new(),
                 action_id: ActionId("a_1".into()),
                 text: "boom".into(),
                 is_error,
@@ -1532,6 +1534,7 @@ fn image_conversation(
             model: REFERENCE.into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_1".into()),
             text: text.into(),
             is_error,
@@ -1579,6 +1582,61 @@ fn a_stored_image_is_sent_as_inline_data_parts_beside_the_response() {
         json!({"name": "read", "id": "c1",
             "response": {"output": "Image: 2x1 image/png.\n"},
             "parts": [{"inlineData": {"mimeType": "image/png", "data": "YWJjZA=="}}]})
+    );
+}
+
+/// A conversation whose one tool result carries a PDF.
+fn pdf_conversation(model: &str, pdf: contract::provider::PdfRef) -> Vec<Input> {
+    vec![
+        Input::ToolCall {
+            action_id: ActionId("a_1".into()),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "a.pdf"}),
+                provider_id: Some(ProviderCallId("c1".into())),
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+            model: model.into(),
+        },
+        Input::ToolResult {
+            action_id: ActionId("a_1".into()),
+            text: "PDF: 2 pages.\n".into(),
+            is_error: false,
+            images: Vec::new(),
+            pdfs: vec![pdf],
+        },
+    ]
+}
+
+fn pdf_ref(path: &str) -> contract::provider::PdfRef {
+    contract::provider::PdfRef {
+        path: path.into(),
+        page_count: 2,
+        pages: None,
+    }
+}
+
+#[test]
+fn a_stored_pdf_is_sent_as_inline_data_parts_beside_the_response() {
+    let session = fakes::TempDir::new("fiber-gemini-request-pdf");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/p_1.pdf"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: pdf_conversation(REFERENCE, pdf_ref("artifacts/p_1.pdf")),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        function_response(&server),
+        json!({"name": "read", "id": "c1",
+            "response": {"output": "PDF: 2 pages.\n"},
+            "parts": [{"inlineData": {"mimeType": "application/pdf", "data": "YWJjZA=="}}]})
     );
 }
 
@@ -1664,6 +1722,7 @@ fn a_foreign_call_and_result_go_as_text_while_the_models_own_stay_native() {
             model: "other/model".into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_f1".into()),
             text: "hello".into(),
             is_error: false,
@@ -1687,6 +1746,7 @@ fn a_foreign_call_and_result_go_as_text_while_the_models_own_stay_native() {
             model: REFERENCE.into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_o1".into()),
             text: "world".into(),
             is_error: false,
@@ -1741,6 +1801,7 @@ fn a_failed_foreign_result_renders_the_failed_text() {
             model: "other/model".into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_f1".into()),
             text: "boom".into(),
             is_error: true,
@@ -1757,6 +1818,29 @@ fn a_failed_foreign_result_renders_the_failed_text() {
     assert!(!contents.to_string().contains("functionCall"));
     assert!(!contents.to_string().contains("functionResponse"));
     assert!(!raw.contains("c_foreign"));
+}
+
+#[test]
+fn a_foreign_result_with_a_pdf_sends_text_then_inline_data() {
+    let session = fakes::TempDir::new("fiber-gemini-foreign-pdf");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/p_1.pdf"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: pdf_conversation("other/model", pdf_ref("artifacts/p_1.pdf")),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["contents"],
+        json!([{"role": "user", "parts": [
+            {"text": "other/model called the tool read with arguments {\"path\":\"a.pdf\"}"},
+            {"text": "The tool read returned:\nPDF: 2 pages.\n"},
+            {"inlineData": {"mimeType": "application/pdf", "data": "YWJjZA=="}}]}])
+    );
 }
 
 #[test]
@@ -1777,6 +1861,7 @@ fn a_foreign_result_with_an_image_sends_text_then_inline_data() {
             model: "other/model".into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_f1".into()),
             text: "Image: 2x1 image/png.\n".into(),
             is_error: false,
@@ -1804,6 +1889,7 @@ fn a_foreign_result_with_an_image_sends_text_then_inline_data() {
 #[test]
 fn a_result_without_its_call_renders_as_today() {
     let conversation = vec![Input::ToolResult {
+        pdfs: Vec::new(),
         action_id: ActionId("a_missing".into()),
         text: "hello".into(),
         is_error: false,

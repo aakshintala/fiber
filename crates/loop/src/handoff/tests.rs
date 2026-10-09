@@ -121,6 +121,7 @@ fn an_input_estimates_a_quarter_of_its_bytes_rounded_up() {
     );
     assert_eq!(
         estimate(&Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_1".into()),
             text: "abcd".into(),
             is_error: false,

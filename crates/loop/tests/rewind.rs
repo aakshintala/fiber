@@ -674,6 +674,117 @@ fn an_image_in_the_inherited_history_reads_from_the_session_that_wrote_it() {
 }
 
 #[test]
+fn a_pdf_in_the_inherited_history_reads_from_the_session_that_wrote_it() {
+    let mut tool = TestTool::reads("cat", "PDF: 2 pages.\n");
+    tool.output.content.push(ContentPart::Pdf(
+        contract::shapes::PdfPart::new(
+            "artifacts/p_3f2a9c0d1e4b5a67.pdf".into(),
+            2,
+            Some(vec![
+                contract::shapes::ImagePart {
+                    path: "artifacts/i_0a1b2c3d4e5f6071.png".into(),
+                    mime_type: "image/png".into(),
+                    width: 1545,
+                    height: 2000,
+                },
+                contract::shapes::ImagePart {
+                    path: "artifacts/i_8090a0b0c0d0e0f0.png".into(),
+                    mime_type: "image/png".into(),
+                    width: 1545,
+                    height: 2000,
+                },
+            ]),
+        )
+        .unwrap(),
+    ));
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("working", &[("cat", paris())]),
+            Scripted::text("done"),
+        ],
+        None,
+        vec![Arc::new(tool)],
+    );
+    let pdf_bytes = b"%PDF-1.4 fake";
+    fs::create_dir_all(session.dir.join("artifacts")).unwrap();
+    fs::write(
+        session.dir.join("artifacts/p_3f2a9c0d1e4b5a67.pdf"),
+        pdf_bytes,
+    )
+    .unwrap();
+    fs::write(
+        session.dir.join("artifacts/i_0a1b2c3d4e5f6071.png"),
+        b"page-one",
+    )
+    .unwrap();
+    fs::write(
+        session.dir.join("artifacts/i_8090a0b0c0d0e0f0.png"),
+        b"page-two",
+    )
+    .unwrap();
+    session.rules.set(StandingRules {
+        global: vec![allow_rule("cat")],
+        project: Vec::new(),
+    });
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = log::read(&session.dir).unwrap();
+    let at = lines
+        .iter()
+        .find(|line| line.kind == "tool_call_completed")
+        .unwrap()
+        .seq
+        .unwrap()
+        .0;
+    let (b, tx, provider, dir) = start_b(
+        &session,
+        B_ID,
+        Point {
+            session_id: SessionId("s_test".into()),
+            seq: Seq(at),
+        },
+        String::new(),
+        None,
+        vec![Scripted::text("done")],
+    );
+    let _b = run_turn(b, &tx, "go");
+    let first = &provider.requests()[0];
+    let pdfs: Vec<&contract::provider::PdfRef> = first
+        .conversation
+        .iter()
+        .filter_map(|input| match input {
+            Input::ToolResult { pdfs, .. } => Some(pdfs.as_slice()),
+            Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. } => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(pdfs.len(), 1);
+    let expected = session
+        .dir
+        .join("artifacts/p_3f2a9c0d1e4b5a67.pdf")
+        .display()
+        .to_string();
+    assert_eq!(pdfs[0].path, expected);
+    assert_eq!(pdfs[0].page_count, 2);
+    let pages = pdfs[0].pages.as_ref().unwrap();
+    assert_eq!(pages.len(), 2);
+    assert_eq!(
+        pages[0].path,
+        session
+            .dir
+            .join("artifacts/i_0a1b2c3d4e5f6071.png")
+            .display()
+            .to_string()
+    );
+    assert_eq!(fs::read(&pdfs[0].path).unwrap(), pdf_bytes);
+    assert!(!dir.join("artifacts/p_3f2a9c0d1e4b5a67.pdf").exists());
+    drop(session);
+}
+
+#[test]
 fn a_rewind_before_the_first_request_keeps_the_logged_model_and_thinking() {
     use contract::events::{
         CacheLifetime, PreambleBuilt, PreambleReason, SentTool, SessionStarted, Variables,

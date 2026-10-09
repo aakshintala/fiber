@@ -80,8 +80,8 @@ impl App {
                 Some(choice) => self.choose(choice),
                 None => super::Effect::None,
             },
-            // The picker draws no switches or rule rows.
-            Spot::Switch { .. } | Spot::Revoke(_) => super::Effect::None,
+            // The picker draws no switches, rule rows or item rows.
+            Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_) => super::Effect::None,
         }
     }
 

@@ -35,6 +35,10 @@ pub(crate) enum Spot {
     /// A rule row's ✕, by its index: revokes the rule
     /// (`docs/tui.md`, "Swapped views").
     Revoke(usize),
+    /// A delegate or job row, by its job's serial: a press and a release
+    /// on the same serial opens that item, never the row's position.
+    /// Only the running list draws one.
+    Item(u64),
 }
 
 /// How a cell draws: plain text, a provider heading, or dimmed text

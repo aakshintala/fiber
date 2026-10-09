@@ -161,6 +161,83 @@ fn an_unknown_content_part_or_input_item_reads_as_unknown() {
 }
 
 #[test]
+fn a_pdf_part_with_and_without_pages_round_trips_as_its_type() {
+    use crate::shapes::{ContentPart, ImagePart, PdfPart};
+    let with_pages = json!([{"type":"text","text":"PDF: pages 2-3 of 30.\n"},{"type":"pdf","path":"artifacts/p_3f2a9c0d1e4b5a67.pdf","page_count":2,"pages":[{"type":"image","path":"artifacts/i_0a1b2c3d4e5f6071.png","mime_type":"image/png","width":1545,"height":2000},{"type":"image","path":"artifacts/i_8090a0b0c0d0e0f0.png","mime_type":"image/png","width":1545,"height":2000}]}]);
+    let parts: Vec<ContentPart> = serde_json::from_value(with_pages.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&parts).unwrap(), with_pages);
+    let [ContentPart::Text { .. }, ContentPart::Pdf(part)] = parts.as_slice() else {
+        panic!("not text plus pdf: {parts:?}");
+    };
+    assert_eq!(part.path(), "artifacts/p_3f2a9c0d1e4b5a67.pdf");
+    assert_eq!(part.page_count(), 2);
+    assert_eq!(part.pages().map(<[_]>::len), Some(2));
+    let without_pages = json!([{"type":"text","text":"PDF: 2 pages.\nThe pages could not be rendered as images: pdftoppm is not installed. It comes with poppler (poppler-utils on Debian and Ubuntu, brew install poppler on macOS).\n"},{"type":"pdf","path":"artifacts/p_3f2a9c0d1e4b5a67.pdf","page_count":2}]);
+    let parts: Vec<ContentPart> = serde_json::from_value(without_pages.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&parts).unwrap(), without_pages);
+    let [ContentPart::Text { .. }, ContentPart::Pdf(part)] = parts.as_slice() else {
+        panic!("not text plus pdf: {parts:?}");
+    };
+    assert_eq!(part.pages(), None);
+    // A boundary part with matching pages is accepted, down to one page.
+    assert!(PdfPart::new("artifacts/p.pdf".into(), 1, None).is_ok());
+    let ok = PdfPart::new(
+        "artifacts/p.pdf".into(),
+        2,
+        Some(vec![
+            ImagePart {
+                path: "artifacts/i_1.png".into(),
+                mime_type: "image/png".into(),
+                width: 1,
+                height: 1,
+            },
+            ImagePart {
+                path: "artifacts/i_2.png".into(),
+                mime_type: "image/png".into(),
+                width: 1,
+                height: 1,
+            },
+        ]),
+    );
+    assert!(ok.is_ok());
+}
+
+#[test]
+fn a_pdf_part_that_breaks_an_invariant_fails_to_read() {
+    use crate::shapes::{ContentPart, ImagePart, PdfPart};
+    fn page(n: u32) -> ImagePart {
+        ImagePart {
+            path: format!("artifacts/i_{n}.png"),
+            mime_type: "image/png".into(),
+            width: 1,
+            height: 1,
+        }
+    }
+    // `page_count: 0` is refused.
+    assert!(PdfPart::new("artifacts/p.pdf".into(), 0, None).is_err());
+    assert!(
+        serde_json::from_value::<ContentPart>(
+            json!({"type":"pdf","path":"artifacts/p.pdf","page_count":0})
+        )
+        .is_err()
+    );
+    // `pages: []` with `page_count: 2` is refused, like any length mismatch.
+    assert!(PdfPart::new("artifacts/p.pdf".into(), 2, Some(vec![])).is_err());
+    assert!(PdfPart::new("artifacts/p.pdf".into(), 2, Some(vec![page(1)])).is_err());
+    assert!(
+        serde_json::from_value::<ContentPart>(
+            json!({"type":"pdf","path":"artifacts/p.pdf","page_count":2,"pages":[]})
+        )
+        .is_err()
+    );
+    assert!(serde_json::from_value::<ContentPart>(json!({"type":"pdf","path":"artifacts/p.pdf","page_count":2,"pages":[{"type":"image","path":"artifacts/i_1.png","mime_type":"image/png","width":1,"height":1}]})).is_err());
+    // One page too many is refused too.
+    assert!(PdfPart::new("artifacts/p.pdf".into(), 1, Some(vec![page(1), page(2)])).is_err());
+    // A text part inside `pages` is refused.
+    assert!(serde_json::from_value::<ContentPart>(json!({"type":"pdf","path":"artifacts/p.pdf","page_count":1,"pages":[{"type":"text","text":"t"}]})).is_err());
+}
+
+#[test]
 fn durable_and_ephemeral_events_say_so() {
     let delta = Event::AssistantMessageDelta(TextDelta { text: "Hel".into() });
     assert_eq!(delta.class(), Class::Ephemeral);
