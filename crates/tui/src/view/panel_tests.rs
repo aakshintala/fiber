@@ -302,6 +302,41 @@ fn cost_against_a_budget() {
 }
 
 #[test]
+fn the_budget_comparison_counts_billed_spend_only() {
+    // $1 billed plus $9 on subscription against a $5 budget: the
+    // subscription bills nothing per call.
+    let mut app = attached(160, 40);
+    app.on_line(budget_preamble(5.0));
+    app.on_line(status_line(
+        spend(1, 0, 0, 2, serde_json::json!(1.0), 9.0),
+        None,
+    ));
+    let drawn = texts(&app, 40);
+    assert!(
+        drawn.iter().any(|row| row == "cost billed  $1.00 of $5.00"),
+        "{drawn:?}"
+    );
+    assert!(
+        drawn
+            .iter()
+            .any(|row| row == "cost on subscription  $9.00"),
+        "{drawn:?}"
+    );
+    // Subscription-only: billed $0 against the budget.
+    let mut app = attached(160, 40);
+    app.on_line(budget_preamble(5.0));
+    app.on_line(status_line(
+        spend(1, 0, 0, 2, serde_json::json!(0.0), 9.0),
+        None,
+    ));
+    let drawn = texts(&app, 40);
+    assert!(
+        drawn.iter().any(|row| row == "cost billed  $0.00 of $5.00"),
+        "{drawn:?}"
+    );
+}
+
+#[test]
 fn turns_at_zero_are_left_out() {
     let mut app = attached(160, 40);
     assert!(rows(&app, 40).is_empty());

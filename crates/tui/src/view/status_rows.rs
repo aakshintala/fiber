@@ -109,13 +109,24 @@ fn session_segments(app: &App) -> Vec<(String, Option<Spot>)> {
         out.push((format!("{pct}% context"), None));
     }
     if let Some(spend) = app.attached_spend() {
-        // With a budget the segment reads spend against it.
-        match app.panel_state().budget() {
-            Some(budget) => out.push((
-                format!("{} of {}", format::money(spend), format::money(budget)),
+        // With a budget the segment reads billed spend against it, as
+        // the Session card does: a subscription bills nothing per call
+        // (`docs/loop.md`, "Spending budget").
+        match (
+            app.panel_state()
+                .status()
+                .map(|status| status.spend.cost),
+            app.panel_state().budget(),
+        ) {
+            (Some(Some(billed)), Some(budget)) => out.push((
+                format!("{} of {}", format::money(billed), format::money(budget)),
                 None,
             )),
-            None => out.push((format::money(spend), None)),
+            (Some(None), Some(budget)) => out.push((
+                format!("unknown of {}", format::money(budget)),
+                None,
+            )),
+            _ => out.push((format::money(spend), None)),
         }
     }
     out

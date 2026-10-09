@@ -258,8 +258,8 @@ fn an_empty_row_two_takes_no_row() {
     assert_eq!(rows[bottom - 2], ">", "{}", screen);
 }
 
-/// A `session_status` with billed `cost`.
-fn spend_status(cost: serde_json::Value) -> Line {
+/// A `session_status` with billed `cost` and `subscription` spend.
+fn spend_status(cost: serde_json::Value, subscription: f64) -> Line {
     session_line(
         SESSION,
         "session_status",
@@ -268,7 +268,7 @@ fn spend_status(cost: serde_json::Value) -> Line {
             "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
-                "cost": cost, "subscription_cost": 0.0},
+                "cost": cost, "subscription_cost": subscription},
             "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
         }),
     )
@@ -291,17 +291,38 @@ fn budget_preamble(budget: f64) -> Line {
 fn the_spend_segment_reads_against_the_budget() {
     let mut app = attached(100, 30);
     app.on_line(budget_preamble(5.0));
-    app.on_line(spend_status(serde_json::json!(1.25)));
+    app.on_line(spend_status(serde_json::json!(1.25), 0.0));
     let (screen, _) = draw(&app, 100, 30);
     let rows: Vec<&str> = screen.lines().collect();
     assert!(rows[rows.len() - 1].contains("$1.25 of $5.00"), "{screen}");
 
     let mut app = attached(100, 30);
-    app.on_line(spend_status(serde_json::json!(1.25)));
+    app.on_line(spend_status(serde_json::json!(1.25), 0.0));
     let (screen, _) = draw(&app, 100, 30);
     let rows: Vec<&str> = screen.lines().collect();
     assert!(rows[rows.len() - 1].contains("$1.25"), "{screen}");
     assert!(!screen.contains("of $"), "{screen}");
+}
+
+#[test]
+fn the_budget_comparison_counts_billed_spend_only() {
+    // $1 billed plus $9 on subscription against a $5 budget: the
+    // subscription bills nothing per call.
+    let mut app = attached(100, 30);
+    app.on_line(budget_preamble(5.0));
+    app.on_line(spend_status(serde_json::json!(1.0), 9.0));
+    let (screen, _) = draw(&app, 100, 30);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(rows[rows.len() - 1].contains("$1.00 of $5.00"), "{screen}");
+    assert!(!screen.contains("$10.00"), "{screen}");
+
+    // Subscription-only: billed $0 against the budget.
+    let mut app = attached(100, 30);
+    app.on_line(budget_preamble(5.0));
+    app.on_line(spend_status(serde_json::json!(0.0), 9.0));
+    let (screen, _) = draw(&app, 100, 30);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(rows[rows.len() - 1].contains("$0.00 of $5.00"), "{screen}");
 }
 
 #[test]
