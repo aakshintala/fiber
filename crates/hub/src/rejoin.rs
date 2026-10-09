@@ -67,6 +67,20 @@ impl Mark {
     }
 }
 
+/// The log `session` has now, for a mark that recorded none at attach:
+/// its path with offset 0, so the later run's `fiber_started` counts.
+/// Never `Mark::now`: that would place the offset after the start the
+/// resumed run already wrote. File IO: never under the relays lock.
+fn discovered(home: &Path, session: &str, epoch: u64) -> Option<Mark> {
+    let log = crate::resume::find_log(home, &contract::SessionId(session.to_owned()))?;
+    Some(Mark {
+        log: Some(log),
+        read: 0,
+        live: false,
+        epoch,
+    })
+}
+
 impl Rejoin {
     pub(crate) fn close(&mut self) {
         self.closed = true;
@@ -290,9 +304,6 @@ fn sweep(hub: &Arc<Hub>, names: &BTreeSet<String>) {
     let mut found = Vec::new();
     for (writer, relays) in live {
         let held = lock(&relays);
-        if held.rejoin.closed {
-            continue;
-        }
         found.extend(
             candidates(&held, names)
                 .into_iter()
@@ -336,16 +347,14 @@ fn rejoin_pass(hub: &Arc<Hub>, candidates: Vec<Candidate>) {
             writer,
             relays,
         } = candidate;
-        // No log at attach time records offset 0; the sweep finds the log
-        // later, and a session that exited cleanly unlinked its socket, so
-        // only a bound name opens a log at all.
+        // No log at attach time records offset 0; the sweep finds the
+        // log later at offset 0, and a session that exited cleanly
+        // unlinked its socket, so only a bound name opens a log at all.
         if !hub.home.join("run").join(&session).exists() {
             continue;
         }
         let mark = if mark.log.is_none() {
-            let mut found = Mark::now(&hub.home, &session);
-            found.epoch = mark.epoch;
-            found
+            discovered(&hub.home, &session, mark.epoch).unwrap_or(mark)
         } else {
             mark
         };
@@ -393,40 +402,58 @@ impl Drop for BusyGuard<'_> {
     }
 }
 
-/// Reads complete lines from `mark.read`: `fiber_started` makes it live;
-/// `fiber_exited` or `rewound` ends it; read moves past the last complete
-/// line only, so a partial tail is read again next time. A file shorter
-/// than `read` was replaced: resets read to 0 and live to false, then
-/// reads the new file from its start.
+/// Seeks to `mark.read` and streams complete lines past it:
+/// `fiber_started` makes it live; `fiber_exited` or `rewound` ends it;
+/// read moves past the last complete line only, so a partial tail is read
+/// again next time. Every consumed complete-line byte is read at most
+/// once: bytes before the offset are never read. A file shorter than
+/// `read` was replaced: resets read to 0 and live to false, then reads
+/// the new file from its start.
 fn advance(mark: Mark) -> Mark {
     let Some(log) = mark.log.clone() else {
         return mark;
     };
-    let Ok(bytes) = std::fs::read(&log) else {
+    let Ok(file) = std::fs::File::open(&log) else {
         return mark;
     };
-    let len = bytes.len() as u64;
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
     let (mut read, mut live) = if len < mark.read {
         // The log was replaced under the same id: start over.
         (0, false)
     } else {
         (mark.read, mark.live)
     };
-    let mut rest = bytes
-        .get(usize::try_from(read).unwrap_or(usize::MAX)..)
-        .unwrap_or_default()
-        .split(|byte| *byte == b'\n');
-    // Every segment but the last is a complete line: the last is the
-    // partial tail, or empty when the bytes end in a newline.
-    let mut line = rest.next().unwrap_or_default();
-    for next in rest {
-        match kind_of(line) {
-            Some(kind) if kind == "fiber_started" => live = true,
-            Some(kind) if kind == "fiber_exited" || kind == "rewound" => live = false,
-            _ => {}
+    use std::io::{BufRead, Seek, SeekFrom};
+    let mut reader = std::io::BufReader::new(file);
+    if reader.seek(SeekFrom::Start(read)).is_err() {
+        return Mark {
+            log: Some(log),
+            read,
+            live,
+            epoch: mark.epoch,
+        };
+    }
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let Some((&last, line)) = buf.split_last() else {
+                    break;
+                };
+                if last != b'\n' {
+                    // A partial tail: read again next time.
+                    break;
+                }
+                match kind_of(line) {
+                    Some(kind) if kind == "fiber_started" => live = true,
+                    Some(kind) if kind == "fiber_exited" || kind == "rewound" => live = false,
+                    _ => {}
+                }
+                read += buf.len() as u64;
+            }
         }
-        read += line.len() as u64 + 1;
-        line = next;
     }
     Mark {
         log: Some(log),
