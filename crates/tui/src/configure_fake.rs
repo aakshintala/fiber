@@ -9,7 +9,7 @@ use contract::{ErrorCode, Secret};
 use crate::ThemeSetting;
 use crate::configure::{
     Configure, ConfigureError, Layer, LoginTarget, Revoked, RulesScope, RulesSection, Saved,
-    SettingRow, Shown, Stored, WriteScope,
+    SettingRow, Shown, Stored, SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 
 /// One revoke the view asked for: the workspace, scope, line and text.
@@ -17,6 +17,9 @@ pub(crate) type Revoke = (PathBuf, RulesScope, usize, String);
 
 /// One write the view asked for: the workspace, layer, key and text.
 pub(crate) type Write = (PathBuf, Layer, String, String);
+
+/// One switch the view asked for: the group, tool, scope and whether on.
+pub(crate) type Switched = (ToolGroup, String, SwitchScope, bool);
 
 /// A seam over rows in memory.
 pub(crate) struct Fake {
@@ -28,6 +31,12 @@ pub(crate) struct Fake {
     pub(crate) writes: Mutex<Vec<Write>>,
     /// The refusal the next writes get; `None` saves them.
     pub(crate) refuse: Mutex<Option<String>>,
+    /// Every MCP server and extension's lists `tool_switches` answers.
+    pub(crate) switches: Mutex<Vec<ToolSwitches>>,
+    /// Every switch asked for, in order.
+    pub(crate) switched: Mutex<Vec<Switched>>,
+    /// Whether `switch_tool` fails after applying the edit to its lists.
+    pub(crate) fail_after_write: Mutex<bool>,
     /// The theme files `themes` lists.
     pub(crate) themes: Vec<String>,
     /// What `global_file` answers.
@@ -54,6 +63,9 @@ impl Fake {
             reads: Mutex::new(Vec::new()),
             writes: Mutex::new(Vec::new()),
             refuse: Mutex::new(None),
+            switches: Mutex::new(Vec::new()),
+            switched: Mutex::new(Vec::new()),
+            fail_after_write: Mutex::new(false),
             themes: Vec::new(),
             global: file(Layer::Global),
             rules: Mutex::new(Ok((
@@ -269,6 +281,76 @@ impl Configure for Fake {
                 name: name.to_owned(),
                 text: Err("gone".to_owned()),
             },
+        }
+    }
+
+    fn tool_switches(&self, workspace: &Path) -> Result<Vec<ToolSwitches>, ConfigureError> {
+        if let Ok(mut reads) = self.reads.lock() {
+            reads.push(workspace.to_path_buf());
+        }
+        match self.refuse.lock().ok().and_then(|refuse| refuse.clone()) {
+            Some(message) => Err(ConfigureError {
+                code: ErrorCode::Usage,
+                message,
+            }),
+            None => Ok(self
+                .switches
+                .lock()
+                .map(|switches| switches.clone())
+                .unwrap_or_default()),
+        }
+    }
+
+    fn switch_tool(
+        &self,
+        workspace: &Path,
+        group: &ToolGroup,
+        tool: &str,
+        scope: SwitchScope,
+        on: bool,
+    ) -> Result<(), ConfigureError> {
+        if let Ok(mut switched) = self.switched.lock() {
+            switched.push((group.clone(), tool.to_owned(), scope, on));
+        }
+        let _ = workspace;
+        match self.refuse.lock().ok().and_then(|refuse| refuse.clone()) {
+            Some(message) => Err(ConfigureError {
+                code: ErrorCode::Usage,
+                message,
+            }),
+            None => {
+                if let Ok(mut switches) = self.switches.lock() {
+                    let at = switches.iter().position(|known| known.group == *group);
+                    let at = at.unwrap_or_else(|| {
+                        switches.push(ToolSwitches {
+                            group: group.clone(),
+                            project: ToolLists::default(),
+                            everywhere: ToolLists::default(),
+                        });
+                        switches.len().saturating_sub(1)
+                    });
+                    if let Some(known) = switches.get_mut(at) {
+                        // The seam's `disabled` handling, so a view re-read
+                        // sees the change (`docs/tui.md`, "Swapped views").
+                        let lists = match scope {
+                            SwitchScope::Project => &mut known.project.disabled,
+                            SwitchScope::Everywhere => &mut known.everywhere.disabled,
+                        };
+                        if on {
+                            lists.retain(|name| name != tool);
+                        } else if !lists.iter().any(|name| name == tool) {
+                            lists.push(tool.to_owned());
+                        }
+                    }
+                }
+                if self.fail_after_write.lock().is_ok_and(|fail| *fail) {
+                    return Err(ConfigureError {
+                        code: ErrorCode::IoFailed,
+                        message: "the write landed, then syncing failed".to_owned(),
+                    });
+                }
+                Ok(())
+            }
         }
     }
 }

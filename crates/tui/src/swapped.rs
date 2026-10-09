@@ -30,6 +30,8 @@ pub(crate) enum Spot {
     /// A cell, by its row and place in it: a button, or a chip in the
     /// model picker. A view without cells never sees one.
     Cell(usize, usize),
+    /// A switch in a row: `at` 0 is this project, 1 everywhere.
+    Switch { row: usize, at: usize },
     /// A rule row's ✕, by its index: revokes the rule
     /// (`docs/tui.md`, "Swapped views").
     Revoke(usize),

@@ -666,7 +666,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             "command_accepted",
             json!({"command_id": "c", "result": {"tools": [
             {"name": "read", "source": "builtin", "state": "full", "bytes": 10, "tokens": 3},
-            {"name": "x", "source": "mcp", "server": "m", "state": "deferred", "bytes": 1},
+            {"name": "x", "source": "mcp", "server": "m", "tool": "x", "state": "deferred", "bytes": 1},
             {"name": "y", "source": "extension", "extension": "e", "state": "loaded",
              "bytes": 1}]}}),
         ),
@@ -1208,6 +1208,21 @@ fn a_session_id_result_reads_as_start_and_a_status_object_as_status() {
         result_of(json!({"command_id": "c", "result": {"new_session_id": "s2"}})),
         CommandResult::Rewind { .. }
     ));
+}
+
+#[test]
+fn an_mcp_tool_names_its_server_and_its_own_name() {
+    let payload = json!({"name": "mcp__m__x", "source": "mcp", "server": "m",
+        "tool": "x", "state": "deferred", "bytes": 1});
+    let info: ToolInfo = serde_json::from_value(payload.clone()).unwrap();
+    assert_eq!(
+        info.source,
+        ToolSource::Mcp {
+            server: "m".into(),
+            tool: "x".into()
+        }
+    );
+    assert_eq!(serde_json::to_value(&info).unwrap(), payload);
 }
 
 #[test]

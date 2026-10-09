@@ -323,9 +323,10 @@ the conversation. The views are:
 - **Changed files:** a file list with the chosen file's hunks.
 - **Search results:** every match with its surrounding lines ("Search").
 - **The tools view,** `/tools` (`docs/tools.md`, "Seeing the tools"): every
-  tool by source, full or deferred, and its approximate size. An MCP server or
-  an extension has an on/off switch that writes its `tools.enabled` and
-  `tools.disabled` (`docs/configuration.md`). A change takes effect on
+  tool by source, full or deferred, and its approximate size. Each MCP
+  server's or extension's tool has two on/off switches, this project and
+  everywhere, that write that source's `tools.enabled` and `tools.disabled`
+  in the project's or the global file (`docs/configuration.md`). A change takes effect on
   reload, and the view says what the reload's cache rebuild costs. Built-in
   tools have no switch: they are always declared, so every session sends the
   same tool list, and the view shows them as rows without a switch.
@@ -1019,12 +1020,12 @@ fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
   box, the approval panel and each card sit on their own background tint, with
   half-block edges (▄ above, ▀ below) and no borders.
 - **A stripe marks state** on the side its surface is anchored to: ▌ on the
-  left for a steering message, a running or finished job and an approval; ▐ on
-  the right for the person's prompt bubble. The stripe is one unbroken bar,
-  because ▌ and ▐ fill half of each cell as Ghostty draws them. Where a
-  terminal cannot draw it unbroken, there is no stripe. Fiber draws stripes
-  in Ghostty, WezTerm and kitty, and not inside tmux or screen; elsewhere
-  the stripe's cell keeps its tint.
+  left for a queued steering message, a running or finished job and an
+  approval; ▐ on the right for the person's prompt bubble. The stripe is one
+  unbroken bar, because ▌ and ▐ fill half of each cell as Ghostty draws them.
+  Where a terminal cannot draw it unbroken, there is no stripe. Fiber draws
+  stripes in Ghostty, WezTerm and kitty, and not inside tmux or screen;
+  elsewhere the stripe's cell keeps its tint.
 - **Colours come from the theme,** in truecolour where the terminal has it:
   `COLORTERM` of `truecolor` or `24bit`, or a `TERM` of `xterm-ghostty`,
   `xterm-kitty`, `wezterm` or one ending in `-direct`, which survives SSH where
@@ -1077,8 +1078,8 @@ The roles, in order:
 | `type` | type names |
 | `constant` | constants: `true`, `null`, `ALL_CAPS` names |
 | `operator` | operators |
-| `background` | every cell no surface covers |
-| `surface` | the input box, cards, notices, the rail's and the panel's regions, the handoff band |
+| `background` | every cell no surface covers, including the rail's and the panel's regions |
+| `surface` | the input box, cards, notices, the handoff band |
 | `surface_raised` | the card on screen, a hovered card, pickers |
 | `prompt` | the person's prompt bubble |
 | `code` | code blocks and inline code |

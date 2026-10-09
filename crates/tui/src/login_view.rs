@@ -333,7 +333,7 @@ impl Login {
     pub(crate) fn click(&mut self, spot: Spot, ctx: &Ctx<'_>) -> Act {
         match spot {
             Spot::Close => Act::Close,
-            Spot::Revoke(_) | Spot::Cell(_, _) => Act::Stay,
+            Spot::Switch { .. } | Spot::Revoke(_) | Spot::Cell(_, _) => Act::Stay,
             Spot::Row(at) => {
                 if matches!(self.mode, Mode::Panel(_)) {
                     return Act::Stay;
@@ -394,7 +394,14 @@ impl Login {
             rows: self
                 .items
                 .iter()
-                .map(|item| vec![(self.line(*item), None, Ink::Plain)])
+                .map(|item| {
+                    let ink = match item {
+                        Item::Heading(_) => Ink::Heading,
+                        Item::Target(_) => Ink::Plain,
+                        Item::Note => Ink::Muted,
+                    };
+                    vec![(self.line(*item), None, ink)]
+                })
                 .collect(),
             list: self.list,
             below,

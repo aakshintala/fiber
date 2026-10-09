@@ -61,6 +61,7 @@ mod surface;
 mod swapped;
 mod term;
 mod theme;
+mod tools_view;
 mod turn;
 mod turn_text;
 mod view;
@@ -78,7 +79,8 @@ pub use attention::Attention;
 pub use catalogue::{Catalogue, ModelEntry, ReadModels, Refresh};
 pub use configure::{
     Configure, ConfigureError, Layer, LoginKind, LoginTarget, Revoked, RuleRow, RulesScope,
-    RulesSection, Saved, SettingRow, Shown, Stored, WriteScope,
+    RulesSection, Saved, SettingRow, Shown, Stored, SwitchScope, ToolGroup, ToolLists,
+    ToolSwitches, WriteScope,
 };
 
 pub use home::Launch;

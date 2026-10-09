@@ -9,12 +9,12 @@ use tui::{Configure, Layer, Shown, WriteScope};
 use super::Seam;
 
 /// Fiber home and two workspaces in one temporary directory.
-struct Dirs {
+pub(in crate::configure) struct Dirs {
     root: fakes::TempDir,
 }
 
 impl Dirs {
-    fn new() -> Self {
+    pub(in crate::configure) fn new() -> Self {
         let root = fakes::TempDir::new("fiber-configure");
         for dir in ["home", "one", "two"] {
             fs::create_dir_all(root.path().join(dir)).unwrap_or_else(|e| panic!("mkdir: {e}"));
@@ -22,16 +22,16 @@ impl Dirs {
         Self { root }
     }
 
-    fn home(&self) -> PathBuf {
+    pub(in crate::configure) fn home(&self) -> PathBuf {
         self.root.path().join("home")
     }
 
-    fn workspace(&self, name: &str) -> PathBuf {
+    pub(in crate::configure) fn workspace(&self, name: &str) -> PathBuf {
         self.root.path().join(name)
     }
 
     /// The project's `config.json` for `workspace`.
-    fn project_file(&self, workspace: &Path) -> PathBuf {
+    pub(in crate::configure) fn project_file(&self, workspace: &Path) -> PathBuf {
         let (_, project) = ::cli::project_of(&self.home(), workspace)
             .unwrap_or_else(|e| panic!("project: {}", e.message));
         self.home()
@@ -42,7 +42,7 @@ impl Dirs {
 }
 
 /// Writes `text` to `file`, making its directory.
-fn write(file: &Path, text: &str) {
+pub(in crate::configure) fn write(file: &Path, text: &str) {
     if let Some(dir) = file.parent() {
         fs::create_dir_all(dir).unwrap_or_else(|e| panic!("mkdir: {e}"));
     }

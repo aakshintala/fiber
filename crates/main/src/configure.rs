@@ -5,6 +5,7 @@
 //! terminal loads configuration with no `-c`, so no row comes from one.
 
 mod login;
+mod tools;
 
 use std::path::{Path, PathBuf};
 
@@ -12,7 +13,7 @@ use config::{Config, SettingValue, Source, Sources};
 use contract::shapes::Failure;
 use tui::{
     ConfigureError, Layer, LoginTarget, Revoked, RuleRow, RulesScope, RulesSection, Saved,
-    SettingRow, Shown, Stored, WriteScope,
+    SettingRow, Shown, Stored, SwitchScope, ToolGroup, ToolSwitches, WriteScope,
 };
 
 /// The seam over Fiber home.
@@ -258,6 +259,21 @@ impl tui::Configure for Seam {
         crate::theme_setting::named(&self.home, Some(name), &|path| {
             std::fs::read_to_string(path)
         })
+    }
+
+    fn tool_switches(&self, workspace: &Path) -> Result<Vec<ToolSwitches>, ConfigureError> {
+        self.read_switches(workspace)
+    }
+
+    fn switch_tool(
+        &self,
+        workspace: &Path,
+        group: &ToolGroup,
+        tool: &str,
+        scope: SwitchScope,
+        on: bool,
+    ) -> Result<(), ConfigureError> {
+        self.write_switch(workspace, group, tool, scope, on)
     }
 }
 
