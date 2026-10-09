@@ -172,6 +172,21 @@ fn headers_ride_every_signed_request_after_authorization() {
 }
 
 #[test]
+fn sign_may_return_an_http_header_named_headers() {
+    let setup = Setup::new();
+    let provider = provider_on(
+        &setup,
+        "{ token = \"tok-1\", expires_at = 4102444800 }",
+        "{ headers = \"sign-header\" }",
+    );
+    let signer = signer_of(&provider);
+    assert_eq!(
+        header(&sign_with(&signer, &[]).unwrap(), "headers"),
+        Some("sign-header".to_owned())
+    );
+}
+
+#[test]
 fn headers_are_cached_with_the_token() {
     let setup = Setup::new();
     // `calls` counts the `credential()` runs: `sign()` reports it, so two
