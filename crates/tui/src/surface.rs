@@ -62,6 +62,22 @@ pub(crate) fn edged(rows: usize, room: usize) -> usize {
     }
 }
 
+/// Which of a surface's edge rows draw: a card cut across pages draws no
+/// edge at the cut (`docs/tui.md`, "Look", "History and paging").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Edges {
+    pub(crate) top: bool,
+    pub(crate) bottom: bool,
+}
+
+impl Edges {
+    /// Both edge rows draw.
+    pub(crate) const BOTH: Self = Self {
+        top: true,
+        bottom: true,
+    };
+}
+
 /// An edge row `width` wide in `tint`: half blocks above (`top`) or below
 /// the surface, with no borders (`docs/tui.md`, "Look"). With no colour
 /// the paint pass blanks it, and the row stays.

@@ -128,8 +128,14 @@ fn texts(app: &App) -> Vec<String> {
     app.lines().iter().map(ToString::to_string).collect()
 }
 
+/// The last row with text: the card's bottom edge carries none
+/// (`docs/tui.md`, "Look").
 fn last(app: &App) -> String {
-    texts(app).pop().unwrap_or_default()
+    texts(app)
+        .into_iter()
+        .rev()
+        .find(|line| line.is_empty() || line.chars().any(|ch| ch != '▄' && ch != '▀'))
+        .unwrap_or_default()
 }
 
 /// The line that reads `text`.
@@ -207,11 +213,13 @@ fn a_group_counts_its_calls_by_kind_and_its_span() {
             " fix it ▐",
             "▀▀▀▀▀▀▀▀▀",
             "00:00",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             "• Read 2 files, edited 1 file +3 −1, ran 1 command, thought once · 12s",
             "Done.",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
-    let summary = styled(&app, &texts(&app)[4]);
+    let summary = styled(&app, &texts(&app)[5]);
     assert!(dim(&summary));
     assert!(!dim(&styled(&app, "Done.")));
 }
@@ -242,7 +250,7 @@ fn shell_searches_and_other_tools_have_their_own_kinds() {
     call(&mut app, "a_8", "edit", json!({"path": "n.rs"}), 0);
     text(&mut app, "a_m", "ok", 0);
     assert_eq!(
-        texts(&app).get(4).map(String::as_str),
+        texts(&app).get(5).map(String::as_str),
         Some("• Searched 3 patterns, edited 2 files, ran 2 commands, 1 other call")
     );
 }
@@ -271,7 +279,7 @@ fn edited_files_count_distinct_paths_and_sum_their_lines() {
     );
     text(&mut app, "a_m", "ok", 0);
     assert_eq!(
-        texts(&app).get(4).map(String::as_str),
+        texts(&app).get(5).map(String::as_str),
         Some("• Edited 2 files +7 −3")
     );
 }
@@ -303,12 +311,54 @@ fn text_splits_groups_and_steering_does_not() {
             " go ▐",
             "▀▀▀▀▀",
             "00:00",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             "• Read 2 files",
-            "steer · also b",
+            "steer · 00:00 ──────────────────────────────────────────────",
+            "also b",
             "Read them.",
             "• Read 2 files",
             "More.",
             "▣ completed · 4 calls",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        ]
+    );
+}
+
+#[test]
+fn a_steer_is_timed_by_its_own_line() {
+    // Each steering rule reads its own line's time, not the turn's start
+    // (`docs/tui.md`, "Turns").
+    let mut app = app();
+    start(&mut app, "go", 0);
+    feed(
+        &mut app,
+        "steering_applied",
+        None,
+        3_600_000,
+        json!({"content": [{"type": "text", "text": "first"}], "source": "driver"}),
+    );
+    feed(
+        &mut app,
+        "steering_applied",
+        None,
+        7_200_000,
+        json!({"content": [{"type": "text", "text": "second"}], "source": "driver"}),
+    );
+    end(&mut app, "completed", 0);
+    assert_eq!(
+        texts(&app),
+        vec![
+            "▄▄▄▄▄",
+            " go ▐",
+            "▀▀▀▀▀",
+            "00:00",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "steer · 01:00 ──────────────────────────────────────────────",
+            "first",
+            "steer · 02:00 ──────────────────────────────────────────────",
+            "second",
+            "▣ completed",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
 }
@@ -327,9 +377,11 @@ fn a_thinking_only_group_is_one_line_per_block() {
             " why ▐",
             "▀▀▀▀▀▀",
             "00:00",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             "+ Thought: Plan the fix · 22s",
             "+ Thought: short",
-            "Because."
+            "Because.",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
     assert!(dim(&styled(&app, "+ Thought: short")));
@@ -337,12 +389,12 @@ fn a_thinking_only_group_is_one_line_per_block() {
     let thought = target(&app, "+ Thought: Plan the fix · 22s");
     app.open(thought);
     assert_eq!(
-        texts(&app).get(5..7).map(<[String]>::to_vec),
+        texts(&app).get(6..8).map(<[String]>::to_vec),
         Some(vec!["**Plan the fix**".to_owned(), "first a".to_owned()])
     );
     assert!(dim(&styled(&app, "first a")));
     app.open(thought);
-    assert_eq!(texts(&app).len(), 7);
+    assert_eq!(texts(&app).len(), 9);
 }
 
 #[test]
@@ -351,7 +403,7 @@ fn a_thought_with_no_end_or_text_has_no_figures() {
     start(&mut app, "q", 0);
     feed(&mut app, "reasoning_started", Some("a_t"), 0, json!({}));
     text(&mut app, "a_m", "A.", 5_000);
-    assert_eq!(texts(&app).get(4).map(String::as_str), Some("+ Thought"));
+    assert_eq!(texts(&app).get(5).map(String::as_str), Some("+ Thought"));
 }
 
 #[test]
@@ -364,7 +416,7 @@ fn a_running_group_shows_calls_in_flight_and_thinking() {
     feed(&mut app, "tool_call_started", Some("a_2"), 0, json!({}));
     feed(&mut app, "reasoning_started", Some("a_t"), 0, json!({}));
     assert_eq!(
-        texts(&app).get(4).map(String::as_str),
+        texts(&app).get(5).map(String::as_str),
         Some("• Read 1 file, ran 1 command, thought once · shell cargo t · Thinking")
     );
     feed(
@@ -375,7 +427,7 @@ fn a_running_group_shows_calls_in_flight_and_thinking() {
         json!({"text": "# One\nx\n**Two**"}),
     );
     assert_eq!(
-        texts(&app).get(4).map(String::as_str),
+        texts(&app).get(5).map(String::as_str),
         Some("• Read 1 file, ran 1 command, thought once · shell cargo t · Thinking: Two")
     );
     // A block that has finished no longer shows; completed calls leave.
@@ -388,7 +440,7 @@ fn a_running_group_shows_calls_in_flight_and_thinking() {
     );
     complete(&mut app, "a_2", 0, json!({}));
     assert_eq!(
-        texts(&app).get(4).map(String::as_str),
+        texts(&app).get(5).map(String::as_str),
         Some("• Read 1 file, ran 1 command, thought once")
     );
 }
@@ -426,18 +478,18 @@ fn raw_arguments_stream_until_their_call_is_requested() {
         );
     }
     assert_eq!(
-        texts(&app).get(4).map(String::as_str),
+        texts(&app).get(5).map(String::as_str),
         Some("• shell {\"com, read {\"path\"")
     );
     // The requested call takes the place of the lowest index.
     request(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
     assert_eq!(
-        texts(&app).get(4).map(String::as_str),
+        texts(&app).get(5).map(String::as_str),
         Some("• Read 1 file · read a.rs, shell {\"com")
     );
     request(&mut app, "a_2", "shell", json!({"command": "ls"}), 0);
     assert_eq!(
-        texts(&app).get(4).map(String::as_str),
+        texts(&app).get(5).map(String::as_str),
         Some("• Read 1 file, ran 1 command · read a.rs, shell ls")
     );
 }
@@ -453,7 +505,7 @@ fn a_streaming_call_with_no_name_yet_shows_an_ellipsis() {
         0,
         json!({"index": 0, "text": "{"}),
     );
-    assert_eq!(texts(&app).get(4).map(String::as_str), Some("• … {"));
+    assert_eq!(texts(&app).get(5).map(String::as_str), Some("• … {"));
     // A failed message stops streaming: nothing is left in flight.
     feed(
         &mut app,
@@ -525,7 +577,7 @@ fn a_call_requested_with_no_deltas_joins_the_open_group() {
     call(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
     call(&mut app, "a_2", "read", json!({"path": "b.rs"}), 0);
     assert_eq!(
-        texts(&app).get(4).map(String::as_str),
+        texts(&app).get(5).map(String::as_str),
         Some("• Read 2 files")
     );
 }
@@ -562,9 +614,11 @@ fn live_text_streams_ahead_of_the_calls_it_precedes() {
             " go ▐",
             "▀▀▀▀▀",
             "00:00",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             "First.",
             "• Read 1 file",
-            "Second."
+            "Second.",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
 }
@@ -673,10 +727,13 @@ fn a_generation_counts_once_and_its_latest_line_wins() {
     end(&mut app, "completed", 0);
     let lines = texts(&app);
     assert_eq!(
-        lines.get(4).map(String::as_str),
+        lines.get(5).map(String::as_str),
         Some("▣ completed · 1.1k tokens · $1.10")
     );
-    assert_eq!(lines.last().map(String::as_str), Some("▣ completed"));
+    assert_eq!(
+        lines.get(lines.len().saturating_sub(2)).map(String::as_str),
+        Some("▣ completed")
+    );
 }
 
 #[test]
@@ -694,12 +751,16 @@ fn usage_with_no_open_turn_and_an_unknown_id_is_dropped() {
             " go ▐",
             "▀▀▀▀▀",
             "00:00",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             "▣ completed",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
             "▄▄▄▄▄▄▄",
             " next ▐",
             "▀▀▀▀▀▀▀",
             "00:00",
-            "▣ completed"
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "▣ completed",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
 }
@@ -754,8 +815,10 @@ fn ledger_app() -> App {
 #[test]
 fn the_ledger_is_one_row_per_call_split_by_step() {
     let mut app = ledger_app();
-    let summary = texts(&app).get(4).cloned().unwrap_or_default();
+    let summary = texts(&app).get(5).cloned().unwrap_or_default();
     app.open(group(&app));
+    let top = "▄".repeat(60);
+    let bottom = "▀".repeat(60);
     assert_eq!(
         texts(&app),
         vec![
@@ -763,6 +826,7 @@ fn the_ledger_is_one_row_per_call_split_by_step() {
             " go ▐".to_owned(),
             "▀▀▀▀▀".to_owned(),
             "00:00".to_owned(),
+            top,
             summary,
             "  1 + Thought: Look first · 4s".to_owned(),
             "    read a.rs".to_owned(),
@@ -772,6 +836,7 @@ fn the_ledger_is_one_row_per_call_split_by_step() {
             "    custom raw text · cancelled".to_owned(),
             "    read z.rs · running".to_owned(),
             "Done.".to_owned(),
+            bottom,
         ]
     );
     // An edited row stands out; the rest sit back.
@@ -786,7 +851,7 @@ fn the_ledger_is_one_row_per_call_split_by_step() {
         assert!(dim(&line) && !bold(&line), "{row}");
     }
     app.open(group(&app));
-    assert_eq!(texts(&app).len(), 6);
+    assert_eq!(texts(&app).len(), 8);
 }
 
 #[test]
@@ -888,7 +953,7 @@ fn targets_name_the_lines_they_open() {
     identities.sort_unstable();
     identities.dedup();
     assert_eq!(identities.len(), 8);
-    assert_eq!(targets.first().map(|(at, _)| *at), Some(4));
+    assert_eq!(targets.first().map(|(at, _)| *at), Some(5));
     // Opening something that is not there changes nothing.
     let before = texts(&app);
     app.open(Target::Call(none()));
@@ -916,7 +981,7 @@ fn ctrl_o_opens_every_ledger_unless_all_are_open() {
     assert!(texts(&app).contains(&"  1 read b.rs".to_owned()));
     // All open: Ctrl+O closes them all.
     ctrl_o(&mut app);
-    assert_eq!(texts(&app).len(), 10);
+    assert_eq!(texts(&app).len(), 12);
     // A group made later starts the way the last Ctrl+O left them.
     ctrl_o(&mut app);
     call(&mut app, "a_3", "read", json!({"path": "c.rs"}), 0);
@@ -937,7 +1002,7 @@ fn ctrl_o_with_no_ledger_yet_sets_how_groups_start() {
     ctrl_o(&mut app);
     ctrl_o(&mut app);
     call(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
-    assert_eq!(texts(&app).len(), 5);
+    assert_eq!(texts(&app).len(), 7);
 }
 
 #[test]
@@ -949,16 +1014,16 @@ fn an_open_approval_shows_its_group_ledger_until_resolved() {
     feed(&mut app, "permission_requested", Some("a_1"), 0, json!({}));
     assert!(texts(&app).contains(&"  1 shell rm x · running".to_owned()));
     feed(&mut app, "permission_resolved", Some("a_1"), 0, json!({}));
-    assert_eq!(texts(&app).len(), 5);
+    assert_eq!(texts(&app).len(), 7);
     // A group the person opened stays open after the answer.
     app.open(group(&app));
     feed(&mut app, "permission_requested", Some("a_1"), 0, json!({}));
     feed(&mut app, "permission_resolved", Some("a_1"), 0, json!({}));
-    assert_eq!(texts(&app).len(), 6);
+    assert_eq!(texts(&app).len(), 8);
     // A request for a call the fold never saw changes nothing.
     app.open(group(&app));
     feed(&mut app, "permission_requested", Some("a_9"), 0, json!({}));
-    assert_eq!(texts(&app).len(), 5);
+    assert_eq!(texts(&app).len(), 7);
 }
 
 #[test]
@@ -1011,8 +1076,10 @@ fn lines_the_fold_cannot_place_are_skipped() {
             " go ▐",
             "▀▀▀▀▀",
             "00:00",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             "+ Thought",
-            "▣ completed"
+            "▣ completed",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
 }
@@ -1100,7 +1167,14 @@ fn an_empty_prompt_draws_no_bubble() {
     let mut app = app();
     start(&mut app, "  ", 0);
     end(&mut app, "completed", 0);
-    assert_eq!(texts(&app), vec!["▣ completed"]);
+    assert_eq!(
+        texts(&app),
+        vec![
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "▣ completed",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        ]
+    );
 }
 
 #[test]
@@ -1114,7 +1188,7 @@ fn a_streaming_call_with_no_text_yet_shows_its_name_alone() {
         0,
         json!({"index": 0, "name": "read", "text": ""}),
     );
-    assert_eq!(texts(&app).get(4).map(String::as_str), Some("• read"));
+    assert_eq!(texts(&app).get(5).map(String::as_str), Some("• read"));
 }
 
 #[test]
@@ -1410,9 +1484,11 @@ fn a_failed_turn_says_why_then_closes() {
     assert_eq!(
         lines[4..],
         [
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             "✗ The provider is rate limiting this key. · rate_limited",
             "anthropic said HTTP 529: “Overloaded”",
             "▣ failed",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
     assert!(!dim(&styled(
@@ -1441,9 +1517,11 @@ fn a_failure_without_a_status_shows_what_the_provider_said() {
     assert_eq!(
         lines[4..],
         [
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             "✗ acme's credential() failed. Run `fiber login acme`. · credential_failed",
             "acme said: “init.lua:3: boom”",
             "▣ failed",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
     assert!(dim(&styled(&app, "acme said: “init.lua:3: boom”")));
@@ -1463,7 +1541,12 @@ fn a_failed_login_offers_log_in_on_its_error_line() {
     );
     assert_eq!(
         texts(&app)[4..],
-        ["✗ The key was refused. · authentication_failed", "▣ failed"]
+        [
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "✗ The key was refused. · authentication_failed",
+            "▣ failed",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        ]
     );
     assert_eq!(
         target(&app, "✗ The key was refused. · authentication_failed"),
@@ -1616,7 +1699,7 @@ fn a_cancelled_wait_keeps_the_failed_attempts() {
     end(&mut app, "interrupted", 1);
     ctrl_o(&mut app);
     assert_eq!(
-        texts(&app)[5..7],
+        texts(&app)[6..8],
         [
             "  1 model call failed · rate_limited · attempt 1",
             "    model call failed · rate_limited · attempt 2",
@@ -1685,10 +1768,10 @@ fn a_failed_model_call_is_counted_on_the_summary_and_in_the_ledger() {
     started(&mut app);
     retry(&mut app, 3, 1_000, 4);
     text(&mut app, "a_m", "Done.", 0);
-    assert_eq!(texts(&app)[4], "• Read 1 file · 2 failed model calls");
+    assert_eq!(texts(&app)[5], "• Read 1 file · 2 failed model calls");
     app.open(group(&app));
     assert_eq!(
-        texts(&app)[5..8],
+        texts(&app)[6..9],
         [
             "  1 model call failed · rate_limited · attempt 1",
             "    model call failed · rate_limited · attempt 1",
@@ -1712,14 +1795,16 @@ fn a_group_with_only_a_failed_call_still_draws_its_summary() {
             " go ▐",
             "▀▀▀▀▀",
             "00:00",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             "• 1 failed model call",
-            "Done."
+            "Done.",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
     // Ctrl+O counts it as a ledger.
     ctrl_o(&mut app);
     assert_eq!(
-        texts(&app)[5],
+        texts(&app)[6],
         "  1 model call failed · rate_limited · attempt 1"
     );
 }
@@ -1761,9 +1846,11 @@ fn a_failed_mcp_server_is_a_warning_line_in_or_out_of_a_turn() {
             " go ▐",
             "▀▀▀▀▀",
             "00:00",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             "⚠ The MCP server two stopped.",
             "Hi",
             "▣ completed",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
             "⚠ The MCP server three stopped.",
         ]
     );

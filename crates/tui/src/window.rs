@@ -17,6 +17,7 @@ use crate::format::{self, Spend};
 use crate::mouse::TargetId;
 use crate::pages::{Cut, Index};
 use crate::rows::{RowText, Rows};
+use crate::surface::Edges;
 use crate::turn::{Fold, Row, Turn};
 
 mod pins;
@@ -34,6 +35,12 @@ struct Seed {
     /// The next page begins inside the same turn, with the text that ends
     /// this page's last group.
     cut: bool,
+    /// The page's last card piece goes on as the next page's first: it
+    /// draws no bottom edge (`docs/tui.md`, "History and paging").
+    joins_next: bool,
+    /// The page's first card piece goes on from the page before: it draws
+    /// no top edge (`docs/tui.md`, "History and paging").
+    joins_previous: bool,
     /// The next target id.
     next: usize,
     /// Whether a new group starts with its ledger open.
@@ -60,6 +67,8 @@ impl Seed {
             first,
             step,
             cut: false,
+            joins_next: false,
+            joins_previous: false,
             next,
             ledgers,
             trigger_at,
@@ -77,6 +86,12 @@ pub(crate) struct Part {
     turns: Vec<Turn>,
     fold: Fold,
     aside_start: usize,
+    /// The page's last card piece goes on as the next page's first: it
+    /// draws no bottom edge (`docs/tui.md`, "History and paging").
+    joins_next: bool,
+    /// The page's first card piece goes on from the page before: it draws
+    /// no top edge (`docs/tui.md`, "History and paging").
+    joins_previous: bool,
 }
 
 impl Part {
@@ -93,6 +108,8 @@ impl Part {
                 seed.carried,
             ),
             aside_start: 0,
+            joins_next: false,
+            joins_previous: seed.joins_previous,
         }
     }
 }
@@ -322,6 +339,7 @@ impl Pages {
         if (changed && kind != "usage_recorded") || cut != Cut::None {
             self.count(self.closed.len());
         }
+        self.rejoin();
         Applied { changed, busy }
     }
 
@@ -442,8 +460,8 @@ impl Pages {
     fn confirm(&mut self) {
         let Some(Pending {
             mut before,
-            next,
-            seed,
+            mut next,
+            mut seed,
         }) = self.pending.take()
         else {
             return;
@@ -453,10 +471,30 @@ impl Pages {
         }
         let at = self.closed.len();
         let spans = group_spans(&before);
+        // Whether the cut card's pieces drew, from the rows the pieces
+        // draw, never from entries: an entry can draw nothing
+        // (`docs/tui.md`, "History and paging"). The page before the cut
+        // is closed and never folds another line, so whether its last
+        // piece drew is final here.
+        let width = self.width;
+        let before_drew = before.turns.last().map(|card| {
+            let mut scratch = Rows::default();
+            card.rows(width, &self.zone, Edges::BOTH, &mut scratch).last
+        });
+        let next_drew = next.turns.first().map(|card| {
+            let mut scratch = Rows::default();
+            card.rows(width, &self.zone, Edges::BOTH, &mut scratch)
+                .first
+        });
+        let joins = before_drew.unwrap_or(false) && next_drew.unwrap_or(false);
+        next.joins_previous = before_drew.unwrap_or(false);
+        seed.joins_previous = before_drew.unwrap_or(false);
+        before.joins_next = joins;
         if let Some(closing) = self.seeds.get_mut(at) {
             closing.cut = true;
             closing.spans = spans;
             closing.carried = before.fold.take_carried();
+            closing.joins_next = joins;
         }
         // The next page took its copy of the open jobs at the candidate:
         // the closed page keeps none of their descriptions.
@@ -467,6 +505,43 @@ impl Pages {
         self.open = next;
         self.fold.ledgers = self.open.fold.ledgers;
         self.count(at);
+    }
+
+    /// While the open page goes on from the page before and that page
+    /// still draws its bottom edge, draws the open page's first turn
+    /// again: once its first piece draws, the edge comes off, so the
+    /// pages joined draw what one fold draws (`docs/tui.md`, "History
+    /// and paging"). A piece never goes from rows back to none, so the
+    /// flag only ever turns true once.
+    fn rejoin(&mut self) {
+        let open = self.closed.len();
+        if !self.open.joins_previous {
+            return;
+        }
+        let Some(before) = open.checked_sub(1) else {
+            return;
+        };
+        if self.seeds.get(before).is_some_and(|seed| seed.joins_next) {
+            return;
+        }
+        let width = self.width;
+        let drew = self.open.turns.first().map(|card| {
+            let mut scratch = Rows::default();
+            card.rows(width, &self.zone, Edges::BOTH, &mut scratch)
+                .first
+        });
+        if !drew.unwrap_or(false) {
+            return;
+        }
+        if let Some(seed) = self.seeds.get_mut(before) {
+            seed.joins_next = true;
+        }
+        if let Some(Some(part)) = self.closed.get_mut(before) {
+            part.joins_next = true;
+            self.count(before);
+        } else if let Some(rows) = self.index.pages().get(before).map(|page| page.rows) {
+            self.index.set_rows(before, rows.saturating_sub(1));
+        }
     }
 
     /// Folds fetched durable lines into the closed pages that hold them,
@@ -516,6 +591,9 @@ impl Pages {
             && let Some(card) = part.turns.last_mut()
         {
             card.end_group();
+        }
+        if let Some(seed) = self.seeds.get(at) {
+            part.joins_next = seed.joins_next;
         }
         for (target, open) in &self.overrides {
             set(part, target, *open);
@@ -1008,7 +1086,11 @@ impl Pages {
                 );
             }
             let first = out.len();
-            card.rows(self.width, &self.zone, &mut out);
+            let edges = Edges {
+                top: !(at == 0 && part.joins_previous),
+                bottom: !(at + 1 == part.turns.len() && part.joins_next),
+            };
+            card.rows(self.width, &self.zone, edges, &mut out);
             if first < out.len() {
                 turns.push((after, first..out.len()));
             }

@@ -6,6 +6,8 @@
 use std::ops::{Deref, Range};
 
 use crate::app::Target;
+use crate::surface::{Edges, edge_row};
+use crate::theme::Role;
 use crate::turn::Row;
 
 /// How a row's text follows the row before it.
@@ -107,6 +109,42 @@ impl Rows {
     /// The rows and their texts, one each.
     pub(crate) fn into_parts(self) -> (Vec<Row>, Vec<RowText>) {
         (self.rows, self.texts)
+    }
+
+    /// The rows from `from` on sit on `tint`: each takes it as its line's
+    /// background; with `edges`, an `edge_row` (`width` cells,
+    /// decoration) is inserted at `from` and pushed after the last. No
+    /// rows from `from`: nothing (`docs/tui.md`, "Look").
+    pub(crate) fn on_surface(&mut self, from: usize, width: u16, tint: Role, edges: Edges) {
+        let Some(body) = self.rows.get_mut(from..) else {
+            return;
+        };
+        if body.is_empty() {
+            return;
+        }
+        for (line, _) in body {
+            line.style.bg = Some(tint.color());
+        }
+        let width = usize::from(width);
+        if edges.bottom {
+            self.rows.push((edge_row(width, tint, false), None));
+            self.texts.push(RowText {
+                decoration: true,
+                scopes: self.scopes.clone(),
+                ..RowText::plain()
+            });
+        }
+        if edges.top {
+            self.rows.insert(from, (edge_row(width, tint, true), None));
+            self.texts.insert(
+                from,
+                RowText {
+                    decoration: true,
+                    scopes: self.scopes.clone(),
+                    ..RowText::plain()
+                },
+            );
+        }
     }
 }
 

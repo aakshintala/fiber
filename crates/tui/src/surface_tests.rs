@@ -151,6 +151,17 @@ fn draw_stripe_draws_nothing_without_rows_or_columns() {
 }
 
 #[test]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "pins the shared constant's value"
+)]
+fn edges_both_draws_both() {
+    // Both edge rows draw (`docs/tui.md`, "Look").
+    assert!(super::Edges::BOTH.top);
+    assert!(super::Edges::BOTH.bottom);
+}
+
+#[test]
 fn init_reads_whether_stripes_draw() {
     // Without init's write the static stays on: a multiplexer must turn
     // the stripe's cell into a tinted blank.

@@ -2,7 +2,7 @@
 source: crates/tui/src/view/results_tests.rs
 expression: "screen(&app, 80, 24)"
 ---
-40 matches for “match”                                    find: match · 20 of 4✕
+40 matches for “match”                                    find: match · 21 of 4✕
 match number 0 match number 1 match number 2
 match number 1 match number 2 match number 3
 match number 2 match number 3 match number 4
