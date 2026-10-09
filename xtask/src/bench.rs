@@ -599,22 +599,6 @@ pub(crate) fn report(
 /// binary is from.
 type Measured<'a> = (Option<&'a Results>, Option<&'a Results>, &'a str);
 
-/// Whether `cell` is a memory ceiling; if not, the row's failure goes to
-/// `failures`, which no base excuses.
-fn kib_ceiling(cell: &str, failures: &mut Vec<String>) -> bool {
-    match ceiling(cell) {
-        Ok(Quantity::Kib(_)) => true,
-        Ok(Quantity::Ms(_)) => {
-            failures.push(format!("{cell:?} is not a memory ceiling"));
-            false
-        }
-        Err(e) => {
-            failures.push(e);
-            false
-        }
-    }
-}
-
 /// Starts each failure that is a measurement over its budget, as opposed to
 /// a result that is missing or malformed.
 const OVER: &str = "over budget: ";
@@ -646,11 +630,7 @@ fn judge(
         result: "pass",
     };
     match check {
-        Check::Memory(ids) => {
-            if kib_ceiling(cell, &mut failures) {
-                line.head = memory(cell, ids, head, &mut measured);
-            }
-        }
+        Check::Memory(ids) => line.head = memory(cell, ids, head, &mut measured),
         Check::Within { row, id } => {
             let other = rows
                 .iter()
@@ -665,10 +645,8 @@ fn judge(
                             "the ceiling reads {cell:?}; it must read {expected:?}, the {row:?} row's ceiling"
                         ));
                     }
-                    if kib_ceiling(other, &mut failures) {
-                        line.head = memory(other, &[id], head, &mut measured);
-                        within = Some((other.clone(), id));
-                    }
+                    line.head = memory(other, &[id], head, &mut measured);
+                    within = Some((other.clone(), id));
                 }
             }
         }

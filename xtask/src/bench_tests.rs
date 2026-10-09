@@ -923,3 +923,21 @@ fn a_self_check_the_base_fails_too_still_fails_the_head() {
     let out = judge(&both, Some(&base), Event::PullRequest);
     assert!(has(&out.failures, "hub did not exit"), "{:?}", out.failures);
 }
+
+#[test]
+fn a_wrong_unit_ceiling_fails_even_when_the_base_is_over() {
+    let kib = json!([30000, 30000, 30000, 30000, 30000]);
+    let over_head = with_metric(head(), "session_idle_rss_kib", kib.clone());
+    let over_base = with_metric(full_base(), "session_idle_rss_kib", kib);
+    let out = judge_doc(
+        &doc_with("12 MiB peak RSS", "12 ms"),
+        &over_head,
+        Some(&over_base),
+        Event::PullRequest,
+    );
+    assert!(
+        has(&out.failures, "not a memory ceiling"),
+        "{:?}",
+        out.failures
+    );
+}
