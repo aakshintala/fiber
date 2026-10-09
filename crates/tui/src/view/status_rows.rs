@@ -109,7 +109,14 @@ fn session_segments(app: &App) -> Vec<(String, Option<Spot>)> {
         out.push((format!("{pct}% context"), None));
     }
     if let Some(spend) = app.attached_spend() {
-        out.push((format::money(spend), None));
+        // With a budget the segment reads spend against it.
+        match app.panel_state().budget() {
+            Some(budget) => out.push((
+                format!("{} of {}", format::money(spend), format::money(budget)),
+                None,
+            )),
+            None => out.push((format::money(spend), None)),
+        }
     }
     out
 }

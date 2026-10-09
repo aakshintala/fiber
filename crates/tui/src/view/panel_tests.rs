@@ -253,6 +253,57 @@ fn cost_rows() {
     );
 }
 
+/// A `preamble_built` setting `budget.usd`.
+fn budget_preamble(budget: f64) -> Line {
+    session_line(
+        "preamble_built",
+        serde_json::json!({
+            "reason": "start", "model": "test/model", "context_window": 1000,
+            "thinking": "high", "tool_choice": "auto", "cache_lifetime": "5m",
+            "system_prompt": "", "tools": [], "budget": budget,
+        }),
+    )
+}
+
+#[test]
+fn cost_against_a_budget() {
+    for (cost, row) in [
+        (serde_json::json!(0.0), "cost billed  $0.00 of $5.00"),
+        (serde_json::json!(1.25), "cost billed  $1.25 of $5.00"),
+        (serde_json::Value::Null, "cost billed  unknown of $5.00"),
+    ] {
+        let mut app = attached(160, 40);
+        app.on_line(budget_preamble(5.0));
+        app.on_line(status_line(spend(1, 0, 0, 2, cost, 0.0), None));
+        assert!(
+            texts(&app, 40).iter().any(|drawn| drawn == row),
+            "{row}"
+        );
+    }
+    // Without a budget the row keeps its rule: hidden at zero,
+    // plain above it.
+    let mut app = attached(160, 40);
+    app.on_line(status_line(
+        spend(1, 0, 0, 2, serde_json::json!(0.0), 0.0),
+        None,
+    ));
+    assert!(
+        texts(&app, 40)
+            .iter()
+            .all(|row| !row.starts_with("cost billed"))
+    );
+    let mut app = attached(160, 40);
+    app.on_line(status_line(
+        spend(1, 0, 0, 2, serde_json::json!(1.25), 0.0),
+        None,
+    ));
+    assert!(
+        texts(&app, 40)
+            .iter()
+            .any(|row| row == "cost billed  $1.25")
+    );
+}
+
 #[test]
 fn turns_at_zero_are_left_out() {
     let mut app = attached(160, 40);

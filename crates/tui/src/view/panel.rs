@@ -285,13 +285,28 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
                 .unwrap_or(0);
             out.push(plain(format!("cache hits  {hits}%")));
         }
-        match status.spend.cost {
-            // debt: spend shows against budget.usd once preamble_built carries the budget; upgrade trigger: #1201 lands.
-            Some(cost) if cost > 0.0 => {
+        // With a budget the cost row always shows spend against it; a
+        // cost still null counts as zero until it settles
+        // (`docs/loop.md`, "Spending budget").
+        match (status.spend.cost, panel.budget()) {
+            (Some(cost), Some(budget)) => {
+                out.push(plain(format!(
+                    "cost billed  {} of {}",
+                    format::money(cost),
+                    format::money(budget)
+                )));
+            }
+            (None, Some(budget)) => {
+                out.push(plain(format!(
+                    "cost billed  unknown of {}",
+                    format::money(budget)
+                )));
+            }
+            (Some(cost), None) if cost > 0.0 => {
                 out.push(plain(format!("cost billed  {}", format::money(cost))));
             }
-            None => out.push(plain("cost billed  unknown".to_owned())),
-            Some(_) => {}
+            (None, None) => out.push(plain("cost billed  unknown".to_owned())),
+            (Some(_), None) => {}
         }
         if status.spend.subscription_cost > 0.0 {
             out.push(plain(format!(

@@ -258,6 +258,55 @@ fn an_empty_row_two_takes_no_row() {
     assert_eq!(rows[bottom - 2], ">", "{}", screen);
 }
 
+/// A `session_status` with billed `cost`.
+fn spend_status(cost: serde_json::Value) -> Line {
+    session_line(
+        SESSION,
+        "session_status",
+        serde_json::json!({
+            "name": "one", "workspace": "/w", "project": "-w", "state": "idle",
+            "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": cost, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        }),
+    )
+}
+
+/// A `preamble_built` setting `budget.usd`.
+fn budget_preamble(budget: f64) -> Line {
+    session_line(
+        SESSION,
+        "preamble_built",
+        serde_json::json!({
+            "reason": "start", "model": "test/model", "context_window": 1000,
+            "tool_choice": "auto", "cache_lifetime": "5m",
+            "system_prompt": "", "tools": [], "budget": budget,
+        }),
+    )
+}
+
+#[test]
+fn the_spend_segment_reads_against_the_budget() {
+    let mut app = attached(100, 30);
+    app.on_line(budget_preamble(5.0));
+    app.on_line(spend_status(serde_json::json!(1.25)));
+    let (screen, _) = draw(&app, 100, 30);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(
+        rows[rows.len() - 1].contains("$1.25 of $5.00"),
+        "{screen}"
+    );
+
+    let mut app = attached(100, 30);
+    app.on_line(spend_status(serde_json::json!(1.25)));
+    let (screen, _) = draw(&app, 100, 30);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(rows[rows.len() - 1].contains("$1.25"), "{screen}");
+    assert!(!screen.contains("of $"), "{screen}");
+}
+
 #[test]
 fn n_waiting_leads_row_one_while_the_rail_is_not_drawn() {
     let mut app = attached(110, 30);
