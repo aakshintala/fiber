@@ -135,3 +135,49 @@ fn edges_and_stripes_follow_the_theme() {
     let cell = stripe(true, Role::Accent, Role::Surface, false);
     assert_eq!(cell.style.fg, Some(Role::Accent.color()));
 }
+
+#[test]
+fn draw_stripe_draws_nothing_without_rows_or_columns() {
+    use ratatui::layout::Rect;
+    // Either arm of the guard: no width with rows, no rows with width.
+    for rect in [Rect::new(2, 0, 0, 3), Rect::new(2, 0, 3, 0)] {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 4));
+        super::draw_stripe(&mut buf, rect, Role::Accent, Role::Surface, false);
+        for cell in &buf.content {
+            assert_eq!(cell.symbol(), " ");
+            assert_ne!(cell.bg, Role::Surface.color());
+        }
+    }
+}
+
+#[test]
+fn init_reads_whether_stripes_draw() {
+    // Without init's write the static stays on: a multiplexer must turn
+    // the stripe's cell into a tinted blank.
+    let multi = [
+        ("TMUX", "/tmp/tmux-501/default,1,0"),
+        ("TERM_PROGRAM", "ghostty"),
+    ];
+    super::init(&|name| {
+        multi
+            .iter()
+            .find(|(set, _)| *set == name)
+            .map(|(_, value)| (*value).to_owned())
+    });
+    assert_eq!(
+        super::stripe_cell(Role::Accent, Role::Surface, false).content,
+        " "
+    );
+    // ... and a stripe terminal back on.
+    let ghost = [("TERM_PROGRAM", "ghostty")];
+    super::init(&|name| {
+        ghost
+            .iter()
+            .find(|(set, _)| *set == name)
+            .map(|(_, value)| (*value).to_owned())
+    });
+    assert_eq!(
+        super::stripe_cell(Role::Accent, Role::Surface, false).content,
+        "▌"
+    );
+}

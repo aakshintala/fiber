@@ -1342,3 +1342,11 @@ proptest::proptest! {
         prop_assert_eq!(&split, &expected);
     }
 }
+
+/// A CSI `n` reply without the `?` is no appearance reply: it parses as
+/// before (dropped, like any other unhandled report).
+#[test]
+fn a_csi_n_without_the_question_mark_is_no_reply() {
+    assert!(feed_all(&[b"\x1b[997;1n"]).is_empty());
+    assert!(feed_all(&[b"\x1b[5n"]).is_empty());
+}

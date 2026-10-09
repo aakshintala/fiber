@@ -144,3 +144,73 @@ fn continuation_rows_join_as_the_wrap_broke_them() {
         ]
     );
 }
+
+/// The bubble's rows as logical text: what a copy or a search reads.
+fn copied(text: &str, columns: u16) -> Vec<String> {
+    let mut out = Rows::default();
+    rows(text, columns, &mut out);
+    let (rows, texts) = out.into_parts();
+    crate::logical::logical(&rows, &texts)
+        .into_iter()
+        .map(|line| line.text)
+        .collect()
+}
+
+#[test]
+fn bubble_rows_carry_their_text_marks() {
+    // A stripe row: one pad skipped, pad and stripe tailed.
+    let (_, texts) = bubbled("hi", 80);
+    assert_eq!(
+        texts
+            .iter()
+            .map(|text| (text.join, text.skip, text.tail, text.decoration))
+            .collect::<Vec<_>>(),
+        [
+            (Join::Break, 0, 0, true),
+            (Join::Break, 1, 2, false),
+            (Join::Break, 0, 0, true),
+        ]
+    );
+    // A row that drops its stripe: one pad each side, no stripe.
+    let (_, texts) = bubbled("界", 4);
+    assert_eq!(
+        texts
+            .iter()
+            .map(|text| (text.join, text.skip, text.tail, text.decoration))
+            .collect::<Vec<_>>(),
+        [
+            (Join::Break, 0, 0, true),
+            (Join::Break, 1, 1, false),
+            (Join::Break, 0, 0, true),
+        ]
+    );
+    // Narrow rows: edges decorate, text rows join as wrapped.
+    let (_, texts) = bubbled("hi", 1);
+    assert_eq!(
+        texts
+            .iter()
+            .map(|text| (text.join, text.skip, text.tail, text.decoration))
+            .collect::<Vec<_>>(),
+        [
+            (Join::Break, 0, 0, true),
+            (Join::Break, 0, 0, false),
+            (Join::Wrap, 0, 0, false),
+            (Join::Break, 0, 0, true),
+        ]
+    );
+}
+
+#[test]
+fn copies_hold_only_the_text() {
+    // Edges, stripe and pads never reach copied text, on the wide path,
+    // the dropped-stripe row, and the narrow path.
+    assert_eq!(copied("hi", 80), ["hi"]);
+    assert_eq!(
+        copied("hello world abcdefghij", 14),
+        ["hello world abcdefghij"]
+    );
+    assert_eq!(copied("界界", 4), ["界界"]);
+    assert_eq!(copied("界", 4), ["界"]);
+    assert_eq!(copied("hi", 3), ["hi"]);
+    assert_eq!(copied("hi", 1), ["hi"]);
+}

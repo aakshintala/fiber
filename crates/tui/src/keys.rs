@@ -484,8 +484,9 @@ fn parse_csi(buf: &[u8]) -> Step {
             // DA1: `CSI ? ... c` ends detection.
             vec![Event::Reply(Reply::DeviceAttributes)]
         }
-        // The theme report: `CSI ? 997 ; 1 n` dark, `; 2` light.
-        0x6e if params.first() == Some(&b'?') => appearance::scheme(params),
+        // The theme report: `CSI ? 997 ; 1 n` dark, `; 2` light. `scheme`
+        // takes only those two, so anything else is nothing.
+        0x6e => appearance::scheme(params),
         0x75 => kitty_key(params).into_iter().collect(),
         0x7e => tilde_key(params).into_iter().collect(),
         b'M' | b'm' if params.first() == Some(&b'<') => {

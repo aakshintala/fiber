@@ -104,3 +104,11 @@ fn a_screen_too_short_for_the_edges_keeps_the_input_row() {
         }
     }
 }
+
+#[test]
+fn the_cursor_counts_the_bottom_edge_only_where_it_draws() {
+    let app = typed(60, 12, "hi");
+    // One draft row: no edges fit a body of 2, two fit a body of 5.
+    assert_eq!(super::cursor_row(&app, 60, 2), (1, 4));
+    assert_eq!(super::cursor_row(&app, 60, 5), (2, 4));
+}

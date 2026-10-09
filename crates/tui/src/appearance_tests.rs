@@ -98,3 +98,14 @@ fn osc_leaves_at_the_first_byte_off_the_grammar() {
         assert!(matches!(osc11(off.as_bytes()), Osc::Off), "{off:?}");
     }
 }
+
+#[test]
+fn scale_takes_one_to_four_hex_digits() {
+    assert_eq!(super::scale(b""), None);
+    assert_eq!(super::scale(b"f"), Some(255));
+    assert_eq!(super::scale(b"ffff"), Some(255));
+    // Past the clamp: five digits, and two past it, are no field.
+    assert_eq!(super::scale(b"fffff"), None);
+    assert_eq!(super::scale(b"ffffff"), None);
+    assert_eq!(super::scale(b"zz"), None);
+}

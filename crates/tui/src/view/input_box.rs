@@ -31,12 +31,12 @@ pub(super) fn draw(
     for row in rows.iter().rev() {
         put(buf, area, bottom, row, Style::default());
     }
-    if *bottom < below {
-        buf.set_style(
-            Rect::new(area.x, *bottom, area.width, below.saturating_sub(*bottom)),
-            SURFACE_TINT,
-        );
-    }
+    // The tint covers the rows drawn, if any: an empty rect paints
+    // nothing.
+    buf.set_style(
+        Rect::new(area.x, *bottom, area.width, below.saturating_sub(*bottom)),
+        SURFACE_TINT,
+    );
     token_targets(app, area, below, (top, rows.len()), targets);
     if edges {
         edge(buf, area, bottom, true);

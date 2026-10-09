@@ -190,3 +190,19 @@ fn tail_cells_are_not_text() {
     // A glyph is never split: a tail past its start keeps the glyph.
     assert_eq!(line_text(&Line::raw(" 界 "), &tailed), (1, "界".to_owned()));
 }
+
+#[test]
+fn tail_drops_whole_cells_only() {
+    let tailed = |tail| RowText {
+        tail,
+        ..RowText::plain()
+    };
+    // A tail of one drops one cell: the last char goes.
+    assert_eq!(line_text(&Line::raw("ab"), &tailed(1)), (0, "a".to_owned()));
+    // A tail past a glyph's start keeps the glyph whole.
+    assert_eq!(
+        line_text(&Line::raw("界"), &tailed(1)),
+        (0, "界".to_owned())
+    );
+    assert_eq!(line_text(&Line::raw("界"), &tailed(2)), (0, "".to_owned()));
+}
