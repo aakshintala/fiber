@@ -74,6 +74,21 @@ fn holds(output: &[u8], needle: &[u8]) -> bool {
         })
 }
 
+/// The timeout error with what the terminal had drawn: its byte count and
+/// the last 3000 bytes as lossy text, so a failed wait shows where the
+/// replay stood.
+pub(crate) fn timeout_note(expired: String, output: &[u8]) -> String {
+    const TAIL: usize = 3000;
+    let tail = output
+        .get(output.len().saturating_sub(TAIL)..)
+        .unwrap_or(&[]);
+    format!(
+        "{expired}; drew {} bytes, ending {:?}",
+        output.len(),
+        String::from_utf8_lossy(tail)
+    )
+}
+
 impl Terminal {
     /// Starts `fiber` with `args` in `home`'s workspace on a new pty.
     pub(crate) fn spawn(
@@ -167,7 +182,16 @@ impl Terminal {
     ) -> Result<(), String> {
         let what = format!("{needle:?} on the terminal");
         while !self.holds(needle.as_bytes()) {
-            match self.wakes.recv_timeout(left(clock, until, &what)?) {
+            let wait = match left(clock, until, &what) {
+                Ok(wait) => wait,
+                Err(expired) => {
+                    return Err(match self.output.lock() {
+                        Ok(output) => timeout_note(expired, &output),
+                        Err(_) => expired,
+                    });
+                }
+            };
+            match self.wakes.recv_timeout(wait) {
                 Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     return Err(format!("the terminal closed before {what}"));

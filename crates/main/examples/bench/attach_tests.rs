@@ -3,7 +3,8 @@ use serde_json::json;
 use crate::busy::filler;
 
 use super::{
-    ATTACH_TAIL, PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES, feed_step, plan_turns, size_note,
+    ATTACH_TAIL, PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES, feed_step, overtime_note, plan_turns,
+    size_note,
 };
 
 fn status(id: &str, state: &str) -> serde_json::Value {
@@ -122,4 +123,16 @@ fn size_note_is_none_at_each_bound_and_some_just_outside() {
         assert!(size_note(fixture, high).is_some());
     }
     assert!(size_note("2 MiB", 2_097_152).is_some());
+}
+
+#[test]
+fn overtime_note_carries_the_true_time_or_never() {
+    assert_eq!(
+        overtime_note(45_123.4, true),
+        "quokkas on screen after 45123.4 ms of overtime"
+    );
+    assert_eq!(
+        overtime_note(150_000.0, false),
+        "quokkas never appeared within 150000.0 ms of overtime"
+    );
 }

@@ -57,3 +57,27 @@ fn an_empty_needle_matches_nothing() {
     assert!(!holds(b"abc", b""));
     assert!(!holds(b"", b"x"));
 }
+
+use super::timeout_note;
+
+#[test]
+fn a_timeout_note_reports_the_byte_count_and_the_tail() {
+    let note = timeout_note(
+        "timed out waiting for \"quokkas\" on the terminal".to_owned(),
+        b"hello world",
+    );
+    assert!(note.contains("timed out waiting"), "{note}");
+    assert!(note.contains("drew 11 bytes"), "{note}");
+    assert!(note.contains("hello world"), "{note}");
+}
+
+#[test]
+fn a_timeout_note_keeps_only_the_last_3000_bytes_and_replaces_invalid_ones() {
+    let mut output = vec![b'q'; 3000];
+    output.extend_from_slice(b"\xff\xfeTAIL");
+    let note = timeout_note("timed out".to_owned(), &output);
+    assert!(note.contains("drew 3006 bytes"), "{note}");
+    assert!(note.contains("TAIL"), "{note}");
+    assert!(!note.contains(&"q".repeat(2995)), "{note}");
+    assert!(note.contains(&"q".repeat(2994)), "{note}");
+}
