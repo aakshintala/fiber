@@ -20,6 +20,7 @@ cargo run --release -- fixtures/session.jsonl
 | `--reduced-motion` | keeps the working line's word still; `FIBER_REDUCED_MOTION=1` does the same |
 | `--hover` | also turns on mode 1003, every mouse motion, and tints the click target under the pointer; see "Hover's cost" |
 | `--home CASE` | draws the home screen case instead of the conversation; see "Home (#1628)" |
+| `--overlay CASE` | draws one overlay case over a dimmed conversation; see "Overlays (#1630)" |
 | `--rail A\|B\|C` | the session rail design at start: list, cards, or tabs; the default is B; F2 cycles; see "The rail (#692)" |
 | `--rail-share P` | the rail's width at start, as a percent of the window; the default is 15, clamped to [22, 48] columns |
 | `--panel-share P` | the panel's width at start, as a percent of the window; the default is 21 (34 columns at 160), clamped to [30, 60] columns |
@@ -77,6 +78,45 @@ cargo run --release -- fixtures/session.jsonl --static --home picker-typed
 
 `./capture-home.sh` captures every case in tmux at 160 by 48, plain text and
 SGR, for the ticket's PR body.
+
+## Overlays (#1630)
+
+`--overlay CASE` draws one overlay over a dimmed conversation instead of the
+conversation: the key map, the quit and delete questions, the Ctrl+R
+prompt-history panel, a notice's full text, and how an overlay closes by
+mouse. Each case draws one static frame from the fixtures in
+`src/overlays.rs` (every binding of docs/tui.md's Bindings table; the quit
+question for 2 working sessions; home's delete question for "docs: rail
+spec"; three recalled prompts matching `back`; a `key_clash` notice) and
+waits for a key; Esc, q or Ctrl+C quits. Combine with `--static`; the fixture
+still loads but the overlay ignores it.
+
+```sh
+cargo run --release -- fixtures/session.jsonl --static --overlay keymap
+cargo run --release -- fixtures/session.jsonl --static --overlay keymap-narrow
+cargo run --release -- fixtures/session.jsonl --static --overlay quit
+cargo run --release -- fixtures/session.jsonl --static --overlay delete
+cargo run --release -- fixtures/session.jsonl --static --overlay history
+cargo run --release -- fixtures/session.jsonl --static --overlay notice
+cargo run --release -- fixtures/session.jsonl --static --overlay close-mouse
+```
+
+- `keymap`: every binding grouped by area (Session, Input, Conversation,
+  Panels, Search, Steering, Requests, Model), each with its id, key and other
+  paths, in two aligned columns.
+- `keymap-narrow`: the same content in one column, opened scrolled, with an
+  "↑ N more · ↓ M more" indicator; run it in a 100x40 tmux.
+- `quit`: the quit question for 2 working sessions, with the three ways out.
+- `delete`: home's delete question for the exited "docs: rail spec" session,
+  naming what `--cascade` would add.
+- `history`: the Ctrl+R panel with the typed query `back`, every hit marked
+  and the first match selected.
+- `notice`: the whole `key_clash` notice text, wrapped to the overlay.
+- `close-mouse`: a small keymap sample with its ✕ hovered and a dim outline
+  marking the click-outside target.
+
+`./capture-overlays.sh` captures every case in tmux, plain text and SGR, for
+the ticket's PR body: `keymap-narrow` at 100 by 40, the rest at 160 by 48.
 
 `cargo run --bin gen` rewrites the fixtures from `src/bin/gen.rs`. `fixtures/session.jsonl` ends with a turn still running, waiting on an approval from the reviewer delegate and on a question form from the main session. `fixtures/idle.jsonl` is the same session cut after its last finished turn.
 

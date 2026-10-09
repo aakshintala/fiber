@@ -67,7 +67,7 @@ impl Turn {
                 Entry::Steer(steered) => steered.rows(width, zone, out),
                 Entry::Group(at) => {
                     if let Some(group) = self.groups.get(*at) {
-                        group.rows(self.is_open() && self.open_group == Some(*at), out);
+                        group.rows(self.is_open() && self.open_group == Some(*at), width, out);
                     }
                 }
                 Entry::Aside(aside) => aside.rows(out),
