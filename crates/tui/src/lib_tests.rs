@@ -720,6 +720,19 @@ pub(super) fn offering(request: &str) -> Input {
     }))
 }
 
+fn one_question(payload: serde_json::Value) -> Input {
+    Input::Hub(Line::Session(contract::Envelope {
+        kind: "interaction_requested".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }))
+}
+
 #[test]
 fn each_approval_choice_goes_to_the_hub_as_a_reply() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
@@ -775,6 +788,125 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
         assert_eq!(reply["command"], "reply");
         assert_eq!(reply["session_id"], "s_aaaaaaaaaaaaaaaa");
         assert_eq!(reply["args"], args);
+    }
+    assert!(lp.app.panel().is_none());
+}
+
+fn connected_loop() -> (Loop<TestBackend>, BufReader<UnixStream>) {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let reader = BufReader::new(theirs);
+    feed(
+        &mut lp,
+        vec![
+            Input::Connected(ours, hello()),
+            Input::Bytes(b"hi\r".to_vec()),
+        ],
+    );
+    let (reader, start) = command(reader, "the start command");
+    let accepted = contract::HubLine {
+        kind: "command_accepted".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"command_id": start["id"],
+            "result": {"session_id": "s_aaaaaaaaaaaaaaaa"}})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    };
+    feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
+    let (reader, _) = command(reader, "the subscribe command");
+    let (reader, commands) = command(reader, "the commands command");
+    assert_eq!(commands["command"], "commands");
+    let (reader, prompt) = command(reader, "the first prompt");
+    assert_eq!(prompt["command"], "prompt");
+    (lp, reader)
+}
+
+#[test]
+fn each_one_question_kind_goes_to_the_hub_as_a_reply() {
+    let (mut lp, mut reader) = connected_loop();
+    feed(
+        &mut lp,
+        vec![
+            one_question(serde_json::json!({"request_id": "r_c", "kind": "confirm",
+                "prompt": "Continue?"})),
+            one_question(serde_json::json!({"request_id": "r_s", "kind": "select",
+                "prompt": "Pick one?", "options": [{"label": "a"}, {"label": "b"}]})),
+            one_question(
+                serde_json::json!({"request_id": "r_m", "kind": "multi_select",
+                "prompt": "Pick some?", "options": [{"label": "a"}, {"label": "b"},
+                    {"label": "c"}]}),
+            ),
+            one_question(
+                serde_json::json!({"request_id": "r_t", "kind": "text_input",
+                "prompt": "What?"}),
+            ),
+        ],
+    );
+    feed(
+        &mut lp,
+        [
+            b"\r".as_slice(),
+            b"\x1b[B\r".as_slice(),
+            b" \x1b[B\x1b[B \r".as_slice(),
+            b"hi\r".as_slice(),
+        ]
+        .map(|bytes| Input::Bytes(bytes.to_vec()))
+        .into_iter()
+        .collect(),
+    );
+    let expected = [
+        serde_json::json!({"request_id": "r_c", "confirmed": true}),
+        serde_json::json!({"request_id": "r_s", "labels": ["b"]}),
+        serde_json::json!({"request_id": "r_m", "labels": ["a", "c"]}),
+        serde_json::json!({"request_id": "r_t", "text": "hi"}),
+    ];
+    for args in expected {
+        let (next, reply) = command(reader, "a one-question reply");
+        reader = next;
+        assert_eq!(reply["command"], "reply");
+        assert_eq!(reply["session_id"], "s_aaaaaaaaaaaaaaaa");
+        assert_eq!(reply["args"], args);
+    }
+    assert!(lp.app.panel().is_none());
+}
+
+#[test]
+fn esc_on_each_one_question_kind_declines_to_the_hub() {
+    let (mut lp, mut reader) = connected_loop();
+    feed(
+        &mut lp,
+        vec![
+            one_question(serde_json::json!({"request_id": "r_c", "kind": "confirm",
+                "prompt": "Continue?"})),
+            one_question(serde_json::json!({"request_id": "r_s", "kind": "select",
+                "prompt": "Pick one?", "options": [{"label": "a"}, {"label": "b"}]})),
+            one_question(
+                serde_json::json!({"request_id": "r_m", "kind": "multi_select",
+                "prompt": "Pick some?", "options": [{"label": "a"}, {"label": "b"},
+                    {"label": "c"}]}),
+            ),
+            one_question(
+                serde_json::json!({"request_id": "r_t", "kind": "text_input",
+                "prompt": "What?"}),
+            ),
+        ],
+    );
+    feed(
+        &mut lp,
+        (0..4).map(|_| Input::Bytes(b"\x1b".to_vec())).collect(),
+    );
+    for request_id in ["r_c", "r_s", "r_m", "r_t"] {
+        let (next, reply) = command(reader, "a declined one-question reply");
+        reader = next;
+        assert_eq!(reply["command"], "reply");
+        assert_eq!(reply["session_id"], "s_aaaaaaaaaaaaaaaa");
+        assert_eq!(
+            reply["args"],
+            serde_json::json!({"request_id": request_id,
+            "declined": true})
+        );
     }
     assert!(lp.app.panel().is_none());
 }
