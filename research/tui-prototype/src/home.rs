@@ -161,24 +161,9 @@ const RECENTS: &[&str] = &[
     "~/work/beacon",
     "~/work/pi-rig",
 ];
-/// Every directory the typed-path row can complete to.
-const ALL_DIRS: &[&str] = &[
-    "~/work/fiber",
-    "~/work/fiber-worktrees",
-    "~/work/beacon",
-    "~/work/pi-rig",
-];
-/// The fixture's typed prefix for the `picker-typed` case.
+/// The fixture's typed prefix and the two completions it shows.
 const TYPED: &str = "~/work/fi";
-
-/// Directories `typed` completes to, in order. An exact match is already
-/// complete, so it is left out; empty typed lists everything.
-pub(crate) fn complete_dirs<'a>(typed: &str, dirs: &[&'a str]) -> Vec<&'a str> {
-    dirs.iter()
-        .copied()
-        .filter(|d| d.len() > typed.len() && d.starts_with(typed))
-        .collect()
-}
+const COMPLETIONS: &[&str] = &["fiber", "fiber-worktrees"];
 
 // ============================================================ pieces
 /// A pixel letter: `#` a filled cell, `o` its shaded counter, `.` empty.
@@ -299,16 +284,15 @@ fn picker(p: Picker, w: usize) -> Vec<super::Row> {
             sp(TYPED, Style::new()),
             sp("█", dim()),
         ]));
-        for (i, d) in complete_dirs(TYPED, ALL_DIRS).iter().enumerate() {
-            let rest = d.rsplit('/').next().unwrap_or(d);
+        for (i, name) in COMPLETIONS.iter().enumerate() {
             if i == 0 {
                 inner.push(super::Row {
-                    spans: vec![sp("▌ ", fg(BLUE)), sp(rest, bold())],
+                    spans: vec![sp("▌ ", fg(BLUE)), sp(*name, bold())],
                     bg: Some(lift(SEL)),
                     ..Default::default()
                 });
             } else {
-                inner.push(row(vec![sp("  ", Style::new()), sp(rest.to_string(), Style::new())]));
+                inner.push(row(vec![sp("  ", Style::new()), sp(*name, Style::new())]));
             }
         }
         inner.push(row(vec![sp("  ── recents ──", dim())]));
@@ -339,69 +323,97 @@ fn picker(p: Picker, w: usize) -> Vec<super::Row> {
 }
 
 // ============================================================ frame
-/// A full-screen row: `spans` centred at the content width.
-fn full(spans: Vec<Span<'static>>, x0: usize) -> super::Row {
-    let mut s = vec![sp(" ".repeat(x0), Style::new())];
-    s.extend(spans);
-    row(s)
+/// A row painted at its own offset and width, so a slab's background stays
+/// within its edges instead of extending across the screen.
+struct Placed {
+    x: u16,
+    w: u16,
+    row: super::Row,
 }
 
-fn frame(c: &Case, cols: usize, rows: usize) -> Vec<super::Row> {
+fn put(
+    screen: &mut [Vec<Placed>],
+    y: usize,
+    x: usize,
+    w: usize,
+    spans: Vec<Span<'static>>,
+    bg: Option<Color>,
+) {
+    if y < screen.len() {
+        screen[y] = vec![Placed {
+            x: x as u16,
+            w: w as u16,
+            row: super::Row {
+                spans: fit(&spans, w),
+                bg,
+                ..Default::default()
+            },
+        }];
+    }
+}
+
+fn frame(c: &Case, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
+    let blank = || vec![Placed {
+        x: 0,
+        w: cols as u16,
+        row: row(vec![]),
+    }];
+    let mut screen: Vec<Vec<Placed>> = (0..rows).map(|_| blank()).collect();
     let w = HOME_W.min(cols.saturating_sub(4)).max(20);
     let x0 = cols.saturating_sub(w) / 2;
-    let mut screen: Vec<super::Row> = (0..rows).map(|_| row(vec![])).collect();
     let mut y = 2;
     for l in logo(w) {
-        if y < rows {
-            screen[y] = full(l, x0);
-        }
+        put(&mut screen, y, x0, w, l, None);
         y += 1;
     }
     y += 1;
     for r in input_box(c, w) {
-        if y < rows {
-            let bg = r.bg;
-            screen[y] = full(r.spans, x0);
-            screen[y].bg = bg;
-        }
+        let bg = r.bg;
+        put(&mut screen, y, x0, w, r.spans, bg);
         y += 1;
     }
     y += 1;
     if c.sessions {
         for l in session_rows(w) {
-            if y < rows {
-                screen[y] = full(l, x0);
-            }
+            put(&mut screen, y, x0, w, l, None);
             y += 1;
         }
     } else {
-        let line = fit(
-            &[sp(
-                "No sessions yet — type a prompt above and press Enter.",
-                dim(),
-            )],
+        put(
+            &mut screen,
+            y,
+            x0,
             w,
+            fit(
+                &[sp(
+                    "No sessions yet — type a prompt above and press Enter.",
+                    dim(),
+                )],
+                w,
+            ),
+            None,
         );
-        if y < rows {
-            screen[y] = full(line, x0);
-        }
         y += 1;
     }
     let _ = y;
     let hint = "enter starts a session · ↑↓ select · q quits";
     if rows >= 2 {
         let pad = cols.saturating_sub(hint.width()) / 2;
-        screen[rows - 2] = row(vec![sp(" ".repeat(pad), Style::new()), sp(hint, dim())]);
+        put(
+            &mut screen,
+            rows - 2,
+            0,
+            cols,
+            vec![sp(" ".repeat(pad), Style::new()), sp(hint, dim())],
+            None,
+        );
     }
     if let Some(p) = c.picker {
         let pw = PICK_W.min(cols.saturating_sub(4)).max(20);
         let px0 = cols.saturating_sub(pw) / 2;
         for (k, r) in picker(p, pw).into_iter().enumerate() {
-            let py = 12 + k;
-            if py < rows {
-                screen[py] = full(r.spans, px0);
-                screen[py].bg = r.bg;
-            }
+            let bg = r.bg;
+            put(&mut screen, 12 + k, px0, pw, r.spans, bg);
         }
     }
     screen
@@ -413,8 +425,10 @@ fn draw(term: &mut Term, c: &Case) -> io::Result<()> {
     term.backend_mut().write_all(b"\x1b[?2026h")?;
     term.draw(|fr| {
         let buf = fr.buffer_mut();
-        for (y, r) in frame(c, cols as usize, rows as usize).iter().enumerate() {
-            paint(buf, 0, y as u16, cols, r);
+        for (y, placements) in frame(c, cols as usize, rows as usize).iter().enumerate() {
+            for p in placements {
+                paint(buf, p.x, y as u16, p.w, &p.row);
+            }
         }
     })?;
     let be = term.backend_mut();
@@ -456,44 +470,6 @@ pub(crate) fn run_home(a: &Args, term: &mut Term) -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn empty_typed_lists_everything() {
-        assert_eq!(complete_dirs("", ALL_DIRS), ALL_DIRS);
-    }
-
-    #[test]
-    fn prefix_keeps_order_and_drops_the_rest() {
-        assert_eq!(
-            complete_dirs("~/work/fi", ALL_DIRS),
-            vec!["~/work/fiber", "~/work/fiber-worktrees"]
-        );
-    }
-
-    #[test]
-    fn exact_prefix_of_a_longer_dir_still_completes() {
-        assert_eq!(complete_dirs("~/work/fiber", ALL_DIRS), vec!["~/work/fiber-worktrees"]);
-    }
-
-    #[test]
-    fn exact_typed_with_no_longer_match_completes_nothing() {
-        assert!(complete_dirs("~/work/pi-rig", ALL_DIRS).is_empty());
-    }
-
-    #[test]
-    fn longer_than_every_dir_matches_nothing() {
-        assert!(complete_dirs("~/work/fiber-worktrees/x", ALL_DIRS).is_empty());
-    }
-
-    #[test]
-    fn no_prefix_match_matches_nothing() {
-        assert!(complete_dirs("~/play", ALL_DIRS).is_empty());
-    }
-
-    #[test]
-    fn matching_is_case_sensitive() {
-        assert!(complete_dirs("~/WORK/fi", ALL_DIRS).is_empty());
-    }
 
     #[test]
     fn every_case_parses_and_unknown_does_not() {
