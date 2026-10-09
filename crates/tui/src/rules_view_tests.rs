@@ -131,7 +131,7 @@ fn lines(rules: &Rules) -> Vec<String> {
         .frame()
         .rows
         .iter()
-        .map(|cells| cells.iter().map(|(text, _)| text.clone()).collect())
+        .map(|cells| cells.iter().map(|(text, _, _)| text.clone()).collect())
         .collect()
 }
 
