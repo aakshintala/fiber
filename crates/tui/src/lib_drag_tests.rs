@@ -3,10 +3,12 @@
 //! (`docs/tui.md`, "Layout").
 
 use super::Input;
-use super::tests::{feed, new_loop};
+use super::tests::{feed, new_loop, open, read_until};
 use crate::home::Launch;
 use crate::link::Line;
+use crate::osc;
 use ratatui::backend::TestBackend;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
@@ -74,6 +76,38 @@ fn drag() -> Vec<Input> {
     ]
 }
 
+/// A loop at 200x40 on a pty pair, with home state and two live sessions.
+fn pty() -> (super::tests::Pair, super::Loop<TestBackend>) {
+    let pair = open();
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(200, 40), Some(tty));
+    lp.app.set_size(200, 40);
+    lp.screen
+        .resize(200, 40)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
+    lp.app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: CARDS.map(str::to_owned).to_vec(),
+        ..Default::default()
+    });
+    lp.app.attach(contract::SessionId(A.to_owned()));
+    lp.app.on_line(live(A));
+    lp.app.on_line(live(B));
+    (pair, lp)
+}
+
+/// Steps `lp` over one terminal read.
+fn step(lp: &mut super::Loop<TestBackend>, bytes: &[u8]) {
+    let (_, rx) = mpsc::channel();
+    assert_eq!(lp.step(Input::Bytes(bytes.to_vec()), &rx), None);
+}
+
 #[test]
 fn a_drag_saves_through_the_launch_callback() {
     let (out, saved) = mpsc::channel();
@@ -105,4 +139,112 @@ fn a_failed_save_is_a_notice() {
         "{}",
         shown(&lp)
     );
+}
+
+#[test]
+fn hover_over_an_edge_writes_col_resize_once_and_leaving_writes_default() {
+    let (pair, mut lp) = pty();
+    // Motion onto the rail's edge twice, then off it.
+    step(&mut lp, b"\x1b[<35;30;21M");
+    step(&mut lp, b"\x1b[<35;30;21M");
+    step(&mut lp, b"\x1b[<35;100;21M");
+    (&pair.slave)
+        .write_all(b"ENDMARK")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let written = read_until(&pair.main, b"ENDMARK", "the mark");
+    let expected = [
+        osc::title("✓ work · fiber").as_slice(),
+        osc::pointer(true),
+        osc::pointer(false),
+        b"ENDMARK".as_slice(),
+    ]
+    .concat();
+    assert_eq!(written, expected);
+}
+
+#[test]
+fn with_hover_off_no_osc_22_is_written() {
+    let (pair, mut lp) = pty();
+    lp.hover = false;
+    for input in drag() {
+        let Input::Bytes(bytes) = input else {
+            panic!("a drag is terminal bytes");
+        };
+        step(&mut lp, &bytes);
+    }
+    (&pair.slave)
+        .write_all(b"ENDMARK")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let written = read_until(&pair.main, b"ENDMARK", "the mark");
+    assert!(
+        !written
+            .windows(osc::pointer(true).len())
+            .any(|window| window == osc::pointer(true) || window == osc::pointer(false)),
+        "{written:?}"
+    );
+}
+
+#[test]
+fn a_drag_off_the_edge_keeps_the_resize_arrow_until_release() {
+    let (pair, mut lp) = pty();
+    // The press writes the title and the arrow; the drag off the edge
+    // writes nothing; the release writes the default back.
+    step(&mut lp, b"\x1b[<0;30;21M");
+    step(&mut lp, b"\x1b[<32;100;21M");
+    step(&mut lp, b"\x1b[<0;100;21m");
+    (&pair.slave)
+        .write_all(b"ENDMARK")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let written = read_until(&pair.main, b"ENDMARK", "the mark");
+    let expected = [
+        osc::title("✓ work · fiber").as_slice(),
+        osc::pointer(true),
+        osc::pointer(false),
+        b"ENDMARK".as_slice(),
+    ]
+    .concat();
+    assert_eq!(written, expected);
+}
+
+#[test]
+fn after_the_editor_returns_the_pointer_shape_is_written_again() {
+    let (pair, mut lp) = pty();
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    read_until(&pair.main, b"\x1b[c", "the setup queries");
+    // The pointer sits on the rail's edge before the editor opens.
+    step(&mut lp, b"\x1b[<35;30;21M");
+    // The size does not change across the hand-over.
+    rustix::termios::tcsetwinsize(
+        &pair.slave,
+        rustix::termios::Winsize {
+            ws_col: 200,
+            ws_row: 40,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+    .unwrap_or_else(|err| panic!("winsize: {err}"));
+    assert_eq!(lp.hand_over(|| {}), None);
+    lp.write_shape();
+    (&pair.slave)
+        .write_all(b"ENDMARK")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let tail = read_until(&pair.main, b"ENDMARK", "the mark");
+    // After the resume bytes the arrow is written again.
+    let resumed: &[u8] =
+        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h";
+    let at = tail
+        .windows(resumed.len())
+        .position(|window| window == resumed)
+        .expect("the resume bytes");
+    let after = tail
+        .get(at.saturating_add(resumed.len())..)
+        .unwrap_or_default();
+    assert!(
+        after
+            .windows(osc::pointer(true).len())
+            .any(|window| window == osc::pointer(true)),
+        "{tail:?}"
+    );
+    crate::term::restore();
 }

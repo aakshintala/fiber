@@ -487,3 +487,27 @@ fn two_drags_queue_two_saves_in_order() {
         vec![("tui.rail.width", 15.5), ("tui.panel.width", 25.0)]
     );
 }
+
+#[test]
+fn over_edge_on_an_edge_and_while_dragging() {
+    let mut app = two(200, 40);
+    assert!(app.over_edge(Some((29, 20))));
+    assert!(app.over_edge(Some((158, 20))));
+    assert!(!app.over_edge(Some((28, 20))));
+    assert!(!app.over_edge(Some((100, 20))));
+    assert!(!app.over_edge(None));
+    // A drag running with the pointer elsewhere keeps the arrow.
+    app.on_drag(&press(29, 20));
+    assert!(app.over_edge(Some((100, 20))));
+    assert!(app.over_edge(None));
+    app.on_drag(&release());
+    assert!(!app.over_edge(Some((100, 20))));
+}
+
+#[test]
+fn over_edge_without_a_layout_is_false() {
+    let mut home = App::new(PathBuf::from("/w"));
+    home.set_home(launch());
+    home.set_size(200, 40);
+    assert!(!home.over_edge(Some((0, 0))));
+}

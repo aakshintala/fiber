@@ -172,6 +172,18 @@ impl App {
     pub(crate) fn take_saves(&mut self) -> Vec<QueuedSave> {
         std::mem::take(&mut self.drag.saves)
     }
+
+    /// Whether the pointer shape is the resize arrow: a drag runs, or
+    /// `at` is on an edge column.
+    pub(crate) fn over_edge(&self, at: Option<(u16, u16)>) -> bool {
+        if self.drag.drag.is_some() {
+            return true;
+        }
+        let Some(layout) = self.chrome.layout() else {
+            return false;
+        };
+        at.is_some_and(|(col, _)| layout::edge_at(&layout, col).is_some())
+    }
 }
 
 #[cfg(test)]

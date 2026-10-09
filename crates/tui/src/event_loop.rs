@@ -97,6 +97,7 @@ pub fn run(
         open_command: crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
             .map(|argv| argv.into_iter().map(str::to_owned).collect()),
         title: osc::Title::default(),
+        shape: osc::Shape::default(),
         save,
     };
     terminal.app.set_opener(terminal.open_command.is_some());
@@ -191,6 +192,8 @@ struct Loop<B: Backend> {
     open_command: Option<Vec<String>>,
     /// The window title last written.
     title: osc::Title,
+    /// The pointer shape last written.
+    shape: osc::Shape,
     /// Saves a dragged share to the global configuration, if any.
     save: Option<crate::Save>,
 }
@@ -384,6 +387,7 @@ impl<B: Backend> Loop<B> {
             return Some(1);
         }
         self.write_title();
+        self.write_shape();
         self.write_alerts();
         None
     }
@@ -408,6 +412,20 @@ impl<B: Backend> Loop<B> {
             && let Some(mut tty) = self.tty.as_ref()
         {
             tty.write_all(&bytes).unwrap_or(());
+        }
+    }
+
+    /// Writes the pointer shape when it changed: the resize arrow over an
+    /// edge or while a drag runs, else the default. Nothing with hover
+    /// off, where the terminal never reports motion.
+    fn write_shape(&mut self) {
+        if !self.hover {
+            return;
+        }
+        if let Some(bytes) = self.shape.next(self.app.over_edge(self.pointer.at))
+            && let Some(mut tty) = self.tty.as_ref()
+        {
+            tty.write_all(bytes).unwrap_or(());
         }
     }
 
@@ -590,6 +608,9 @@ impl<B: Backend> Loop<B> {
         }
         // The restore popped the title: the next frame writes it again.
         self.title.forget();
+        // The restore put the default pointer back: the next frame writes
+        // the shape again.
+        self.shape.reset();
         if let Some(reader) = &self.reader {
             reader.resume();
         }
