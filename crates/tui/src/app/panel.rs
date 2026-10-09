@@ -37,6 +37,9 @@ pub(crate) enum Spot {
     Usage,
     /// A Changed files card row, by its rank in `changed_files_view::ranked`.
     File(usize),
+    /// A Delegates card row, by its job's serial: a press and a release
+    /// on the same serial opens that delegate, never the row's position.
+    Delegate(u64),
     /// The Changed files card's totals row: opens the file list.
     ChangedFiles,
     /// The Session card's tools line: opens the tools view (`docs/tui.md`,
@@ -546,6 +549,7 @@ impl App {
             Spot::Usage => self.open_session_view(super::SessionView::Usage),
             Spot::Tools => self.open_config_view(super::ConfigView::Tools),
             Spot::File(rank) => self.open_changed_file(rank),
+            Spot::Delegate(serial) => self.open_serial(serial),
             Spot::ChangedFiles => self.open_session_view(super::SessionView::ChangedFiles),
             Spot::Widget => self.toggle_widget_row(),
         }

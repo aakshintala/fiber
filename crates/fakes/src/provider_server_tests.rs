@@ -127,6 +127,57 @@ fn hold_records_the_request_and_sends_the_body_only_after_release() {
     assert!(body.ends_with(b"hello"));
 }
 
+/// Sends a GET and reads the whole reply on a thread, naming it on `tx`.
+fn get_on(addr: SocketAddr, name: &'static str, tx: mpsc::Sender<(&'static str, Vec<u8>)>) {
+    thread::spawn(move || {
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .write_all(b"GET /v1 HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .unwrap();
+        let mut body = Vec::new();
+        stream.read_to_end(&mut body).unwrap();
+        tx.send((name, body)).unwrap();
+    });
+}
+
+#[test]
+fn hold_from_answers_earlier_requests_and_holds_the_rest_until_release() {
+    let server =
+        ProviderServer::start([Response::stream(b"one"), Response::stream(b"two")]).unwrap();
+    server.hold_from(2, Duration::from_secs(5));
+    let (tx, rx) = mpsc::channel();
+    get_on(server.addr, "a", tx.clone());
+    let (name, body) = rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap_or_else(|_| panic!("the first request is answered at once"));
+    assert!(body.ends_with(b"one"), "{name}");
+    get_on(server.addr, "b", tx);
+    assert!(server.await_requests(2, Duration::from_secs(2)));
+    assert!(
+        rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the second reply is held"
+    );
+    server.release();
+    let (_, body) = rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap_or_else(|_| panic!("release sends the held reply"));
+    assert!(body.ends_with(b"two"));
+}
+
+#[test]
+fn a_held_reply_nobody_releases_becomes_a_500_at_its_deadline() {
+    let server = ProviderServer::start([Response::stream(b"one")]).unwrap();
+    server.hold_from(1, Duration::from_millis(200));
+    let (tx, rx) = mpsc::channel();
+    get_on(server.addr, "a", tx);
+    let (_, body) = rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap_or_else(|_| panic!("the deadline ends the hold"));
+    let text = String::from_utf8_lossy(&body);
+    assert!(text.contains("500"), "{text}");
+    assert!(text.contains("never released"), "{text}");
+}
+
 #[test]
 fn release_one_sends_one_held_response_and_keeps_holding_the_rest() {
     let server =

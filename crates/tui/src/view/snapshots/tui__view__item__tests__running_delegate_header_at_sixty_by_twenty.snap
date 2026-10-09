@@ -1,0 +1,24 @@
+---
+source: crates/tui/src/view/item_tests.rs
+expression: "rows.join(\"\\n\")"
+---
+fix the parser
+fix the parser › ◆ review the parser                       ✕
+⠋ running · harness fiber · model test/model · 0 ca · ■ stop
+
+
+
+
+
+
+
+
+
+
+⠋ fiber  test/model
+  review the parser
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+>
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+$0.00
+1 delegate running
