@@ -200,7 +200,7 @@ pub(crate) fn render(
                 conversation_rows(app, body, buf, &mut targets);
                 marks::draw(app, body, buf, &mut targets);
             } else {
-                item::draw_body(app, body, buf, &mut targets);
+                item::draw_body(app, body, buf);
             }
             notices(app, conversation, buf, &mut targets);
         }

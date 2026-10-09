@@ -98,8 +98,7 @@ pub(crate) fn draw_header(app: &App, area: Rect, buf: &mut Buffer, targets: &mut
 
 /// Draws the item view's body for a view with no transcript: the output
 /// path line.
-pub(crate) fn draw_body(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
-    let _ = targets;
+pub(crate) fn draw_body(app: &App, area: Rect, buf: &mut Buffer) {
     let Some(view) = app.item_view() else {
         return;
     };
