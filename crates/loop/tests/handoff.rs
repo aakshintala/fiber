@@ -2665,3 +2665,54 @@ fn a_tool_may_hand_off_in_the_step_after_an_automatic_handoff() {
     assert_eq!(next.len(), 3);
     assert_eq!(next[2], user("Tool note."));
 }
+
+#[test]
+fn a_skill_written_before_a_handoff_expands_after_it() {
+    let mut session = session(
+        vec![
+            said("Hi.", 100),
+            said("Still here.", 100),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        settings(),
+    );
+    // Turn 1 writes the opening message.
+    let (outcome, first) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
+
+    // Written after the opening, the skill is unknown to the maintained
+    // set: the prompt is sent as written.
+    let dir = session.workspace.join(".agents/skills/late");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: late\ndescription: Runs late.\n---\nRuns late.\n",
+    )
+    .unwrap();
+    let (outcome, second) = run(&mut session, "/late 1");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&second, &[&["turn_started"], STEP, REPLY, ENDED]);
+    assert_eq!(
+        of_kind(&second, "turn_started")[0].payload["input"][0]["content"][0]["text"],
+        "/late 1"
+    );
+
+    // A person's handoff rewrites the opening message, which refreshes
+    // the set: only that refresh tells the two turns apart.
+    session.inbox.send(handoff("c_h", None)).unwrap();
+    let outcome = session.turn();
+    let handed = session.lines();
+    assert_kinds(&handed, &[&["turn_started"], STEP, HANDED_OFF, ENDED]);
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+
+    // Now the same prompt expands.
+    let (outcome, third) = run(&mut session, "/late 1");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&third, &[&["turn_started"], STEP, REPLY, ENDED]);
+    assert_eq!(
+        of_kind(&third, "turn_started")[0].payload["input"][0]["content"][0]["text"],
+        "Runs late.\n\n1"
+    );
+}
