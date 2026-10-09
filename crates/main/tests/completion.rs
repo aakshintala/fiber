@@ -85,6 +85,8 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
         "",
         &[
             "ask",
+            "resume",
+            "continue",
             "sessions",
             "models",
             "extension",
@@ -113,6 +115,8 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
         ],
     ),
     ("models", &[], &["--json", "-h", "--help"]),
+    ("resume", &[], &["-h", "--help"]),
+    ("continue", &[], &["-h", "--help"]),
     ("approve", &[], &["--yes", "-h", "--help"]),
     ("login", &[], &["--as", "-h", "--help"]),
     ("logout", &[], &["--as", "--all", "-h", "--help"]),
