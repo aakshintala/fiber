@@ -2,6 +2,8 @@
 //! its value and layer, and what it never shows (`docs/tui.md`, "Swapped
 //! views"; `docs/configuration.md`, "Keys", "Layers").
 
+#![allow(clippy::panic, reason = "test helpers; a failure is the test's")]
+
 mod common;
 
 use common::Setup;

@@ -23,6 +23,11 @@ use crate::swapped::Spot;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
+/// The injected clock's now.
+fn now() -> Instant {
+    contract::clock::Clock::now(fakes::clock::FakeClock::new().as_ref())
+}
+
 /// A seam over two rows.
 fn fake() -> Arc<Fake> {
     let mut fake = Fake::new(vec![
@@ -66,9 +71,9 @@ fn attached(seam: Option<Arc<Fake>>) -> App {
 /// Types `/settings` and presses Enter.
 fn slash_settings(app: &mut App) -> Effect {
     for ch in "/settings".chars() {
-        app.on_key(Key::Char(ch), Instant::now());
+        app.on_key(Key::Char(ch), now());
     }
-    app.on_key(Key::Enter, Instant::now())
+    app.on_key(Key::Enter, now())
 }
 
 /// The screen's rows as text.
@@ -138,7 +143,7 @@ fn esc_and_the_x_close_it_and_send_nothing() {
     let seam = fake();
     let mut app = attached(Some(Arc::clone(&seam)));
     slash_settings(&mut app);
-    assert_eq!(app.on_key(Key::Esc, Instant::now()), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert!(!app.config_view_open());
     slash_settings(&mut app);
     assert_eq!(app.on_click(TargetId::View(Spot::Close)), Effect::None);
@@ -151,11 +156,7 @@ fn every_key_but_ctrl_c_lands_in_the_view() {
     let mut app = attached(Some(fake()));
     slash_settings(&mut app);
     for key in [Key::Char('x'), Key::Tab, Key::BackTab, Key::AltP, Key::F1] {
-        assert_eq!(
-            app.on_key(key.clone(), Instant::now()),
-            Effect::None,
-            "{key:?}"
-        );
+        assert_eq!(app.on_key(key.clone(), now()), Effect::None, "{key:?}");
     }
     assert!(app.input().is_empty());
     assert!(app.keymap_top().is_none());
@@ -166,7 +167,7 @@ fn every_key_but_ctrl_c_lands_in_the_view() {
 fn ctrl_c_still_reaches_the_quit_flow() {
     let mut app = attached(Some(fake()));
     slash_settings(&mut app);
-    let now = Instant::now();
+    let now = now();
     assert_eq!(app.on_key(Key::CtrlC, now), Effect::None);
     let later = now.checked_add(Duration::from_millis(10)).unwrap_or(now);
     assert_eq!(app.on_key(Key::CtrlC, later), Effect::Quit);
@@ -187,7 +188,7 @@ fn an_approval_waits_until_the_view_closes() {
     ));
     assert!(app.panel().is_some());
     // The first Esc closes the view; the panel keeps its request.
-    app.on_key(Key::Esc, Instant::now());
+    app.on_key(Key::Esc, now());
     assert!(!app.config_view_open());
     assert!(app.panel().is_some());
 }
@@ -197,8 +198,8 @@ fn opening_a_view_drops_its_unsaved_field() {
     let seam = fake();
     let mut app = attached(Some(Arc::clone(&seam)));
     slash_settings(&mut app);
-    app.on_key(Key::Enter, Instant::now());
-    app.on_key(Key::Char('9'), Instant::now());
+    app.on_key(Key::Enter, now());
+    app.on_key(Key::Char('9'), now());
     assert!(
         app.config_view_screen()
             .is_some_and(|frame| frame.field.is_some())
@@ -220,9 +221,9 @@ fn without_a_seam_the_view_says_not_available() {
         frame.map(|frame| frame.below),
         Some(vec!["Not available in this terminal.".to_owned()])
     );
-    assert_eq!(app.on_key(Key::CtrlG, Instant::now()), Effect::None);
+    assert_eq!(app.on_key(Key::CtrlG, now()), Effect::None);
     assert_eq!(app.on_click(TargetId::View(Spot::Row(0))), Effect::None);
-    app.on_key(Key::Esc, Instant::now());
+    app.on_key(Key::Esc, now());
     assert!(!app.config_view_open());
 }
 
@@ -231,7 +232,7 @@ fn ctrl_g_returns_the_file_to_open() {
     let mut app = attached(Some(fake()));
     slash_settings(&mut app);
     assert_eq!(
-        app.on_key(Key::CtrlG, Instant::now()),
+        app.on_key(Key::CtrlG, now()),
         Effect::OpenFile(file(Layer::Global))
     );
 }
@@ -296,7 +297,7 @@ fn a_theme_choice_is_taken_once() {
     let mut app = attached(Some(fake()));
     slash_settings(&mut app);
     for key in [Key::Down, Key::Enter, Key::Up, Key::Up, Key::Enter] {
-        app.on_key(key, Instant::now());
+        app.on_key(key, now());
     }
     assert!(matches!(
         app.take_theme_choice(),
