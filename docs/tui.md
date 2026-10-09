@@ -259,10 +259,11 @@ The default cards, in order:
   fills toward the automatic handoff point, with a marker there; tokens, cache
   hit rate, cost billed and cost on subscription, delegates included, against
   `budget.usd` when one is set; output speed and turns; and one "tools" line naming any
-  MCP server that is down. Every figure has a short dim label before it:
-  "in", "out", "cache", "tok/s", "turns", "tools". The line under the context
-  bar says where the handoff runs and how much of the window is used
-  (`docs/handoff.md`).
+  MCP server that is down. Every number has a plain label that says what it
+  measures, such as "tokens in / out", "cache hits" or "output speed, last
+  reply", never a bare abbreviation. The handoff marker carries one line saying
+  what a handoff is: when the context fills, Fiber writes a summary and the
+  work continues in a fresh context (`docs/handoff.md`).
 - **Changed files:** the five files with the most lines changed, and totals.
 - **Delegates:** one card for all of them, two rows each, at most 6 rows
   shown, drawn from each delegate's `session_status` over a `summary`
@@ -284,9 +285,13 @@ cut with "…". The cards draw:
   git main
   anthropic/claude-opus      high ∴
   ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│          268k
-  handoff 400k              26% of 1M
-  in 412k out 18.2k        cache 91%
-  $4.12 · 64 tok/s · 12 turns
+  handoff at 400k    26% of window
+  then a summary, fresh context
+  tokens in / out     412k / 18.2k
+  cache hits                   91%
+  cost                       $4.12
+  speed, last reply   64 tokens/s
+  turns                         12
   tools 31          ✗ github down
 
   Changed files                     7
@@ -313,11 +318,12 @@ cut with "…". The cards draw:
   right-aligned in `attention` and a dim "∴" after it while the model thinks.
   The context bar is 17 cells of ▆, filled in `info` toward the handoff point
   and `rule` for the rest, then the handoff marker, │ in `attention`, and the
-  context size right-aligned ("268k"). Under it, "handoff 400k" dim, and the
-  share of the window right-aligned, dim ("26% of 1M"). Clicking the bar or
-  the line under it opens the context breakdown. Each figure after that has
-  its label dim before it and the figure in the text colour; a down MCP server
-  is "✗ <server> down" right-aligned in `error`.
+  context size right-aligned ("268k"). Under it, "handoff at 400k" dim, and
+  the share of the window right-aligned, dim; then the one line saying what a
+  handoff is, dim. Clicking the bar or the lines under it opens the context
+  breakdown. Each figure after that is a row: its plain label dim, and the
+  figure right-aligned in the text colour; a down MCP server is "✗ <server>
+  down" right-aligned in `error`.
 - **Changed files.** The title's figure is the count of files, dim. Each row
   is a path, cut from the left to keep its file name ("…/tests/x.rs"), with
   "+N" in `added` and "−N" in `removed` right-aligned. The last row is
@@ -577,9 +583,10 @@ arrived after `sessions` was sent.
   by step, with each step's number in the gutter and its thinking line first.
   A step is opened by `step_started` (`docs/events.md`, "Session and turn").
 - **Clicking a row opens that call:** its diff, output or error.
-- **A call that changed a file stands out** in the ledger by its counts: the
-  file's name, then its lines added in `added` and removed in `removed`, where
-  every other result is dim.
+- **A call that changed a file is highlighted** in the ledger, with the file's
+  name and its lines added and removed, so edits stand out from reads and
+  commands. Its counts are in `added` and `removed`, where every other result
+  is dim.
 - **Failed calls get no special treatment.** They are ordinary rows with their
   status. Nothing is hoisted above the fold.
 
@@ -783,9 +790,10 @@ An approval request is a panel at the bottom that replaces the input box
   matches"). A request that offers no rule shows neither.
 - The panel says why it asked: the standing rule that asked, the reviewer's
   reason when the reviewer escalated, or that the reviewer failed.
-- Every request looks the same whatever asked; the reason is text. A call
-  that declares itself irreversible says "not reversible" in the panel's
-  facts line. Nothing judges danger by reading the command
+- The panel's tint follows why it asked. A reviewer's escalation gets the
+  alert tint; a standing ask gets the normal approval tint. A call that
+  declares itself irreversible says "irreversible" in the panel's header, as
+  text, whatever asked. Nothing judges danger by reading the command
   (`docs/permissions.md`).
 - The asking call's tool group expands so the full call can be read.
 - Esc puts the request aside. It stays pending behind a badge, and clicking the
@@ -795,13 +803,14 @@ An approval request is a panel at the bottom that replaces the input box
 - `/approvals` reopens the waiting queue at the first request. It is the key
   path for reopening a request put aside and for moving to the next.
 
-The panel is an `approval` slab with ▄ and ▀ edges, every row starting with
-a ▌ stripe in `attention` and a space:
+The panel is a slab with ▄ and ▀ edges, every row starting with a ▌ stripe
+and a space: the `approval` tint and an `attention` stripe for a standing
+ask, the `alert` tint and an `error` stripe for a reviewer's escalation.
 
 ```
-▌ Approval 1 of 2 · main                                 esc puts it aside
+▌ Approval 1 of 2 · main · irreversible                  esc puts it aside
 ▌ shell cargo mutants -p hub
-▌ runs a command, writes files · not reversible · asked by the project rule cargo
+▌ runs a command, writes files · asked by the project rule cargo
 ▌
 ▌ ▸ 1 Allow once
 ▌   2 Allow for this session cargo mutants *
@@ -812,11 +821,12 @@ a ▌ stripe in `attention` and a space:
 ```
 
 - The first row is "Approval k of n" bold in `attention`, which moves to the
-  next request on a click, " · " and the asking session in `attention`, and
-  "esc puts it aside" dim, right-aligned.
+  next request on a click, " · " and the asking session in `attention`,
+  " · irreversible" in `error` when the call declares itself so, and "esc
+  puts it aside" dim, right-aligned.
 - Then the tool's name bold in `info` and its main argument bold, wrapped.
 - Then one dim facts line: the call's declared effects joined by ", ",
-  " · not reversible" when it is not, " · " and the paths it names, and
+  " · " and the paths it names, and
   " · " and why it asked: "asked by the <scope> rule <prefix>", "a standing
   ask rule matches it", "it would leave readonly", "the reviewer failed",
   "the reviewer blocked the last calls: <reason>" or "the reviewer has
@@ -1336,7 +1346,8 @@ fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
   and each colour is the nearest entry of the xterm palette: the neutral tints
   (`background`, `panel`, `surface`, `surface_raised`, `turn`, `prompt`,
   `code`, `approval`, `rule`, `hover`) take the grey ramp, the other tints take
-  the colour cube so they keep their hue, and text takes either. The terminal's
+  the colour cube so they keep their hue and an alert stays red, and text
+  takes either. The terminal's
   own 16 colours are never used.
 - **`NO_COLOR`** set and not empty turns colour off: every role is the
   terminal's default colour. Bold, dim, reversed and underline stay, so focus,
@@ -1391,8 +1402,8 @@ The roles, in order, with the dark theme's values:
 | `heading` | markdown headings | `#ff9f43` |
 | `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded | `#6eaafe` |
 | `warning` | RETRYING and its spinner, a rail card's context bar from 60% | `#ff9f43` |
-| `error` | CRASHED, a failed job's stripe, a rail card's context bar from 85%, a down MCP server, a quota nearly spent, tool results in the context breakdown | `#ff5d73` |
-| `attention` | NEEDS INPUT, what a card waits on, the approval stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the handoff marker, "steer", notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` |
+| `error` | CRASHED, a failed job's stripe, an escalation's stripe, "irreversible" in an approval's header, a rail card's context bar from 85%, a down MCP server, a quota nearly spent, tool results in the context breakdown | `#ff5d73` |
+| `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the handoff marker, "steer", notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` |
 | `added` | lines added: an edited file's `+N`, added lines in a diff | `#6eaafe` |
 | `removed` | lines removed: an edited file's `−N`, removed lines in a diff | `#ff5d73` |
 | `code_text` | code with no syntax role | the terminal's foreground |
@@ -1416,7 +1427,8 @@ The roles, in order, with the dark theme's values:
 | `prompt` | the person's prompt bubble | `#343541` |
 | `code` | code blocks | `#181821` |
 | `handoff` | the handoff band | `#1f1a2e` |
-| `approval` | the approval panel and the question form | `#1a1a22` |
+| `approval` | the approval panel for a standing ask, and the question form | `#1a1a22` |
+| `alert` | the approval panel for a reviewer's escalation; red in both built-in themes | `#501c20` |
 | `hover` | the click target under the pointer where it has no tint; a target on a tint is drawn with that tint 0x14 lighter on each channel | `#1e1e26` |
 | `selection` | selected text | `#264f78` |
 | `match` | a search match, its text white | `#5a4a1a` |
@@ -1439,7 +1451,7 @@ extension (`docs/extensions.md`, "What a package holds"), and `tui.theme`
 names it by `<name>`; `dark` and `light` always name the built-ins:
 
 ```json
-{"base": "light", "roles": {"accent": "#0b7285", "approval": "#5f1e22"}}
+{"base": "light", "roles": {"accent": "#0b7285", "alert": "#5f1e22"}}
 ```
 
 `base`, `dark` or `light`, gives every role the file leaves out, so a theme
