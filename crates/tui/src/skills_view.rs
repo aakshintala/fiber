@@ -388,11 +388,17 @@ impl Skills {
         self.clamp(ctx.height);
     }
 
-    /// Keeps the selection on a row at `height`.
+    /// Keeps the selection on a row at `height`: the pane's while open,
+    /// else the skill rows'.
     fn clamp(&mut self, height: usize) {
         let shown = rows_height(&self.frame(height), height);
-        self.list
-            .select(self.list.selected(), self.rows_len(), shown);
+        if let Some(text) = &mut self.text {
+            let selected = text.list.selected();
+            text.list.select(selected, text.lines.len(), shown);
+        } else {
+            let selected = self.list.selected();
+            self.list.select(selected, self.rows_len(), shown);
+        }
     }
 
     /// The answer to the sent command: any other answer, and an answer to

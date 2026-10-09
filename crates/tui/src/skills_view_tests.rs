@@ -772,6 +772,32 @@ fn ctrl_g_with_no_rows_opens_nothing() {
 }
 
 #[test]
+fn shortening_the_open_text_clamps_the_pane_and_keeps_the_row() {
+    let body: Vec<String> = (0..10).map(|n| format!("line {n}")).collect();
+    let fake = text_fake(&body.join("\n"));
+    let mut skills = entered(&fake, &[repository("tdd")]);
+    let narrow = Ctx {
+        height: 6,
+        ..ctx(&fake)
+    };
+    // Two past the last line scrolls to it.
+    skills.click(Spot::Row(11), &narrow);
+    assert_eq!(selected_line(&skills), 9);
+    assert_eq!(skills.list.selected(), 1);
+    // Ctrl+G shortens the file to one line; the return re-reads it.
+    if let Ok(mut texts) = fake.texts.lock() {
+        *texts = Ok("only".to_owned());
+    }
+    skills.reread(&narrow);
+    assert_eq!(skills.list.selected(), 1, "the skill row is unchanged");
+    assert_eq!(selected_line(&skills), 0);
+    let frame = skills.frame(6);
+    assert_eq!(frame.rows.len(), 1);
+    assert_eq!(frame.rows[0][0].0, "only");
+    assert!(frame_has_row(&frame, 6, 0), "{frame:?}");
+}
+
+#[test]
 fn skills_text_80x24() {
     let fake = text_fake("Test first, then write the test.\nA second paragraph.");
     let mut win = repository("tdd");
