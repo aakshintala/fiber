@@ -143,6 +143,36 @@ fn clear_wake_drops_an_ask() {
 }
 
 #[test]
+fn ask_wall_converts_and_asks_under_reduced_motion() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    let wall = 1_700_000_000_000;
+    let at = |motion: &Motion| motion.take_wake();
+    // A moment past converts against the frame's wall time.
+    let mut live = Motion::default();
+    live.set_now(origin, wall);
+    live.ask_wall(wall + 2);
+    assert_eq!(at(&live), origin.checked_add(Duration::from_millis(2)));
+    // At and before the wall ask at once.
+    live.ask_wall(wall);
+    assert_eq!(at(&live), Some(origin));
+    live.ask_wall(wall.saturating_sub(1));
+    assert_eq!(at(&live), Some(origin));
+    // Reduced motion still asks: the countdown keeps its wake.
+    let mut reduced = Motion::default();
+    reduced.set_reduced(true);
+    reduced.set_now(origin, wall);
+    reduced.ask_wall(wall + 1_000);
+    assert_eq!(
+        at(&reduced),
+        origin.checked_add(Duration::from_millis(1_000))
+    );
+    // With no time there is nothing to convert against.
+    let bare = Motion::default();
+    bare.ask_wall(wall + 1_000);
+    assert_eq!(at(&bare), None);
+}
+
+#[test]
 fn spin_writes_one_cell_and_keeps_its_style() {
     let origin = fakes::clock::FakeClock::new().origin();
     let live = motion(origin);

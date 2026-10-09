@@ -598,7 +598,7 @@ impl App {
             + input
             + self.completion_rows()
             + self.steering().len()
-            + usize::from(self.banner().is_some())
+            + usize::from(self.working_row_shown())
             + usize::from(self.badge().is_some())
             + usize::from(self.hint())
     }

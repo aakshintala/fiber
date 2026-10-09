@@ -174,6 +174,7 @@ pub(crate) fn render(
     }
     status_rows::draw_delegates(app, area, buf, &mut bottom);
     banner::draw(app, area, buf, &mut bottom);
+    working_line::draw(app, area, buf, &mut bottom, &mut targets);
     if let Some(rect) = app
         .badge()
         .and_then(|badge| put(buf, area, &mut bottom, &badge, Style::default()))

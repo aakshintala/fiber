@@ -61,6 +61,7 @@ mod turn;
 mod turn_text;
 mod view;
 mod window;
+mod working;
 
 use std::io;
 use std::os::unix::net::UnixStream;

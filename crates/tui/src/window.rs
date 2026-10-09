@@ -19,6 +19,7 @@ use crate::pages::{Cut, Index};
 use crate::rows::{RowText, Rows};
 use crate::turn::{Fold, Row, Turn};
 
+mod live;
 mod pins;
 
 /// Where folding a page begins: its turn and step, the live fold's scalar

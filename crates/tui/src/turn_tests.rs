@@ -1326,6 +1326,19 @@ fn message_done(app: &mut App, outcome: &str) {
     );
 }
 
+/// The open turn's pending retry, as the working line reads it: with no
+/// time set the countdown reads the delay alone.
+fn pending(app: &App) -> String {
+    let turn = app.pages().open_turn().expect("an open turn");
+    let retry = turn.pending_retry().expect("a pending retry");
+    crate::format::retry(
+        &retry.retry,
+        retry.attempt,
+        retry.retry.delay_ms.div_ceil(1000),
+    )
+    .to_string()
+}
+
 /// A `retry_scheduled` for message `a_m`. The payload's `attempt` is never
 /// read: the card counts the starts. Its `last_attempt` names the last
 /// attempt the policy allows, and the row reads it.
@@ -1419,26 +1432,30 @@ fn a_failed_login_offers_log_in_on_its_error_line() {
 }
 
 #[test]
-fn a_pending_retry_is_a_row_after_the_open_turn() {
+fn a_pending_retry_draws_no_conversation_row() {
     let mut app = app();
     start(&mut app, "go", 0);
     step(&mut app, 0);
     started(&mut app);
     retry(&mut app, 9, 3_001, 4);
+    assert!(
+        !texts(&app).iter().any(|line| line.starts_with('↻')),
+        "the retry draws no conversation row"
+    );
     assert_eq!(
-        last(&app),
+        pending(&app),
         "↻ Retrying in 4s · rate_limited · attempt 2 of 4"
     );
     started(&mut app);
     retry(&mut app, 9, 4_000, 4);
     assert_eq!(
-        last(&app),
+        pending(&app),
         "↻ Retrying in 4s · rate_limited · attempt 3 of 4"
     );
     started(&mut app);
     retry(&mut app, 9, 0, 4);
     assert_eq!(
-        last(&app),
+        pending(&app),
         "↻ Retrying in 0s · rate_limited · attempt 4 of 4"
     );
 }
@@ -1452,7 +1469,7 @@ fn a_retried_request_shows_its_attempt_of_its_last_attempt() {
     message_done(&mut app, "failed");
     retry(&mut app, 9, 4_000, 4);
     assert_eq!(
-        last(&app),
+        pending(&app),
         "↻ Retrying in 4s · rate_limited · attempt 2 of 4"
     );
     insta::assert_snapshot!("retried_request", texts(&app).join("\n"));
@@ -1474,7 +1491,7 @@ fn a_new_request_counts_its_attempts_from_one() {
     message_done(&mut app, "failed");
     retry(&mut app, 9, 1_000, 4);
     assert_eq!(
-        last(&app),
+        pending(&app),
         "↻ Retrying in 1s · rate_limited · attempt 2 of 4"
     );
     // So does the next step's.
@@ -1484,7 +1501,7 @@ fn a_new_request_counts_its_attempts_from_one() {
     message_done(&mut app, "failed");
     retry(&mut app, 9, 1_000, 4);
     assert_eq!(
-        last(&app),
+        pending(&app),
         "↻ Retrying in 1s · rate_limited · attempt 2 of 4"
     );
 }
@@ -1503,7 +1520,7 @@ fn attempts_are_counted_from_lines_a_late_attach_replays() {
     message_done(&mut app, "failed");
     retry(&mut app, 9, 1_000, 4);
     assert_eq!(
-        last(&app),
+        pending(&app),
         "↻ Retrying in 1s · rate_limited · attempt 4 of 4"
     );
 }
@@ -1529,7 +1546,7 @@ fn a_handoff_note_request_counts_its_own_attempts() {
     message_done(&mut app, "failed");
     retry(&mut app, 9, 1_000, 4);
     assert_eq!(
-        last(&app),
+        pending(&app),
         "↻ Retrying in 1s · rate_limited · attempt 2 of 4"
     );
 }
@@ -1542,7 +1559,7 @@ fn the_retry_row_reads_its_total_from_the_event() {
     started(&mut app);
     retry(&mut app, 9, 1_000, 2);
     assert_eq!(
-        last(&app),
+        pending(&app),
         "↻ Retrying in 1s · rate_limited · attempt 2 of 2"
     );
 }
@@ -1557,7 +1574,7 @@ fn a_cancelled_wait_keeps_the_failed_attempts() {
     started(&mut app);
     retry(&mut app, 9, 1_000, 4);
     assert_eq!(
-        last(&app),
+        pending(&app),
         "↻ Retrying in 1s · rate_limited · attempt 3 of 4"
     );
     end(&mut app, "interrupted", 1);
@@ -1617,7 +1634,10 @@ fn the_retry_row_clears_once_the_call_gets_through() {
     started(&mut app);
     retry(&mut app, 2, 1_000, 4);
     step(&mut app, 0);
-    assert!(last(&app).starts_with('↻'));
+    assert_eq!(
+        pending(&app),
+        "↻ Retrying in 1s · rate_limited · attempt 2 of 4"
+    );
 }
 
 #[test]

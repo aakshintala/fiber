@@ -157,8 +157,11 @@ fn a_tick_behind_a_key_is_acked_before_the_next() {
     // `gate_step_table`'s in-flight row; no quiet wait proves it here.
     assert_eq!(step(&mut lp, Input::Bytes(b"x".to_vec())), None);
     clock.advance(Duration::from_millis(240));
-    // Stepping tick A acks it, and the past deadline sends tick B at once.
+    // Stepping tick A acks it. The step re-arms the next boundary, so
+    // advancing to it delivers tick B whichever arm the thread reads:
+    // the stale one past, or the new one reached now.
     assert_eq!(step(&mut lp, Input::Tick), None);
+    clock.advance(Duration::from_millis(120));
     assert!(matches!(
         rx.recv_timeout(DEADLINE)
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for tick B: {err}")),
@@ -201,6 +204,54 @@ fn a_tick_while_a_frame_waits_for_history_is_acked() {
         Input::Tick
     ));
     lp.tick.stop();
+}
+
+/// A hub `hub_hello` this terminal reads.
+fn hello() -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    })
+}
+
+/// A `session_status` for the attached session in `state`.
+fn status(state: serde_json::Value) -> Line {
+    let mut payload = serde_json::json!({
+        "name": "fix the parser", "workspace": "/w",
+        "project": "-w", "state": "idle", "since": 1_700_000_000_000u64,
+        "spend": {"tokens": {"input": 1, "cache_read": 0,
+            "cache_write": {}, "output": 2},
+            "cost": 0.0, "subscription_cost": 0.0},
+        "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+    });
+    for (key, value) in state.as_object().cloned().unwrap_or_default() {
+        payload[key] = value;
+    }
+    session_line("session_status", payload, None)
+}
+
+#[test]
+fn under_reduced_motion_a_working_line_arms_its_next_second() {
+    let (mut lp, clock) = running();
+    let origin = clock.origin();
+    // Home, a working feed row and a busy turn: the line draws.
+    lp.app.set_home(crate::home::Launch {
+        workspace: std::path::PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        ..Default::default()
+    });
+    lp.app.on_line(hello());
+    lp.app
+        .on_line(status(serde_json::json!({"state": "streaming"})));
+    lp.app.set_reduced_motion(true);
+    assert_eq!(step(&mut lp, Input::Resize), None);
+    // The wall second is armed, not the next frame boundary.
+    assert_eq!(
+        lp.tick.armed(),
+        origin.checked_add(Duration::from_millis(1_000))
+    );
 }
 
 #[test]

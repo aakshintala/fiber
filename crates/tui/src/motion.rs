@@ -5,6 +5,7 @@
 //! arms the tick with the earliest ask after the frame.
 
 use std::cell::Cell;
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use ratatui::buffer::Buffer;
@@ -53,7 +54,10 @@ impl Motion {
             return STILL;
         };
         // Ten frames: the index is always in range.
-        SPINNER.get(usize::try_from(frame % 10).unwrap_or(0)).copied().unwrap_or(STILL)
+        SPINNER
+            .get(usize::try_from(frame % 10).unwrap_or(0))
+            .copied()
+            .unwrap_or(STILL)
     }
 
     /// Asks for the next frame's boundary. Nothing under reduced motion
@@ -84,6 +88,47 @@ impl Motion {
             cell.set_symbol(self.spinner());
         }
         self.ask_frame();
+    }
+
+    /// The frame's wall time, in milliseconds since the epoch; none with
+    /// no time set.
+    pub(crate) fn wall_ms(&self) -> Option<u64> {
+        self.now.map(|(_, wall)| wall)
+    }
+
+    /// The glimmer's cells in a word `len` cells wide: a 3-cell band
+    /// sweeping one cell a frame from two cells before the word, then
+    /// resting (`docs/tui.md`, "The working line"). Reads the frame and
+    /// asks for nothing.
+    pub(crate) fn glimmer(&self, len: usize) -> Option<Range<usize>> {
+        if self.reduced {
+            return None;
+        }
+        let frame = self.frame()?;
+        // Nine sweeping frames, then eight resting: a period of about
+        // two seconds.
+        let at = frame % 17;
+        if at >= 9 {
+            return None;
+        }
+        let from = usize::try_from(at.saturating_sub(2)).unwrap_or(0);
+        let end = usize::try_from(at.saturating_add(1)).unwrap_or(usize::MAX);
+        let end = end.min(len);
+        (from < end).then_some(from..end)
+    }
+
+    /// Asks for a wall-clock moment `ms`: the frame converts it against
+    /// its own wall time, or asks at once when it already passed. Asks
+    /// even under reduced motion: the time and the countdown keep a
+    /// one-second wake. Nothing with no time set.
+    pub(crate) fn ask_wall(&self, ms: u64) {
+        let Some((now, wall)) = self.now else {
+            return;
+        };
+        let at = now
+            .checked_add(Duration::from_millis(ms.saturating_sub(wall)))
+            .unwrap_or(now);
+        self.ask(at);
     }
 
     /// Drops the frame's asks: the next render asks them again.

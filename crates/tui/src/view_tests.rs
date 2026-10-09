@@ -1284,6 +1284,7 @@ fn lines(targets: &[crate::mouse::Target]) -> Vec<(crate::app::Target, Rect)> {
             crate::mouse::TargetId::Line(line) => Some((line, target.rect)),
             crate::mouse::TargetId::Badge
             | crate::mouse::TargetId::NewBelow
+            | crate::mouse::TargetId::Interrupt
             | crate::mouse::TargetId::Token(_)
             | crate::mouse::TargetId::Steering(_)
             | crate::mouse::TargetId::DropSteering(_)

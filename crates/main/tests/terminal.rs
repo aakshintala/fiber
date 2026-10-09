@@ -490,6 +490,10 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
     // The second prompt starts a stalled turn; Esc interrupts it.
     run.write(b"again\r");
     run.read_until("Working");
+    // The elapsed count proves the working line draws: a count whose
+    // width changes rewrites its cells whole, while unchanged cells are
+    // never rewritten, so no other word of the line arrives whole.
+    run.read_until("10s");
     run.write(b"\x1b");
     run.read_until("interrupted");
     run.write(b"\x03\x03\r");

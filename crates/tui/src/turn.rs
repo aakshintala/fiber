@@ -29,11 +29,13 @@ mod answers;
 pub(crate) mod crash;
 mod group;
 mod handoff;
+mod live;
 
 #[cfg(test)]
 use group::Section;
 use group::{Call, Streaming};
 pub(crate) use group::{Group, Thought};
+pub(crate) use live::PendingRetry;
 
 /// One drawn line and what clicking it opens.
 pub(crate) type Row = (Line<'static>, Option<Target>);
@@ -112,7 +114,7 @@ pub(crate) struct Turn {
     pub(crate) spend: format::Spend,
     /// A failed model call waiting to retry, with the number of the attempt
     /// about to be made.
-    retry: Option<(RetryScheduled, u32)>,
+    retry: Option<PendingRetry>,
     /// The `assistant_message_started` lines of the model request in flight:
     /// a start after a failed call continues the count, any other restarts it.
     attempts: u32,
@@ -548,7 +550,11 @@ impl Turn {
             .section(step)
             .failed
             .push((code, failed));
-        self.retry = Some((retry, failed.saturating_add(1)));
+        self.retry = Some(PendingRetry {
+            retry,
+            attempt: failed.saturating_add(1),
+            ts,
+        });
     }
 
     /// The card's lines at `width`, each prompt bubble with the local time
@@ -594,9 +600,9 @@ impl Turn {
             let ms = ts.saturating_sub(self.started);
             let closing = format::closing(head, ms, self.calls, &self.spend.usage());
             out.push((format::dim(closing), None));
-        } else if let Some((retry, attempt)) = &self.retry {
-            out.push((format::retry(retry, *attempt), None));
         }
+        // A pending retry draws no conversation row: the working line
+        // counts its wait down (`docs/tui.md`, "The working line").
     }
 }
 
