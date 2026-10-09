@@ -1762,3 +1762,8 @@ fn a_selected_run_with_no_mutants_starts_no_shard() {
     assert!(!plan.jobs["mutants"]);
     assert_eq!(plan.shards, 0);
 }
+
+#[test]
+fn probe_1574_fails_on_purpose() {
+    assert_eq!(1, 2);
+}
