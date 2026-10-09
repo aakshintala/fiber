@@ -51,6 +51,7 @@ mod pages;
 mod paste_image;
 #[cfg(test)]
 mod pty_watch;
+mod rebind;
 #[cfg(test)]
 mod results_support;
 mod retry;
@@ -89,9 +90,9 @@ pub use attention::Attention;
 
 pub use catalogue::{Catalogue, ModelEntry, ReadModels, Refresh};
 pub use configure::{
-    Configure, ConfigureError, Layer, LoginKind, LoginTarget, Revoked, RuleRow, RulesScope,
-    RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup,
-    ToolLists, ToolSwitches, WriteScope,
+    Configure, ConfigureError, KeyEdit, Layer, LoginKind, LoginTarget, Revoked, RuleRow,
+    RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope,
+    ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 
 pub use home::Launch;

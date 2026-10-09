@@ -368,6 +368,16 @@ pub(crate) const BINDINGS: &[Binding] = &[
     },
     Binding {
         area: "Requests, models and help",
+        id: "session_only",
+        description: "Choose in the model picker for this session only",
+        keys: "s",
+        other_paths: "",
+        contexts: Contexts::PICKER,
+        defaults: &["s"],
+        events: &[Canon::Key(Key::Char('s'))],
+    },
+    Binding {
+        area: "Requests, models and help",
         id: "key_map",
         description: "Open the key map",
         keys: "F1",

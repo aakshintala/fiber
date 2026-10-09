@@ -75,15 +75,31 @@ fn asked_by(session: &str) -> contract::Envelope {
 /// A one-question interaction `kind` with request id `id`.
 fn asked_one(kind: &str, id: &str) -> contract::Envelope {
     let payload = match kind {
-        "confirm" => json!({"request_id": id, "kind": kind, "prompt": "Continue?"}),
-        "select" => json!({"request_id": id, "kind": kind, "prompt": "Pick one?",
-            "options": [{"label": "a"}, {"label": "b"}, {"label": "c"}]}),
-        "multi_select" => json!({"request_id": id, "kind": kind, "prompt": "Pick some?",
-            "options": [{"label": "a"}, {"label": "b"}, {"label": "c"}]}),
-        "text_input" => json!({"request_id": id, "kind": kind, "prompt": "What?"}),
+        "confirm" => {
+            json!({"request_id": id, "kind": kind, "prompt": "Continue?", "action_ids": ["a_1"]})
+        }
+        "select" => {
+            json!({"request_id": id, "kind": kind, "prompt": "Pick one?", "action_ids": ["a_1"],
+            "options": [{"label": "a"}, {"label": "b"}, {"label": "c"}]})
+        }
+        "multi_select" => {
+            json!({"request_id": id, "kind": kind, "prompt": "Pick some?", "action_ids": ["a_1"],
+            "options": [{"label": "a"}, {"label": "b"}, {"label": "c"}]})
+        }
+        "text_input" => {
+            json!({"request_id": id, "kind": kind, "prompt": "What?", "action_ids": ["a_1"]})
+        }
         _ => panic!("unknown one-question interaction: {kind}"),
     };
     from(S_A, "interaction_requested", payload)
+}
+
+/// `asked_one`'s interaction as an extension command's `host.ask` raises
+/// it: no tool call, so no `action_ids`.
+fn asked_outside(kind: &str, id: &str) -> contract::Envelope {
+    let mut line = asked_one(kind, id);
+    line.payload.remove("action_ids");
+    line
 }
 
 /// An app attached to `S_A` showing the form `r_4f`.
@@ -617,4 +633,91 @@ fn without_id_from_effect(effect: Effect) -> (String, Value) {
     };
     assert_eq!(lines.len(), 1, "{lines:?}");
     without_id(lines.first().map(String::as_str).unwrap_or_default())
+}
+
+/// A `turn_started` on `S_A`, so a turn is running.
+fn turn_running(app: &mut App) {
+    feed(
+        app,
+        envelope(
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "go"}]}]}),
+        ),
+    );
+}
+
+#[test]
+fn a_form_raised_outside_a_tool_call_is_declined_and_never_cancelled() {
+    for running in [false, true] {
+        let mut app = attached();
+        if running {
+            turn_running(&mut app);
+        }
+        let mut asked = asked();
+        asked.payload.remove("action_ids");
+        feed(&mut app, asked);
+        let (id, reply) = sent(&mut app, Key::Esc);
+        assert_eq!(
+            reply["args"],
+            json!({"request_id": "r_4f", "declined": true})
+        );
+        assert!(
+            fold(&mut app, accepted(S_A, &id)).is_empty(),
+            "running {running}"
+        );
+    }
+}
+
+#[test]
+fn chat_about_this_outside_a_tool_call_never_cancels() {
+    for running in [false, true] {
+        let mut app = attached();
+        if running {
+            turn_running(&mut app);
+        }
+        let mut asked = asked();
+        asked.payload.remove("action_ids");
+        feed(&mut app, asked);
+        for _ in 0..4 {
+            press(&mut app, Key::Down);
+        }
+        let (id, reply) = sent(&mut app, Key::Enter);
+        assert_eq!(
+            reply["args"],
+            json!({"request_id": "r_4f", "declined": true})
+        );
+        assert!(
+            fold(&mut app, accepted(S_A, &id)).is_empty(),
+            "running {running}"
+        );
+    }
+}
+
+#[test]
+fn a_one_question_raised_outside_a_tool_call_is_declined_and_never_cancelled() {
+    for running in [false, true] {
+        for (kind, request_id) in [
+            ("confirm", "r_c"),
+            ("select", "r_s"),
+            ("multi_select", "r_m"),
+            ("text_input", "r_t"),
+        ] {
+            let mut app = attached();
+            if running {
+                turn_running(&mut app);
+            }
+            feed(&mut app, asked_outside(kind, request_id));
+            let (id, reply) = sent(&mut app, Key::Esc);
+            assert_eq!(
+                reply["args"],
+                json!({"request_id": request_id, "declined": true}),
+                "{kind}"
+            );
+            assert!(
+                fold(&mut app, accepted(S_A, &id)).is_empty(),
+                "{kind} running {running}"
+            );
+        }
+    }
 }

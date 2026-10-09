@@ -97,6 +97,11 @@ impl App {
         self.config_views.seam = seam;
     }
 
+    /// The seam the views and the model picker write through, if any.
+    pub(in crate::app) fn configure_seam(&self) -> Option<Arc<dyn Configure>> {
+        self.config_views.seam.clone()
+    }
+
     /// Saves one dragged share to the global configuration through the
     /// seam, as `fiber config set` would (`docs/tui.md`, "Layout"). With
     /// no seam nothing is saved; a failed save and each warning is a
