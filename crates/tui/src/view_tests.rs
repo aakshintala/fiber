@@ -992,10 +992,12 @@ fn styles_reach_the_screen() {
             .map(|cell| cell.style())
             .unwrap_or_default()
     };
-    // The summary line is dim from its dot on; the reply is not.
+    // The summary line is dim from its dot on; the reply is not. The
+    // summary is one row, whatever runs, so the row after it is the
+    // reply's, not the summary's second row.
     let summary = row("• Read");
     assert!(cell(0, summary).add_modifier.contains(Modifier::DIM));
-    assert!(cell(0, summary + 1).add_modifier.contains(Modifier::DIM));
+    assert!(!cell(0, summary + 1).add_modifier.contains(Modifier::DIM));
     assert!(!cell(0, row("Fixed.")).add_modifier.contains(Modifier::DIM));
     // The bubble is tinted to the last text column, and blank to its
     // left.
@@ -1437,12 +1439,12 @@ fn a_collapsed_groups_line_is_a_target_over_its_rows() {
     use crate::app::Target;
     let mut app = empty();
     tool_turn(&mut app);
-    // The summary wraps to rows 3 and 4 of `tool_group_collapsed`.
+    // The summary is one row: its line is the target over that row.
     let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     let group = app.targets().first().map(|(_, target)| *target);
     assert!(matches!(group, Some(Target::Group(_))), "{group:?}");
     let drawn: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
-    assert_eq!(drawn, vec![Rect::new(0, 3, WIDTH - 1, 2)]);
+    assert_eq!(drawn, vec![Rect::new(0, 4, WIDTH - 1, 1)]);
     assert_eq!(
         lines(&targets).first().map(|(target, _)| Some(*target)),
         Some(group)
@@ -1479,7 +1481,7 @@ fn ledger_rows_are_targets_over_their_rows() {
     assert_eq!(
         rects,
         vec![
-            Rect::new(0, 1, WIDTH - 1, 2),
+            Rect::new(0, 2, WIDTH - 1, 1),
             Rect::new(0, 3, WIDTH - 1, 1),
             Rect::new(0, 4, WIDTH - 1, 1),
             Rect::new(0, 5, WIDTH - 1, 1),
@@ -2000,4 +2002,128 @@ fn a_focus_the_view_does_not_draw_is_not_drawn_on_it() {
             .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED)),
         "the header's cross is not focused"
     );
+}
+
+/// Four questions for an `ask_user` call, within the tool's schema.
+fn four_questions() -> serde_json::Value {
+    serde_json::json!({"questions": [
+        {"header": "Timeout", "question": "How long?",
+         "options": [{"label": "1m"}, {"label": "5m"}]},
+        {"header": "Scope", "question": "Which scope?",
+         "options": [{"label": "a"}, {"label": "b"}]},
+        {"header": "Name", "question": "What name?"},
+        {"header": "Pick", "question": "Which one?",
+         "options": [{"label": "x"}, {"label": "y"}]},
+    ]})
+}
+
+/// The summary row holding `needle` in `buf`, trailing spaces trimmed.
+fn summary_row(buf: &Buffer, needle: &str) -> String {
+    (0..buf.area.height)
+        .map(|y| row_text(buf, y).trim_end().to_owned())
+        .find(|row| row.contains(needle))
+        .unwrap_or_else(|| panic!("no row holds {needle:?}\n{}", text(buf)))
+}
+
+#[test]
+fn group_line_and_ledger_show_parsed_arguments_never_json() {
+    use serde_json::json;
+    const W: u16 = 160;
+    const H: u16 = 24;
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(W, H);
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    let arguments = four_questions();
+    // While the call streams, the group line holds its raw text.
+    app.on_line(at(
+        "tool_call_arguments_delta",
+        Some("a_m"),
+        0,
+        json!({"index": 0, "name": "ask_user", "text": arguments.to_string()}),
+    ));
+    let area = Rect::new(0, 0, W, H);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    assert!(text(&buf).contains("{\"questions\""), "{}", text(&buf));
+    // Once requested, the parsed form draws as one row, never JSON.
+    app.on_line(at(
+        "tool_call_requested",
+        Some("a_1"),
+        0,
+        json!({"name": "ask_user", "arguments": arguments}),
+    ));
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let shown = text(&buf);
+    assert!(shown.contains("ask_user 4 questions"), "{shown}");
+    assert!(!shown.contains("{\""), "{shown}");
+    let holding: Vec<String> = (0..H)
+        .map(|y| row_text(&buf, y))
+        .filter(|row| row.contains("4 questions"))
+        .collect();
+    assert_eq!(holding.len(), 1, "{shown}");
+    // Ten calls in flight still draw one row, cut with "…".
+    for n in 0..9 {
+        app.on_line(at(
+            "tool_call_requested",
+            Some(format!("a_1{n}").as_str()),
+            0,
+            json!({"name": "read",
+                "arguments": {"path": format!("src/some/long/file{n:02}.rs")}}),
+        ));
+    }
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let shown = text(&buf);
+    assert!(shown.contains("ask_user 4 questions"), "{shown}");
+    assert!(!shown.contains("file08.rs"), "{shown}");
+    let row = summary_row(&buf, "ask_user 4 questions");
+    assert!(row.ends_with('…'), "{row}");
+    assert!(crate::format::width(&row) <= usize::from(W), "{row}");
+    // At a narrow width the one row is cut there instead.
+    app.set_size(40, H);
+    let narrow = Rect::new(0, 0, 40, H);
+    let mut buf = Buffer::empty(narrow);
+    render(&app, narrow, &mut buf, None);
+    let shown = text(&buf);
+    let row = summary_row(&buf, "asked 4 questions");
+    assert!(row.ends_with('…'), "{row}");
+    assert!(crate::format::width(&row) <= 40, "{row}");
+    assert!(!shown.contains("{\""), "{shown}");
+}
+
+/// A finished call's ledger row shows its parsed summary, never JSON.
+#[test]
+fn ledger_rows_show_parsed_arguments_never_json() {
+    use serde_json::json;
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    for (action, name, arguments) in [
+        ("a_1", "ask_user", four_questions()),
+        ("a_2", "web_fetch", json!({"url": "https://example.com/x"})),
+        ("a_3", "search", json!({"query": "rust errors"})),
+    ] {
+        app.on_line(at(
+            "tool_call_requested",
+            Some(action),
+            0,
+            json!({"name": name, "arguments": arguments}),
+        ));
+        app.on_line(at(
+            "tool_call_completed",
+            Some(action),
+            0,
+            json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+        ));
+    }
+    app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+    let shown = screen(&app);
+    assert!(shown.contains("ask_user 4 questions"), "{shown}");
+    assert!(shown.contains("web_fetch https://example.com/x"), "{shown}");
+    assert!(shown.contains("search rust errors"), "{shown}");
+    assert!(!shown.contains("{\""), "{shown}");
 }

@@ -1079,6 +1079,12 @@
           }
         ]
       },
+      "extra_body": {
+        "include": [
+          "reasoning.encrypted_content",
+          "web_search_call.action.sources"
+        ]
+      },
       "id": "gpt-6.1-sol",
       "input": [
         "text",

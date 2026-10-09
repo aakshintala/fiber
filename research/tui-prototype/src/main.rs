@@ -2,8 +2,10 @@
 //! `docs/events.md` lines in a real terminal. Throwaway code: the fold and the
 //! drawing side by side, the input parser in `input.rs`, a few tests.
 
+mod home;
 mod input;
 mod lua;
+mod model_picker;
 mod paged;
 
 use crossterm::{execute, terminal};
@@ -94,6 +96,14 @@ enum Act {
     Context,
     /// leaves a swapped view
     Back,
+    /// the model picker's row for one model, by its flat index: focuses it
+    Pick(usize),
+    /// one thinking chip of one model: focuses that chip
+    PickChip(usize, usize),
+    /// the picker's show-all toggle
+    PickAll,
+    /// the picker's refresh-all button
+    PickRefresh,
     /// the rail's row for one fake session, by its index: moves the on-screen marker only
     Rail(usize),
     /// the rail's scope line: shows or hides sessions in other projects
@@ -2194,6 +2204,8 @@ struct Ui {
     cmd_n: u32,
     /// the context breakdown is swapped into the conversation area
     ctx_view: bool,
+    /// the model picker is swapped into the conversation area
+    picker: Option<model_picker::State>,
     /// the view's own scroll, rows from its top
     vscroll: usize,
     /// the rail design: 0 list, 1 cards, 2 tabs (`--rail`, or the A/B/C chips)
@@ -3100,6 +3112,8 @@ struct Args {
     bench: bool,
     no_pending: bool,
     hover: bool,
+    /// the home screen case (`--home`), drawn instead of the conversation
+    home: Option<String>,
     /// the rail design at start: 0 list, 1 cards, 2 tabs
     rail: u8,
     /// the B card density at start: 0 full, 1 medium, 2 compact
@@ -3108,6 +3122,8 @@ struct Args {
     rail_share: f64,
     /// the panel's width at start, as a percent of the window
     panel_share: f64,
+    /// `--picker CASE`: start with the model picker open
+    picker: Option<String>,
 }
 fn args() -> Args {
     let mut a = Args {
@@ -3131,10 +3147,12 @@ fn args() -> Args {
         bench: false,
         no_pending: false,
         hover: false,
+        home: None,
         rail: 1,
         density: 2,
         rail_share: 15.0,
         panel_share: 21.0,
+        picker: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
@@ -3158,6 +3176,7 @@ fn args() -> Args {
             "--paging-bench" => a.bench = true,
             "--no-pending" => a.no_pending = true,
             "--hover" => a.hover = true,
+            "--home" => a.home = it.next(),
             "--rail" => {
                 a.rail = match it.next().as_deref().map(|v| v.to_uppercase()).as_deref() {
                     Some("A") => 0,
@@ -3177,8 +3196,9 @@ fn args() -> Args {
                     _ => panic!("--density full|medium|three|compact"),
                 }
             }
+            "--picker" => a.picker = it.next(),
             "-h" | "--help" => {
-                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
+                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -3273,7 +3293,7 @@ fn main() -> io::Result<()> {
         out.write_all(HOVER_ON.as_bytes())?;
     }
     let mut term = Terminal::new(CrosstermBackend::new(out))?;
-    let res = run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index);
+    let res = if a.home.is_some() { home::run_home(&a, &mut term) } else { run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index) };
     let b = term.backend_mut();
     if a.hover {
         b.write_all(HOVER_OFF.as_bytes())?;
@@ -3288,7 +3308,10 @@ fn main() -> io::Result<()> {
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
     }
-    println!("Session {0} · resume it with fiber --resume {0}", f.session_id);
+    // home draws no session, so there is nothing to resume
+    if a.home.is_none() {
+        println!("Session {0} · resume it with fiber --resume {0}", f.session_id);
+    }
     Ok(())
 }
 
@@ -3368,6 +3391,8 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     ui.density = a.density.min(2);
     ui.rail_share = a.rail_share.clamp(1.0, 90.0);
     ui.panel_share = a.panel_share.clamp(1.0, 90.0);
+    model_picker::set_still(a.static_);
+    ui.picker = a.picker.as_deref().map(model_picker::for_case);
     let mut rd = input::Reader::new()?;
     let mut cmds = match &a.commands {
         Some(p) => Some(std::fs::OpenOptions::new().create(true).append(true).open(p)?),
@@ -3380,7 +3405,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     let mut kitty_seen: Option<u32> = None;
     let mut det: Option<(bool, Duration)> = None;
     let mut pushed = false;
-    let mut links_at = (u64::MAX, usize::MAX, false, false);
+    let mut links_at = (u64::MAX, usize::MAX, false, false, false);
     let mut next_auto = Instant::now();
     const FLASH: Duration = Duration::from_secs(6);
 
@@ -3567,14 +3592,30 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 None => conv[start..end].iter().collect(),
             };
             let top_pad = tabs_h + vh.saturating_sub(vis.len());
-            // a swapped view: its header, then its rows from its own scroll
-            let vrows: Option<Vec<Row>> = ui.ctx_view.then(|| {
-                let body = context_view(f, cw);
-                ui.vscroll = ui.vscroll.min(body.len().saturating_sub(view_h.saturating_sub(1)));
-                let mut r = vec![view_header("Context", "/context")];
-                r.extend(body.into_iter().skip(ui.vscroll).take(view_h.saturating_sub(1)));
-                r
-            });
+            // a swapped view: its header, then its rows from its own scroll. The picker
+            // sits over the context breakdown.
+            let vrows: Option<Vec<Row>> = ui
+                .picker
+                .as_mut()
+                .map(|p| {
+                    p.tick = p.tick.wrapping_add(1);
+                    model_picker::view(p, cw)
+                })
+                .map(|body| {
+                    ui.vscroll = ui.vscroll.min(body.len().saturating_sub(view_h.saturating_sub(1)));
+                    let mut r = vec![view_header("Models", "/model")];
+                    r.extend(body.into_iter().skip(ui.vscroll).take(view_h.saturating_sub(1)));
+                    r
+                })
+                .or_else(|| {
+                    ui.ctx_view.then(|| {
+                        let body = context_view(f, cw);
+                        ui.vscroll = ui.vscroll.min(body.len().saturating_sub(view_h.saturating_sub(1)));
+                        let mut r = vec![view_header("Context", "/context")];
+                        r.extend(body.into_iter().skip(ui.vscroll).take(view_h.saturating_sub(1)));
+                        r
+                    })
+                });
             lay = (start, top_pad, if vrows.is_some() { 0 } else { vis.len() }, view_h, max_top);
             hits.clear();
             geom = (conv_w, cols, rail_w, show_tabs, panel_w);
@@ -3843,7 +3884,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 }
             })?;
             rail_lay = (rrows.len(), rows as usize, rmap);
-            let frame_buf = (links_at != (conv_gen, start, ui.ctx_view, ui.search.is_some()) || a.audit).then(|| completed.buffer.clone());
+            let frame_buf = (links_at != (conv_gen, start, ui.ctx_view, ui.picker.is_some(), ui.search.is_some()) || a.audit).then(|| completed.buffer.clone());
             if a.audit && window.is_some() {
                 let cur = frame_buf.clone().unwrap();
                 if let Some(prev) = &prev_buf {
@@ -3863,8 +3904,8 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             }
             // links: mouse capture turns off the terminal's own link detection, so replies
             // mark URLs and paths with OSC 8, rewritten only when the conversation moves
-            if links_at != (conv_gen, start, ui.ctx_view, ui.search.is_some()) {
-                links_at = (conv_gen, start, ui.ctx_view, ui.search.is_some());
+            if links_at != (conv_gen, start, ui.ctx_view, ui.picker.is_some(), ui.search.is_some()) {
+                links_at = (conv_gen, start, ui.ctx_view, ui.picker.is_some(), ui.search.is_some());
                 let fb = frame_buf.unwrap();
                 let be = term.backend_mut();
                 for (k, r) in vis.iter().enumerate().filter(|(_, r)| r.link && vrows.is_none()) {
@@ -4014,6 +4055,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     }
                     if k == Key::Char('f') && (m.ctrl || m.sup) {
                         ui.ctx_view = false;
+                        ui.picker = None;
                         let s = ui.search.get_or_insert_with(Search::default);
                         if !s.hits.is_empty() {
                             s.i = (s.i + 1) % s.hits.len();
@@ -4089,6 +4131,11 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         if let Some(s) = ui.search.as_mut() {
                             s.jump = true;
                         }
+                        continue;
+                    }
+                    // the model picker takes its keys while it is open; Ctrl+L and
+                    // `/model` open it over the conversation
+                    if model_picker::on_key(&mut ui, k, m) {
                         continue;
                     }
                     // Esc leaves a swapped view, back to where the conversation was
@@ -4268,7 +4315,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                             ui.resize = Some(if rail_edge { 0 } else { 1 });
                             ui.sel = None;
                         }
-                        Mouse::Down if in_conv && !ui.ctx_view && !in_sbox && !(show_tabs && y == 0) => {
+                        Mouse::Down if in_conv && !ui.ctx_view && ui.picker.is_none() && !in_sbox && !(show_tabs && y == 0) => {
                             ui.sel = at(x, y).map(|p| Sel { a: p, b: p, moved: false, down: true });
                         }
                         Mouse::Down => {
@@ -4356,6 +4403,9 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             let Some(act) = click else { continue };
             changed = true;
             match act {
+                Act::Pick(_) | Act::PickChip(_, _) | Act::PickAll | Act::PickRefresh => {
+                    model_picker::click(&mut ui, act);
+                }
                 Act::Group(p, bi) if pager.is_some() => pager.as_mut().unwrap().toggle(p, bi, &v),
                 Act::Group(ti, bi) => {
                     if let Block::Group(g) = &mut f.turns[ti].blocks[bi] {
@@ -4407,10 +4457,14 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 }
                 Act::Context => {
                     ui.search = None;
+                    ui.picker = None;
                     ui.ctx_view = true;
                     ui.vscroll = 0;
                 }
-                Act::Back => ui.ctx_view = false,
+                Act::Back => {
+                    ui.ctx_view = false;
+                    ui.picker = None;
+                }
                 Act::Ext(i) => {
                     let id = v.lua.as_ref().map(|x| x.clicks.borrow()[i].clone()).unwrap_or_default();
                     say(&mut ui, format!("extension click: {id}"));

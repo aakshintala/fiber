@@ -6,7 +6,7 @@
 //! carrying the candidate's `finishReason`
 //! (`research/google-generative-ai-probe`).
 
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::sync::Arc;
 
 use contract::provider::{
@@ -109,6 +109,23 @@ pub struct Call {
     direct: bool,
     cancel: Arc<Cancel>,
     secrets: Secrets,
+}
+
+impl Call {
+    /// Sends the request and returns the reply's bytes, unread.
+    pub fn open(&self) -> Result<impl Read + use<>, Error> {
+        let mut secrets = self.secrets.clone();
+        http::post_signed(
+            &self.url,
+            &self.headers,
+            &self.body,
+            self.signer.as_deref(),
+            self.direct,
+            &self.cancel,
+            &mut secrets,
+        )
+        .map(|(body, _)| body)
+    }
 }
 
 impl ModelCall for Call {

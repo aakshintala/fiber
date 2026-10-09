@@ -61,6 +61,10 @@ const ANTHROPIC: Package = Package {
     by_model: &[],
 };
 
+/// The hosted search the probed Gemini models accept (October 9, 2026); a
+/// model not probed declares none.
+const GOOGLE_SEARCH: &str = r#"{"web_search":"google_search"}"#;
+
 /// Gemini's models, all on `google-generative-ai`.
 const GEMINI: Package = Package {
     path: "providers/gemini/providers/gemini.json",
@@ -74,7 +78,18 @@ const GEMINI: Package = Package {
     protocol_overrides: &[],
     every_model: r#"{}"#,
     by_protocol: &[],
-    by_model: &[],
+    by_model: &[
+        ("gemini-3.1-flash-lite", GOOGLE_SEARCH),
+        ("gemini-3.1-flash-lite-preview", GOOGLE_SEARCH),
+        ("gemini-3.1-pro-preview", GOOGLE_SEARCH),
+        ("gemini-3.1-pro-preview-customtools", GOOGLE_SEARCH),
+        ("gemini-3.5-flash", GOOGLE_SEARCH),
+        ("gemini-3.5-flash-lite", GOOGLE_SEARCH),
+        ("gemini-3.6-flash", GOOGLE_SEARCH),
+        ("gemini-3.7-flash", GOOGLE_SEARCH),
+        ("gemini-3.8-flash", GOOGLE_SEARCH),
+        ("gemini-3-flash-preview", GOOGLE_SEARCH),
+    ],
 };
 
 /// OpenAI's models, all on `openai-responses` with `store: false`.
@@ -153,8 +168,8 @@ const OPENCODE_GO: Package = Package {
     )],
 };
 
-/// OpenCode Zen: billed per token, leaving out its Gemini models until
-/// that route is probed.
+/// OpenCode Zen: billed per token, leaving out its Gemini models: the
+/// one probe of that route was refused (research/opencode-zen-gemini-probe).
 const OPENCODE_ZEN: Package = Package {
     path: "providers/opencode/providers/opencode-zen.json",
     source: "opencode",
@@ -178,7 +193,10 @@ const OPENCODE_ZEN: Package = Package {
             "muse-spark-1.3",
             r#"{"thinking_levels":["minimal","low","medium","high","xhigh","max"]}"#,
         ),
-        ("gpt-6.1-sol", r#"{"web_search":"web_search"}"#),
+        (
+            "gpt-6.1-sol",
+            r#"{"extra_body":{"include":["reasoning.encrypted_content","web_search_call.action.sources"]},"web_search":"web_search"}"#,
+        ),
     ],
 };
 
