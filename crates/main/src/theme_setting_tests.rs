@@ -494,29 +494,6 @@ fn a_disabled_extensions_file_reads_as_absent() {
 }
 
 #[test]
-fn an_explicitly_enabled_extension_still_supplies_its_file() {
-    let home = fakes::TempDir::new("fiber-theme-enabled-true");
-    healthy_named(home.path(), "acme", "acme");
-    let acme_file = home
-        .path()
-        .join("extensions")
-        .join("acme")
-        .join("themes")
-        .join("dusk.json");
-    let answers = [(acme_file.clone(), "acme".to_owned())]
-        .into_iter()
-        .collect();
-    let (got, _) = named_enabled(home.path(), "dusk", &found(&answers), &|name| {
-        assert_eq!(name, "acme");
-        true
-    });
-    let tui::ThemeSetting::File { text, .. } = got else {
-        panic!("not a theme file");
-    };
-    assert_eq!(text, Ok("acme".to_owned()));
-}
-
-#[test]
 fn a_disabled_extensions_same_named_file_is_skipped_for_a_later_enabled_one() {
     let home = fakes::TempDir::new("fiber-theme-disabled-order");
     healthy_named(home.path(), "aaa", "off");

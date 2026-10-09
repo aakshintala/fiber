@@ -65,9 +65,7 @@ fn login_targets_maps_providers_to_key_and_secrets_to_secret() {
     let setup = Setup::new();
     setup.install("acme");
     setup.declare("acme-secrets", &["acme.api_key"]);
-    let rows = Seam::new(setup.home(), std::sync::Arc::new(|_: &str| true))
-        .login_targets()
-        .unwrap();
+    let rows = Seam::new(setup.home()).login_targets().unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].name, "acme");
     assert_eq!(rows[0].kind, LoginKind::Key);
@@ -79,7 +77,7 @@ fn login_targets_maps_providers_to_key_and_secrets_to_secret() {
 fn store_key_lands_in_credentials_and_names_the_first_label() {
     let setup = Setup::new();
     setup.install("acme");
-    let seam = Seam::new(setup.home(), std::sync::Arc::new(|_: &str| true));
+    let seam = Seam::new(setup.home());
     let stored = seam
         .store_key(
             "acme",
@@ -106,7 +104,7 @@ fn store_key_lands_in_credentials_and_names_the_first_label() {
 fn store_key_refusal_is_usage_with_the_cli_message() {
     let setup = Setup::new();
     setup.install("acme");
-    let seam = Seam::new(setup.home(), std::sync::Arc::new(|_: &str| true));
+    let seam = Seam::new(setup.home());
     seam.store_key("acme", None, contract::Secret::new("old".to_owned()))
         .unwrap();
     let error = seam
@@ -132,7 +130,7 @@ fn store_key_refusal_is_usage_with_the_cli_message() {
 fn store_key_with_an_empty_key_stores_nothing() {
     let setup = Setup::new();
     setup.install("acme");
-    let error = Seam::new(setup.home(), std::sync::Arc::new(|_: &str| true))
+    let error = Seam::new(setup.home())
         .store_key("acme", None, contract::Secret::new(String::new()))
         .err()
         .unwrap();

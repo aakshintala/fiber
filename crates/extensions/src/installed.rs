@@ -212,20 +212,6 @@ pub fn package_names(home: &Path) -> Vec<(String, PathBuf)> {
     dirs
 }
 
-/// The directories of the healthy installed extensions: every
-/// `extensions/<dir>/` whose install record reads, sorted by directory
-/// file name. Best-effort and infallible: a missing or unreadable
-/// `extensions/`, an unreadable entry, a name starting with `.` (an
-/// install in progress) and a directory whose record is missing or
-/// unreadable each contribute nothing. Only the record is read; no
-/// manifest, Lua or repository code is loaded.
-pub fn package_dirs(home: &Path) -> Vec<PathBuf> {
-    package_names(home)
-        .into_iter()
-        .map(|(_, dir)| dir)
-        .collect()
-}
-
 /// What `fiber extension remove` will delete, worked out under the lock. Dropping it
 /// deletes nothing.
 pub struct Removal {
@@ -377,7 +363,7 @@ fn existing_data(layers: &[PathBuf], dir: &str) -> Result<Vec<PathBuf>, Error> {
 
 #[cfg(test)]
 #[path = "installed_tests.rs"]
-mod package_dirs_tests;
+mod installed_tests;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "a failure is the test's")]

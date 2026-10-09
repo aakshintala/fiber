@@ -66,7 +66,7 @@ fn settings_reads_the_session_workspaces_project_layer() {
     assert_ne!(dirs.project_file(&one), dirs.project_file(&two));
     write(&dirs.project_file(&one), r#"{"handoff": {"tokens": 1}}"#);
     write(&dirs.project_file(&two), r#"{"handoff": {"tokens": 2}}"#);
-    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
+    let seam = Seam::new(dirs.home());
     let first = row(&seam, &one, "handoff.tokens");
     assert_eq!(first.value, Shown::Value("1".to_owned()));
     assert_eq!(first.layer, "project");
@@ -79,7 +79,7 @@ fn settings_reads_the_session_workspaces_project_layer() {
 #[test]
 fn a_default_row_names_no_file() {
     let dirs = Dirs::new();
-    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
+    let seam = Seam::new(dirs.home());
     let tokens = row(&seam, &dirs.workspace("one"), "handoff.tokens");
     assert_eq!(
         (tokens.value, tokens.layer.as_str(), tokens.file),
@@ -101,7 +101,7 @@ fn skills_disabled_carries_each_layers_own_list() {
         &dirs.project_file(&one),
         r#"{"skills": {"disabled": ["b"]}}"#,
     );
-    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
+    let seam = Seam::new(dirs.home());
     let skills = row(&seam, &one, "skills.disabled");
     assert_eq!(skills.layer, "global + project");
     assert_eq!(
@@ -131,7 +131,7 @@ fn skills_disabled_with_the_same_name_in_two_layers_shows_both() {
         &dirs.project_file(&one),
         r#"{"skills": {"disabled": ["a"]}}"#,
     );
-    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
+    let seam = Seam::new(dirs.home());
     let skills = row(&seam, &one, "skills.disabled");
     // Each layer's own list decides the row's layers, not the
     // deduplicated names: both layers list `a`.
@@ -152,7 +152,7 @@ fn skills_disabled_with_the_same_name_in_two_layers_shows_both() {
 fn set_writes_the_layers_file_as_config_set_does() {
     let dirs = Dirs::new();
     let one = dirs.workspace("one");
-    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
+    let seam = Seam::new(dirs.home());
     let saved = seam
         .set(&one, Layer::Project, "handoff.tokens", "200000")
         .unwrap_or_else(|e| panic!("set: {e}"));
@@ -177,7 +177,7 @@ fn set_writes_the_layers_file_as_config_set_does() {
 fn a_refused_write_writes_nothing_and_says_why() {
     let dirs = Dirs::new();
     let one = dirs.workspace("one");
-    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
+    let seam = Seam::new(dirs.home());
     let error = seam
         .set(&one, Layer::Repository, "tui.hover", "false")
         .err()
@@ -195,15 +195,13 @@ fn themes_lists_json_files_by_name_sorted() {
         write(&themes.join(name), "{}");
     }
     fs::create_dir_all(themes.join("dir.json")).unwrap_or_else(|e| panic!("mkdir: {e}"));
-    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
-    assert_eq!(seam.themes(), ["dusk", "solar"]);
+    let seam = Seam::new(dirs.home());
+    let one = dirs.workspace("one");
+    assert_eq!(seam.themes(&one), ["dusk", "solar"]);
     assert!(
-        Seam::new(
-            dirs.root.path().join("none"),
-            std::sync::Arc::new(|_: &str| true)
-        )
-        .themes()
-        .is_empty()
+        Seam::new(dirs.root.path().join("none"))
+            .themes(&one)
+            .is_empty()
     );
 }
 
@@ -220,49 +218,35 @@ fn themes_lists_package_themes_once() {
     write(&pkg.join("themes").join("tide.json"), "{}");
     let broken = dirs.home().join("extensions").join("broken");
     write(&broken.join("themes").join("gone.json"), "{}");
-    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
-    assert_eq!(seam.themes(), ["solar", "tide"]);
+    let seam = Seam::new(dirs.home());
+    assert_eq!(seam.themes(&dirs.workspace("one")), ["solar", "tide"]);
 }
 
 #[test]
-fn themes_leaves_out_a_disabled_extensions_themes() {
+fn themes_and_theme_follow_each_workspaces_enabled() {
     let dirs = Dirs::new();
-    for (dir, name, theme) in [("acme", "acme", "dusk"), ("other", "other", "tide")] {
-        let pkg = dirs.home().join("extensions").join(dir);
-        write(
-            &pkg.join(".fiber.json"),
-            &format!(
-                r#"{{"name":"{name}","version":"1.0.0","requested":true,"source":{{"path":"/p"}}}}"#
-            ),
-        );
-        write(&pkg.join("themes").join(format!("{theme}.json")), "{}");
-    }
-    let seam = Seam::new(
-        dirs.home(),
-        std::sync::Arc::new(|name: &str| name != "acme"),
-    );
-    assert_eq!(seam.themes(), ["tide"]);
-}
-
-#[test]
-fn theme_does_not_load_a_disabled_extensions_file() {
-    let dirs = Dirs::new();
+    let (one, two) = (dirs.workspace("one"), dirs.workspace("two"));
     let pkg = dirs.home().join("extensions").join("acme");
     write(
         &pkg.join(".fiber.json"),
         r#"{"name":"acme","version":"1.0.0","requested":true,"source":{"path":"/p"}}"#,
     );
     write(&pkg.join("themes").join("dusk.json"), "acme");
-    let off = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| false));
+    // Only one's project switches `acme` off.
+    write(
+        &dirs.project_file(&one),
+        r#"{"extensions": {"acme": {"enabled": false}}}"#,
+    );
+    let seam = Seam::new(dirs.home());
+    assert!(seam.themes(&one).is_empty());
+    assert_eq!(seam.themes(&two), ["dusk"]);
     // A `tui.theme` naming a switched-off extension's theme reads as a
     // missing file: one notice, then the terminal follows its appearance.
-    let tui::ThemeSetting::File { text, .. } = off.theme("dusk") else {
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "dusk") else {
         panic!("not a file");
     };
     assert!(text.is_err());
-    assert!(off.themes().is_empty());
-    let on = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
-    let tui::ThemeSetting::File { text, .. } = on.theme("dusk") else {
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&two, "dusk") else {
         panic!("not a file");
     };
     assert_eq!(text, Ok("acme".to_owned()));
@@ -272,22 +256,29 @@ fn theme_does_not_load_a_disabled_extensions_file() {
 fn theme_builds_the_setting_as_at_start() {
     let dirs = Dirs::new();
     write(&dirs.home().join("themes").join("solar.json"), "{\"x\": 1}");
-    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
-    assert!(matches!(seam.theme("auto"), tui::ThemeSetting::Follow));
-    assert!(matches!(seam.theme("dark"), tui::ThemeSetting::Dark));
-    assert!(matches!(seam.theme("light"), tui::ThemeSetting::Light));
-    let tui::ThemeSetting::File { name, text } = seam.theme("solar") else {
+    let seam = Seam::new(dirs.home());
+    let one = dirs.workspace("one");
+    assert!(matches!(
+        seam.theme(&one, "auto"),
+        tui::ThemeSetting::Follow
+    ));
+    assert!(matches!(seam.theme(&one, "dark"), tui::ThemeSetting::Dark));
+    assert!(matches!(
+        seam.theme(&one, "light"),
+        tui::ThemeSetting::Light
+    ));
+    let tui::ThemeSetting::File { name, text } = seam.theme(&one, "solar") else {
         panic!("not a file");
     };
     assert_eq!(
         (name.as_str(), text),
         ("solar", Ok("{\"x\": 1}".to_owned()))
     );
-    let tui::ThemeSetting::File { text, .. } = seam.theme("missing") else {
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "missing") else {
         panic!("not a file");
     };
     assert!(text.is_err());
-    let tui::ThemeSetting::File { text, .. } = seam.theme("../x") else {
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "../x") else {
         panic!("not a file");
     };
     assert_eq!(text, Err("not a theme name".to_owned()));
@@ -297,7 +288,7 @@ fn theme_builds_the_setting_as_at_start() {
 fn the_global_file_is_fiber_homes_config() {
     let dirs = Dirs::new();
     assert_eq!(
-        Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true)).global_file(),
+        Seam::new(dirs.home()).global_file(),
         dirs.home().join("config.json")
     );
 }
@@ -334,7 +325,7 @@ fn rules_reads_the_session_workspaces_project_file() {
         &rules_file(&dirs, &two),
         &format!("{}\n", allow_line("two")),
     );
-    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
+    let seam = Seam::new(dirs.home());
     let (global, project) = seam.rules(&one).unwrap_or_else(|e| panic!("rules: {e}"));
     assert_eq!(global.file, dirs.home().join("rules"));
     let message = global.rows.unwrap_err();
@@ -361,7 +352,7 @@ fn revoke_then_the_next_read_lacks_the_rule() {
     let one = dirs.workspace("one");
     let line = allow_line("npm test");
     write(&rules_file(&dirs, &one), &format!("{line}\n"));
-    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
+    let seam = Seam::new(dirs.home());
     assert_eq!(
         seam.revoke(&one, tui::RulesScope::Project, 1, &line)
             .unwrap_or_else(|e| panic!("revoke: {e}")),
@@ -384,7 +375,7 @@ fn a_stale_revoke_writes_nothing() {
     let file = rules_file(&dirs, &one);
     write(&file, &format!("{line}\n"));
     let before = fs::read(&file).unwrap_or_else(|e| panic!("read: {e}"));
-    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
+    let seam = Seam::new(dirs.home());
     assert_eq!(
         seam.revoke(&one, tui::RulesScope::Project, 1, &allow_line("other"))
             .unwrap_or_else(|e| panic!("revoke: {e}")),
@@ -403,7 +394,7 @@ fn revoke_maps_global_and_project_to_their_files() {
     let line = allow_line("same");
     write(&dirs.home().join("rules"), &format!("{line}\n"));
     write(&rules_file(&dirs, &one), &format!("{line}\n"));
-    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
+    let seam = Seam::new(dirs.home());
     assert_eq!(
         seam.revoke(&one, tui::RulesScope::Global, 1, &line)
             .unwrap_or_else(|e| panic!("revoke: {e}")),

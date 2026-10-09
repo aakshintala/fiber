@@ -10,7 +10,6 @@ mod skills;
 mod tools;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use config::{Config, SettingValue, Source, Sources};
 use contract::shapes::Failure;
@@ -22,17 +21,12 @@ use tui::{
 /// The seam over Fiber home.
 pub(crate) struct Seam {
     home: PathBuf,
-    /// Whether an installed extension's themes load: the launch
-    /// configuration's `extensions."<name>".enabled`. `/settings` has no
-    /// workspace, so the lookup is fixed at launch.
-    enabled: Arc<dyn Fn(&str) -> bool + Send + Sync>,
 }
 
 impl Seam {
-    /// The seam over Fiber home `home`. `enabled` names the extensions
-    /// whose themes list and load.
-    pub(crate) fn new(home: PathBuf, enabled: Arc<dyn Fn(&str) -> bool + Send + Sync>) -> Self {
-        Self { home, enabled }
+    /// The seam over Fiber home `home`.
+    pub(crate) fn new(home: PathBuf) -> Self {
+        Self { home }
     }
 
     /// The configuration `workspace`'s project and repository give.
@@ -246,17 +240,35 @@ impl tui::Configure for Seam {
         login::store(&self.home, name, label, key)
     }
 
-    fn themes(&self) -> Vec<String> {
-        crate::theme_setting::names(&self.home, self.enabled.as_ref())
+    fn themes(&self, workspace: &Path) -> Vec<String> {
+        match self.load(workspace) {
+            Ok(config) => crate::theme_setting::names(&self.home, &|name| {
+                extensions::is_enabled(&config, name)
+            }),
+            // The other reads fail the workspace: listing cannot, so
+            // without a project no extension's `enabled` is known and
+            // only Fiber home's themes list.
+            Err(_) => crate::theme_setting::names(&self.home, &|_: &str| false),
+        }
     }
 
-    fn theme(&self, name: &str) -> tui::ThemeSetting {
-        crate::theme_setting::named(
-            &self.home,
-            Some(name),
-            &|path| std::fs::read_to_string(path),
-            self.enabled.as_ref(),
-        )
+    fn theme(&self, workspace: &Path, name: &str) -> tui::ThemeSetting {
+        match self.load(workspace) {
+            Ok(config) => crate::theme_setting::named(
+                &self.home,
+                Some(name),
+                &|path| std::fs::read_to_string(path),
+                &|extension| extensions::is_enabled(&config, extension),
+            ),
+            // As with `themes` above: without a project the read is
+            // Fiber home only.
+            Err(_) => crate::theme_setting::named(
+                &self.home,
+                Some(name),
+                &|path| std::fs::read_to_string(path),
+                &|_: &str| false,
+            ),
+        }
     }
 
     fn tool_switches(&self, workspace: &Path) -> Result<Vec<ToolSwitches>, ConfigureError> {

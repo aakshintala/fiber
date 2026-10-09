@@ -3,7 +3,7 @@
 
 use std::fs;
 
-use super::{is_enabled, package_dirs, package_names};
+use super::{is_enabled, package_names};
 
 /// A healthy install record, as `extensions/<dir>/.fiber.json` holds it.
 const RECORD: &str = r#"{"name":"x","version":"1.0.0","requested":true,"source":{"path":"/p"}}"#;
@@ -23,14 +23,14 @@ fn healthy(home: &std::path::Path, dir: &str) {
 #[test]
 fn a_missing_extensions_directory_gives_an_empty_list() {
     let home = fakes::TempDir::new("fiber-package-dirs-missing");
-    assert!(package_dirs(home.path()).is_empty());
+    assert!(package_names(home.path()).is_empty());
 }
 
 #[test]
 fn an_extensions_path_that_is_a_file_gives_an_empty_list() {
     let home = fakes::TempDir::new("fiber-package-dirs-file");
     fs::write(home.path().join("extensions"), "nope").unwrap_or_else(|e| panic!("write: {e}"));
-    assert!(package_dirs(home.path()).is_empty());
+    assert!(package_names(home.path()).is_empty());
 }
 
 #[test]
@@ -40,10 +40,10 @@ fn healthy_directories_come_back_sorted_by_directory_name() {
         healthy(home.path(), dir);
     }
     assert_eq!(
-        package_dirs(home.path()),
+        package_names(home.path()),
         ["-local-path", "a", "b"]
             .into_iter()
-            .map(|dir| home.path().join("extensions").join(dir))
+            .map(|dir| ("x".to_owned(), home.path().join("extensions").join(dir)))
             .collect::<Vec<_>>()
     );
 }
@@ -59,8 +59,8 @@ fn in_progress_damaged_and_plain_files_are_left_out() {
     fs::write(home.path().join("extensions").join("notes"), "nope")
         .unwrap_or_else(|e| panic!("write: {e}"));
     assert_eq!(
-        package_dirs(home.path()),
-        [home.path().join("extensions").join("a")]
+        package_names(home.path()),
+        [("x".to_owned(), home.path().join("extensions").join("a"))]
     );
 }
 
@@ -75,7 +75,7 @@ fn a_non_utf8_healthy_directory_is_returned_exactly_once() {
     // Linux only: macOS rejects non-UTF-8 file names (EILSEQ).
     fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("mkdir: {e}"));
     fs::write(dir.join(".fiber.json"), RECORD).unwrap_or_else(|e| panic!("write: {e}"));
-    assert_eq!(package_dirs(home.path()), vec![dir]);
+    assert_eq!(package_names(home.path()), vec![("x".to_owned(), dir)]);
 }
 
 #[test]
