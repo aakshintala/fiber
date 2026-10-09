@@ -54,6 +54,7 @@ mod mouse;
 mod offer;
 pub(crate) mod panel;
 mod paste;
+pub(crate) mod rail;
 pub(crate) mod results;
 mod screen;
 mod select;
@@ -239,6 +240,8 @@ pub(crate) struct App {
     chrome: chrome::Chrome,
     /// The attached session's folded panel data (`docs/tui.md`, "The panel").
     panel_state: panel::PanelState,
+    /// The session rail's numbers and wall time (`docs/tui.md`, "The rail").
+    rail_state: rail::RailState,
     /// The drag selecting conversation text, and a copy waiting on dropped
     /// pages (`docs/tui.md`, "Selection and copy").
     select: select::Selection,
@@ -282,6 +285,7 @@ impl App {
             regions: crate::focus::Regions::default(),
             chrome: chrome::Chrome::default(),
             panel_state: panel::PanelState::default(),
+            rail_state: rail::RailState::default(),
             select: select::Selection::default(),
             find: find::Find::default(),
             keyboard: keyboard::Keyboard::default(),

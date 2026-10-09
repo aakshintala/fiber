@@ -1,0 +1,44 @@
+---
+source: crates/tui/src/view/rail_tests.rs
+expression: text(&screen(&app))
+---
+  fiber                $0.41  fix the parser
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                   directory  /Users/you/work/fiber
+▌ 2 ✓ READY               9m                                                                                                                                    branch  main
+▌ fix the parser                                                                                                                                                model  test/model
+▌ main                                                                                                                                                          tokens in / out  1 / 2
+▌ $0.41 ▆░░░░░░░░░░░░░░░ 11%                                                                                                                                    cache hits  0%
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                   cost billed  $0.41
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ 3 ● WORKING             2h
+▌ write the rail
+▌ detached
+▌ $0.00
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  hub                  $1.35
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ 1 ! NEEDS INPUT        16s
+▌ fix flaky lock test
+▌ approval: shell cargo muta
+▌ $1.35 ▆▆▆▆▆▆▆▆▆▆▆░░░░░ 70%
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀⋮                                                                                                                                ⋮
+  site                 $0.00 ⋮                                                                                                                                ⋮
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄⋮                                                                                                                                ⋮
+▌ 4 ✗ CRASHED              ✕
+▌ deploy
+▌
+▌ $2.00 ▆▆▆▆▆▆▆▆▆▆▆▆▆▆░░ 90%
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+
+
+
+
+
+
+
+
+
+
+
+                              >

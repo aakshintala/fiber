@@ -192,6 +192,7 @@ impl App {
         if moved {
             self.set_regions(self.chrome.regions());
         }
+        self.sync_rail();
     }
 
     /// ⌥P and `/panel`: shows or hides the panel.
