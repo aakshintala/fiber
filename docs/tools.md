@@ -1288,8 +1288,8 @@ Fiber finds skills and how the listing is built are `docs/system-prompt.md`,
   after the note
   (`docs/handoff.md`, "What the model sees after a handoff"), and the terminal
   shows each load as a skill, not as a file read.
-- It declares the resolved target of the skill's file, and a link that changes
-  before the read fails the call with `path_changed`. It is never reviewed.
+- It declares `reads` on the resolved target of the skill's file, and a link that
+  changes before the read fails the call with `path_changed`. It is never reviewed.
   It is declared in every session, in full, and counts toward the built-in
   budget ("Size budget in CI").
 
