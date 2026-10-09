@@ -4,7 +4,7 @@
 
 use crate::cases::{Case, Surface};
 use crate::input::{Key, Mods};
-use crate::{bold, dim, fg, fit, left_cut, row, slab, sp, Row, Ui, BLUE, ORANGE};
+use crate::{bold, dim, fg, fit, left_cut, panel, row, sp, Row, Ui, BLUE, ORANGE};
 use ratatui::style::Style;
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
@@ -117,14 +117,14 @@ pub struct State {
 
 /// Every `--completions` case.
 pub(crate) const CASES: &[Case<State>] = &[
-    Case { name: "slash", help: "the `/` list, eight of forty rows", check: "the panel sits above the input box, eight rows of name, dim description and right-aligned tag, with a `1–8 of 40 · ↓ 32 more` footer.", build: || State { focus: 0 } },
-    Case { name: "slash-filtered", help: "the `/` list filtered to `/re`", check: "the input reads `/re`, only matching rows show, matched letters bold.", build: || State { focus: 0 } },
+    Case { name: "slash", help: "the `/` list, eight of forty rows", check: "the panel sits above the input box in the shared frame with ▄ ▀ edges and the ▌ stripe; eight rows of name in one fixed column, dim description and right-aligned tag, the focused row `›` on a full-width accent bar, with a `1–8 of 40 · ↓ 32 more` footer.", build: || State { focus: 0 } },
+    Case { name: "slash-filtered", help: "the `/` list filtered to `/re`", check: "the input reads `/re`, only matching rows show, matched letters bold; same frame, names aligned, first row barred.", build: || State { focus: 0 } },
     // the skill with an argument-hint, focused so its row shows
-    Case { name: "slash-hint", help: "the `review` row with its argument hint", check: "the `review` row focused with its orange `<path>` hint, and the `login` description cut with … keeping its `command` tag.", build: || State { focus: entries().iter().position(|e| e.hint.is_some()).unwrap_or(0) } },
-    Case { name: "at", help: "the `@` file search with matches", check: "the input reads `@test`, two file rows (lock.rs, cancel.rs).", build: || State { focus: 0 } },
-    Case { name: "at-empty", help: "the `@` search with no match", check: "the input reads `@zzz`, one dim `no files match` row.", build: || State { focus: 0 } },
-    Case { name: "narrow-slash", help: "the `/` list in a narrow terminal", check: "the same `/` panel in a 100x40 terminal, above the input box with the narrow status rows below.", build: || State { focus: 0 } },
-    Case { name: "narrow-at", help: "the `@` search in a narrow terminal", check: "the same `@` panel in a 100x40 terminal, above the input box with the narrow status rows below.", build: || State { focus: 0 } },
+    Case { name: "slash-hint", help: "the `review` row with its argument hint", check: "the `review` row `›` on the accent bar with its `<path>` hint, and the `login` description cut with … keeping its `command` tag; same frame.", build: || State { focus: entries().iter().position(|e| e.hint.is_some()).unwrap_or(0) } },
+    Case { name: "at", help: "the `@` file search with matches", check: "the input reads `@test`, two file rows (lock.rs, cancel.rs) in the shared frame, the first `›` on the accent bar.", build: || State { focus: 0 } },
+    Case { name: "at-empty", help: "the `@` search with no match", check: "the input reads `@zzz`, one dim `no files match` row in the shared frame.", build: || State { focus: 0 } },
+    Case { name: "narrow-slash", help: "the `/` list in a narrow terminal", check: "the same framed `/` panel in a 100x40 terminal, above the input box with the narrow status rows below.", build: || State { focus: 0 } },
+    Case { name: "narrow-at", help: "the `@` search in a narrow terminal", check: "the same framed `@` panel in a 100x40 terminal, above the input box with the narrow status rows below.", build: || State { focus: 0 } },
 ];
 
 /// `--completions`, for `--help` and `check/completions.md`.
@@ -219,10 +219,17 @@ fn highlight(text: &str, query: &str, base: Style) -> Vec<Span<'static>> {
     ]
 }
 
-/// One `/` row: the name in the accent colour, the description dim, the skill's
-/// argument-hint in the attention colour, and the tag right-aligned. The
-/// description gives way first, so the tag is never cut.
-pub fn slash_row(e: &Entry, focused: bool, query: &str, w: usize) -> Row {
+/// Pads a name to a fixed cell width, so every description starts together.
+/// Names are ASCII, so padding by chars is padding by cells.
+fn pad_name(name: &str, name_w: usize) -> String {
+    format!("{name}{}", " ".repeat(name_w.saturating_sub(name.len())))
+}
+
+/// One `/` row: the name in the accent colour in a fixed column, the
+/// description dim, the skill's argument-hint in the attention colour, and
+/// the tag right-aligned. The description gives way first, so the tag is
+/// never cut. The caller draws the bar over the focused row.
+pub fn slash_row(e: &Entry, focused: bool, query: &str, name_w: usize, w: usize) -> Row {
     let name_style = if focused {
         bold().patch(fg(BLUE))
     } else {
@@ -230,12 +237,12 @@ pub fn slash_row(e: &Entry, focused: bool, query: &str, w: usize) -> Row {
     };
     let mut spans = vec![sp(
         if focused { "› " } else { "  " },
-        if focused { fg(ORANGE) } else { dim() },
+        if focused { bold() } else { dim() },
     )];
-    spans.extend(highlight(e.name, query, name_style));
+    spans.extend(highlight(&pad_name(e.name, name_w), query, name_style));
     spans.push(sp(" ", Style::new()));
     let hint = e.hint.map_or(String::new(), |h| format!(" {h}"));
-    let fixed = 2 + e.name.width() + 1 + hint.width() + 1 + e.tag.width();
+    let fixed = 2 + name_w + 1 + hint.width() + 1 + e.tag.width();
     spans.push(sp(truncate(e.desc, w.saturating_sub(fixed)), dim()));
     if e.hint.is_some() {
         spans.push(sp(hint, fg(ORANGE)));
@@ -255,15 +262,10 @@ pub fn file_row(path: &str, focused: bool, query: &str, w: usize) -> Row {
     let cut = left_cut(path, w.saturating_sub(2));
     let mut spans = vec![sp(
         if focused { "› " } else { "  " },
-        if focused { fg(ORANGE) } else { dim() },
+        if focused { bold() } else { dim() },
     )];
     spans.extend(highlight(&cut, query, name_style));
     row(fit(&spans, w))
-}
-
-/// Rows on the raised surface, under slab edges like the input box.
-fn panel(rows: Vec<Row>, w: usize) -> Vec<Row> {
-    slab(rows, crate::SEL, None, w)
 }
 
 /// At most this many rows show; the footer says what is above or below.
@@ -289,45 +291,69 @@ fn footer(start: usize, end: usize, total: usize) -> Row {
     if end < total {
         parts.push(format!("↓ {} more", total - end));
     }
-    row(vec![sp(format!("  {}", parts.join(" · ")), dim())])
+    row(vec![sp(parts.join(" · "), dim())])
 }
 
-/// The panel above the input box: the `/` list or the `@` file search.
+/// Bars the focused row: the full-width selection bar with its `›` marker.
+fn select(rows: Vec<Row>, focus: usize, start: usize) -> Vec<Row> {
+    rows.into_iter()
+        .enumerate()
+        .flat_map(|(k, r)| {
+            if start + k == focus {
+                panel::bar(vec![r])
+            } else {
+                vec![r]
+            }
+        })
+        .collect()
+}
+
+/// The panel above the input box: the `/` list or the `@` file search, in
+/// the shared frame with padding and the stripe. It spans the input's width,
+/// like the input box it completes, instead of centring.
 pub fn view(s: &State, input: &str, w: usize) -> Vec<Row> {
+    let inner = panel::inner_w(w);
     let query = query_of(input);
-    if input.starts_with('@') {
+    let rows = if input.starts_with('@') {
         let all = files();
         let m = filter_files(&all, query);
         if m.is_empty() {
-            return panel(vec![row(vec![sp("  no files match", dim())])], w);
+            vec![row(vec![sp("no files match", dim())])]
+        } else {
+            let focus = clamped(s.focus, m.len());
+            let (start, end) = window(s.focus, m.len());
+            let mut rows: Vec<Row> = m[start..end]
+                .iter()
+                .enumerate()
+                .map(|(k, p)| file_row(p, start + k == focus, query, inner))
+                .collect();
+            if m.len() > SHOWN {
+                rows.push(footer(start, end, m.len()));
+            }
+            select(rows, focus, start)
         }
-        let (start, end) = window(s.focus, m.len());
-        let mut rows: Vec<Row> = m[start..end]
-            .iter()
-            .enumerate()
-            .map(|(k, p)| file_row(p, start + k == clamped(s.focus, m.len()), query, w))
-            .collect();
-        if m.len() > SHOWN {
-            rows.push(footer(start, end, m.len()));
-        }
-        panel(rows, w)
     } else {
         let all = entries();
         let m = filter(&all, query);
         if m.is_empty() {
-            return panel(vec![row(vec![sp("  no matches", dim())])], w);
+            vec![row(vec![sp("no matches", dim())])]
+        } else {
+            let focus = clamped(s.focus, m.len());
+            let (start, end) = window(s.focus, m.len());
+            // The name column, computed once over the rows shown.
+            let name_w = m[start..end].iter().map(|e| e.name.len()).max().unwrap_or(0);
+            let mut rows: Vec<Row> = m[start..end]
+                .iter()
+                .enumerate()
+                .map(|(k, e)| slash_row(e, start + k == focus, query, name_w, inner))
+                .collect();
+            if m.len() > SHOWN {
+                rows.push(footer(start, end, m.len()));
+            }
+            select(rows, focus, start)
         }
-        let (start, end) = window(s.focus, m.len());
-        let mut rows: Vec<Row> = m[start..end]
-            .iter()
-            .enumerate()
-            .map(|(k, e)| slash_row(e, start + k == clamped(s.focus, m.len()), query, w))
-            .collect();
-        if m.len() > SHOWN {
-            rows.push(footer(start, end, m.len()));
-        }
-        panel(rows, w)
-    }
+    };
+    panel::frame(None, rows, None, w)
 }
 
 /// How many rows the panel shows for this input, so movement can clamp.
@@ -513,7 +539,7 @@ mod tests {
         let long = entries().into_iter().find(|e| e.name == "login").unwrap();
         // at the width edge, one below, one above
         for w in [59, 60, 61] {
-            let r = slash_row(&long, true, "", w);
+            let r = slash_row(&long, true, "", long.name.len(), w);
             assert_eq!(width(&r.spans), w, "slash row at {w}");
             assert!(
                 plain(&r).contains('…'),
@@ -523,7 +549,7 @@ mod tests {
         }
         let hinted = entries().into_iter().find(|e| e.hint.is_some()).unwrap();
         for w in [49, 50, 51] {
-            let r = slash_row(&hinted, false, "", w);
+            let r = slash_row(&hinted, false, "", hinted.name.len(), w);
             assert_eq!(width(&r.spans), w, "hint row at {w}");
         }
         for w in [39, 40, 41] {
@@ -581,6 +607,34 @@ mod tests {
         );
         let t = text(&view(&for_case("at-empty"), "@zzz", 100));
         assert!(t.contains("no files match"), "missing the empty row");
+    }
+
+    #[test]
+    fn the_panel_draws_through_the_shared_frame() {
+        let rows = view(&for_case("slash"), "/", 100);
+        let t = text(&rows);
+        assert!(t.contains("\u{2584}"), "no top edge");
+        assert!(t.contains("\u{2580}"), "no bottom edge");
+        assert!(t.contains("\u{258c}"), "no stripe");
+        assert!(t.contains("\u{203a} "), "no gutter marker");
+        // Names in one fixed column: descriptions start in the same cell on
+        // every row. The stripe and marker are multibyte, so count cells.
+        let mut cols = vec![];
+        for l in t.split('\n') {
+            for d in ["show the context breakdown", "pick the model for this session"] {
+                if let Some(i) = l.find(d) {
+                    cols.push(l[..i].width());
+                }
+            }
+        }
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[0], cols[1], "descriptions drift");
+        // Only the focused row rides the bar.
+        let barred = rows
+            .iter()
+            .filter(|r| r.spans.iter().any(|s| s.style.bg == Some(crate::BLUE)))
+            .count();
+        assert_eq!(barred, 1, "more than the focus is barred");
     }
 
     #[test]

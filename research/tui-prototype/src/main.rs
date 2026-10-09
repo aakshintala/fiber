@@ -3801,16 +3801,18 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 // the left edge while the rail is hidden. On hover or while dragging the
                 // whole column tints and the grip goes bright in the accent colour.
                 // Hidden, the dead margin column beside the handle is cleared too.
+                // The rail-edge grip stops where the bottom stack starts: the input box,
+                // approvals and completion panels paint their own first cell there.
                 let rail_hid = ui.rail != 2 && rail_w == 1;
                 let rail_hx = if rail_hid { 0 } else { rail_w };
                 let rail_gap_hot = ptr.is_some_and(|(x, _)| x == rail_hx) && ui.rail != 2 && rail_w > 0;
                 let panel_gap_hot = ptr.is_some_and(|(x, _)| x == rail_w + conv_w) && panel_w > 0;
-                for (gx, active, clear_next) in [(rail_hx, ui.resize == Some(0) || rail_gap_hot, rail_hid), (rail_w + conv_w, ui.resize == Some(1) || panel_gap_hot, false)] {
+                for (gx, active, clear_next, y_end) in [(rail_hx, ui.resize == Some(0) || rail_gap_hot, rail_hid, view_h.min(rows as usize) as u16), (rail_w + conv_w, ui.resize == Some(1) || panel_gap_hot, false, rows)] {
                     if gx >= cols || (gx == rail_w && (rail_w == 0 || ui.rail == 2)) || (gx == rail_w + conv_w && panel_w == 0) {
                         continue;
                     }
                     let mid = rows / 2;
-                    for y in 0..rows {
+                    for y in 0..y_end {
                         let grip_row = y >= mid.saturating_sub(1) && y <= mid + 1;
                         let (sym, st) = match (grip_row, active) {
                             (true, true) => ("⋮", fg(BLUE).add_modifier(Modifier::BOLD)),
