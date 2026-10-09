@@ -51,6 +51,8 @@ pub(crate) enum TargetId {
     Form(crate::approvals::form::Spot),
     /// A panel item: what a click there does.
     Panel(crate::app::panel::Spot),
+    /// A rail card, its ✕ or its project's "+": what a click there does.
+    Rail(crate::app::rail::Spot),
 }
 
 /// One click target as drawn: what it does and the cells it covers.

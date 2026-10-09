@@ -359,6 +359,9 @@ impl App {
                     if let Some(ask) = self.take_ask(id) {
                         return Some(self.answer_ask(ask, accepted, &hub.payload));
                     }
+                    if let Some(lines) = self.rail_answered(id, accepted, &hub.payload) {
+                        return Some(lines);
+                    }
                     // A rejected `start` is home's blocker text, above the
                     // box until the next `start` goes out. Reading
                     // `pending` first, it still reaches the rejection
@@ -1170,11 +1173,19 @@ impl App {
         self.workspace.clone()
     }
 
+    /// Opens the row with `key` while home draws.
+    fn open_row(&mut self, key: u64) -> Effect {
+        if !self.on_home() {
+            return Effect::None;
+        }
+        self.open_entry(key)
+    }
+
     /// Opens the row with `key`: the subscribes its level needs, then the
     /// session's commands. The conversation clears as going home does,
     /// and the gate holds until the last subscribe is answered.
-    fn open_row(&mut self, key: u64) -> Effect {
-        if !self.on_home() || self.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
+    pub(super) fn open_entry(&mut self, key: u64) -> Effect {
+        if self.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
             return Effect::None;
         }
         let Some(row) = self
@@ -1308,7 +1319,7 @@ impl Home {
     /// new worktree switch off and keeping whether it is in git: the
     /// launch flag for the launch directory, else whether some row in
     /// that workspace is then.
-    fn choose(&mut self, workspace: String) {
+    pub(super) fn choose(&mut self, workspace: String) {
         self.chosen_git = if workspace == self.launch.workspace.display().to_string() {
             self.launch.git
         } else {
@@ -1360,7 +1371,7 @@ fn refusal_parts(payload: &serde_json::Map<String, Value>) -> (&str, String) {
     (code, refusal(payload))
 }
 /// A hub refusal's message, for a notice.
-fn refusal(payload: &serde_json::Map<String, Value>) -> String {
+pub(super) fn refusal(payload: &serde_json::Map<String, Value>) -> String {
     payload
         .get("message")
         .and_then(Value::as_str)
