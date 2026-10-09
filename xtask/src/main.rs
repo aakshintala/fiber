@@ -27,6 +27,9 @@
 //!   pull_request|push --comment FILE`: judges the benchmark result files
 //!   against the budget table and writes the pull request comment; exit 1
 //!   when a budget, a head self-check or the table mapping fails
+//! - `models-dev [--from FILE]`: regenerates the first-party model lists
+//!   from models.dev, or from FILE instead of fetching
+//!   (`docs/model-routing.md`)
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `check-docs`, `ci-needs`: the checks
 //! - `logo-mask --font <path> [--out <path>]`: regenerates the logo's alpha
 //!   mask from JetBrains Mono ExtraBold; the font is downloaded by whoever
@@ -42,6 +45,8 @@ mod bench;
 mod ci_needs;
 mod docs;
 mod logo;
+mod models_dev;
+mod models_dev_table;
 mod rules;
 mod select;
 #[cfg(test)]
@@ -202,6 +207,10 @@ fn run(args: &[String]) -> Result<bool, String> {
             let yes = select::docs_only(rest);
             println!("docs-only: {}", if yes { "yes" } else { "no" });
             Ok(yes)
+        }
+        "models-dev" => {
+            let from = optional(rest, "--from");
+            models_dev::run(Path::new("."), from.as_deref().map(Path::new)).map(|()| true)
         }
         "line-cap" => {
             let over = rules::over_cap(&rust_files(&workspace_members()?)?);

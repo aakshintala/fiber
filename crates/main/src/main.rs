@@ -267,9 +267,12 @@ fn run() -> i32 {
                 ::cli::config_set(layer, &key, &value)
             }
         },
-        cli::Invocation::Run(Some(cli::Commands::Login(args))) => {
-            ::cli::run_login(args.name.as_deref(), args.label.as_deref())
-        }
+        cli::Invocation::Run(Some(cli::Commands::Login(args))) => ::cli::run_login(
+            args.name.as_deref(),
+            args.label.as_deref(),
+            args.device,
+            Arc::clone(&clock),
+        ),
         cli::Invocation::Run(Some(cli::Commands::Logout(args))) => {
             let target = match (args.label.as_deref(), args.all) {
                 (_, true) => ::cli::LogoutTarget::All,

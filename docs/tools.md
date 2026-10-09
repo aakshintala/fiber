@@ -950,10 +950,14 @@ does not know, is read as UTF-8, and bytes that are not valid UTF-8 become
   them, the rule for reasoning state
   (`docs/loop.md`). Anthropic refuses a request whose encrypted search content
   was changed. After a switch to another model reference, the request leaves
-  them out. On `google-generative-ai` the search arrives as the candidate's
-  `groundingMetadata`, which no request field accepts: it is logged and shown
-  but never sent back, and the model's own content parts, with their
-  `thoughtSignature`, are what goes back. Probed on `gemini-3-flash-preview`,
+  them out. On `google-generative-ai`, a request that declares function
+  tools beside the hosted search sets
+  `toolConfig.includeServerSideToolInvocations`; without it the request is
+  refused. The search then arrives as `toolCall` and `toolResponse` content
+  parts, which replay with their `thoughtSignature` like any signed part.
+  The candidate's `groundingMetadata`, which no request field accepts, is
+  logged in the last hosted result's `details`: shown, but never sent back.
+  Probed on `gemini-3-flash-preview`,
   October 9, 2026: `groundingMetadata` on a content or on a part is refused
   with 400 "Unknown name", and a follow-up turn without it searches again.
 - Whether a hosted search is declared is fixed when the preamble is built

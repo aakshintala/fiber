@@ -1,6 +1,6 @@
 //! Tests for the colour roles and the built-in themes.
 
-use super::{ROLES, Role, Theme};
+use super::{ROLES, Role, Shade, Theme};
 
 #[test]
 fn all_lists_every_role_once_in_index_order() {
@@ -9,6 +9,7 @@ fn all_lists_every_role_once_in_index_order() {
         assert_eq!(Role::from_index(index), Some(role));
         assert_eq!(role.color(), ratatui::style::Color::Indexed(index));
     }
+    assert_eq!(Role::from_index(36), Some(Role::MatchCurrent));
     assert_eq!(Role::from_index(37), None);
     assert_eq!(Role::from_index(255), None);
 }
@@ -26,15 +27,22 @@ fn names_round_trip() {
             role.name()
         );
         let theme = Theme::parse(&text).unwrap_or_else(|error| panic!("{text}: {error}"));
-        assert_eq!(theme.rgb(role), (1, 2, 3), "{}", role.name());
+        assert_eq!(theme.shade(role), Shade::Rgb((1, 2, 3)), "{}", role.name());
     }
     assert_eq!(Role::CodeText.name(), "code_text");
     assert_eq!(Role::SurfaceRaised.name(), "surface_raised");
     assert_eq!(Role::MatchCurrent.name(), "match_current");
+    assert_eq!(Role::Info.name(), "info");
+    assert_eq!(Role::Secondary.name(), "secondary");
+    assert_eq!(Role::Rule.name(), "rule");
+    assert_eq!(Role::Scroll.name(), "scroll");
+    assert_eq!(Role::Panel.name(), "panel");
+    assert_eq!(Role::Turn.name(), "turn");
+    assert_eq!(Role::Handoff.name(), "handoff");
 }
 
 /// A theme file, the built-in it names as `base`, and the roles it sets.
-type Case = (&'static str, Theme, &'static [(Role, (u8, u8, u8))]);
+type Case = (&'static str, Theme, &'static [(Role, Shade)]);
 
 #[test]
 fn parse_accepts_base_and_roles() {
@@ -45,14 +53,14 @@ fn parse_accepts_base_and_roles() {
             r##"{"base": "light", "roles": {"accent": "#0b7285", "alert": "#5f1e22"}}"##,
             Theme::LIGHT,
             &[
-                (Role::Accent, (0x0b, 0x72, 0x85)),
-                (Role::Alert, (0x5f, 0x1e, 0x22)),
+                (Role::Accent, Shade::Rgb((0x0b, 0x72, 0x85))),
+                (Role::Alert, Shade::Rgb((0x5f, 0x1e, 0x22))),
             ],
         ),
         (
             r##"{"roles": {"text": "#ffffff"}, "base": "dark"}"##,
             Theme::DARK,
-            &[(Role::Text, (255, 255, 255))],
+            &[(Role::Text, Shade::Rgb((255, 255, 255)))],
         ),
     ];
     for (text, base, set) in cases {
@@ -61,8 +69,8 @@ fn parse_accepts_base_and_roles() {
             let want = set
                 .iter()
                 .find(|(named, _)| *named == role)
-                .map_or_else(|| base.rgb(role), |(_, rgb)| *rgb);
-            assert_eq!(theme.rgb(role), want, "{text}: {}", role.name());
+                .map_or_else(|| base.shade(role), |(_, shade)| *shade);
+            assert_eq!(theme.shade(role), want, "{text}: {}", role.name());
         }
     }
 }
@@ -74,13 +82,13 @@ fn parse_fills_missing_roles_from_base() {
         let theme = Theme::parse(&text).unwrap_or_else(|error| panic!("{text}: {error}"));
         for role in Role::ALL.into_iter().filter(|role| *role != Role::Muted) {
             assert_eq!(
-                theme.rgb(role),
-                built_in.rgb(role),
+                theme.shade(role),
+                built_in.shade(role),
                 "{base}: {}",
                 role.name()
             );
         }
-        assert_eq!(theme.rgb(Role::Muted), (0x12, 0x34, 0x56));
+        assert_eq!(theme.shade(Role::Muted), Shade::Rgb((0x12, 0x34, 0x56)));
     }
 }
 
@@ -145,7 +153,7 @@ fn parse_refuses() {
 fn parse_accepts_upper_case_hex() {
     let theme = Theme::parse(r##"{"base": "dark", "roles": {"accent": "#0B72Af"}}"##)
         .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(theme.rgb(Role::Accent), (0x0b, 0x72, 0xaf));
+    assert_eq!(theme.shade(Role::Accent), Shade::Rgb((0x0b, 0x72, 0xaf)));
 }
 
 #[test]
@@ -173,7 +181,7 @@ fn tint_and_grey_per_role() {
         (Role::Operator, false, false),
         (Role::Info, false, false),
         (Role::Secondary, false, false),
-        (Role::Rule, false, false),
+        (Role::Rule, false, true),
         (Role::Scroll, false, false),
         (Role::Background, true, true),
         (Role::Panel, true, true),
@@ -183,10 +191,10 @@ fn tint_and_grey_per_role() {
         (Role::Prompt, true, true),
         (Role::Code, true, true),
         (Role::Handoff, true, false),
-        (Role::Approval, true, false),
+        (Role::Approval, true, true),
         (Role::Alert, true, false),
         (Role::Hover, true, true),
-        (Role::Selection, true, true),
+        (Role::Selection, true, false),
         (Role::Match, true, false),
         (Role::MatchCurrent, true, false),
     ];
@@ -199,16 +207,14 @@ fn tint_and_grey_per_role() {
 
 #[test]
 fn dark_and_light_differ_in_every_background_role() {
-    // `panel`, `turn` and `handoff` carry the dark value in both themes until
-    // #1617 gives the light theme its own.
-    let pending = [Role::Panel, Role::Turn, Role::Handoff];
-    for role in Role::ALL
-        .into_iter()
-        .filter(|role| role.tint() && !pending.contains(role))
-    {
+    // `panel`, `turn` and `handoff` are new in the doc table and take the
+    // dark value in the light theme until ruled (see #1634's case).
+    for role in Role::ALL.into_iter().filter(|role| {
+        role.tint() && *role != Role::Panel && *role != Role::Turn && *role != Role::Handoff
+    }) {
         assert_ne!(
-            Theme::DARK.rgb(role),
-            Theme::LIGHT.rgb(role),
+            Theme::DARK.shade(role),
+            Theme::LIGHT.shade(role),
             "{}",
             role.name()
         );
@@ -218,7 +224,9 @@ fn dark_and_light_differ_in_every_background_role() {
 #[test]
 fn the_alert_tint_is_red_in_both_built_ins() {
     for theme in [Theme::DARK, Theme::LIGHT] {
-        let (r, g, b) = theme.rgb(Role::Alert);
+        let Shade::Rgb((r, g, b)) = theme.shade(Role::Alert) else {
+            panic!("alert is {:?}", theme.shade(Role::Alert));
+        };
         assert!(r > g && r > b, "{:?}", (r, g, b));
     }
 }
@@ -287,9 +295,9 @@ fn no_colour_outside_the_theme() {
     assert!(found.is_empty(), "{found:#?}");
 }
 
-/// The first column of the first table under `### Themes` in `doc`, each
-/// cell with its backticks taken off.
-fn doc_roles(doc: &str) -> Vec<String> {
+/// The `index`-th `|`-separated column of the first table under
+/// `### Themes` in `doc`, trimmed.
+fn doc_column(doc: &str, index: usize) -> Vec<String> {
     doc.lines()
         .skip_while(|line| *line != "### Themes")
         .skip(1)
@@ -297,8 +305,17 @@ fn doc_roles(doc: &str) -> Vec<String> {
         .skip_while(|line| !line.starts_with('|'))
         .take_while(|line| line.starts_with('|'))
         .skip(2)
-        .filter_map(|line| line.split('|').nth(1))
-        .map(|cell| cell.trim().trim_matches('`').to_owned())
+        .filter_map(|line| line.split('|').nth(index))
+        .map(|cell| cell.trim().to_owned())
+        .collect()
+}
+
+/// The first column of the first table under `### Themes` in `doc`, each
+/// cell with its backticks taken off.
+fn doc_roles(doc: &str) -> Vec<String> {
+    doc_column(doc, 1)
+        .into_iter()
+        .map(|cell| cell.trim_matches('`').to_owned())
         .collect()
 }
 
@@ -315,4 +332,83 @@ fn the_doc_lists_every_role() {
     let doc = include_str!("../../../docs/tui.md");
     let names: Vec<&str> = Role::ALL.into_iter().map(Role::name).collect();
     assert_eq!(doc_roles(doc), names);
+}
+
+/// The third column of the first table under `### Themes` in `doc`, one
+/// cell per role, in order, backticks kept.
+fn doc_dark(doc: &str) -> Vec<String> {
+    doc_column(doc, 3)
+}
+
+#[test]
+fn doc_dark_reads_the_third_column_of_the_themes_table() {
+    let doc = "## Look\n\n| a | b | c |\n|---|---|---|\n| `x` | use | `1` |\n\n### Themes\n\nText.\n\n\
+               | Role | Use | Dark |\n|---|---|---|\n| `text` | words | the terminal's foreground |\n| `muted` | dim | `text`, dim |\n\nAfter.\n\n\
+               | `later` | no | `2` |\n\n### Next\n";
+    assert_eq!(doc_dark(doc), ["the terminal's foreground", "`text`, dim"]);
+}
+
+/// The dark theme's shade the doc's dark cell `cell` names for `role`.
+fn dark_cell(cell: &str, role: Role) -> Shade {
+    match cell {
+        "the terminal's foreground" | "the terminal's background" => Shade::Terminal,
+        "`text`, dim" => Shade::Dim,
+        hex => {
+            let text = hex.strip_prefix('`').and_then(|hex| hex.strip_suffix('`'));
+            text.and_then(super::hex)
+                .map(|(r, g, b)| Shade::Rgb((r, g, b)))
+                .unwrap_or_else(|| panic!("{}: unknown dark cell {cell:?}", role.name()))
+        }
+    }
+}
+
+#[test]
+fn the_dark_theme_is_the_doc_table() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/tui.md");
+    let doc =
+        std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+    let names: Vec<&str> = Role::ALL.into_iter().map(Role::name).collect();
+    assert_eq!(doc_roles(&doc), names);
+    let dark = doc_dark(&doc);
+    assert_eq!(dark.len(), ROLES, "{dark:?}");
+    for (role, cell) in Role::ALL.into_iter().zip(dark.iter()) {
+        assert_eq!(
+            Theme::DARK.shade(role),
+            dark_cell(cell, role),
+            "{}",
+            role.name()
+        );
+    }
+}
+
+#[test]
+fn the_light_theme_takes_the_dark_value_for_unruled_roles() {
+    for role in [
+        Role::Info,
+        Role::Secondary,
+        Role::Rule,
+        Role::Scroll,
+        Role::Panel,
+        Role::Turn,
+        Role::Handoff,
+    ] {
+        assert_eq!(
+            Theme::LIGHT.shade(role),
+            Theme::DARK.shade(role),
+            "{}",
+            role.name()
+        );
+    }
+    assert_eq!(
+        Theme::LIGHT.shade(Role::Text),
+        Shade::Rgb((0x38, 0x3a, 0x42))
+    );
+    assert_eq!(
+        Theme::LIGHT.shade(Role::Background),
+        Shade::Rgb((0xfa, 0xfa, 0xfa))
+    );
+    assert_eq!(
+        Theme::LIGHT.shade(Role::Muted),
+        Shade::Rgb((0xa0, 0xa1, 0xa7))
+    );
 }

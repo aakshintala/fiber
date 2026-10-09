@@ -108,7 +108,7 @@ const SHARD_TIMEOUT_MAX_MINUTES: u64 = 360;
 /// Crates whose tests read a first-party package under `providers/` or
 /// `extensions/` (`docs/ci.md`, "Selection"); sorted. Checked against the
 /// sources by `package_reader_mismatches`.
-const PACKAGE_READERS: &[&str] = &["config", "extensions", "main"];
+const PACKAGE_READERS: &[&str] = &["cli", "config", "extensions", "main", "xtask"];
 /// The package whose tests are the binary-level tests (`docs/ci.md`,
 /// "Selection"): the `fiber` binary.
 const BINARY_TESTS: &str = "main";
@@ -264,8 +264,8 @@ fn reads_package(source: &str) -> Result<bool, proc_macro2::LexError> {
 
 /// Failures where the package-reader list and the sources disagree, one
 /// line each; empty when they agree. A Rust file in a workspace member
-/// reads a first-party package when `reads_package` says so; crate `xtask`
-/// never counts (its own tests hold such literals as data). Err on a file
+/// reads a first-party package when `reads_package` says so, `xtask`
+/// included: its drift test reads the committed packages. Err on a file
 /// that does not tokenise.
 pub(crate) fn package_reader_mismatches(
     files: &[RustFile],
@@ -273,7 +273,7 @@ pub(crate) fn package_reader_mismatches(
 ) -> Result<Vec<String>, String> {
     let mut found = BTreeSet::new();
     for f in files {
-        if f.krate == "xtask" || !members.contains_key(&f.krate) {
+        if !members.contains_key(&f.krate) {
             continue;
         }
         if reads_package(&f.source)

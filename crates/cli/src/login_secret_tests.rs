@@ -263,7 +263,12 @@ fn child(test: &str, home: &Path, stdin: &str) -> ExitStatus {
 #[test]
 fn run_login_stores_a_declared_secret_from_a_pipe() {
     if std::env::var_os(CHILD).is_some() {
-        std::process::exit(run_login(Some(NAME), None));
+        std::process::exit(run_login(
+            Some(NAME),
+            None,
+            false,
+            fakes::clock::FakeClock::new(),
+        ));
     }
     let setup = Setup::new();
     setup.declare("acme", &[NAME]);
@@ -281,7 +286,12 @@ fn run_login_stores_a_declared_secret_from_a_pipe() {
 #[test]
 fn run_login_of_a_mistyped_secret_is_a_usage_failure() {
     if std::env::var_os(CHILD).is_some() {
-        std::process::exit(run_login(Some("acme.api_kye"), None));
+        std::process::exit(run_login(
+            Some("acme.api_kye"),
+            None,
+            false,
+            fakes::clock::FakeClock::new(),
+        ));
     }
     let setup = Setup::new();
     setup.declare("acme", &[NAME]);
@@ -297,7 +307,12 @@ fn run_login_of_a_mistyped_secret_is_a_usage_failure() {
 #[test]
 fn run_login_of_a_secret_with_as_is_a_usage_failure() {
     if std::env::var_os(CHILD).is_some() {
-        std::process::exit(run_login(Some(NAME), Some("work")));
+        std::process::exit(run_login(
+            Some(NAME),
+            Some("work"),
+            false,
+            fakes::clock::FakeClock::new(),
+        ));
     }
     let setup = Setup::new();
     setup.declare("acme", &[NAME]);

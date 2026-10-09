@@ -1357,6 +1357,14 @@ fn main_reads_a_package() -> RustFile {
     )
 }
 
+fn cli_reads_a_package() -> RustFile {
+    package_src(
+        "cli",
+        "crates/cli/src/login/browser_tests.rs",
+        "fn copy() -> PathBuf {\n    std::path::PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../providers/codex\")\n}\n",
+    )
+}
+
 fn extensions_reads_a_package() -> RustFile {
     package_src(
         "extensions",
@@ -1365,17 +1373,37 @@ fn extensions_reads_a_package() -> RustFile {
     )
 }
 
+fn xtask_reads_a_package() -> RustFile {
+    package_src(
+        "xtask",
+        "xtask/tests/models_dev.rs",
+        "let providers = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../providers\");\n",
+    )
+}
+
 fn package_ok_files() -> Vec<RustFile> {
     vec![
+        cli_reads_a_package(),
         config_reads_a_package(),
         extensions_reads_a_package(),
         main_reads_a_package(),
+        xtask_reads_a_package(),
     ]
 }
 
 /// The members the package-reader tests use.
 fn package_members() -> Members {
-    members_with_tools()
+    let mut members = members_with_tools();
+    members.insert(
+        "cli".to_owned(),
+        Member {
+            dir: "crates/cli".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            library: true,
+        },
+    );
+    members
 }
 
 #[test]
@@ -1407,8 +1435,10 @@ fn a_listed_crate_with_no_reading_source_fails() {
     assert_eq!(
         package_reader_mismatches(&[config_reads_a_package()], &package_members()).unwrap(),
         [
+            "cli: listed as reading a first-party package, but no source reads one",
             "extensions: listed as reading a first-party package, but no source reads one",
-            "main: listed as reading a first-party package, but no source reads one"
+            "main: listed as reading a first-party package, but no source reads one",
+            "xtask: listed as reading a first-party package, but no source reads one"
         ]
     );
 }
@@ -1474,7 +1504,7 @@ fn a_raw_string_package_literal_counts() {
 }
 
 #[test]
-fn xtask_sources_never_count_as_package_readers() {
+fn xtask_sources_count_as_package_readers_like_any_crate() {
     let mut files = package_ok_files();
     files.push(package_src(
         "xtask",
@@ -1484,6 +1514,14 @@ fn xtask_sources_never_count_as_package_readers() {
     assert_eq!(
         package_reader_mismatches(&files, &package_members()).unwrap(),
         Vec::<String>::new()
+    );
+    let without_xtask: Vec<RustFile> = package_ok_files()
+        .into_iter()
+        .filter(|file| file.krate != "xtask")
+        .collect();
+    assert_eq!(
+        package_reader_mismatches(&without_xtask, &package_members()).unwrap(),
+        ["xtask: listed as reading a first-party package, but no source reads one"]
     );
 }
 

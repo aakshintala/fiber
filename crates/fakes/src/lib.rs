@@ -33,7 +33,7 @@ pub use cancel::CancelToken;
 pub use client::Client;
 pub use connect_proxy::ConnectProxy;
 pub use emit::Recorder;
-pub use oauth_server::{OauthReply, OauthRequest, OauthServer};
+pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
 pub use process_group::{
     WATCHDOG_SCRIPT, group_empties, kill_group, kill_matching, kill_pid, matching, matching_exits,
     pids_exit,
