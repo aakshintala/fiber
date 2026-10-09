@@ -64,6 +64,46 @@ pub fn model_cache_age(
     Ok(Some(now.duration_since(mtime).unwrap_or(Duration::ZERO)))
 }
 
+/// The providers with a cached model list: every `.json` stem in
+/// `cache/models/`, sorted. A missing directory holds none. The lock
+/// file a refresh holds while it runs, and anything else, is skipped:
+/// only a finished write names a list.
+pub fn cached_model_lists(home: &Path) -> Result<Vec<String>, ConfigError> {
+    let dir = home.join("cache/models");
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(ConfigError::Io { file: dir, source });
+        }
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| ConfigError::Io {
+            file: dir.clone(),
+            source,
+        })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // Only a finished write names a list: the lock file a refresh
+        // holds, anything else, and a directory that happens to end in
+        // `.json`, are skipped.
+        let file = entry.file_type().map_err(|source| ConfigError::Io {
+            file: dir.clone(),
+            source,
+        })?;
+        if !file.is_file() {
+            continue;
+        }
+        if let Some(stem) = name.strip_suffix(".json")
+            && one_file_name(stem)
+        {
+            names.push(stem.to_owned());
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
 /// The lock file a refresh of `provider` holds while it runs, beside the
 /// cached list it replaces. The cache stays safe to delete, lock file
 /// included: a crash leaves the file, and the lock it held dies with the

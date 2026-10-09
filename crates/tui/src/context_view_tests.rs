@@ -2,7 +2,7 @@
 //! (`docs/tui.md`, "Swapped views").
 
 use super::{Category, ContextFold, LARGEST_SHOWN, Sized, bar, categories, frame};
-use crate::swapped::{List, render};
+use crate::swapped::{Ink, List, render};
 use contract::Envelope;
 use contract::{ActionId, SCHEMA_VERSION, SessionId};
 use log::{Rate, RateFold};
@@ -98,7 +98,7 @@ fn row(frame: &crate::swapped::Frame, prefix: &str) -> Option<String> {
     frame.rows.iter().find_map(|row| {
         let text = row
             .iter()
-            .map(|(text, _)| text.as_str())
+            .map(|(text, _, _)| text.as_str())
             .collect::<String>();
         text.starts_with(prefix).then_some(text)
     })
@@ -111,7 +111,7 @@ fn text(fold: &ContextFold, rate: Rate, sized: Option<Sized>, width: u16) -> Str
         .iter()
         .map(|row| {
             row.iter()
-                .map(|(text, _)| text.as_str())
+                .map(|(text, _, _)| text.as_str())
                 .collect::<String>()
         })
         .collect::<Vec<_>>()
@@ -359,7 +359,8 @@ fn no_preamble_or_context_total_says_when_context_appears() {
             frame.rows,
             [vec![(
                 "The context shows after the session's first request.".to_owned(),
-                None
+                None,
+                Ink::Muted
             )]]
         );
     }
@@ -473,14 +474,14 @@ fn the_bar_row_stays_present_and_row_count_does_not_depend_on_width() {
     assert_eq!(
         zero.rows.get(1).map(|cells| cells
             .iter()
-            .map(|(text, _)| text.as_str())
+            .map(|(text, _, _)| text.as_str())
             .collect::<String>()),
         Some(String::new())
     );
     assert!(wide.rows.iter().any(|cells| {
         cells
             .iter()
-            .map(|(text, _)| text.as_str())
+            .map(|(text, _, _)| text.as_str())
             .collect::<String>()
             .contains('█')
     }));

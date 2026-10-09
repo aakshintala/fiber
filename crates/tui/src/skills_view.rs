@@ -13,7 +13,7 @@ use crate::configure::{SkillsDisabled, SwitchScope};
 use crate::format::{cut, width, wrap};
 use crate::keys::{Edit, Key};
 use crate::settings_view::{Act, Ctx, applies_text};
-use crate::swapped::{Frame, List, Spot, rows_height};
+use crate::swapped::{Frame, Ink, List, Spot, rows_height};
 use crate::tools_view::{fit, mark};
 
 /// A skill name's column.
@@ -261,7 +261,7 @@ impl Skills {
         self.width = ctx.width;
         match spot {
             Spot::Close => Act::Close,
-            Spot::Revoke(_) => Act::Stay,
+            Spot::Revoke(_) | Spot::Cell(_, _) => Act::Stay,
             Spot::Row(at) => {
                 let shown = self.shown(ctx.height);
                 if let Some(text) = &mut self.text {
@@ -439,7 +439,7 @@ impl Skills {
                 rows: text
                     .lines
                     .iter()
-                    .map(|line| vec![(line.clone(), None)])
+                    .map(|line| vec![(line.clone(), None, Ink::Plain)])
                     .collect(),
                 list: text.list,
                 below: self.said.clone(),
@@ -496,7 +496,7 @@ impl Skills {
 
     /// One skill's cells: its name, its two switches, its visibility,
     /// its source and its description.
-    fn skill_cells(&self, index: usize, info: &SkillInfo) -> Vec<(String, Option<Spot>)> {
+    fn skill_cells(&self, index: usize, info: &SkillInfo) -> Vec<(String, Option<Spot>, Ink)> {
         let selected = index == self.list.selected();
         let project = (
             format!(
@@ -507,6 +507,7 @@ impl Skills {
                 )
             ),
             Some(Spot::Switch { row: index, at: 0 }),
+            Ink::Plain,
         );
         let everywhere = (
             format!(
@@ -517,13 +518,14 @@ impl Skills {
                 )
             ),
             Some(Spot::Switch { row: index, at: 1 }),
+            Ink::Plain,
         );
         debug_assert_eq!(width(&project.0), PROJECT);
         debug_assert_eq!(width(&everywhere.0), EVERYWHERE);
         vec![
-            (format!("  {}", fit(&info.name, NAME)), None),
+            (format!("  {}", fit(&info.name, NAME)), None, Ink::Plain),
             project,
-            ("  ".to_owned(), None),
+            ("  ".to_owned(), None, Ink::Plain),
             everywhere,
             (
                 format!(
@@ -533,6 +535,7 @@ impl Skills {
                     info.description
                 ),
                 None,
+                Ink::Plain,
             ),
         ]
     }
@@ -558,7 +561,7 @@ fn pane_text(info: &SkillInfo, text: &str) -> String {
 }
 
 /// The header row: each column's name over its column.
-fn heading_cells() -> Vec<(String, Option<Spot>)> {
+fn heading_cells() -> Vec<(String, Option<Spot>, Ink)> {
     vec![(
         format!(
             "{}{:^PROJECT$}  {:^EVERYWHERE$}  {:<VISIBILITY$}  {:<SOURCE$}  description",
@@ -569,6 +572,7 @@ fn heading_cells() -> Vec<(String, Option<Spot>)> {
             "source",
         ),
         None,
+        Ink::Heading,
     )]
 }
 

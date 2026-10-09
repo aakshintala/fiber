@@ -19,7 +19,7 @@ use contract::clock::Clock;
 use contract::shapes::Failure;
 use serde_json::{Value, json};
 
-use super::{refresh_named, refresh_run, run};
+use super::{providers_and_config, refresh_named, refresh_run, run};
 
 /// `fiber models` never writes a file, so its lock runs every call straight
 /// through.
@@ -1197,4 +1197,27 @@ fn a_repository_settings_file_cannot_supply_the_host() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("acme/plain"), "{stdout:?}");
     assert!(!stdout.contains("acme/m"), "{stdout:?}");
+}
+
+#[test]
+fn providers_and_config_reads_the_same_providers_run_lists() {
+    let setup = Setup::new();
+    setup.install(
+        "acme-ext",
+        "acme",
+        &json!([
+            {"id": "m1", "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1", "context_window": 1000},
+        ]),
+    );
+    setup.write_config(&json!({"model": "acme/m1"}));
+    let (providers, config, notices) =
+        providers_and_config(&setup.home(), &setup.workspace()).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(providers.names().collect::<Vec<_>>(), ["acme"]);
+    assert_eq!(
+        config
+            .get("model", None)
+            .and_then(|(value, _)| value.as_str().map(str::to_owned)),
+        Some("acme/m1".to_owned())
+    );
 }

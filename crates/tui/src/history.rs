@@ -239,6 +239,7 @@ impl App {
             | Key::CtrlG
             | Key::CtrlR
             | Key::CtrlV
+            | Key::CtrlL
             | Key::CtrlF
             | Key::AltUp
             | Key::AltDown
@@ -289,6 +290,7 @@ impl App {
             | Key::BackTab
             | Key::CtrlG
             | Key::CtrlV
+            | Key::CtrlL
             | Key::AltUp
             | Key::AltDown
             | Key::AltX => {}

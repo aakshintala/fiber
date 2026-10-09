@@ -111,6 +111,10 @@ fn is_cooked(termios: &rustix::termios::Termios) -> bool {
 /// Reads until `marker` appears with one named deadline, returning
 /// everything up to and including it.
 pub(super) fn read_until(main: &File, marker: &[u8], what: &str) -> Vec<u8> {
+    read_until_with_timeout(main, marker, what, DEADLINE)
+}
+
+fn read_until_with_timeout(main: &File, marker: &[u8], what: &str, timeout: Duration) -> Vec<u8> {
     let mut dup = main.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
     let marker = marker.to_vec();
     let (done, finished) = mpsc::channel();
@@ -138,10 +142,52 @@ pub(super) fn read_until(main: &File, marker: &[u8], what: &str) -> Vec<u8> {
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    match finished.recv_timeout(DEADLINE) {
+    match finished.recv_timeout(timeout) {
         Ok(buf) => buf,
-        Err(_) => panic!("waited {DEADLINE:?} for {what}"),
+        Err(_) => panic!("waited {timeout:?} for {what}"),
     }
+}
+
+/// Watches `main` without stopping: sends cumulative bytes through each marker,
+/// then keeps reading and discarding so the terminal's output cannot fill.
+fn watch(main: &File, markers: Vec<&'static [u8]>) -> Receiver<Vec<u8>> {
+    let mut dup = main.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-watch".to_owned())
+        .spawn(move || {
+            let mut buf = Vec::new();
+            let mut at = 0usize;
+            let mut byte = [0u8; 1];
+            'markers: while at < markers.len() {
+                match dup.read(&mut byte) {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {
+                        buf.push(byte[0]);
+                        while at < markers.len()
+                            && buf
+                                .windows(markers[at].len())
+                                .any(|window| window == markers[at])
+                        {
+                            if done.send(buf.clone()).is_err() {
+                                break 'markers;
+                            }
+                            at += 1;
+                        }
+                    }
+                }
+            }
+            let mut discard = [0u8; 4096];
+            while dup.read(&mut discard).is_ok_and(|read| read > 0) {}
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    finished
+}
+
+fn watched_with_timeout(frames: &Receiver<Vec<u8>>, what: &str, timeout: Duration) -> Vec<u8> {
+    frames
+        .recv_timeout(timeout)
+        .unwrap_or_else(|err| panic!("waited {timeout:?} for {what}: {err}"))
 }
 
 /// Every byte the backend wrote, shared with the test.
@@ -194,6 +240,7 @@ pub(super) fn new_loop<B: Backend>(
         search: None,
         stash: std::collections::VecDeque::new(),
         reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
         paste_reader: None,
         pointer: crate::mouse::Pointer::default(),
         hover: true,
@@ -594,6 +641,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     // read through the placeholder, whose letters are written together.
     let frames = super::reconnect_tests::watch(&pair.main, vec![
         b"shortcuts",
+        b"Press Ctrl+C again to",
         b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h",
     ]);
     super::reconnect_tests::watched(&frames, "the first frame");
@@ -602,9 +650,23 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     assert!(is_cooked(&before));
     assert!(!is_cooked(&raw));
     // Ctrl+C twice quits with 0 while the reader is still blocked: the
-    // master stays open and nothing is closed to wake it.
+    // master stays open and nothing is closed to wake it. The first
+    // press must visibly arm first: waiting for its hint proves the
+    // reader delivered a byte and the loop drew again. The watcher is the
+    // only pty reader and keeps draining while the second press quits with
+    // no frame between, so the return wait cannot stall behind a full pty.
     pair.main
-        .write_all(&[0x03, 0x03])
+        .write_all(&[0x03])
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    pair.main
+        .flush()
+        .unwrap_or_else(|err| panic!("flush: {err}"));
+    // The armed frame foots the quit hint, which no earlier frame
+    // holds. Only its first run is matched: the incremental redraw
+    // splits the hint around the cells the unarmed foot already holds.
+    super::reconnect_tests::watched(&frames, "the armed quit hint");
+    pair.main
+        .write_all(&[0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
     pair.main
         .flush()
@@ -1575,6 +1637,7 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         search: None,
         stash: std::collections::VecDeque::new(),
         reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
         paste_reader: None,
         pointer: crate::mouse::Pointer::default(),
         hover: true,
@@ -1696,6 +1759,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
             | Input::Disconnected
             | Input::Resize
             | Input::Files { .. }
+            | Input::Models(_)
             | Input::Image { .. } => panic!("a pause sent something else"),
         }
     }
@@ -1878,6 +1942,126 @@ fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
         lp.app.find_bar().map(|bar| bar.query).unwrap_or_default(),
         "xyzab"
     );
+}
+
+#[test]
+fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
+    let mut pair = open();
+    const START: &[u8] =
+        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
+    let frames = watch(
+        &pair.main,
+        vec![START, b"shortcuts", b"the lists", b"are in"],
+    );
+    let slave = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_in = Arc::clone(&seen);
+    let (release, held) = mpsc::channel();
+    let held = Arc::new(Mutex::new(held));
+    let held_in = Arc::clone(&held);
+    // The cached lists answer with one model and one notice, only after
+    // the test releases the read following the first frame.
+    let read: crate::ReadModels = Arc::new(move |refresh| {
+        held_in
+            .lock()
+            .unwrap()
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the cached read release: {err}"));
+        seen_in.lock().unwrap().push(refresh);
+        Ok(crate::Catalogue {
+            models: vec![crate::ModelEntry {
+                reference: "acme/m1".to_owned(),
+                provider: "acme".to_owned(),
+                id: "m1".to_owned(),
+                levels: Vec::new(),
+                default_level: None,
+                configured: None,
+                roles: Vec::new(),
+            }],
+            notices: vec!["the lists are in".to_owned()],
+        })
+    });
+    let mut started = launch();
+    started.models = Some(read);
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-run".to_owned())
+        .spawn(move || {
+            let code = super::run(
+                slave,
+                started,
+                Box::new(|| Err(io::Error::other("refused"))),
+                Box::new(|_| {}),
+                fakes::clock::FakeClock::new(),
+            );
+            match done.send(code) {
+                Ok(()) | Err(_) => {}
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let mut output = watched_with_timeout(&frames, "terminal start", DEADLINE);
+    assert_eq!(output, START);
+    output = watched_with_timeout(&frames, "the first frame", DEADLINE);
+    assert!(
+        output
+            .windows(b"shortcuts".len())
+            .any(|window| window == b"shortcuts")
+    );
+    // The cached read cannot answer until the first frame is seen. Its
+    // notice may already be in the cumulative output when this wait starts.
+    release
+        .send(())
+        .unwrap_or_else(|err| panic!("release the cached read: {err}"));
+    // The two text runs are separated by cursor and style controls in the
+    // terminal stream, so both are checked in the cumulative output.
+    output = watched_with_timeout(&frames, "the cached read's notice text", DEADLINE);
+    assert!(
+        output
+            .windows(b"the lists".len())
+            .any(|window| window == b"the lists")
+    );
+    output = watched_with_timeout(&frames, "the cached read's notice ending", DEADLINE);
+    assert!(
+        output
+            .windows(b"are in".len())
+            .any(|window| window == b"are in")
+    );
+    assert_eq!(*seen.lock().unwrap(), [crate::Refresh::Cached]);
+    pair.main
+        .write_all(&[0x03, 0x03])
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let code = finished
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn opening_the_picker_asks_stale_through_the_loop() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_in = Arc::clone(&seen);
+    let read: crate::ReadModels = Arc::new(move |refresh: crate::Refresh| {
+        seen_in.lock().unwrap().push(refresh);
+        Ok(crate::Catalogue::default())
+    });
+    lp.model_reader = crate::catalogue::Reader::new(Some(read));
+    let (tx, rx) = mpsc::channel();
+    lp.files_out = Some(tx);
+    let (_, idle) = mpsc::channel();
+    assert_eq!(lp.step(Input::Bytes(vec![0x0c]), &idle), None);
+    assert!(lp.app.model_picker_open());
+    let answer = rx
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the stale read: {err}"));
+    assert!(matches!(answer, Input::Models(Ok(_))));
+    assert_eq!(*seen.lock().unwrap(), [crate::Refresh::Stale]);
+    // The answer folds with no read owed.
+    assert_eq!(lp.step(answer, &idle), None);
+    assert_eq!(lp.app.take_reads(), None);
 }
 
 #[path = "lib_motion_tests.rs"]

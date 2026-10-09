@@ -25,6 +25,7 @@ mod late_emit;
 mod launch;
 mod lua_providers;
 mod mcp_servers;
+mod model_list;
 mod open;
 mod prompt_files;
 mod resume;
@@ -837,12 +838,23 @@ fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
     let save = launch::save(home.clone());
     let seam: Arc<dyn tui::Configure> = Arc::new(configure::Seam::new(home.clone()));
     let hub_clock = Arc::clone(&clock);
+    // The picker's model lists: the cached copy at once, refreshed in the
+    // background (`docs/model-routing.md`, "Model discovery"). The lock
+    // is the one `fiber models` uses: a refresh beside another process
+    // refreshes once.
+    let models = model_list::reader(
+        home.clone(),
+        workspace.clone(),
+        Arc::clone(&clock),
+        Arc::new(tools::PathLocks::new()),
+    );
     let connect: tui::Connect = Box::new(move || {
         let mut start = || start_hub(fiber.clone());
         doors::hub::connect(&home, &mut start, hub_clock.as_ref())
     });
     let identity = doors::project(&workspace);
     let mut launch = launch::launch(workspace, &identity, &config, theme);
+    launch.models = Some(models);
     launch.configure = Some(seam);
     launch.open_at = open_at;
     launch.save = Some(save);

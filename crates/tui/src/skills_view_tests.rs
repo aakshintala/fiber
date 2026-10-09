@@ -118,7 +118,7 @@ fn rows(skills: &Skills, height: usize) -> Vec<String> {
         .map(|cells| {
             cells
                 .into_iter()
-                .map(|(text, _)| text)
+                .map(|(text, _, _)| text)
                 .collect::<Vec<_>>()
                 .join("")
         })

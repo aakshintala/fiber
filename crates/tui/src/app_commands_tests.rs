@@ -202,17 +202,29 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
         selected(&app).as_deref(),
         Some("/home  Goes home.  command")
     );
-    for _ in 0..10 {
+    // One Down from `/home` selects `/new`.
+    app.on_key(Key::Down, now());
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("/new  Goes home with the cursor in the input box.  command")
+    );
+    app.on_key(Key::Up, now());
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("/home  Goes home.  command")
+    );
+    for _ in 0..11 {
         app.on_key(Key::Down, now());
     }
-    // The handoff command, after the added `/context`, `/usage` and `/skills` rows.
+    // Eleven rows from `/home` through `/handoff`, including `/model`,
+    // `/context`, `/usage` and `/skills`.
     assert_eq!(
         selected(&app).as_deref(),
         Some("/handoff [instructions]  Starts a handoff.  command")
     );
     assert_eq!(app.completions().and_then(|c| c.selected), Some(7));
     app.on_key(Key::Down, now());
-    // The next row: the window moves down by one.
+    // `/name` is next; the window moves down by one.
     let completions = app.completions();
     assert_eq!(completions.as_ref().and_then(|c| c.selected), Some(7));
     assert_eq!(

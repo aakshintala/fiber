@@ -13,6 +13,7 @@ mod approvals;
 mod attention;
 mod bindings;
 mod bubble;
+mod catalogue;
 mod cells;
 mod changed_files_view;
 mod clipboard;
@@ -39,6 +40,7 @@ mod logical;
 mod login_view;
 mod look;
 mod markdown;
+mod model_picker;
 mod motion;
 mod mouse;
 mod offer;
@@ -81,6 +83,7 @@ use crate::link::Line;
 
 pub use attention::Attention;
 
+pub use catalogue::{Catalogue, ModelEntry, ReadModels, Refresh};
 pub use configure::{
     Configure, ConfigureError, Layer, LoginKind, LoginTarget, Revoked, RuleRow, RulesScope,
     RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup,
@@ -146,6 +149,9 @@ pub(crate) enum Input {
         /// The image in base64, or the notice.
         result: Result<String, String>,
     },
+    /// A model-list read answered: the installed models, or why they
+    /// could not be read. An answer for a closed loop is dropped.
+    Models(Result<Catalogue, String>),
     /// The working line's timer passed: the frame the tick armed drew,
     /// and the next moving frame arms it again (`docs/tui.md`, "The
     /// working line").

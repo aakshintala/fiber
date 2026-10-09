@@ -145,6 +145,7 @@ fn opened() -> (
         files_out: None,
         search: None,
         reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
         paste_reader: None,
         pointer: crate::mouse::Pointer::default(),
         hover: true,
@@ -345,6 +346,7 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             | Input::FindDue(_)
             | Input::Tick
             | Input::Files { .. }
+            | Input::Models(_)
             | Input::Image { .. } => "other".to_owned(),
             Input::Resize => "resize".to_owned(),
         })

@@ -364,7 +364,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         other_paths: "/model",
         contexts: Contexts::INPUT_STEERING_CONVERSATION,
         defaults: &["ctrl+l"],
-        events: &[Canon::None],
+        events: &[Canon::Key(Key::CtrlL)],
     },
     Binding {
         area: "Requests, models and help",

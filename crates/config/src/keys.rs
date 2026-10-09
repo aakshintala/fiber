@@ -29,6 +29,9 @@ pub(crate) enum Kind {
     StrList,
     /// A string, or a list of strings (`[]` included): `keys.*`.
     StrOrStrList,
+    /// A model reference string, or an object with `model`, the reference:
+    /// `roles.*` (`docs/configuration.md`, "Keys").
+    Role,
     /// An object whose values are strings, such as a server's `env`.
     StrMap,
     /// An object whose values are booleans, such as MCP hints.
@@ -57,6 +60,12 @@ impl Kind {
                     || value
                         .as_array()
                         .is_some_and(|items| items.iter().all(Value::is_string))
+            }
+            Self::Role => {
+                value.is_string()
+                    || value
+                        .as_object()
+                        .is_some_and(|object| object.get("model").is_some_and(Value::is_string))
             }
             Self::StrMap => value
                 .as_object()
@@ -93,6 +102,7 @@ impl Kind {
             Self::OneOf(allowed) => format!("one of \"{}\"", allowed.join("\", \"")),
             Self::StrList => "a list of strings".into(),
             Self::StrOrStrList => "a string or a list of strings".into(),
+            Self::Role => "a model reference, or an object with `model`, the reference".into(),
             Self::StrMap => "an object of strings".into(),
             Self::BoolMap => "an object of true or false values".into(),
             Self::Credential => {
@@ -181,7 +191,7 @@ const fn person_files(path: &'static str, kind: Kind) -> Key {
 
 use Kind::{
     Bool, BoolMap, Count, CountBelow, Credential, Duration as DurationKind, Number, OneOf,
-    RepositoryExtensions, Str, StrList, StrMap, StrOrStrList,
+    RepositoryExtensions, Role, Str, StrList, StrMap, StrOrStrList,
 };
 
 const YES: bool = true;
@@ -198,7 +208,8 @@ pub(crate) const KEYS: &[Key] = &[
         Some("\"24h\""),
     ),
     key("model", Str, YES, None),
-    key("roles.*", Str, YES, None),
+    key("scoped_models", StrList, YES, None),
+    key("roles.*", Role, YES, None),
     key("hub.idle_exit_ms", Count, NO, Some("1800000")),
     key("hub.port", CountBelow(65536), NO, None),
     key("session.idle_exit_ms", Count, NO, Some("1800000")),

@@ -306,7 +306,7 @@ fn file_closed_rereads_the_lists_and_the_text() {
         frame
             .rows
             .iter()
-            .any(|row| row.iter().any(|(text, _)| text.contains("off"))),
+            .any(|row| row.iter().any(|(text, _, _)| text.contains("off"))),
         "{frame:?}"
     );
 }
