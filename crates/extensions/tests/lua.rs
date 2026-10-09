@@ -101,9 +101,8 @@ fn hold_open(dir: &std::path::Path) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
         match tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
-        match release_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(())
-            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+        match release_rx.recv() {
+            Ok(()) | Err(mpsc::RecvError) => {}
         }
         drop(held);
     });
@@ -505,8 +504,8 @@ fn answer_when_released(
     let mut sock = listener.accept().unwrap().0;
     read_head(&mut sock);
     accepted.send(()).unwrap();
-    match release.recv_timeout(Duration::from_secs(5)) {
-        Ok(()) | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+    match release.recv() {
+        Ok(()) | Err(mpsc::RecvError) => {}
     }
     drop(sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"));
 }
@@ -759,6 +758,8 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     );
 }
 
+/// Answers `times` connections, each once the test sends on `release` or
+/// drops it, so a parked `host.http` stays parked until the test says.
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 fn answer_n(
     listener: std::net::TcpListener,
@@ -770,9 +771,8 @@ fn answer_n(
         let mut sock = listener.accept().unwrap().0;
         read_head(&mut sock);
         accepted.send(()).unwrap();
-        match release.recv_timeout(Duration::from_secs(8)) {
-            Ok(())
-            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+        match release.recv() {
+            Ok(()) | Err(mpsc::RecvError) => {}
         }
         drop(
             sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"),
