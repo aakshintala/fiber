@@ -738,17 +738,50 @@ fn shift_tab_with_a_completion_panel_open_stays_in_the_input_box() {
 
 #[test]
 fn a_wrapped_item_is_revealed_whole() {
-    // Group summaries are 13 columns, so at width 12 each wraps to two
-    // rows; width 14 never wraps them.
-    let mut app = groups(8, 12, 8);
+    // An open ledger's long call row wraps at width 12; a group summary
+    // is one row, whatever runs, so the call row stands in for the
+    // wrapped item the navigation must reveal whole.
+    let mut app = attached(12, 8);
+    app.on_line(envelope(
+        "turn_started",
+        serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(envelope(
+        "tool_call_requested",
+        serde_json::json!({"name": "shell",
+            "arguments": {"command": "cargo test --workspace --all-targets"}}),
+        Some("a_1"),
+    ));
+    app.on_line(envelope(
+        "tool_call_completed",
+        serde_json::json!({"status": "completed",
+            "content": [{"type": "text", "text": "ok"}]}),
+        Some("a_1"),
+    ));
+    key(&mut app, Key::CtrlO);
+    let rows_of = |at: usize| {
+        app.lines()
+            .get(at)
+            .map(|text| crate::view::rows(text.clone(), 12))
+            .unwrap_or(0)
+    };
+    let mut wrapped = false;
     for (line, _) in app.targets() {
-        let rows = app
+        let rows = rows_of(line);
+        if app
             .lines()
             .get(line)
-            .map(|text| crate::view::rows(text.clone(), 12))
-            .unwrap_or(0);
-        assert!(rows >= 2, "line {line} wraps, with {rows} rows");
+            .is_some_and(|text| text.to_string().starts_with('•'))
+        {
+            assert_eq!(rows, 1, "the summary is one row");
+        } else {
+            assert!(rows >= 2, "line {line} wraps, with {rows} rows");
+            wrapped = true;
+        }
     }
+    assert!(wrapped, "a wrapping call row");
     let ids = group_ids(&app);
     key(&mut app, Key::BackTab);
     assert_eq!(app.focused(), ids.last().copied());
