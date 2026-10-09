@@ -160,7 +160,7 @@ fn a_delegate_is_subscribed_drawn_and_scrolled_in_the_loop() {
         vec![Input::Hub(delegate_status(delegates[0], "streaming"))],
     );
     let screen = shown(&lp);
-    assert!(screen.contains("● WORKING"), "{screen}");
+    assert!(screen.contains("⠋ WORKING"), "{screen}");
     assert!(!screen.contains("delegate one"), "{screen}");
     let panel = lp
         .app

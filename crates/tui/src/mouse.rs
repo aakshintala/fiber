@@ -41,6 +41,9 @@ pub(crate) enum TargetId {
     /// A turn, by its index: a focus stop that clicks and hover pass
     /// over.
     Turn(usize),
+    /// "esc to interrupt" on the working line: interrupts the turn as
+    /// Esc does (`docs/tui.md`, "The working line").
+    Interrupt,
     /// The open overlay's ✕: closes it.
     CloseOverlay,
     /// A home row, chip or toggle: what a click there does.

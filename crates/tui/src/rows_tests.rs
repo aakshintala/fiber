@@ -28,6 +28,7 @@ fn push_text_keeps_its_text() {
         decoration: true,
         links: Vec::new(),
         scopes: Vec::new(),
+        spin: None,
     };
     rows.push_text(row("a"), text.clone());
     assert_eq!(rows.len(), 1);
@@ -252,6 +253,7 @@ fn on_surface_keeps_each_rows_text() {
             decoration: false,
             links: vec![(0..1, "https://x".to_owned())],
             scopes: Vec::new(),
+            spin: None,
         },
     );
     rows.on_surface(

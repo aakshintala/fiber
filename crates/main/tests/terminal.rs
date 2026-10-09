@@ -485,11 +485,17 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
     // Enter goes out once the hub connects. Unchanged cells are never
     // rewritten, spaces included, so each wait matches one word.
     run.write(b"say hi\r");
-    run.read_until("Hello.");
+    // The reply streams in two deltas, so only the first delta's text
+    // arrives whole; the turn's close says it finished.
+    run.read_until("Hel");
     run.read_until("completed");
     // The second prompt starts a stalled turn; Esc interrupts it.
     run.write(b"again\r");
     run.read_until("Working");
+    // The elapsed count proves the working line draws: a count whose
+    // width changes rewrites its cells whole, while unchanged cells are
+    // never rewritten, so no other word of the line arrives whole.
+    run.read_until("10s");
     run.write(b"\x1b");
     run.read_until("interrupted");
     run.write(b"\x03\x03\r");
@@ -516,7 +522,9 @@ fn a_finished_turn_sends_an_osc_9_notification() {
     let mut run = Run::terminal_with(&setup, &[("TERM_PROGRAM", "ghostty")]);
     run.read_until(">");
     run.write(b"say hi\r");
-    run.read_until("Hello.");
+    // The reply streams in two deltas, so only the first delta's text
+    // arrives whole; the turn's close says it finished.
+    run.read_until("Hel");
     run.read_until("\x1b]9;Fiber: ");
     run.write(b"\x03\x03\r");
     run.read_until("\x1b[?25h");
@@ -566,7 +574,9 @@ fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
     // Enter on the first choice allows once; the call runs and the turn
     // finishes with the answer.
     run.write(b"\r");
-    run.read_until("Hello.");
+    // The reply streams in two deltas, so only the first delta's text
+    // arrives whole; the turn's close says it finished.
+    run.read_until("Hel");
     run.read_until("completed");
     // As above: the turn just ended, so quitting either exits at once or
     // asks first. The Enter leaves the session running, and exiting prints
@@ -609,7 +619,9 @@ fn a_repository_offer_swaps_in_and_approve_lets_the_turn_run() {
     run.write(b"\r");
     // The turn runs only once the offer resolves, so the answer shows the
     // reply was accepted and the session counted this terminal first.
-    run.read_until("Hello.");
+    // The reply streams in two deltas, so only the first delta's text
+    // arrives whole; the turn's close says it finished.
+    run.read_until("Hel");
     run.read_until("completed");
     // As above: quitting either exits at once or asks first.
     run.write(b"\x03\x03\r");
@@ -869,7 +881,9 @@ fn ctrl_v_pastes_an_image_that_the_session_stores() {
     run.write(&[0x16]);
     run.read_until("[Image #1]");
     run.write(b"\r");
-    run.read_until("Hello.");
+    // The reply streams in two deltas, so only the first delta's text
+    // arrives whole; quitting needs the turn finished, which the close says.
+    run.read_until("completed");
     stored_pixel(&setup);
     run.write(b"\x03\x03\r");
     run.read_until("\x1b[?25h");

@@ -150,7 +150,7 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
 pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     let text = text_width(area.width);
     let width = u16::try_from(text).unwrap_or(u16::MAX);
-    let rows = rows(app, area.width);
+    let (rows, span) = rows_and_delegates(app, area.width);
     // A screen that grew never shows a gap: a scroll past the end clamps
     // when drawn.
     let height = usize::from(area.height.saturating_sub(1));
@@ -162,6 +162,7 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     let card_w = area.width.saturating_sub(1);
     let x = area.x.saturating_add(2);
     let mut y = area.y.saturating_add(1);
+    let mut drawn: usize = 0;
     for row in rows.iter().skip(skip) {
         if y >= area.bottom() {
             break;
@@ -185,6 +186,17 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
             }
         }
         y = y.saturating_add(1);
+        drawn = drawn.saturating_add(1);
+    }
+    // A drawn delegates state row's spinner moves on the tick.
+    if let Some(span) = span {
+        let from = skip.max(span.start);
+        let to = skip.saturating_add(drawn).min(span.end);
+        // Empty or reversed ranges contain no delegate state row.
+        delegates::ask(
+            app,
+            from.saturating_sub(span.start)..to.saturating_sub(span.start),
+        );
     }
 }
 

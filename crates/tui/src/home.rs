@@ -45,6 +45,10 @@ pub struct Launch {
     /// `tui.hover`: with it off, mouse mode 1003 is never sent and nothing
     /// is tinted under the pointer.
     pub hover: bool,
+    /// `tui.reduced_motion`: spinners, the glimmer and the pulse stay
+    /// still, while the time and the countdown keep a one-second wake
+    /// (`docs/tui.md`, "The working line").
+    pub reduced_motion: bool,
     /// Fiber's version, for the logo.
     pub version: String,
     /// `model`: the chip's model, unset on a fresh install with no key.
@@ -709,8 +713,8 @@ pub(crate) fn dependents(message: &str) -> Vec<SessionId> {
 /// A row's state glyph, the one set home's list, the rail and the
 /// terminal title share (`docs/tui.md`, "State glyphs").
 pub(crate) fn glyph(row: &Row) -> &'static str {
-    // The working states share one still glyph: a still glyph, not the
-    // spinner; upgrade when the working line's timer lands (see #686).
+    // The still form: a working row's spinner draws through the frame
+    // clock, which spins the glyph the frame asks for.
     match (&row.left, &row.state) {
         (Some(Left::Exited), _) => "○",
         (Some(Left::Crashed), _) => "✗",
@@ -725,7 +729,12 @@ pub(crate) fn glyph(row: &Row) -> &'static str {
 /// workspace's last path segment outside the launch project, joined by
 /// two spaces with empty parts left out.
 pub(crate) fn line(row: &Row, launch_project: &str) -> String {
-    let glyph = glyph(row);
+    line_with(row, launch_project, glyph(row))
+}
+
+/// A row's line with `glyph` drawn first: the frame's spinner while the
+/// row works, else the still glyph.
+pub(crate) fn line_with(row: &Row, launch_project: &str, glyph: &str) -> String {
     let name = title(row);
     let mut detail = row.note.clone().unwrap_or_default();
     if detail.is_empty() {
