@@ -459,8 +459,13 @@ impl App {
     /// whatever opened or closed a panel, the recall waits no more.
     pub(super) fn settle(&mut self) {
         self.relayout();
-        let height = self.conversation_height();
-        self.screen.settle(height);
+        // A batch settles once at its end: trimming mid-batch would drop
+        // pages the batch's uncounted rows still hold in the window, and
+        // the batch's end fetches them back.
+        if !self.screen.pages().holding() {
+            let height = self.conversation_height();
+            self.screen.settle(height);
+        }
         self.settle_pending_turn();
         self.settle_find();
         if !self.history.waiting {
@@ -472,6 +477,19 @@ impl App {
             Some(cover) if cover != now => self.history.cancel(),
             Some(_) => {}
         }
+    }
+
+    /// Holds the open page's recount while a batch of hub lines folds:
+    /// the batch's lines mark it, and `end_batch` counts it once.
+    pub(crate) fn begin_batch(&mut self) {
+        self.screen.pages_mut().hold();
+    }
+
+    /// Counts the batch's open page once and settles: the pages the
+    /// batch changed are exact before the frame pages anything in.
+    pub(crate) fn end_batch(&mut self) {
+        self.screen.pages_mut().flush();
+        self.settle();
     }
 
     /// A `command_rejected` for `id`: when it rejects `prompt_history`, its

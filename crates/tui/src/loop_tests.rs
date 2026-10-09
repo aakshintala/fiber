@@ -897,6 +897,50 @@ fn counted(lp: &Loop<CountingBackend>) -> String {
 }
 
 #[test]
+fn one_batch_counts_its_open_page_once() {
+    let (mut lp, _, tx, rx) = counting();
+    let mut seq = 0u64;
+    let mut inputs = turn_lines("marker one", 0, &mut seq);
+    inputs.truncate(2);
+    let before = lp.app.pages().recounts;
+    assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+    // The batch folds both lines before it counts: one recount for the
+    // batch, not one per changed line.
+    assert_eq!(lp.app.pages().recounts - before, 1);
+    let screen = counted(&lp);
+    assert!(screen.contains("marker one"), "{screen}");
+}
+
+#[test]
+fn one_line_alone_counts_its_page_at_once() {
+    let (mut lp, _, tx, rx) = counting();
+    let mut seq = 0u64;
+    let mut inputs = turn_lines("marker one", 0, &mut seq);
+    inputs.truncate(1);
+    let before = lp.app.pages().recounts;
+    assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+    // A batch of one holds nothing back: the line counts its page.
+    assert_eq!(lp.app.pages().recounts - before, 1);
+}
+
+#[test]
+fn a_batch_with_no_changed_line_counts_nothing() {
+    let (mut lp, _, tx, rx) = counting();
+    let mut seq = 0u64;
+    let mut step = || {
+        let envelope = line("step_started", Some(seq), None, json!({}));
+        seq += 1;
+        Input::Hub(Line::Session(envelope))
+    };
+    let inputs = vec![step(), step()];
+    let before = lp.app.pages().recounts;
+    assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+    // Neither line changed a card, so the batch marks nothing and
+    // counts nothing.
+    assert_eq!(lp.app.pages().recounts - before, 0);
+}
+
+#[test]
 fn lines_a_key_and_lines_draw_three_frames() {
     let (mut lp, flushes, tx, rx) = counting();
     let mut seq = 0u64;

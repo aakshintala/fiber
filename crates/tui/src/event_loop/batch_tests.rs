@@ -143,6 +143,18 @@ fn a_closed_channel_keeps_the_first_input() {
 }
 
 #[test]
+fn a_stashed_key_ends_the_batch_and_stays_first() {
+    let (_tx, rx) = channel(vec![hub(2)]);
+    let mut stash = VecDeque::from([hub(1), key()]);
+    let got = batch(hub(0), &mut stash, &rx);
+    assert_eq!(described(&got), ["hub-0", "hub-1"]);
+    // The key runs next, ahead of the line still in the channel.
+    assert_eq!(described(stash.make_contiguous()), ["bytes"]);
+    let rest = rx.try_recv().unwrap_or_else(|err| panic!("recv: {err}"));
+    assert_eq!(described(std::slice::from_ref(&rest)), ["hub-2"]);
+}
+
+#[test]
 fn a_non_batchable_first_is_alone() {
     let (_tx, rx) = channel(vec![hub(2)]);
     let mut stash = VecDeque::from([hub(1)]);
