@@ -1,7 +1,8 @@
 //! The terminal's configuration seam (`docs/tui.md`, "Swapped views"):
 //! `/settings` reads every key through `config` and writes through the
 //! same path as `fiber config set`, for the project of the workspace the
-//! view is about, and lists the themes in Fiber home's `themes/`. The
+//! view is about, and lists the themes in Fiber home's `themes/` and each
+//! installed extension's. The
 //! terminal loads configuration with no `-c`, so no row comes from one.
 
 mod login;
@@ -240,20 +241,7 @@ impl tui::Configure for Seam {
     }
 
     fn themes(&self) -> Vec<String> {
-        let Ok(entries) = std::fs::read_dir(self.home.join("themes")) else {
-            return Vec::new();
-        };
-        let mut names: Vec<String> = entries
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-            .filter_map(|entry| {
-                let name = entry.file_name().into_string().ok()?;
-                let stem = name.strip_suffix(".json")?;
-                (!stem.is_empty() && !stem.starts_with('.')).then(|| stem.to_owned())
-            })
-            .collect();
-        names.sort();
-        names
+        crate::theme_setting::names(&self.home)
     }
 
     fn theme(&self, name: &str) -> tui::ThemeSetting {

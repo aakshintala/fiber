@@ -1,5 +1,6 @@
 //! Tests for the terminal's configuration seam: which project's layer it
-//! reads and writes, the rows it builds, and the themes in Fiber home.
+//! reads and writes, the rows it builds, and the themes in Fiber home and
+//! installed extensions.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -197,6 +198,23 @@ fn themes_lists_json_files_by_name_sorted() {
     let seam = Seam::new(dirs.home());
     assert_eq!(seam.themes(), ["dusk", "solar"]);
     assert!(Seam::new(dirs.root.path().join("none")).themes().is_empty());
+}
+
+#[test]
+fn themes_lists_package_themes_once() {
+    let dirs = Dirs::new();
+    write(&dirs.home().join("themes").join("solar.json"), "{}");
+    let pkg = dirs.home().join("extensions").join("acme");
+    write(
+        &pkg.join(".fiber.json"),
+        r#"{"name":"x","version":"1.0.0","requested":true,"source":{"path":"/p"}}"#,
+    );
+    write(&pkg.join("themes").join("solar.json"), "{}");
+    write(&pkg.join("themes").join("tide.json"), "{}");
+    let broken = dirs.home().join("extensions").join("broken");
+    write(&broken.join("themes").join("gone.json"), "{}");
+    let seam = Seam::new(dirs.home());
+    assert_eq!(seam.themes(), ["solar", "tide"]);
 }
 
 #[test]
