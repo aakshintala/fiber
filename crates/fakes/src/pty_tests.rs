@@ -47,6 +47,16 @@ impl Read for Script {
     }
 }
 
+/// Every value sent, in order, up to the end of file: the collector ends when
+/// the reader thread drops the callback. The whole wait has one deadline.
+fn collect_to_eof<T: Send + 'static>(rx: mpsc::Receiver<T>) -> Vec<T> {
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        done_tx.send(rx.iter().collect::<Vec<T>>()).unwrap_or(());
+    });
+    done_rx.recv_timeout(WAIT).unwrap()
+}
+
 fn disconnected<T: std::fmt::Debug>(result: Result<T, mpsc::RecvTimeoutError>, what: &str) {
     match result {
         Err(mpsc::RecvTimeoutError::Disconnected) => {}
@@ -65,14 +75,7 @@ fn delivers_every_chunk_in_order_up_to_eof() {
     read_to_eof(script, move |bytes: &[u8]| {
         tx.send(bytes.to_vec()).unwrap();
     });
-    // The collector ends only when the reader thread drops the callback at
-    // end of file, so the chunks and the end of file share one deadline.
-    let (done_tx, done_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let chunks: Vec<Vec<u8>> = rx.iter().collect();
-        done_tx.send(chunks).unwrap();
-    });
-    let got = done_rx.recv_timeout(WAIT).unwrap();
+    let got = collect_to_eof(rx);
     assert_eq!(got, vec![b"foo".to_vec(), b"bar".to_vec(), b"baz".to_vec()]);
 }
 
@@ -88,9 +91,7 @@ fn keeps_reading_after_the_consumer_is_gone() {
         gone_tx.send(bytes.to_vec()).unwrap_or(());
         read_tx.send(bytes.len()).unwrap_or(());
     });
-    let first = read_rx.recv_timeout(WAIT).unwrap();
-    let second = read_rx.recv_timeout(WAIT).unwrap();
-    assert_eq!(first + second, 6);
+    assert_eq!(collect_to_eof(read_rx), vec![3, 3]);
 }
 
 #[test]
@@ -100,8 +101,7 @@ fn retries_an_interrupted_read() {
     read_to_eof(script, move |bytes: &[u8]| {
         tx.send(bytes.to_vec()).unwrap();
     });
-    assert_eq!(rx.recv_timeout(WAIT).unwrap(), b"hi");
-    disconnected(rx.recv_timeout(WAIT), "end of file");
+    assert_eq!(collect_to_eof(rx), vec![b"hi".to_vec()]);
 }
 
 #[test]
