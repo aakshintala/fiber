@@ -312,9 +312,7 @@ fn doc_roles_reads_the_first_column_of_the_themes_table() {
 
 #[test]
 fn the_doc_lists_every_role() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/tui.md");
-    let doc =
-        std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+    let doc = include_str!("../../../docs/tui.md");
     let names: Vec<&str> = Role::ALL.into_iter().map(Role::name).collect();
-    assert_eq!(doc_roles(&doc), names);
+    assert_eq!(doc_roles(doc), names);
 }

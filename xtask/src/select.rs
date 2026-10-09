@@ -78,10 +78,12 @@ const RUN_ALL_ROOTS: [&str; 4] = [
 /// that crate: Markdown anywhere, and every file outside the crate
 /// (`docs/ci.md`, "Selection").
 const COMPILED_IN: &[(&str, &str)] = &[
+    ("docs/ci.md", "xtask"),
     ("docs/errors.md", "contract"),
     ("docs/events.md", "contract"),
     ("docs/invocation.md", "contract"),
     ("docs/tui.md", "contract"),
+    ("docs/tui.md", "tui"),
     ("crates/loop/prompt/messages.md", "loop"),
     ("crates/loop/prompt/opening.md", "loop"),
     ("crates/loop/prompt/reviewer.md", "loop"),

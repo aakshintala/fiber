@@ -42,12 +42,7 @@ fn a_bare_name_is_ambiguous_once_a_dependency_shares_it() {
 
 #[test]
 fn markdown_docs_and_research_run_the_docs_job_alone() {
-    let files = strings(&[
-        "docs/ci.md",
-        "README.md",
-        "crates/loop/notes.md",
-        "research/x/run.sh",
-    ]);
+    let files = strings(&["README.md", "crates/loop/notes.md", "research/x/run.sh"]);
     let selection = classify(&files, &members());
     assert_eq!(selection, Selection::Docs);
     assert_eq!(selection.mode(), "docs");
@@ -144,6 +139,20 @@ fn a_compiled_in_doc_runs_its_crate_alone() {
         );
         assert_eq!(selection.mode(), "crates", "{path}");
     }
+}
+
+#[test]
+fn a_shared_compiled_in_doc_runs_every_crate_that_compiles_it_in() {
+    let selection = classify(&strings(&["docs/tui.md"]), &members_with_tools());
+    assert_eq!(selection, Selection::Crates(strings(&["contract", "tui"])));
+    assert_eq!(selection.mode(), "crates");
+}
+
+#[test]
+fn a_compiled_in_ci_doc_runs_xtask() {
+    let selection = classify(&strings(&["docs/ci.md"]), &members_with_tools());
+    assert_eq!(selection, Selection::Crates(strings(&["xtask"])));
+    assert_eq!(selection.mode(), "crates");
 }
 
 #[test]
@@ -940,14 +949,51 @@ fn tools_src(source: &str) -> RustFile {
     }
 }
 
-/// `members()` with the `tools` crate: only the compiled-in tests name
-/// it, so the selection tests keep the smaller fixture.
+fn tui_src(source: &str) -> RustFile {
+    RustFile {
+        krate: "tui".to_owned(),
+        path: "crates/tui/src/theme_tests.rs".to_owned(),
+        rel: "src/theme_tests.rs".to_owned(),
+        source: source.to_owned(),
+    }
+}
+
+fn xtask_src(source: &str) -> RustFile {
+    RustFile {
+        krate: "xtask".to_owned(),
+        path: "xtask/src/ci_needs_tests.rs".to_owned(),
+        rel: "src/ci_needs_tests.rs".to_owned(),
+        source: source.to_owned(),
+    }
+}
+
+/// `members()` with the `tools`, `tui` and `xtask` crates: only the
+/// compiled-in tests name them, so the selection tests keep the smaller
+/// fixture.
 fn members_with_tools() -> Members {
     let mut members = members();
     members.insert(
         "tools".to_owned(),
         Member {
             dir: "crates/tools".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            library: true,
+        },
+    );
+    members.insert(
+        "tui".to_owned(),
+        Member {
+            dir: "crates/tui".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            library: true,
+        },
+    );
+    members.insert(
+        "xtask".to_owned(),
+        Member {
+            dir: "xtask".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
             library: true,
@@ -971,6 +1017,8 @@ fn listed_files() -> Vec<RustFile> {
         contract_src(&listed_includes("contract")),
         loop_src(&listed_includes("loop")),
         tools_src(&listed_includes("tools")),
+        tui_src(&listed_includes("tui")),
+        xtask_src(&listed_includes("xtask")),
     ]
 }
 
@@ -993,6 +1041,8 @@ fn an_unlisted_outside_include_fails() {
         contract_src(&source),
         loop_src(&listed_includes("loop")),
         tools_src(&listed_includes("tools")),
+        tui_src(&listed_includes("tui")),
+        xtask_src(&listed_includes("xtask")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1010,6 +1060,8 @@ fn an_unlisted_non_docs_outside_include_fails() {
         contract_src(&source),
         loop_src(&listed_includes("loop")),
         tools_src(&listed_includes("tools")),
+        tui_src(&listed_includes("tui")),
+        xtask_src(&listed_includes("xtask")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1027,6 +1079,8 @@ fn an_unlisted_markdown_inside_the_crate_dir_fails() {
         contract_src(&source),
         loop_src(&listed_includes("loop")),
         tools_src(&listed_includes("tools")),
+        tui_src(&listed_includes("tui")),
+        xtask_src(&listed_includes("xtask")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1060,6 +1114,8 @@ fn a_non_docs_include_inside_the_crate_dir_is_unlisted() {
         contract_src(&source),
         loop_src(&listed_includes("loop")),
         tools_src(&listed_includes("tools")),
+        tui_src(&listed_includes("tui")),
+        xtask_src(&listed_includes("xtask")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1078,6 +1134,8 @@ fn a_raw_string_include_is_resolved() {
             contract_src(&source),
             loop_src(&listed_includes("loop")),
             tools_src(&listed_includes("tools")),
+            tui_src(&listed_includes("tui")),
+            xtask_src(&listed_includes("xtask")),
         ];
         assert_eq!(
             compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1097,6 +1155,8 @@ fn an_unresolvable_include_argument_fails() {
         contract_src(&source),
         loop_src(&listed_includes("loop")),
         tools_src(&listed_includes("tools")),
+        tui_src(&listed_includes("tui")),
+        xtask_src(&listed_includes("xtask")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1113,6 +1173,8 @@ fn another_macro_with_a_string_argument_yields_no_target() {
         contract_src(&source),
         loop_src(&listed_includes("loop")),
         tools_src(&listed_includes("tools")),
+        tui_src(&listed_includes("tui")),
+        xtask_src(&listed_includes("xtask")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1130,6 +1192,8 @@ fn include_bytes_yields_its_target() {
         contract_src(&source),
         loop_src(&listed_includes("loop")),
         tools_src(&listed_includes("tools")),
+        tui_src(&listed_includes("tui")),
+        xtask_src(&listed_includes("xtask")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1150,6 +1214,8 @@ fn a_trailing_comma_on_an_include_is_accepted() {
             contract_src(&source),
             loop_src(&listed_includes("loop")),
             tools_src(&listed_includes("tools")),
+            tui_src(&listed_includes("tui")),
+            xtask_src(&listed_includes("xtask")),
         ];
         assert_eq!(
             compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1169,6 +1235,8 @@ fn an_include_with_tokens_after_the_literal_fails() {
         contract_src(&source),
         loop_src(&listed_includes("loop")),
         tools_src(&listed_includes("tools")),
+        tui_src(&listed_includes("tui")),
+        xtask_src(&listed_includes("xtask")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
@@ -1344,20 +1412,9 @@ fn package_ok_files() -> Vec<RustFile> {
     ]
 }
 
-/// `members()` with the `tools` and `xtask` crates: only the package-reader
-/// tests name them, so the selection tests keep the smaller fixture.
+/// The members the package-reader tests use.
 fn package_members() -> Members {
-    let mut members = members_with_tools();
-    members.insert(
-        "xtask".to_owned(),
-        Member {
-            dir: "xtask".to_owned(),
-            version: "0.0.0".to_owned(),
-            deps: Vec::new(),
-            library: true,
-        },
-    );
-    members
+    members_with_tools()
 }
 
 #[test]
@@ -1534,6 +1591,8 @@ fn an_include_str_in_a_comment_is_ignored() {
         contract_src(&source),
         loop_src(&listed_includes("loop")),
         tools_src(&listed_includes("tools")),
+        tui_src(&listed_includes("tui")),
+        xtask_src(&listed_includes("xtask")),
     ];
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
