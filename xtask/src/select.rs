@@ -93,7 +93,13 @@ const COMPILED_IN: &[(&str, &str)] = &[
 /// `docs/ci.md`: the most mutants one shard tests, measured from CI runs.
 const MUTANTS_PER_SHARD: u64 = 15;
 /// `docs/ci.md`: the most shards one run starts.
-const MAX_MUTANT_SHARDS: u64 = 32;
+const MAX_MUTANT_SHARDS: u64 = 16;
+/// `docs/ci.md`: a shard's time limit with up to one shard's worth of
+/// mutants, in minutes.
+const SHARD_TIMEOUT_BASE_MINUTES: u64 = 20;
+/// `docs/ci.md`: the most time one shard gets, in minutes: GitHub stops a
+/// job after 6 hours, so a larger bound buys nothing.
+const SHARD_TIMEOUT_MAX_MINUTES: u64 = 360;
 /// Crates whose tests read a first-party package under `providers/` or
 /// `extensions/` (`docs/ci.md`, "Selection"); sorted. Checked against the
 /// sources by `package_reader_mismatches`.
@@ -450,6 +456,20 @@ pub(crate) fn mutant_shards(count: u64) -> u64 {
     count.div_ceil(MUTANTS_PER_SHARD).min(MAX_MUTANT_SHARDS)
 }
 
+/// One shard's time limit for `count` mutants, in minutes: 20 minutes per
+/// 15 of the largest round-robin share, rounded up, never under 20 and
+/// never over 360. The share is clamped to 270, the share at which the
+/// bound reaches 360, before multiplying, so `20 * share` cannot overflow
+/// for any `u64` count.
+pub(crate) fn shard_timeout_minutes(count: u64) -> u64 {
+    let share = count
+        .div_ceil(mutant_shards(count).max(1))
+        .min(SHARD_TIMEOUT_MAX_MINUTES * MUTANTS_PER_SHARD / SHARD_TIMEOUT_BASE_MINUTES);
+    (SHARD_TIMEOUT_BASE_MINUTES * share)
+        .div_ceil(MUTANTS_PER_SHARD)
+        .clamp(SHARD_TIMEOUT_BASE_MINUTES, SHARD_TIMEOUT_MAX_MINUTES)
+}
+
 pub(crate) fn plan(
     mode: &str,
     packages: &[String],
@@ -460,8 +480,10 @@ pub(crate) fn plan(
 ) -> Plan {
     let pr = event == "pull_request";
     let code = mode != "docs";
+    let test = !pr || !packages.is_empty();
     // The backstop runs no mutants: each pull request tested its own diff.
-    let shards = if pr && code && mutants {
+    // A run that selects no tests runs no mutants either.
+    let shards = if pr && mutants && test {
         mutant_shards(mutant_count)
     } else {
         0
@@ -469,7 +491,7 @@ pub(crate) fn plan(
     let jobs = BTreeMap::from([
         ("lint", !pr || code),
         // The backstop on `main` compiles the whole workspace on every push.
-        ("test", !pr || !packages.is_empty()),
+        ("test", test),
         ("mutants", shards > 0),
         ("bug_red", pr && code && bug),
         // Runs with the binary-level tests, and on every push (`docs/ci.md`, "Selection").
