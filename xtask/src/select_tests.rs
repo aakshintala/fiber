@@ -1835,6 +1835,216 @@ fn an_outer_binding_is_visible_in_a_nested_block() {
 }
 
 #[test]
+fn a_ref_to_a_bound_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = fs::read_to_string(&base.join(\"docs/a\"));\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/main/tests/release.rs: reads docs/a at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_mut_ref_to_a_bound_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = &mut base.join(\"docs/b\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/main/tests/release.rs: reads docs/b at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_deref_of_a_bound_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = *base.join(\"docs/c\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/main/tests/release.rs: reads docs/c at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_parenthesised_bound_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = (base).join(\"docs/d\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/main/tests/release.rs: reads docs/d at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_parenthesised_ref_to_a_bound_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = (&base).join(\"docs/e\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/main/tests/release.rs: reads docs/e at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_rebuilt_path_on_a_bound_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = Path::new(base).join(\"docs/f\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/main/tests/release.rs: reads docs/f at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_ref_to_a_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = &home.join(\"docs/a\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_mut_ref_to_a_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = &mut home.join(\"docs/b\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_deref_of_a_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = *home.join(\"docs/c\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_parenthesised_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = (home).join(\"docs/d\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_parenthesised_ref_to_a_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = (&home).join(\"docs/e\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_rebuilt_path_on_a_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = Path::new(home).join(\"docs/f\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_read_argument_block_does_not_leak_its_bindings() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "read_to_string({ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); \"x\" });\nbase.join(\"docs/x\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_concat_argument_block_does_not_leak_its_bindings() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let c = concat!({ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); \"x\" });\nbase.join(\"docs/x\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_join_argument_block_does_not_leak_its_bindings() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "outer.join({ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); \"docs/x\" });\nbase.join(\"docs/y\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
 fn a_partial_segment_is_not_a_repository_path() {
     let files = [runtime_src(
         "contract",

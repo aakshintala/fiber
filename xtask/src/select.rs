@@ -325,11 +325,13 @@ fn is_manifest_rooted(tokens: &[TokenTree]) -> bool {
     })
 }
 
-/// Whether `ch` ends the path expression a `join` builds on: the receiver
-/// runs back to the nearest one of these, so a manifest literal past it
-/// belongs to another expression.
+/// Whether `ch` ends the path expression a `join` builds on: the
+/// receiver runs back to the nearest one of these, so a manifest
+/// literal past it belongs to another expression. Bare brackets never
+/// appear (every bracketed span is a Group), so only these count; `=>`
+/// ends at its `=`.
 fn is_receiver_boundary(ch: char) -> bool {
-    matches!(ch, ';' | '=' | '(' | ',' | '{' | '}')
+    matches!(ch, ';' | '=' | ',')
 }
 
 /// Whether `tokens` hold an identifier bound to the manifest directory
@@ -344,15 +346,9 @@ fn holds_bound(tokens: &[TokenTree], bound: &BTreeSet<String>) -> bool {
     })
 }
 
-/// Whether `preceding`, the current expression back to its nearest
-/// boundary, starts at an identifier bound to the manifest directory.
-fn starts_bound(preceding: &[TokenTree], bound: &BTreeSet<String>) -> bool {
-    match preceding.first() {
-        Some(TokenTree::Ident(ident)) => bound.contains(ident.to_string().as_str()),
-        Some(TokenTree::Group(_) | TokenTree::Punct(_) | TokenTree::Literal(_)) | None => false,
-    }
-}
-
+/// Walk a group's tokens with the bindings scoped to it: bindings made
+/// inside do not leak out, and an inner `let` never changes the outer
+/// set. The one place groups enter a fresh scope.
 fn all_literals(stream: TokenStream, out: &mut Vec<String>) {
     for tree in stream {
         match tree {
@@ -378,7 +374,7 @@ fn all_literals(stream: TokenStream, out: &mut Vec<String>) {
 ///   naming a repository path;
 /// - `join` given a literal naming a repository path, on a base rooted
 ///   at the manifest directory: the receiver holds the literal, or
-///   starts at an identifier an earlier `let` bound to the manifest
+///   holds an identifier an earlier `let` bound to the manifest
 ///   directory (or to another bound identifier).
 ///
 /// A literal nested inside another call is a computed path, not a named
@@ -461,6 +457,17 @@ pub(crate) fn runtime_read_mismatches(
         }
         walk(rhs, bound, found);
     }
+    /// Walk a group's tokens with the bindings scoped to it: bindings
+    /// made inside do not leak out, and an inner `let` never changes
+    /// the outer set. The one place groups enter a fresh scope.
+    fn walk_group(
+        group: &proc_macro2::Group,
+        bound: &mut BTreeSet<String>,
+        found: &mut BTreeSet<String>,
+    ) {
+        let tokens: Vec<TokenTree> = group.stream().into_iter().collect();
+        walk(tokens, &mut bound.clone(), found);
+    }
     fn walk(tokens: Vec<TokenTree>, bound: &mut BTreeSet<String>, found: &mut BTreeSet<String>) {
         let mut stream = tokens.into_iter().peekable();
         // The current expression back to its nearest boundary: the
@@ -492,11 +499,7 @@ pub(crate) fn runtime_read_mismatches(
                                 found.insert(text);
                             }
                         }
-                        walk(
-                            group.stream().into_iter().collect(),
-                            &mut bound.clone(),
-                            found,
-                        );
+                        walk_group(&group, &mut *bound, found);
                         preceding.push(TokenTree::Group(group));
                     }
                     preceding.push(TokenTree::Ident(ident));
@@ -517,11 +520,7 @@ pub(crate) fn runtime_read_mismatches(
                                 literals.into_iter().filter(|literal| is_repo_path(literal)),
                             );
                         }
-                        walk(
-                            group.stream().into_iter().collect(),
-                            &mut bound.clone(),
-                            found,
-                        );
+                        walk_group(&group, &mut *bound, found);
                         preceding.push(TokenTree::Group(group));
                     }
                     preceding.push(TokenTree::Ident(ident));
@@ -530,7 +529,7 @@ pub(crate) fn runtime_read_mismatches(
                     if matches!(stream.peek(), Some(TokenTree::Group(_)))
                         && let Some(TokenTree::Group(group)) = stream.next()
                     {
-                        if is_manifest_rooted(&preceding) || starts_bound(&preceding, bound) {
+                        if is_manifest_rooted(&preceding) || holds_bound(&preceding, bound) {
                             for tree in group.stream() {
                                 if let TokenTree::Literal(lit) = tree
                                     && let Some(text) = string_literal(&lit.to_string())
@@ -540,21 +539,13 @@ pub(crate) fn runtime_read_mismatches(
                                 }
                             }
                         }
-                        walk(
-                            group.stream().into_iter().collect(),
-                            &mut bound.clone(),
-                            found,
-                        );
+                        walk_group(&group, &mut *bound, found);
                         preceding.push(TokenTree::Group(group));
                     }
                     preceding.push(TokenTree::Ident(ident));
                 }
                 TokenTree::Group(group) => {
-                    walk(
-                        group.stream().into_iter().collect(),
-                        &mut bound.clone(),
-                        found,
-                    );
+                    walk_group(&group, &mut *bound, found);
                     preceding.push(TokenTree::Group(group));
                 }
                 TokenTree::Ident(ident) => preceding.push(TokenTree::Ident(ident)),
