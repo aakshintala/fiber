@@ -652,12 +652,18 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
     let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-held-stdout");
     let member_pid = dir.path().join("member");
+    let ready = fifo(dir.path(), "ready");
     // Escaped past the leader's group, the sleeper holds the pipe past
     // the reap: the fold proceeds after the bound with no `fiber_exited`,
-    // and does not hang.
+    // and does not hang. The leader leaves only after the member writes
+    // past its own `setsid`, so the reap's SIGKILL cannot reach it: an
+    // early leader exit would reap and signal the group before the
+    // member escapes, closing the pipe and ending the drain early.
     let shell = format!(
-        "perl -MPOSIX -e 'POSIX::setsid(); sleep 60; # fiber-delegate-held-stdout' & echo $! > '{}'",
-        member_pid.display()
+        "perl -MPOSIX -e 'POSIX::setsid(); open(my $W, \">\", $ARGV[0]) or die $!; print $W \"ok\\n\"; close $W; sleep 60; # fiber-delegate-held-stdout' '{}' & echo $! > '{}'; read _ < '{}'; exit 0",
+        ready.display(),
+        member_pid.display(),
+        ready.display()
     );
     let rig = rig(vec![]);
     // Backstop armed before the shell starts: on any early failure the
