@@ -458,6 +458,60 @@ fn echo_reads_text_and_only_n_counts_as_a_flag() {
 }
 
 #[test]
+fn sed_through_the_classifier_declares_its_files() {
+    assert_eq!(
+        classified("sed -n 1p a b").declared.paths,
+        Some(vec!["/work/a".to_owned(), "/work/b".to_owned()])
+    );
+    assert_eq!(
+        classified("sed -n 1p").declared.paths,
+        Some(vec!["/work".to_owned()])
+    );
+    assert_eq!(
+        classified("sed -e 1p f").declared.paths,
+        Some(vec!["/work/f".to_owned()])
+    );
+    assert_eq!(
+        classified("sed -n 1p /home/me/.fiber/credentials/k").declared.paths,
+        Some(vec!["/home/me/.fiber/credentials/k".to_owned()])
+    );
+    assert_reads("sed -n 1p a b");
+    assert_reads("'sed' -n 1p f");
+    assert_reads("sed -n 1p f 2>/dev/null");
+    for command in [
+        "sed -n 1p /proc/self/environ",
+        "/usr/bin/sed -n 1p f",
+        "sed -n 1p f > out",
+        "sed -n 1p f >/dev/null",
+        "sed -n 1p f 2>file",
+        "sed -n '1w out' f",
+        "sed -i 1p f",
+        "sed --in-place 1p f",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn the_four_quoted_commands_read() {
+    assert_reads("sed -n '320,520p' crates/main/src/switch.rs");
+    assert_reads("sed -n 1,120p docs/testing.md 2>/dev/null || ls docs/");
+    assert_reads("git log --oneline -8; echo ---; git show --stat HEAD");
+    assert_reads(
+        "grep -rn \"command_id\\|command_accepted\\|command_rejected\" crates/ --include=\"*.rs\" | head -n 80",
+    );
+    assert_closed("git log --oneline -8; echo ---; git show --stat HEAD; ...");
+    assert_eq!(
+        classified(
+            "grep -rn \"command_id\\|command_accepted\\|command_rejected\" crates/ --include=\"*.rs\" | head -n 80",
+        )
+        .declared
+        .paths,
+        Some(vec!["/work/crates/".to_owned(), "/work".to_owned()])
+    );
+}
+
+#[test]
 fn only_echo_and_pwd_declare_no_paths() {
     for command in COMMANDS {
         let declares = command.name != "echo"

@@ -146,6 +146,14 @@ fn part_outcome(part: &Part, workdir: &Path) -> Outcome {
     if EXACT.iter().any(|row| cooked_equals(&kept, row)) {
         return Outcome::Reads(Vec::new());
     }
+    // `sed` has its own print-only grammar, not a table row.
+    if first.cooked == "sed" {
+        let words = kept.iter().skip(1).map(|word| word.cooked.as_str());
+        let Some(files) = super::sed::files(words) else {
+            return Outcome::Executes;
+        };
+        return path_tail(&files, workdir);
+    }
     let Some(entry) = lookup(first, &mut words) else {
         return Outcome::Executes;
     };
@@ -172,8 +180,14 @@ fn part_outcome(part: &Part, workdir: &Path) -> Outcome {
     if entry.pattern && !pattern_given && !operands.is_empty() {
         operands.remove(0);
     }
+    path_tail(&operands, workdir)
+}
+
+/// Resolves each operand against `workdir`, declaring the workdir when
+/// there are none. A path under `/proc/` is not read-only.
+fn path_tail(operands: &[String], workdir: &Path) -> Outcome {
     let mut paths = Vec::new();
-    for operand in &operands {
+    for operand in operands {
         let Some(path) = resolve(workdir, operand) else {
             return Outcome::Executes;
         };
