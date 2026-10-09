@@ -69,6 +69,7 @@ pub fn run(
         app.push_notice(notice);
     }
     app.set_keys(std::mem::take(&mut launch.keys));
+    let save = launch.save.take();
     app.set_configure(launch.configure.take());
     app.set_home(launch);
     app.set_size(width, height);
@@ -99,6 +100,8 @@ pub fn run(
         open_command: crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
             .map(|argv| argv.into_iter().map(str::to_owned).collect()),
         title: osc::Title::default(),
+        shape: osc::Shape::default(),
+        save,
         retry: Some(Arc::clone(&retry)),
     };
     terminal.app.set_opener(terminal.open_command.is_some());
@@ -193,6 +196,10 @@ struct Loop<B: Backend> {
     open_command: Option<Vec<String>>,
     /// The window title last written.
     title: osc::Title,
+    /// The pointer shape last written.
+    shape: osc::Shape,
+    /// Saves a dragged share to the global configuration, if any.
+    save: Option<crate::Save>,
     /// The hub thread's permit to connect again (`docs/tui.md`, "A
     /// dropped connection"); none in tests with no hub thread.
     retry: Option<Arc<Retry>>,
@@ -247,6 +254,7 @@ impl<B: Backend> Loop<B> {
                                 self.app.clear_copied();
                                 self.app.attention_seen();
                             }
+                            self.app.on_drag(&mouse);
                             self.app.on_wheel(&mouse);
                             let selected = self.app.on_select(&mouse, self.screen.targets());
                             let clicked =
@@ -379,6 +387,7 @@ impl<B: Backend> Loop<B> {
         if !self.app.files_open() {
             self.search = None;
         }
+        self.save_shares();
         self.page_in(rx);
         self.apply_theme();
         // A selection's copy waiting on dropped pages runs once they load.
@@ -389,8 +398,23 @@ impl<B: Backend> Loop<B> {
             return Some(1);
         }
         self.write_title();
+        self.write_shape();
         self.write_alerts();
         None
+    }
+
+    /// Saves the shares a drag's release queued, in order. A failed
+    /// save is a notice, so it shows on the frame drawn next.
+    fn save_shares(&mut self) {
+        for (key, share) in self.app.take_saves() {
+            let Some(save) = &self.save else {
+                continue;
+            };
+            if let Err(message) = save(key, share) {
+                self.app
+                    .push_notice(format!("Could not save {key}: {message}"));
+            }
+        }
     }
 
     /// Writes the app's window title when it changed since the last write.
@@ -399,6 +423,20 @@ impl<B: Backend> Loop<B> {
             && let Some(mut tty) = self.tty.as_ref()
         {
             tty.write_all(&bytes).unwrap_or(());
+        }
+    }
+
+    /// Writes the pointer shape when it changed: the resize arrow over an
+    /// edge or while a drag runs, else the default. Nothing with hover
+    /// off, where the terminal never reports motion.
+    fn write_shape(&mut self) {
+        if !self.hover {
+            return;
+        }
+        if let Some(bytes) = self.shape.next(self.app.over_edge(self.pointer.at))
+            && let Some(mut tty) = self.tty.as_ref()
+        {
+            tty.write_all(bytes).unwrap_or(());
         }
     }
 
@@ -632,6 +670,9 @@ impl<B: Backend> Loop<B> {
         }
         // The restore popped the title: the next frame writes it again.
         self.title.forget();
+        // The restore put the default pointer back: the next frame writes
+        // the shape again.
+        self.shape.reset();
         if let Some(reader) = &self.reader {
             reader.resume();
         }
@@ -698,6 +739,10 @@ mod panel_tests;
 #[cfg(test)]
 #[path = "lib_rail_tests.rs"]
 mod rail_tests;
+
+#[cfg(test)]
+#[path = "lib_drag_tests.rs"]
+mod drag_tests;
 
 #[cfg(test)]
 #[path = "lib_attention_tests.rs"]

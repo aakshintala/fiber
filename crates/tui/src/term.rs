@@ -28,10 +28,10 @@ const QUERIES: &[u8] = b"\x1b[?u\x1b[c";
 pub(crate) const KITTY_PUSH: &[u8] = b"\x1b[>1u";
 /// Pops kitty's keyboard flags while still on the alternate screen, turns
 /// bracketed paste off, turns every mouse mode off, whichever were on,
-/// pops the window title, then leaves the alternate screen and shows the
-/// cursor.
+/// resets the pointer shape to the default, pops the window title, then
+/// leaves the alternate screen and shows the cursor.
 const RESTORE: &[u8] =
-    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
 /// The tty `setup` changed and its modes from before. One terminal per
 /// process: the first `setup` records it.

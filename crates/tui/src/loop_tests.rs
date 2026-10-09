@@ -152,6 +152,8 @@ fn opened() -> (
         copy_command: None,
         open_command: None,
         title: crate::osc::Title::default(),
+        save: None,
+        shape: crate::osc::Shape::default(),
         retry: None,
     };
     let (tx, rx) = mpsc::channel();
