@@ -394,10 +394,11 @@ pub(crate) fn runtime_read_mismatches(
     files: &[RustFile],
     members: &Members,
 ) -> Result<Vec<String>, String> {
-    /// If `stream` holds a plain binding next (`mut`, a name, `=`), bind
-    /// the name when its value, through the terminating `;`, holds the
-    /// manifest literal or a bound name; walk the value either way.
-    /// Anything else stays in the stream for the caller.
+    /// If `stream` holds a plain binding next (`mut`, a name, an
+    /// optional `: <type>`, `=`), rebind the name to its value through
+    /// the terminating `;`: insert it when the value holds the manifest
+    /// literal or a bound name, remove it otherwise. Walk the value
+    /// either way. Anything else stays in the stream for the caller.
     fn bind(
         stream: &mut Peekable<std::vec::IntoIter<TokenTree>>,
         bound: &mut BTreeSet<String>,
@@ -417,6 +418,27 @@ pub(crate) fn runtime_read_mismatches(
         if stream.next().is_none() {
             return;
         }
+        if matches!(stream.peek(), Some(TokenTree::Punct(p)) if p.as_char() == ':') {
+            if stream.next().is_none() {
+                return;
+            }
+            loop {
+                match stream.peek() {
+                    None => return,
+                    Some(TokenTree::Punct(p)) if p.as_char() == '=' => break,
+                    Some(TokenTree::Punct(p)) if p.as_char() == ';' => return,
+                    Some(
+                        TokenTree::Group(_)
+                        | TokenTree::Ident(_)
+                        | TokenTree::Punct(_)
+                        | TokenTree::Literal(_),
+                    ) => {}
+                }
+                if stream.next().is_none() {
+                    return;
+                }
+            }
+        }
         if !matches!(stream.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '=') {
             return;
         }
@@ -434,6 +456,8 @@ pub(crate) fn runtime_read_mismatches(
         }
         if is_manifest_rooted(&rhs) || holds_bound(&rhs, bound) {
             bound.insert(name);
+        } else {
+            bound.remove(name.as_str());
         }
         walk(rhs, bound, found);
     }
@@ -468,7 +492,11 @@ pub(crate) fn runtime_read_mismatches(
                                 found.insert(text);
                             }
                         }
-                        walk(group.stream().into_iter().collect(), bound, found);
+                        walk(
+                            group.stream().into_iter().collect(),
+                            &mut bound.clone(),
+                            found,
+                        );
                         preceding.push(TokenTree::Group(group));
                     }
                     preceding.push(TokenTree::Ident(ident));
@@ -489,7 +517,11 @@ pub(crate) fn runtime_read_mismatches(
                                 literals.into_iter().filter(|literal| is_repo_path(literal)),
                             );
                         }
-                        walk(group.stream().into_iter().collect(), bound, found);
+                        walk(
+                            group.stream().into_iter().collect(),
+                            &mut bound.clone(),
+                            found,
+                        );
                         preceding.push(TokenTree::Group(group));
                     }
                     preceding.push(TokenTree::Ident(ident));
@@ -508,13 +540,21 @@ pub(crate) fn runtime_read_mismatches(
                                 }
                             }
                         }
-                        walk(group.stream().into_iter().collect(), bound, found);
+                        walk(
+                            group.stream().into_iter().collect(),
+                            &mut bound.clone(),
+                            found,
+                        );
                         preceding.push(TokenTree::Group(group));
                     }
                     preceding.push(TokenTree::Ident(ident));
                 }
                 TokenTree::Group(group) => {
-                    walk(group.stream().into_iter().collect(), bound, found);
+                    walk(
+                        group.stream().into_iter().collect(),
+                        &mut bound.clone(),
+                        found,
+                    );
                     preceding.push(TokenTree::Group(group));
                 }
                 TokenTree::Ident(ident) => preceding.push(TokenTree::Ident(ident)),
