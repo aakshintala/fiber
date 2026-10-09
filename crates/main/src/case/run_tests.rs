@@ -232,7 +232,7 @@ fn successful_initial_advances_do_not_close_before_the_until_event() {
 
     let failures = case.drive(
         Arc::clone(&driver) as Arc<dyn contract::extension::Drive>,
-        log,
+        log.watch_all(),
         Arc::new(r#loop::TurnCancel::default()),
     );
 
@@ -259,7 +259,7 @@ fn the_until_event_stops_driving_and_uses_the_short_exit_deadline() {
 
     let failures = case.drive(
         Arc::clone(&driver) as Arc<dyn contract::extension::Drive>,
-        log,
+        log.watch_all(),
         Arc::new(r#loop::TurnCancel::default()),
     );
 
@@ -300,7 +300,7 @@ fn exiting_before_the_next_advance_names_that_advance() {
 
     let failures = case.drive(
         driver as Arc<dyn contract::extension::Drive>,
-        log,
+        log.watch_all(),
         Arc::new(r#loop::TurnCancel::default()),
     );
 
@@ -338,7 +338,7 @@ fn a_missing_advance_fails_on_the_short_advance_wait() {
 
     let failures = case.drive(
         driver.clone() as Arc<dyn contract::extension::Drive>,
-        log,
+        log.watch_all(),
         Arc::new(r#loop::TurnCancel::default()),
     );
 
