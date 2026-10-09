@@ -201,6 +201,10 @@ impl Skills {
         let shown = self.shown(ctx.height);
         if self.list.key(key, self.rows_len(), shown) {
             self.said.clear();
+            // The new selection can add two details lines, and
+            // clearing the message frees one, so the frame's available
+            // rows change: clamp to the final frame.
+            self.clamp(ctx.height);
         }
         Act::Stay
     }
@@ -265,6 +269,9 @@ impl Skills {
                 } else {
                     self.list.select(at, self.rows_len(), shown);
                 }
+                // The new selection's details lines change the frame's
+                // available rows: clamp to the final frame.
+                self.clamp(ctx.height);
                 Act::Stay
             }
             Spot::Switch { row, at } => {

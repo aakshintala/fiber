@@ -797,6 +797,52 @@ fn shortening_the_open_text_clamps_the_pane_and_keeps_the_row() {
     assert!(frame_has_row(&frame, 6, 0), "{frame:?}");
 }
 
+/// Four skills each with two details lines, so every selection shrinks
+/// the frame.
+fn detailed_infos() -> Vec<SkillInfo> {
+    let mut infos = Vec::new();
+    for name in ["a", "b", "c", "d"] {
+        let mut info = repository(name);
+        info.shadows = vec![format!("/home/skills/{name}/SKILL.md")];
+        infos.push(info);
+    }
+    infos
+}
+
+#[test]
+fn navigation_keeps_the_selected_row_visible_at_small_heights() {
+    for height in [6usize, 5] {
+        for key in [Key::PageDown, Key::Down] {
+            let fake = fake_with(off(&[], &[]));
+            let mut skills = opened(&fake, &detailed_infos());
+            let context = Ctx {
+                height,
+                ..ctx(&fake)
+            };
+            skills.reread(&context);
+            assert_eq!(skills.list.selected(), 0);
+            skills.key(&key, &context);
+            let selected = skills.list.selected();
+            assert!(selected > 0, "height {height} key {key:?}");
+            let frame = skills.frame(height);
+            assert!(
+                frame_has_row(&frame, height, selected),
+                "height {height} key {key:?} selected {selected} {frame:?}"
+            );
+            // Two past the last row clamps to it and stays visible.
+            let rows = skills.frame(height).rows.len();
+            skills.click(Spot::Row(rows + 1), &context);
+            let selected = skills.list.selected();
+            assert_eq!(selected, rows - 1, "height {height} key {key:?}");
+            let frame = skills.frame(height);
+            assert!(
+                frame_has_row(&frame, height, selected),
+                "height {height} key {key:?} selected {selected} {frame:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn skills_text_80x24() {
     let fake = text_fake("Test first, then write the test.\nA second paragraph.");
