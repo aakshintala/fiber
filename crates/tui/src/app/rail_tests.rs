@@ -478,6 +478,18 @@ fn a_switch_with_the_key_map_open_still_opens() {
 }
 
 #[test]
+fn alt_r_with_the_key_map_open_still_hides() {
+    let mut app = sized(200);
+    press(&mut app, Key::F1);
+    assert!(app.keymap_top().is_some());
+    assert!(rail_rect(&app).is_some());
+    // ⌥R reaches past the key map to the rail, leaving the map open.
+    assert_eq!(press(&mut app, Key::AltR), Effect::None);
+    assert!(rail_rect(&app).is_none());
+    assert!(app.keymap_top().is_some());
+}
+
+#[test]
 fn a_switch_with_the_link_down_does_nothing() {
     let mut app = opened(&[A, B], A);
     app.disconnected();
