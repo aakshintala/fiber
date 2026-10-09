@@ -12,8 +12,8 @@ use contract::events::{
     ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
 };
 use contract::provider::{
-    CallError, CallUsage, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider,
-    Reply, ReplyAction, ToolDefinition,
+    CallError, CallUsage, Delta, Finish, HostedCall, Input, InputSize, ModelCall, ModelRequest,
+    Provider, Reply, ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, ProviderCallId};
@@ -570,6 +570,10 @@ impl Decoder {
                         provider_item: Some(item.clone()),
                     }));
             }
+            "web_search_call" => {
+                self.actions
+                    .push(ReplyAction::Hosted(web_search_call(item)));
+            }
             "function_call" => {
                 let raw = str_at(item, "arguments");
                 let arguments = match serde_json::from_str(raw) {
@@ -589,7 +593,7 @@ impl Decoder {
                     provider_item: None,
                 }));
             }
-            // Items Fiber does not act on, such as a hosted tool's.
+            // Items Fiber does not act on.
             _ => {}
         }
     }
@@ -664,6 +668,54 @@ impl Decoder {
             cost: None,
             input_size: InputSize::default(),
         })
+    }
+}
+
+/// A hosted search's call and result from its done item: the call names
+/// `web_search`, with the item's `action` as its arguments less any
+/// `sources`; the completion carries the result URLs, the item's
+/// `results` then its action's `sources`, one per line
+/// (`docs/tools.md`, "Hosted by the provider").
+fn web_search_call(item: &Value) -> HostedCall {
+    let arguments = match item.get("action") {
+        Some(Value::Object(action)) => {
+            let mut action = action.clone();
+            action.remove("sources");
+            Value::Object(action)
+        }
+        _ => Value::Object(Map::new()),
+    };
+    let mut urls: Vec<&str> = item
+        .get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|result| result.get("url").and_then(Value::as_str))
+        .collect();
+    urls.extend(
+        item.pointer("/action/sources")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|source| source.get("url").and_then(Value::as_str)),
+    );
+    let completed = match item.get("status").and_then(Value::as_str) {
+        Some("completed") => crate::hosted::completed(item.clone(), &urls),
+        status => crate::hosted::failed(item.clone(), status.unwrap_or("unknown")),
+    };
+    HostedCall {
+        call: ToolCallRequested {
+            name: "web_search".to_owned(),
+            arguments,
+            provider_id: item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|id| ProviderCallId(id.to_owned())),
+            repair: None,
+            ran_by: None,
+            provider_item: Some(item.clone()),
+        },
+        completed,
     }
 }
 
