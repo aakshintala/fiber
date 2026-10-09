@@ -89,6 +89,7 @@ fn ctx(fake: &Fake) -> Ctx<'_> {
         seam: fake,
         workspace: Path::new("/w"),
         height: 24,
+        width: 80,
         usage: None,
     }
 }

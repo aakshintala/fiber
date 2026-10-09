@@ -1295,7 +1295,11 @@ nothing while the store is empty.
 A person who removed a provider can install it again with
 `fiber extension install <name>`, or by choosing it in the terminal's model
 picker. A headless run whose provider is not installed fails with
-`extension_missing`. An extension a repository declares and nobody has
+`extension_missing`. Its message names the first-party extension that serves
+the provider, so `opencode-go/<id>` says to run
+`fiber extension install opencode`. For a provider no first-party extension
+serves, it says to install the extension that provides it, by name or URL. An
+extension a repository declares and nobody has
 approved is skipped, or fails the run when the repository marks it `required`
 ("Code a repository ships").
 

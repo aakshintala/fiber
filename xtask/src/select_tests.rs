@@ -1327,8 +1327,20 @@ fn main_reads_a_package() -> RustFile {
     )
 }
 
+fn extensions_reads_a_package() -> RustFile {
+    package_src(
+        "extensions",
+        "crates/extensions/build.rs",
+        "let manifest = env!(\"CARGO_MANIFEST_DIR\");\nlet root = \"../../providers\";\n",
+    )
+}
+
 fn package_ok_files() -> Vec<RustFile> {
-    vec![config_reads_a_package(), main_reads_a_package()]
+    vec![
+        config_reads_a_package(),
+        extensions_reads_a_package(),
+        main_reads_a_package(),
+    ]
 }
 
 /// `members()` with the `tools` and `xtask` crates: only the package-reader
@@ -1375,7 +1387,10 @@ fn an_unlisted_crate_that_reads_a_package_fails() {
 fn a_listed_crate_with_no_reading_source_fails() {
     assert_eq!(
         package_reader_mismatches(&[config_reads_a_package()], &package_members()).unwrap(),
-        ["main: listed as reading a first-party package, but no source reads one"]
+        [
+            "extensions: listed as reading a first-party package, but no source reads one",
+            "main: listed as reading a first-party package, but no source reads one"
+        ]
     );
 }
 

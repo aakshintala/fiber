@@ -91,6 +91,7 @@ fn ctx(fake: &Fake) -> Ctx<'_> {
         seam: fake,
         workspace: Path::new("/w"),
         height: 24,
+        width: 80,
         usage: None,
     }
 }
@@ -483,6 +484,7 @@ fn moving_down_past_the_first_row_keeps_three_rows_in_view() {
         seam: &fake,
         workspace: Path::new("/w"),
         height: 5,
+        width: 80,
         usage: None,
     };
     let mut rules = Rules::open(&ctx);

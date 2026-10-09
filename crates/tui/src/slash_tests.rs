@@ -34,6 +34,7 @@ fn built_ins_come_in_table_order_then_the_answer_rows() {
             "panel",
             "rules",
             "settings",
+            "skills",
             "handoff",
             "name",
             "login",

@@ -5,6 +5,7 @@
 //! terminal loads configuration with no `-c`, so no row comes from one.
 
 mod login;
+mod skills;
 mod tools;
 
 use std::path::{Path, PathBuf};
@@ -13,7 +14,7 @@ use config::{Config, SettingValue, Source, Sources};
 use contract::shapes::Failure;
 use tui::{
     ConfigureError, Layer, LoginTarget, Revoked, RuleRow, RulesScope, RulesSection, Saved,
-    SettingRow, Shown, Stored, SwitchScope, ToolGroup, ToolSwitches, WriteScope,
+    SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolSwitches, WriteScope,
 };
 
 /// The seam over Fiber home.
@@ -274,6 +275,24 @@ impl tui::Configure for Seam {
         on: bool,
     ) -> Result<(), ConfigureError> {
         self.write_switch(workspace, group, tool, scope, on)
+    }
+
+    fn skills_disabled(&self, workspace: &Path) -> Result<SkillsDisabled, ConfigureError> {
+        self.read_skills_disabled(workspace)
+    }
+
+    fn switch_skill(
+        &self,
+        workspace: &Path,
+        name: &str,
+        scope: SwitchScope,
+        on: bool,
+    ) -> Result<(), ConfigureError> {
+        self.write_skill_switch(workspace, name, scope, on)
+    }
+
+    fn skill_text(&self, path: &Path) -> Result<String, ConfigureError> {
+        self.read_skill_text(path)
     }
 }
 

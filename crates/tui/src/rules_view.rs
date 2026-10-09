@@ -82,11 +82,7 @@ impl Rules {
 
     /// `scope`'s section.
     fn section(&self, scope: RulesScope) -> Option<&RulesSection> {
-        let sections = self.sections.as_ref()?;
-        Some(match scope {
-            RulesScope::Global => &sections.0,
-            RulesScope::Project => &sections.1,
-        })
+        self.sections.as_ref().map(|sections| pick(sections, scope))
     }
 
     /// Handles one key.
@@ -139,14 +135,10 @@ impl Rules {
     /// Opens the selected section's file; with the rules unread there is
     /// no section, so nothing opens.
     fn open_file(&self) -> Act {
-        let (Some(item), Some(sections)) = (self.selected(), self.sections.as_ref()) else {
-            return Act::Stay;
-        };
-        let section = match item.scope() {
-            RulesScope::Global => &sections.0,
-            RulesScope::Project => &sections.1,
-        };
-        Act::Open(section.file.clone())
+        match self.selected().and_then(|item| self.section(item.scope())) {
+            Some(section) => Act::Open(section.file.clone()),
+            None => Act::Stay,
+        }
     }
 
     /// Revokes the selected rule. On a heading or note row nothing
@@ -233,6 +225,15 @@ impl Rules {
     }
 }
 
+/// `scope`'s section: the only match on a rules scope, which `section`,
+/// `open_file` and `build` share.
+fn pick(sections: &(RulesSection, RulesSection), scope: RulesScope) -> &RulesSection {
+    match scope {
+        RulesScope::Global => &sections.0,
+        RulesScope::Project => &sections.1,
+    }
+}
+
 /// The view's rows for `sections`: each section's heading, then its rules
 /// in line order, or one note in place of them. With the rules unread
 /// there are no rows.
@@ -243,10 +244,7 @@ fn build(sections: Option<&(RulesSection, RulesSection)>) -> Vec<Item> {
     let mut items = Vec::new();
     for scope in [RulesScope::Global, RulesScope::Project] {
         items.push(Item::Heading(scope));
-        let section = match scope {
-            RulesScope::Global => &sections.0,
-            RulesScope::Project => &sections.1,
-        };
+        let section = pick(sections, scope);
         match section.rows.as_ref() {
             Ok(rows) if !rows.is_empty() => {
                 for (index, _) in rows.iter().enumerate() {
