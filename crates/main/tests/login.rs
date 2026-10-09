@@ -17,7 +17,7 @@ mod support;
 
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
@@ -325,22 +325,14 @@ struct Screen {
 
 impl Screen {
     fn new(terminal: &Terminal, deadline: Deadline) -> Self {
-        let mut reader = fs::File::from(terminal.main.try_clone().unwrap());
+        let reader = fs::File::from(terminal.main.try_clone().unwrap());
         let (send, chunks) = mpsc::channel();
-        thread::spawn(move || {
-            let mut buffer = [0u8; 4096];
-            // A read error is the end of the terminal, on Linux as well as
-            // on macOS.
-            while let Ok(n) = reader.read(&mut buffer) {
-                if n == 0
-                    || send
-                        .send(Some(String::from_utf8_lossy(&buffer[..n]).into()))
-                        .is_err()
-                {
-                    return;
-                }
-            }
-            send.send(None).unwrap_or(());
+        // A read error is the end of the terminal, on Linux as well as
+        // on macOS. The channel's disconnect when the reader ends
+        // replaces a trailing `None`: `wait_for` treats both alike.
+        fakes::pty::read_to_eof(reader, move |bytes| {
+            send.send(Some(String::from_utf8_lossy(bytes).into()))
+                .unwrap_or(());
         });
         Self {
             chunks,
