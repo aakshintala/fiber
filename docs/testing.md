@@ -309,6 +309,13 @@ is added to it by the ticket that builds it.
 Tests that need live credentials are opt-in by environment variable and never
 run in CI.
 
+A live test asserts the outcome, the fields under test, and the order of the
+kinds it relies on (the turn's start first, its `text_completed` before its
+`turn_completed`, `turn_completed` last), not the complete ordered list "Event
+streams" requires: a real model's stream varies in its deltas and reasoning
+events. The complete list is pinned by the same scenario against the fake
+provider.
+
 An eval measures the model plus Fiber's prompting as a pass rate over many
 runs. It is a development instrument for prompts and tool definitions. No eval
 gates a merge or a release.

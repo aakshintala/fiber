@@ -98,14 +98,34 @@ fn a_live_codex_turn_replies() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
+    // A live stream varies in its deltas and reasoning events, so this pins
+    // only the order of the kinds it relies on (docs/testing.md, "Live calls
+    // and evals"). Lines written on their own trigger are set aside.
+    let kinds: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| line["kind"].as_str())
+        .filter(|kind| !matches!(*kind, "session_status" | "clients" | "attention"))
+        .collect();
+    let started = kinds.iter().position(|kind| *kind == "turn_started");
+    let first_turn_line = lines
+        .iter()
+        .position(|line| line.get("turn_id").is_some())
+        .map(|at| lines[at]["kind"].as_str());
+    assert_eq!(first_turn_line, Some(Some("turn_started")), "{stdout}");
+    assert_eq!(kinds.last(), Some(&"turn_completed"), "{stdout}");
+    let text_at = kinds.iter().rposition(|kind| *kind == "text_completed");
+    assert!(
+        matches!((started, text_at), (Some(s), Some(t)) if s < t),
+        "{stdout}"
+    );
     let completed = lines
         .iter()
-        .find(|line| line["kind"] == "turn_completed")
-        .unwrap_or_else(|| panic!("no turn_completed in {stdout}"));
+        .rfind(|line| line["kind"] == "turn_completed")
+        .unwrap();
     assert_eq!(completed["payload"]["outcome"], "completed", "{stdout}");
     let text = lines
         .iter()
-        .find(|line| line["kind"] == "text_completed")
+        .rfind(|line| line["kind"] == "text_completed")
         .and_then(|line| line["payload"]["text"].as_str())
         .unwrap_or_else(|| panic!("no text_completed with text in {stdout}"));
     assert!(!text.is_empty(), "{stdout}");
