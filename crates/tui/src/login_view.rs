@@ -12,7 +12,7 @@ use crate::configure::{LoginKind, LoginTarget};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
 use crate::settings_view::{Act, Ctx};
-use crate::swapped::{Frame, List, Spot, rows_height};
+use crate::swapped::{Frame, Ink, List, Spot, rows_height};
 
 /// The key or value being typed. It never prints: `Debug` shows only its
 /// length (`docs/code-quality.md`, "Errors"). No `Clone`, no `PartialEq`.
@@ -333,7 +333,7 @@ impl Login {
     pub(crate) fn click(&mut self, spot: Spot, ctx: &Ctx<'_>) -> Act {
         match spot {
             Spot::Close => Act::Close,
-            Spot::Revoke(_) => Act::Stay,
+            Spot::Revoke(_) | Spot::Cell(_, _) => Act::Stay,
             Spot::Row(at) => {
                 if matches!(self.mode, Mode::Panel(_)) {
                     return Act::Stay;
@@ -394,7 +394,7 @@ impl Login {
             rows: self
                 .items
                 .iter()
-                .map(|item| vec![(self.line(*item), None)])
+                .map(|item| vec![(self.line(*item), None, Ink::Plain)])
                 .collect(),
             list: self.list,
             below,
