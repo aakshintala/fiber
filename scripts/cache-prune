@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Prunes the repository's Actions cache (docs/ci.md, "The backstop"). The
+# backstop runs it after it saved the build cache. It deletes:
+#   - every build-cache entry (key v0-rust-...) that a newer generation of the
+#     same cache replaced: entries sharing a ref and a key up to its last
+#     dash, all but the newest;
+#   - every release-musl-<sha> entry whose commit is not among the 10 nearest
+#     first-parent commits (the commit included) of main's head or of the
+#     merge base of main's head and any open pull request's head: the commits
+#     the 9-ancestor lookup of a pull request's base can reach.
+# A failure warns and never fails the script, and one that leaves the
+# reachable set unknown deletes no release binary.
+#
+# Usage: scripts/cache-prune [--dry-run]
+# Needs GH_TOKEN with actions: write and GITHUB_REPOSITORY; HEAD is main's head
+# in a checkout with full history. --dry-run prints the ids it would delete.
+# Prints the cache size before and after.
+set -euo pipefail
+shopt -s inherit_errexit 2> /dev/null || true # bash 4.4; macOS ships 3.2
+cd "$(git rev-parse --show-toplevel)"
+
+dry_run=false
+if [ "${1:-}" = --dry-run ]; then
+  dry_run=true
+fi
+
+usage() {
+  gh api "repos/$GITHUB_REPOSITORY/actions/cache/usage" --jq .active_caches_size_in_bytes
+}
+
+# The commits a stored release binary can still serve, one per line. Runs in
+# an `||` list, where errexit is off, so every command checks itself.
+reachable() {
+  local main_head prs pr base
+  main_head=$(git rev-parse HEAD) || return 1
+  git rev-list --first-parent -n 10 "$main_head" || return 1
+  # One more than the cap: a full page means pull requests may be missing.
+  prs=$(gh pr list --state open --limit 1001 --json number --jq '.[].number') || return 1
+  if [ "$(wc -l <<<"$prs")" -gt 1000 ]; then
+    echo "::warning::more than 1000 open pull requests" >&2
+    return 1
+  fi
+  for pr in $prs; do
+    git fetch --quiet --no-tags origin "refs/pull/$pr/head" || return 1
+    base=$(git merge-base "$main_head" FETCH_HEAD) || return 1
+    git rev-list --first-parent -n 10 "$base" || return 1
+  done
+}
+
+# Reads the cache list as a JSON array on stdin and prints the ids to delete.
+# $1 holds the reachable commits, one per line.
+doomed() {
+  jq -r --arg keep "$1" '
+    ($keep | split("\n") | map(select(length > 0))) as $keep
+    | ([.[] | select(.key | startswith("v0-rust-"))]
+        | group_by([.ref, (.key | sub("-[^-]*$"; ""))])
+        | map(sort_by(.created_at) | reverse | .[1:][])) as $old
+    | ([.[] | select(.key | startswith("release-musl-"))
+        | select((.key | ltrimstr("release-musl-")) | IN($keep[]) | not)]) as $unreachable
+    | ($old + $unreachable)[] | .id'
+}
+
+prune() {
+  local keep caches id before after
+  before=$(usage) || return 1
+  echo "cache size before: $before bytes"
+  keep=$(reachable) || return 1
+  caches=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/caches?per_page=100" --jq '.actions_caches' | jq -s 'add // []') || return 1
+  for id in $(doomed "$keep" <<<"$caches"); do
+    if [ "$dry_run" = true ]; then
+      echo "would delete cache $id"
+    elif ! gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/caches/$id" --silent; then
+      echo "::warning::could not delete cache $id"
+    fi
+  done
+  after=$(usage) || return 1
+  echo "cache size after: $after bytes"
+}
+
+prune || echo "::warning::cache pruning stopped on a failed read; nothing was deleted after it"
