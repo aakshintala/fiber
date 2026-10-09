@@ -46,7 +46,6 @@ fn fixed_package(source: &'static str, protocol: &'static str) -> Package {
         protocol: ProtocolRule::Fixed(protocol),
         base_url: "https://t/v1",
         drop_deprecated: false,
-        drop_protocols: &[],
         skip: &[],
         protocol_overrides: &[],
         every_model: r#"{}"#,
@@ -693,7 +692,7 @@ fn fetch_names_a_failed_curl() {
 }
 
 #[test]
-fn zen_leaves_out_google_generative_ai_until_it_is_probed() {
+fn zen_keeps_its_google_generative_ai_models() {
     let google = || tool_model(json!({"provider": {"npm": "@ai-sdk/google"}}));
     let other = || tool_model(json!({"provider": {"npm": "@ai-sdk/openai"}}));
     let zen = PACKAGES
@@ -709,12 +708,12 @@ fn zen_leaves_out_google_generative_ai_until_it_is_probed() {
             ("gpt-6.1-sol", other()),
         ],
     );
-    assert!(generated_model(&output, "gemini-3.8-flash").is_none());
+    assert!(generated_model(&output, "gemini-3.8-flash").is_some());
     for id in ["gpt-6-luna", "muse-spark-1.3", "gpt-6.1-sol"] {
         assert!(generated_model(&output, id).is_some(), "{id}");
     }
     assert!(
-        left_out
+        !left_out
             .iter()
             .any(|line| line.contains("gemini-3.8-flash")),
         "{left_out:?}"

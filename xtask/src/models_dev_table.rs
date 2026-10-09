@@ -27,8 +27,6 @@ pub(crate) struct Package {
     pub(crate) base_url: &'static str,
     /// Whether a model with `status == "deprecated"` is left out.
     pub(crate) drop_deprecated: bool,
-    /// Protocols left out until a probe covers them.
-    pub(crate) drop_protocols: &'static [&'static str],
     /// Ids models.dev lists that the vendor rejects.
     pub(crate) skip: &'static [&'static str],
     /// A model's protocol, replacing the rule's, as `(id, protocol)`.
@@ -50,7 +48,6 @@ const ANTHROPIC: Package = Package {
     protocol: ProtocolRule::Fixed("anthropic-messages"),
     base_url: "https://api.anthropic.com/v1",
     drop_deprecated: false,
-    drop_protocols: &[],
     skip: &[],
     protocol_overrides: &[],
     every_model: r#"{}"#,
@@ -73,7 +70,6 @@ const GEMINI: Package = Package {
     protocol: ProtocolRule::Fixed("google-generative-ai"),
     base_url: "https://generativelanguage.googleapis.com/v1beta",
     drop_deprecated: false,
-    drop_protocols: &[],
     skip: &[],
     protocol_overrides: &[],
     every_model: r#"{}"#,
@@ -100,7 +96,6 @@ const OPENAI: Package = Package {
     protocol: ProtocolRule::Fixed("openai-responses"),
     base_url: "https://api.openai.com/v1",
     drop_deprecated: false,
-    drop_protocols: &[],
     skip: &["gpt-5.6"],
     protocol_overrides: &[],
     every_model: r#"{"compat":{"store":false}}"#,
@@ -116,7 +111,6 @@ const MUSE: Package = Package {
     protocol: ProtocolRule::Fixed("openai-responses"),
     base_url: "https://api.meta.ai/v1",
     drop_deprecated: false,
-    drop_protocols: &[],
     skip: &[],
     protocol_overrides: &[],
     every_model: r#"{}"#,
@@ -150,7 +144,6 @@ const OPENCODE_GO: Package = Package {
     protocol: ProtocolRule::ByNpm,
     base_url: "https://opencode.ai/zen/go/v1",
     drop_deprecated: true,
-    drop_protocols: &[],
     skip: &[],
     protocol_overrides: &[("minimax-m2.7", "openai-completions")],
     every_model: r#"{"subscription":true}"#,
@@ -168,8 +161,8 @@ const OPENCODE_GO: Package = Package {
     )],
 };
 
-/// OpenCode Zen: billed per token, leaving out its Gemini models: the
-/// one probe of that route was refused (research/opencode-zen-gemini-probe).
+/// OpenCode Zen: billed per token. Its Gemini models are kept: one request
+/// to each of two answered 200 (research/opencode-zen-gemini-probe).
 const OPENCODE_ZEN: Package = Package {
     path: "providers/opencode/providers/opencode-zen.json",
     source: "opencode",
@@ -177,7 +170,6 @@ const OPENCODE_ZEN: Package = Package {
     protocol: ProtocolRule::ByNpm,
     base_url: "https://opencode.ai/zen/v1",
     drop_deprecated: true,
-    drop_protocols: &["google-generative-ai"],
     skip: &[],
     protocol_overrides: &[],
     every_model: r#"{}"#,
@@ -187,6 +179,7 @@ const OPENCODE_ZEN: Package = Package {
         ("anthropic-messages", OPENCODE_SESSION),
         ("openai-completions", OPENCODE_COMPLETIONS),
         ("openai-responses", OPENCODE_SESSION),
+        ("google-generative-ai", OPENCODE_SESSION),
     ],
     by_model: &[
         (

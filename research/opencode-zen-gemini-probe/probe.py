@@ -1,8 +1,8 @@
-"""One billed Zen request to a Gemini model over google-generative-ai (#1642).
+"""One billed Zen request per run to a Gemini model over google-generative-ai (#1642).
 Key read from ~/.config/probe-keys/opencode-key, never written out. One request, no retry."""
-import json, os, urllib.request, urllib.error
+import json, os, sys, urllib.request, urllib.error
 KEY = open(os.path.expanduser('~/.config/probe-keys/opencode-key')).read().strip()
-MODEL = 'gemini-3.5-flash-lite'
+MODEL = sys.argv[1]  # run once per model: probe.py <model>
 URL = f'https://opencode.ai/zen/v1/models/{MODEL}:generateContent'
 body = {'contents': [{'role': 'user', 'parts': [{'text': 'Reply with the single word: ok'}]}],
         'generationConfig': {'maxOutputTokens': 16}}
@@ -18,5 +18,5 @@ hd = {k: v for k, v in hd.items() if k.lower() in ('content-type', 'retry-after'
 out = {'url': URL, 'status': status, 'request_headers': sorted(h), 'request': body, 'response_headers': hd, 'body': json.loads(txt) if txt.startswith(('{', '[')) else txt}
 s = json.dumps(out, indent=1)
 assert KEY not in s
-open('research/opencode-zen-gemini-probe/raw/generate.json', 'w').write(s)
+open('research/opencode-zen-gemini-probe/raw/generate-' + MODEL + '.json', 'w').write(s)
 print(status)
