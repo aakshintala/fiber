@@ -524,7 +524,14 @@ fn waiting(
         clock.await_parked(end, DEADLINE),
         "{what}: the read never parked at its deadline"
     );
-    let mark = clock.advance_marked(LIMIT.checked_sub(Duration::from_millis(1)).unwrap());
+    clock.advance(LIMIT.checked_sub(Duration::from_millis(1)).unwrap());
+    // The child can wake the worker between the first park and the
+    // advance, so the park to wait out is one that is live after the
+    // advance; a zero advance then wakes the worker out of it.
+    let mark = clock
+        .mark_parked(end, DEADLINE)
+        .unwrap_or_else(|| panic!("{what}: the read never parked after the advance"));
+    clock.advance(Duration::ZERO);
     assert!(
         clock.await_parked_since(&mark, Some(end), DEADLINE),
         "{what}: the read never parked again before its deadline"
