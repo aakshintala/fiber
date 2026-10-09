@@ -400,4 +400,4 @@ Typing `/` opens one completion panel above the input box. Commands, skills, pro
 | `at-empty` | `cargo run --release -- fixtures/idle.jsonl --static --completions at-empty`: the input reads `@zzz`, a `no files match` row |
 | `narrow-slash`, `narrow-at` | the same panels; run in a 100x40 terminal for the existing narrow layout |
 
-Live keys: typing `/` or `@` at the start of the input opens the panel. While it is open: ↑/↓ move, Tab completes and keeps the panel open, Enter completes and closes it (a second Enter sends), Esc closes. `/context` and `/model` keep their Enter, opening their views at once.
+Live keys: typing `/` or `@` at the start of the input opens the panel. While it is open: ↑/↓ move, Tab completes and keeps the panel open, Enter on a `/` row completes it and runs it at once (`/context` and `/model` open their views, anything else sends), Enter on an `@` row inserts its path as text, Esc closes.

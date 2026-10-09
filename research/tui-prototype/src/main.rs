@@ -2619,7 +2619,7 @@ fn bottom(f: &Fold, w: usize, tick: u64, now: i64, v: &View, narrow: bool, ui: &
     }
     // the `/` and `@` completion panels sit above the input box, over the conversation's bottom
     if let Some(c) = ui.completions.as_ref() {
-        out.extend(completions::view(c, completions::query_of(&ui.input), w));
+        out.extend(completions::view(c, &ui.input, w));
     }
     // search floats over the conversation, so the input box keeps its place and its draft
     let mut ib = match ui.top(f) {
@@ -4295,10 +4295,17 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                 let i = ui.qsel.unwrap();
                                 queue_drop(f, &mut ui, &mut cmds, ts, i);
                             }
-                            // the one slash command the prototype has: there is no slash command panel yet
+                            // the slash commands the prototype runs locally: their views
+                            // open at once, anything else sends as usual
                             Key::Enter if ui.qsel.is_none() && ui.input.trim() == "/context" => {
                                 ui.input.clear();
                                 ui.ctx_view = true;
+                                ui.vscroll = 0;
+                            }
+                            Key::Enter if ui.qsel.is_none() && ui.input.trim() == "/model" => {
+                                ui.input.clear();
+                                ui.ctx_view = false;
+                                ui.picker = Some(model_picker::for_case("list"));
                                 ui.vscroll = 0;
                             }
                             Key::Enter => enter(f, &mut ui, &mut cmds, ts),

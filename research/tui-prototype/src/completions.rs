@@ -99,24 +99,15 @@ pub fn filter_files<'a>(all: &'a [&'static str], query: &str) -> Vec<&'a str> {
         .collect()
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Kind {
-    Slash,
-    At,
-}
-
-fn kind_of(case: &str) -> Kind {
-    if case.contains("at") {
-        Kind::At
-    } else {
-        Kind::Slash
-    }
+/// The focused row, clamped into the filtered list wherever it is used, so
+/// rendering and selection always agree on the same row.
+fn clamped(focus: usize, len: usize) -> usize {
+    if len == 0 { 0 } else { focus.min(len - 1) }
 }
 
 pub struct State {
     /// the focused row, as an index into the filtered list
     pub focus: usize,
-    pub case: String,
 }
 
 pub fn for_case(case: &str) -> State {
@@ -128,10 +119,7 @@ pub fn for_case(case: &str) -> State {
             "--completions slash|slash-filtered|slash-hint|at|at-empty|narrow-slash|narrow-at"
         ),
     };
-    State {
-        focus,
-        case: case.into(),
-    }
+    State { focus }
 }
 
 /// The input box's text for a static case: the query already typed.
@@ -282,49 +270,40 @@ fn footer(start: usize, end: usize, total: usize) -> Row {
 }
 
 /// The panel above the input box: the `/` list or the `@` file search.
-pub fn view(s: &State, query: &str, w: usize) -> Vec<Row> {
-    match kind_of(&s.case) {
-        Kind::Slash => {
-            let all = entries();
-            let m = filter(&all, query);
-            if m.is_empty() {
-                return panel(vec![row(vec![sp("  no matches", dim())])], w);
-            }
-            let (start, end) = window(s.focus, m.len());
-            let mut rows: Vec<Row> = m[start..end]
-                .iter()
-                .enumerate()
-                .map(|(k, e)| {
-                    slash_row(
-                        e,
-                        start + k == s.focus.min(m.len().saturating_sub(1)),
-                        query,
-                        w,
-                    )
-                })
-                .collect();
-            if m.len() > SHOWN {
-                rows.push(footer(start, end, m.len()));
-            }
-            panel(rows, w)
+pub fn view(s: &State, input: &str, w: usize) -> Vec<Row> {
+    let query = query_of(input);
+    if input.starts_with('@') {
+        let all = files();
+        let m = filter_files(&all, query);
+        if m.is_empty() {
+            return panel(vec![row(vec![sp("  no files match", dim())])], w);
         }
-        Kind::At => {
-            let all = files();
-            let m = filter_files(&all, query);
-            if m.is_empty() {
-                return panel(vec![row(vec![sp("  no files match", dim())])], w);
-            }
-            let (start, end) = window(s.focus, m.len());
-            let mut rows: Vec<Row> = m[start..end]
-                .iter()
-                .enumerate()
-                .map(|(k, p)| file_row(p, start + k == s.focus.min(m.len() - 1), query, w))
-                .collect();
-            if m.len() > SHOWN {
-                rows.push(footer(start, end, m.len()));
-            }
-            panel(rows, w)
+        let (start, end) = window(s.focus, m.len());
+        let mut rows: Vec<Row> = m[start..end]
+            .iter()
+            .enumerate()
+            .map(|(k, p)| file_row(p, start + k == clamped(s.focus, m.len()), query, w))
+            .collect();
+        if m.len() > SHOWN {
+            rows.push(footer(start, end, m.len()));
         }
+        panel(rows, w)
+    } else {
+        let all = entries();
+        let m = filter(&all, query);
+        if m.is_empty() {
+            return panel(vec![row(vec![sp("  no matches", dim())])], w);
+        }
+        let (start, end) = window(s.focus, m.len());
+        let mut rows: Vec<Row> = m[start..end]
+            .iter()
+            .enumerate()
+            .map(|(k, e)| slash_row(e, start + k == clamped(s.focus, m.len()), query, w))
+            .collect();
+        if m.len() > SHOWN {
+            rows.push(footer(start, end, m.len()));
+        }
+        panel(rows, w)
     }
 }
 
@@ -344,31 +323,44 @@ fn move_focus(ui: &mut Ui, d: isize) {
         return;
     }
     let f = ui.completions.as_ref().map_or(0, |c| c.focus) as isize;
-    let f = (f + d).max(0).min(n as isize - 1) as usize;
+    let f = clamped((f + d).max(0) as usize, n);
     if let Some(c) = ui.completions.as_mut() {
         c.focus = f;
     }
 }
 
-/// Tab completes the focused row into the input box, keeping the panel open;
-/// Enter completes and closes it, so a second Enter sends.
+/// Tab completes the focused row into the input box, keeping the panel open.
+/// Only the leading command token (or the `@` token) is replaced, so any
+/// arguments already typed are kept. Enter on a `/` row closes the panel and
+/// falls through to the normal Enter, which runs the completed command.
 fn complete(ui: &mut Ui, close: bool) {
     let (at, focus, query) = (
         ui.input.starts_with('@'),
         ui.completions.as_ref().map_or(0, |c| c.focus),
         query_of(&ui.input).to_string(),
     );
+    // the rest of the draft after the leading token, kept as typed
+    let rest = ui
+        .input
+        .find(char::is_whitespace)
+        .map_or("", |i| ui.input[i..].trim_start());
     let next = if at {
-        filter_files(&files(), &query)
-            .get(focus)
-            .map(|p| format!("{p} "))
+        let all = files();
+        let m = filter_files(&all, &query);
+        m.get(clamped(focus, m.len()))
+            .map(|p| format!("{p} {rest}"))
     } else {
-        filter(&entries(), &query)
-            .get(focus)
-            .map(|e| format!("/{} ", e.name))
+        let all = entries();
+        let m = filter(&all, &query);
+        m.get(clamped(focus, m.len()))
+            .map(|e| format!("/{} {rest}", e.name))
     };
     if let Some(n) = next {
         ui.input = n;
+    }
+    // the filtered list changed behind the stored focus
+    if let Some(c) = ui.completions.as_mut() {
+        c.focus = clamped(c.focus, matches_len(&ui.input));
     }
     if close {
         ui.completions = None;
@@ -386,11 +378,14 @@ pub fn on_key(ui: &mut Ui, k: Key, m: Mods) -> bool {
         Key::Down if !m.alt && !m.ctrl => move_focus(ui, 1),
         Key::Tab if plain => complete(ui, false),
         Key::Enter if plain => {
-            // `/context` and `/model` keep their Enter: the swapped views open at once
-            if ui.input.trim() == "/context" || ui.input.trim() == "/model" {
+            // `/` runs at once: complete, close, and let the normal Enter below
+            // send the command (`/context` and `/model` open their views there).
+            // `@` inserts the file's path as text, sending nothing.
+            let at = ui.input.starts_with('@');
+            complete(ui, true);
+            if !at {
                 return false;
             }
-            complete(ui, true);
         }
         Key::Esc => ui.completions = None,
         _ => return false,
@@ -414,6 +409,10 @@ pub fn sync(ui: &mut Ui, top_open: bool) {
         }
     } else if !slash_at || top_open {
         ui.completions = None;
+    }
+    // typing changes the filtered list behind the stored focus
+    if let Some(c) = ui.completions.as_mut() {
+        c.focus = clamped(c.focus, matches_len(&ui.input));
     }
 }
 
@@ -526,10 +525,10 @@ mod tests {
         ] {
             let mut s = for_case("slash");
             s.focus = focus;
-            let t = text(&view(&s, "", 100));
+            let t = text(&view(&s, "/", 100));
             assert!(t.contains(tag), "missing tag {tag} at focus {focus}");
         }
-        let t = text(&view(&for_case("slash"), "", 100));
+        let t = text(&view(&for_case("slash"), "/", 100));
         assert!(
             t.contains("↓") && t.contains("more") && t.contains("40"),
             "missing the scroll hint"
@@ -538,26 +537,26 @@ mod tests {
 
     #[test]
     fn the_filtered_panel_shows_only_matches() {
-        let t = text(&view(&for_case("slash-filtered"), "re", 100));
+        let t = text(&view(&for_case("slash-filtered"), "/re", 100));
         assert!(t.contains("review"), "review matches re");
         assert!(!t.contains("onboard"), "onboard does not match re");
     }
 
     #[test]
     fn the_hint_case_shows_the_argument_hint_with_the_cut() {
-        let t = text(&view(&for_case("slash-hint"), "", 100));
+        let t = text(&view(&for_case("slash-hint"), "/", 100));
         assert!(t.contains("<path>"), "missing the skill's argument-hint");
         assert!(t.contains('…'), "missing the truncated description");
     }
 
     #[test]
     fn the_at_panel_lists_files_and_empty_says_so() {
-        let t = text(&view(&for_case("at"), "test", 100));
+        let t = text(&view(&for_case("at"), "@test", 100));
         assert!(
             t.contains("lock.rs") && t.contains("cancel.rs"),
             "missing the file matches"
         );
-        let t = text(&view(&for_case("at-empty"), "zzz", 100));
+        let t = text(&view(&for_case("at-empty"), "@zzz", 100));
         assert!(t.contains("no files match"), "missing the empty row");
     }
 
@@ -572,7 +571,7 @@ mod tests {
         // the last row on screen carries the focus marker
         let mut s = for_case("slash");
         s.focus = 39;
-        let t = text(&view(&s, "", 100));
+        let t = text(&view(&s, "/", 100));
         assert!(
             t.contains("↑ 32 above") && t.contains("33–40 of 40"),
             "missing the position"
@@ -622,6 +621,61 @@ mod tests {
         // `@` inserts the file's path as text
         let mut ui = ui_with("@test", "at");
         complete(&mut ui, true);
+        assert!(ui.input.contains("lock.rs"), "enter inserts the path");
+        assert!(ui.completions.is_none());
+    }
+
+    #[test]
+    fn a_stale_focus_clamps_onto_the_filtered_list() {
+        // `/`, Down, Tab on `model`: the second row of the full list, one match after
+        let mut ui = ui_with("/", "slash");
+        move_focus(&mut ui, 1);
+        assert_eq!(ui.completions.as_ref().unwrap().focus, 1);
+        complete(&mut ui, false);
+        assert_eq!(ui.input, "/model ");
+        assert_eq!(
+            ui.completions.as_ref().unwrap().focus,
+            0,
+            "one match left, so the focus clamps onto it"
+        );
+        // rendering and selection agree on the same row
+        let t = text(&view(ui.completions.as_ref().unwrap(), &ui.input, 100));
+        assert!(t.contains("model"), "the clamped row still shows");
+        complete(&mut ui, false);
+        assert_eq!(ui.input, "/model ", "a second Tab keeps the same row");
+    }
+
+    #[test]
+    fn completing_keeps_the_typed_arguments() {
+        // Tab selects `/review `, typing `src/main.rs` then Enter keeps `/review src/main.rs`
+        let mut ui = ui_with("/re", "slash-filtered");
+        complete(&mut ui, false);
+        assert_eq!(ui.input, "/review ");
+        ui.input.push_str("src/main.rs");
+        sync(&mut ui, false);
+        assert!(
+            ui.completions.is_some(),
+            "still a slash command, so the panel stays open"
+        );
+        complete(&mut ui, true);
+        assert_eq!(ui.input, "/review src/main.rs", "Enter keeps the arguments");
+        assert!(ui.completions.is_none(), "Enter closes the panel");
+    }
+
+    #[test]
+    fn enter_on_a_slash_row_runs_and_on_a_file_row_inserts() {
+        let mut ui = ui_with("/re", "slash-filtered");
+        assert!(
+            !on_key(&mut ui, Key::Enter, Mods::default()),
+            "Enter on a `/` row falls through to the normal Enter, which sends it"
+        );
+        assert_eq!(ui.input, "/review ");
+        assert!(ui.completions.is_none(), "Enter closes the panel");
+        let mut ui = ui_with("@test", "at");
+        assert!(
+            on_key(&mut ui, Key::Enter, Mods::default()),
+            "Enter on an `@` row is consumed: the path is inserted, nothing is sent"
+        );
         assert!(ui.input.contains("lock.rs"), "enter inserts the path");
         assert!(ui.completions.is_none());
     }
