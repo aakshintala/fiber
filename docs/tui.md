@@ -302,7 +302,9 @@ the conversation. The views are:
   ("main › ◆ review: …"). A status card gives harness, model, calls, elapsed
   time and session, with a stop target. The transcript uses the same turn
   cards as the conversation, and the input box sends steering messages to
-  that delegate.
+  that delegate. A delegate that has not bound its socket yet answers
+  `session_not_found`; while its parent lists it running, the terminal asks
+  again every 500 ms.
 - **A job running under a pseudo-terminal** has a live view of its screen. The
   input box types into it as raw keys, as `jobs write` does for the model, so
   the person can finish an interactive step the model started.

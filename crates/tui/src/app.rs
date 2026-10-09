@@ -49,6 +49,7 @@ mod form;
 #[path = "history.rs"]
 mod history;
 mod home;
+pub(crate) mod items;
 mod keyboard;
 mod links;
 mod model_picker;
@@ -282,6 +283,9 @@ pub(crate) struct App {
     config_views: config_views::ConfigViews,
     /// The attached session's views (`docs/tui.md`, "Swapped views").
     session_views: session_views::SessionViews,
+    /// The open delegate or job view and the per-job fold (`docs/tui.md`,
+    /// "Swapped views").
+    items: items::Items,
     /// Failures since the hub was last reached (`docs/tui.md`, "A dropped
     /// connection").
     reconnect: reconnect::Reconnect,
@@ -331,6 +335,7 @@ impl App {
             attention: attention::State::default(),
             config_views: config_views::ConfigViews::default(),
             session_views: session_views::SessionViews::default(),
+            items: items::Items::default(),
             reconnect: reconnect::Reconnect::default(),
             motion: crate::motion::Motion::default(),
         }
@@ -416,6 +421,7 @@ impl App {
                 self.steering.clear(&mut self.draft);
                 Effect::None
             }
+            Key::Esc if self.item_open() => self.item_esc(),
             Key::Esc => self.on_esc(),
             Key::PageUp | Key::PageDown => {
                 self.page(key == Key::PageUp);
@@ -495,6 +501,10 @@ impl App {
             self.link = Link::Down;
             self.notices.push("Connection lost.".to_owned());
         }
+        // A lost connection closes an open item view first, swapping the
+        // screen back before anything clears it, and drops every wish:
+        // the hub connection and its levels are gone.
+        self.drop_items();
         self.sessions_dropped();
         self.find_lost();
         self.abandon_copy();
@@ -543,13 +553,25 @@ impl App {
     /// every page.
     pub(crate) fn set_size(&mut self, width: u16, height: u16) {
         self.screen.set_size(width, height);
+        // A resize while open applies to both screens, so the restored
+        // screen keeps the new size.
+        if let Some(open) = self.items.open.as_mut()
+            && let Some(stashed) = open.stashed.as_mut()
+        {
+            stashed.set_size(width, height);
+        }
         self.settle();
     }
 
     /// Sets the zone the time of day under a prompt bubble shows
     /// (`docs/tui.md`, "Turns").
     pub(crate) fn set_zone(&mut self, zone: TimeZone) {
-        self.screen.pages_mut().zone = zone;
+        self.screen.pages_mut().zone = zone.clone();
+        if let Some(open) = self.items.open.as_mut()
+            && let Some(stashed) = open.stashed.as_mut()
+        {
+            stashed.pages_mut().zone = zone;
+        }
     }
 
     /// Records kitty's keyboard flags reply.
@@ -601,7 +623,14 @@ impl App {
     /// None on a screen too short for them.
     pub(crate) fn conversation_height(&self) -> usize {
         let below = self.below_rows();
-        usize::from(self.screen.height()).saturating_sub(below + self.narrow_rows(below))
+        let height =
+            usize::from(self.screen.height()).saturating_sub(below + self.narrow_rows(below));
+        // The item view's header takes the conversation's top rows.
+        if self.item_open() {
+            height.saturating_sub(crate::view::item::ITEM_HEADER_ROWS)
+        } else {
+            height
+        }
     }
 
     /// The rows below the conversation before the narrow layout's rows:
@@ -848,6 +877,28 @@ impl App {
             self.request_arrived(envelope);
         }
         let mut send = self.reply_ack(envelope);
+        // The open delegate's lines fold into the swapped screen, never
+        // touching the attached busy flag; their command answers still
+        // settle below, as any non-attached session's do.
+        if self.is_item_session(&envelope.session_id) {
+            self.item_session_line(envelope);
+            match envelope.kind.as_str() {
+                "command_accepted" => {
+                    if let Some(accepted) = read!(envelope, CommandAccepted) {
+                        self.pending.remove(&accepted.command_id.0);
+                    }
+                }
+                "command_rejected" => {
+                    if let Some(rejected) = read!(envelope, CommandRejected)
+                        && let Some(id) = rejected.command_id
+                    {
+                        self.refused(&id.0, &rejected.code, rejected.message);
+                    }
+                }
+                _ => {}
+            }
+            return send;
+        }
         if self.session() != Some(&envelope.session_id) {
             // A resent command for another session settles its pending
             // entry when its answer arrives, as on screen
@@ -881,6 +932,7 @@ impl App {
             return send;
         }
         send.extend(self.panel_line(envelope));
+        self.items_line(envelope);
         self.session_views_line(envelope);
         self.config_views_line(envelope);
         if envelope.kind == "turn_started"
@@ -888,7 +940,7 @@ impl App {
         {
             self.history.saw(&envelope.session_id, &started.input);
         }
-        let applied = self.screen.pages_mut().apply(envelope);
+        let applied = self.attached_screen_mut().pages_mut().apply(envelope);
         let mut changed = applied.changed;
         match envelope.kind.as_str() {
             "command_accepted" => {
@@ -898,12 +950,15 @@ impl App {
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
                     let item = shell
                         .and_then(|(_, draft)| shell::answered(&draft.expand(), accepted.result));
-                    changed |= self.screen.pages_mut().add_shell(item);
+                    changed |= self.attached_screen_mut().pages_mut().add_shell(item);
                 }
             }
             "shell_command" => {
                 if let Some(ran) = read!(envelope, ShellCommand) {
-                    changed |= self.screen.pages_mut().add_shell(Some(shell::ran(&ran)));
+                    changed |= self
+                        .attached_screen_mut()
+                        .pages_mut()
+                        .add_shell(Some(shell::ran(&ran)));
                 }
             }
             "command_rejected" => {
@@ -943,7 +998,7 @@ impl App {
             self.set_busy(busy);
         }
         if changed {
-            self.screen.changed();
+            self.attached_screen_mut().changed();
         }
         send
     }

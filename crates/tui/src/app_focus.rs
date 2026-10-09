@@ -249,6 +249,7 @@ impl App {
             | TargetId::Panel(_)
             | TargetId::Rail(_)
             | TargetId::Form(_)
+            | TargetId::Item(_)
             | TargetId::View(_) => None,
         }
     }

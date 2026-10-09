@@ -1374,6 +1374,7 @@ fn lines(targets: &[crate::mouse::Target]) -> Vec<(crate::app::Target, Rect)> {
             | crate::mouse::TargetId::Home(_)
             | crate::mouse::TargetId::Offer(_)
             | crate::mouse::TargetId::Panel(_)
+            | crate::mouse::TargetId::Item(_)
             | crate::mouse::TargetId::Rail(_)
             | crate::mouse::TargetId::Form(_)
             | crate::mouse::TargetId::Turn(_)

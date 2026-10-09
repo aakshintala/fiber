@@ -355,7 +355,15 @@ impl App {
                 "command_accepted" | "command_rejected" => {
                     let id = hub.payload.get("command_id").and_then(Value::as_str)?;
                     let accepted = hub.kind.as_str() == "command_accepted";
-                    if self.answered(id, accepted).is_some() {
+                    if let Some(session) = self.answered(id, accepted) {
+                        if !accepted {
+                            let code = hub
+                                .payload
+                                .get("code")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            self.subscribe_refused(session, code, &refusal(&hub.payload));
+                        }
                         if !accepted && self.is_ack(id) {
                             return Some(self.fail_open(refusal(&hub.payload)));
                         }
@@ -466,7 +474,19 @@ impl App {
                 ) {
                     let accepted = envelope.kind == "command_accepted";
                     let id = envelope.payload.get("command_id").and_then(Value::as_str)?;
-                    if self.answered(id, accepted).is_some() {
+                    if let Some(session) = self.answered(id, accepted) {
+                        if !accepted {
+                            let code = envelope
+                                .payload
+                                .get("code")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            self.subscribe_refused(
+                                session.clone(),
+                                code,
+                                &refusal(&envelope.payload),
+                            );
+                        }
                         if !accepted && self.is_ack(id) {
                             return Some(self.fail_open(refusal(&envelope.payload)));
                         }
@@ -522,6 +542,25 @@ impl App {
         self.home
             .as_ref()
             .and_then(|home| home.subs.expected(session))
+    }
+
+    /// Whether a subscribe for `session` waits for its answer.
+    pub(super) fn subscribe_pending(&self, session: &SessionId) -> bool {
+        self.home
+            .as_ref()
+            .is_some_and(|home| home.subs.pending(session))
+    }
+
+    /// Pushes an outgoing hub line made outside `on_line`'s tail.
+    /// Unused: the reconciler sends from `on_line`'s tail and the loop.
+    #[allow(
+        dead_code,
+        reason = "the plan's interface lists it; no path sends through it yet"
+    )]
+    pub(super) fn push_outbox(&mut self, line: String) {
+        if let Some(home) = self.home.as_mut() {
+            home.outbox.push(line);
+        }
     }
 
     /// Leaves the session on screen for home: the conversation cleared
