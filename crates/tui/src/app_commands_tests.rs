@@ -205,10 +205,10 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
     for _ in 0..8 {
         app.on_key(Key::Down, now());
     }
-    // The name command, after the added configuration commands.
+    // The handoff command, after the added `/usage` row.
     assert_eq!(
         selected(&app).as_deref(),
-        Some("/name <text>  Names the session.  command")
+        Some("/handoff [instructions]  Starts a handoff.  command")
     );
     assert_eq!(app.completions().and_then(|c| c.selected), Some(7));
     app.on_key(Key::Down, now());

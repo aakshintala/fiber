@@ -406,9 +406,13 @@ fn session_card_full() {
     let ids: Vec<crate::mouse::TargetId> = targets.iter().map(|target| target.id).collect();
     assert_eq!(
         ids,
-        [crate::mouse::TargetId::Panel(
-            crate::app::panel::Spot::Tools
-        )]
+        [
+            crate::mouse::TargetId::Panel(crate::app::panel::Spot::Usage),
+            crate::mouse::TargetId::Panel(crate::app::panel::Spot::Usage),
+            crate::mouse::TargetId::Panel(crate::app::panel::Spot::Usage),
+            crate::mouse::TargetId::Panel(crate::app::panel::Spot::Usage),
+            crate::mouse::TargetId::Panel(crate::app::panel::Spot::Tools),
+        ]
     );
 }
 
@@ -420,10 +424,8 @@ fn session_card_without_trigger() {
         spend(900, 100, 50, 200, serde_json::json!(0.41), 0.0),
         Some(serde_json::json!({"tokens": 500, "window": 1000})),
     ));
-    insta::assert_snapshot!(
-        "session_card_without_trigger",
-        super::super::text(&draw_panel(&app))
-    );
+    let (buf, _) = draw_targets(&app);
+    insta::assert_snapshot!("session_card_without_trigger", super::super::text(&buf));
 }
 
 #[test]
@@ -445,9 +447,13 @@ fn context_bar_marker_at_the_trigger() {
         spend(500, 0, 0, 0, serde_json::json!(0.0), 0.0),
         Some(serde_json::json!({"tokens": 500, "window": 1000})),
     ));
+    let (buf, targets) = draw_targets(&app);
+    assert!(targets.iter().any(|target| {
+        target.id == crate::mouse::TargetId::Panel(crate::app::panel::Spot::Usage)
+    }));
     insta::assert_snapshot!(
         "context_bar_marker_at_the_trigger",
-        super::super::text(&draw_panel(&app))
+        super::super::text(&buf)
     );
 }
 
