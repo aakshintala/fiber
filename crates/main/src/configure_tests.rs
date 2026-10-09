@@ -119,6 +119,35 @@ fn skills_disabled_carries_each_layers_own_list() {
 }
 
 #[test]
+fn skills_disabled_with_the_same_name_in_two_layers_shows_both() {
+    let dirs = Dirs::new();
+    let one = dirs.workspace("one");
+    write(
+        &dirs.home().join("config.json"),
+        r#"{"skills": {"disabled": ["a"]}}"#,
+    );
+    write(
+        &dirs.project_file(&one),
+        r#"{"skills": {"disabled": ["a"]}}"#,
+    );
+    let seam = Seam::new(dirs.home());
+    let skills = row(&seam, &one, "skills.disabled");
+    // Each layer's own list decides the row's layers, not the
+    // deduplicated names: both layers list `a`.
+    assert_eq!(skills.layer, "global + project");
+    assert_eq!(
+        skills.value,
+        Shown::Union {
+            names: vec![("a".to_owned(), "global".to_owned())],
+            own: vec![
+                (Layer::Global, r#"["a"]"#.to_owned()),
+                (Layer::Project, r#"["a"]"#.to_owned()),
+            ],
+        }
+    );
+}
+
+#[test]
 fn set_writes_the_layers_file_as_config_set_does() {
     let dirs = Dirs::new();
     let one = dirs.workspace("one");

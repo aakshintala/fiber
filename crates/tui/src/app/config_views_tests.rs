@@ -139,6 +139,27 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
 }
 
 #[test]
+fn notices_show_above_the_open_view_on_home_and_attached() {
+    // Notices float above the conversation (`docs/tui.md`, "Notices"),
+    // and above a configuration view swapped into its place.
+    for on_home in [false, true] {
+        let mut app = if on_home {
+            home(Some(fake()))
+        } else {
+            attached(Some(fake()))
+        };
+        app.push_notice("The theme solar floats above.".to_owned());
+        slash_settings(&mut app);
+        assert!(app.config_view_open());
+        let rows = screen(&app);
+        assert!(
+            rows.iter().any(|row| row.contains("floats above")),
+            "{rows:?}"
+        );
+    }
+}
+
+#[test]
 fn esc_and_the_x_close_it_and_send_nothing() {
     let seam = fake();
     let mut app = attached(Some(Arc::clone(&seam)));

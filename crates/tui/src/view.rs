@@ -85,9 +85,23 @@ pub(crate) fn render(
         return Vec::new();
     }
     // A configuration view takes home's place (`docs/tui.md`, "Swapped
-    // views").
+    // views"). Notices float above it (`docs/tui.md`, "Notices"), as
+    // over the conversation.
     if app.config_view_open() && app.on_home() {
-        return crate::swapped::whole(app, area, buf, pointer);
+        let mut targets = Vec::new();
+        crate::swapped::draw(app, area, buf, &mut targets);
+        notices(app, area, buf, &mut targets);
+        if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
+            for target in targets.iter().filter(|target| target.id == id) {
+                buf.set_style(target.rect, HOVER_TINT);
+            }
+        }
+        if let Some(id) = app.focused() {
+            for target in targets.iter().filter(|target| target.id == id) {
+                buf.set_style(target.rect, FOCUS_STYLE);
+            }
+        }
+        return targets;
     }
     if let Some(screen) = app.home_screen() {
         return home::render(app, &screen, area, buf, pointer);
@@ -161,9 +175,12 @@ pub(crate) fn render(
                 .render(conversation, buf);
             overlay_cross(buf, conversation, &mut targets);
         }
-        // A configuration view swaps in for the conversation.
+        // A configuration view swaps in for the conversation. Notices
+        // float above it (`docs/tui.md`, "Notices"), as over the
+        // conversation.
         None if app.config_view_open() => {
             crate::swapped::draw(app, conversation, buf, &mut targets);
+            notices(app, conversation, buf, &mut targets);
         }
         None => {
             // The repository offer swaps in for the conversation.

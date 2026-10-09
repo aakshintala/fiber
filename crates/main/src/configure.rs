@@ -84,17 +84,6 @@ fn row(config: &Config, info: config::SettingInfo) -> SettingRow {
             (Shown::Redacted(text), layer.to_owned(), file)
         }
         SettingValue::Union(names) => {
-            let mut layers: Vec<&str> = Vec::new();
-            let names = names
-                .into_iter()
-                .map(|(name, source)| {
-                    let (layer, _) = layer_of(&source);
-                    if !layers.contains(&layer) {
-                        layers.push(layer);
-                    }
-                    (name, layer.to_owned())
-                })
-                .collect();
             let own = [Layer::Global, Layer::Project, Layer::Repository]
                 .into_iter()
                 .filter_map(|layer| {
@@ -102,8 +91,27 @@ fn row(config: &Config, info: config::SettingInfo) -> SettingRow {
                         .in_layer(&info.key, layer_to(layer))
                         .map(|list| (layer, list.to_string()))
                 })
+                .collect::<Vec<_>>();
+            // Each layer's own list decides whether it shows, not the
+            // deduplicated names: two layers listing the same name both
+            // show (`docs/tui.md`, "Swapped views").
+            let layers = own
+                .iter()
+                .map(|(layer, _)| match layer {
+                    Layer::Global => "global",
+                    Layer::Project => "project",
+                    Layer::Repository => "repository",
+                })
+                .collect::<Vec<_>>()
+                .join(" + ");
+            let names = names
+                .into_iter()
+                .map(|(name, source)| {
+                    let (layer, _) = layer_of(&source);
+                    (name, layer.to_owned())
+                })
                 .collect();
-            (Shown::Union { names, own }, layers.join(" + "), None)
+            (Shown::Union { names, own }, layers, None)
         }
     };
     SettingRow {

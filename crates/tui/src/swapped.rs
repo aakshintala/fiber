@@ -10,7 +10,7 @@ use ratatui::style::{Modifier, Style};
 
 use crate::app::App;
 use crate::keys::Key;
-use crate::mouse::{self, Target, TargetId};
+use crate::mouse::{Target, TargetId};
 use crate::theme::Role;
 
 /// The selected row's style: reversed, so it shows on every theme and
@@ -109,24 +109,6 @@ pub(crate) struct Frame {
 pub(crate) fn rows_height(frame: &Frame, height: usize) -> usize {
     let fixed = 2 + frame.below.len() + usize::from(frame.field.is_some());
     height.saturating_sub(fixed)
-}
-
-/// Draws the open view over the whole of `area`, home's place, tinting
-/// the target under `pointer`.
-pub(crate) fn whole(
-    app: &App,
-    area: Rect,
-    buf: &mut Buffer,
-    pointer: Option<(u16, u16)>,
-) -> Vec<Target> {
-    let mut targets = Vec::new();
-    draw(app, area, buf, &mut targets);
-    if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
-        for target in targets.iter().filter(|target| target.id == id) {
-            buf.set_style(target.rect, crate::view::HOVER_TINT);
-        }
-    }
-    targets
 }
 
 /// Draws the open view into `area`, pushing its click targets.

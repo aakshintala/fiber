@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+use std::fmt;
+
 use serde_json::Value;
 
 use crate::ThemeSetting;
@@ -139,12 +141,24 @@ pub(crate) struct Ctx<'a> {
 
 /// The edit field: the layers a write may choose, the one chosen, the
 /// typed text, and whether the row's value is hidden.
-#[derive(Debug)]
 struct Field {
     layers: Vec<Layer>,
     at: usize,
     draft: Draft,
     redacted: bool,
+}
+
+/// The field may hold a typed secret replacing a redacted value, so it
+/// prints its draft redacted (`docs/code-quality.md`, "Errors").
+impl fmt::Debug for Field {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Field")
+            .field("layers", &self.layers)
+            .field("at", &self.at)
+            .field("draft", &"redacted")
+            .field("redacted", &self.redacted)
+            .finish()
+    }
 }
 
 impl Field {

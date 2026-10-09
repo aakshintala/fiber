@@ -342,6 +342,18 @@ fn a_redacted_row_opens_an_empty_field() {
 }
 
 #[test]
+fn debug_of_a_field_holding_a_typed_secret_hides_it() {
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "providers.openai.credentials.work");
+    press(&mut settings, &fake, &[Key::Enter]);
+    typed(&mut settings, &fake, "s3cr3t-k3y-xyz");
+    // A type that holds a secret prints it redacted in `Debug`
+    // (`docs/code-quality.md`, "Errors").
+    let shown = format!("{:?}", settings);
+    assert!(!shown.contains("s3cr3t-k3y-xyz"), "{shown}");
+}
+
+#[test]
 fn enter_on_an_empty_redacted_field_writes_nothing() {
     let fake = Fake::new(rows());
     let mut settings = at(&fake, "providers.openai.credentials.work");
