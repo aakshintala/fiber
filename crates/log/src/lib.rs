@@ -29,7 +29,7 @@ use contract::{ErrorCode, SessionId};
 pub use dependents::dependents;
 pub use export::export;
 pub use history::{Segment, history, history_to, last_line};
-pub use rate::Rate;
+pub use rate::{Rate, RateFold};
 pub use read::{Injector, Lines, Watcher, lines, read};
 pub use resolve::{most_recent, resolve};
 pub use scan::{

@@ -41,7 +41,7 @@ impl Rate {
 /// the action ids of the `assistant_message_started` lines since the latest
 /// build while its numerator is unset.
 #[derive(Debug, Default)]
-pub(crate) struct RateFold {
+pub struct RateFold {
     rate: Rate,
     model: Option<String>,
     started: HashSet<String>,
@@ -49,7 +49,7 @@ pub(crate) struct RateFold {
 
 impl RateFold {
     /// Folds one appended or replayed line.
-    pub(crate) fn fold(&mut self, line: &Envelope) {
+    pub fn fold(&mut self, line: &Envelope) {
         match line.kind.as_str() {
             "preamble_built" => {
                 self.rate = Rate::default();
@@ -93,7 +93,7 @@ impl RateFold {
     }
 
     /// The rate folded so far.
-    pub(crate) fn rate(&self) -> Rate {
+    pub fn rate(&self) -> Rate {
         self.rate
     }
 }

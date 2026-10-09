@@ -214,6 +214,23 @@ fn row_one_shows_the_context_share_and_a_zero_window_shows_none() {
 }
 
 #[test]
+fn the_context_status_segment_has_a_context_target() {
+    let mut app = attached(100, 30);
+    app.on_line(context_status(50, 100));
+    app.on_line(preamble("test/model", 100));
+    let (screen, targets) = draw(&app, 100, 30);
+    let context = targets
+        .iter()
+        .find(|target| target.id == TargetId::Panel(Spot::Context))
+        .expect("the context segment is clickable");
+    let row = screen.lines().nth(usize::from(context.rect.y));
+    assert!(
+        row.is_some_and(|row| row.contains("50% context")),
+        "{screen}"
+    );
+}
+
+#[test]
 fn row_two_opens_with_delegates_and_jobs() {
     let mut app = attached(100, 30);
     app.on_line(idle(SESSION, "one"));
