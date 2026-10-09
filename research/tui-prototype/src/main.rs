@@ -2,6 +2,7 @@
 //! `docs/events.md` lines in a real terminal. Throwaway code: the fold and the
 //! drawing side by side, the input parser in `input.rs`, a few tests.
 
+mod completions;
 mod home;
 mod input;
 mod lua;
@@ -2206,6 +2207,8 @@ struct Ui {
     ctx_view: bool,
     /// the model picker is swapped into the conversation area
     picker: Option<model_picker::State>,
+    /// the `/` or `@` completion panel above the input box
+    completions: Option<completions::State>,
     /// the view's own scroll, rows from its top
     vscroll: usize,
     /// the rail design: 0 list, 1 cards, 2 tabs (`--rail`, or the A/B/C chips)
@@ -2240,7 +2243,7 @@ impl Ui {
         (!open.is_empty()).then(|| open[self.shown % open.len()])
     }
     fn nothing_open(&self, f: &Fold) -> bool {
-        self.search.is_none() && self.qsel.is_none() && !self.ctx_view && self.top(f).is_none()
+        self.search.is_none() && self.qsel.is_none() && !self.ctx_view && self.completions.is_none() && self.top(f).is_none()
     }
     /// Starts a fresh form state when the form on top changes.
     fn sync_form(&mut self, f: &Fold) {
@@ -2613,6 +2616,10 @@ fn bottom(f: &Fold, w: usize, tick: u64, now: i64, v: &View, narrow: bool, ui: &
             ]));
         }
         out.push(row(vec![sp("      ⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to drop", dim())]));
+    }
+    // the `/` and `@` completion panels sit above the input box, over the conversation's bottom
+    if let Some(c) = ui.completions.as_ref() {
+        out.extend(completions::view(c, completions::query_of(&ui.input), w));
     }
     // search floats over the conversation, so the input box keeps its place and its draft
     let mut ib = match ui.top(f) {
@@ -3124,6 +3131,8 @@ struct Args {
     panel_share: f64,
     /// `--picker CASE`: start with the model picker open
     picker: Option<String>,
+    /// `--completions CASE`: start with the completion panel open
+    completions: Option<String>,
 }
 fn args() -> Args {
     let mut a = Args {
@@ -3153,6 +3162,7 @@ fn args() -> Args {
         rail_share: 15.0,
         panel_share: 21.0,
         picker: None,
+        completions: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
@@ -3197,8 +3207,9 @@ fn args() -> Args {
                 }
             }
             "--picker" => a.picker = it.next(),
+            "--completions" => a.completions = it.next(),
             "-h" | "--help" => {
-                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
+                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -3393,6 +3404,10 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     ui.panel_share = a.panel_share.clamp(1.0, 90.0);
     model_picker::set_still(a.static_);
     ui.picker = a.picker.as_deref().map(model_picker::for_case);
+    ui.completions = a.completions.as_deref().map(|c| {
+        ui.input = completions::input_for(c);
+        completions::for_case(c)
+    });
     let mut rd = input::Reader::new()?;
     let mut cmds = match &a.commands {
         Some(p) => Some(std::fs::OpenOptions::new().create(true).append(true).open(p)?),
@@ -4138,6 +4153,10 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     if model_picker::on_key(&mut ui, k, m) {
                         continue;
                     }
+                    // the `/` and `@` panels take their keys while open
+                    if completions::on_key(&mut ui, k, m) {
+                        continue;
+                    }
                     // Esc leaves a swapped view, back to where the conversation was
                     if k == Key::Esc && ui.ctx_view {
                         ui.ctx_view = false;
@@ -4399,6 +4418,11 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         Mouse::Other | Mouse::Move => {}
                     }
                 }
+            }
+            // typing `/` or `@` at the input's start opens the panel; anything else closes it
+            {
+                let top_open = ui.top(f).is_some();
+                completions::sync(&mut ui, top_open);
             }
             let Some(act) = click else { continue };
             changed = true;

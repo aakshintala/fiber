@@ -85,13 +85,18 @@ pub fn files() -> Vec<&'static str> {
 /// empty matches all, so arguments after the name keep filtering on it.
 pub fn filter<'a>(all: &'a [Entry], query: &str) -> Vec<&'a Entry> {
     let q = query.split_whitespace().next().unwrap_or("").to_lowercase();
-    all.iter().filter(|e| e.name.to_lowercase().contains(&q)).collect()
+    all.iter()
+        .filter(|e| e.name.to_lowercase().contains(&q))
+        .collect()
 }
 
 /// The files whose path holds the query's first word, case-insensitive; empty matches all.
 pub fn filter_files<'a>(all: &'a [&'static str], query: &str) -> Vec<&'a str> {
     let q = query.split_whitespace().next().unwrap_or("").to_lowercase();
-    all.iter().copied().filter(|p| p.to_lowercase().contains(&q)).collect()
+    all.iter()
+        .copied()
+        .filter(|p| p.to_lowercase().contains(&q))
+        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -101,7 +106,11 @@ enum Kind {
 }
 
 fn kind_of(case: &str) -> Kind {
-    if case.contains("at") { Kind::At } else { Kind::Slash }
+    if case.contains("at") {
+        Kind::At
+    } else {
+        Kind::Slash
+    }
 }
 
 pub struct State {
@@ -115,9 +124,14 @@ pub fn for_case(case: &str) -> State {
         "slash" | "slash-filtered" | "at" | "at-empty" | "narrow-slash" | "narrow-at" => 0,
         // the skill with an argument-hint, focused so its row shows
         "slash-hint" => entries().iter().position(|e| e.hint.is_some()).unwrap_or(0),
-        _ => panic!("--completions slash|slash-filtered|slash-hint|at|at-empty|narrow-slash|narrow-at"),
+        _ => panic!(
+            "--completions slash|slash-filtered|slash-hint|at|at-empty|narrow-slash|narrow-at"
+        ),
     };
-    State { focus, case: case.into() }
+    State {
+        focus,
+        case: case.into(),
+    }
 }
 
 /// The input box's text for a static case: the query already typed.
@@ -127,13 +141,18 @@ pub fn input_for(case: &str) -> String {
         "slash-filtered" => "/re".into(),
         "at" | "narrow-at" => "@test".into(),
         "at-empty" => "@zzz".into(),
-        _ => panic!("--completions slash|slash-filtered|slash-hint|at|at-empty|narrow-slash|narrow-at"),
+        _ => panic!(
+            "--completions slash|slash-filtered|slash-hint|at|at-empty|narrow-slash|narrow-at"
+        ),
     }
 }
 
 /// The query behind the leading `/` or `@`.
 pub fn query_of(input: &str) -> &str {
-    input.strip_prefix('/').or_else(|| input.strip_prefix('@')).unwrap_or(input)
+    input
+        .strip_prefix('/')
+        .or_else(|| input.strip_prefix('@'))
+        .unwrap_or(input)
 }
 
 /// Cuts text to at most `max` cells, ending in an ellipsis when cut.
@@ -161,7 +180,12 @@ fn truncate(s: &str, max: usize) -> String {
 /// The name with its matched letters in bold, when the query matches.
 fn highlight(text: &str, query: &str, base: Style) -> Vec<Span<'static>> {
     let lower = text.to_lowercase();
-    let Some(i) = query.to_lowercase().split_whitespace().next().and_then(|q| lower.find(q)) else {
+    let Some(i) = query
+        .to_lowercase()
+        .split_whitespace()
+        .next()
+        .and_then(|q| lower.find(q))
+    else {
         return vec![sp(text, base)];
     };
     let q = query.split_whitespace().next().unwrap_or(query);
@@ -174,15 +198,29 @@ fn highlight(text: &str, query: &str, base: Style) -> Vec<Span<'static>> {
     while !text.is_char_boundary(b) {
         b -= 1;
     }
-    vec![sp(&text[..a], base), sp(&text[a..b], base.add_modifier(ratatui::style::Modifier::BOLD)), sp(&text[b..], base)]
+    vec![
+        sp(&text[..a], base),
+        sp(
+            &text[a..b],
+            base.add_modifier(ratatui::style::Modifier::BOLD),
+        ),
+        sp(&text[b..], base),
+    ]
 }
 
 /// One `/` row: the name in the accent colour, the description dim, the skill's
 /// argument-hint in the attention colour, and the tag right-aligned. The
 /// description gives way first, so the tag is never cut.
 pub fn slash_row(e: &Entry, focused: bool, query: &str, w: usize) -> Row {
-    let name_style = if focused { bold().patch(fg(BLUE)) } else { fg(BLUE) };
-    let mut spans = vec![sp(if focused { "› " } else { "  " }, if focused { fg(ORANGE) } else { dim() })];
+    let name_style = if focused {
+        bold().patch(fg(BLUE))
+    } else {
+        fg(BLUE)
+    };
+    let mut spans = vec![sp(
+        if focused { "› " } else { "  " },
+        if focused { fg(ORANGE) } else { dim() },
+    )];
     spans.extend(highlight(e.name, query, name_style));
     spans.push(sp(" ", Style::new()));
     let hint = e.hint.map_or(String::new(), |h| format!(" {h}"));
@@ -198,9 +236,16 @@ pub fn slash_row(e: &Entry, focused: bool, query: &str, w: usize) -> Row {
 /// One `@` row: the path in the accent colour, cut from the left when long so
 /// the file name stays.
 pub fn file_row(path: &str, focused: bool, query: &str, w: usize) -> Row {
-    let name_style = if focused { bold().patch(fg(BLUE)) } else { fg(BLUE) };
+    let name_style = if focused {
+        bold().patch(fg(BLUE))
+    } else {
+        fg(BLUE)
+    };
     let cut = left_cut(path, w.saturating_sub(2));
-    let mut spans = vec![sp(if focused { "› " } else { "  " }, if focused { fg(ORANGE) } else { dim() })];
+    let mut spans = vec![sp(
+        if focused { "› " } else { "  " },
+        if focused { fg(ORANGE) } else { dim() },
+    )];
     spans.extend(highlight(&cut, query, name_style));
     row(fit(&spans, w))
 }
@@ -246,7 +291,18 @@ pub fn view(s: &State, query: &str, w: usize) -> Vec<Row> {
                 return panel(vec![row(vec![sp("  no matches", dim())])], w);
             }
             let (start, end) = window(s.focus, m.len());
-            let mut rows: Vec<Row> = m[start..end].iter().enumerate().map(|(k, e)| slash_row(e, start + k == s.focus.min(m.len().saturating_sub(1)), query, w)).collect();
+            let mut rows: Vec<Row> = m[start..end]
+                .iter()
+                .enumerate()
+                .map(|(k, e)| {
+                    slash_row(
+                        e,
+                        start + k == s.focus.min(m.len().saturating_sub(1)),
+                        query,
+                        w,
+                    )
+                })
+                .collect();
             if m.len() > SHOWN {
                 rows.push(footer(start, end, m.len()));
             }
@@ -259,7 +315,11 @@ pub fn view(s: &State, query: &str, w: usize) -> Vec<Row> {
                 return panel(vec![row(vec![sp("  no files match", dim())])], w);
             }
             let (start, end) = window(s.focus, m.len());
-            let mut rows: Vec<Row> = m[start..end].iter().enumerate().map(|(k, p)| file_row(p, start + k == s.focus.min(m.len() - 1), query, w)).collect();
+            let mut rows: Vec<Row> = m[start..end]
+                .iter()
+                .enumerate()
+                .map(|(k, p)| file_row(p, start + k == s.focus.min(m.len() - 1), query, w))
+                .collect();
             if m.len() > SHOWN {
                 rows.push(footer(start, end, m.len()));
             }
@@ -293,11 +353,19 @@ fn move_focus(ui: &mut Ui, d: isize) {
 /// Tab completes the focused row into the input box, keeping the panel open;
 /// Enter completes and closes it, so a second Enter sends.
 fn complete(ui: &mut Ui, close: bool) {
-    let (at, focus, query) = (ui.input.starts_with('@'), ui.completions.as_ref().map_or(0, |c| c.focus), query_of(&ui.input).to_string());
+    let (at, focus, query) = (
+        ui.input.starts_with('@'),
+        ui.completions.as_ref().map_or(0, |c| c.focus),
+        query_of(&ui.input).to_string(),
+    );
     let next = if at {
-        filter_files(&files(), &query).get(focus).map(|p| format!("{p} "))
+        filter_files(&files(), &query)
+            .get(focus)
+            .map(|p| format!("{p} "))
     } else {
-        filter(&entries(), &query).get(focus).map(|e| format!("/{} ", e.name))
+        filter(&entries(), &query)
+            .get(focus)
+            .map(|e| format!("/{} ", e.name))
     };
     if let Some(n) = next {
         ui.input = n;
@@ -335,8 +403,13 @@ pub fn on_key(ui: &mut Ui, k: Key, m: Mods) -> bool {
 pub fn sync(ui: &mut Ui, top_open: bool) {
     let slash_at = ui.input.starts_with('/') || ui.input.starts_with('@');
     if ui.completions.is_none() {
-        if slash_at && !top_open && ui.search.is_none() && ui.picker.is_none() && ui.qsel.is_none() {
-            let case = if ui.input.starts_with('@') { "at" } else { "slash" };
+        if slash_at && !top_open && ui.search.is_none() && ui.picker.is_none() && ui.qsel.is_none()
+        {
+            let case = if ui.input.starts_with('@') {
+                "at"
+            } else {
+                "slash"
+            };
             ui.completions = Some(for_case(case));
         }
     } else if !slash_at || top_open {
@@ -371,12 +444,22 @@ mod tests {
         assert_eq!(filter(&all, "").len(), 40, "empty query matches all");
         let m = filter(&all, "re");
         assert!(!m.is_empty() && m.len() < 40, "only some entries match");
-        assert!(m.iter().all(|e| e.name.to_lowercase().contains("re")), "every match holds the query");
+        assert!(
+            m.iter().all(|e| e.name.to_lowercase().contains("re")),
+            "every match holds the query"
+        );
         assert!(names(&m).contains(&"review"), "review matches re");
         assert!(!names(&m).contains(&"onboard"), "onboard does not match re");
         assert!(filter(&all, "zzz").is_empty(), "no entry matches zzz");
-        assert_eq!(names(&filter(&all, "RE")), names(&m), "matching ignores case");
-        assert!(names(&filter(&all, "review --staged")).contains(&"review"), "arguments keep filtering on the name");
+        assert_eq!(
+            names(&filter(&all, "RE")),
+            names(&m),
+            "matching ignores case"
+        );
+        assert!(
+            names(&filter(&all, "review --staged")).contains(&"review"),
+            "arguments keep filtering on the name"
+        );
     }
 
     #[test]
@@ -384,9 +467,15 @@ mod tests {
         let all = files();
         assert_eq!(filter_files(&all, "").len(), all.len());
         let m = filter_files(&all, "test");
-        assert!(m.contains(&"crates/log/tests/lock.rs") && m.contains(&"crates/loop/tests/cancel.rs"));
+        assert!(
+            m.contains(&"crates/log/tests/lock.rs") && m.contains(&"crates/loop/tests/cancel.rs")
+        );
         assert!(filter_files(&all, "zzz").is_empty());
-        assert_eq!(filter_files(&all, "LOCK"), filter_files(&all, "lock"), "matching ignores case");
+        assert_eq!(
+            filter_files(&all, "LOCK"),
+            filter_files(&all, "lock"),
+            "matching ignores case"
+        );
     }
 
     #[test]
@@ -396,7 +485,10 @@ mod tests {
         for w in [59, 60, 61] {
             let r = slash_row(&long, true, "", w);
             assert_eq!(width(&r.spans), w, "slash row at {w}");
-            assert!(plain(&r).contains('…'), "the long description is cut at {w}");
+            assert!(
+                plain(&r).contains('…'),
+                "the long description is cut at {w}"
+            );
             assert!(plain(&r).contains("command"), "the tag survives at {w}");
         }
         let hinted = entries().into_iter().find(|e| e.hint.is_some()).unwrap();
@@ -407,21 +499,33 @@ mod tests {
         for w in [39, 40, 41] {
             let r = file_row("research/tui-prototype/src/model_picker.rs", false, "", w);
             assert_eq!(width(&r.spans), w, "file row at {w}");
-            assert!(plain(&r).contains("model_picker.rs"), "the file name survives at {w}");
+            assert!(
+                plain(&r).contains("model_picker.rs"),
+                "the file name survives at {w}"
+            );
         }
     }
 
     #[test]
     fn the_slash_panel_shows_each_kind_with_a_scroll_hint() {
         // eight rows show at once, so each tag is checked with the focus in its rows
-        for (focus, tag) in [(0, "command"), (15, "skill"), (24, "template"), (30, "review"), (39, "linear")] {
+        for (focus, tag) in [
+            (0, "command"),
+            (15, "skill"),
+            (24, "template"),
+            (30, "review"),
+            (39, "linear"),
+        ] {
             let mut s = for_case("slash");
             s.focus = focus;
             let t = text(&view(&s, "", 100));
             assert!(t.contains(tag), "missing tag {tag} at focus {focus}");
         }
         let t = text(&view(&for_case("slash"), "", 100));
-        assert!(t.contains("↓") && t.contains("more") && t.contains("40"), "missing the scroll hint");
+        assert!(
+            t.contains("↓") && t.contains("more") && t.contains("40"),
+            "missing the scroll hint"
+        );
     }
 
     #[test]
@@ -441,7 +545,10 @@ mod tests {
     #[test]
     fn the_at_panel_lists_files_and_empty_says_so() {
         let t = text(&view(&for_case("at"), "test", 100));
-        assert!(t.contains("lock.rs") && t.contains("cancel.rs"), "missing the file matches");
+        assert!(
+            t.contains("lock.rs") && t.contains("cancel.rs"),
+            "missing the file matches"
+        );
         let t = text(&view(&for_case("at-empty"), "zzz", 100));
         assert!(t.contains("no files match"), "missing the empty row");
     }
@@ -458,7 +565,10 @@ mod tests {
         let mut s = for_case("slash");
         s.focus = 39;
         let t = text(&view(&s, "", 100));
-        assert!(t.contains("↑ 32 above") && t.contains("33–40 of 40"), "missing the position");
+        assert!(
+            t.contains("↑ 32 above") && t.contains("33–40 of 40"),
+            "missing the position"
+        );
     }
 
     #[test]
@@ -469,10 +579,18 @@ mod tests {
         let n = matches_len(&ui.input);
         assert!(n > 1, "the filter leaves room to move");
         move_focus(&mut ui, -1);
-        assert_eq!(ui.completions.as_ref().unwrap().focus, 0, "focus moved above the first row");
+        assert_eq!(
+            ui.completions.as_ref().unwrap().focus,
+            0,
+            "focus moved above the first row"
+        );
         ui.completions.as_mut().unwrap().focus = n - 1;
         move_focus(&mut ui, 1);
-        assert_eq!(ui.completions.as_ref().unwrap().focus, n - 1, "focus moved below the last row");
+        assert_eq!(
+            ui.completions.as_ref().unwrap().focus,
+            n - 1,
+            "focus moved below the last row"
+        );
         // below and above the list both clamp onto it
         ui.completions.as_mut().unwrap().focus = 99;
         move_focus(&mut ui, 1);
