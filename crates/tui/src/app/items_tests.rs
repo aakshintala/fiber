@@ -942,6 +942,34 @@ fn the_delegate_call_count_counts_its_tool_calls() {
 }
 
 #[test]
+fn reopening_restarts_the_call_count_for_the_replay() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    opened_item(&mut app, "j_1");
+    app.on_line(other_line(DELEGATE_A, "tool_call_completed", json!({})));
+    app.on_line(other_line(DELEGATE_A, "tool_call_completed", json!({})));
+    assert_eq!(
+        app.item_view()
+            .unwrap_or_else(|| panic!("a view"))
+            .calls,
+        Some(2)
+    );
+    app.close_item();
+    let lowered = commands(app.items_due(clock.now()));
+    ack_all(&mut app, &lowered);
+    opened_item(&mut app, "j_1");
+    // The fresh screen replays the transcript: the same two
+    // completions count once, not on top of the first viewing.
+    app.on_line(other_line(DELEGATE_A, "tool_call_completed", json!({})));
+    app.on_line(other_line(DELEGATE_A, "tool_call_completed", json!({})));
+    let view = app.item_view().unwrap_or_else(|| panic!("a view"));
+    assert_eq!(view.calls, Some(2));
+}
+
+#[test]
 fn paging_follows_the_open_delegate() {
     let mut app = home();
     opened(&mut app);

@@ -311,6 +311,14 @@ impl App {
             swapped.set_size(self.screen.width(), self.screen.height());
             swapped.pages_mut().zone = self.screen.pages().zone.clone();
             let stashed = std::mem::replace(&mut self.screen, swapped);
+            // A fresh screen replays the transcript from the start, so
+            // the call count restarts with it: replayed completions
+            // would otherwise count twice.
+            if let Some(record) = self.items.jobs.get_mut(job)
+                && let Some(delegate) = record.delegate.as_mut()
+            {
+                delegate.calls = 0;
+            }
             self.items.open = Some(Open {
                 job_id: job.clone(),
                 stashed: Some(stashed),
