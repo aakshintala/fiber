@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::OneQuestion;
 use crate::approvals::form::Spot;
-use crate::approvals::PanelKey;
+use crate::approvals::{PanelKey, Queue};
 use crate::keys::{Edit, Key};
 
 fn choice(label: &str, description: Option<&str>) -> Choice {
@@ -583,4 +583,231 @@ fn answer_variant_types_match_the_kind() {
     assert!(matches!(multi.answer(), Some(ReplyAnswer::Labels { .. })));
     let text = OneQuestion::text_input("Words?".to_owned());
     assert!(matches!(text.answer(), Some(ReplyAnswer::Text { .. })));
+}
+
+const S_A: &str = "s_aaaaaaaaaaaaaaaa";
+
+fn envelope(kind: &str, payload: Value) -> contract::Envelope {
+    contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId(S_A.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }
+}
+
+fn confirm_request(id: &str) -> contract::Envelope {
+    envelope(
+        "interaction_requested",
+        json!({"request_id": id, "kind": "confirm", "prompt": "Continue?"}),
+    )
+}
+
+fn select_request(id: &str) -> contract::Envelope {
+    envelope(
+        "interaction_requested",
+        json!({"request_id": id, "kind": "select", "prompt": "Pick one?",
+            "options": [{"label": "a"}, {"label": "b"}]}),
+    )
+}
+
+fn multi_select_request(id: &str) -> contract::Envelope {
+    envelope(
+        "interaction_requested",
+        json!({"request_id": id, "kind": "multi_select", "prompt": "Pick some?",
+            "options": [{"label": "a"}, {"label": "b"}, {"label": "c"}]}),
+    )
+}
+
+fn text_input_request(id: &str) -> contract::Envelope {
+    envelope(
+        "interaction_requested",
+        json!({"request_id": id, "kind": "text_input", "prompt": "What?"}),
+    )
+}
+
+fn form_request(id: &str) -> contract::Envelope {
+    envelope(
+        "interaction_requested",
+        json!({"request_id": id, "kind": "form", "fields": []}),
+    )
+}
+
+fn approval_request(id: &str) -> contract::Envelope {
+    envelope(
+        "permission_requested",
+        json!({"request_id": id, "effects": ["executes"], "reversible": true,
+            "step": "standing_ask", "standing_rule": {"scope": "global", "prefix": "ls"}}),
+    )
+}
+
+fn queue_with(request: contract::Envelope) -> Queue {
+    let mut queue = Queue::default();
+    queue.fold(&request);
+    queue
+}
+
+fn header(queue: &Queue) -> String {
+    queue
+        .panel(80)
+        .and_then(|panel| panel.lines.first().cloned())
+        .unwrap_or_default()
+}
+
+fn reply(line: &str) -> Value {
+    serde_json::from_str(line).unwrap_or_default()
+}
+
+#[test]
+fn each_one_question_kind_opens_in_the_shared_queue() {
+    for request in [
+        confirm_request("r_c"),
+        select_request("r_s"),
+        multi_select_request("r_m"),
+        text_input_request("r_t"),
+    ] {
+        let queue = queue_with(request);
+        assert!(queue.open());
+        assert_eq!(header(&queue), format!("question · {S_A} · 1 of 1"));
+    }
+}
+
+#[test]
+fn a_one_question_waits_behind_a_put_aside_approval() {
+    let mut queue = queue_with(approval_request("r_a"));
+    assert_eq!(queue.on_key(&Key::Esc), Some(PanelKey::Handled));
+    queue.fold(&confirm_request("r_c"));
+    assert!(!queue.open());
+    assert_eq!(
+        queue.badge(0).as_deref(),
+        Some("! 2 waiting · /approvals or ⌥A")
+    );
+}
+
+#[test]
+fn a_one_question_joins_the_queue_after_a_form_and_moves_up_when_answered() {
+    let mut queue = queue_with(form_request("r_f"));
+    queue.fold(&confirm_request("r_c"));
+    assert_eq!(header(&queue), format!("question · {S_A} · 1 of 2"));
+    assert!(queue.answer("c_f").is_some());
+    assert_eq!(header(&queue), format!("question · {S_A} · 1 of 1"));
+}
+
+#[test]
+fn each_one_question_kind_answers_with_its_reply_key() {
+    let mut confirm = queue_with(confirm_request("r_c"));
+    assert_eq!(confirm.on_key(&Key::Enter), Some(PanelKey::Answer));
+    assert_eq!(
+        reply(&confirm.answer("c_c").unwrap_or_default()),
+        json!({"id": "c_c", "command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_c", "confirmed": true}})
+    );
+
+    let mut select = queue_with(select_request("r_s"));
+    assert_eq!(select.on_key(&Key::Down), Some(PanelKey::Handled));
+    assert_eq!(select.on_key(&Key::Enter), Some(PanelKey::Answer));
+    assert_eq!(
+        reply(&select.answer("c_s").unwrap_or_default()),
+        json!({"id": "c_s", "command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_s", "labels": ["b"]}})
+    );
+
+    let mut multi = queue_with(multi_select_request("r_m"));
+    for key in [Key::Char(' '), Key::Down, Key::Down, Key::Char(' ')] {
+        assert_eq!(multi.on_key(&key), Some(PanelKey::Handled), "{key:?}");
+    }
+    assert_eq!(multi.on_key(&Key::Enter), Some(PanelKey::Answer));
+    assert_eq!(
+        reply(&multi.answer("c_m").unwrap_or_default()),
+        json!({"id": "c_m", "command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_m", "labels": ["a", "c"]}})
+    );
+
+    let mut text = queue_with(text_input_request("r_t"));
+    for ch in "hi".chars() {
+        assert_eq!(text.on_key(&Key::Char(ch)), Some(PanelKey::Handled));
+    }
+    assert_eq!(text.on_key(&Key::Enter), Some(PanelKey::Answer));
+    assert_eq!(
+        reply(&text.answer("c_t").unwrap_or_default()),
+        json!({"id": "c_t", "command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_t", "text": "hi"}})
+    );
+}
+
+#[test]
+fn decline_sends_declined_and_records_each_one_question_session_once() {
+    for request in [
+        confirm_request("r_c"),
+        select_request("r_s"),
+        multi_select_request("r_m"),
+        text_input_request("r_t"),
+    ] {
+        let request_id = request
+            .payload
+            .get("request_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let mut queue = queue_with(request);
+        assert_eq!(
+            reply(&queue.decline("c_1").unwrap_or_default()),
+            json!({"id": "c_1", "command": "reply", "session_id": S_A,
+                "args": {"request_id": request_id, "declined": true}})
+        );
+        assert_eq!(queue.declined("c_1"), Some(contract::SessionId(S_A.to_owned())));
+        assert_eq!(queue.declined("c_1"), None);
+    }
+}
+
+#[test]
+fn restoring_a_text_input_reply_keeps_its_words() {
+    let mut queue = queue_with(text_input_request("r_t"));
+    queue.on_edit(&Edit::Paste("hi".to_owned()));
+    assert!(queue.answer("c_t").is_some());
+    queue.restore("c_t");
+    assert!(queue.open());
+    assert!(queue
+        .panel(80)
+        .is_some_and(|panel| panel.lines.contains(&"› ✎ hi".to_owned())));
+}
+
+#[test]
+fn a_raised_again_text_input_keeps_its_words() {
+    let mut queue = queue_with(text_input_request("r_t"));
+    queue.on_edit(&Edit::Paste("hi".to_owned()));
+    let mut raised = text_input_request("r_t");
+    raised
+        .payload
+        .insert("resumes".to_owned(), Value::Bool(true));
+    queue.fold(&raised);
+    assert!(queue
+        .panel(80)
+        .is_some_and(|panel| panel.lines.contains(&"› ✎ hi".to_owned())));
+}
+
+#[test]
+fn an_interaction_resolved_by_fiber_removes_a_one_question() {
+    let mut queue = queue_with(text_input_request("r_t"));
+    queue.fold(&envelope(
+        "interaction_resolved",
+        json!({"request_id": "r_t", "by": "fiber", "declined": true}),
+    ));
+    assert!(!queue.open());
+    assert!(queue.badge(0).is_none());
+}
+
+#[test]
+fn answering_a_select_from_chat_sends_nothing_and_keeps_it_waiting() {
+    let mut queue = queue_with(select_request("r_s"));
+    assert_eq!(queue.on_key(&Key::Down), Some(PanelKey::Handled));
+    assert_eq!(queue.on_key(&Key::Down), Some(PanelKey::Handled));
+    let before = header(&queue);
+    assert_eq!(queue.answer("c_s"), None);
+    assert!(queue.open());
+    assert_eq!(header(&queue), before);
 }

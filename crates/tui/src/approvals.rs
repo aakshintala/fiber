@@ -17,7 +17,6 @@ use crate::app::session_command;
 use crate::keys::{Edit, Key};
 
 pub(crate) mod form;
-#[cfg(test)]
 mod one_question;
 
 /// The envelope kinds the queue folds, from any session.
@@ -42,8 +41,8 @@ enum Choice {
     Deny,
 }
 
-/// One request in the queue: a session's `permission_requested`, or its
-/// `interaction_requested` form, not yet resolved.
+/// One unanswered request in the queue: an approval, a question form or a
+/// one-question interaction.
 #[derive(Debug, Clone)]
 struct Request {
     session: SessionId,
@@ -57,11 +56,13 @@ struct Request {
     answered_by: Option<String>,
 }
 
-/// What a request asks: an approval or a question form.
+/// What a request asks: an approval, a question form or a one-question
+/// interaction.
 #[derive(Debug, Clone)]
 enum Ask {
     Approval(Approval),
     Form(form::Form),
+    One(one_question::OneQuestion),
 }
 
 /// An approval: the call it asks about and the person's choice so far.
@@ -282,19 +283,18 @@ pub(crate) const IRREVERSIBLE: &str = " · irreversible";
 /// The request panel as it draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Panel {
-    /// Its lines, before wrapping: the header, then the approval's or the
-    /// form's rows.
+    /// Its lines, before wrapping: the header, then the request's rows.
     pub(crate) lines: Vec<String>,
     /// Whether it takes the alert tint: the reviewer escalated. Never on a
-    /// form.
+    /// question.
     pub(crate) alert: bool,
-    /// The form's click targets; none on an approval.
+    /// The question's click targets; none on an approval.
     pub(crate) spots: Vec<PanelSpot>,
-    /// The line holding the form's cursor; `None` on an approval, which
+    /// The line holding the question's cursor; `None` on an approval, which
     /// keeps its top when it does not fit.
     pub(crate) cursor: Option<usize>,
     /// The words row's line and the text cursor's column on it, while the
-    /// form's cursor is on that row.
+    /// question's cursor is on that row.
     pub(crate) caret: Option<(usize, u16)>,
 }
 
@@ -315,7 +315,7 @@ pub(crate) enum PanelKey {
     Handled,
     /// Answer the shown request.
     Answer,
-    /// Decline the shown form: Esc, or "Chat about this".
+    /// Decline the shown question: Esc, or "Chat about this".
     Decline,
 }
 
@@ -339,8 +339,8 @@ pub(crate) struct Queue {
 
 impl Queue {
     /// The request panel, while it is open: `approval` or `question`, the
-    /// session asking, and its place among the requests waiting. A form fits
-    /// its rows to `width` columns.
+    /// session asking, and its place among the requests waiting. A question
+    /// fits its rows to `width` columns.
     pub(crate) fn panel(&self, width: u16) -> Option<Panel> {
         let at = self.shown_index()?;
         let request = self.requests.get(at)?;
@@ -366,6 +366,7 @@ impl Queue {
                 caret: None,
             },
             Ask::Form(form) => form.panel(format!("question · {place}"), width),
+            Ask::One(question) => question.panel(format!("question · {place}"), width),
         })
     }
 
@@ -386,7 +387,7 @@ impl Queue {
 
     /// Handles a key while the panel is open; `None` when the panel is
     /// closed or the key is not the panel's. ⌥A moves to the next request
-    /// waiting; Esc puts an approval aside and declines a form.
+    /// waiting; Esc puts an approval aside and declines a question.
     pub(crate) fn on_key(&mut self, key: &Key) -> Option<PanelKey> {
         let at = self.shown_index()?;
         if *key == Key::AltA {
@@ -407,6 +408,7 @@ impl Queue {
             }
             Ask::Approval(approval) => approval.on_key(key),
             Ask::Form(form) => form.on_key(key),
+            Ask::One(question) => question.on_key(key),
         }
     }
 
@@ -419,15 +421,17 @@ impl Queue {
         match self.requests.get_mut(at).map(|request| &mut request.ask) {
             Some(Ask::Approval(approval)) => approval.on_edit(edit),
             Some(Ask::Form(form)) => form.on_edit(edit),
+            Some(Ask::One(question)) => question.on_edit(edit),
             None => {}
         }
     }
 
-    /// A click on the shown form's `spot`; `None` when no form is shown.
+    /// A click on the shown question's `spot`; `None` when no question is shown.
     pub(crate) fn click(&mut self, spot: form::Spot) -> Option<PanelKey> {
         let at = self.shown_index()?;
         match &mut self.requests.get_mut(at)?.ask {
             Ask::Form(form) => Some(form.click(spot)),
+            Ask::One(question) => Some(question.click(spot)),
             Ask::Approval(_) => None,
         }
     }
@@ -437,19 +441,20 @@ impl Queue {
     pub(crate) fn answer(&mut self, id: &str) -> Option<String> {
         let at = self.shown_index()?;
         let answer = match &self.requests.get(at)?.ask {
-            Ask::Approval(approval) => approval.answer(),
-            Ask::Form(form) => form.answer(),
-        };
+            Ask::Approval(approval) => Some(approval.answer()),
+            Ask::Form(form) => Some(form.answer()),
+            Ask::One(question) => question.answer(),
+        }?;
         self.reply(at, id, answer)
     }
 
-    /// Declines the shown form with the `reply` command `id`, returning its
-    /// line, and moves the panel on. `None` when no form is shown.
+    /// Declines the shown question with the `reply` command `id`, returning
+    /// its line, and moves the panel on. `None` when no question is shown.
     pub(crate) fn decline(&mut self, id: &str) -> Option<String> {
         let at = self.shown_index()?;
         let request = self.requests.get(at)?;
         let session = match request.ask {
-            Ask::Form(_) => request.session.clone(),
+            Ask::Form(_) | Ask::One(_) => request.session.clone(),
             Ask::Approval(_) => return None,
         };
         let line = self.reply(at, id, ReplyAnswer::Declined { declined: True })?;
@@ -519,7 +524,7 @@ impl Queue {
     }
 
     /// Folds one of [`KINDS`] from any session: the call, the request and
-    /// its resolution. Only a `form` interaction is queued.
+    /// its resolution.
     pub(crate) fn fold(&mut self, envelope: &Envelope) {
         let session = &envelope.session_id;
         let action = envelope.action_id.as_ref().map(|id| id.0.clone());
@@ -563,11 +568,26 @@ impl Queue {
                             Ask::Form(form::Form::new(fields))
                         });
                     }
-                    // The other kinds are not drawn yet (#1243).
-                    Interaction::Confirm { .. }
-                    | Interaction::Select { .. }
-                    | Interaction::MultiSelect { .. }
-                    | Interaction::TextInput { .. } => {}
+                    Interaction::Confirm { prompt } => {
+                        self.queue(session, asked.request_id.0, |_| {
+                            Ask::One(one_question::OneQuestion::confirm(prompt))
+                        });
+                    }
+                    Interaction::Select { prompt, options } => {
+                        self.queue(session, asked.request_id.0, |_| {
+                            Ask::One(one_question::OneQuestion::select(prompt, options))
+                        });
+                    }
+                    Interaction::MultiSelect { prompt, options } => {
+                        self.queue(session, asked.request_id.0, |_| {
+                            Ask::One(one_question::OneQuestion::multi_select(prompt, options))
+                        });
+                    }
+                    Interaction::TextInput { prompt } => {
+                        self.queue(session, asked.request_id.0, |_| {
+                            Ask::One(one_question::OneQuestion::text_input(prompt))
+                        });
+                    }
                 }
             }
             "permission_resolved" | "interaction_resolved" => {
@@ -594,7 +614,7 @@ impl Queue {
 
     /// Queues the request `request_id` from `session`, made by `ask` from
     /// the calls seen, and surfaces it. A request already queued, such as a
-    /// form raised again on resume, keeps what the person typed.
+    /// interaction raised again on resume, keeps what the person typed.
     fn queue(
         &mut self,
         session: &SessionId,
