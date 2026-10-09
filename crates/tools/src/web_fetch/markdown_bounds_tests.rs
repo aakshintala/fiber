@@ -504,20 +504,34 @@ proptest! {
 /// How long the linear hidden-close cases may take on the wall clock.
 const HIDDEN_LINEAR: Duration = Duration::from_secs(10);
 
+/// An end tag that matches no open hidden element is consumed and leaves
+/// the open elements and their counts as they were. The deadline is a hang
+/// guard, not a timing assertion: a per-close rescan at this size takes
+/// minutes, linear work a fraction of a second in debug.
 #[test]
-fn unmatched_hidden_closes_stay_linear_at_three_hundred_thousand() {
-    // One named deadline per shape; a quadratic close would take minutes at
-    // this size, a linear one a few seconds in debug.
-    let n = 300_000;
+fn half_a_million_unmatched_hidden_closes_stay_linear() {
+    let n = 500_000;
     for (svg, open, close) in [
-        ("<svg>", "<noscript>", "</template>"),
-        ("<svg>", "<template>", "</noscript>"),
-        ("", "<noscript>", "</svg>"),
-        ("", "<template>", "</svg>"),
+        (true, "noscript", "template"),
+        (true, "template", "noscript"),
+        (false, "noscript", "svg"),
+        (false, "template", "svg"),
     ] {
         fakes::within("the hidden closes", HIDDEN_LINEAR, move || {
-            let html = format!("{svg}{}{}x", open.repeat(n), close.repeat(n));
-            assert_eq!(to_markdown(&html), "", "{svg}{open}{close}");
+            let mut hidden = Hidden::default();
+            if svg {
+                hidden.open("svg", &start("svg", false, vec![]));
+            }
+            let tag = start(open, false, vec![]);
+            for _ in 0..n {
+                hidden.open(open, &tag);
+            }
+            let before = hidden.above_counts();
+            for _ in 0..n {
+                assert!(hidden.end(close), "{close}");
+            }
+            assert!(hidden.is_hidden(), "{open} {close}");
+            assert_eq!(hidden.above_counts(), before, "{open} {close}");
         });
     }
 }

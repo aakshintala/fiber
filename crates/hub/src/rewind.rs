@@ -157,6 +157,12 @@ pub(crate) fn follow(
     let Some(next) = continued(&hub.home, &from) else {
         return;
     };
+    // The new session opens once: the sweep never opens it while this
+    // transfer, reach and attach hold it opening.
+    let _opening = {
+        let mut held = lock(relays);
+        crate::rejoin::Opening::mark(&mut held, relays, &next.0)
+    };
     // Under one lock hold: the client may have relayed the new session,
     // still unsubscribed, while the old relay waited for EOF. `transfer`
     // keeps the level and carries it onto that relay, or reports that no
@@ -167,7 +173,16 @@ pub(crate) fn follow(
     let Some(stream) = reach(hub, &from, &next) else {
         return;
     };
-    attach(&next.0, stream, hub, writer, relays, Some(replay), None);
+    attach(
+        &next.0,
+        stream,
+        hub,
+        writer,
+        relays,
+        Some(replay),
+        None,
+        false,
+    );
 }
 
 /// `next`'s lock in [`Hub::starting`]: one mutex per next session, so two

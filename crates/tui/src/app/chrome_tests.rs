@@ -15,11 +15,16 @@ use std::path::PathBuf;
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
 /// A right-aligned prompt bubble edge, distinct from the column-wide input edge.
+/// A bubble's edge row or a card's full-width edge row: the cells past
+/// any leading space are all half blocks (`docs/tui.md`, "Look").
 fn prompt_edge(row: &str) -> bool {
     row.chars()
         .position(|cell| cell != ' ')
-        .is_some_and(|first| first > 0)
-        && row.chars().all(|cell| matches!(cell, ' ' | '▄' | '▀'))
+        .is_some_and(|first| {
+            row.chars()
+                .skip(first)
+                .all(|cell| matches!(cell, '▄' | '▀'))
+        })
 }
 
 /// The launch description: `/w`, outside git, default shares.
@@ -254,8 +259,12 @@ fn conversation_height_equals_the_drawn_rows() {
         let mut app = attached(width, height);
         started_with_reply(&mut app, "prompt", &long);
         let (screen, _) = draw(&app, width, height);
+        // The header holds row 0; the conversation is the rows after
+        // it, so the input box's own edges never count.
         let drawn = screen
             .lines()
+            .skip(1)
+            .take(app.conversation_height())
             .filter(|row| row.contains("www") || row.contains("00:00") || prompt_edge(row))
             .count();
         assert_eq!(drawn, app.conversation_height(), "{width}x{height}");
@@ -265,10 +274,13 @@ fn conversation_height_equals_the_drawn_rows() {
 }
 
 /// Counts the conversation's content rows on screen: the long turn's rows
-/// and its time row.
-fn content_rows(screen: &str) -> usize {
+/// and its time row. The header holds row 0; only the conversation's
+/// rows count, so the panel's own edges never do.
+fn content_rows(screen: &str, height: usize) -> usize {
     screen
         .lines()
+        .skip(1)
+        .take(height)
         .filter(|row| row.contains("www") || row.contains("00:00") || prompt_edge(row))
         .count()
 }
@@ -304,7 +316,7 @@ fn conversation_height_counts_the_panel_edges_where_they_fit() {
         ));
         let (screen, _) = draw(&app, 60, height);
         assert_eq!(
-            content_rows(&screen),
+            content_rows(&screen, app.conversation_height()),
             app.conversation_height(),
             "60x{height}"
         );
@@ -326,7 +338,7 @@ fn conversation_height_counts_the_panel_edges_where_they_fit() {
         assert!(app.panel().is_some(), "60x{height}: a form is open");
         let (screen, _) = draw(&app, 60, height);
         assert_eq!(
-            content_rows(&screen),
+            content_rows(&screen, app.conversation_height()),
             app.conversation_height(),
             "60x{height}"
         );

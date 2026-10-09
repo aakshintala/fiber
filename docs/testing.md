@@ -10,7 +10,10 @@ are `docs/architecture.md`. Which CI jobs run on which runners is
 `docs/ci.md`. Latency, memory and
 storage budgets are
 `docs/performance.md`. No
-test asserts a performance timing or sleeps to get a correct result.
+test asserts a performance timing or sleeps to get a correct result. A wait's
+deadline ("Waits and timeouts") is a hang guard, not a timing assertion; a
+test of how much work something does counts the work, such as scans or
+opens.
 
 ## Levels
 

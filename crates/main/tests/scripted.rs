@@ -150,12 +150,33 @@ fn log_kinds(setup: &Setup, id: &str) -> Vec<String> {
         .collect()
 }
 
-/// The event kinds of socket `lines`, in order, without `session_status`.
+/// The event kinds of socket `lines`, in order, without `session_status`
+/// or `attention`: an observer thread writes `session_status`, and the
+/// hub's `attention` line derives from it, so neither's presence or
+/// position is pinned.
 fn kinds(lines: &[Value]) -> Vec<&str> {
     lines
         .iter()
-        .filter(|line| line["kind"] != "session_status")
+        .filter(|line| line["kind"] != "session_status" && line["kind"] != "attention")
         .map(|line| line["kind"].as_str().unwrap())
+        .collect()
+}
+
+/// [`kinds`] without `clients`, after checking `lines` hold exactly one.
+/// The hub sends a `start`'s first prompt once the requester's `full`
+/// `subscribe` is accepted or 1 second after its answer, whichever comes
+/// first (`docs/invocation.md`, "What the hub speaks"), so on a loaded
+/// machine the ephemeral `clients` line can fall after the loop's first
+/// lines: only its presence is pinned, not its position.
+fn kinds_with_one_clients_line(lines: &[Value]) -> Vec<&str> {
+    let clients = lines
+        .iter()
+        .filter(|line| line["kind"] == "clients")
+        .count();
+    assert_eq!(clients, 1, "{lines:?}");
+    kinds(lines)
+        .into_iter()
+        .filter(|kind| *kind != "clients")
         .collect()
 }
 
@@ -205,6 +226,74 @@ fn a_tool_call_step_runs_the_tool_and_the_next_request_takes_the_next_step() {
     );
     assert_eq!(run.of("usage_recorded").len(), 2);
     assert_eq!(run.of("text_completed")[0]["payload"]["text"], "Done.");
+}
+
+/// A read-only `sed` with stderr discarded takes the permission fast path:
+/// no reviewer call, so every usage names the session script and no
+/// `permission_resolved` is decided by a reviewer.
+#[test]
+fn a_sed_read_with_stderr_discarded_takes_the_fast_path_with_no_reviewer_call() {
+    let setup = Setup::new();
+    let notes: String = (1..=7).map(|n| format!("line {n}\n")).collect();
+    std::fs::write(setup.workspace().join("notes.md"), notes).unwrap();
+    script(
+        &setup,
+        "s.json",
+        &json!({"steps": [
+            {"tool_calls": [{"name": "shell", "arguments": {"command": "sed -n '1,5p' notes.md 2>/dev/null"}}]},
+            {"text": "Done."}
+        ]}),
+    );
+    script(&setup, "r.json", &json!({"steps": []}));
+    reviewed_by_script(&setup, json!({}));
+    let run = ask(&setup);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let completed = run.of("tool_call_completed");
+    assert_eq!(completed.len(), 1);
+    let payload = completed[0].to_string();
+    assert!(payload.contains("line 5"), "{payload}");
+    assert!(!payload.contains("line 6"), "{payload}");
+    let models: Vec<&str> = run
+        .of("usage_recorded")
+        .iter()
+        .map(|line| line["payload"]["model"].as_str().unwrap())
+        .collect();
+    assert_eq!(models, ["scripted/s.json", "scripted/s.json"]);
+    for resolved in run.of("permission_resolved") {
+        assert_ne!(resolved["payload"]["decided_by"], "reviewer", "{resolved}");
+    }
+    let durable = run.durable();
+    assert!(!durable.contains(&"permission_requested"), "{durable:?}");
+    assert!(!durable.contains(&"permission_resolved"), "{durable:?}");
+    assert_eq!(
+        durable,
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    assert_eq!(
+        run.of("text_completed").last().unwrap()["payload"]["text"],
+        "Done."
+    );
 }
 
 #[test]
@@ -505,12 +594,12 @@ fn a_scripted_log_with_a_recorded_label_still_resumes() {
 }
 
 /// The hub stream of a scripted start turn through `turn_completed`: the
-/// full ordered list without any retry lines.
-const SCRIPTED_START_KINDS: [&str; 14] = [
+/// full ordered list without any retry lines and without `clients`, which
+/// [`kinds_with_one_clients_line`] checks.
+const SCRIPTED_START_KINDS: [&str; 13] = [
     "session_started",
     "fiber_started",
     "extensions_loaded",
-    "clients",
     "preamble_built",
     "opening_message",
     "turn_started",
@@ -553,7 +642,7 @@ fn the_credential_command_on_a_scripted_session_is_rejected() {
     let mut stream = until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
-    assert_eq!(kinds(&stream), SCRIPTED_START_KINDS);
+    assert_eq!(kinds_with_one_clients_line(&stream), SCRIPTED_START_KINDS);
 
     client.send(
         &json!({"id": "c_cred", "session_id": id, "command": "credential", "args": {"label": "x"}})
@@ -567,11 +656,12 @@ fn the_credential_command_on_a_scripted_session_is_rejected() {
         (line["kind"] == "command_accepted" || line["kind"] == "command_rejected")
             && line["payload"]["command_id"] == "c_cred"
     });
-    // `session_status` is an observer-thread line pinned nowhere (as
-    // `kinds` filters it): drop it, then exactly the reply remains.
+    // `session_status` is an observer-thread line, and `attention` derives
+    // from it; neither is pinned (as `kinds` filters them): drop them, then
+    // exactly the reply remains.
     let rejected: Vec<Value> = waited
         .into_iter()
-        .filter(|line| line["kind"] != "session_status")
+        .filter(|line| line["kind"] != "session_status" && line["kind"] != "attention")
         .collect();
     assert_eq!(rejected.len(), 1, "{rejected:?}");
     assert_eq!(rejected[0]["kind"], "command_rejected", "{rejected:?}");
@@ -588,7 +678,7 @@ fn the_credential_command_on_a_scripted_session_is_rejected() {
     let mut expected: Vec<&str> = SCRIPTED_START_KINDS.to_vec();
     expected.push("command_rejected");
     expected.extend(["command_accepted", "fiber_exited"]);
-    assert_eq!(kinds(&stream), expected);
+    assert_eq!(kinds_with_one_clients_line(&stream), expected);
 
     guard.wait_gone();
     drop(client);
@@ -634,7 +724,7 @@ fn a_live_scripted_resume_with_a_label_is_rejected() {
     let stream = until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
-    assert_eq!(kinds(&stream), SCRIPTED_START_KINDS);
+    assert_eq!(kinds_with_one_clients_line(&stream), SCRIPTED_START_KINDS);
 
     let run = fiber(&setup, &["ask", "--resume", &id, "--credential", "x", "hi"]);
     assert_eq!(run.code, Some(1), "{}", run.stderr);

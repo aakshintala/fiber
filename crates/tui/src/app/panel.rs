@@ -30,6 +30,9 @@ pub(crate) enum Spot {
     /// The Session card's "N waiting" while the rail is not drawn: shows
     /// the rail (`docs/tui.md`, "Shedding").
     Waiting,
+    /// The Session card's spend rows: opens the usage view (`docs/tui.md`,
+    /// "The panel").
+    Usage,
     /// The Session card's tools line: opens the tools view (`docs/tui.md`,
     /// "The panel").
     Tools,
@@ -68,6 +71,7 @@ pub(crate) struct PanelState {
     thinking: Option<String>,
     window: Option<u64>,
     trigger_at: Option<u64>,
+    budget: Option<f64>,
     turns: u64,
     started_at: Option<u64>,
     speed: Option<u64>,
@@ -105,6 +109,9 @@ impl PanelState {
                     self.thinking = built.thinking;
                     self.window = Some(built.context_window);
                     self.trigger_at = built.trigger_at;
+                    // The latest build's budget is the one in force; a
+                    // build without one clears it.
+                    self.budget = built.budget;
                 }
             }
             "model_changed" => {
@@ -242,6 +249,12 @@ impl PanelState {
     /// The latest `preamble_built`'s handoff point, in tokens.
     pub(crate) fn trigger_at(&self) -> Option<u64> {
         self.trigger_at
+    }
+
+    /// The latest `preamble_built`'s budget, in US dollars; `None` when
+    /// it set none.
+    pub(crate) fn budget(&self) -> Option<f64> {
+        self.budget
     }
 
     /// How many turns have started.
@@ -523,6 +536,7 @@ impl App {
                 Effect::Send(vec![line])
             }
             Spot::Waiting => self.show_rail(),
+            Spot::Usage => self.open_session_view(super::SessionView::Usage),
             Spot::Tools => self.open_config_view(super::ConfigView::Tools),
             Spot::Widget => self.toggle_widget_row(),
         }

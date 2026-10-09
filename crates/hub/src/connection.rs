@@ -56,6 +56,8 @@ pub(crate) struct Hub {
     /// Held across a resume: one at a time per hub, so two commands for
     /// one exited session start one process.
     pub(crate) resume_gate: Mutex<()>,
+    /// Every served connection's writer and relays, for the rejoin sweep.
+    pub(crate) rejoins: crate::rejoin::Connections,
     /// One start at a time per next session: a slow rewind start blocks
     /// only the threads starting that same session, never a resume, which
     /// takes the shared gate instead (`docs/invocation.md`, "`rewind`
@@ -76,6 +78,10 @@ pub(crate) struct Hub {
     /// Tests only: runs after a client command's route returns.
     #[cfg(test)]
     pub(crate) after_relay: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: a one-shot pause in `route` after its opening is taken
+    /// and before the connect.
+    #[cfg(test)]
+    pub(crate) before_open: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: runs handing a queued command over, or clearing it.
     #[cfg(test)]
     pub(crate) on_pass_on: PassOnHook,
@@ -131,6 +137,7 @@ impl Hub {
             tick,
             wake,
             resume_gate: Mutex::new(()),
+            rejoins: crate::rejoin::Connections::default(),
             starting: Mutex::new(HashMap::new()),
             #[cfg(test)]
             before_hello: Mutex::new(None),
@@ -142,6 +149,8 @@ impl Hub {
             before_accepted: Mutex::new(None),
             #[cfg(test)]
             after_relay: Mutex::new(None),
+            #[cfg(test)]
+            before_open: Mutex::new(None),
             #[cfg(test)]
             on_pass_on: Mutex::new(None),
         }
@@ -431,6 +440,7 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
         )]),
     );
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+    hub.rejoins.register(n, &writer, &relays);
     let heard = hub.feed.attention.listen(Arc::clone(&writer));
     let mut read = BufReader::new(stream);
     let mut buf = Vec::new();
@@ -457,6 +467,7 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
     // A first prompt still waiting for this connection's subscription goes
     // out now: the connection will never subscribe. Released once the
     // relays lock is dropped.
+    hub.rejoins.unregister(n);
     let waiting = {
         let mut held = lock(&relays);
         held.close_all();

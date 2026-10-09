@@ -7,9 +7,9 @@ expression: "screen(&app, 80, 24)"
 /resume  Opens home at the session list.  command
 /model  Opens the model picker.  command  █▀▀▀▀ █▀▀▀▄
 /tools  Opens the tools view.  command▀█  ████  █▄▄▄▀
-/panel  Shows or hides the panel.  command█▀▀▀▀ █ ▀▄
-/rules  Opens the standing rules.  command█▄▄▄▄ █   █ 0.0.1
-/settings  Opens the configuration keys.  command
+/usage  Opens the usage view.  command██  █▀▀▀▀ █ ▀▄
+/panel  Shows or hides the panel.  command█▄▄▄▄ █   █ 0.0.1
+/rules  Opens the standing rules.  command
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 > /
 

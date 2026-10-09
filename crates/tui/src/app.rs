@@ -62,12 +62,14 @@ mod reconnect;
 pub(crate) mod results;
 mod screen;
 mod select;
+mod session_views;
 mod status_rows;
 
 use screen::Screen;
 
 pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
+pub(crate) use session_views::SessionView;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
@@ -277,6 +279,8 @@ pub(crate) struct App {
     attention: attention::State,
     /// The configuration views (`docs/tui.md`, "Swapped views").
     config_views: config_views::ConfigViews,
+    /// The attached session's views (`docs/tui.md`, "Swapped views").
+    session_views: session_views::SessionViews,
     /// Failures since the hub was last reached (`docs/tui.md`, "A dropped
     /// connection").
     reconnect: reconnect::Reconnect,
@@ -322,6 +326,7 @@ impl App {
             opener: false,
             attention: attention::State::default(),
             config_views: config_views::ConfigViews::default(),
+            session_views: session_views::SessionViews::default(),
             reconnect: reconnect::Reconnect::default(),
         }
     }
@@ -349,6 +354,9 @@ impl App {
             return self.open_model_picker(crate::model_picker::Mode::Choose);
         }
         if let Some(effect) = self.config_view_key(&key) {
+            return effect;
+        }
+        if let Some(effect) = self.session_view_key(&key) {
             return effect;
         }
         if let Some(effect) = self.home_key(&key) {
@@ -867,6 +875,7 @@ impl App {
             return send;
         }
         send.extend(self.panel_line(envelope));
+        self.session_views_line(envelope);
         self.config_views_line(envelope);
         if envelope.kind == "turn_started"
             && let Some(started) = read!(envelope, TurnStarted)

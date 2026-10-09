@@ -669,16 +669,19 @@ fn turn_started_sets_busy_and_completed_clears_it() {
     assert_eq!(
         texts(&app),
         vec![
-            "▄▄▄▄▄".to_owned(),
-            " hi ▐".to_owned(),
-            "▀▀▀▀▀".to_owned(),
-            "00:00".to_owned(),
-            "steer · more".to_owned(),
-            "▣ completed".to_owned(),
-            "▄▄▄▄▄▄▄".to_owned(),
-            " next ▐".to_owned(),
-            "▀▀▀▀▀▀▀".to_owned(),
-            "00:00".to_owned(),
+            "▄▄▄▄▄",
+            " hi ▐",
+            "▀▀▀▀▀",
+            "00:00",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "steer · 00:00 ──────────────────────────────────────────────────────────────────",
+            "more",
+            "▣ completed",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▄▄▄▄▄▄▄",
+            " next ▐",
+            "▀▀▀▀▀▀▀",
+            "00:00",
         ]
     );
 }
@@ -690,7 +693,15 @@ fn failed_turn_says_why_before_it_closes() {
     attach(&mut app, clock.now(), "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
     app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "failed"));
-    assert_eq!(texts(&app)[4..], ["✗ boom · io_failed", "▣ failed"]);
+    assert_eq!(
+        texts(&app)[4..],
+        [
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "✗ boom · io_failed",
+            "▣ failed",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        ]
+    );
 }
 
 #[test]
@@ -738,12 +749,14 @@ fn each_action_streams_its_own_reply() {
     assert_eq!(
         texts(&app),
         vec![
-            "▄▄▄▄▄".to_owned(),
-            " hi ▐".to_owned(),
-            "▀▀▀▀▀".to_owned(),
-            "00:00".to_owned(),
-            "one more".to_owned(),
-            "two".to_owned()
+            "▄▄▄▄▄",
+            " hi ▐",
+            "▀▀▀▀▀",
+            "00:00",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "one more",
+            "two",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
 }
@@ -760,7 +773,8 @@ fn steering_applied_is_a_line() {
         serde_json::json!({"content": [{"type": "text", "text": "use x"}], "source": "driver"}),
         None,
     ));
-    assert!(texts(&app).contains(&"steer · use x".to_owned()));
+    assert!(texts(&app).contains(&format!("steer · 00:00 {}", "─".repeat(66))));
+    assert!(texts(&app).contains(&"use x".to_owned()));
 }
 
 #[test]

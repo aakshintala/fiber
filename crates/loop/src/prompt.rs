@@ -313,6 +313,7 @@ pub(crate) fn build(
         model: model.to_owned(),
         context_window: inputs.context_window,
         trigger_at,
+        budget: None,
         thinking: inputs.thinking.map(|level| level.as_str().to_owned()),
         tool_choice,
         cache_lifetime,

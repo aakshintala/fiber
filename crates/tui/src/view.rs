@@ -166,11 +166,10 @@ pub(crate) fn render(
                 .render(conversation, buf);
             overlay_cross(buf, conversation, &mut targets);
         }
-        // A swapped view takes the conversation's place: the
-        // configuration view or the model picker. Notices
-        // float above it (`docs/tui.md`, "Notices"), as over the
-        // conversation.
-        None if app.config_view_open() || app.model_picker_open() => {
+        // A swapped view takes the conversation's place: the configuration
+        // view, model picker or session view. Notices float above it
+        // (`docs/tui.md`, "Notices"), as over the conversation.
+        None if app.config_view_open() || app.model_picker_open() || app.session_view_open() => {
             crate::swapped::draw(app, conversation, buf, &mut targets);
             notices(app, conversation, buf, &mut targets);
         }
@@ -319,8 +318,13 @@ fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
 /// shown form's caret wins over an open repository offer, which already
 /// gives the panel its keys.
 pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
-    // A swapped view draws its own caret, if it has one.
-    if app.chrome().floor_line().is_some() || app.config_view_open() || app.model_picker_open() {
+    // A swapped view draws any field caret in its frame; it has no
+    // input-box caret.
+    if app.chrome().floor_line().is_some()
+        || app.config_view_open()
+        || app.model_picker_open()
+        || app.session_view_open()
+    {
         return None;
     }
     if let Some(screen) = app.home_screen() {
@@ -419,7 +423,17 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         let skip = top.saturating_sub(start);
         let count = next.min(end).saturating_sub(start.max(top));
         let rect = Rect::new(area.x, y, area.width, to_u16(count));
-        paragraph(line).scroll((to_u16(skip), 0)).render(rect, buf);
+        // A short row and the wrapped rows of a long one fill the column
+        // with the row's own background, so a card's surface tint reaches
+        // the column's edge (`docs/tui.md`, "Look").
+        let fill = Style {
+            bg: line.style.bg,
+            ..Style::default()
+        };
+        paragraph(line)
+            .style(fill)
+            .scroll((to_u16(skip), 0))
+            .render(rect, buf);
         if let Some(open) = open {
             let height = rect.height.min(last.saturating_sub(rect.y));
             // A code block's copy target is its `copy` cells, not the line.

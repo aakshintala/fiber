@@ -23,26 +23,30 @@ use support::*;
 /// The prompt a started session runs.
 const PROMPT: &str = "the-volume-of-the-meeting-room";
 
-/// The event kinds of `lines`, in order, without `session_status`: an
-/// observer thread writes it, so where it falls among the loop's own
-/// lines is not what this test pins (as `tests/session_command.rs`
-/// filters it).
+/// The event kinds of `lines`, in order, without `session_status` or
+/// `attention`: an observer thread writes `session_status`, so where it
+/// falls among the loop's own lines is not what this test pins (as
+/// `tests/session_command.rs` filters it), and the hub's `attention` line
+/// derives from that status, so whether it comes and where is not pinned
+/// either.
 fn kinds(lines: &[Value]) -> Vec<&str> {
     lines
         .iter()
-        .filter(|line| line["kind"] != "session_status")
+        .filter(|line| line["kind"] != "session_status" && line["kind"] != "attention")
         .map(|line| line["kind"].as_str().unwrap())
         .collect()
 }
 
 /// The complete, ordered stream from the subscription through `fiber_exited`:
-/// the replayed start, `clients`, the full retried turn, the `close`
-/// acknowledgement and the exit.
-const EXPECTED_KINDS: [&str; 21] = [
+/// the replayed start, the full retried turn, the `close` acknowledgement
+/// and the exit. The ephemeral `clients` line is checked apart: the hub sends
+/// a `start`'s first prompt once the `full` `subscribe` is accepted or 1
+/// second after its answer, so on a loaded machine `clients` can fall after
+/// the loop's first lines, and only its presence is pinned.
+const EXPECTED_KINDS: [&str; 20] = [
     "session_started",
     "fiber_started",
     "extensions_loaded",
-    "clients",
     "preamble_built",
     "opening_message",
     "turn_started",
@@ -118,7 +122,16 @@ fn hub_start_with_overrides_runs_the_session_with_them_as_dash_c() {
         line["kind"] == "fiber_exited"
     });
     stream.extend(tail);
-    assert_eq!(kinds(&stream), EXPECTED_KINDS);
+    let clients = stream
+        .iter()
+        .filter(|line| line["kind"] == "clients")
+        .count();
+    assert_eq!(clients, 1, "{stream:?}");
+    let without_clients: Vec<&str> = kinds(&stream)
+        .into_iter()
+        .filter(|kind| *kind != "clients")
+        .collect();
+    assert_eq!(without_clients, EXPECTED_KINDS);
     guard.wait_gone();
     drop(client);
     hub.lock()

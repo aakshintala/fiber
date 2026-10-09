@@ -64,6 +64,7 @@ mod theme;
 mod tools_view;
 mod turn;
 mod turn_text;
+mod usage_view;
 mod view;
 mod window;
 

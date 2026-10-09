@@ -1407,6 +1407,7 @@ fn refusing_a_missing_relay_writes_the_rejection_and_releases_its_acknowledgemen
             Vec::new(),
             command,
         )),
+        false,
     );
 
     let mut read = BufReader::new(peer);
@@ -1806,10 +1807,16 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
     session_peer.flush().unwrap();
     let mut known = String::new();
     read.read_line(&mut known).unwrap();
-    session_peer
-        .shutdown(std::net::Shutdown::Both)
-        .unwrap_or(());
-    thread.join().unwrap();
+    // Closing the session's end ends the relay's read, as a session's
+    // exit does: a shutdown on macOS can leave the blocked read waiting.
+    drop(session_peer);
+    let (ended_tx, ended) = std::sync::mpsc::channel();
+    std::thread::spawn(move || ended_tx.send(thread.join().is_ok()).unwrap_or(()));
+    assert_eq!(
+        ended.recv_timeout(DEADLINE).ok(),
+        Some(true),
+        "the relay thread ends once the session closes"
+    );
 
     let known: Value = serde_json::from_str(known.trim_end()).unwrap();
     assert!(suppressed, "an unknown acknowledgement is not forwarded");

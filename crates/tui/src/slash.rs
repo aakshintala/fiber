@@ -14,6 +14,7 @@ const BUILT_INS: &[(&str, &str, Option<&str>)] = &[
     ("resume", "Opens home at the session list.", None),
     ("model", "Opens the model picker.", None),
     ("tools", "Opens the tools view.", None),
+    ("usage", "Opens the usage view.", None),
     ("panel", "Shows or hides the panel.", None),
     ("rules", "Opens the standing rules.", None),
     ("settings", "Opens the configuration keys.", None),

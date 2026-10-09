@@ -2,12 +2,11 @@
 source: crates/tui/src/turn/answers_tests.rs
 expression: answered_screen(30)
 ---
-
-
                        ▄▄▄▄▄▄▄
                         pick ▐
                        ▀▀▀▀▀▀▀
                          00:00
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 • Asked 2 questions · 4s
 you answered
 Base: main (Recommended), dev,
@@ -15,6 +14,7 @@ Base: main (Recommended), dev,
 Name: skipped
 note: "by friday"
 Thanks.
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 >
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

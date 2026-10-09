@@ -204,12 +204,41 @@ fn grip_excludes_the_bottom_edge() {
 }
 
 #[test]
-fn the_regions_keep_the_surface_tint() {
+fn the_regions_are_on_the_background() {
     use crate::theme::Role;
-    let app = app(160, 40, false);
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        git: false,
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: vec!["session".to_owned()],
+        ..Default::default()
+    });
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.set_size(160, 40);
+    app.on_line(session_line(
+        "session_status",
+        serde_json::json!({
+            "name": "fix the parser", "workspace": "/w",
+            "project": "-w", "state": "idle", "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        }),
+    ));
     let (buf, _) = draw(&app, 160, 40);
-    // The panel's region keeps the surface tint (`docs/tui.md`,
-    // "Themes"): a cell no card covers carries it.
+    // The panel's region draws on the background (`docs/tui.md`,
+    // "Themes"): every cell of its top row, which no card covers, is
+    // not the surface tint.
     let surface = Role::Surface.color();
     let panel = app
         .chrome()
@@ -218,6 +247,11 @@ fn the_regions_keep_the_surface_tint() {
         .panel
         .expect("a panel");
     for x in panel.left()..panel.right() {
-        assert_eq!(buf[(x, panel.y)].bg, surface);
+        assert_ne!(buf[(x, panel.y)].bg, surface, "column {x}");
     }
+    // A card row of the panel still carries the surface tint.
+    let card = (panel.y..panel.bottom())
+        .find(|y| buf[(panel.x + 1, *y)].bg == surface)
+        .expect("a card row");
+    assert!(card > panel.y);
 }

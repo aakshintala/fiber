@@ -60,6 +60,9 @@ pub(crate) type Line = Arc<[u8]>;
 /// A rejected feed command: its code and sentence.
 pub(crate) type Refusal = (ErrorCode, String);
 
+/// Called at the end of every scan of `run/` with the names it found.
+pub(crate) type ScanHook = Box<dyn Fn(&BTreeSet<String>) + Send + Sync>;
+
 /// The feed: its registry, the scanner and the summary connections.
 pub(crate) struct Feed {
     home: PathBuf,
@@ -74,6 +77,10 @@ pub(crate) struct Feed {
     /// Starts the session a `rewound` last line names, set once by the hub
     /// serving it, so a rewind no client relays still starts it.
     pub(crate) on_rewound: OnceLock<Box<dyn Fn(SessionId, SessionId) + Send + Sync>>,
+    /// Called at the end of every scan of `run/` with the names it found,
+    /// set once by the hub serving it: the rejoin sweep collects resumed
+    /// sessions there. Never under the state lock.
+    pub(crate) on_scan: OnceLock<ScanHook>,
     #[cfg(test)]
     settle_pause: Mutex<Option<SettlePause>>,
 }
@@ -150,6 +157,7 @@ impl Feed {
             _wake: wake,
             scanner: Mutex::new(None),
             on_rewound: OnceLock::new(),
+            on_scan: OnceLock::new(),
             #[cfg(test)]
             settle_pause: Mutex::new(None),
         }
@@ -376,6 +384,9 @@ impl Feed {
             self.follow(id);
         }
         self.scanned();
+        if let Some(on_scan) = self.on_scan.get() {
+            on_scan(&names);
+        }
     }
 
     /// Subscribes `summary` to session `id` and follows it on a thread. A
@@ -667,7 +678,7 @@ fn closed_since(log: &Path, from: u64) -> bool {
 }
 
 /// The `kind` of one log line. `None` when it does not parse.
-fn kind_of(line: &[u8]) -> Option<String> {
+pub(crate) fn kind_of(line: &[u8]) -> Option<String> {
     let value: Value = serde_json::from_slice(line).ok()?;
     value.get("kind")?.as_str().map(str::to_owned)
 }

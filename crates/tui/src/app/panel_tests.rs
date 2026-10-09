@@ -206,6 +206,29 @@ fn failed_line(server: &str) -> Line {
     )
 }
 
+/// A `preamble_built` with `budget`: `None` leaves the key out.
+fn budget_line(budget: Option<f64>) -> Line {
+    let mut payload = serde_json::json!({
+        "reason": "start", "model": "one/model", "context_window": 1000,
+        "trigger_at": 800, "thinking": "low",
+        "tool_choice": "auto", "cache_lifetime": "5m",
+        "system_prompt": "", "tools": [],
+    });
+    if let Some(budget) = budget {
+        payload["budget"] = budget.into();
+    }
+    session_line(SESSION, "preamble_built", payload)
+}
+
+#[test]
+fn budget_comes_from_the_latest_preamble_and_absent_clears_it() {
+    let mut app = attached();
+    app.on_line(budget_line(Some(2.5)));
+    assert_eq!(app.panel_state().budget(), Some(2.5));
+    app.on_line(preamble_line("two/model", "high", 2000, 1600));
+    assert_eq!(app.panel_state().budget(), None);
+}
+
 #[test]
 fn model_thinking_window_and_trigger_come_from_the_latest_preamble() {
     let mut app = attached();

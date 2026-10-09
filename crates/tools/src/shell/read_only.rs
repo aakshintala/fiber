@@ -1,5 +1,6 @@
 //! The shell's built-in read-only list (`docs/tools.md`, "Shell", "Effects").
-//! `uniq` is not listed: its second operand is an output file.
+//! `uniq` is not listed: its second operand is an output file. `sed` has
+//! its own print-only grammar in `super::sed`.
 
 /// A flag that keeps its command read-only.
 pub(super) struct Flag {
@@ -24,6 +25,12 @@ pub(super) struct Command {
     pub(super) pattern_flags: &'static [&'static str],
     /// Whether `--` ends flags. `find` still reads a primary after `--`.
     pub(super) ends_flags: bool,
+    /// A word is a flag only when it is `-` followed by one or more of
+    /// `n`, `e`, `E`; any other word is text, as bash's `echo` reads it.
+    pub(super) prints: bool,
+    /// `-<one or more ASCII digits>` is an accepted flag, as in
+    /// `git log -8`.
+    pub(super) counts: bool,
 }
 
 const fn flag(spelling: &'static str) -> Flag {
@@ -180,6 +187,43 @@ const GIT_SHOW: &[Flag] = &[
     flag("--no-ext-diff"),
 ];
 
+const GIT_REV_PARSE: &[Flag] = &[
+    flag("--show-toplevel"),
+    flag("--abbrev-ref"),
+    flag("--short"),
+    flag("--verify"),
+    flag("-q"),
+    flag("--quiet"),
+    flag("--is-inside-work-tree"),
+    flag("--show-prefix"),
+];
+
+const GIT_LS_FILES: &[Flag] = &[
+    flag("-c"),
+    flag("-m"),
+    flag("-o"),
+    flag("-d"),
+    flag("--cached"),
+    flag("--modified"),
+    flag("--others"),
+    flag("--deleted"),
+    flag("--exclude-standard"),
+];
+
+const GIT_BLAME: &[Flag] = &[
+    value("-L"),
+    flag("-w"),
+    flag("-s"),
+    flag("-e"),
+    flag("--porcelain"),
+    flag("--line-porcelain"),
+];
+
+/// Parts whose cooked words, redirects removed, equal one row exactly read
+/// with no paths. `git branch` has no row: bare `git branch` lists and
+/// `git branch <name>` creates, so only `--show-current` reads.
+pub(super) const EXACT: &[&[&str]] = &[&["git", "branch", "--show-current"]];
+
 /// Fiber's own read-only commands. A later change can pass a person's
 /// `shell.read_only` entries in beside this slice.
 pub(super) const COMMANDS: &[Command] = &[
@@ -190,6 +234,8 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,
+        prints: false,
+        counts: false,
     },
     Command {
         name: "echo",
@@ -198,6 +244,8 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,
+        prints: true,
+        counts: false,
     },
     Command {
         name: "ls",
@@ -217,6 +265,8 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,
+        prints: false,
+        counts: false,
     },
     Command {
         name: "cat",
@@ -233,6 +283,8 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,
+        prints: false,
+        counts: false,
     },
     Command {
         name: "head",
@@ -241,6 +293,8 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,
+        prints: false,
+        counts: false,
     },
     Command {
         name: "tail",
@@ -249,6 +303,8 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,
+        prints: false,
+        counts: false,
     },
     Command {
         name: "wc",
@@ -257,6 +313,8 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,
+        prints: false,
+        counts: false,
     },
     Command {
         name: "grep",
@@ -265,6 +323,8 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: true,
         pattern_flags: &["-e"],
         ends_flags: true,
+        prints: false,
+        counts: false,
     },
     Command {
         name: "rg",
@@ -273,6 +333,8 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: true,
         pattern_flags: &["-e", "--files"],
         ends_flags: true,
+        prints: false,
+        counts: false,
     },
     Command {
         name: "find",
@@ -281,6 +343,8 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: false,
         pattern_flags: &[],
         ends_flags: false,
+        prints: false,
+        counts: false,
     },
     Command {
         name: "sort",
@@ -289,6 +353,8 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,
+        prints: false,
+        counts: false,
     },
     Command {
         name: "git status",
@@ -297,6 +363,8 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,
+        prints: false,
+        counts: false,
     },
     Command {
         name: "git diff",
@@ -305,6 +373,8 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,
+        prints: false,
+        counts: false,
     },
     Command {
         name: "git log",
@@ -313,6 +383,8 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,
+        prints: false,
+        counts: true,
     },
     Command {
         name: "git show",
@@ -321,5 +393,37 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,
+        prints: false,
+        counts: false,
+    },
+    Command {
+        name: "git rev-parse",
+        flags: GIT_REV_PARSE,
+        paths: false,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: true,
+        prints: false,
+        counts: false,
+    },
+    Command {
+        name: "git ls-files",
+        flags: GIT_LS_FILES,
+        paths: true,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: true,
+        prints: false,
+        counts: false,
+    },
+    Command {
+        name: "git blame",
+        flags: GIT_BLAME,
+        paths: true,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: true,
+        prints: false,
+        counts: false,
     },
 ];

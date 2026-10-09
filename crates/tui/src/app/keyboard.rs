@@ -53,6 +53,7 @@ impl App {
         if self.quit_open()
             || self.model_picker_open()
             || self.config_view_open()
+            || self.session_view_open()
             || self.home_modal()
             || self.keymap_top().is_some()
             || self.panel().is_some()
