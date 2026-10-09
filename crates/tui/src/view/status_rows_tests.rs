@@ -333,6 +333,31 @@ fn no_widget_no_widget_row() {
 }
 
 #[test]
+fn no_narrow_rows_drawn_outside_the_narrow_layout() {
+    // Wide, with a widget, a delegate and status segments wanted: the
+    // panel shows them, and no row draws under the input box.
+    let mut app = attached(200, 40);
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(started("j_1", "alpha"));
+    app.on_line(delegated("j_1"));
+    app.on_line(widget("ex", "wid", &["abc", "def"]));
+    let area = Rect::new(0, 0, 200, 40);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let screen = crate::view::text(&buf);
+    assert!(!screen.contains('▸'), "{screen}");
+    assert!(!screen.contains('▾'), "{screen}");
+    assert_eq!(screen.lines().next_back(), Some(">"));
+    // The row above the input box is blank inside the column.
+    assert_eq!(
+        buf.cell((2, 38))
+            .map(|cell| cell.symbol().to_owned())
+            .as_deref(),
+        Some(" ")
+    );
+}
+
+#[test]
 fn short_screens_shed_row_two_then_row_one() {
     // A five-line widget, open, with both status rows wanted.
     let setup = |height: u16| {
