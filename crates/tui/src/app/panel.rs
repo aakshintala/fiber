@@ -451,9 +451,9 @@ impl App {
         let max = rows.len().saturating_sub(height);
         let clamped = self.panel_state.scroll.min(max);
         if up {
-            self.panel_state.scroll = clamped.saturating_sub(3);
+            self.panel_state.scroll = clamped.saturating_sub(super::mouse::WHEEL_ROWS);
         } else {
-            self.panel_state.scroll = clamped.saturating_add(3).min(max);
+            self.panel_state.scroll = clamped.saturating_add(super::mouse::WHEEL_ROWS).min(max);
         }
     }
 
