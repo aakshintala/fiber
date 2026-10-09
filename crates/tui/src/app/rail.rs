@@ -58,9 +58,9 @@ impl RailState {
             if self.number(card.key).is_some() {
                 continue;
             }
-            let free = (1..)
+            let free = (1..=self.numbers.len() + 1)
                 .find(|number| !self.numbers.iter().any(|(_, held)| held == number))
-                .unwrap_or(1);
+                .unwrap_or(self.numbers.len() + 1);
             self.numbers.push((card.key, free));
         }
     }
@@ -125,13 +125,7 @@ impl App {
             .min(rows.len().saturating_sub(height));
         if let Some(start) = rows.iter().position(|row| row.start == Some(key)) {
             let end = start.saturating_add(CARD_ROWS);
-            self.rail_state.scroll = if start < scroll {
-                start
-            } else if end > scroll.saturating_add(height) {
-                end.saturating_sub(height)
-            } else {
-                scroll
-            };
+            self.rail_state.scroll = scroll.min(start).max(end.saturating_sub(height));
         }
         self.rail_state.reveal = None;
     }

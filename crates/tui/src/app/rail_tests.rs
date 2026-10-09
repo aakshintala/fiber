@@ -587,6 +587,44 @@ fn switching_scrolls_the_card_into_view() {
     assert_eq!(app.rail_state().scroll(), 1);
 }
 
+#[test]
+fn revealing_a_card_at_the_top_edge_keeps_the_scroll() {
+    let mut app = tall();
+    let down = wheel(MouseKind::WheelDown, 5, 10);
+    app.on_wheel(&down);
+    app.on_wheel(&down);
+    assert_eq!(app.rail_state().scroll(), 7);
+    // The second card starts on row 7, exactly at the top edge: the
+    // scroll stays.
+    press(&mut app, Key::AltDigit(2));
+    assert_eq!(app.rail_state().scroll(), 7);
+}
+
+#[test]
+fn revealing_a_card_ending_at_the_bottom_edge_keeps_the_scroll() {
+    let mut app = tall();
+    // A 12-row rail: cards start every 6 rows, so the third card's end
+    // (19) is exactly the second card's start (7) plus the height.
+    app.set_size(200, 12);
+    let down = wheel(MouseKind::WheelDown, 5, 5);
+    app.on_wheel(&down);
+    app.on_wheel(&down);
+    assert_eq!(app.rail_state().scroll(), 7);
+    press(&mut app, Key::AltDigit(3));
+    assert_eq!(app.rail_state().scroll(), 7);
+}
+
+#[test]
+fn a_card_taller_than_the_rail_shows_its_bottom() {
+    // A card is 6 rows and the floor keeps the rail at 10 or more, so
+    // no drawn rail is shorter than a card. This pins the arithmetic
+    // `sync_rail` uses when one is: the card's bottom edge sets the
+    // scroll.
+    let (start, height, scroll) = (10usize, 4usize, 20usize);
+    let end = start + crate::view::rail::CARD_ROWS;
+    assert_eq!(scroll.min(start).max(end.saturating_sub(height)), 12);
+}
+
 /// A waiting `session_status` field set: request `request` since `since`.
 fn waiting(request: &str, since: u64) -> Value {
     json!({"state": "waiting", "since": since, "waiting": {"request_id": request,
