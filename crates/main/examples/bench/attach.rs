@@ -27,11 +27,12 @@ pub(crate) const SAMPLED: [Workload; 1] = [Workload {
 /// the terminal holds it.
 pub(crate) const ATTACH_TAIL: &str = "quokkas";
 
-/// The reply bytes of one probe or growth turn: small enough that one
-/// turn's log stays far below either band's one-MiB width, so rounding up
-/// to whole turns lands the log inside its band. Reply bytes never size a
-/// log: the probe's measured bytes do.
-pub(crate) const TURN_REPLY_BYTES: usize = 131_072;
+/// The reply bytes of one probe or growth turn: about one screenful, a
+/// typical reply. Small replies keep redrawing each reply's markdown fast
+/// while the log replays, and one turn's log stays far below either band's
+/// one-MiB width, so rounding up to whole turns lands the log inside its
+/// band. Reply bytes never size a log: the probe's measured bytes do.
+pub(crate) const TURN_REPLY_BYTES: usize = 4_096;
 
 /// A growth turn holds a fraction of the handoff trigger's tokens, so no
 /// automatic handoff runs while the log grows.

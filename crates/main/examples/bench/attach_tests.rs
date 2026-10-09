@@ -58,15 +58,15 @@ fn feed_step_waits_on_another_sessions_status_and_a_busy_state() {
 
 #[test]
 fn plan_turns_grows_whole_turns_to_the_bands_low_end() {
-    // A 200,000-byte first turn with 170,000-byte growth turns: six turns
-    // reach 1,050,000, inside the 1 MiB band, and sixty-two reach
-    // 10,570,000, inside the 10 MiB band.
-    assert_eq!(plan_turns(1_048_576, 200_000, 170_000).unwrap(), 6);
-    assert_eq!(size_note("1 MiB", 200_000 + 5 * 170_000), None);
-    assert_eq!(plan_turns(10_485_760, 200_000, 170_000).unwrap(), 62);
-    assert_eq!(size_note("10 MiB", 200_000 + 61 * 170_000), None);
+    // A 15,000-byte first turn with 12,000-byte growth turns: eighty-eight
+    // turns reach 1,059,000, inside the 1 MiB band, and eight hundred
+    // seventy-four reach 10,491,000, inside the 10 MiB band.
+    assert_eq!(plan_turns(1_048_576, 15_000, 12_000).unwrap(), 88);
+    assert_eq!(size_note("1 MiB", 15_000 + 87 * 12_000), None);
+    assert_eq!(plan_turns(10_485_760, 15_000, 12_000).unwrap(), 874);
+    assert_eq!(size_note("10 MiB", 15_000 + 873 * 12_000), None);
     // A shortfall smaller than one growth turn still takes a whole one.
-    assert_eq!(plan_turns(1_048_576, 1_000_000, 170_000).unwrap(), 2);
+    assert_eq!(plan_turns(1_048_576, 1_040_000, 12_000).unwrap(), 2);
 }
 
 #[test]
