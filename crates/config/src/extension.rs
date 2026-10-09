@@ -244,10 +244,18 @@ pub enum Protocol {
 }
 
 impl Protocol {
-    /// Whether the protocol reads back this hosted-search tool type: only
-    /// `anthropic-messages` reads `web_search_20250305`.
+    /// Whether the protocol reads back this hosted-search tool type:
+    /// `anthropic-messages` reads `web_search_20250305` and
+    /// `openai-responses` reads `web_search`; every other pair is unread.
     pub fn reads_web_search(self, kind: &str) -> bool {
-        matches!(self, Self::AnthropicMessages) && kind == "web_search_20250305"
+        match self {
+            Self::AnthropicMessages => kind == "web_search_20250305",
+            Self::OpenaiResponses => kind == "web_search",
+            Self::OpenaiCompletions
+            | Self::GoogleGenerativeAi
+            | Self::BedrockConverse
+            | Self::Scripted => false,
+        }
     }
 
     /// The request fields Fiber builds for this protocol, which a model's

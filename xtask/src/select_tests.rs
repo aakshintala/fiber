@@ -319,13 +319,13 @@ fn a_docs_push_runs_lint_and_tests_but_no_mutants() {
 }
 
 #[test]
-fn a_code_push_runs_lint_tests_and_mutants_but_no_bug_check() {
+fn a_code_push_runs_lint_tests_and_release_but_no_mutants_or_bug_check() {
     let plan = plan("all", &strings(&["log"]), "push", true, true, 1000);
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, true, false, true),
-            shards: MAX_MUTANT_SHARDS
+            jobs: jobs(true, true, false, false, true),
+            shards: 0
         }
     );
 }

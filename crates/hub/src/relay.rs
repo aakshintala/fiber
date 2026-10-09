@@ -85,6 +85,10 @@ pub(crate) struct Relays {
     /// Tests only: pauses after a transfer write, before its result returns.
     #[cfg(test)]
     pub(crate) after_transfer_write: Option<Box<dyn FnOnce() + Send>>,
+    /// Tests only: a one-shot pause in `route` between keeping a command
+    /// as sent and writing it, with the relays lock held.
+    #[cfg(test)]
+    pub(crate) before_command_write: Option<Box<dyn FnOnce() + Send>>,
     /// Per session, the last `subscribe` it accepted, without its
     /// `session_id`: what a reconnect sends again.
     pub(crate) subscribed: Vec<(String, Map<String, Value>)>,
@@ -362,9 +366,17 @@ pub(crate) fn route(
                 return;
             }
             // Kept before the write, so the relay thread finds it when the
-            // session answers.
+            // session answers. The drain never sees the push without the
+            // write's outcome: it collects under the relays lock, which
+            // this hold keeps until the write's result flips the entry.
+            #[cfg(test)]
+            let before_write = held.before_command_write.take();
             let sent = held.entries.get(at).is_some_and(|entry| {
                 lock(&entry.kept).push((id.0.clone(), stripped.clone(), true));
+                #[cfg(test)]
+                if let Some(before_write) = before_write {
+                    before_write();
+                }
                 write_all(&entry.writer, &bytes).is_ok()
             });
             if sent {
@@ -648,6 +660,10 @@ fn relay(
     // follows nothing.
     let mut ended = false;
     loop {
+        #[cfg(test)]
+        if let Some(before_read) = lock(&order.before_read).take() {
+            before_read();
+        }
         buf.clear();
         match read.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => {
@@ -732,7 +748,7 @@ fn relay(
             }
         }
     }
-    crate::retire::drain(session, epoch, &kept, hub, writer, relays);
+    crate::retire::drain(session, epoch, &kept, &order, hub, writer, relays);
     if ended {
         crate::rewind::follow(hub, writer, relays, session);
     }

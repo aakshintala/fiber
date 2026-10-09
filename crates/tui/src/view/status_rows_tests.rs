@@ -588,7 +588,47 @@ fn a_delegate_row_count_matches_the_card() {
         .collect();
     let status = crate::view::status_rows::delegates(&app, 100);
     assert_eq!(status.len(), 4);
-    assert_eq!(status, card);
+    assert_eq!(
+        status.into_iter().map(|(line, _)| line).collect::<Vec<_>>(),
+        card
+    );
+}
+
+#[test]
+fn the_narrow_delegate_rows_carry_their_serials_as_targets() {
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(started("j_1", "alpha"));
+    app.on_line(delegated("j_1"));
+    app.on_line(started("j_2", "beta"));
+    app.on_line(delegated("j_2"));
+    let (_, targets) = draw(&app, 100, 30);
+    let mut serials: Vec<u64> = targets
+        .iter()
+        .filter_map(|target| {
+            if let TargetId::Panel(Spot::Delegate(serial)) = target.id {
+                Some(serial)
+            } else {
+                None
+            }
+        })
+        .collect();
+    serials.sort_unstable();
+    assert_eq!(serials, vec![1, 1, 2, 2]);
+}
+
+#[test]
+fn a_zero_width_delegate_row_has_no_click_target() {
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(started("j_1", "alpha"));
+    app.on_line(delegated("j_1"));
+    let area = Rect::new(0, 0, 0, 10);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    super::draw_delegates(&app, area, &mut buf, &mut bottom, &mut targets);
+    assert!(targets.is_empty());
 }
 
 #[test]

@@ -124,7 +124,10 @@ impl App {
         // the one link drawn over those rows.
         let mut found: Vec<(usize, u16, String, Rect)> = Vec::new();
         let index = self.screen.pages().index();
-        let area_width = area.width.max(1);
+        // Links are placed and counted at the width the pages wrap at:
+        // the rows draw one column narrower than the column, leaving
+        // the last column to the scroll bar.
+        let area_width = self.screen.pages().wrap_width();
         // Each resident page once, its rows with their texts as drawn now.
         let mut pages: BTreeMap<usize, (Vec<crate::turn::Row>, Vec<crate::rows::RowText>)> =
             BTreeMap::new();

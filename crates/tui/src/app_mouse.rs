@@ -71,6 +71,7 @@ impl App {
             TargetId::View(spot) if self.session_view_open() => self.session_view_click(spot),
             TargetId::View(spot) => self.config_view_click(spot),
             TargetId::Panel(spot) => self.panel_click(spot),
+            TargetId::Item(spot) => self.item_click(spot),
             TargetId::Rail(spot) => self.rail_click(spot),
             TargetId::Token(number) => self.open_token(number),
             TargetId::Turn(_) => Effect::None,
@@ -140,13 +141,27 @@ impl App {
         let (left, width, top) = match self.chrome().layout() {
             Some(layout) => {
                 let header = u16::try_from(self.chrome().header_rows()).unwrap_or(u16::MAX);
+                // The item view's header takes the conversation's top
+                // rows, so the wheel over it scrolls nothing.
+                let item = if self.item_open() {
+                    u16::try_from(crate::view::item::ITEM_HEADER_ROWS).unwrap_or(u16::MAX)
+                } else {
+                    0
+                };
                 (
                     layout.column.x,
                     layout.column.width,
-                    layout.column.y.saturating_add(header),
+                    layout.column.y.saturating_add(header).saturating_add(item),
                 )
             }
-            None => (0, self.screen.width(), 0),
+            None => {
+                let item = if self.item_open() {
+                    u16::try_from(crate::view::item::ITEM_HEADER_ROWS).unwrap_or(u16::MAX)
+                } else {
+                    0
+                };
+                (0, self.screen.width(), item)
+            }
         };
         let in_column = usize::from(at.x) >= usize::from(left)
             && usize::from(at.x).saturating_sub(usize::from(left)) < usize::from(width);

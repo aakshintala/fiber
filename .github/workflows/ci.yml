@@ -9,9 +9,11 @@ on:
   push:
     branches: [main]
 
-# A newer push to a pull request cancels its older run.
+# A newer push to a pull request cancels its older run. Pushes to main share
+# one group that cancels nothing: the running backstop finishes and the newest
+# push waits behind it.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  group: ci-${{ github.event.pull_request.number || 'main' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -131,8 +133,9 @@ jobs:
           PACKAGES: ${{ steps.select.outputs.packages }}
           BUG: ${{ steps.ticket.outputs.bug || 'false' }}
           BASE: ${{ steps.base.outputs.base }}
-          # Mutants run on a ready pull request, a push, and a draft labelled `mutants`.
-          MUTANTS: ${{ !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'mutants') }}
+          # Mutants run on a ready pull request and on a draft labelled `mutants`,
+          # never on the backstop.
+          MUTANTS: ${{ github.event_name == 'pull_request' && (!github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'mutants')) }}
         run: |
           # The shard count follows the diff's mutant count (docs/ci.md, "Mutation testing").
           count=0
@@ -192,7 +195,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci
-          save-if: ${{ github.event_name == 'push' }}
+          # The cache saves once the build succeeded, even if a later step
+          # fails (cache-on-failure lets the save step run after a failure).
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' && steps.build.outcome != 'failure' }}
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-nextest
@@ -206,6 +212,7 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install fish
       - name: Build the whole workspace
+        id: build
         if: github.event_name == 'push'
         run: cargo build --workspace --all-targets
       - name: scripts/check, the per-platform checks

@@ -465,6 +465,11 @@ impl<B: Backend> Loop<B> {
     /// batch, after every input in it is handled. Returns the exit code
     /// when the terminal cannot be drawn.
     fn frame(&mut self, rx: &Receiver<Input>) -> Option<i32> {
+        // The reconciler's subscribes go out before the frame pages: an
+        // acknowledgement arriving late is reconciled on the step that
+        // brings it.
+        let due = self.app.items_due(self.clock.now());
+        self.send(&due);
         self.page_in(rx);
         self.apply_theme();
         // A selection's copy waiting on dropped pages runs once they load.
@@ -571,7 +576,7 @@ impl<B: Backend> Loop<B> {
     /// nothing to ask, and the pages draw blank.
     fn page_in(&mut self, rx: &Receiver<Input>) {
         while let Some(range) = self.app.needs().into_iter().next() {
-            let Some(session) = self.app.session().cloned() else {
+            let Some(session) = self.app.paging_session().cloned() else {
                 return;
             };
             if self.hub.is_none() {

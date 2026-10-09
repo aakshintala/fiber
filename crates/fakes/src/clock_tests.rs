@@ -701,3 +701,99 @@ fn a_later_park_after_mark_parked_matches() {
         .recv_timeout(Duration::from_secs(5))
         .expect("the parked thread exits");
 }
+
+/// Parks one thread twice at `until`: reports each park from inside
+/// the wait, leaves the first on release, reports left, waits for the
+/// gate, parks again, exits. Every wait bounds at 5 s wall-clock.
+#[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
+type Twice = (
+    mpsc::Receiver<()>,
+    mpsc::Receiver<()>,
+    mpsc::Receiver<()>,
+    mpsc::Receiver<()>,
+    mpsc::Sender<()>,
+    mpsc::Sender<()>,
+);
+#[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
+fn park_twice(clock: &Arc<FakeClock>, until: std::time::Instant) -> Twice {
+    let (first_tx, first_rx) = mpsc::channel();
+    let (left_tx, left_rx) = mpsc::channel();
+    let (second_tx, second_rx) = mpsc::channel();
+    let (exit_tx, exit_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (gate_tx, gate_rx) = mpsc::channel::<()>();
+    let clock = Arc::clone(clock);
+    thread::spawn(move || {
+        clock.wait_until(Some(until), &mut |_bound| {
+            match first_tx.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+            release_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("waited for release of the first park");
+        });
+        match left_tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+        gate_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("waited for the test to open the gate");
+        clock.wait_until(Some(until), &mut |_bound| {
+            match second_tx.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+            release_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("waited for release of the second park");
+        });
+        if let Ok(()) = exit_tx.send(()) {}
+    });
+    (first_rx, left_rx, second_rx, exit_rx, release_tx, gate_tx)
+}
+
+#[test]
+fn a_thread_that_left_its_park_before_the_advance_matches_its_next_park() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (first, left, _second, exit, release, gate) = park_twice(&clock, until);
+    first
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to park");
+    release.send(()).unwrap();
+    left.recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to leave its park");
+    let mark = clock.advance_marked(Duration::from_millis(1));
+    gate.send(()).unwrap();
+    assert!(
+        await_since(&clock, &mark, Some(until)),
+        "the park after the advance is later than the mark"
+    );
+    release.send(()).unwrap();
+    exit.recv_timeout(Duration::from_secs(5))
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn a_re_park_before_the_advance_does_not_match() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (first, left, second, exit, release, gate) = park_twice(&clock, until);
+    first
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to park");
+    release.send(()).unwrap();
+    left.recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to leave its park");
+    gate.send(()).unwrap();
+    second
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to park again");
+    let mark = clock.advance_marked(Duration::from_millis(1));
+    assert!(
+        !clock.await_parked_since(&mark, Some(until), Duration::ZERO),
+        "the park present at the advance is not a later park"
+    );
+    release.send(()).unwrap();
+    exit.recv_timeout(Duration::from_secs(5))
+        .expect("the parked thread exits");
+}

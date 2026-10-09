@@ -21,7 +21,11 @@ which runs at most 40 jobs at once and at most 5 macOS jobs at once, shared
 by every repository on the account. A draft pull request runs only the
 Linux x86_64 leg, so its run uses no macOS job. A ready pull request's run
 uses one macOS job, so five ready pull requests can run before a sixth
-queues for macOS.
+queues for macOS. The 40-job cap is the one CI reaches: from 2026-10-07 to
+2026-10-09 every job that queued for more than 15 minutes waited while 38 or
+more jobs ran, and the macOS cap held jobs back for 85 of 3,250 queued
+minutes. A change that saves jobs, such as fewer mutants shards, shortens the
+queue; one that saves only macOS jobs does not.
 
 Every runner has a C compiler, which `mlua` needs to build Lua
 ([ADR 0006](adr/0006-extension-runtime-lua.md)).
@@ -49,7 +53,14 @@ A branch does not have to be up to date with `main` to merge, and there is no
 merge queue. The backstop on `main` catches two pull requests that each
 passed alone but break together.
 
-A newer push to a pull request cancels that pull request's older run.
+A newer push to a pull request cancels that pull request's older run. A
+label, a change from draft to ready or a reopen at the same head cancels
+nothing: the run in flight finishes, and the new event starts only the jobs
+the earlier run did not select, such as the macOS leg and mutants when a
+draft becomes ready. Pushes
+to `main` share one group that cancels nothing: the running backstop finishes
+and a newer push waits, replacing any older one that waits ("The backstop on
+`main`").
 
 ## Selection
 
@@ -135,15 +146,17 @@ On Linux x86_64 alone:
 - the built-in tool definitions within their byte budget, with each
   definition's size printed
 - mutation testing: `cargo-mutants --in-diff`, split across runners. It runs
-  on a ready pull request, on a push to `main`, and on a draft pull request
-  that carries the label `mutants`; an unlabelled draft skips it, and adding
-  the label starts a run. The selection counts the diff's mutants
+  on a ready pull request and on a draft pull request
+  that carries the label `mutants`, never on a push to `main`; an unlabelled draft skips it, and adding
+  the label starts a run. Shards start once the Linux x86_64 test job passes,
+  so a run whose tests fail starts none. The selection counts the diff's mutants
   (`cargo mutants --list`) and plans one shard per 15 of them, rounded up, at
-  most 32; a diff with no mutants starts none. Recent runs (#1461, #1395)
+  most 16; a diff with no mutants starts none. Recent runs (#1461, #1395)
   tested a mutant in 13 to 27 seconds on a runner and the unmutated baseline
   took 1 to 3.5 minutes, so 15 mutants keep a shard near 10 minutes. Shards
   split the list round-robin, so every shard holds the same mix of crates and
-  the count alone sets its size. Past 480 mutants the cap makes shards larger.
+  the count alone sets its size. Past 240 mutants the cap makes shards larger. Two pull requests at the cap
+  leave 8 of the 40 jobs for everything else.
   Mutants run under nextest's `mutants` profile (`.cargo/mutants.toml`),
   which stops every running test at the first failure. A mutant that makes
   one test hang until its deadline is then caught by a faster test, not
@@ -160,7 +173,8 @@ One more Linux x86_64 job builds the release profile for the target that
 ships, `x86_64-unknown-linux-musl` (`docs/releasing.md`), at the pull
 request's head and at its base commit (`scripts/release-size`). The base
 binary comes from the build cache when the backstop stored one for that
-commit, and is built otherwise. It checks that the stripped head binary is
+commit, and is built otherwise. The scripts that build and measure both
+binaries are the head's, so a base older than a script still compares. It checks that the stripped head binary is
 under 20 MiB and runs the benchmarks that gate each pull request
 (`docs/performance.md`). A timing gate compares against the base binary
 measured in the same job on the same runner.
@@ -220,7 +234,7 @@ opened.
 
 ## The backstop on `main`
 
-Every push to `main` runs the backstop. It runs the lint, test, mutant and
+Every push to `main` runs the backstop. It runs the lint, test and
 release jobs the selection chooses from the diff
 since the last `main` commit whose backstop passed. The tests run on all
 three platforms, and it compiles
@@ -231,13 +245,29 @@ and the selection includes that crate. The release job runs on every push
 and stores that commit's stripped binary in the build cache, for a later
 pull request's base.
 
-When lint, the tests, the mutants or the release job fail, the backstop opens an issue, or
+One backstop runs and one waits. All pushes to `main` share a concurrency group
+that cancels nothing, so the running backstop finishes, which lets `main` record
+a pass during a stream of merges, and GitHub replaces a waiting backstop with
+the newest push. The newest backstop's selection covers every commit it
+replaced, because it diffs from the last passing commit. A replaced commit
+stores no release binary; a pull request based on one compares against the
+nearest ancestor that has one ("On every pull request that changes code").
+
+The backstop runs no mutants. Each pull request already tests its own diff
+("On every pull request that changes code"), and a second run on `main` would
+repeat that cost.
+
+When lint, the tests or the release job fail, the backstop opens an issue, or
 comments on the open one. It
 never blocks a merge.
 
 The backstop is the only run that saves the build cache. Pull requests
 restore it and never write it, so branches do not fill the repository's
-10 GB cache.
+10 GB cache. When the backstop saves a new generation of the build cache it
+deletes the older ones, and it keeps a stored release binary only for a commit
+that the 9-ancestor lookup can still reach from an open pull request's base.
+The test job saves its cache once the workspace build succeeded,
+even when a later check fails, and saves nothing when the build fails.
 
 ## Toolchain
 
@@ -299,7 +329,8 @@ up to a round number, and never under 5 minutes, because runner start-up
 varies. A job with too little history gets a generous bound. The one exception
 is a mutants shard: 8 % of shards take 9 to 12 minutes when a pull request
 changes a widely used function, so its bound is twice that slow group, not
-twice the median. The median behind each bound is a comment beside its
+twice the median. A shard holding more than 15 mutants, past the shard cap,
+has its bound raised in proportion to its count. The median behind each bound is a comment beside its
 `timeout-minutes` line. A job that gains work past its bound has the bound
 raised in its workflow.
 

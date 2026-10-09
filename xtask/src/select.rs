@@ -460,7 +460,8 @@ pub(crate) fn plan(
 ) -> Plan {
     let pr = event == "pull_request";
     let code = mode != "docs";
-    let shards = if code && mutants {
+    // The backstop runs no mutants: each pull request tested its own diff.
+    let shards = if pr && code && mutants {
         mutant_shards(mutant_count)
     } else {
         0
