@@ -97,7 +97,7 @@ accent gradient, the version dim.
   and the name set in JetBrains Mono ExtraBold, in the gradient. Detection
   never delays the first frame. The pixel logo draws first, and the image
   replaces it when the terminal's reply arrives.
-- **The image is an alpha mask built from the font at build time,** tinted
+- **The image is an alpha mask built from the font with `cargo xtask logo-mask` and checked in,** tinted
   with the theme's accents at run time. Fiber bundles no font, and the logo
   follows any theme.
 - **Where the screen is too short for four rows,** the logo is one row:
