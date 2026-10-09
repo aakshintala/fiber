@@ -19,9 +19,12 @@ cargo run --release -- fixtures/session.jsonl
 | `--static` | loads the whole file at once |
 | `--reduced-motion` | keeps the working line's word still; `FIBER_REDUCED_MOTION=1` does the same |
 | `--hover` | also turns on mode 1003, every mouse motion, and tints the click target under the pointer; see "Hover's cost" |
+| `--home CASE` | draws the home screen case instead of the conversation; see "Home (#1628)" |
+| `--overlay CASE` | draws one overlay case over a dimmed conversation; see "Overlays (#1630)" |
 | `--rail A\|B\|C` | the session rail design at start: list, cards, or tabs; the default is B; F2 cycles; see "The rail (#692)" |
 | `--rail-share P` | the rail's width at start, as a percent of the window; the default is 15, clamped to [22, 48] columns |
 | `--panel-share P` | the panel's width at start, as a percent of the window; the default is 21 (34 columns at 160), clamped to [30, 60] columns |
+| `--picker CASE` | starts with the model picker open; see "Model picker (#1629)" |
 | `--stats FILE` | writes the measurement below to FILE on exit |
 | `--exit-after S` | exits after S seconds |
 | `--warmup S` | starts the measurement window after S seconds; default 2 |
@@ -38,6 +41,82 @@ cargo run --release -- fixtures/session.jsonl
 | `--paging-bench` | prints the paging measurements that need no terminal, and exits |
 
 The key map is under "Stage 2".
+
+## Home (#1628)
+
+`--home CASE` draws the home screen instead of the conversation: the logo,
+the large input box with its chip row, and the session list, or the workspace
+picker over home. Each case draws one static frame from the fixtures in
+`src/home.rs` (six exited sessions with name or first prompt, spend and
+workspace segment; four recent workspaces; `~/work/fi` completing to `fiber`
+and `fiber-worktrees`) and waits for a key; Esc, q or Ctrl+C quits. Combine
+with `--static`; the fixture still loads but home ignores it.
+
+```sh
+cargo run --release -- fixtures/session.jsonl --static --home empty
+cargo run --release -- fixtures/session.jsonl --static --home sessions
+cargo run --release -- fixtures/session.jsonl --static --home hover-workspace
+cargo run --release -- fixtures/session.jsonl --static --home hover-worktree
+cargo run --release -- fixtures/session.jsonl --static --home hover-model
+cargo run --release -- fixtures/session.jsonl --static --home hover-thinking
+cargo run --release -- fixtures/session.jsonl --static --home worktree-on
+cargo run --release -- fixtures/session.jsonl --static --home worktree-off
+cargo run --release -- fixtures/session.jsonl --static --home picker-recent
+cargo run --release -- fixtures/session.jsonl --static --home picker-typed
+```
+
+- `empty`: home with an empty session list.
+- `sessions`: home with six exited sessions (○, name or first prompt, spend,
+  the workspace's last segment outside the launch project).
+- `hover-workspace`, `hover-worktree`, `hover-model`, `hover-thinking`: one
+  chip hovered (the `lift` tint, as `--hover` does it).
+- `worktree-on`, `worktree-off`: the new-worktree switch on and off.
+- `picker-recent`: the picker over home with recent workspaces only.
+- `picker-typed`: the picker over home with the typed-path row
+  (`~/work/fi` completing to `fiber` and `fiber-worktrees`, first row
+  selected) over the recents; this settles #1604 Q7.
+
+`./capture-home.sh` captures every case in tmux at 160 by 48, plain text and
+SGR, for the ticket's PR body.
+
+## Overlays (#1630)
+
+`--overlay CASE` draws one overlay over a dimmed conversation instead of the
+conversation: the key map, the quit and delete questions, the Ctrl+R
+prompt-history panel, a notice's full text, and how an overlay closes by
+mouse. Each case draws one static frame from the fixtures in
+`src/overlays.rs` (every binding of docs/tui.md's Bindings table; the quit
+question for 2 working sessions; home's delete question for "docs: rail
+spec"; three recalled prompts matching `back`; a `key_clash` notice) and
+waits for a key; Esc, q or Ctrl+C quits. Combine with `--static`; the fixture
+still loads but the overlay ignores it.
+
+```sh
+cargo run --release -- fixtures/session.jsonl --static --overlay keymap
+cargo run --release -- fixtures/session.jsonl --static --overlay keymap-narrow
+cargo run --release -- fixtures/session.jsonl --static --overlay quit
+cargo run --release -- fixtures/session.jsonl --static --overlay delete
+cargo run --release -- fixtures/session.jsonl --static --overlay history
+cargo run --release -- fixtures/session.jsonl --static --overlay notice
+cargo run --release -- fixtures/session.jsonl --static --overlay close-mouse
+```
+
+- `keymap`: every binding grouped by area (Session, Input, Conversation,
+  Panels, Search, Steering, Requests, Model), each with its id, key and other
+  paths, in two aligned columns.
+- `keymap-narrow`: the same content in one column, opened scrolled, with an
+  "↑ N more · ↓ M more" indicator; run it in a 100x40 tmux.
+- `quit`: the quit question for 2 working sessions, with the three ways out.
+- `delete`: home's delete question for the exited "docs: rail spec" session,
+  naming what `--cascade` would add.
+- `history`: the Ctrl+R panel with the typed query `back`, every hit marked
+  and the first match selected.
+- `notice`: the whole `key_clash` notice text, wrapped to the overlay.
+- `close-mouse`: a small keymap sample with its ✕ hovered and a dim outline
+  marking the click-outside target.
+
+`./capture-overlays.sh` captures every case in tmux, plain text and SGR, for
+the ticket's PR body: `keymap-narrow` at 100 by 40, the rest at 160 by 48.
 
 `cargo run --bin gen` rewrites the fixtures from `src/bin/gen.rs`. `fixtures/session.jsonl` ends with a turn still running, waiting on an approval from the reviewer delegate and on a question form from the main session. `fixtures/idle.jsonl` is the same session cut after its last finished turn.
 
@@ -62,7 +141,7 @@ The key map is under "Stage 2".
 
 Stage 2 covers selection and copy, search, keyboard protocol detection, the approval and question panels and the full key map. Beyond those, the prototype leaves out:
 
-- clicking a ledger row to open that call's diff, output or error, and every panel item's view but the context breakdown (model picker, usage, tools, a delegate's or job's transcript, a file's diff);
+- clicking a ledger row to open that call's diff, output or error, and every panel item's view but the context breakdown and the model picker (usage, tools, a delegate's or job's transcript, a file's diff);
 - the Delegates card scrolling on its own, and the Jobs card's list;
 - the start page, the session list, handoff bands, the nudge, rewind, retries, a failed turn, crash recovery and interrupts, because the fixture has none of them;
 - paging history from the log: by default the prototype folds the whole file into memory; `--paged` is a probe of paging, in `PAGING.md`;
@@ -283,7 +362,7 @@ What needs the kitty protocol, and the fallback without it:
 - The view draws one bar of the context by category against the handoff point, marked "handoff 400k", then a row per category with its size and share, the five largest tool results, and a note on what is estimated.
 - `--log-input FILE` records the raw input and each frame's scroll position, so the owner can capture what Ghostty sends for a trackpad movement.
 
-Not built: the model picker. The stream names only the current model, so the list of models and their roles would be made up.
+Not built: usage, tools, and the other panel views. The model picker draws from a fixture: the stream names only the current model, so the list of models and their roles is made up.
 
 `cargo test` adds tests for the scroll anchor, the one-row group line and the context view's totals, and for the sideways wheel buttons in the input parser.
 
@@ -332,3 +411,33 @@ For `docs/tui.md`: every frame is written inside synchronised output; a frame is
 - The handoff point and the model's context window, as in stage 1. The bar is drawn against them.
 - What is in context now. After a handoff or a rewind only part of the log is in context; the view has to work out which part from `handoff_completed` and the rewind lines. The fixture has neither, so the prototype counts the whole session.
 - For the model picker, the models and their roles. The stream names only the current model (`preamble_built`, `model_changed`). The cache rebuild size can be estimated from the last `usage_recorded`.
+
+## Model picker (#1629)
+
+A second swapped view, drawn like the context breakdown: Ctrl+L and `/model` open it over the conversation area, under a "Models /model" header, with the side panel and the input box still there. Typing still goes to the input box. It draws from a fixture in `src/model_picker.rs` (three providers, twelve models): the stream names only the current model, so the roles, thinking levels and rebuild costs are made up. Every body row sits on the raised surface (`SEL`); the model name is in the accent colour, its thinking chips in the attention colour, the rest dim.
+
+| Case | How to reach it |
+|---|---|
+| `list` | `cargo run --release -- fixtures/idle.jsonl --static --picker list`, or Ctrl+L / `/model` live |
+| `levels` | `cargo run --release -- fixtures/idle.jsonl --static --picker levels`: the current model's thinking chips focused, as after clicking a thinking chip |
+| `scoped` | `cargo run --release -- fixtures/idle.jsonl --static --picker scoped`: the `scoped_models` set, five of twelve, with a show-all toggle |
+| `scoped-all` | `cargo run --release -- fixtures/idle.jsonl --static --picker scoped-all`: all twelve, the scoped five marked |
+| `refreshing` | `cargo run --release -- fixtures/idle.jsonl --static --picker refreshing`: one provider refreshing in the background, the others with an updated-ago age |
+| `session-only` | `cargo run --release -- fixtures/idle.jsonl --static --picker session-only`: a non-current model focused with the `s` mark, "this session only · nothing saved" |
+
+Live keys while it is open: ↑/↓ move between models, ←/→ between the focused model's thinking chips, Enter chooses and closes, `s` marks the choice this session only (then nothing is saved), `a` toggles show all when scoped, `r` refreshes every list (cosmetic), Esc closes. Clicking a row focuses it; clicking a chip focuses that chip.
+
+## Completions (#1631)
+
+Typing `/` opens one completion panel above the input box. Commands, skills, prompt templates and MCP prompts share one list, filtered as the person types. Each row is a name, a one-line description, a skill's `argument-hint` when it has one, and a tag: command, skill, template, the extension's name, or the MCP server's name. Tab completes and Enter runs. Typing `@` opens a file search panel, and choosing a file inserts its path as text. The panel draws from fixtures in `src/completions.rs` (forty entries over every tag kind; eight file paths): the stream has no command list, so both are made up. At most eight rows show with the focused row kept on screen and a scroll hint (`1–8 of 40 · ↓ 32 more`); a long description is cut with an ellipsis keeping the tag, and matched letters read bold.
+
+| Case | How to reach it |
+|---|---|
+| `slash` | `cargo run --release -- fixtures/idle.jsonl --static --completions slash`: `/` with an empty filter, eight of forty rows with a scroll hint |
+| `slash-filtered` | `cargo run --release -- fixtures/idle.jsonl --static --completions slash-filtered`: the input reads `/re`, only matching entries, matched letters bold |
+| `slash-hint` | `cargo run --release -- fixtures/idle.jsonl --static --completions slash-hint`: the `review` skill focused with its `<path>` hint, and the overlong `login` description cut with … |
+| `at` | `cargo run --release -- fixtures/idle.jsonl --static --completions at`: the input reads `@test`, two file matches |
+| `at-empty` | `cargo run --release -- fixtures/idle.jsonl --static --completions at-empty`: the input reads `@zzz`, a `no files match` row |
+| `narrow-slash`, `narrow-at` | the same panels; run in a 100x40 terminal for the existing narrow layout |
+
+Live keys: typing `/` or `@` at the start of the input opens the panel. While it is open: ↑/↓ move, Tab completes and keeps the panel open, Enter on a `/` row completes it and runs it at once (`/context` and `/model` open their views, anything else sends), Enter on an `@` row inserts its path as text, Esc closes.

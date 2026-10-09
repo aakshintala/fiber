@@ -37,8 +37,8 @@ pub use credential::{Read, Runner};
 pub use credential_file::{CredentialFile, CredentialLock};
 pub use error::ConfigError;
 pub use extension::{
-    Binary, Cost, Manifest, ModelData, Opening, Placeholder, Process, Protocol, ProviderData, Tier,
-    read_manifest, read_package_text, read_providers,
+    Binary, Cost, Login, Manifest, ModelData, Opening, Placeholder, Process, Protocol,
+    ProviderData, Tier, read_manifest, read_package_text, read_providers,
 };
 pub use home::{
     ProjectKey, create_fiber_home, fiber_home, fiber_home_from_env, fiber_home_path,
@@ -53,7 +53,7 @@ pub use secret::{
 pub use settings::{SettingInfo, SettingValue, WriteScope};
 pub use write::{
     Layer, ListChange, ListEdit, Scope, edit_list, get_global, remove_extension_settings,
-    replace_global, set, set_global, set_global_if_unset, write_atomic,
+    replace_global, set, set_global, set_global_if_unset, update_global_entries, write_atomic,
 };
 
 pub use keys::{diagnostics_debug, parse_duration, refresh_after};

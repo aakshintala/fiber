@@ -2,7 +2,8 @@
 //! chips, and the movement clamps. The app's keys are tested beside them.
 
 use super::{
-    Choice, Mode, ModelPicker, command_args, preselect, saves, shown_in, start_args, visible,
+    Choice, Mode, ModelPicker, command_args, preselect, saves, scoped_save, shown_in, start_args,
+    visible,
 };
 use crate::catalogue::{Catalogue, ModelEntry};
 use crate::keys::Key;
@@ -743,4 +744,269 @@ fn clicks_choose_at_the_row_and_chip() {
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     // A row past the frame chooses nothing.
     assert_eq!(picker.click_cell(40, 0), None);
+}
+
+#[test]
+fn scope_opens_over_every_model_with_no_scope_line() {
+    let models = catalogue();
+    for scoped in [Vec::new(), vec!["acme/m1".to_owned(), "gone/x".to_owned()]] {
+        let (rows, line) = shown_in(&models, &scoped, false, Mode::Scope, None);
+        assert_eq!(rows, [0, 1, 2, 3, 4]);
+        assert_eq!(line, None);
+    }
+}
+
+#[test]
+fn an_open_checklist_starts_marked_from_the_list() {
+    let mut picker = ModelPicker {
+        scoped: vec!["acme/m2".to_owned(), "gone/x".to_owned()],
+        ..ModelPicker::default()
+    };
+    picker.catalogue = Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+    };
+    picker.open(Mode::Scope, None);
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![false, true, false, false, false])
+    );
+    // Any other open keeps no marks.
+    picker.open(Mode::Choose, None);
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(Vec::new())
+    );
+}
+
+#[test]
+fn toggle_mark_flips_only_the_selected_row() {
+    let mut picker = ModelPicker {
+        scoped: vec!["acme/m1".to_owned()],
+        ..ModelPicker::default()
+    };
+    picker.catalogue = Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+    };
+    picker.open(Mode::Scope, None);
+    picker.move_row(1);
+    picker.toggle_mark();
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, true, false, false, false])
+    );
+    picker.toggle_mark();
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, false, false, false, false])
+    );
+    // With no marks kept, toggling changes nothing.
+    picker.open(Mode::Choose, None);
+    picker.toggle_mark();
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(Vec::new())
+    );
+}
+
+#[test]
+fn scope_clicks_toggle_the_mark_cell_and_select_on_any_other() {
+    let mut picker = ModelPicker {
+        scoped: Vec::new(),
+        ..ModelPicker::default()
+    };
+    picker.catalogue = Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+    };
+    picker.open(Mode::Scope, None);
+    // Frame rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1`.
+    assert_eq!(picker.click_cell(2, 0), None);
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, false, false, false, false])
+    );
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    // The name cell selects without toggling.
+    assert_eq!(picker.click_cell(3, 1), None);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(1));
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, false, false, false, false])
+    );
+    // A heading toggles nothing.
+    assert_eq!(picker.click_cell(1, 0), None);
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, false, false, false, false])
+    );
+    // The checklist never chooses, on any cell.
+    assert_eq!(picker.click_cell(2, 0), None);
+    assert!(picker.choice(false).is_none());
+    assert!(picker.choice(true).is_none());
+}
+
+#[test]
+fn scoped_save_orders_marked_then_keeps_uninstalled_old_entries() {
+    let models = catalogue();
+    let old = vec![
+        "gone/x".to_owned(),
+        "zeta/z3".to_owned(),
+        "acme/m2".to_owned(),
+    ];
+    // `zeta/z3` is installed but unmarked: it stays dropped, while the
+    // uninstalled `gone/x` is kept in its old order.
+    assert_eq!(
+        scoped_save(&models, &[false, false, true, false, false], &old),
+        vec!["zeta/z1".to_owned(), "gone/x".to_owned()]
+    );
+    // Marked references come in catalogue order whatever the old order.
+    assert_eq!(
+        scoped_save(&models, &[false, false, false, true, true], &old),
+        vec![
+            "zeta/z2".to_owned(),
+            "zeta/z3".to_owned(),
+            "gone/x".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn scoped_save_with_every_marked_keeps_the_old_order_behind() {
+    let models = catalogue();
+    assert_eq!(
+        scoped_save(
+            &models,
+            &[true, true, true, true, true],
+            &["gone/y".to_owned(), "gone/x".to_owned()]
+        ),
+        vec![
+            "acme/m1".to_owned(),
+            "acme/m2".to_owned(),
+            "zeta/z1".to_owned(),
+            "zeta/z2".to_owned(),
+            "zeta/z3".to_owned(),
+            "gone/y".to_owned(),
+            "gone/x".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn scoped_save_with_none_marked_clears() {
+    let models = catalogue();
+    assert!(scoped_save(&models, &[false, false, false, false, false], &[]).is_empty());
+    // Even an unavailable old entry is dropped: written as `[]`, an
+    // empty list reads as every model.
+    assert!(
+        scoped_save(
+            &models,
+            &[false, false, false, false, false],
+            &["gone/x".to_owned(), "acme/m1".to_owned()]
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_read_keeps_checklist_marks_by_reference() {
+    let mut picker = ModelPicker {
+        scoped: vec!["acme/m1".to_owned(), "zeta/z9".to_owned()],
+        ..ModelPicker::default()
+    };
+    picker.catalogue = Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+    };
+    picker.open(Mode::Scope, None);
+    // Unmark the installed `acme/m1`.
+    picker.toggle_mark();
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![false, false, false, false, false])
+    );
+    // The answer drops `acme/m2` and adds `zeta/z9`: the kept rows hold
+    // their marks, and the new row starts marked from the saved list.
+    let mut models = catalogue();
+    models.remove(1);
+    models.push(entry("zeta/z9", &["low"], Some("low"), None));
+    picker.store(Ok(Catalogue {
+        models,
+        notices: Vec::new(),
+    }));
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![false, false, false, false, true])
+    );
+}
+
+#[test]
+fn a_read_leaves_a_choose_open_without_marks() {
+    let mut picker = ModelPicker {
+        scoped: vec!["acme/m1".to_owned()],
+        ..ModelPicker::default()
+    };
+    picker.catalogue = Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+    };
+    picker.open(Mode::Choose, None);
+    picker.store(Ok(Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+    }));
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(Vec::new())
+    );
+}
+
+#[test]
+fn a_read_through_an_empty_catalogue_marks_from_the_list_again() {
+    let mut picker = ModelPicker {
+        scoped: vec!["acme/m1".to_owned(), "gone/x".to_owned()],
+        ..ModelPicker::default()
+    };
+    picker.catalogue = Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+    };
+    picker.open(Mode::Scope, None);
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, false, false, false, false])
+    );
+    // A refresh that briefly empties the catalogue leaves no rows, so
+    // no marks either.
+    picker.store(Ok(Catalogue {
+        models: Vec::new(),
+        notices: Vec::new(),
+    }));
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(Vec::new())
+    );
+    // The next answer marks every row from the saved list again, so
+    // toggling and saving work.
+    picker.store(Ok(Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+    }));
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, false, false, false, false])
+    );
+    picker.move_row(1);
+    picker.toggle_mark();
+    let marks = picker.open.as_ref().expect("open").marks.clone();
+    assert_eq!(marks, vec![true, true, false, false, false]);
+    assert_eq!(
+        scoped_save(&picker.catalogue.models, &marks, &picker.scoped),
+        vec![
+            "acme/m1".to_owned(),
+            "acme/m2".to_owned(),
+            "gone/x".to_owned()
+        ]
+    );
 }

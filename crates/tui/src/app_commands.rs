@@ -127,6 +127,11 @@ impl App {
         if self.overlays.keymap.is_some() {
             return Effect::None;
         }
+        // The `/keys` screen takes every stroke in `on_press`, so only
+        // a paste reaches here, and it does nothing behind the screen.
+        if self.keys_screen_open() {
+            return Effect::None;
+        }
         if let Some(effect) = self.offer_edit(&edit) {
             return effect;
         }
@@ -136,6 +141,11 @@ impl App {
         // A request on the panel takes the edit ahead of the prompt search.
         if self.panel().is_none() && (self.search_edit(&edit) || self.focus.is_some()) {
             return Effect::None;
+        }
+        // A running `tty` job's view types into the job ahead of the
+        // input box, behind every overlay above.
+        if let Some(effect) = self.item_job_edit(&edit) {
+            return effect;
         }
         crate::input::route(edit, &mut self.draft, &mut self.queue);
         self.overlays.selected = 0;
@@ -432,6 +442,7 @@ impl App {
                 self.open_model_picker(crate::model_picker::Mode::Choose)
             }
             "thinking" => self.thinking_command(&rest),
+            "scoped-models" => self.scoped_models_command(),
             "panel" => {
                 self.draft.clear();
                 self.toggle_panel()
@@ -449,6 +460,7 @@ impl App {
                 self.next_request()
             }
             "settings" => self.open_config_view(super::ConfigView::Settings),
+            "keys" => self.open_keys(),
             "tools" => self.open_config_view(super::ConfigView::Tools),
             "skills" => self.open_config_view(super::ConfigView::Skills),
             "context" => {
@@ -488,6 +500,9 @@ impl App {
         self.phase = Phase::Starting;
         self.clear_selection();
         self.attached_screen_mut().clear();
+        // Home keeps no session's images: a late answer or viewer
+        // completion from it is dropped.
+        self.forget_images();
         self.panel_state.reset();
         self.session_views_reset();
         self.offer = crate::offer::Offer::default();

@@ -23,10 +23,13 @@
 //!   as tab-separated lines
 //! - `docs-only FILE...`: whether every file is a docs file, as `docs-only: yes` or
 //!   `docs-only: no`
-//! - `bench-report --head FILE [--base FILE] --doc docs/performance.md --event
+//! - `bench-report --head FILE [--base FILE --base-commit SHA] --doc docs/performance.md --event
 //!   pull_request|push --comment FILE`: judges the benchmark result files
 //!   against the budget table and writes the pull request comment; exit 1
 //!   when a budget, a head self-check or the table mapping fails
+//! - `models-dev [--from FILE]`: regenerates the first-party model lists
+//!   from models.dev, or from FILE instead of fetching
+//!   (`docs/model-routing.md`)
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `check-docs`, `ci-needs`: the checks
 //! - `logo-mask --font <path> [--out <path>]`: regenerates the logo's alpha
 //!   mask from JetBrains Mono ExtraBold; the font is downloaded by whoever
@@ -42,6 +45,8 @@ mod bench;
 mod ci_needs;
 mod docs;
 mod logo;
+mod models_dev;
+mod models_dev_table;
 mod rules;
 mod select;
 #[cfg(test)]
@@ -203,6 +208,10 @@ fn run(args: &[String]) -> Result<bool, String> {
             println!("docs-only: {}", if yes { "yes" } else { "no" });
             Ok(yes)
         }
+        "models-dev" => {
+            let from = optional(rest, "--from");
+            models_dev::run(Path::new("."), from.as_deref().map(Path::new)).map(|()| true)
+        }
         "line-cap" => {
             let over = rules::over_cap(&rust_files(&workspace_members()?)?);
             for line in &over {
@@ -269,7 +278,8 @@ fn run(args: &[String]) -> Result<bool, String> {
             // An unreadable base is reported in the comment, not as a usage
             // error: the base only feeds advisory timings.
             let base = optional(rest, "--base").map(|path| read(&path));
-            let out = bench::report(&doc, &head, base, event);
+            let base_commit = optional(rest, "--base-commit").unwrap_or_default();
+            let out = bench::report(&doc, &head, base, event, &base_commit);
             std::fs::write(&comment_path, &out.comment)
                 .map_err(|e| format!("{comment_path}: {e}"))?;
             report(

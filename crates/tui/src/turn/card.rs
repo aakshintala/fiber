@@ -25,11 +25,20 @@ impl Turn {
     /// The bubble and its time row, then the card's pieces on `surface`,
     /// each broken at a handoff's band; `edges` says whether the first
     /// piece draws its top edge and the last its bottom one
-    /// (`docs/tui.md`, "Look", "Turns", "Handoff").
-    pub(crate) fn rows(&self, width: u16, zone: &TimeZone, edges: Edges, out: &mut Rows) -> Pieces {
+    /// (`docs/tui.md`, "Look", "Turns", "Handoff"). `layout` names
+    /// the session's images, so each draws as its one clickable line
+    /// (`docs/tui.md`, "Images").
+    pub(crate) fn rows(
+        &self,
+        width: u16,
+        zone: &TimeZone,
+        edges: Edges,
+        layout: &crate::image::Layout,
+        out: &mut Rows,
+    ) -> Pieces {
         for prompt in &self.prompts {
             let before = out.len();
-            crate::bubble::rows(prompt, width, out);
+            super::images::bubble_rows(prompt, width, layout, out);
             if out.len() > before
                 && let Some(time) = crate::local_time::time_of_day(self.started, zone)
             {
@@ -64,10 +73,15 @@ impl Turn {
             }
             match entry {
                 Entry::Reply { reply, .. } => reply.rows(width, out),
-                Entry::Steer(steered) => steered.rows(width, zone, out),
+                Entry::Steer(steered) => steered.rows(width, zone, layout, out),
                 Entry::Group(at) => {
                     if let Some(group) = self.groups.get(*at) {
-                        group.rows(self.is_open() && self.open_group == Some(*at), out);
+                        group.rows(
+                            self.is_open() && self.open_group == Some(*at),
+                            width,
+                            layout,
+                            out,
+                        );
                     }
                 }
                 Entry::Aside(aside) => aside.rows(out),

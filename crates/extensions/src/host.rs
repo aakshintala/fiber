@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use config::{Config, CredentialLock};
+use config::Config;
 use contract::clock::Clock;
 use contract::files::PathLock;
 
@@ -18,7 +18,7 @@ use serde_json::{Map, Number, Value};
 use ureq::Agent;
 use ureq::tls::{RootCerts, TlsConfig};
 
-use crate::oauth::{self, Browser};
+use crate::oauth::{self, Browser, Holder};
 
 mod ask;
 mod drive;
@@ -293,8 +293,9 @@ pub(crate) enum Request {
     Drive(DriveRequest),
     /// `host.exec`: run a program in its own process group.
     Exec(exec::ExecRequest),
-    /// `host.oauth.callback`: serve one request on this localhost port.
-    Callback { port: u16 },
+    /// `host.oauth.callback`: serve one request on this localhost port,
+    /// answering only `path` when set.
+    Callback { port: u16, path: Option<String> },
     /// `host.oauth.refresh`: take the lock on the provider's credential.
     Lock,
     /// `host.oauth.poll`: wait this long on the extension's clock.
@@ -331,7 +332,7 @@ pub(crate) enum Reply {
     /// The query parameters of the one request the callback served, or the
     /// code and message `host.oauth.callback` raises.
     Query(Result<Vec<(String, String)>, (contract::ErrorCode, String)>),
-    Lock(Result<CredentialLock, LockError>),
+    Lock(Result<Holder, LockError>),
     Slept,
 }
 
@@ -355,6 +356,7 @@ pub(crate) fn request_from(
         ("exec", Some(LuaValue::Table(spec))) => Request::Exec(exec_request(spec, workspace, cap)?),
         ("callback", Some(LuaValue::Table(opts))) => Request::Callback {
             port: opts.get("port")?,
+            path: opts.get("path")?,
         },
         ("lock", _) => Request::Lock,
         ("sleep", Some(LuaValue::Integer(seconds))) => Request::Sleep(Duration::from_secs(
@@ -539,8 +541,8 @@ pub(crate) fn resume_values(
             }
             Ok(MultiValue::from_vec(vec![LuaValue::Table(table)]))
         }
-        Reply::Lock(Ok(lock)) => Ok(MultiValue::from_vec(vec![LuaValue::UserData(
-            lua.create_userdata(oauth::Held::new(lock, Arc::clone(clock)))?,
+        Reply::Lock(Ok(holder)) => Ok(MultiValue::from_vec(vec![LuaValue::UserData(
+            lua.create_userdata(oauth::Held::new(holder, Arc::clone(clock)))?,
         )])),
         // An ask's answer as a Lua table: the answer keys of
         // `interaction_resolved`, or `{ declined = true }`.

@@ -17,6 +17,7 @@ pub mod jobs;
 mod oauth_server;
 mod process_group;
 mod provider_server;
+pub mod pty;
 pub mod refused;
 mod rerun;
 mod scripted_provider;
@@ -32,7 +33,7 @@ pub use cancel::CancelToken;
 pub use client::Client;
 pub use connect_proxy::ConnectProxy;
 pub use emit::Recorder;
-pub use oauth_server::{OauthReply, OauthRequest, OauthServer};
+pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
 pub use process_group::{
     WATCHDOG_SCRIPT, group_empties, kill_group, kill_matching, kill_pid, matching, matching_exits,
     pids_exit,
@@ -42,7 +43,7 @@ pub use rerun::{rerun, rerun_within};
 pub use scripted_provider::{Scripted, ScriptedProvider, call_usage, reply, unnamed_usage};
 pub use temp_dir::TempDir;
 pub use watchdog::Watchdog;
-pub use within::within;
+pub use within::{MUST_SUCCEED_WITHIN, within};
 
 /// The context window every fake model declares, in tokens: the window
 /// fixtures build sessions with, so size notices and the handoff trigger

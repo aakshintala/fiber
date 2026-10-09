@@ -2,6 +2,12 @@
 
 use std::time::Duration;
 
+/// The deadline for a wait that must succeed. It only catches a hang, so it
+/// is far above what a thread start, a socket or a TLS handshake takes under
+/// full parallelism (`docs/testing.md`, "Waits and timeouts"). A "nothing
+/// arrives" check keeps its own short bound.
+pub const MUST_SUCCEED_WITHIN: Duration = Duration::from_secs(10);
+
 /// Runs `work` on its own thread and returns its value. Fails the test
 /// naming `what` when `work` panics, and when it has not returned within
 /// `deadline`. Never joins the thread.

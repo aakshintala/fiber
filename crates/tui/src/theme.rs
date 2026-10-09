@@ -11,7 +11,7 @@ use ratatui::style::Color;
 use serde_json::Value;
 
 /// How many roles a theme gives a colour.
-pub(crate) const ROLES: usize = 30;
+pub(crate) const ROLES: usize = 37;
 
 /// A colour role: what a colour is for. The order is the doc table's
 /// (`docs/tui.md`, "Themes"), and each role's index is its marker's.
@@ -20,7 +20,7 @@ pub(crate) const ROLES: usize = 30;
 pub(crate) enum Role {
     /// The full text colour.
     Text,
-    /// Dim text: READY, line numbers, rules, grips.
+    /// What the doc calls dim: READY, labels and hints, grips.
     Muted,
     /// Bullets, the logo's mark, WORKING and its spinner, the steering and
     /// prompt stripes.
@@ -57,17 +57,34 @@ pub(crate) enum Role {
     Constant,
     /// Operators.
     Operator,
+    /// Inline code, a call's kind, an approval's tool name and rule prefix,
+    /// the input box's ›, "Copied", the context bar's fill.
+    Info,
+    /// The git branch, the handoff band's label, the question form's
+    /// stripe, title and marks, the delegates' ◆.
+    Secondary,
+    /// Rules, line numbers, a bar's empty cells, the pill, a grip's column
+    /// under the pointer, "Chat about this".
+    Rule,
+    /// The scroll bar's thumb.
+    Scroll,
     /// Every cell no surface covers.
     Background,
-    /// The input box, cards, notices, the handoff band.
+    /// The rail's and the panel's regions, the narrow layout's status line.
+    Panel,
+    /// The input box, the panel's cards, the search box.
     Surface,
     /// The card on screen, a hovered card, pickers.
     SurfaceRaised,
+    /// A turn's card.
+    Turn,
     /// The person's prompt bubble.
     Prompt,
-    /// Code blocks and inline code.
+    /// Code blocks.
     Code,
-    /// The approval panel for a standing ask.
+    /// The handoff band.
+    Handoff,
+    /// The approval panel for a standing ask, and the question form.
     Approval,
     /// The approval panel for a reviewer's escalation.
     Alert,
@@ -103,11 +120,18 @@ impl Role {
         Self::Type,
         Self::Constant,
         Self::Operator,
+        Self::Info,
+        Self::Secondary,
+        Self::Rule,
+        Self::Scroll,
         Self::Background,
+        Self::Panel,
         Self::Surface,
         Self::SurfaceRaised,
+        Self::Turn,
         Self::Prompt,
         Self::Code,
+        Self::Handoff,
         Self::Approval,
         Self::Alert,
         Self::Hover,
@@ -144,11 +168,18 @@ impl Role {
             Self::Type => "type",
             Self::Constant => "constant",
             Self::Operator => "operator",
+            Self::Info => "info",
+            Self::Secondary => "secondary",
+            Self::Rule => "rule",
+            Self::Scroll => "scroll",
             Self::Background => "background",
+            Self::Panel => "panel",
             Self::Surface => "surface",
             Self::SurfaceRaised => "surface_raised",
+            Self::Turn => "turn",
             Self::Prompt => "prompt",
             Self::Code => "code",
+            Self::Handoff => "handoff",
             Self::Approval => "approval",
             Self::Alert => "alert",
             Self::Hover => "hover",
@@ -162,10 +193,13 @@ impl Role {
     pub(crate) fn tint(self) -> bool {
         match self {
             Self::Background
+            | Self::Panel
             | Self::Surface
             | Self::SurfaceRaised
+            | Self::Turn
             | Self::Prompt
             | Self::Code
+            | Self::Handoff
             | Self::Approval
             | Self::Alert
             | Self::Hover
@@ -190,7 +224,11 @@ impl Role {
             | Self::Function
             | Self::Type
             | Self::Constant
-            | Self::Operator => false,
+            | Self::Operator
+            | Self::Info
+            | Self::Secondary
+            | Self::Rule
+            | Self::Scroll => false,
         }
     }
 
@@ -199,12 +237,15 @@ impl Role {
     pub(crate) fn grey(self) -> bool {
         match self {
             Self::Background
+            | Self::Panel
             | Self::Surface
             | Self::SurfaceRaised
+            | Self::Turn
             | Self::Prompt
             | Self::Code
-            | Self::Hover
-            | Self::Selection => true,
+            | Self::Approval
+            | Self::Rule
+            | Self::Hover => true,
             Self::Text
             | Self::Muted
             | Self::Accent
@@ -224,8 +265,12 @@ impl Role {
             | Self::Type
             | Self::Constant
             | Self::Operator
-            | Self::Approval
+            | Self::Info
+            | Self::Secondary
+            | Self::Scroll
+            | Self::Handoff
             | Self::Alert
+            | Self::Selection
             | Self::Match
             | Self::MatchCurrent => false,
         }
@@ -240,91 +285,120 @@ impl Role {
 /// A colour in 24 bits.
 pub(crate) type Rgb = (u8, u8, u8);
 
+/// A theme value: the terminal's own default colour, the default
+/// foreground drawn dim, or a fixed colour (`docs/tui.md`, "Themes").
+/// The default foreground is SGR 39 as a foreground and SGR 49 as a
+/// background; both resolve to `Color::Reset` at every depth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Shade {
+    /// The terminal's default colour.
+    Terminal,
+    /// The default foreground drawn dim.
+    Dim,
+    /// A fixed colour.
+    Rgb(Rgb),
+}
+
 /// A theme: one colour per role.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Theme {
-    colours: [Rgb; ROLES],
+    colours: [Shade; ROLES],
 }
 
 impl Theme {
-    /// The built-in dark theme.
+    /// The built-in dark theme (`docs/tui.md`, "Themes").
     pub(crate) const DARK: Theme = Theme {
         colours: [
-            (0xdc, 0xdf, 0xe4), // text
-            (0x7f, 0x84, 0x8e), // muted
-            (0x56, 0xb6, 0xc2), // accent
-            (0x61, 0xaf, 0xef), // heading
-            (0x98, 0xc3, 0x79), // success
-            (0xe5, 0xc0, 0x7b), // warning
-            (0xe0, 0x6c, 0x75), // error
-            (0xd1, 0x9a, 0x66), // attention
-            (0x98, 0xc3, 0x79), // added
-            (0xe0, 0x6c, 0x75), // removed
-            (0xab, 0xb2, 0xbf), // code_text
-            (0xc6, 0x78, 0xdd), // keyword
-            (0x98, 0xc3, 0x79), // string
-            (0x6a, 0x73, 0x82), // comment
-            (0xd1, 0x9a, 0x66), // number
-            (0x61, 0xaf, 0xef), // function
-            (0xe5, 0xc0, 0x7b), // type
-            (0xe0, 0x6c, 0x75), // constant
-            (0x56, 0xb6, 0xc2), // operator
-            (0x1e, 0x21, 0x27), // background
-            (0x28, 0x2c, 0x34), // surface
-            (0x32, 0x38, 0x42), // surface_raised
-            (0x26, 0x34, 0x4a), // prompt
-            (0x21, 0x25, 0x2b), // code
-            (0x1c, 0x28, 0x40), // approval
-            (0x50, 0x1c, 0x20), // alert
-            (0x3e, 0x44, 0x51), // hover
-            (0x37, 0x41, 0x5a), // selection
-            (0x5a, 0x4a, 0x1e), // match
-            (0x82, 0x64, 0x1e), // match_current
+            Shade::Terminal,                // text
+            Shade::Dim,                     // muted
+            Shade::Rgb((0x6e, 0xaa, 0xfe)), // accent
+            Shade::Rgb((0xff, 0x9f, 0x43)), // heading
+            Shade::Rgb((0x6e, 0xaa, 0xfe)), // success
+            Shade::Rgb((0xff, 0x9f, 0x43)), // warning
+            Shade::Rgb((0xff, 0x5d, 0x73)), // error
+            Shade::Rgb((0xff, 0x9f, 0x43)), // attention
+            Shade::Rgb((0x6e, 0xaa, 0xfe)), // added
+            Shade::Rgb((0xff, 0x5d, 0x73)), // removed
+            Shade::Terminal,                // code_text
+            Shade::Rgb((0x6e, 0xaa, 0xfe)), // keyword
+            Shade::Rgb((0xce, 0x91, 0x78)), // string
+            Shade::Rgb((0x7a, 0x7a, 0x8a)), // comment
+            Shade::Rgb((0xb5, 0xce, 0xa8)), // number
+            Shade::Rgb((0x7d, 0xd3, 0xfc)), // function
+            Shade::Rgb((0x7d, 0xd3, 0xfc)), // type
+            Shade::Rgb((0x7d, 0xd3, 0xfc)), // constant
+            Shade::Terminal,                // operator
+            Shade::Rgb((0x7d, 0xd3, 0xfc)), // info
+            Shade::Rgb((0xb3, 0x9d, 0xdb)), // secondary
+            Shade::Rgb((0x3a, 0x3a, 0x4a)), // rule
+            Shade::Rgb((0x80, 0x80, 0x80)), // scroll
+            Shade::Terminal,                // background
+            Shade::Rgb((0x0c, 0x0c, 0x11)), // panel
+            Shade::Rgb((0x1a, 0x1a, 0x22)), // surface
+            Shade::Rgb((0x3a, 0x3a, 0x4a)), // surface_raised
+            Shade::Rgb((0x10, 0x10, 0x17)), // turn
+            Shade::Rgb((0x34, 0x35, 0x41)), // prompt
+            Shade::Rgb((0x18, 0x18, 0x21)), // code
+            Shade::Rgb((0x1f, 0x1a, 0x2e)), // handoff
+            Shade::Rgb((0x1a, 0x1a, 0x22)), // approval
+            Shade::Rgb((0x50, 0x1c, 0x20)), // alert
+            Shade::Rgb((0x1e, 0x1e, 0x26)), // hover
+            Shade::Rgb((0x26, 0x4f, 0x78)), // selection
+            Shade::Rgb((0x5a, 0x4a, 0x1a)), // match
+            Shade::Rgb((0xff, 0x9f, 0x43)), // match_current
         ],
     };
 
-    /// The built-in light theme.
+    /// The built-in light theme. Roles with no ruled light value take
+    /// the dark value until ruled (see #1634's case).
     pub(crate) const LIGHT: Theme = Theme {
         colours: [
-            (0x38, 0x3a, 0x42), // text
-            (0xa0, 0xa1, 0xa7), // muted
-            (0x01, 0x84, 0xbc), // accent
-            (0x40, 0x78, 0xf2), // heading
-            (0x50, 0xa1, 0x4f), // success
-            (0xc1, 0x84, 0x01), // warning
-            (0xe4, 0x56, 0x49), // error
-            (0xcc, 0x66, 0x00), // attention
-            (0x50, 0xa1, 0x4f), // added
-            (0xe4, 0x56, 0x49), // removed
-            (0x38, 0x3a, 0x42), // code_text
-            (0xa6, 0x26, 0xa4), // keyword
-            (0x50, 0xa1, 0x4f), // string
-            (0xa0, 0xa1, 0xa7), // comment
-            (0x98, 0x68, 0x01), // number
-            (0x40, 0x78, 0xf2), // function
-            (0xc1, 0x84, 0x01), // type
-            (0xe4, 0x56, 0x49), // constant
-            (0x01, 0x84, 0xbc), // operator
-            (0xfa, 0xfa, 0xfa), // background
-            (0xf0, 0xf0, 0xf1), // surface
-            (0xe5, 0xe5, 0xe6), // surface_raised
-            (0xe2, 0xea, 0xf6), // prompt
-            (0xea, 0xea, 0xeb), // code
-            (0xe0, 0xe8, 0xf8), // approval
-            (0xfc, 0xde, 0xde), // alert
-            (0xdb, 0xdb, 0xde), // hover
-            (0xd2, 0xde, 0xf5), // selection
-            (0xfa, 0xec, 0xb4), // match
-            (0xf5, 0xd7, 0x78), // match_current
+            Shade::Rgb((0x38, 0x3a, 0x42)), // text
+            Shade::Rgb((0xa0, 0xa1, 0xa7)), // muted
+            Shade::Rgb((0x01, 0x84, 0xbc)), // accent
+            Shade::Rgb((0x40, 0x78, 0xf2)), // heading
+            Shade::Rgb((0x50, 0xa1, 0x4f)), // success
+            Shade::Rgb((0xc1, 0x84, 0x01)), // warning
+            Shade::Rgb((0xe4, 0x56, 0x49)), // error
+            Shade::Rgb((0xcc, 0x66, 0x00)), // attention
+            Shade::Rgb((0x50, 0xa1, 0x4f)), // added
+            Shade::Rgb((0xe4, 0x56, 0x49)), // removed
+            Shade::Rgb((0x38, 0x3a, 0x42)), // code_text
+            Shade::Rgb((0xa6, 0x26, 0xa4)), // keyword
+            Shade::Rgb((0x50, 0xa1, 0x4f)), // string
+            Shade::Rgb((0xa0, 0xa1, 0xa7)), // comment
+            Shade::Rgb((0x98, 0x68, 0x01)), // number
+            Shade::Rgb((0x40, 0x78, 0xf2)), // function
+            Shade::Rgb((0xc1, 0x84, 0x01)), // type
+            Shade::Rgb((0xe4, 0x56, 0x49)), // constant
+            Shade::Rgb((0x01, 0x84, 0xbc)), // operator
+            Shade::Rgb((0x7d, 0xd3, 0xfc)), // info
+            Shade::Rgb((0xb3, 0x9d, 0xdb)), // secondary
+            Shade::Rgb((0x3a, 0x3a, 0x4a)), // rule
+            Shade::Rgb((0x80, 0x80, 0x80)), // scroll
+            Shade::Rgb((0xfa, 0xfa, 0xfa)), // background
+            Shade::Rgb((0x0c, 0x0c, 0x11)), // panel
+            Shade::Rgb((0xf0, 0xf0, 0xf1)), // surface
+            Shade::Rgb((0xe5, 0xe5, 0xe6)), // surface_raised
+            Shade::Rgb((0x10, 0x10, 0x17)), // turn
+            Shade::Rgb((0xe2, 0xea, 0xf6)), // prompt
+            Shade::Rgb((0xea, 0xea, 0xeb)), // code
+            Shade::Rgb((0x1f, 0x1a, 0x2e)), // handoff
+            Shade::Rgb((0xe0, 0xe8, 0xf8)), // approval
+            Shade::Rgb((0xfc, 0xde, 0xde)), // alert
+            Shade::Rgb((0xdb, 0xdb, 0xde)), // hover
+            Shade::Rgb((0xd2, 0xde, 0xf5)), // selection
+            Shade::Rgb((0xfa, 0xec, 0xb4)), // match
+            Shade::Rgb((0xf5, 0xd7, 0x78)), // match_current
         ],
     };
 
-    /// The colour `role` takes.
-    pub(crate) fn rgb(&self, role: Role) -> Rgb {
+    /// The shade `role` takes.
+    pub(crate) fn shade(&self, role: Role) -> Shade {
         self.colours
             .get(usize::from(role as u8))
             .copied()
-            .unwrap_or_default()
+            .unwrap_or(Shade::Terminal)
     }
 
     /// Reads a theme file (`docs/tui.md`, "Themes"): an object with
@@ -362,7 +436,7 @@ impl Theme {
                 .and_then(hex)
                 .ok_or_else(|| format!("role \"{name}\": {value} is not #rrggbb"))?;
             if let Some(slot) = theme.colours.get_mut(usize::from(role as u8)) {
-                *slot = rgb;
+                *slot = Shade::Rgb(rgb);
             }
         }
         Ok(theme)

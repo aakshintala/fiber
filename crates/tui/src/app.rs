@@ -49,6 +49,7 @@ mod form;
 #[path = "history.rs"]
 mod history;
 mod home;
+mod images;
 pub(crate) mod items;
 mod keyboard;
 mod links;
@@ -196,6 +197,9 @@ pub(crate) enum Target {
     Login,
     /// A handoff's note.
     Note(usize),
+    /// An image's line: clicking it, or Enter on it while focused,
+    /// opens it in the system viewer (`docs/tui.md`, "Images").
+    Image(u32),
     /// The jobs a resumed process marked orphaned.
     Orphans(usize),
     /// A reply's `block`th code block's `copy` cells: they copy its code.
@@ -213,6 +217,9 @@ pub(crate) struct App {
     paste: paste::Paste,
     phase: Phase,
     link: Link,
+    /// The attached session's image fetches and queued viewer opens
+    /// (`docs/tui.md`, "Images").
+    images: images::Images,
     /// Lines held until the hub connects: the `start` of an early Enter.
     held: Vec<String>,
     /// Commands waiting for their answer: kind and the draft they carried.
@@ -304,6 +311,7 @@ impl App {
             paste: paste::Paste::default(),
             phase: Phase::Starting,
             link: Link::Waiting,
+            images: images::Images::default(),
             held: Vec::new(),
             pending: HashMap::new(),
             notices: Notices::default(),
@@ -349,6 +357,9 @@ impl App {
             busy: false,
         };
         self.panel_state.attached();
+        // A new session's images start over: a late answer or viewer
+        // completion from the last one is dropped.
+        self.forget_images();
     }
 
     /// Hands one key to what is on top: the key map above the model
@@ -410,6 +421,11 @@ impl App {
             return effect;
         }
         if let Some(effect) = self.completion_key(&key) {
+            return effect;
+        }
+        // A running `tty` job's view types into the job ahead of the
+        // input box, behind every overlay above.
+        if let Some(effect) = self.item_job_key(&key) {
             return effect;
         }
         if let Some(effect) = self.draft_key(&key) {
@@ -509,6 +525,7 @@ impl App {
         // the hub connection and its levels are gone.
         self.drop_items();
         self.sessions_dropped();
+        self.images_disconnected();
         self.find_lost();
         self.abandon_copy();
         self.settle();
@@ -664,9 +681,12 @@ impl App {
         self.queue.panel(crate::surface::inset(self.column_width()))
     }
 
-    /// The badge line while the panel is closed and requests wait.
+    /// The badge line while the panel is closed and requests wait:
+    /// the `next_request` action's bound key, left out when unbound.
     pub(crate) fn badge(&self) -> Option<String> {
-        self.queue.badge(usize::from(self.offer.aside()))
+        let key = self.keys().first_label("next_request");
+        self.queue
+            .badge(usize::from(self.offer.aside()), key.as_deref())
     }
 
     /// The resident conversation's lines, before wrapping.
@@ -785,6 +805,11 @@ impl App {
                 if let Some(lines) = self.history_answered(&id, hub.payload.get("result")) {
                     return lines;
                 }
+                // A `read_file` for a viewer open answers here, never
+                // in the pages: its bytes go to the loop's worker.
+                if self.image_answered(&id, hub.payload.get("result")) {
+                    return Vec::new();
+                }
                 let session = hub
                     .payload
                     .get("result")
@@ -802,6 +827,9 @@ impl App {
             "command_rejected" => {
                 if let Some(id) = command_id {
                     let message = hub_string(&hub.payload, "message").unwrap_or_default();
+                    if self.image_rejected(&id, &message) {
+                        return Vec::new();
+                    }
                     self.config_views_refused(&id, &message);
                     self.session_views_refused(&id, &message);
                     if !self.history_rejected(&id, &message) {

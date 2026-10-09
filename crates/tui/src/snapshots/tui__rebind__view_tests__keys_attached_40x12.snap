@@ -1,0 +1,16 @@
+---
+source: crates/tui/src/rebind_view_tests.rs
+expression: "screen(&app, 40, 12)"
+---
+
+Keys                                   ✕
+Enter                       send Send a
+Shift+Enter, Ctrl+J         line_break I
+Esc                         close_or_int
+Ctrl+C                      clear_then_q
+⌥0                          go_home Go h
+Ctrl+N                      new_session
+↑↓ move · Enter rebind · r reset · Delet
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+>
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -317,7 +317,7 @@ fn echoes(terminal: &fs::File) -> bool {
 /// What `fiber` wrote to its terminal, read on a thread so a wait can have a
 /// deadline.
 struct Screen {
-    chunks: Receiver<Option<String>>,
+    chunks: Receiver<String>,
     typed: fs::File,
     seen: String,
     deadline: Deadline,
@@ -325,22 +325,14 @@ struct Screen {
 
 impl Screen {
     fn new(terminal: &Terminal, deadline: Deadline) -> Self {
-        let mut reader = fs::File::from(terminal.main.try_clone().unwrap());
+        let reader = fs::File::from(terminal.main.try_clone().unwrap());
         let (send, chunks) = mpsc::channel();
-        thread::spawn(move || {
-            let mut buffer = [0u8; 4096];
-            // A read error is the end of the terminal, on Linux as well as
-            // on macOS.
-            while let Ok(n) = reader.read(&mut buffer) {
-                if n == 0
-                    || send
-                        .send(Some(String::from_utf8_lossy(&buffer[..n]).into()))
-                        .is_err()
-                {
-                    return;
-                }
-            }
-            send.send(None).unwrap_or(());
+        // A read error is the end of the terminal, on Linux as well as
+        // on macOS. The channel's disconnect when the reader ends is the
+        // end of the terminal.
+        fakes::pty::read_to_eof(reader, move |bytes| {
+            send.send(String::from_utf8_lossy(bytes).into())
+                .unwrap_or(());
         });
         Self {
             chunks,
@@ -357,8 +349,8 @@ impl Screen {
         while !self.seen[mark..].contains(text) {
             // Each chunk has the deadline: a terminal that goes quiet fails.
             match self.chunks.recv_timeout(self.deadline.left()) {
-                Ok(Some(chunk)) => self.seen.push_str(&chunk),
-                Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Ok(chunk) => self.seen.push_str(&chunk),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
                     panic!(
                         "the terminal ended before {text:?}: {:?}",
                         &self.seen[mark..]
@@ -720,4 +712,186 @@ fn labels_are_stored_and_deleted_through_argv() {
     assert_eq!(all.stderr, "fiber: removed credentials/acme/home\n");
     assert!(!setup.home().join("credentials/acme/home").exists());
     assert!(!format!("{}{}{}", work.stderr, same.stderr, bare.stderr).contains(KEY));
+}
+
+/// Installs the codex package with its OAuth origin rewritten to `oauth`,
+/// so the login talks to the fake.
+fn install_codex(setup: &Setup, oauth: &str) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers/codex");
+    let to = setup.home().join("extensions/codex");
+    for file in ["extension.json", "providers/codex.json", "init.lua"] {
+        let text = fs::read_to_string(root.join(file)).unwrap();
+        let dir = to.join(file).parent().unwrap().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            to.join(file),
+            text.replace("https://auth.openai.com", oauth),
+        )
+        .unwrap();
+    }
+}
+
+/// A device-code exchange reply carrying `email`.
+fn codex_exchange(email: &str) -> String {
+    let access = fakes::jwt(&serde_json::json!({
+        "https://api.openai.com/auth": { "chatgpt_account_id": "acct_1" },
+        "exp": 4_102_444_800u64,
+    }));
+    let id = fakes::jwt(&serde_json::json!({ "email": email }));
+    serde_json::json!({
+        "access_token": access,
+        "refresh_token": "rt_1",
+        "id_token": id,
+        "expires_in": 864000,
+    })
+    .to_string()
+}
+
+/// Runs `fiber login codex --device`, reading stderr until `needle`
+/// shows, then waiting for the exit under the deadline.
+fn login_device(setup: &Setup, args: &[&str], needle: &str) -> Run {
+    let mut command = setup.command(args);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (mut child, watchdog) = spawn_watched(&mut command);
+    let group = child.id();
+    let guard = KillGroup(group);
+    feed(&mut child, "");
+    // Stderr arrives in chunks on a thread, so the wait for the device
+    // code carries the deadline instead of hanging on a pipe.
+    let (chunks, received) = mpsc::channel();
+    let mut err = child.stderr.take().unwrap();
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match err.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if chunks.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    let mut stderr = Vec::new();
+    loop {
+        let chunk = received
+            .recv_timeout(setup.deadline.left())
+            .unwrap_or_else(|_| {
+                panic!("`fiber login codex --device` showed no device code within the deadline")
+            });
+        stderr.extend_from_slice(&chunk);
+        if String::from_utf8_lossy(&stderr).contains(needle) {
+            break;
+        }
+    }
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let output = match finished.recv_timeout(setup.deadline.left()) {
+        Ok(output) => output.unwrap(),
+        Err(_) => support::expired(
+            setup.deadline,
+            group,
+            &finished,
+            "`fiber login codex --device` to exit",
+        ),
+    };
+    while let Ok(chunk) = received.try_recv() {
+        stderr.extend_from_slice(&chunk);
+    }
+    assert!(
+        !group_alive(setup.deadline, group),
+        "`fiber` left a process behind"
+    );
+    std::mem::forget(guard);
+    watchdog.stand_down(setup.deadline.cleanup());
+    Run {
+        code: output.status.code(),
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+    }
+}
+
+#[test]
+fn a_device_login_stores_the_email_label_then_logs_out() {
+    let setup = Setup::new();
+    let oauth = fakes::OauthServer::start(vec![
+        fakes::OauthReply::raw(
+            200,
+            &serde_json::json!({
+                "device_auth_id": "da_1",
+                "user_code": "ABCD-1234",
+                "interval": "1",
+            })
+            .to_string(),
+        ),
+        fakes::OauthReply::raw(
+            200,
+            &serde_json::json!({ "authorization_code": "authcode-2", "code_verifier": "verifier-2" })
+                .to_string(),
+        ),
+        fakes::OauthReply::raw(200, &codex_exchange("alice@example.com")),
+    ]);
+    install_codex(&setup, &oauth.url());
+    let login = login_device(
+        &setup,
+        &["login", "codex", "--device"],
+        "enter the code ABCD-1234",
+    );
+    assert_eq!(login.code, Some(0), "{}", login.stderr);
+    assert_eq!(login.stdout, "");
+    assert_eq!(
+        login.stderr,
+        format!(
+            "Go to {}/codex/device and enter the code ABCD-1234\nfiber: stored credentials/codex/alice@example.com\n",
+            oauth.url()
+        )
+    );
+    let file = setup.home().join("credentials/codex/alice@example.com");
+    assert!(file.is_file());
+    assert_eq!(
+        fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let stored: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(stored["account_id"], "acct_1");
+    assert_eq!(stored["refresh_token"], "rt_1");
+
+    let logout = setup.fiber(&["logout", "codex", "--as", "alice@example.com"], "");
+    assert_eq!(logout.code, Some(0), "{}", logout.stderr);
+    assert_eq!(
+        logout.stderr,
+        "fiber: removed credentials/codex/alice@example.com\n"
+    );
+    assert!(!file.exists());
+}
+
+#[test]
+fn a_device_login_with_as_to_an_already_stored_label_contacts_nothing() {
+    let setup = Setup::new();
+    let oauth = fakes::OauthServer::start(vec![]);
+    install_codex(&setup, &oauth.url());
+    let dir = setup.home().join("credentials/codex");
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("x");
+    fs::write(
+        &file,
+        serde_json::json!({
+            "token": "old",
+            "expires_at": 4_102_444_800u64,
+            "refresh_token": "rt",
+            "account_id": "acct_0",
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let login = setup.fiber(&["login", "codex", "--as", "x"], "");
+    assert_eq!(login.code, Some(2), "{}", login.stderr);
+    assert!(login.stderr.contains("--as"), "{}", login.stderr);
+    assert_eq!(oauth.request_count(), 0);
+    assert!(file.is_file());
 }

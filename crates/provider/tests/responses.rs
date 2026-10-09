@@ -14,6 +14,9 @@
 #[path = "support/probes.rs"]
 mod probes;
 
+#[path = "support/large.rs"]
+mod large;
+
 #[path = "support/wire_tools.rs"]
 mod wire_tools;
 
@@ -1887,33 +1890,59 @@ fn search_item_with(action: Value, extra: Value) -> Value {
     item
 }
 
-fn cited_message_done() -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "message",
-        "content": [{"type": "output_text", "text": "Rust 1.90 is out.",
-            "annotations": [{"type": "url_citation", "url": "https://a.example"}]}]
-    }})
+/// A recording saved by the `record` jig, response bytes only.
+fn recorded(name: &str) -> Vec<u8> {
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/recordings")
+            .join(name),
+    )
+    .unwrap()
+}
+
+/// The recording's `response.output_item.done` items, in order. Lines
+/// that are not JSON, such as muse's trailing `[DONE]`, are skipped:
+/// the decoder stops at the terminal event before them.
+fn recorded_items(bytes: &[u8]) -> Vec<Value> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+        .filter(|event| {
+            event.get("type").and_then(Value::as_str) == Some("response.output_item.done")
+        })
+        .map(|event| event["item"].clone())
+        .collect()
+}
+
+fn hosted_calls(reply: &Reply) -> Vec<&contract::provider::HostedCall> {
+    reply
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            ReplyAction::Hosted(hosted) => Some(hosted),
+            ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::ToolCall(_) => None,
+        })
+        .collect()
+}
+
+fn hosted_text(hosted: &contract::provider::HostedCall) -> &str {
+    match hosted.completed.content.as_slice() {
+        [contract::shapes::ContentPart::Text { text }] => text,
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]
-fn a_web_search_call_decodes_as_a_hosted_call_with_its_query_and_urls() {
-    let item = search_item_with(
-        json!({"type": "search", "query": "rust 1.90",
-            "sources": [{"type": "url", "url": "https://a.example"},
-                        {"type": "api", "name": "oai-sports"},
-                        {"type": "url", "url": "https://b.example"},
-                        {"type": "url"}]}),
-        json!({}),
-    );
-    let events = vec![
-        json!({"type": "response.output_item.added",
-            "item": {"type": "web_search_call", "id": "ws_1"}}),
-        json!({"type": "response.web_search_call.in_progress", "item_id": "ws_1"}),
-        search_done(item.clone()),
-        cited_message_done(),
-        completed("completed", json!({})),
-    ];
-    let (reply, deltas) = decoded(&stream(&events));
+fn the_recorded_openai_search_decodes_its_query_and_sources() {
+    let bytes = recorded("openai-web-search.sse");
+    let items = recorded_items(&bytes);
+    let searches: Vec<&Value> = items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("web_search_call"))
+        .collect();
+    assert!(!searches.is_empty(), "the recording holds a search");
+    let (reply, deltas) = decoded(&bytes);
     let reply = reply.unwrap();
     assert!(
         deltas
@@ -1921,43 +1950,132 @@ fn a_web_search_call_decodes_as_a_hosted_call_with_its_query_and_urls() {
             .all(|d| !matches!(d, Delta::ToolCallArguments(_))),
         "a hosted call streams no arguments"
     );
-    let [ReplyAction::Hosted(hosted), ReplyAction::Text(text)] = reply.actions.as_slice() else {
-        panic!("{:?}", reply.actions);
-    };
-    assert_eq!(
-        hosted,
-        &contract::provider::HostedCall {
-            call: ToolCallRequested {
-                name: "web_search".into(),
-                arguments: json!({"type": "search", "query": "rust 1.90"}),
-                provider_id: Some(ProviderCallId("ws_1".into())),
-                repair: None,
-                ran_by: None,
-                provider_item: Some(item.clone()),
-            },
-            completed: contract::events::ToolCallCompleted {
-                status: contract::events::CallStatus::Completed,
-                reason: None,
-                error: None,
-                process: None,
-                content: vec![contract::shapes::ContentPart::Text {
-                    text: "https://a.example\nhttps://b.example".into(),
-                }],
-                details: None,
-                artifact: None,
-                changes: None,
-                control: None,
-                changed_by: None,
-                provider_item: Some(item),
-            },
-        }
-    );
-    assert_eq!(text.text, "Rust 1.90 is out.");
+    let hosted = hosted_calls(&reply);
+    assert_eq!(hosted.len(), searches.len());
+    for (pair, item) in hosted.iter().zip(searches) {
+        // Arguments are the action less `sources`; both logged lines are
+        // the item itself.
+        let mut action = item["action"].clone();
+        action.as_object_mut().unwrap().remove("sources");
+        assert_eq!(pair.call.name, "web_search");
+        assert_eq!(pair.call.arguments, action);
+        // A done item is several kilobytes: compare without printing it
+        // whole on failure.
+        large::assert_json_eq(
+            item,
+            pair.call.provider_item.as_ref().unwrap(),
+            "the hosted call's logged item",
+        );
+        large::assert_json_eq(
+            item,
+            pair.completed.provider_item.as_ref().unwrap(),
+            "the hosted result's logged item",
+        );
+        assert_eq!(
+            pair.completed.status,
+            contract::events::CallStatus::Completed
+        );
+        let urls: Vec<&str> = item["action"]["sources"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|source| source.get("url").and_then(Value::as_str))
+            .collect();
+        assert!(!urls.is_empty(), "the recording asked for sources");
+        assert_eq!(hosted_text(pair), urls.join("\n"));
+    }
     assert_eq!(reply.web_searches, None);
 }
 
 #[test]
-fn a_web_search_calls_urls_come_from_results_then_sources() {
+fn a_search_without_sources_completes_with_no_urls() {
+    let bytes = recorded("openai-web-search-no-sources.sse");
+    let items = recorded_items(&bytes);
+    assert!(
+        items
+            .iter()
+            .any(|item| item.get("type").and_then(Value::as_str) == Some("web_search_call")),
+        "the recording holds a search"
+    );
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("\"sources\""),
+        "the recording carries no sources"
+    );
+    let reply = decoded(&bytes).0.unwrap();
+    let hosted = hosted_calls(&reply);
+    assert_eq!(hosted.len(), 1);
+    assert_eq!(
+        hosted[0].completed.status,
+        contract::events::CallStatus::Completed
+    );
+    assert_eq!(hosted_text(hosted[0]), "");
+}
+
+#[test]
+fn the_recorded_muse_search_takes_its_urls_from_results() {
+    let bytes = recorded("muse-web-search.sse");
+    let items = recorded_items(&bytes);
+    let searches: Vec<&Value> = items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("web_search_call"))
+        .collect();
+    assert!(!searches.is_empty(), "the recording holds searches");
+    let reply = decoded(&bytes).0.unwrap();
+    let hosted = hosted_calls(&reply);
+    assert_eq!(hosted.len(), searches.len());
+    for (pair, item) in hosted.iter().zip(searches) {
+        assert_eq!(
+            pair.completed.status,
+            contract::events::CallStatus::Completed
+        );
+        if item["action"].get("type").and_then(Value::as_str) == Some("open_page") {
+            // An `open_page` item names its URL on the action.
+            assert_eq!(hosted_text(pair), item["action"]["url"].as_str().unwrap());
+        } else {
+            let urls: Vec<&str> = item["results"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|result| result.get("url").and_then(Value::as_str))
+                .collect();
+            assert!(!urls.is_empty(), "the recording holds results");
+            assert_eq!(hosted_text(pair), urls.join("\n"));
+        }
+    }
+    assert_eq!(reply.web_searches, None);
+}
+
+#[test]
+fn results_win_over_sources_in_the_recording() {
+    let bytes = recorded("muse-web-search-sources.sse");
+    let items = recorded_items(&bytes);
+    let reply = decoded(&bytes).0.unwrap();
+    let hosted = hosted_calls(&reply);
+    let searches: Vec<&Value> = items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("web_search_call"))
+        .collect();
+    assert_eq!(hosted.len(), searches.len());
+    for (pair, item) in hosted.iter().zip(searches) {
+        if item["action"].get("type").and_then(Value::as_str) == Some("open_page") {
+            continue;
+        }
+        // Both lists name the same URLs: the content is the results, each
+        // once, never results then sources.
+        let results: Vec<&str> = item["results"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|result| result.get("url").and_then(Value::as_str))
+            .collect();
+        assert!(!results.is_empty());
+        assert!(!item["action"]["sources"].as_array().unwrap().is_empty());
+        assert_eq!(hosted_text(pair), results.join("\n"));
+    }
+}
+
+#[test]
+fn urls_are_results_else_sources_else_the_action_url() {
     let content = |item: &Value| {
         let events = vec![search_done(item.clone()), completed("completed", json!({}))];
         let reply = decoded(&stream(&events)).0.unwrap();
@@ -1968,38 +2086,41 @@ fn a_web_search_calls_urls_come_from_results_then_sources() {
             hosted.completed.status,
             contract::events::CallStatus::Completed
         );
-        match hosted.completed.content.as_slice() {
-            [contract::shapes::ContentPart::Text { text }] => text.clone(),
-            other => panic!("{other:?}"),
-        }
+        hosted_text(hosted).to_owned()
     };
-    let action = json!({"type": "search", "query": "rust 1.90"});
-    let sourced = json!({"type": "search", "query": "rust 1.90",
-        "sources": [{"url": "https://a.example"}]});
-    // Results only.
+    // Empty results fall through to sources.
     assert_eq!(
         content(&search_item_with(
-            action.clone(),
-            json!({"results": [{"url": "https://b.example", "title": "B"}]}),
+            json!({"type": "search", "query": "rust 1.90",
+                "sources": [{"url": "https://a.example"}]}),
+            json!({"results": []}),
         )),
-        "https://b.example"
-    );
-    // Sources only.
-    assert_eq!(
-        content(&search_item_with(sourced.clone(), json!({}))),
         "https://a.example"
     );
-    // Both: results first.
+    // Neither list, with an `open_page` URL, gives that URL.
     assert_eq!(
         content(&search_item_with(
-            sourced,
-            json!({"results": [{"url": "https://b.example"}]}),
+            json!({"type": "open_page", "url": "https://a.example"}),
+            json!({"results": []}),
         )),
-        "https://b.example\nhttps://a.example"
+        "https://a.example"
     );
-    // Neither: empty text.
-    assert_eq!(content(&search_item_with(action, json!({}))), "");
-    // A non-string url is skipped.
+    // Neither list and no URL: empty text.
+    assert_eq!(
+        content(&search_item_with(
+            json!({"type": "search", "query": "rust 1.90"}),
+            json!({}),
+        )),
+        ""
+    );
+    // Only string URLs count.
+    assert_eq!(
+        content(&search_item_with(
+            json!({"type": "open_page", "url": 7}),
+            json!({"results": [{"url": null}]}),
+        )),
+        ""
+    );
     assert_eq!(
         content(&search_item_with(
             json!({"type": "search", "query": "x",
@@ -2027,12 +2148,7 @@ fn a_web_search_calls_urls_come_from_results_then_sources() {
         };
         assert_eq!(hosted.call.arguments, json!({}));
         assert_eq!(hosted.completed.provider_item, Some(item));
-        match hosted.completed.content.as_slice() {
-            [contract::shapes::ContentPart::Text { text }] => {
-                assert_eq!(text, "https://b.example")
-            }
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(hosted_text(hosted), "https://b.example");
     }
 }
 
@@ -2081,46 +2197,70 @@ fn a_web_search_call_that_did_not_complete_completes_failed_with_its_status() {
 }
 
 #[test]
-fn the_scripted_hosted_search_runs_through_the_seam_and_replays_its_item() {
-    let item = search_item_with(
-        json!({"type": "search", "query": "rust 1.90",
-            "sources": [{"url": "https://a.example"}]}),
-        json!({}),
-    );
-    let msg = answer_item();
-    let server = ProviderServer::start([
-        Response::stream(stream(&[
-            search_done(item.clone()),
-            search_done(msg.clone()),
-            completed("completed", json!({})),
-        ])),
-        Response::stream(stream(&[completed("completed", json!({}))])),
-    ])
-    .unwrap();
-    let provider: Box<dyn Provider> = Box::new(Responses::new(endpoint(&server)));
-    let (reply, _) = run(provider.call(&request()));
-    let reply = reply.unwrap();
-    assert_eq!(reply.finish, Finish::Completed);
-    let [ReplyAction::Hosted(hosted), ReplyAction::Text(part)] = reply.actions.as_slice() else {
-        panic!("{:?}", reply.actions);
-    };
-    assert_eq!(hosted.call.provider_item, Some(item.clone()));
-    assert_eq!(hosted.completed.provider_item, Some(item.clone()));
-    // The next request sends the item once, then the message item, as the
-    // loop renders the pair: two adjacent lines with the item, then the text.
-    let reference = "opencode/muse-spark-1.3-contributor".to_owned();
-    let next = ModelRequest {
-        conversation: vec![
-            hosted_assistant(&reference, item.clone()),
-            hosted_assistant(&reference, item.clone()),
-            Input::Assistant {
-                model: reference,
-                text: part.text.clone(),
-                provider_item: Some(msg.clone()),
-            },
-        ],
-        ..request()
-    };
-    run(provider.call(&next)).0.unwrap();
-    assert_eq!(sent_body(&server, 1)["input"], json!([item, msg]));
+fn the_recorded_searches_run_through_the_seam_and_replay_their_items() {
+    for name in ["openai-web-search.sse", "muse-web-search.sse"] {
+        let bytes = recorded(name);
+        let items = recorded_items(&bytes);
+        // Every done item is one the decoder reads: an ignored type, a
+        // refusal or a replay mismatch stops here, as a replay bug, never
+        // as a bent test.
+        for item in &items {
+            assert!(
+                matches!(
+                    item.get("type").and_then(Value::as_str),
+                    Some("message" | "reasoning" | "web_search_call")
+                ),
+                "{name}: an item the decoder ignores: {item}"
+            );
+        }
+        let server = ProviderServer::start([
+            Response::stream(bytes.clone()),
+            Response::stream(stream(&[completed("completed", json!({}))])),
+        ])
+        .unwrap();
+        let provider: Box<dyn Provider> = Box::new(Responses::new(endpoint(&server)));
+        let (reply, _) = run(provider.call(&request()));
+        let reply = reply.unwrap();
+        assert_eq!(reply.finish, Finish::Completed);
+        // The next request, as the loop renders the reply: reasoning keeps
+        // its item, text keeps its item, and a hosted pair goes as two
+        // adjacent lines carrying the same item, sent once.
+        let mut conversation: Vec<Input> = Vec::new();
+        for action in &reply.actions {
+            match action {
+                ReplyAction::Text(part) => conversation.push(Input::Assistant {
+                    model: HOSTED_REFERENCE.into(),
+                    text: part.text.clone(),
+                    provider_item: part.provider_item.clone(),
+                }),
+                ReplyAction::Reasoning(reasoning) => conversation.push(Input::Reasoning {
+                    model: HOSTED_REFERENCE.into(),
+                    text: reasoning.text.clone(),
+                    provider_item: reasoning.provider_item.clone(),
+                }),
+                ReplyAction::Hosted(hosted) => {
+                    for item in [
+                        hosted.call.provider_item.clone(),
+                        hosted.completed.provider_item.clone(),
+                    ] {
+                        conversation.push(hosted_assistant(HOSTED_REFERENCE, item.unwrap()));
+                    }
+                }
+                ReplyAction::ToolCall(call) => panic!("{name}: a tool call: {call:?}"),
+            }
+        }
+        let next = ModelRequest {
+            conversation,
+            ..request()
+        };
+        run(provider.call(&next)).0.unwrap();
+        // The replayed input holds whole done items, tens of kilobytes:
+        // compare without printing them whole on failure.
+        let input = sent_body(&server, 1)["input"].clone();
+        large::assert_json_eq(
+            &Value::Array(items),
+            &input,
+            &format!("{name}: the replayed input"),
+        );
+    }
 }

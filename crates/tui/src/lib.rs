@@ -28,6 +28,7 @@ mod focus;
 mod format;
 mod highlight;
 mod home;
+mod image;
 mod input;
 mod jigs;
 mod keymap;
@@ -51,6 +52,7 @@ mod pages;
 mod paste_image;
 #[cfg(test)]
 mod pty_watch;
+mod rebind;
 #[cfg(test)]
 mod results_support;
 mod retry;
@@ -75,6 +77,7 @@ mod turn;
 mod turn_text;
 mod usage_view;
 mod view;
+mod viewer;
 mod window;
 mod working;
 
@@ -89,9 +92,9 @@ pub use attention::Attention;
 
 pub use catalogue::{Catalogue, ModelEntry, ReadModels, Refresh};
 pub use configure::{
-    Configure, ConfigureError, Layer, LoginKind, LoginTarget, Revoked, RuleRow, RulesScope,
-    RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup,
-    ToolLists, ToolSwitches, WriteScope,
+    Configure, ConfigureError, KeyEdit, Layer, LoginKind, LoginTarget, Revoked, RuleRow,
+    RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope,
+    ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 
 pub use home::Launch;
@@ -148,6 +151,19 @@ pub(crate) enum Input {
         ticket: u64,
         /// The image in base64, or the notice.
         result: Result<String, String>,
+    },
+    /// A viewer worker finished opening image `id`: nothing on success,
+    /// or why the open failed. A completion from an earlier session is
+    /// dropped (`docs/tui.md`, "Images").
+    Viewed {
+        /// The image's id, so a failed open is not asked for again.
+        id: u32,
+        /// The file's name.
+        name: String,
+        /// The session generation that asked.
+        generation: u64,
+        /// Nothing, or why the open failed.
+        result: Result<(), String>,
     },
     /// A model-list read answered: the installed models, or why they
     /// could not be read. An answer for a closed loop is dropped.
