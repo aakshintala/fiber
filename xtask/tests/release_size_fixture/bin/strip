@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Stands in for strip -o OUT IN in the release-size test.
+cp "$3" "$2"

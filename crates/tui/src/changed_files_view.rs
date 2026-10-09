@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use contract::events::CommandResult;
 
 use crate::format;
-use crate::swapped::{Frame, List};
+use crate::swapped::{Frame, Ink, List};
 
 /// Every changed path, most lines changed first, ties by path ascending.
 pub(crate) fn ranked(changes: &BTreeMap<String, (u64, u64)>) -> Vec<(&str, u64, u64)> {
@@ -84,7 +84,11 @@ pub(crate) fn frame(
     let rows = paths
         .iter()
         .map(|(path, added, removed)| {
-            vec![(format!("{}  +{added} −{removed}", safe_line(path)), None)]
+            vec![(
+                format!("{}  +{added} −{removed}", safe_line(path)),
+                None,
+                Ink::Plain,
+            )]
         })
         .collect();
     let (files, added, removed) = totals(changes);
@@ -105,23 +109,30 @@ pub(crate) fn frame(
 fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
     let (rows, below) = match diff {
         Diff::Reading => (
-            vec![vec![("Reading the diff…".to_owned(), None)]],
+            vec![vec![("Reading the diff…".to_owned(), None, Ink::Plain)]],
             Vec::new(),
         ),
         Diff::Lines { lines, cut } => (
             lines
                 .iter()
-                .map(|line| vec![(line.clone(), None)])
+                .map(|line| vec![(line.clone(), None, Ink::Plain)])
                 .collect(),
             cut.iter()
                 .map(|artifact| format!("Cut: the whole diff is in {artifact}"))
                 .collect(),
         ),
         Diff::Empty => (
-            vec![vec![("No changes against HEAD.".to_owned(), None)]],
+            vec![vec![(
+                "No changes against HEAD.".to_owned(),
+                None,
+                Ink::Plain,
+            )]],
             Vec::new(),
         ),
-        Diff::Failed(message) => (vec![vec![(safe_line(message), None)]], Vec::new()),
+        Diff::Failed(message) => (
+            vec![vec![(safe_line(message), None, Ink::Plain)]],
+            Vec::new(),
+        ),
     };
     Frame {
         title: format!("Changed files › {} · diff against HEAD", safe_line(path)),
