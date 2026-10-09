@@ -23,6 +23,7 @@ fn home() -> App {
     app.set_home(Launch {
         workspace: PathBuf::from("/w"),
         project: "-w".to_owned(),
+        model: Some("test/model".to_owned()),
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: CARDS.map(str::to_owned).to_vec(),

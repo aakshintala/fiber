@@ -1479,3 +1479,157 @@ fn global_action_keys_pass_through_the_picker() {
     assert!(!app.model_picker_open());
     assert!(app.keymap_top().is_some());
 }
+
+/// Types `text` into the draft.
+fn type_draft(app: &mut App, text: &str) {
+    for ch in text.chars() {
+        assert_eq!(app.on_key(Key::Char(ch), now()), Effect::None);
+    }
+}
+
+/// The `start` line an Enter on home sent, parsed.
+fn started(effect: Effect) -> serde_json::Value {
+    let Effect::Send(lines) = effect else {
+        panic!("Enter on home sends the start, got {effect:?}");
+    };
+    let start = lines
+        .iter()
+        .find_map(|line| {
+            let line: serde_json::Value = serde_json::from_str(line).ok()?;
+            (line["command"] == json!("start")).then(|| line.clone())
+        })
+        .expect("a start line");
+    start["args"].clone()
+}
+
+#[test]
+fn s_on_home_rides_the_next_start() {
+    let mut app = home();
+    let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
+    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.on_line(hello());
+    app.on_models(Ok(three()));
+    open(&mut app);
+    app.on_edit(Edit::Left);
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert!(!app.model_picker_open());
+    // Nothing is written: the choice rides the next `start`.
+    assert!(seam.writes().is_empty());
+    type_draft(&mut app, "hi");
+    let args = started(app.on_key(Key::Enter, now()));
+    assert_eq!(args["workspace"], json!("/w"));
+    assert_eq!(args["model"], json!("acme/m1"));
+    assert_eq!(
+        args["overrides"],
+        json!(["models.\"acme/m1\".thinking=low"])
+    );
+}
+
+#[test]
+fn a_suffix_named_model_is_not_chosen_by_mistake() {
+    // The catalogue holds `p/m` and a `p/m:high` of its own: choosing
+    // `p/m` at `high` still names the exact reference, with the level as
+    // an override.
+    let catalogue = Catalogue {
+        models: vec![
+            ModelEntry {
+                reference: "p/m".to_owned(),
+                provider: "p".to_owned(),
+                id: "m".to_owned(),
+                levels: vec!["high".to_owned()],
+                default_level: Some("high".to_owned()),
+                configured: None,
+                roles: Vec::new(),
+            },
+            ModelEntry {
+                reference: "p/m:high".to_owned(),
+                provider: "p".to_owned(),
+                id: "m:high".to_owned(),
+                levels: Vec::new(),
+                default_level: None,
+                configured: None,
+                roles: Vec::new(),
+            },
+        ],
+        notices: Vec::new(),
+    };
+    let mut app = home();
+    app.on_line(hello());
+    app.on_models(Ok(catalogue));
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    type_draft(&mut app, "hi");
+    let args = started(app.on_key(Key::Enter, now()));
+    assert_eq!(args["model"], json!("p/m"));
+    assert_eq!(args["overrides"], json!(["models.\"p/m\".thinking=high"]));
+}
+
+#[test]
+fn a_model_without_levels_rides_start_with_no_override() {
+    let mut app = home();
+    app.on_line(hello());
+    app.on_models(Ok(three()));
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    type_draft(&mut app, "hi");
+    let args = started(app.on_key(Key::Enter, now()));
+    assert_eq!(args["model"], json!("acme/m2"));
+    assert!(args.get("overrides").is_none());
+}
+
+#[test]
+fn the_start_model_clears_once_start_is_accepted() {
+    let mut app = home();
+    app.on_line(hello());
+    app.on_models(Ok(three()));
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert!(app.model_picker.start_model.is_some());
+    type_draft(&mut app, "hi");
+    let Effect::Send(lines) = app.on_key(Key::Enter, now()) else {
+        panic!("Enter on home sends the start");
+    };
+    let id = lines
+        .iter()
+        .find_map(|line| {
+            let line: serde_json::Value = serde_json::from_str(line).ok()?;
+            (line["command"] == json!("start"))
+                .then(|| line["id"].as_str().map(str::to_owned).expect("an id"))
+        })
+        .expect("a start line");
+    // The hub accepts the `start`: the choice rode it, and clears.
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "command_accepted".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [
+            ("command_id".to_owned(), json!(id)),
+            (
+                "result".to_owned(),
+                json!({"session_id": "s_aaaaaaaaaaaaaaaa"}),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    }));
+    assert!(app.model_picker.start_model.is_none());
+}
+
+#[test]
+fn enter_on_home_with_no_model_opens_the_picker_and_keeps_the_draft() {
+    let mut app = home();
+    app.on_line(hello());
+    type_draft(&mut app, "hi");
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.model_picker_open());
+    assert_eq!(app.input().expand(), "hi");
+    // With a model on the chip Enter starts instead.
+    let mut app = home();
+    app.home.as_mut().expect("home").launch.model = Some("p/m".to_owned());
+    app.on_line(hello());
+    type_draft(&mut app, "hi");
+    let effect = app.on_key(Key::Enter, now());
+    assert!(!app.model_picker_open());
+    started(effect);
+}

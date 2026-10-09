@@ -641,6 +641,16 @@ impl App {
             }
             (Phase::Pending { .. }, None) => return Effect::None,
             (Phase::Starting, None) => {
+                // With no model on the chip and none chosen, Enter opens
+                // the picker and keeps the draft, sending nothing.
+                if self
+                    .home
+                    .as_ref()
+                    .is_some_and(|home| home.launch.model.is_none())
+                    && self.model_picker.start_model.is_none()
+                {
+                    return self.open_model_picker(crate::model_picker::Mode::Choose);
+                }
                 let mut args = self.start_args();
                 // A session-only choice on home rides this `start`.
                 self.with_start_model(&mut args);

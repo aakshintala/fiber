@@ -75,7 +75,14 @@ pub fn run(
     let models = std::mem::take(&mut launch.models);
     let save = launch.save.take();
     app.set_configure(launch.configure.take());
+    // With no model configured the picker opens on home, before the
+    // first frame: saving the choice writes the config default. It stays
+    // shut when attaching to a session.
+    let pick_at_start = launch.model.is_none() && launch.open_at == crate::OpenAt::Home;
     app.set_home(launch);
+    if pick_at_start {
+        app.open_model_picker(crate::model_picker::Mode::Choose);
+    }
     app.set_size(width, height);
     let retry = Retry::new(&clock);
     let mut terminal = Loop {

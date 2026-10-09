@@ -24,7 +24,7 @@ pub(super) fn launch() -> super::Launch {
         git: false,
         hover: true,
         version: "0.0.1".to_owned(),
-        model: None,
+        model: Some("p/m".to_owned()),
         thinking: None,
         logo_glyph: "⌇".to_owned(),
         keys: crate::KeysSetup::default(),
@@ -2066,3 +2066,146 @@ fn opening_the_picker_asks_stale_through_the_loop() {
 
 #[path = "lib_motion_tests.rs"]
 mod motion;
+
+/// One installed model with no levels.
+fn one_model() -> crate::Catalogue {
+    crate::Catalogue {
+        models: vec![crate::ModelEntry {
+            reference: "p/m".to_owned(),
+            provider: "p".to_owned(),
+            id: "m".to_owned(),
+            levels: Vec::new(),
+            default_level: None,
+            configured: None,
+            roles: Vec::new(),
+        }],
+        notices: Vec::new(),
+    }
+}
+
+/// Quits a running terminal: Ctrl+C twice, waiting for 0 with one named
+/// deadline.
+fn quit(pair: &mut Pair, finished: &mpsc::Receiver<i32>) {
+    pair.main
+        .write_all(&[0x03, 0x03])
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    pair.main
+        .flush()
+        .unwrap_or_else(|err| panic!("flush: {err}"));
+    let code = finished
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn with_no_model_the_picker_opens_at_start() {
+    let mut pair = open();
+    // The watcher drains the terminal past its markers, so later frames
+    // never fill the pty while the test polls for the write.
+    let frames = super::reconnect_tests::watch(&pair.main, vec![b"Models"]);
+    let slave = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let seam = std::sync::Arc::new(crate::configure_fake::Fake::new(vec![]));
+    let (release, held) = mpsc::channel();
+    let held = std::sync::Arc::new(std::sync::Mutex::new(held));
+    let held_in = std::sync::Arc::clone(&held);
+    // The cached read answers one model, only once the test releases it
+    // after the first frame.
+    let read: crate::ReadModels = std::sync::Arc::new(move |_| {
+        held_in
+            .lock()
+            .unwrap_or_else(|err| panic!("lock: {err}"))
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the read release: {err}"));
+        Ok(one_model())
+    });
+    let mut launch = launch();
+    launch.model = None;
+    launch.models = Some(read);
+    launch.configure = Some(seam.clone() as std::sync::Arc<dyn crate::Configure>);
+    let (done, finished) = mpsc::channel();
+    let clock = fakes::clock::FakeClock::new();
+    let (hub, _held) =
+        std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    std::thread::Builder::new()
+        .name("lib-run".to_owned())
+        .spawn(move || {
+            let code = super::run(slave, launch, once(hub, hello()), Box::new(|_| {}), clock);
+            match done.send(code) {
+                Ok(()) | Err(_) => {}
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // The first frame shows the picker, which opened with no keypress.
+    super::reconnect_tests::watched(&frames, "the picker at start");
+    // Opening saves nothing: the choice does, once Enter chooses it.
+    assert!(seam.writes().is_empty());
+    release
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    // The cached read answers, then Enter chooses: the write goes out
+    // through the seam. An Enter before the answer is folded keeps the
+    // picker open, sending nothing, and one after the choice left the
+    // picker with an empty draft, so resending is safe. Each pass waits
+    // out one frame's worth of quiet, two hundred passes to the named
+    // deadline.
+    let (tick, tock) = mpsc::channel::<()>();
+    for _ in 0..200 {
+        pair.main
+            .write_all(b"\r")
+            .unwrap_or_else(|err| panic!("write: {err}"));
+        pair.main
+            .flush()
+            .unwrap_or_else(|err| panic!("flush: {err}"));
+        if !seam.writes().is_empty() {
+            break;
+        }
+        if tock.recv_timeout(Duration::from_millis(50)).is_ok() {
+            break;
+        }
+    }
+    let _ = tick;
+    assert!(
+        !seam.writes().is_empty(),
+        "Enter never chose through the cached read"
+    );
+    assert_eq!(
+        seam.writes(),
+        vec![(
+            PathBuf::from("/w"),
+            crate::configure::Layer::Global,
+            "model".to_owned(),
+            "p/m".to_owned()
+        )]
+    );
+    quit(&mut pair, &finished);
+}
+
+#[test]
+fn with_a_model_home_opens_as_before() {
+    let mut pair = open();
+    let slave = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (done, finished) = mpsc::channel();
+    let clock = fakes::clock::FakeClock::new();
+    let (hub, _held) =
+        std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    std::thread::Builder::new()
+        .name("lib-run".to_owned())
+        .spawn(move || {
+            let code = super::run(slave, launch(), once(hub, hello()), Box::new(|_| {}), clock);
+            match done.send(code) {
+                Ok(()) | Err(_) => {}
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // Home draws with no picker over it: the first frame names the
+    // shortcuts the picker would cover.
+    read_until(&pair.main, b"shortcuts", "home at start");
+    quit(&mut pair, &finished);
+}
