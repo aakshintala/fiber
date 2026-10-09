@@ -280,35 +280,13 @@ fn resets_at_of(body: &str) -> Option<u64> {
 /// `unix` seconds as `YYYY-MM-DD HH:MM UTC`, from the timestamp alone; no
 /// clock is read (`docs/model-routing.md`, "Protocols and providers").
 fn reset_time(unix: u64) -> String {
-    let days = unix / 86_400;
     let rest = unix % 86_400;
-    let (year, month, day) = civil_from_days(days);
+    let (year, month, day) = contract::clock::utc_date_of_secs(unix);
     format!(
         "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
         rest / 3_600,
         (rest % 3_600) / 60
     )
-}
-
-/// The civil date of `days` days after the epoch, as year, month and day
-/// (Howard Hinnant's algorithm: shift to the civil era starting March).
-/// The inputs fit `u64` many times over: the largest day count below
-/// `u64::MAX` seconds still leaves every product far from overflowing.
-fn civil_from_days(days: u64) -> (u64, u64, u64) {
-    let shifted = days + 719_468;
-    let era = shifted / 146_097;
-    let ordinal = shifted - era * 146_097;
-    let year_of_era = (ordinal - ordinal / 1_460 + ordinal / 36_524 - ordinal / 146_096) / 365;
-    let year = year_of_era + era * 400;
-    let day_of_year = ordinal - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_part = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_part + 2) / 5 + 1;
-    let month = if month_part < 10 {
-        month_part + 3
-    } else {
-        month_part - 9
-    };
-    (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
 /// Whether a status body carries a documented quota or billing shape
