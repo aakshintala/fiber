@@ -956,10 +956,12 @@ fn styles_reach_the_screen() {
             .map(|cell| cell.style())
             .unwrap_or_default()
     };
-    // The summary line is dim from its dot on; the reply is not.
+    // The summary line is dim from its dot on; the reply is not. The
+    // summary is one row, whatever runs, so the row after it is the
+    // reply's, not the summary's second row.
     let summary = row("• Read");
     assert!(cell(0, summary).add_modifier.contains(Modifier::DIM));
-    assert!(cell(0, summary + 1).add_modifier.contains(Modifier::DIM));
+    assert!(!cell(0, summary + 1).add_modifier.contains(Modifier::DIM));
     assert!(!cell(0, row("Fixed.")).add_modifier.contains(Modifier::DIM));
     // The bubble is tinted to the last text column, and blank to its
     // left.
@@ -1401,12 +1403,12 @@ fn a_collapsed_groups_line_is_a_target_over_its_rows() {
     use crate::app::Target;
     let mut app = empty();
     tool_turn(&mut app);
-    // The summary wraps to rows 3 and 4 of `tool_group_collapsed`.
+    // The summary is one row: its line is the target over that row.
     let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     let group = app.targets().first().map(|(_, target)| *target);
     assert!(matches!(group, Some(Target::Group(_))), "{group:?}");
     let drawn: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
-    assert_eq!(drawn, vec![Rect::new(0, 3, WIDTH - 1, 2)]);
+    assert_eq!(drawn, vec![Rect::new(0, 4, WIDTH - 1, 1)]);
     assert_eq!(
         lines(&targets).first().map(|(target, _)| Some(*target)),
         Some(group)
@@ -1443,7 +1445,7 @@ fn ledger_rows_are_targets_over_their_rows() {
     assert_eq!(
         rects,
         vec![
-            Rect::new(0, 1, WIDTH - 1, 2),
+            Rect::new(0, 2, WIDTH - 1, 1),
             Rect::new(0, 3, WIDTH - 1, 1),
             Rect::new(0, 4, WIDTH - 1, 1),
             Rect::new(0, 5, WIDTH - 1, 1),

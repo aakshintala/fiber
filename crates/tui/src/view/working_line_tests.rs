@@ -706,8 +706,8 @@ fn a_clipped_group_line_off_screen_asks_nothing() {
     // The one row scrolled wholly above: nothing spins, nothing asks.
     assert!(!shown.contains(SPINNER[0]), "{shown}");
     assert_eq!(app.take_wake(), None);
-    // Following again shows the one row, spinning.
-    app.on_key(Key::End, clock.now());
+    // Its row back on screen spins again.
+    app.jump(top);
     let followed = screen(&app);
     assert!(followed.contains(SPINNER[0]), "{followed}");
     assert!(app.take_wake().is_some());

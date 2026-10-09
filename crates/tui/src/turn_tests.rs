@@ -214,7 +214,7 @@ fn a_group_counts_its_calls_by_kind_and_its_span() {
             "▀▀▀▀▀▀▀▀▀",
             "00:00",
             "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-            "• Read 2 files, edited 1 file +3 −1, ran 1 command, thought once · 12s",
+            "• Read 2 files, edited 1 file +3 −1, ran 1 command, though…",
             "Done.",
             "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
@@ -251,7 +251,7 @@ fn shell_searches_and_other_tools_have_their_own_kinds() {
     text(&mut app, "a_m", "ok", 0);
     assert_eq!(
         texts(&app).get(5).map(String::as_str),
-        Some("• Searched 3 patterns, edited 2 files, ran 2 commands, 1 other call")
+        Some("• Searched 3 patterns, edited 2 files, ran 2 commands, 1 o…")
     );
 }
 
@@ -417,7 +417,7 @@ fn a_running_group_shows_calls_in_flight_and_thinking() {
     feed(&mut app, "reasoning_started", Some("a_t"), 0, json!({}));
     assert_eq!(
         texts(&app).get(5).map(String::as_str),
-        Some("• Read 1 file, ran 1 command, thought once · shell cargo t · Thinking")
+        Some("• Read 1 file, ran 1 command, thought once · shell cargo t…")
     );
     feed(
         &mut app,
@@ -428,7 +428,7 @@ fn a_running_group_shows_calls_in_flight_and_thinking() {
     );
     assert_eq!(
         texts(&app).get(5).map(String::as_str),
-        Some("• Read 1 file, ran 1 command, thought once · shell cargo t · Thinking: Two")
+        Some("• Read 1 file, ran 1 command, thought once · shell cargo t…")
     );
     // A block that has finished no longer shows; completed calls leave.
     feed(
@@ -492,6 +492,30 @@ fn raw_arguments_stream_until_their_call_is_requested() {
         texts(&app).get(5).map(String::as_str),
         Some("• Read 1 file, ran 1 command · read a.rs, shell ls")
     );
+}
+
+#[test]
+fn group_summary_lines_are_cut_to_one_row_at_the_width() {
+    // "• Read 1 file · read a.rs" is 25 cells, and the summary clips to
+    // the conversation width, one column inside the window for the
+    // scroll bar: it fits whole at 26 and above, and is cut with "…"
+    // at 25.
+    for (width, expected) in [
+        (26u16, "• Read 1 file · read a.rs"),
+        (27u16, "• Read 1 file · read a.rs"),
+        (25u16, "• Read 1 file · read a.…"),
+    ] {
+        let mut app = app();
+        app.set_size(width, 24);
+        start(&mut app, "go", 0);
+        step(&mut app, 0);
+        request(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
+        let line = texts(&app)
+            .into_iter()
+            .find(|line| line.starts_with('•'))
+            .expect("a group summary");
+        assert_eq!(line, expected, "at {width}");
+    }
 }
 
 #[test]
@@ -832,8 +856,8 @@ fn the_ledger_is_one_row_per_call_split_by_step() {
             "    read a.rs".to_owned(),
             "  2 edit src/a.rs +3 −1".to_owned(),
             "    shell cargo t · failed".to_owned(),
-            "    web_fetch {\"url\":\"u\"} · denied".to_owned(),
-            "    custom raw text · cancelled".to_owned(),
+            "    web_fetch u · denied".to_owned(),
+            "    custom · cancelled".to_owned(),
             "    read z.rs · running".to_owned(),
             "Done.".to_owned(),
             bottom,
@@ -909,11 +933,8 @@ fn opening_a_call_shows_its_error_reason_diff_or_output() {
     for (row, shown) in [
         ("  2 edit src/a.rs +3 −1", vec!["    -old", "    +new"]),
         ("    shell cargo t · failed", vec!["    exit 101"]),
-        (
-            "    web_fetch {\"url\":\"u\"} · denied",
-            vec!["    not allowed"],
-        ),
-        ("    custom raw text · cancelled", vec!["    x"]),
+        ("    web_fetch u · denied", vec!["    not allowed"]),
+        ("    custom · cancelled", vec!["    x"]),
         ("    read a.rs", vec!["    ok"]),
     ] {
         let call = target(&app, row);
