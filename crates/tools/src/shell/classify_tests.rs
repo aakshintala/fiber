@@ -151,7 +151,11 @@ fn characters_outside_the_plain_set_are_unreadable() {
         "echo \"unterminated",
         "echo \"a$b\"",
         "echo \"a`b\"",
-        "echo \"a\\b\"",
+        "echo \"\\$\"",
+        "echo \"\\`\"",
+        "echo \"a\\\"",
+        "echo \"a\\\\\"",
+        "echo \"a\\\n b\"",
         "ls ;; ls",
         "ls;;ls",
         ";;",
@@ -174,6 +178,95 @@ fn characters_outside_the_plain_set_are_unreadable() {
         "",
         "   ",
         "\t",
+    ] {
+        assert_unreadable(command);
+    }
+}
+
+#[test]
+fn a_backslash_before_a_plain_character_inside_double_quotes_is_literal() {
+    assert_eq!(
+        lexed("echo \"a\\b\""),
+        vec![Part {
+            words: vec![plain("echo"), quoted("\"a\\b\"", "a\\b"),]
+        }]
+    );
+    assert_eq!(
+        lexed("echo \"a\\|b\""),
+        vec![Part {
+            words: vec![plain("echo"), quoted("\"a\\|b\"", "a\\|b"),]
+        }]
+    );
+}
+
+#[test]
+fn a_stderr_redirect_lexes_as_one_word() {
+    assert_eq!(
+        lexed("ls 2>/dev/null"),
+        vec![Part {
+            words: vec![plain("ls"), plain("2>/dev/null")]
+        }]
+    );
+    assert_eq!(
+        lexed("ls 2>&1 | head"),
+        vec![
+            Part {
+                words: vec![plain("ls"), plain("2>&1")]
+            },
+            Part {
+                words: vec![plain("head")]
+            },
+        ]
+    );
+    assert_eq!(
+        lexed("cat '2>&1'"),
+        vec![Part {
+            words: vec![plain("cat"), quoted("'2>&1'", "2>&1")]
+        }]
+    );
+    assert_reads("git 2>/dev/null status");
+    assert_eq!(
+        classified("cat '2>&1'").declared.paths,
+        Some(vec!["/work/2>&1".to_owned()])
+    );
+}
+
+#[test]
+fn a_stderr_redirect_reads_at_each_boundary() {
+    assert_reads("ls 2>/dev/null");
+    assert_reads("ls 2>/dev/null | head");
+    assert_reads("ls 2>/dev/null\t| head");
+    assert_reads("ls 2>/dev/null||head");
+    assert_reads("ls 2>/dev/null&&pwd");
+    assert_reads("ls 2>/dev/null;pwd");
+    assert_reads("ls 2>&1");
+    assert_reads("git 2>&1 status");
+}
+
+#[test]
+fn anything_but_the_two_exact_redirects_is_unreadable() {
+    for command in [
+        "ls 2> /dev/null",
+        "ls 12>/dev/null",
+        "ls 1>/dev/null",
+        "ls x2>/dev/null",
+        "ls \"2\">/dev/null",
+        "ls 2>>/dev/null",
+        "ls 2>&-",
+        "ls 2>&2",
+        "ls 2>/dev/nullx",
+        "ls 2>&12",
+        "2>/dev/null ls",
+        "2>&1 ls",
+        "echo 2>(x)",
+        "ls 2>/dev/null/x",
+        "ls 2>/dev/zero",
+        "ls >/dev/null",
+        "ls 1>/dev/null",
+        "ls 2>file",
+        "ls >file",
+        "ls &>file",
+        "ls 2>\tfile",
     ] {
         assert_unreadable(command);
     }

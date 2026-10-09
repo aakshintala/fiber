@@ -113,6 +113,26 @@ fn a_plain_command_offers_its_prefix() {
 }
 
 #[test]
+fn a_redirect_stays_in_the_subject_but_never_in_the_prefix() {
+    let dir = fakes::TempDir::new("fiber-shell-redirect");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let root = dir.path().to_str().unwrap().to_owned();
+    let npm = effects(&shell, "npm test 2>&1");
+    assert_closed(&npm);
+    assert_eq!(npm.subject.as_deref(), Some("npm test 2>&1"));
+    assert_eq!(npm.prefix.as_deref(), Some("npm test"));
+    let bare = effects(&shell, "npm 2>&1");
+    assert_closed(&bare);
+    assert_eq!(bare.subject.as_deref(), Some("npm 2>&1"));
+    assert_eq!(bare.prefix.as_deref(), Some("npm"));
+    let listed = effects(&shell, "ls 2>/dev/null");
+    assert_eq!(listed.declared.effects, vec![Effect::Reads]);
+    assert_eq!(listed.subject.as_deref(), Some("ls 2>/dev/null"));
+    assert_eq!(listed.prefix.as_deref(), Some("ls"));
+    assert_eq!(listed.declared.paths, Some(vec![root]));
+}
+
+#[test]
 fn paths_are_absolute_operands_and_the_workdir_when_there_are_none() {
     let dir = fakes::TempDir::new("fiber-shell-effects");
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());

@@ -94,10 +94,12 @@ fn prefix_of(part: &Part) -> Option<String> {
     }
 }
 
-/// A second word offered in the prefix: no leading `-`, and no `/`, `.` or
-/// `=` (`docs/tools.md`, "Shell", "Effects").
+/// A second word offered in the prefix: no leading `-`, and no `/`, `.`,
+/// `=` or `>` (`docs/tools.md`, "Shell", "Effects").
 fn plain_word(raw: &str) -> bool {
-    !raw.is_empty() && !raw.starts_with('-') && !raw.contains(['\'', '"', '/', '.', '='])
+    !raw.is_empty()
+        && !raw.starts_with('-')
+        && !raw.contains(['\'', '"', '/', '.', '=', '>'])
 }
 
 enum Outcome {
@@ -122,7 +124,18 @@ fn outcome(parts: &[Part], workdir: &Path) -> Outcome {
 }
 
 fn part_outcome(part: &Part, workdir: &Path) -> Outcome {
-    let mut words = part.words.iter();
+    // A redirect applies wherever it stands, so it is dropped before the
+    // read-only check and kept only in the subject.
+    let kept: Vec<Word> = part
+        .words
+        .iter()
+        .filter(|word| !is_redirect_word(word))
+        .map(|word| Word {
+            raw: word.raw.clone(),
+            cooked: word.cooked.clone(),
+        })
+        .collect();
+    let mut words = kept.iter();
     let Some(first) = words.next() else {
         return Outcome::Executes;
     };
@@ -274,6 +287,13 @@ fn short_letter(flag: &super::read_only::Flag) -> Option<char> {
     chars.next().is_none().then_some(letter)
 }
 
+/// A word the lexer accepted as a stderr redirect. Raw equality is
+/// enough: `>` is refused everywhere else, so only an accepted redirect
+/// has this raw text, and a quoted `'2>&1'` keeps its quotes in raw.
+fn is_redirect_word(word: &Word) -> bool {
+    word.raw == "2>/dev/null" || word.raw == "2>&1"
+}
+
 fn resolve(workdir: &Path, operand: &str) -> Option<String> {
     if Path::new(operand).is_absolute() {
         Some(operand.to_owned())
@@ -337,9 +357,19 @@ impl<'a> Lexer<'a> {
         let Some(closer) = self.quote else {
             return self.unquoted(ch);
         };
-        // `$`, backticks and backslash expand inside double quotes, so
-        // the command names something this classifier cannot see.
-        if closer == '"' && matches!(ch, '$' | '`' | '\\') {
+        // Inside double quotes a backslash before `$`, a backtick, `"`,
+        // `\` or a newline still expands, so the command is not plain.
+        // Before any other character it is literal, as bash reads it.
+        if closer == '"' && ch == '\\' {
+            let special = matches!(self.chars.peek(), Some('$' | '`' | '"' | '\\' | '\n'));
+            if special || self.chars.peek().is_none() {
+                return None;
+            }
+            self.raw.push(ch);
+            self.cooked.push(ch);
+            return Some(());
+        }
+        if closer == '"' && matches!(ch, '$' | '`') {
             return None;
         }
         self.quoted(ch, closer)
@@ -366,6 +396,10 @@ impl<'a> Lexer<'a> {
             self.quote = Some(ch);
             return Some(());
         }
+        // `>` starts only the two stderr redirects, read as one word.
+        if ch == '>' {
+            return self.redirect();
+        }
         match self.operator(ch) {
             Operator::Split => self.finish_part().then_some(()),
             Operator::None => {
@@ -380,6 +414,47 @@ impl<'a> Lexer<'a> {
                 Some(())
             }
         }
+    }
+
+    /// Reads `>/dev/null` or `>&1` after a plain `2` as one redirect word.
+    /// Anything else holding `>` is not plain, so the call is reviewed.
+    fn redirect(&mut self) -> Option<()> {
+        // The word so far is exactly `2`, and the part already holds a
+        // word, so the redirect is never first in a part.
+        if !self.in_word || self.raw != "2" || self.words.is_empty() {
+            return None;
+        }
+        let tail = if self.ahead("/dev/null") {
+            "/dev/null"
+        } else if self.ahead("&1") {
+            "&1"
+        } else {
+            return None;
+        };
+        for _ in 0..tail.len() {
+            self.chars.next();
+        }
+        self.raw.push('>');
+        self.cooked.push('>');
+        for ch in tail.chars() {
+            self.raw.push(ch);
+            self.cooked.push(ch);
+        }
+        // The redirect is a word of its own: what follows ends the word.
+        match self.chars.peek() {
+            None | Some(' ') | Some('\t') | Some('|') | Some('&') | Some(';') => Some(()),
+            _ => None,
+        }
+    }
+
+    fn ahead(&self, want: &str) -> bool {
+        let mut rest = self.chars.clone();
+        for ch in want.chars() {
+            if rest.next() != Some(ch) {
+                return false;
+            }
+        }
+        true
     }
 
     /// A lone `&` is not an operator: the plain-character check refuses it.
