@@ -27,6 +27,7 @@ mod providers;
 mod release;
 mod repository;
 mod resolve;
+mod search;
 
 use std::io;
 use std::path::PathBuf;
