@@ -112,24 +112,11 @@ fn scale(digits: &[u8]) -> Option<u8> {
     if digits.is_empty() || digits.len() > 4 {
         return None;
     }
-    let mut value = 0u32;
-    for byte in digits {
-        value = value.saturating_mul(16).saturating_add(hex(*byte)?);
-    }
+    let value = u32::from_str_radix(std::str::from_utf8(digits).ok()?, 16).ok()?;
     let max = 16u32
         .pow(u32::try_from(digits.len()).unwrap_or(4))
         .saturating_sub(1);
     u8::try_from(value.saturating_mul(255) / max).ok()
-}
-
-/// The hex digit's value; `None` for any other byte.
-fn hex(byte: u8) -> Option<u32> {
-    match byte {
-        b'0'..=b'9' => Some(u32::from(byte.saturating_sub(b'0'))),
-        b'a'..=b'f' => Some(u32::from(byte.saturating_sub(b'a')).saturating_add(10)),
-        b'A'..=b'F' => Some(u32::from(byte.saturating_sub(b'A')).saturating_add(10)),
-        _ => None,
-    }
 }
 
 /// Whether `rgb` is dark: its luma below mid grey.
