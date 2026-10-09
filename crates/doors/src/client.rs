@@ -41,6 +41,8 @@ pub(crate) const ENDED: &str = "The session ended before answering.";
 const NO_TURN: &str = "No turn is running.";
 /// A `job_stop` names no running job.
 const NO_JOB: &str = "That job is not running.";
+/// A `job_input` names a job that was not started with `tty`.
+const NOT_TTY: &str = "That job was not started with `tty`.";
 /// A `background` finds no shell call in the foreground.
 const NO_CALL: &str = "No shell call is running.";
 const HISTORY: usize = 256;
@@ -210,6 +212,7 @@ pub(crate) fn built(command: &str) -> bool {
             | "close"
             | "shell"
             | "job_stop"
+            | "job_input"
             | "background"
             | "handoff"
             | "rewind"
@@ -314,6 +317,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let stopped = conn.gate.jobs().is_some_and(|jobs| jobs.stop(&args.job_id));
             answer(conn, id, stopped, NO_JOB);
         }
+        Command::JobInput(args) => job_input(conn, id, &args),
         Command::Background => {
             let moving = conn.gate.jobs().is_some_and(|jobs| jobs.background() > 0);
             answer(conn, id, moving, NO_CALL);
@@ -331,6 +335,34 @@ fn answer(conn: &mut Conn, id: CommandId, done: bool, message: &str) {
         accept(conn, id, None);
     } else {
         reject(conn, Some(id), ErrorCode::StaleRequest, message);
+    }
+}
+
+/// Types into a running job started with `tty` (`docs/architecture.md`,
+/// "One inbox"). Accepted once written; rejected `stale_request` when the
+/// job is not running and `invalid_arguments` when it was not started with
+/// `tty`. Answered at once, on the reader thread, writing no durable event.
+fn job_input(conn: &mut Conn, id: CommandId, args: &contract::commands::JobInput) {
+    let Some(jobs) = conn.gate.jobs() else {
+        reject(conn, Some(id), ErrorCode::StaleRequest, NO_JOB);
+        return;
+    };
+    match jobs.write(&args.job_id, &args.text) {
+        Ok(()) => accept(conn, id, None),
+        Err(contract::jobs::WriteError::NotRunning) => {
+            reject(conn, Some(id), ErrorCode::StaleRequest, NO_JOB);
+        }
+        Err(contract::jobs::WriteError::NotTty) => {
+            reject(conn, Some(id), ErrorCode::InvalidArguments, NOT_TTY);
+        }
+        Err(contract::jobs::WriteError::Io(error)) => {
+            reject(
+                conn,
+                Some(id),
+                ErrorCode::IoFailed,
+                &format!("Writing to the job's terminal failed: {error}."),
+            );
+        }
     }
 }
 

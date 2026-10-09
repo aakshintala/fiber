@@ -86,6 +86,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "reply", "args": {"request_id": "r",
             "decisions": ["approve", "skip", "never"]}}),
         json!({"id": "c", "command": "job_stop", "args": {"job_id": "j"}}),
+        json!({"id": "c", "command": "job_input", "args": {"job_id": "j", "text": "t"}}),
         json!({"id": "c", "command": "background"}),
         json!({"id": "c", "command": "reload"}),
         json!({"id": "c", "command": "tools"}),

@@ -2532,6 +2532,240 @@ fn job_stop_with_a_malformed_job_id_is_invalid_arguments() {
     opened.close();
 }
 
+fn job_input_line(id: &str, job_id: &str, text: &str) -> String {
+    let text = serde_json::to_string(text).unwrap();
+    format!(r#"{{"id":"{id}","command":"job_input","args":{{"job_id":"{job_id}","text":{text}}}}}"#)
+}
+
+/// Jobs whose `write` types into the inner fake's terminal, as the registry
+/// does: accepted while the job runs with one, `NotTty` while it runs
+/// without one, `NotRunning` for an unknown id or once it ended.
+struct WritableJobs {
+    inner: Arc<FakeJobs>,
+    clock: Arc<FakeClock>,
+}
+
+impl WritableJobs {
+    fn wrap(jobs: Arc<FakeJobs>) -> Arc<Self> {
+        Arc::new(Self {
+            inner: jobs,
+            clock: FakeClock::new(),
+        })
+    }
+}
+
+impl Jobs for WritableJobs {
+    fn open(
+        &self,
+        opening: Opening,
+    ) -> Result<contract::jobs::Opened, contract::jobs::OpenError> {
+        self.inner.open(opening)
+    }
+
+    fn stop(&self, job_id: &contract::JobId) -> bool {
+        self.inner.stop(job_id)
+    }
+
+    fn background(&self) -> usize {
+        self.inner.background()
+    }
+
+    fn foreground(&self, call: Foreground) {
+        self.inner.foreground(call)
+    }
+
+    fn running(&self) -> Vec<contract::JobId> {
+        self.inner.running()
+    }
+
+    fn stop_delegates(&self) -> usize {
+        self.inner.stop_delegates()
+    }
+
+    fn deliver_to(&self, inbox: mpsc::Sender<Delivery>) {
+        self.inner.deliver_to(inbox)
+    }
+
+    fn write(
+        &self,
+        job_id: &contract::JobId,
+        text: &str,
+    ) -> Result<(), contract::jobs::WriteError> {
+        if !self.inner.running().contains(job_id) {
+            return Err(contract::jobs::WriteError::NotRunning);
+        }
+        match self
+            .inner
+            .type_into(job_id, text.as_bytes(), self.clock.as_ref(), &fakes::CancelToken::new())
+        {
+            Some(Ok(_)) => Ok(()),
+            Some(Err(error)) => Err(contract::jobs::WriteError::Io(error)),
+            None => Err(contract::jobs::WriteError::NotTty),
+        }
+    }
+}
+
+/// Opens a `tty` job on `jobs`, recording what is typed into it.
+fn open_tty_job(jobs: &FakeJobs, typed: Arc<Mutex<Vec<u8>>>) -> contract::jobs::Opened {
+    jobs.open(Opening {
+        tool: "shell".into(),
+        description: "cat".into(),
+        stop: Stop(Box::new(|| {})),
+        lines: false,
+        input: Some(contract::jobs::Input(Box::new(move |bytes, _, _| {
+            typed.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }))),
+    })
+    .unwrap()
+}
+
+#[test]
+fn job_input_is_answered_on_the_reader_thread_while_the_loop_is_blocked() {
+    let temp = Temp::new();
+    let jobs = FakeJobs::new(&temp.0);
+    let typed = Arc::new(Mutex::new(Vec::new()));
+    let job = open_tty_job(&jobs, Arc::clone(&typed));
+    let job_id = job.started.job_id.0.clone();
+    let opened = Opened::open(vec![]);
+    opened.session.jobs(WritableJobs::wrap(jobs));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            // This body is the loop's side: it drains nothing until the
+            // write has been sent, so the reader thread answered alone.
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &job_input_line("c_in", &job_id, "hi\u{1b}[A"));
+            let accepted = response(&client, "c_in");
+            assert_eq!(kind(&accepted), "command_accepted");
+            assert_eq!(command_id(&accepted), Some("c_in"));
+            assert_eq!(typed.lock().unwrap().as_slice(), b"hi\x1b[A");
+            assert!(
+                matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "job_input waited for the drain"
+            );
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    drop(job);
+    opened.close();
+}
+
+#[test]
+fn job_input_for_an_unknown_or_ended_job_is_rejected_stale() {
+    let temp = Temp::new();
+    let jobs = FakeJobs::new(&temp.0);
+    let job = open_tty_job(&jobs, Arc::new(Mutex::new(Vec::new())));
+    let ended_id = job.started.job_id.0.clone();
+    (job.end.0)(contract::events::JobCompleted {
+        job_id: job.started.job_id.clone(),
+        status: contract::events::Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: None,
+    });
+    let opened = Opened::open(vec![]);
+    opened.session.jobs(WritableJobs::wrap(jobs));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            for (id, job_id) in [("c_1", "j_5e10c0ffee123456"), ("c_2", ended_id.as_str())] {
+                send(&client, &job_input_line(id, job_id, "x"));
+                let rejected = response(&client, id);
+                assert_eq!(
+                    rejection(&rejected),
+                    ("stale_request", "That job is not running.")
+                );
+                assert_eq!(command_id(&rejected), Some(id));
+            }
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn job_input_to_a_job_without_a_terminal_is_rejected_invalid_arguments() {
+    let temp = Temp::new();
+    let jobs = FakeJobs::new(&temp.0);
+    let (fired_tx, _fired_rx) = mpsc::channel();
+    let job = open_job(&jobs, fired_tx);
+    let job_id = job.started.job_id.0.clone();
+    let opened = Opened::open(vec![]);
+    opened.session.jobs(WritableJobs::wrap(jobs));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &job_input_line("c_1", &job_id, "x"));
+            assert_eq!(
+                rejection(&response(&client, "c_1")),
+                ("invalid_arguments", "That job was not started with `tty`.")
+            );
+            Ok(())
+        })
+        .unwrap();
+    drop(job);
+    opened.close();
+}
+
+#[test]
+fn job_input_with_malformed_args_is_invalid_arguments() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, r#"{"id":"c_1","command":"job_input"}"#);
+            assert_eq!(
+                rejection(&response(&client, "c_1")),
+                ("invalid_arguments", UNFIT)
+            );
+            send(
+                &client,
+                r#"{"id":"c_2","command":"job_input","args":{"job_id":"j_1"}}"#,
+            );
+            assert_eq!(
+                rejection(&response(&client, "c_2")),
+                ("invalid_arguments", UNFIT)
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn job_input_without_jobs_is_rejected_stale() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &job_input_line("c_1", "j_5e10c0ffee123456", "x"));
+            assert_eq!(
+                rejection(&response(&client, "c_1")),
+                ("stale_request", "That job is not running.")
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
 #[test]
 fn background_asks_the_running_foreground_calls_and_writes_nothing() {
     let temp = Temp::new();

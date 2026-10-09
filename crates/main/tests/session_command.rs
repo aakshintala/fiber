@@ -2404,6 +2404,73 @@ fn close_now_while_idle_with_a_job_starts_no_turn() {
     );
 }
 
+/// The background call this test's first response makes: `cat` on a
+/// pseudo-terminal, waiting for typed input.
+fn tty_call() -> Value {
+    function_call("call_tty", "shell", &json!({"command": "cat", "tty": true}))
+}
+
+#[test]
+fn job_input_types_into_a_tty_job_and_its_output_arrives() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([stream(&[tty_call()]), hello()]).unwrap();
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "cat"})
+        ),
+    )
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"start the editor"}]}}"#,
+    );
+    let started = until(&client, "the job_started line", |line| {
+        line["kind"] == "job_started"
+    });
+    let job_id = started.last().unwrap()["payload"]["job_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    send(
+        &client,
+        &format!(
+            "{{\"id\":\"c_in\",\"command\":\"job_input\",\"args\":{{\"job_id\":\"{job_id}\",\"text\":\"hi\\r\"}}}}"
+        ),
+    );
+    let accepted = answer(&client, "c_in");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    let echo = until(&client, "the typed output", |line| {
+        line["kind"] == "job_delta"
+            && line["payload"]["text"].as_str().is_some_and(|text| text.contains("hi"))
+    });
+    assert_eq!(
+        echo.last().unwrap()["payload"]["job_id"],
+        job_id,
+        "the output is the typed job's"
+    );
+    let _done = until(&client, "the prompt's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send_close_now(&client);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert_exited_clean(&assert_exited_0(status, &out, &stderr));
+}
+
 #[test]
 fn close_now_on_a_pending_approval_leaves_it_pending_and_exits_0() {
     let setup = Setup::new();
