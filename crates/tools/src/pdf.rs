@@ -5,7 +5,7 @@
 //! call without a part.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use contract::ErrorCode;
@@ -24,9 +24,6 @@ const RANGE_MAX: u32 = 20;
 /// The longest side a rendered page is scaled to (`docs/model-routing.md`,
 /// "Image limits").
 const RENDER_SIDE: u32 = 2000;
-
-/// What `pdftoppm` is run as when no test pointed elsewhere.
-const PDFTOPPM: &str = "pdftoppm";
 
 /// Why the pages could not be rendered when `pdftoppm` is not installed.
 const MISSING_RENDERER: &str = "pdftoppm is not installed. It comes with poppler (poppler-utils on Debian and Ubuntu, brew install poppler on macOS)";
@@ -322,12 +319,7 @@ fn render_pages(
         }
         let root = child.artifacts().join(format!("{stem}-{n}"));
         let raw = root.with_extension("png");
-        let renderer = if child.renderer().as_os_str().is_empty() {
-            PathBuf::from(PDFTOPPM)
-        } else {
-            child.renderer().to_path_buf()
-        };
-        let mut command = Command::new(renderer);
+        let mut command = Command::new(child.renderer());
         command
             .arg("-png")
             .arg("-scale-to")

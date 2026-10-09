@@ -346,6 +346,37 @@ fn a_missing_renderer_keeps_the_pdf_and_names_poppler() {
 }
 
 #[test]
+fn a_renderer_that_cannot_start_for_another_reason_names_the_start() {
+    let dir = workspace("fiber-pdf-ppmperm");
+    let fiber = fiber_stub(dir.path(), PDF_TWO_PAGES, IMAGE_BODY);
+    // A directory is not executable: the spawn fails with a kind other
+    // than `NotFound`.
+    let output = run(dir.path(), &fiber, dir.path(), json!({"path": "a.pdf"}));
+    assert_eq!(code(&output), None);
+    assert!(
+        message(&output).contains("pdftoppm failed to start"),
+        "{}",
+        message(&output)
+    );
+    assert_eq!(pdf_part(&output).map(|part| part.2), Some(None));
+}
+
+#[test]
+fn a_renderer_killed_by_a_signal_keeps_the_pdf_with_the_reason() {
+    let dir = workspace("fiber-pdf-ppmsignal");
+    let fiber = fiber_stub(dir.path(), PDF_TWO_PAGES, IMAGE_BODY);
+    let ppm = ppm_stub(dir.path(), "kill -9 $$");
+    let output = run(dir.path(), &fiber, &ppm, json!({"path": "a.pdf"}));
+    assert_eq!(code(&output), None);
+    assert!(
+        message(&output).contains("killed by a signal"),
+        "{}",
+        message(&output)
+    );
+    assert_eq!(pdf_part(&output).map(|part| part.2), Some(None));
+}
+
+#[test]
 fn a_renderer_that_exits_1_keeps_the_pdf_with_the_reason() {
     let dir = workspace("fiber-pdf-ppmfail");
     let fiber = fiber_stub(dir.path(), PDF_TWO_PAGES, IMAGE_BODY);
@@ -493,11 +524,14 @@ fn a_cancel_between_pages_stops_with_no_part_and_one_render() {
         r#"cat >/dev/null
 exec sleep 3600"#,
     );
+    // The log line comes before the FIFO line: when the wait below
+    // returns, the render count is already on disk. Either order still
+    // cancels the call with no part.
     let ppm = ppm_stub(
         dir.path(),
         &format!(
-            r#"echo 1 > '{}'
-echo "$@" >> "$(dirname "$0")/ppm.log"
+            r#"echo "$@" >> "$(dirname "$0")/ppm.log"
+echo 1 > '{}'
 for root; do :; done
 mkdir -p "$(dirname "$root")"
 printf 'fakepng' > "$root.png""#,
