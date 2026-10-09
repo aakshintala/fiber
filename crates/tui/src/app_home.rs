@@ -1166,11 +1166,19 @@ impl App {
         self.workspace.clone()
     }
 
+    /// Opens the row with `key` while home draws.
+    fn open_row(&mut self, key: u64) -> Effect {
+        if !self.on_home() {
+            return Effect::None;
+        }
+        self.open_entry(key)
+    }
+
     /// Opens the row with `key`: the subscribes its level needs, then the
     /// session's commands. The conversation clears as going home does,
     /// and the gate holds until the last subscribe is answered.
-    fn open_row(&mut self, key: u64) -> Effect {
-        if !self.on_home() || self.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
+    pub(super) fn open_entry(&mut self, key: u64) -> Effect {
+        if self.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
             return Effect::None;
         }
         let Some(row) = self

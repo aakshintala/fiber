@@ -1,12 +1,15 @@
 //! Loop-level tests for the rail: the wall time a card's elapsed time
-//! reads comes from the loop's clock (`docs/tui.md`, "The rail").
+//! reads comes from the loop's clock, ⌥N switches and the wheel scrolls
+//! (`docs/tui.md`, "The rail").
 
 use super::Input;
-use super::tests::{feed, new_loop};
+use super::tests::{command, feed, hello, new_loop};
 use crate::home::Launch;
 use crate::link::Line;
 use contract::clock::Clock;
 use ratatui::backend::TestBackend;
+use std::io::BufReader;
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -77,4 +80,36 @@ fn the_loop_gives_the_app_the_wall_time() {
     feed(&mut lp, vec![Input::Resize]);
     assert!(shown(&lp).contains("1m"), "{}", shown(&lp));
     assert!(!shown(&lp).contains("16s"), "{}", shown(&lp));
+}
+
+#[test]
+fn alt_one_switches_in_the_loop() {
+    let mut lp = wide();
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    lp.hub = Some(ours);
+    lp.app.on_line(Line::Hub(hello()));
+    lp.app.on_line(live(B, 0));
+    lp.app.on_line(live(A, 0));
+    // `B` is card 1; `A` is on screen.
+    feed(&mut lp, vec![Input::Bytes(b"\x1b1".to_vec())]);
+    let (_, subscribe) = command(BufReader::new(theirs), "the subscribe for B");
+    assert_eq!(subscribe["command"], "subscribe");
+    assert_eq!(subscribe["session_id"], B);
+    assert_eq!(subscribe["args"]["level"], "full");
+    assert_eq!(lp.app.session().map(|id| id.0.as_str()), Some(B));
+}
+
+#[test]
+fn the_wheel_over_the_rail_scrolls_it_in_the_loop() {
+    let mut lp = wide();
+    lp.app.on_line(live(A, 0));
+    for n in 1..10 {
+        lp.app.on_line(live(&format!("s_{n:016x}"), 0));
+    }
+    feed(&mut lp, vec![Input::Resize]);
+    assert!(shown(&lp).contains("  w "), "{}", shown(&lp));
+    // A wheel-down report over the rail, 1-based.
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[<65;6;11M".to_vec())]);
+    assert_eq!(lp.app.rail_state().scroll(), 1);
+    assert!(!shown(&lp).contains("  w "), "{}", shown(&lp));
 }

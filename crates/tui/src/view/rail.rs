@@ -11,12 +11,17 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::App;
+use crate::app::rail::Spot;
 use crate::format;
 use crate::home::{Left, Row, State, glyph, title};
 use crate::markdown::{Role, style};
+use crate::mouse::{Target, TargetId};
 
 /// The rail's width from which a card draws its context bar.
 const BAR_FROM: u16 = 30;
+
+/// A card's rows: its two edges and four text rows.
+pub(crate) const CARD_ROWS: usize = 6;
 
 /// A project's cards under its header.
 pub(crate) struct Group<'a> {
@@ -108,13 +113,18 @@ pub(crate) fn tone(row: &Row) -> Role {
     }
 }
 
-/// One drawn row of the rail: its line from the card's first column and
-/// its background.
+/// One drawn row of the rail: its line from the card's first column, its
+/// background, the targets starting on it, and whether it starts a card.
 pub(crate) struct RailRow {
     /// The row's spans from the card's first column.
     pub(crate) line: Line<'static>,
     /// The card's tint behind a text row; none for a header or an edge.
     pub(crate) tint: Option<Role>,
+    /// The targets whose top row this is: column offset from the card's
+    /// first column, width, height in rows, and what a click does.
+    pub(crate) spots: Vec<(u16, u16, u16, Spot)>,
+    /// The key of the card this row starts: the wheel's stops.
+    pub(crate) start: Option<u64>,
 }
 
 /// Every group's rows, top to bottom; `width` is the rail rect's.
@@ -135,6 +145,8 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<RailRow> {
         out.push(RailRow {
             line: Line::from(header),
             tint: None,
+            spots: Vec::new(),
+            start: None,
         });
         for row in &group.cards {
             card(app, row, width, &mut out);
@@ -164,18 +176,26 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
     out.push(RailRow {
         line: Line::styled("▄".repeat(card_w), style(tint)),
         tint: None,
+        spots: Vec::new(),
+        start: Some(row.key),
     });
+    let wide = u16::try_from(card_w).unwrap_or(u16::MAX);
+    let mut spots = vec![(0, wide, 4, Spot::Card(row.key))];
     for spans in texts {
         let mut line = vec![stripe.clone(), Span::raw(" ")];
         line.extend(spans);
         out.push(RailRow {
             line: Line::from(line),
             tint: Some(tint),
+            spots: std::mem::take(&mut spots),
+            start: None,
         });
     }
     out.push(RailRow {
         line: Line::styled("▀".repeat(card_w), style(tint)),
         tint: None,
+        spots: Vec::new(),
+        start: None,
     });
 }
 
@@ -292,12 +312,28 @@ fn cut_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
         .collect()
 }
 
-/// Draws the rail's rows into `area`, each row's tint across the card's
-/// columns. Styles set the foreground only, so the tint stays.
-pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer) {
+/// Draws the rail's rows into `area` past its scroll, each row's tint
+/// across the card's columns, with each target cut at the rail's foot.
+/// Styles set the foreground only, so the tint stays. With `pointer` on
+/// a card, the rail's last row shows its full name, workspace and model,
+/// dim.
+pub(crate) fn draw(
+    app: &App,
+    area: Rect,
+    buf: &mut Buffer,
+    pointer: Option<(u16, u16)>,
+    targets: &mut Vec<Target>,
+) {
     let card_w = area.width.saturating_sub(1);
     let rows = rows(app, area.width);
-    for (row, y) in rows.iter().zip(area.y..area.bottom()) {
+    // A screen that grew never shows a gap: a scroll past the end clamps
+    // when drawn.
+    let skip = app
+        .rail_state()
+        .scroll()
+        .min(rows.len().saturating_sub(usize::from(area.height)));
+    let mut hovered = None;
+    for (row, y) in rows.iter().skip(skip).zip(area.y..area.bottom()) {
         if let Some(tint) = row.tint {
             buf.set_style(
                 Rect::new(area.x, y, card_w, 1),
@@ -305,7 +341,48 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer) {
             );
         }
         buf.set_line(area.x, y, &row.line, card_w);
+        for (col, wide, high, spot) in &row.spots {
+            let rect = Rect::new(
+                area.x.saturating_add(*col),
+                y,
+                *wide,
+                (*high).min(area.bottom().saturating_sub(y)),
+            );
+            targets.push(Target {
+                id: TargetId::Rail(*spot),
+                rect,
+            });
+            if let Spot::Card(key) = spot
+                && pointer.is_some_and(|(x, y)| rect.contains((x, y).into()))
+            {
+                hovered = Some(*key);
+            }
+        }
     }
+    if let Some(row) = hovered.and_then(|key| {
+        app.rail_cards()
+            .and_then(|(cards, _)| cards.into_iter().find(|card| card.key == key))
+    }) {
+        foot(row, area, buf);
+    }
+}
+
+/// The hover line on the rail's last row: the card's full name, its
+/// workspace and its model when its status names one, dim, over
+/// whatever is there.
+fn foot(row: &Row, area: Rect, buf: &mut Buffer) {
+    let text = usize::from(area.width.saturating_sub(1)).saturating_sub(3);
+    let mut parts = vec![title(row), row.workspace.clone()];
+    parts.extend(row.status.as_ref().map(|status| status.model.clone()));
+    let line = format::cut(&parts.join(" · "), text);
+    let pad = " ".repeat(text.saturating_sub(format::width(&line)));
+    buf.set_stringn(
+        area.x.saturating_add(2),
+        area.bottom().saturating_sub(1),
+        format!("{line}{pad}"),
+        text,
+        style(Role::Muted),
+    );
 }
 
 #[cfg(test)]

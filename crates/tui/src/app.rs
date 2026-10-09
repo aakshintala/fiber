@@ -315,6 +315,9 @@ impl App {
             return self.on_ctrl_c(now);
         }
         self.armed_at = None;
+        if let Some(effect) = self.rail_key(&key) {
+            return effect;
+        }
         if let Some(effect) = self.keymap_key(&key) {
             return effect;
         }

@@ -3,9 +3,11 @@
 
 use super::{draw, elapsed, groups, tone, word};
 use crate::app::App;
+use crate::app::rail::Spot;
 use crate::home::{Launch, Left, Row, State};
 use crate::link::Line;
 use crate::markdown::Role;
+use crate::mouse::{Target, TargetId};
 use crate::view::{render, text};
 use contract::SessionId;
 use ratatui::buffer::Buffer;
@@ -114,7 +116,7 @@ fn rail(app: &App) -> Buffer {
         .unwrap_or_else(|| panic!("a rail"));
     let area = Rect::new(0, 0, rect.width, rect.height);
     let mut buf = Buffer::empty(area);
-    draw(app, area, &mut buf);
+    draw(app, area, &mut buf, None, &mut Vec::new());
     buf
 }
 
@@ -400,4 +402,148 @@ fn rail_waiting_card_shows_its_wait() {
             "spend": spend(1.35), "context": {"tokens": 120, "window": 1000}}),
     );
     insta::assert_snapshot!("rail_waiting_card_shows_its_wait", text(&rail(&app)));
+}
+
+/// The rail rect drawn alone with `pointer`: the buffer and the targets.
+fn hovered(app: &App, pointer: Option<(u16, u16)>) -> (Buffer, Vec<Target>) {
+    let rect = app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.rail)
+        .unwrap_or_else(|| panic!("a rail"));
+    let area = Rect::new(0, 0, rect.width, rect.height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    draw(app, area, &mut buf, pointer, &mut targets);
+    (buf, targets)
+}
+
+/// The rail's targets with their rects.
+fn rail_targets(targets: &[Target]) -> Vec<(Spot, Rect)> {
+    targets
+        .iter()
+        .filter_map(|target| {
+            if let TargetId::Rail(spot) = target.id {
+                Some((spot, target.rect))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// `count` live sessions in the launch project, `A` first and on screen.
+fn many(count: u64) -> App {
+    let mut app = app(15.0);
+    app.on_line(status(A, json!({})));
+    for n in 1..count {
+        app.on_line(status(&format!("s_{n:016x}"), json!({})));
+    }
+    app
+}
+
+/// The key of `session`'s card.
+fn key(app: &App, session: &str) -> u64 {
+    app.rail_cards()
+        .and_then(|(cards, _)| {
+            cards
+                .iter()
+                .find(|row| row.id.0 == session)
+                .map(|row| row.key)
+        })
+        .unwrap_or_else(|| panic!("a card for {session}"))
+}
+
+#[test]
+fn targets_cover_each_card() {
+    // Seven cards in one group take 43 rows: the last card's text rows
+    // start on row 38, and its target stops at the rail's foot.
+    let app = many(7);
+    let keys: Vec<u64> = app
+        .rail_cards()
+        .map(|(cards, _)| cards.iter().map(|card| card.key).collect())
+        .unwrap_or_default();
+    let (_, targets) = hovered(&app, None);
+    let expected: Vec<(Spot, Rect)> = keys
+        .iter()
+        .zip(0u16..)
+        .map(|(key, at)| {
+            let top = 2 + at * 6;
+            (Spot::Card(*key), Rect::new(0, top, 29, (40 - top).min(4)))
+        })
+        .collect();
+    assert_eq!(rail_targets(&targets), expected);
+}
+
+#[test]
+fn rail_hover_foot_line() {
+    let app = two(
+        20.0,
+        json!({"name": "a name too long for the rail's card to show it whole",
+            "workspace": "/Users/you/work/hub"}),
+    );
+    let (buf, _) = hovered(&app, Some((5, 9)));
+    insta::assert_snapshot!("rail_hover_foot_line", text(&buf));
+    assert_eq!(
+        lines(&buf).last().map(String::as_str),
+        Some("  a name too long for the rail's card")
+    );
+    let fg = buf.cell((2, 39)).and_then(|cell| cell.style().fg);
+    assert_eq!(fg, Some(Role::Muted.color()));
+}
+
+#[test]
+fn no_foot_line_without_a_pointer() {
+    let app = two(20.0, json!({"workspace": "/Users/you/work/hub"}));
+    for pointer in [None, Some((5, 0)), Some((5, 13))] {
+        let (buf, _) = hovered(&app, pointer);
+        assert!(!text(&buf).contains("work/hub"), "{pointer:?}");
+    }
+    let (buf, _) = hovered(&app, Some((5, 8)));
+    assert!(text(&buf).contains("work/hub"));
+}
+
+#[test]
+fn rail_scrolled() {
+    let mut app = many(10);
+    let down = crate::keys::Mouse {
+        kind: crate::keys::MouseKind::WheelDown,
+        col: 5,
+        row: 10,
+    };
+    app.on_wheel(&down);
+    app.on_wheel(&down);
+    assert_eq!(app.rail_state().scroll(), 7);
+    let (buf, targets) = hovered(&app, None);
+    insta::assert_snapshot!("rail_scrolled", text(&buf));
+    // The first card is past the top: the second card's target leads.
+    assert_eq!(
+        rail_targets(&targets).first(),
+        Some(&(
+            Spot::Card(key(&app, "s_0000000000000001")),
+            Rect::new(0, 1, 29, 4)
+        ))
+    );
+}
+
+#[test]
+fn on_home_no_rail_is_drawn() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: CARDS.map(str::to_owned).to_vec(),
+        ..Default::default()
+    });
+    app.set_size(200, 40);
+    for session in [A, B, C] {
+        app.on_line(status(session, json!({})));
+    }
+    let area = Rect::new(0, 0, 200, 40);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    assert!(app.home_screen().is_some());
+    assert!(rail_targets(&targets).is_empty());
 }

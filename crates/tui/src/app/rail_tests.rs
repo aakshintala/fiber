@@ -1,8 +1,13 @@
-//! Tests for the rail's state: card numbers.
+//! Tests for the rail's state: card numbers, switching, keys and the
+//! wheel.
 
-use super::super::App;
-use crate::home::Launch;
+use super::super::{App, Effect};
+use super::Spot;
+use crate::home::{Launch, Spot as HomeSpot};
+use crate::keys::{Key, Mouse, MouseKind};
 use crate::link::Line;
+use crate::mouse::TargetId;
+use contract::clock::Clock;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -220,4 +225,364 @@ fn no_home_no_numbers() {
     app.on_line(live(A, json!({})));
     assert!(app.rail_cards().is_none());
     assert_eq!(app.rail_state().number(0), None);
+}
+
+/// Presses `key`.
+fn press(app: &mut App, key: Key) -> Effect {
+    app.on_key(key, fakes::clock::FakeClock::new().now())
+}
+
+/// The lines an effect sends, parsed; none for any other effect.
+fn sent(effect: Effect) -> Vec<Value> {
+    if let Effect::Send(lines) = effect {
+        commands(lines)
+    } else {
+        Vec::new()
+    }
+}
+
+/// A session `command_accepted` for `id` from `session`.
+fn accepted(session: &str, id: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"command_id": id})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+/// Accepts every subscribe in `out`.
+fn ack(app: &mut App, out: &[Value]) {
+    for line in out.iter().filter(|line| line["command"] == "subscribe") {
+        let session = line["session_id"].as_str().unwrap_or_default();
+        let id = line["id"].as_str().unwrap_or_default();
+        app.on_line(accepted(session, id));
+    }
+}
+
+/// Opens `session` from home and accepts its subscribes.
+fn open(app: &mut App, session: &str) -> Vec<Value> {
+    let key = key(app, session);
+    let out = sent(app.on_click(TargetId::Home(HomeSpot::Entry(key))));
+    assert!(!out.is_empty(), "opening {session} sends");
+    ack(app, &out);
+    out
+}
+
+/// A linked app with `sessions` live, showing `on`.
+fn opened(sessions: &[&str], on: &str) -> App {
+    let mut app = with(sessions);
+    open(&mut app, on);
+    assert_eq!(app.session().map(|id| id.0.as_str()), Some(on));
+    app
+}
+
+/// Clicks `session`'s card.
+fn click(app: &mut App, session: &str) -> Effect {
+    let key = key(app, session);
+    app.on_click(TargetId::Rail(Spot::Card(key)))
+}
+
+/// A `subscribe` line with `id` for `session` at `level`.
+fn subscribe(id: &Value, session: &str, level: &str) -> Value {
+    json!({"id": id, "command": "subscribe", "session_id": session,
+        "args": {"level": level}})
+}
+
+/// A `commands` line with `id` for `session`.
+fn asks_commands(id: &Value, session: &str) -> Value {
+    json!({"id": id, "command": "commands", "session_id": session})
+}
+
+/// The session on screen.
+fn on_screen(app: &App) -> Option<&str> {
+    app.session().map(|id| id.0.as_str())
+}
+
+/// Ten sessions' ids, `s_` and the number in 16 hex digits.
+fn ten() -> Vec<String> {
+    (1..=10).map(|n| format!("s_{n:016x}")).collect()
+}
+
+#[test]
+fn a_click_switches_lowering_the_old_and_opening_the_new() {
+    let mut app = opened(&[A, B], A);
+    let out = sent(click(&mut app, B));
+    assert_eq!(out.len(), 3, "{out:?}");
+    assert_eq!(
+        out,
+        vec![
+            subscribe(&out[0]["id"], A, "summary"),
+            subscribe(&out[1]["id"], B, "full"),
+            asks_commands(&out[2]["id"], B),
+        ]
+    );
+    assert_eq!(on_screen(&app), Some(B));
+}
+
+#[test]
+fn a_switch_to_a_session_held_at_full_sends_summary_then_full() {
+    // `B` is held at `full` when it crashes, so leaving it lowers
+    // nothing.
+    let mut app = opened(&[A, B, C], B);
+    app.on_line(left(B, "crashed"));
+    let out = sent(click(&mut app, A));
+    ack(&mut app, &out);
+    let out = sent(click(&mut app, B));
+    assert_eq!(
+        out,
+        vec![
+            subscribe(&out[0]["id"], A, "summary"),
+            subscribe(&out[1]["id"], B, "summary"),
+            subscribe(&out[2]["id"], B, "full"),
+            asks_commands(&out[3]["id"], B),
+        ]
+    );
+}
+
+#[test]
+fn alt_n_switches() {
+    let ids = ten();
+    let sessions: Vec<&str> = ids.iter().take(9).map(String::as_str).collect();
+    let mut app = opened(&sessions, sessions[4]);
+    let out = sent(press(&mut app, Key::AltDigit(1)));
+    assert!(
+        out.contains(&subscribe(&out[1]["id"], sessions[0], "full")),
+        "{out:?}"
+    );
+    assert_eq!(on_screen(&app), Some(sessions[0]));
+    ack(&mut app, &out);
+    let out = sent(press(&mut app, Key::AltDigit(9)));
+    assert!(
+        out.contains(&subscribe(&out[1]["id"], sessions[8], "full")),
+        "{out:?}"
+    );
+    assert_eq!(on_screen(&app), Some(sessions[8]));
+}
+
+#[test]
+fn alt_n_with_no_such_card_does_nothing() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(press(&mut app, Key::AltDigit(3)), Effect::None);
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn alt_n_on_home_opens_the_card() {
+    let mut app = with(&[A, B]);
+    let out = sent(press(&mut app, Key::AltDigit(2)));
+    assert_eq!(
+        out,
+        vec![
+            subscribe(&out[0]["id"], B, "full"),
+            asks_commands(&out[1]["id"], B),
+        ]
+    );
+    assert_eq!(on_screen(&app), Some(B));
+}
+
+#[test]
+fn alt_n_without_home_does_nothing() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.attach(contract::SessionId(A.to_owned()));
+    app.on_line(hello());
+    app.on_line(live(A, json!({})));
+    app.on_line(live(B, json!({})));
+    assert_eq!(press(&mut app, Key::AltDigit(1)), Effect::None);
+    assert_eq!(press(&mut app, Key::AltDigit(2)), Effect::None);
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn a_click_on_the_session_on_screen_does_nothing() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(click(&mut app, A), Effect::None);
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+/// A `permission_requested` from `session` for `request`.
+fn permission(session: &str, request: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "permission_requested".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: json!({"request_id": request, "effects": ["executes"],
+            "reversible": true, "step": "review"})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+#[test]
+fn a_switch_with_the_approval_panel_open_still_opens() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(permission(A, "r_1"));
+    assert!(app.panel().is_some());
+    let out = sent(press(&mut app, Key::AltDigit(2)));
+    assert!(
+        out.contains(&subscribe(&out[1]["id"], B, "full")),
+        "{out:?}"
+    );
+    assert_eq!(on_screen(&app), Some(B));
+}
+
+#[test]
+fn a_switch_with_the_key_map_open_still_opens() {
+    let mut app = opened(&[A, B], A);
+    press(&mut app, Key::F1);
+    assert!(app.keymap_top().is_some());
+    let out = sent(press(&mut app, Key::AltDigit(2)));
+    assert!(
+        out.contains(&subscribe(&out[1]["id"], B, "full")),
+        "{out:?}"
+    );
+    assert_eq!(on_screen(&app), Some(B));
+}
+
+#[test]
+fn a_switch_with_the_link_down_does_nothing() {
+    let mut app = opened(&[A, B], A);
+    app.disconnected();
+    assert_eq!(click(&mut app, B), Effect::None);
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn a_switch_while_a_start_is_pending_does_nothing() {
+    let mut app = with(&[A, B]);
+    for ch in "hi".chars() {
+        press(&mut app, Key::Char(ch));
+    }
+    let start = sent(press(&mut app, Key::Enter));
+    assert_eq!(start[0]["command"], "start");
+    assert_eq!(press(&mut app, Key::AltDigit(2)), Effect::None);
+    assert_eq!(on_screen(&app), None);
+}
+
+#[test]
+fn an_unreadable_card_gives_the_notice_and_sends_nothing() {
+    let mut app = opened(&[A, B], A);
+    let Line::Session(mut envelope) = live(C, json!({})) else {
+        panic!("a session line");
+    };
+    envelope.schema_version = contract::SCHEMA_VERSION + 1;
+    app.on_line(Line::Session(envelope));
+    assert_eq!(click(&mut app, C), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Cannot attach: this session's schema is newer than this terminal reads.")
+    );
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn a_crashed_card_click_resumes_it() {
+    let mut app = opened(&[A, B, C], A);
+    app.on_line(left(B, "crashed"));
+    let out = sent(click(&mut app, B));
+    assert!(
+        out.contains(&subscribe(&out[1]["id"], B, "full")),
+        "{out:?}"
+    );
+    assert_eq!(on_screen(&app), Some(B));
+}
+
+#[test]
+fn after_a_switch_only_the_new_session_is_held_at_full() {
+    let mut app = opened(&[A, B], A);
+    let mut levels: Vec<(String, String)> = Vec::new();
+    for session in [B, A] {
+        let out = sent(click(&mut app, session));
+        ack(&mut app, &out);
+        for line in out.iter().filter(|line| line["command"] == "subscribe") {
+            let id = line["session_id"].as_str().unwrap_or_default().to_owned();
+            let level = line["args"]["level"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+            levels.retain(|(held, _)| *held != id);
+            levels.push((id, level));
+        }
+    }
+    levels.sort();
+    assert_eq!(
+        levels,
+        vec![
+            (A.to_owned(), "full".to_owned()),
+            (B.to_owned(), "summary".to_owned()),
+        ]
+    );
+}
+
+/// A wheel `kind` at 0-based `col`, `row`.
+fn wheel(kind: MouseKind, col: u16, row: u16) -> Mouse {
+    Mouse { kind, col, row }
+}
+
+/// Ten live sessions, the first on screen: one group of ten cards is
+/// 61 rows, 21 past a 40-row rail, with cards starting on rows 1, 7, 13,
+/// 19 and 25.
+fn tall() -> App {
+    let ids = ten();
+    let sessions: Vec<&str> = ids.iter().map(String::as_str).collect();
+    opened(&sessions, sessions[0])
+}
+
+#[test]
+fn the_wheel_scrolls_the_rail_by_one_card_and_clamps() {
+    let mut app = tall();
+    let down = wheel(MouseKind::WheelDown, 5, 10);
+    for expected in [1, 7, 13, 19, 21, 21] {
+        app.on_wheel(&down);
+        assert_eq!(app.rail_state().scroll(), expected);
+    }
+    let up = wheel(MouseKind::WheelUp, 5, 10);
+    for expected in [19, 13, 7, 1, 0, 0] {
+        app.on_wheel(&up);
+        assert_eq!(app.rail_state().scroll(), expected);
+    }
+}
+
+#[test]
+fn the_wheel_over_the_conversation_does_not_scroll_the_rail() {
+    let mut app = tall();
+    app.on_wheel(&wheel(MouseKind::WheelDown, 100, 10));
+    assert_eq!(app.rail_state().scroll(), 0);
+}
+
+#[test]
+fn a_scroll_past_the_end_after_a_resize_moves_on_the_first_wheel_up() {
+    let mut app = tall();
+    let down = wheel(MouseKind::WheelDown, 5, 10);
+    for _ in 0..5 {
+        app.on_wheel(&down);
+    }
+    assert_eq!(app.rail_state().scroll(), 21);
+    // At 50 rows the end is 11: up from there is the card on row 7.
+    app.set_size(200, 50);
+    app.on_wheel(&wheel(MouseKind::WheelUp, 5, 10));
+    assert_eq!(app.rail_state().scroll(), 7);
+}
+
+#[test]
+fn switching_scrolls_the_card_into_view() {
+    let mut app = tall();
+    // The ninth card starts on row 49 and ends on row 54: the least
+    // scroll showing it in 40 rows is 15.
+    press(&mut app, Key::AltDigit(9));
+    assert_eq!(app.rail_state().scroll(), 15);
+    press(&mut app, Key::AltDigit(1));
+    assert_eq!(app.rail_state().scroll(), 1);
 }

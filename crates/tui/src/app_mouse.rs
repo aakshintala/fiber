@@ -62,6 +62,7 @@ impl App {
             TargetId::Offer(spot) => self.offer_click(spot),
             TargetId::Form(spot) => self.form_click(spot),
             TargetId::Panel(spot) => self.panel_click(spot),
+            TargetId::Rail(spot) => self.rail_click(spot),
             TargetId::Token(number) => self.open_token(number),
             TargetId::Turn(_) => Effect::None,
         };
@@ -76,8 +77,8 @@ impl App {
         self.settle();
     }
 
-    /// The mouse wheel over the panel scrolls it (`docs/tui.md`, "The
-    /// panel"). Anything else does nothing: it settles nothing else and
+    /// The mouse wheel over the panel or the rail scrolls it
+    /// (`docs/tui.md`, "The panel", "The rail"). Anything else does nothing: it settles nothing else and
     /// returns nothing.
     pub(crate) fn on_wheel(&mut self, mouse: &Mouse) {
         let up = match mouse.kind {
@@ -94,6 +95,14 @@ impl App {
             .is_some_and(|panel| panel.contains(Position::new(mouse.col, mouse.row)));
         if over {
             self.scroll_panel(up);
+        }
+        let over_rail = self
+            .chrome()
+            .regions()
+            .rail
+            .is_some_and(|rail| rail.contains(Position::new(mouse.col, mouse.row)));
+        if over_rail {
+            self.scroll_rail(up);
         }
     }
 }

@@ -98,7 +98,7 @@ pub(crate) fn render(
         panel::draw(app, rect, buf, &mut targets);
     }
     if let Some(rect) = app.chrome().layout().and_then(|layout| layout.rail) {
-        rail::draw(app, rect, buf);
+        rail::draw(app, rect, buf, pointer, &mut targets);
     }
     let mut bottom = area.bottom();
     if let Some(panel) = app.panel() {
