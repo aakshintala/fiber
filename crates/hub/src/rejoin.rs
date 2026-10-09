@@ -6,14 +6,9 @@
 //! When a session a hub connection held a level on resumes, the hub
 //! reopens the relay and subscribes it at that level with no client
 //! command, so the client receives the new run's `session_status` lines.
-//! The sweep runs off the feed's rescan of `run/` (R3 in the ticket's
-//! plan): on the scanner thread it only collects candidates, and a single
-//! `hub-rejoin` worker reads the logs, connects and attaches.
-
-#![allow(
-    dead_code,
-    reason = "the red commit holds inert signatures; later commits fill them"
-)]
+//! The sweep runs off the feed's rescan of `run/`: on the scanner thread
+//! it only collects candidates, and a single `hub-rejoin` worker reads the
+//! logs, connects and attaches.
 
 use std::collections::{BTreeSet, HashMap};
 use std::os::unix::net::UnixStream;
@@ -21,6 +16,7 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, Weak};
+use std::thread;
 
 use serde_json::{Map, Value};
 
@@ -217,6 +213,10 @@ pub(crate) struct Connections {
 /// and its relays, the last two weakly so a gone connection drops out.
 type Held = (u64, Weak<Mutex<UnixStream>>, Weak<Mutex<Relays>>);
 
+/// One live connection as the sweep holds it across the scan: its writer
+/// and its relays.
+type Live = (Arc<Mutex<UnixStream>>, Arc<Mutex<Relays>>);
+
 #[derive(Default)]
 struct Inner {
     conns: Vec<Held>,
@@ -268,7 +268,55 @@ pub(crate) fn wire(hub: &Arc<Hub>) {
 /// closed. When any are found, sets busy and spawns `hub-rejoin` running
 /// `rejoin_pass`. A failed spawn clears busy.
 fn sweep(hub: &Arc<Hub>, names: &BTreeSet<String>) {
-    let _ = (hub, names);
+    if lock(&hub.rejoins.inner).busy {
+        return;
+    }
+    // The live connections, pruning dead ones: the registry lock is never
+    // held while a relays lock is taken.
+    let live: Vec<Live> = {
+        let mut inner = lock(&hub.rejoins.inner);
+        let mut live = Vec::new();
+        inner.conns.retain(
+            |(_, writer, relays)| match (writer.upgrade(), relays.upgrade()) {
+                (Some(writer), Some(relays)) => {
+                    live.push((writer, relays));
+                    true
+                }
+                _ => false,
+            },
+        );
+        live
+    };
+    let mut found = Vec::new();
+    for (writer, relays) in live {
+        let held = lock(&relays);
+        if held.rejoin.closed {
+            continue;
+        }
+        found.extend(
+            candidates(&held, names)
+                .into_iter()
+                .map(|(session, mark, kept)| Candidate {
+                    session,
+                    mark,
+                    kept,
+                    writer: Arc::clone(&writer),
+                    relays: Arc::clone(&relays),
+                }),
+        );
+    }
+    if found.is_empty() {
+        return;
+    }
+    lock(&hub.rejoins.inner).busy = true;
+    let worker = Arc::clone(hub);
+    if thread::Builder::new()
+        .name("hub-rejoin".to_owned())
+        .spawn(move || rejoin_pass(&worker, found))
+        .is_err()
+    {
+        lock(&hub.rejoins.inner).busy = false;
+    }
 }
 
 /// On the worker, with no lock held across IO. For each candidate:
@@ -277,7 +325,72 @@ fn sweep(hub: &Arc<Hub>, names: &BTreeSet<String>) {
 /// A guard clears busy at the end (panic included). In tests it runs the
 /// pause hook before each connect and signals pass-done at the end.
 fn rejoin_pass(hub: &Arc<Hub>, candidates: Vec<Candidate>) {
-    let _ = (hub, candidates);
+    let _guard = BusyGuard {
+        inner: &hub.rejoins.inner,
+    };
+    for candidate in candidates {
+        let Candidate {
+            session,
+            mark,
+            kept,
+            writer,
+            relays,
+        } = candidate;
+        // No log at attach time records offset 0; the sweep finds the log
+        // later, and a session that exited cleanly unlinked its socket, so
+        // only a bound name opens a log at all.
+        if !hub.home.join("run").join(&session).exists() {
+            continue;
+        }
+        let mark = if mark.log.is_none() {
+            let mut found = Mark::now(&hub.home, &session);
+            found.epoch = mark.epoch;
+            found
+        } else {
+            mark
+        };
+        let advanced = advance(mark);
+        let live = advanced.live;
+        {
+            let mut held = lock(&relays);
+            store_back(&mut held, &session, advanced);
+        }
+        if !live {
+            continue;
+        }
+        #[cfg(test)]
+        if let Some(before_connect) = lock(&hub.rejoins.before_connect).take() {
+            before_connect();
+        }
+        let Ok(stream) = UnixStream::connect(hub.home.join("run").join(&session)) else {
+            continue;
+        };
+        crate::relay::attach(
+            &session,
+            stream,
+            hub,
+            &writer,
+            &relays,
+            Some(kept),
+            None,
+            true,
+        );
+    }
+    #[cfg(test)]
+    if let Some(passed) = lock(&hub.rejoins.pass_done).as_ref() {
+        passed.send(()).unwrap_or(());
+    }
+}
+
+/// Clears the rejoin busy flag when the worker ends, a panic included.
+struct BusyGuard<'a> {
+    inner: &'a Mutex<Inner>,
+}
+
+impl Drop for BusyGuard<'_> {
+    fn drop(&mut self) {
+        lock(self.inner).busy = false;
+    }
 }
 
 /// Reads complete lines from `mark.read`: `fiber_started` makes it live;
