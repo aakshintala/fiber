@@ -348,6 +348,72 @@ fn a_give_back_among_the_captured_keys_is_not_given() {
 }
 
 #[test]
+fn a_give_back_held_in_an_overlapping_context_is_refused() {
+    let before = holding("focus_area", &["y"]);
+    let next = before
+        .set("copy_focused", vec![stroke("enter")], &["open_focused"])
+        .unwrap_or_else(|refused| panic!("swap refused: {refused:?}"));
+    // `focus_area` shares the conversation with `open_focused`, so the
+    // give-back `y` would clash there: the group holding Enter drops.
+    assert!(next.current("open_focused").is_empty());
+    assert_eq!(next.current("copy_focused"), [stroke("enter")]);
+    assert!(clash_free(&next));
+}
+
+#[test]
+fn a_give_back_held_in_a_disjoint_context_is_given() {
+    let before = holding("session_only", &["y"]);
+    let next = before
+        .set("copy_focused", vec![stroke("enter")], &["open_focused"])
+        .unwrap_or_else(|refused| panic!("swap refused: {refused:?}"));
+    // `session_only` lives in the model picker, which shares no context
+    // with `open_focused`, so `y` still goes back to it.
+    assert_eq!(next.current("open_focused"), [stroke("y")]);
+    assert_eq!(next.current("copy_focused"), [stroke("enter")]);
+    assert_eq!(next.current("session_only"), [stroke("y")]);
+}
+
+#[test]
+fn a_capture_holding_its_give_back_still_gives_it() {
+    let before = holding("copy_focused", &["y", "f5"]);
+    let next = before
+        .set("copy_focused", vec![stroke("enter")], &["open_focused"])
+        .unwrap_or_else(|refused| panic!("swap refused: {refused:?}"));
+    // The capture's old keys go when it takes `enter`, so `y` (its first
+    // key, held in its own row) still goes back to `open_focused`.
+    assert_eq!(next.current("open_focused"), [stroke("y")]);
+    assert_eq!(next.current("copy_focused"), [stroke("enter")]);
+    assert!(clash_free(&next));
+}
+
+#[test]
+fn a_later_group_drains_from_its_own_place() {
+    let Keyset { mut rows } = keyset(&[("delete_word", json!([]))]);
+    let at = BINDINGS
+        .iter()
+        .position(|binding| binding.id == "move_word")
+        .unwrap_or_else(|| panic!("no action move_word"));
+    if let Some(row) = rows.get_mut(at) {
+        // `alt+left` is the only copy, in the second group (place 2).
+        row.keys = ["alt+right", "f5", "alt+left", "ctrl+r"]
+            .iter()
+            .map(|name| stroke(name))
+            .collect();
+    }
+    let before = Keyset { rows };
+    let next = before
+        .set("delete_word", vec![stroke("alt+left")], &["move_word"])
+        .unwrap_or_else(|refused| panic!("swap refused: {refused:?}"));
+    // No give-back, so the whole group at place 2 goes: `alt+left` and the
+    // `ctrl+r` beside it, not the place one group later.
+    assert_eq!(
+        next.current("move_word"),
+        [stroke("alt+right"), stroke("f5")]
+    );
+    assert!(clash_free(&next));
+}
+
+#[test]
 fn edits_name_every_change_in_table_order() {
     let before = keyset(&[]);
     assert!(before.edits(&before).is_empty());

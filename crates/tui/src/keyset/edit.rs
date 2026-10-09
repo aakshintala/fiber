@@ -128,7 +128,11 @@ fn swap_key(trade: &mut Trade<'_>, other_at: usize, other: &Binding, got: usize,
         if let Some(row) = trade.rows.get_mut(other_at) {
             let start = place / variants * variants;
             let end = start.saturating_add(variants).min(row.keys.len());
+            let before = row.keys.len();
             row.keys.drain(start..end);
+            if row.keys.len() == before {
+                return;
+            }
         }
     }
 }
