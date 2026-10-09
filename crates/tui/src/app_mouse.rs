@@ -6,6 +6,10 @@ use crate::keys::{Key, Mouse, MouseKind};
 use crate::mouse::TargetId;
 use ratatui::layout::Position;
 
+/// A wheel step over the conversation scrolls it this many rows: a
+/// starting point, not a measurement (`docs/tui.md`, "Turns").
+pub(super) const WHEEL_ROWS: usize = 3;
+
 impl App {
     /// Handles a click on `target` (`docs/tui.md`, "Bindings"): the badge
     /// reopens the approval queue, "↓ New messages below" jumps to the end,
@@ -77,9 +81,13 @@ impl App {
         self.settle();
     }
 
-    /// The mouse wheel over the panel scrolls it (`docs/tui.md`, "The
-    /// panel"). Anything else does nothing: it settles nothing else and
-    /// returns nothing.
+    /// The mouse wheel scrolls what it is over (`docs/tui.md`, "Turns",
+    /// "The panel", "Layout"): over the panel it scrolls only the panel;
+    /// over the conversation's visible rows it scrolls the conversation by
+    /// [`WHEEL_ROWS`] rows, but only while a session is on screen and no
+    /// swapped view covers the conversation. Over the rail, the header, or
+    /// below the conversation it scrolls the conversation not at all; the
+    /// rail's own wheel scrolling is #669 Part 4's.
     pub(crate) fn on_wheel(&mut self, mouse: &Mouse) {
         let up = match mouse.kind {
             MouseKind::WheelUp => true,
@@ -88,13 +96,57 @@ impl App {
                 return;
             }
         };
-        let over = self
+        let at = Position::new(mouse.col, mouse.row);
+        if self
             .chrome()
-            .regions()
-            .panel
-            .is_some_and(|panel| panel.contains(Position::new(mouse.col, mouse.row)));
-        if over {
+            .layout()
+            .and_then(|layout| layout.panel)
+            .is_some_and(|panel| panel.contains(at))
+        {
             self.scroll_panel(up);
+        } else if self.session().is_some()
+            && self.keymap_top().is_none()
+            && !self.offer_open()
+            && !self.results_open()
+            && self.over_conversation(at)
+        {
+            self.scroll_conversation(up);
         }
+    }
+
+    /// Whether `at` is over the conversation's visible rows: the
+    /// conversation column's columns, from its top past the header for the
+    /// conversation's height, the same rows the draw keeps for the
+    /// conversation (`view.rs`, `render`). Without the layout the
+    /// conversation is the whole width with no header row.
+    fn over_conversation(&self, at: Position) -> bool {
+        let height = self.conversation_height();
+        let (left, width, top) = match self.chrome().layout() {
+            Some(layout) => {
+                let header = u16::try_from(self.chrome().header_rows()).unwrap_or(u16::MAX);
+                (
+                    layout.column.x,
+                    layout.column.width,
+                    layout.column.y.saturating_add(header),
+                )
+            }
+            None => (0, self.screen.width(), 0),
+        };
+        let in_column = usize::from(at.x) >= usize::from(left)
+            && usize::from(at.x).saturating_sub(usize::from(left)) < usize::from(width);
+        let in_rows = usize::from(at.y) >= usize::from(top)
+            && usize::from(at.y).saturating_sub(usize::from(top)) < height;
+        in_column && in_rows
+    }
+
+    /// Scrolls the conversation by [`WHEEL_ROWS`] rows, as PageUp and
+    /// PageDown scroll by a screen (`docs/tui.md`, "Turns"): up pauses
+    /// following, down resumes it at the bottom, and past the top the next
+    /// frame pages history in, as `settle` and `needs` already do for a
+    /// page (`docs/tui.md`, "History and paging").
+    fn scroll_conversation(&mut self, up: bool) {
+        let height = self.conversation_height();
+        self.screen.scroll_rows(up, WHEEL_ROWS, height);
+        self.settle();
     }
 }

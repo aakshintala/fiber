@@ -5,15 +5,93 @@ use std::fs;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use contract::Secret;
 use contract::signing::{SignRequest, Signer};
 use fakes::clock::FakeClock;
+use serde_json::{Value, json};
 
 use crate::{
     CredentialPair, LuaExtension,
-    lua_provider::{LuaProvider, LuaSigner},
+    lua_provider::{LuaProvider, LuaSigner, UsedState, parse_credential_headers, redact_values},
 };
 
 const WAIT: Duration = Duration::from_secs(5);
+
+#[test]
+fn redaction_replaces_each_non_empty_call_value() {
+    let cases: &[(&[&str], &str, &str)] = &[
+        (&[""], "untouched", "untouched"),
+        (&["tok", "tok-1"], "saw tok-1", "saw [redacted]"),
+        (
+            &["token"],
+            "token and token again",
+            "[redacted] and [redacted] again",
+        ),
+        (&["absent"], "no credential here", "no credential here"),
+    ];
+    for (values, message, expected) in cases {
+        let values: Vec<Secret> = values
+            .iter()
+            .map(|value| Secret::new((*value).to_owned()))
+            .collect();
+        assert_eq!(redact_values(message, &values), *expected, "{values:?}");
+    }
+}
+
+#[test]
+fn used_history_keeps_sixteen_completed_values_at_the_boundary() {
+    for (count, want) in [(15_usize, 15_usize), (16, 16), (17, 16)] {
+        let values: Vec<Secret> = (1..=count)
+            .map(|n| Secret::new(format!("tok-{n}")))
+            .collect();
+        let mut used = UsedState::default();
+        used.start(&values);
+        used.finish(&values);
+
+        let completed: Vec<String> = used
+            .completed
+            .iter()
+            .map(|secret| secret.expose().to_owned())
+            .collect();
+        let first = count.saturating_sub(16) + 1;
+        let expected: Vec<String> = (first..=count).map(|n| format!("tok-{n}")).collect();
+        assert_eq!(completed, expected, "{count} completed calls");
+        assert!(used.active.is_empty(), "{count} calls have finished");
+        assert_eq!(completed.len(), want, "{count} completed values");
+    }
+}
+
+#[test]
+fn credential_header_parser_distinguishes_empty_and_non_empty_arrays() {
+    type HeaderCase = (Option<Value>, &'static [(&'static str, &'static str)], bool);
+    let cases: &[HeaderCase] = &[
+        (None, &[], true),
+        (Some(Value::Null), &[], true),
+        (Some(json!({})), &[], true),
+        (Some(json!([])), &[], true),
+        (Some(json!({"x-key": "value"})), &[("x-key", "value")], true),
+        (Some(json!(["value"])), &[], false),
+        (Some(json!({"x-key": 1})), &[], false),
+        (Some(json!("value")), &[], false),
+    ];
+    for (headers, expected, valid) in cases {
+        let parsed = parse_credential_headers(headers.as_ref());
+        assert_eq!(parsed.is_ok(), *valid, "{headers:?}");
+        if let Ok(parsed) = parsed {
+            let mut parsed: Vec<(String, String)> = parsed
+                .into_iter()
+                .map(|(name, value)| (name, value.expose().to_owned()))
+                .collect();
+            parsed.sort();
+            let mut expected: Vec<(String, String)> = expected
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect();
+            expected.sort();
+            assert_eq!(parsed, expected, "{headers:?}");
+        }
+    }
+}
 
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();

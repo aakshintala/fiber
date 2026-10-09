@@ -465,25 +465,23 @@ fn bind(port: u16) -> io::Result<TcpListener> {
     TcpListener::bind((Ipv4Addr::LOCALHOST, port))
 }
 
-/// Listens on `port` for one request and delivers its query parameters. The
-/// returned sender is the cancel handle: dropping it ends the listener and
-/// frees the port. None when nothing is listening, in which case the error is
-/// already delivered.
-pub(crate) fn listen(port: u16, deliver: &Deliver) -> Option<Sender<()>> {
+/// Binds `port` and serves one request off the thread, delivering its query.
+/// Ok: the cancel handle; dropping it ends the listener and frees the port.
+/// Err: nothing listens and nothing was delivered; the caller delivers it.
+pub(crate) fn listen(port: u16, deliver: &Deliver) -> Result<Sender<()>, Reply> {
     // A port that cannot be bound is `io_failed`; a request whose query
     // cannot be read is `unreadable_reply`, both raised as `{ code,
     // message }` by the callback half.
     let fail = |why: &dyn std::fmt::Display| {
-        deliver(Reply::Query(Err((
+        Reply::Query(Err((
             contract::ErrorCode::IoFailed,
             format!("host.oauth.callback: port {port}: {why}"),
-        ))));
+        )))
     };
     let listener = match bind(port).and_then(|l| l.set_nonblocking(true).map(|()| l)) {
         Ok(listener) => listener,
         Err(e) => {
-            fail(&e);
-            return None;
+            return Err(fail(&e));
         }
     };
     let (cancel, stop) = mpsc::channel();
@@ -496,11 +494,8 @@ pub(crate) fn listen(port: u16, deliver: &Deliver) -> Option<Sender<()>> {
             }
         });
     match spawned {
-        Ok(_) => Some(cancel),
-        Err(e) => {
-            fail(&e);
-            None
-        }
+        Ok(_) => Ok(cancel),
+        Err(e) => Err(fail(&e)),
     }
 }
 
@@ -679,23 +674,24 @@ fn decode(text: &str) -> Result<String, &'static str> {
     String::from_utf8(out).map_err(|_| "is not UTF-8 once decoded")
 }
 
-/// Waits for the lock on the stored credential
-/// `credentials/<credential>/<label>` for the pair the call was made for,
-/// polling [`CredentialFile::try_lock`], and delivers it. The returned
-/// sender is the cancel handle. None when no wait started, in which case
-/// the error is already delivered.
-pub(crate) fn lock(home: &Path, pair: &CredentialPair, deliver: &Deliver) -> Option<Sender<()>> {
+/// Starts the off-thread wait for the pair's credential lock, which delivers
+/// the lock. Ok: the cancel handle. Err: no wait started and nothing was
+/// delivered; the caller delivers it.
+pub(crate) fn lock(
+    home: &Path,
+    pair: &CredentialPair,
+    deliver: &Deliver,
+) -> Result<Sender<()>, Reply> {
     let fail = |why: &dyn std::fmt::Display| {
-        deliver(Reply::Lock(Err(crate::host::LockError::Coded((
+        Reply::Lock(Err(crate::host::LockError::Coded((
             contract::ErrorCode::IoFailed,
             format!("host.oauth.refresh: {why}"),
-        )))));
+        ))))
     };
     let file = match CredentialFile::new(home, &pair.credential, &pair.label) {
         Ok(file) => file,
         Err(e) => {
-            fail(&e);
-            return None;
+            return Err(fail(&e));
         }
     };
     let (cancel, stop) = mpsc::channel();
@@ -721,11 +717,8 @@ pub(crate) fn lock(home: &Path, pair: &CredentialPair, deliver: &Deliver) -> Opt
             }
         });
     match spawned {
-        Ok(_) => Some(cancel),
-        Err(e) => {
-            fail(&e);
-            None
-        }
+        Ok(_) => Ok(cancel),
+        Err(e) => Err(fail(&e)),
     }
 }
 

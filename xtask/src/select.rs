@@ -90,8 +90,10 @@ const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/skills/using-fiber/SKILL.md", "loop"),
     ("crates/tools/prompt/guidelines.md", "tools"),
 ];
-/// `docs/ci.md`: mutation testing runs as 6 shards.
-const MUTANT_SHARDS: u64 = 6;
+/// `docs/ci.md`: the most mutants one shard tests, measured from CI runs.
+const MUTANTS_PER_SHARD: u64 = 15;
+/// `docs/ci.md`: the most shards one run starts.
+const MAX_MUTANT_SHARDS: u64 = 32;
 /// Crates whose tests read a first-party package under `providers/` or
 /// `extensions/` (`docs/ci.md`, "Selection"); sorted. Checked against the
 /// sources by `package_reader_mismatches`.
@@ -442,10 +444,27 @@ pub(crate) struct Plan {
     pub(crate) shards: u64,
 }
 
-pub(crate) fn plan(mode: &str, packages: &[String], event: &str, bug: bool, mutants: bool) -> Plan {
+/// Shards for `count` mutants: none without mutants, else one per
+/// `MUTANTS_PER_SHARD`, rounded up, at most `MAX_MUTANT_SHARDS`.
+pub(crate) fn mutant_shards(count: u64) -> u64 {
+    count.div_ceil(MUTANTS_PER_SHARD).min(MAX_MUTANT_SHARDS)
+}
+
+pub(crate) fn plan(
+    mode: &str,
+    packages: &[String],
+    event: &str,
+    bug: bool,
+    mutants: bool,
+    mutant_count: u64,
+) -> Plan {
     let pr = event == "pull_request";
     let code = mode != "docs";
-    let shards = if code && mutants { MUTANT_SHARDS } else { 0 };
+    let shards = if code && mutants {
+        mutant_shards(mutant_count)
+    } else {
+        0
+    };
     let jobs = BTreeMap::from([
         ("lint", !pr || code),
         // The backstop on `main` compiles the whole workspace on every push.
