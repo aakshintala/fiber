@@ -409,6 +409,7 @@ fn session_card_full() {
     assert_eq!(
         ids,
         vec![
+            TargetId::Panel(Spot::Model),
             TargetId::Panel(Spot::Context),
             TargetId::Panel(Spot::Context),
             TargetId::Panel(Spot::Context),
