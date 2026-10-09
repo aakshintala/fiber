@@ -479,9 +479,8 @@ impl ModelPicker {
             list: List::default(),
             below: self.status(),
             field: None,
-            footer:
-                "↑↓ move · ←→ level · PageUp PageDown page · Tab scope · Ctrl+R refresh · Esc close"
-                    .to_owned(),
+            footer: "Enter set as default · s this session only · ↑↓ move · ←→ level · PageUp PageDown page · Tab scope · Ctrl+R refresh · Esc close"
+                .to_owned(),
         };
         // The selection may sit off the scoped rows after a read
         // answered, so it falls to the first model row shown.

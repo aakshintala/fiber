@@ -326,15 +326,14 @@ fn other_keys_and_edits_do_nothing() {
     app.on_models(Ok(three()));
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
     let before = selected(&app);
-    for key in [Key::Char('x'), Key::Backspace, Key::Char('s'), Key::F1] {
+    for key in [Key::Char('x'), Key::Backspace, Key::Char('S'), Key::CtrlF] {
         assert_eq!(app.on_key(key.clone(), now()), Effect::None);
     }
     for edit in [Edit::Delete, Edit::WordLeft, Edit::CtrlJ] {
         assert_eq!(app.on_edit(edit), Effect::None);
     }
-    // Enter chooses; `s` does in the next task. Here the other keys keep
-    // the picker open, the draft keeps nothing typed, and the selection
-    // never moved.
+    // Enter and `s` choose; any other key keeps the picker open, the
+    // draft keeps nothing typed, and the selection never moved.
     assert!(app.model_picker_open());
     assert!(app.input().expand().is_empty());
     assert_eq!(selected(&app), before);
@@ -417,7 +416,7 @@ fn refreshing_shows_until_the_answer() {
 }
 
 #[test]
-fn the_picker_is_an_overlay_context() {
+fn the_picker_is_a_picker_context() {
     let mut app = App::new(PathBuf::from("/w"));
     let user: serde_json::Map<String, serde_json::Value> =
         serde_json::from_value(json!({"send": "ctrl+s"})).unwrap();
@@ -1342,4 +1341,141 @@ fn choosing_on_home_writes_at_once_and_sets_the_chips() {
             .and_then(|entry| entry.configured.clone()),
         Some("low".to_owned())
     );
+}
+
+#[test]
+fn s_chooses_for_this_session_only_and_writes_nothing() {
+    let (mut app, seam) = choosing_app();
+    open(&mut app);
+    let line = sent(app.on_key(Key::Char('s'), now()));
+    assert_eq!(line["command"], json!("model"));
+    assert_eq!(
+        line["args"],
+        json!({"model": "acme/m1", "thinking": "high"})
+    );
+    assert!(!app.model_picker_open());
+    // Nothing waits to be written, before or after the acceptance.
+    assert!(app.model_picker.awaiting.is_empty());
+    let id = line["id"].as_str().expect("an id").to_owned();
+    app.on_line(accepted(SESSION, &id));
+    assert!(seam.writes().is_empty());
+}
+
+#[test]
+fn s_on_a_touched_row_sends_the_level() {
+    let (mut app, _) = choosing_app();
+    open(&mut app);
+    app.on_edit(Edit::Left);
+    let line = sent(app.on_key(Key::Char('s'), now()));
+    assert_eq!(line["args"], json!({"model": "acme/m1", "thinking": "low"}));
+}
+
+#[test]
+fn s_does_nothing_on_the_empty_scoped_view() {
+    let mut app = scoped_home(&["gone/x"]);
+    app.on_line(hello());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.on_models(Ok(three()));
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert!(app.model_picker_open());
+}
+
+#[test]
+fn the_footer_reads_enter_set_as_default_s_this_session_only() {
+    let (mut app, _) = choosing_app();
+    open(&mut app);
+    assert_eq!(
+        app.model_picker_frame(24).map(|frame| frame.footer),
+        Some(
+            "Enter set as default · s this session only · ↑↓ move · ←→ level · PageUp PageDown page · Tab scope · Ctrl+R refresh · Esc close"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn session_only_rebinds() {
+    let user: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_value(json!({"session_only": "x"})).unwrap();
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_keys(crate::KeysSetup { user });
+    app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        git: false,
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        ..Default::default()
+    });
+    app.set_size(80, 24);
+    app.on_line(hello());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.on_models(Ok(three()));
+    open(&mut app);
+    // `x` chooses for this session only, sending the `model` command.
+    let stroke = Stroke::parse("x").unwrap();
+    let Effect::Send(lines) = app.on_press(stroke, now()) else {
+        panic!("a rebound `s` sends");
+    };
+    assert_eq!(lines.len(), 1);
+    assert!(!app.model_picker_open());
+    // `s` moved off the action: it does nothing in the picker.
+    open(&mut app);
+    let stroke = Stroke::parse("s").unwrap();
+    assert_eq!(app.on_press(stroke, now()), Effect::None);
+    assert!(app.model_picker_open());
+}
+
+#[test]
+fn typing_s_in_an_overlay_is_unaffected_by_rebinding_session_only() {
+    let user: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_value(json!({"session_only": "x"})).unwrap();
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_keys(crate::KeysSetup { user });
+    app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        git: false,
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        ..Default::default()
+    });
+    app.set_size(80, 24);
+    // The `/` panel is open: `s` types into the draft, reaching no
+    // picker, which is never open here.
+    assert_eq!(app.on_key(Key::Char('/'), now()), Effect::None);
+    let stroke = Stroke::parse("s").unwrap();
+    assert_eq!(app.on_press(stroke, now()), Effect::None);
+    assert_eq!(app.input().expand(), "/s");
+    assert!(!app.model_picker_open());
+}
+
+#[test]
+fn global_action_keys_pass_through_the_picker() {
+    let (mut app, _) = choosing_app();
+    open(&mut app);
+    // F1 opens the key map above the open picker: the picker's own key
+    // check passes the global actions' keys on.
+    assert_eq!(app.on_key(Key::F1, now()), Effect::None);
+    assert!(app.keymap_top().is_some());
+    assert!(app.model_picker_open());
+    // Esc reaches the picker first, as `route_key` orders it.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.model_picker_open());
+    assert!(app.keymap_top().is_some());
 }

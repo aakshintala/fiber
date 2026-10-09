@@ -84,7 +84,11 @@ pub(crate) fn frame(
     let rows = paths
         .iter()
         .map(|(path, added, removed)| {
-            vec![(format!("{}  +{added} −{removed}", safe_line(path)), None, Ink::Plain)]
+            vec![(
+                format!("{}  +{added} −{removed}", safe_line(path)),
+                None,
+                Ink::Plain,
+            )]
         })
         .collect();
     let (files, added, removed) = totals(changes);
@@ -118,10 +122,17 @@ fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
                 .collect(),
         ),
         Diff::Empty => (
-            vec![vec![("No changes against HEAD.".to_owned(), None, Ink::Plain)]],
+            vec![vec![(
+                "No changes against HEAD.".to_owned(),
+                None,
+                Ink::Plain,
+            )]],
             Vec::new(),
         ),
-        Diff::Failed(message) => (vec![vec![(safe_line(message), None, Ink::Plain)]], Vec::new()),
+        Diff::Failed(message) => (
+            vec![vec![(safe_line(message), None, Ink::Plain)]],
+            Vec::new(),
+        ),
     };
     Frame {
         title: format!("Changed files › {} · diff against HEAD", safe_line(path)),

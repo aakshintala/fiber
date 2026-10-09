@@ -258,15 +258,25 @@ impl App {
     }
 
     /// A key for the open picker; `None` while it is closed, for Ctrl+C,
-    /// and while the quit question is up, so quitting keeps every key.
-    /// Enter chooses and saves; `s` chooses in the next task. Every other
-    /// key but the picker's own does nothing, and no key cycles.
+    /// for the global actions' keys, and while the quit question is up,
+    /// so quitting and every global action keep their keys. Enter chooses
+    /// and saves, `s` chooses for this session only. Every other key but
+    /// the picker's own does nothing, and no key cycles.
     pub(in crate::app) fn model_picker_key(&mut self, key: &Key) -> Option<super::Effect> {
         if !self.model_picker_open() || self.quit_open() {
             return None;
         }
         match key {
             Key::CtrlC => None,
+            // A global action acts in every context, the picker's
+            // included: its key passes through to its handler.
+            Key::F1
+            | Key::CtrlO
+            | Key::End
+            | Key::AltA
+            | Key::AltP
+            | Key::AltR
+            | Key::AltDigit(_) => None,
             Key::Up => {
                 self.model_picker.move_row(-1);
                 Some(super::Effect::None)
@@ -311,25 +321,25 @@ impl App {
                     None => super::Effect::None,
                 })
             }
-            // `s` chooses in the next task; here it does nothing, as
-            // every other key does.
+            Key::Char('s') => {
+                // `s` is the only path to a session-only choice: with no
+                // scoped row it stays open, sending nothing.
+                Some(match self.model_picker.choice(true) {
+                    Some(choice) => self.choose(choice),
+                    None => super::Effect::None,
+                })
+            }
+            // Every other key does nothing, and no key cycles.
             Key::Char(_)
             | Key::Backspace
-            | Key::CtrlO
-            | Key::End
-            | Key::AltA
             | Key::BackTab
-            | Key::F1
             | Key::CtrlG
             | Key::CtrlF
             | Key::CtrlV
             | Key::CtrlL
             | Key::AltUp
             | Key::AltDown
-            | Key::AltX
-            | Key::AltP
-            | Key::AltR
-            | Key::AltDigit(_) => Some(super::Effect::None),
+            | Key::AltX => Some(super::Effect::None),
         }
     }
 
