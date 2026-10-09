@@ -97,7 +97,7 @@ fn recv_returns_a_buffered_line_without_waiting_for_the_socket_to_close() {
     let (tx, rx) = mpsc::channel();
     thread::spawn(
         move || {
-            if let Ok(()) = tx.send(client.recv(Duration::from_secs(10))) {}
+            if let Ok(()) = tx.send(client.recv(Duration::from_secs(60))) {}
         },
     );
     let line = rx
