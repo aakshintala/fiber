@@ -168,8 +168,8 @@ const OPENCODE_GO: Package = Package {
     )],
 };
 
-/// OpenCode Zen: billed per token, leaving out its Gemini models until
-/// that route is probed.
+/// OpenCode Zen: billed per token, leaving out its Gemini models: the
+/// one probe of that route was refused (research/opencode-zen-gemini-probe).
 const OPENCODE_ZEN: Package = Package {
     path: "providers/opencode/providers/opencode-zen.json",
     source: "opencode",
