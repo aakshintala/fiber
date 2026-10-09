@@ -804,8 +804,9 @@ fn another_harness_body_shows_the_output_path() {
     let (rows, _) = rendered(&app, 80, 24);
     assert!(
         rows.iter()
-            .any(|row| row.contains("Output: /tmp/other.out"))
+            .any(|row| row.contains("Output since this terminal attached · /tmp/other.out"))
     );
+    insta::assert_snapshot!("another_harness_body", rows.join("\n"));
 }
 
 #[test]
