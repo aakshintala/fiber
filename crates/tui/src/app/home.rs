@@ -551,18 +551,6 @@ impl App {
             .is_some_and(|home| home.subs.pending(session))
     }
 
-    /// Pushes an outgoing hub line made outside `on_line`'s tail.
-    /// Unused: the reconciler sends from `on_line`'s tail and the loop.
-    #[allow(
-        dead_code,
-        reason = "the plan's interface lists it; no path sends through it yet"
-    )]
-    pub(super) fn push_outbox(&mut self, line: String) {
-        if let Some(home) = self.home.as_mut() {
-            home.outbox.push(line);
-        }
-    }
-
     /// Leaves the session on screen for home: the conversation cleared
     /// with the session left running, then lowered to `summary` when this
     /// connection holds it at `full` and its row is live. `/close` keeps
