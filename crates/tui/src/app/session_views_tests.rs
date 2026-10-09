@@ -419,3 +419,61 @@ fn an_open_usage_view_hides_the_input_cursor() {
     assert_eq!(crate::view::cursor(&app, area), None);
     assert!(screen(&app, 80, 24).0.contains("Usage"));
 }
+
+const DELEGATE: &str = "s_cccccccccccccccc";
+
+fn job_started_line(job: &str, description: &str) -> Line {
+    session_line(
+        SESSION,
+        "job_started",
+        None,
+        json!({"job_id": job, "description": description, "output_path": "/tmp/out"}),
+    )
+}
+
+fn delegate_started_line(job: &str, delegate: &str, model: &str) -> Line {
+    session_line(
+        SESSION,
+        "delegate_started",
+        None,
+        json!({"job_id": job, "delegate_session_id": delegate,
+            "harness": "fiber", "model": model, "workspace": "/w"}),
+    )
+}
+
+fn delegated_usage_line(origin: &str, generation: &str, model: &str) -> Line {
+    session_line(
+        SESSION,
+        "usage_recorded",
+        None,
+        json!({
+            "generation_id": generation, "model": model,
+            "tokens": {"input": 12, "cache_read": 0,
+                "cache_write": {"5m": 0}, "output": 5},
+            "input_bytes": 0, "cost": 0.25, "origin_session_id": origin,
+        }),
+    )
+}
+
+#[test]
+fn a_job_started_line_labels_its_delegate_with_the_job_description() {
+    let mut app = attached(100, 40);
+    app.on_line(job_started_line("j_1", "review the diff"));
+    app.on_line(delegate_started_line("j_1", DELEGATE, "model/d"));
+    app.on_line(delegated_usage_line(DELEGATE, "g1", "model/d"));
+    open_usage(&mut app);
+    let shown = screen(&app, 100, 40).0;
+    assert!(shown.contains("◆ review the diff · model/d"), "{shown}");
+    assert!(!shown.contains("◆ j_1"), "{shown}");
+}
+
+#[test]
+fn a_delegate_started_line_adds_a_delegate_row_for_its_calls() {
+    let mut app = attached(100, 40);
+    app.on_line(delegate_started_line("j_2", DELEGATE, "model/d"));
+    app.on_line(delegated_usage_line(DELEGATE, "g1", "model/d"));
+    open_usage(&mut app);
+    let shown = screen(&app, 100, 40).0;
+    assert!(shown.contains("◆ j_2 · model/d"), "{shown}");
+    assert!(!shown.contains(&format!("session {DELEGATE}")), "{shown}");
+}
