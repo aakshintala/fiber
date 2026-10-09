@@ -3350,6 +3350,30 @@ fn a_skill_added_mid_session_is_refused_until_the_listing_has_it() {
     let first = until(&client, "the first turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
+    let mut stream = vec![sub];
+    stream.extend(first.clone());
+    assert_eq!(
+        kinds(&stream),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert!(
         first
             .iter()
@@ -3374,6 +3398,28 @@ fn a_skill_added_mid_session_is_refused_until_the_listing_has_it() {
     let second = until(&client, "the second turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
+    assert_eq!(
+        kinds(&second),
+        [
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let completed = second
         .iter()
         .find(|line| line["kind"] == "tool_call_completed")
@@ -3383,8 +3429,45 @@ fn a_skill_added_mid_session_is_refused_until_the_listing_has_it() {
     assert!(completed["payload"].get("control").is_none());
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let tail = until_close(&client);
+    assert_eq!(kinds(&tail), ["command_accepted", "fiber_exited"]);
     drop(client);
-    let (status, _out, stderr) = running.wait();
+    let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(
+        kinds_except_clients(&out),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 }

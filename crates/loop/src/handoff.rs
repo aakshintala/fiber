@@ -376,7 +376,11 @@ impl Loop {
     /// set with what the message sent, so `/name` and the `skill` tool
     /// answer from the listing the model was given.
     pub(crate) fn write_opening(&mut self, turn: Option<&TurnId>) -> Result<(), Error> {
-        let inputs = self.skills.inputs_now();
+        // The loop's current inputs, with the maintained disabled list
+        // applied: a model switch updates the window `collect` sizes its
+        // notices by, and the set's snapshot would keep the old one
+        // (`docs/system-prompt.md`, "Size").
+        let inputs = self.skills.with_disabled(&self.prompt);
         let collected = crate::opening::collect(&inputs, &self.workspace);
         let crate::opening::Collected {
             message,

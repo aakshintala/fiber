@@ -298,8 +298,7 @@ pub(crate) fn expand(file: &Path, content: &[ContentPart]) -> Option<Vec<Content
     let Some((ContentPart::Text { text }, rest)) = content.split_first() else {
         return None;
     };
-    let (name, args) = split_command(text)?;
-    let _ = name;
+    let (_, args) = split_command(text)?;
     let raw = std::fs::read(file).ok()?;
     let read = String::from_utf8_lossy(&raw);
     let body = skill_header::body(&read)?;

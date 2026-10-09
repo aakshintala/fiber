@@ -93,8 +93,8 @@ fn after_opened_the_new_skill_is_found() {
     let set = tree.set();
     assert!(set.command("tdd").is_some());
     let late = skill(&tree.top().join(".agents/skills"), "late", "late", "d");
-    let collected = crate::opening::collect(&set.inputs_now(), &tree.top());
-    set.opened(collected.found, set.inputs_now().skills_disabled);
+    let collected = crate::opening::collect(&tree.inputs(), &tree.top());
+    set.opened(collected.found, tree.inputs().skills_disabled);
     assert_eq!(set.command("late"), Some(late.clone()));
     assert_eq!(set.listed_file("late"), Some(late));
 }

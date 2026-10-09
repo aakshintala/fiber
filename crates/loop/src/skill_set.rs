@@ -33,13 +33,11 @@ struct Inner {
     known: Option<Known>,
 }
 
-/// One discovery's winners, and the switched-off names in force with it.
+/// One discovery's winners, in discovery order.
 #[derive(Clone)]
 struct Known {
     /// The winners, in discovery order.
     found: Vec<skills::Found>,
-    /// The switched-off names in force with them.
-    disabled: Vec<String>,
 }
 
 impl SkillSet {
@@ -61,23 +59,22 @@ impl SkillSet {
         SkillReader::new(self.clone())
     }
 
-    /// The inputs with the current disabled list: what the opening
-    /// message collects.
-    pub(crate) fn inputs_now(&self) -> PromptInputs {
-        let inner = lock(&self.0);
-        let mut inputs = inner.inputs.clone();
-        if let Some(known) = &inner.known {
-            inputs.skills_disabled = known.disabled.clone();
-        }
-        inputs
+    /// The given inputs with the set's current disabled list applied:
+    /// what a fresh opening message collects, so a handoff sizes its
+    /// notices by the model's current window, not the set's startup
+    /// snapshot (`docs/system-prompt.md`, "Size").
+    pub(crate) fn with_disabled(&self, inputs: &PromptInputs) -> PromptInputs {
+        let mut out = inputs.clone();
+        out.skills_disabled = lock(&self.0).inputs.skills_disabled.clone();
+        out
     }
 
     /// Refreshes the set with what the opening message sent: the
     /// discovery's winners and the disabled list in force with them.
     pub(crate) fn opened(&self, found: Vec<skills::Found>, disabled: Vec<String>) {
         let mut inner = lock(&self.0);
-        inner.inputs.skills_disabled = disabled.clone();
-        inner.known = Some(Known { found, disabled });
+        inner.inputs.skills_disabled = disabled;
+        inner.known = Some(Known { found });
     }
 
     /// The winner's `SKILL.md` for `name`, when it is not switched off,
@@ -87,11 +84,12 @@ impl SkillSet {
     pub(crate) fn command(&self, name: &str) -> Option<PathBuf> {
         let mut inner = lock(&self.0);
         ensure(&mut inner);
-        let known = inner.known.as_ref()?;
-        if known.disabled.iter().any(|off| off == name) {
+        if inner.inputs.skills_disabled.iter().any(|off| off == name) {
             return None;
         }
-        known
+        inner
+            .known
+            .as_ref()?
             .found
             .iter()
             .find(|found| found.listed.name == name)
@@ -104,11 +102,12 @@ impl SkillSet {
     pub(crate) fn listed_file(&self, name: &str) -> Option<PathBuf> {
         let mut inner = lock(&self.0);
         ensure(&mut inner);
-        let known = inner.known.as_ref()?;
-        if known.disabled.iter().any(|off| off == name) {
+        if inner.inputs.skills_disabled.iter().any(|off| off == name) {
             return None;
         }
-        known
+        inner
+            .known
+            .as_ref()?
             .found
             .iter()
             .find(|found| found.listed.name == name && found.model_invocable)
@@ -119,20 +118,13 @@ impl SkillSet {
     pub(crate) fn is_disabled(&self, name: &str) -> bool {
         let mut inner = lock(&self.0);
         ensure(&mut inner);
-        inner
-            .known
-            .as_ref()
-            .is_some_and(|known| known.disabled.iter().any(|off| off == name))
+        inner.inputs.skills_disabled.iter().any(|off| off == name)
     }
 
     /// Switches off `names`, as `skills.disabled` does
     /// (`docs/system-prompt.md`, "Skills").
     pub(crate) fn set_disabled(&self, names: Vec<String>) {
-        let mut inner = lock(&self.0);
-        inner.inputs.skills_disabled = names.clone();
-        if let Some(known) = inner.known.as_mut() {
-            known.disabled = names;
-        }
+        lock(&self.0).inputs.skills_disabled = names;
     }
 
     /// Moves `from`'s state into `self`: after it, `self` answers what
@@ -165,7 +157,6 @@ fn ensure(inner: &mut Inner) {
     let found = skills::discover(&inner.inputs, &inner.top);
     inner.known = Some(Known {
         found: found.skills,
-        disabled: inner.inputs.skills_disabled.clone(),
     });
 }
 
