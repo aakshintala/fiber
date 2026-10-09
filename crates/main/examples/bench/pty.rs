@@ -5,12 +5,11 @@
 
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
 use std::time::Instant;
 
 use contract::clock::Clock;
@@ -122,24 +121,17 @@ impl Terminal {
         drop(command);
         drop(terminal);
         let main = fs::File::from(main);
-        let mut reader = main
+        let reader = main
             .try_clone()
             .map_err(|e| format!("cloning the pty master: {e}"))?;
         let output = Arc::new(Mutex::new(Vec::new()));
         let appended = Arc::clone(&output);
         let (tx, wakes) = mpsc::channel();
-        thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            while let Ok(n @ 1..) = reader.read(&mut buf) {
-                let Some(chunk) = buf.get(..n) else { break };
-                match appended.lock() {
-                    Ok(mut output) => output.extend_from_slice(chunk),
-                    Err(_) => break,
-                }
-                if tx.send(()).is_err() {
-                    break;
-                }
+        fakes::pty::read_to_eof(reader, move |chunk| {
+            if let Ok(mut out) = appended.lock() {
+                out.extend_from_slice(chunk);
             }
+            tx.send(()).unwrap_or(());
         });
         Ok(Self {
             proc,
