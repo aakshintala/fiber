@@ -67,7 +67,8 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -83,7 +84,8 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -114,7 +116,8 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -154,7 +157,8 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -179,7 +183,8 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -195,7 +200,8 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -211,7 +217,8 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -227,7 +234,8 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -243,7 +251,8 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -259,7 +268,8 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "web_search": "google_search"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",

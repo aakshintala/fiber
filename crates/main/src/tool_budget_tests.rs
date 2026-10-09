@@ -20,7 +20,7 @@ const BUDGET: usize = 9_327;
 
 /// The Anthropic hosted tool type the budget measures
 /// (`config::Protocol::reads_web_search`); `openai-responses` reads
-/// `web_search` instead.
+/// `web_search` and `google-generative-ai` reads `google_search` instead.
 const HOSTED_SEARCH: &str = "web_search_20250305";
 
 /// Every wire protocol; `protocol_name`'s exhaustive match keeps this list
@@ -462,20 +462,6 @@ fn the_hosted_search_counts_only_where_a_protocol_reads_it() {
             "{}",
             sizes.protocol
         );
-    }
-
-    let google = ToolDefinition {
-        name: String::from("web_search"),
-        description: String::new(),
-        input_schema: json!({}),
-        deferred: false,
-        hosted: Some(String::from("google_search")),
-    };
-    let measured = measure(&[google]);
-    assert!(!measured.sizes.is_empty());
-    for sizes in &measured.sizes {
-        assert!(sizes.tools.is_empty(), "{}", sizes.protocol);
-        assert_eq!(sizes.total, 0);
     }
 }
 

@@ -694,9 +694,10 @@ impl Decoder {
 
 /// A hosted search's call and result from its done item: the call names
 /// `web_search`, with the item's `action` as its arguments less any
-/// `sources`; the completion carries the result URLs, the item's
-/// `results` then its action's `sources`, one per line
-/// (`docs/tools.md`, "Hosted by the provider").
+/// `sources`; the completion carries the result URLs, one per line: the
+/// first non-empty of the item's `results` URLs, the action's `sources`
+/// URLs, and the action's own `url`, such as an `open_page` action's
+/// (`docs/tools.md`, "Hosted by the provider"). Only string URLs count.
 fn web_search_call(item: &Value) -> HostedCall {
     let arguments = match item.get("action") {
         Some(Value::Object(action)) => {
@@ -706,20 +707,30 @@ fn web_search_call(item: &Value) -> HostedCall {
         }
         _ => Value::Object(Map::new()),
     };
-    let mut urls: Vec<&str> = item
+    let results: Vec<&str> = item
         .get("results")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|result| result.get("url").and_then(Value::as_str))
         .collect();
-    urls.extend(
-        item.pointer("/action/sources")
-            .and_then(Value::as_array)
+    let sources: Vec<&str> = item
+        .pointer("/action/sources")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|source| source.get("url").and_then(Value::as_str))
+        .collect();
+    let urls = if !results.is_empty() {
+        results
+    } else if !sources.is_empty() {
+        sources
+    } else {
+        item.pointer("/action/url")
+            .and_then(Value::as_str)
             .into_iter()
-            .flatten()
-            .filter_map(|source| source.get("url").and_then(Value::as_str)),
-    );
+            .collect()
+    };
     let completed = match item.get("status").and_then(Value::as_str) {
         Some("completed") => crate::hosted::completed(item.clone(), &urls),
         status => crate::hosted::failed(item.clone(), status.unwrap_or("unknown")),
