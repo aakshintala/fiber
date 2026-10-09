@@ -460,6 +460,29 @@ fn running_first() -> (App, Arc<FakeClock>) {
 }
 
 #[test]
+fn a_mark_at_or_past_the_width_does_not_spin() {
+    let (mut app, clock) = running();
+    let origin = clock.origin();
+    app.set_now(origin, 0);
+    let area = Rect::new(0, 0, 4, 2);
+    let mut buf = Buffer::empty(area);
+    spin(
+        &app,
+        &mut buf,
+        area,
+        Drawn {
+            y: 0,
+            col: area.width,
+            first_row_shown: true,
+            rows: 1,
+            count: 1,
+        },
+    );
+    assert!(!text(&buf).contains(SPINNER[0]), "{}", text(&buf));
+    assert_eq!(app.take_wake(), None);
+}
+
+#[test]
 fn a_mark_at_column_zero_can_spin_when_its_line_wraps() {
     let (mut app, clock) = running();
     let origin = clock.origin();
