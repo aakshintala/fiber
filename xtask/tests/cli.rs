@@ -238,7 +238,7 @@ fn plan_prints_the_jobs_and_shards() {
     assert_eq!(code, 0);
     assert_eq!(
         out,
-        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"test\":true}\nshards=[0,1,2]\nshard_total=3\n"
+        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"test\":true}\nshards=[0,1,2]\nshard_total=3\nshard_timeout=20\n"
     );
     let skipped = [
         "plan",
@@ -259,6 +259,7 @@ fn plan_prints_the_jobs_and_shards() {
     assert_eq!(code, 0);
     assert!(out.contains("\"mutants\":false"), "{out}");
     assert!(out.contains("shards=[]\nshard_total=0\n"), "{out}");
+    assert!(out.contains("shard_timeout=20\n"), "{out}");
     let bad = [
         "plan",
         "--mode",

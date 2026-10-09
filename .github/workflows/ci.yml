@@ -9,12 +9,16 @@ on:
   push:
     branches: [main]
 
-# A newer push to a pull request cancels its older run. Pushes to main share
+# A newer push to a pull request cancels its older run. Any other pull
+# request event at the same head (a label, a change from draft to ready, a
+# reopen) waits behind the running run instead of cancelling it, then runs
+# the whole selection again at that head; at most one run waits, and a newer
+# event replaces it before it starts. Pushes to main share
 # one group that cancels nothing: the running backstop finishes and the newest
 # push waits behind it.
 concurrency:
   group: ci-${{ github.event.pull_request.number || 'main' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
 
 permissions:
   contents: read
@@ -45,6 +49,7 @@ jobs:
       jobs: ${{ steps.plan.outputs.jobs }}
       shards: ${{ steps.plan.outputs.shards }}
       shard_total: ${{ steps.plan.outputs.shard_total }}
+      shard_timeout: ${{ steps.plan.outputs.shard_timeout }}
     steps:
       - &checkout-full
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -242,7 +247,7 @@ jobs:
 
   mutants:
     name: Mutants (shard ${{ matrix.shard }})
-    needs: select
+    needs: [select, test]
     if: fromJSON(needs.select.outputs.jobs).mutants
     strategy:
       fail-fast: false
@@ -250,8 +255,11 @@ jobs:
         # A skipped job still needs a non-empty matrix.
         shard: ${{ fromJSON(needs.select.outputs.shard_total) > 0 && fromJSON(needs.select.outputs.shards) || fromJSON('[0]') }}
     runs-on: ubuntu-24.04
-    # Median 2.5 min; 8 % of shards take 9-12 min, so the bound is twice that slow group.
-    timeout-minutes: 20
+    # A shard of up to 15 mutants gets 20 minutes; a larger shard, which only
+    # the 16-shard cap makes, gets 20 minutes per 15 of its mutants, rounded
+    # up, at most 360 minutes, GitHub's limit for a job. The selection
+    # computes it (`cargo xtask plan`).
+    timeout-minutes: ${{ fromJSON(needs.select.outputs.shard_timeout || '20') }}
     env:
       BASE: ${{ needs.select.outputs.base }}
       SHARD: ${{ matrix.shard }}
@@ -476,7 +484,7 @@ jobs:
     if: >-
       always() && github.event_name == 'pull_request'
       && github.event.pull_request.head.repo.full_name == github.repository
-      && (needs.release.result == 'success' || needs.release.result == 'failure')
+      && needs.release.result == 'success'
     runs-on: ubuntu-24.04
     # No history: it makes only gh calls.
     timeout-minutes: 5
