@@ -9,12 +9,16 @@ on:
   push:
     branches: [main]
 
-# A newer push to a pull request cancels its older run. Pushes to main share
+# A newer push to a pull request cancels its older run. Any other pull
+# request event at the same head (a label, a change from draft to ready, a
+# reopen) waits behind the running run instead of cancelling it, then runs
+# the whole selection again at that head; at most one run waits, and a newer
+# event replaces it before it starts. Pushes to main share
 # one group that cancels nothing: the running backstop finishes and the newest
 # push waits behind it.
 concurrency:
   group: ci-${{ github.event.pull_request.number || 'main' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
 
 permissions:
   contents: read
@@ -45,6 +49,7 @@ jobs:
       jobs: ${{ steps.plan.outputs.jobs }}
       shards: ${{ steps.plan.outputs.shards }}
       shard_total: ${{ steps.plan.outputs.shard_total }}
+      shard_timeout: ${{ steps.plan.outputs.shard_timeout }}
     steps:
       - &checkout-full
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -167,6 +172,23 @@ jobs:
         run: scripts/check --base "$BASE" --shared-only
       - name: cargo-deny licences, sources and bans
         run: cargo deny check licenses sources bans
+      # No install-action tool installs actionlint, so this downloads the release
+      # and checks its digest (docs/ci.md, "On every pull request that changes code").
+      - name: actionlint, when a workflow changed
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          if ! git diff --name-only "$BASE...HEAD" | grep -q '^\.github/workflows/'; then
+            echo "no workflow file changed"
+            exit 0
+          fi
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "$ACTIONLINT_SHA256  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color
       - name: cargo-deny advisories, when Cargo.lock changed
         run: |
           if git diff --name-only "$BASE...HEAD" | grep -qx Cargo.lock; then
@@ -198,7 +220,7 @@ jobs:
           # The cache saves once the build succeeded, even if a later step
           # fails (cache-on-failure lets the save step run after a failure).
           cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' && steps.build.outcome != 'failure' }}
+          save-if: ${{ github.event_name == 'push' }}
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-nextest
@@ -207,7 +229,9 @@ jobs:
       - name: Install zsh and fish
         if: runner.os == 'Linux'
         timeout-minutes: 5
-        run: sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
+        run: |
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
+          sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
       - name: Install fish
         if: runner.os == 'macOS'
         run: brew install fish
@@ -225,7 +249,8 @@ jobs:
         timeout-minutes: 5
         run: |
           sudo loginctl enable-linger "$USER"
-          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export XDG_RUNTIME_DIR
           state=""
           for _ in $(seq 1 30); do
             state=$(systemctl --user is-system-running 2>/dev/null || true)
@@ -242,7 +267,7 @@ jobs:
 
   mutants:
     name: Mutants (shard ${{ matrix.shard }})
-    needs: select
+    needs: [select, test]
     if: fromJSON(needs.select.outputs.jobs).mutants
     strategy:
       fail-fast: false
@@ -250,8 +275,11 @@ jobs:
         # A skipped job still needs a non-empty matrix.
         shard: ${{ fromJSON(needs.select.outputs.shard_total) > 0 && fromJSON(needs.select.outputs.shards) || fromJSON('[0]') }}
     runs-on: ubuntu-24.04
-    # Median 2.5 min; 8 % of shards take 9-12 min, so the bound is twice that slow group.
-    timeout-minutes: 20
+    # A shard of up to 15 mutants gets 20 minutes; a larger shard, which only
+    # the 16-shard cap makes, gets 20 minutes per 15 of its mutants, rounded
+    # up, at most 360 minutes, GitHub's limit for a job. The selection
+    # computes it (`cargo xtask plan`).
+    timeout-minutes: ${{ fromJSON(needs.select.outputs.shard_timeout || '20') }}
     env:
       BASE: ${{ needs.select.outputs.base }}
       SHARD: ${{ matrix.shard }}
@@ -267,7 +295,9 @@ jobs:
       # and fish (crates/main/tests/completion.rs).
       - name: Install zsh and fish
         timeout-minutes: 5
-        run: sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
+        run: |
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
+          sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
       - name: cargo mutants --in-diff
         run: |
           git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
@@ -325,7 +355,9 @@ jobs:
         timeout-minutes: 5
         run: |
           rustup target add x86_64-unknown-linux-musl
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
           sudo apt-get $APT_OPTS update
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
           sudo apt-get $APT_OPTS install -y --no-install-recommends musl-tools time
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -405,9 +437,10 @@ jobs:
             if [ -f "$RUNNER_TEMP/release/base/paging" ]; then
               base_paging=(--paging "$RUNNER_TEMP/release/base/paging")
             fi
-            # The base feeds advisory timings only: a base run that writes no
-            # file is reported by bench-report, not here.
-            "$harness" --fiber "$RUNNER_TEMP/release/base/fiber" --out "$out/base.json" --only timing \
+            # The base is measured on every row: a memory or exact budget it
+            # fails too does not fail the pull request. A base run that writes
+            # no file is reported by bench-report, not here.
+            "$harness" --fiber "$RUNNER_TEMP/release/base/fiber" --out "$out/base.json" --only all \
               "${base_paging[@]}" || echo "::warning::the base binary's benchmarks exited $?"
           fi
       - name: Judge the benchmarks against docs/performance.md
@@ -418,6 +451,9 @@ jobs:
             --comment "$out/bench-comment.md")
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             args+=(--base "$out/base.json")
+            if [ -f "$RUNNER_TEMP/release/base/commit" ]; then
+              args+=(--base-commit "$(git rev-parse --short "$(cat "$RUNNER_TEMP/release/base/commit")")")
+            fi
           fi
           status=0
           cargo xtask bench-report "${args[@]}" || status=$?
@@ -476,7 +512,7 @@ jobs:
     if: >-
       always() && github.event_name == 'pull_request'
       && github.event.pull_request.head.repo.full_name == github.repository
-      && (needs.release.result == 'success' || needs.release.result == 'failure')
+      && needs.release.result == 'success'
     runs-on: ubuntu-24.04
     # No history: it makes only gh calls.
     timeout-minutes: 5

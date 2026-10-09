@@ -127,6 +127,11 @@ impl App {
         if self.overlays.keymap.is_some() {
             return Effect::None;
         }
+        // The `/keys` screen takes every stroke in `on_press`, so only
+        // a paste reaches here, and it does nothing behind the screen.
+        if self.keys_screen_open() {
+            return Effect::None;
+        }
         if let Some(effect) = self.offer_edit(&edit) {
             return effect;
         }
@@ -436,6 +441,7 @@ impl App {
                 self.draft.clear();
                 self.open_model_picker(crate::model_picker::Mode::Choose)
             }
+            "thinking" => self.thinking_command(&rest),
             "panel" => {
                 self.draft.clear();
                 self.toggle_panel()
@@ -453,6 +459,7 @@ impl App {
                 self.next_request()
             }
             "settings" => self.open_config_view(super::ConfigView::Settings),
+            "keys" => self.open_keys(),
             "tools" => self.open_config_view(super::ConfigView::Tools),
             "skills" => self.open_config_view(super::ConfigView::Skills),
             "context" => {
@@ -556,7 +563,9 @@ impl App {
     }
 
     /// A key while the key map is open: ↑ ↓ PageUp PageDown scroll it, Esc
-    /// closes it, other keys do nothing. `None` while it is closed.
+    /// closes it, other keys do nothing. `None` while it is closed, and
+    /// for Ctrl+C, ⌥R and ⌥1–9, which arm quit and switch sessions past
+    /// the key map.
     pub(super) fn keymap_key(&mut self, key: &Key) -> Option<Effect> {
         let top = self.overlays.keymap?;
         let height = self.conversation_height();
@@ -570,6 +579,9 @@ impl App {
         let last = total.saturating_sub(height);
         self.overlays.keymap = match key {
             Key::Esc => None,
+            // Quitting and rail switching keep their keys above every
+            // overlay: they reach past the key map to their handlers.
+            Key::CtrlC | Key::AltR | Key::AltDigit(_) => return None,
             Key::Up => Some(top.saturating_sub(1)),
             Key::Down => Some(top.saturating_add(1).min(last)),
             Key::PageUp => Some(top.saturating_sub(page)),
@@ -577,15 +589,12 @@ impl App {
             Key::Char(_)
             | Key::Backspace
             | Key::Enter
-            | Key::CtrlC
             | Key::End
             | Key::AltA
             | Key::AltUp
             | Key::AltDown
             | Key::AltX
             | Key::AltP
-            | Key::AltR
-            | Key::AltDigit(_)
             | Key::Tab
             | Key::BackTab
             | Key::F1
@@ -659,7 +668,19 @@ impl App {
             }
             (Phase::Pending { .. }, None) => return Effect::None,
             (Phase::Starting, None) => {
-                let args = self.start_args();
+                // With no model on the chip and none chosen, Enter opens
+                // the picker and keeps the draft, sending nothing.
+                if self
+                    .home
+                    .as_ref()
+                    .is_some_and(|home| home.launch.model.is_none())
+                    && self.model_picker.start_model.is_none()
+                {
+                    return self.open_model_picker(crate::model_picker::Mode::Choose);
+                }
+                let mut args = self.start_args();
+                // A session-only choice on home rides this `start`.
+                self.with_start_model(&mut args);
                 let line = json!({"id": id, "command": "start", "args": args});
                 (Kind::Start, line)
             }

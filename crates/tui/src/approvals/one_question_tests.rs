@@ -823,6 +823,14 @@ fn decline_sends_declined_and_records_each_one_question_session_once() {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
+        // One no tool call raised names no session: its decline cancels nothing.
+        let mut outside = queue_with(request.clone());
+        assert!(outside.decline("c_0").is_some());
+        assert_eq!(outside.declined("c_0"), None);
+        let mut request = request;
+        request
+            .payload
+            .insert("action_ids".to_owned(), json!(["a_1"]));
         let mut queue = queue_with(request);
         assert_eq!(
             reply(&queue.decline("c_1").unwrap_or_default()),

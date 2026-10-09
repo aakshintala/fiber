@@ -97,7 +97,7 @@ accent gradient, the version dim.
   and the name set in JetBrains Mono ExtraBold, in the gradient. Detection
   never delays the first frame. The pixel logo draws first, and the image
   replaces it when the terminal's reply arrives.
-- **The image is an alpha mask built from the font at build time,** tinted
+- **The image is an alpha mask built from the font with `cargo xtask logo-mask` and checked in,** tinted
   with the theme's accents at run time. Fiber bundles no font, and the logo
   follows any theme.
 - **Where the screen is too short for four rows,** the logo is one row:
@@ -156,8 +156,11 @@ the command to resume it.
 
 The screen is a session rail on the left while two or more sessions are
 live, a conversation column, and a side panel on the right. The conversation
-column's top row is a header holding the session's name, or its first prompt
-when it has none. The panel is shown while the screen is wide enough, unless the person hides it with ⌥P. It replaces
+column has no header row: its first row is conversation. The conversation keeps
+one blank column on each side, so the turn cards start one column in from the
+rail's edge and end one column before the panel's; with the rail hidden its
+one-column grip sits at the screen's left edge and the cards start at the third
+column. The panel is shown while the screen is wide enough, unless the person hides it with ⌥P. It replaces
 a footer and status line, and the input box spans only the conversation
 column.
 
@@ -167,9 +170,11 @@ from 30 to 60. Dragging the edge between either and the conversation resizes
 it, and saves the new share as `tui.rail.width` or `tui.panel.width`, so one
 setting suits a laptop and a 4K screen alike. A drag stops where the
 conversation would fall below its minimum width. Each draggable edge shows a
-dim grip, `⋮` on three rows at mid-height; under the pointer the edge column
-tints and the pointer becomes a resize arrow (OSC 22, where the terminal
-supports it). The numbers are starting values, to be tuned once the terminal
+dim grip, `⋮` on three rows at mid-height; under the pointer, and while
+dragging, the whole edge column takes the `rule` tint, the grip turns bold in
+the accent colour, and the pointer becomes a resize arrow (OSC 22, where the
+terminal supports it). The rail's and the panel's regions take the `panel`
+tint from top to bottom. The numbers are starting values, to be tuned once the terminal
 is built.
 
 ### The rail
@@ -268,6 +273,74 @@ The default cards, in order:
 - **Quota,** from each provider's `quota()`, as `/quota` shows it
   (`docs/tools.md`, "Provider quota"). A provider without one shows none.
 
+Each card is a `surface` slab on the panel's tint, edged ▄ and ▀ in the
+`surface` colour over the `panel` colour, with two columns of padding on the
+left, one on the right, and a blank row after it. Its title row holds the
+card's name in bold, with a figure right-aligned. A value right-aligned on a
+row is pushed to the card's right padding, and a row too long for the card is
+cut with "…". The cards draw:
+
+```
+  ~/work/fiber                     auto
+  git main
+  anthropic/claude-opus      high ∴
+  ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│          268k
+  handoff at 400k    26% of window
+  then a summary, fresh context
+  tokens in / out     412k / 18.2k
+  cache hits                   91%
+  cost                       $4.12
+  speed, last reply   64 tokens/s
+  turns                         12
+  tools 31          ✗ github down
+
+  Changed files                     7
+  …/tests/serve_attach.rs  +120  −14
+  crates/tui/src/app.rs     +38   −9
+  … 2 more                +175 −83
+
+  Delegates                 1 running
+  ● review: the diff
+    14 calls · 2m 10s · read app.rs
+  ✓ docs check
+    6 calls · 48s · done
+
+  Jobs                    1 running ▸
+
+  Quota                     extension
+  claude weekly                   65%
+  ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆
+```
+
+- **Session.** The title is the working directory in bold, with the
+  permission mode right-aligned in `attention`. Then "git" dim and the branch
+  in `secondary`; the model in `accent`, with the thinking level
+  right-aligned in `attention` and a dim "∴" after it while the model thinks.
+  The context bar is 17 cells of ▆, filled in `info` toward the handoff point
+  and `rule` for the rest, then the handoff marker, │ in `attention`, and the
+  context size right-aligned ("268k"). Under it, "handoff at 400k" dim, and
+  the share of the window right-aligned, dim; then the one line saying what a
+  handoff is, dim. Clicking the bar or the lines under it opens the context
+  breakdown. Each figure after that is a row: its plain label dim, and the
+  figure right-aligned in the text colour; a down MCP server is "✗ <server>
+  down" right-aligned in `error`.
+- **Changed files.** The title's figure is the count of files, dim. Each row
+  is a path, cut from the left to keep its file name ("…/tests/x.rs"), with
+  "+N" in `added` and "−N" in `removed` right-aligned. The last row is
+  "… N more" dim, when there are more, and the totals.
+- **Delegates.** The title's figure is "N running", in `attention` while one
+  runs and dim otherwise. Each delegate is "●" in `attention` while it runs or
+  "✓" in `success` once done, then its description; under it, dim, its calls,
+  elapsed time and its last step, or "done".
+- **Jobs.** "N running" in `attention` while one runs, then a dim "▸".
+- **Quota.** "extension" dim in the title. Each limit is its name dim with
+  the share left right-aligned, and a bar of ▆ under it in `accent`, or in
+  `error` with the share when little is left.
+
+With the rail hidden and sessions waiting, the Session card ends with "! N
+waiting · rail hidden · show" in `attention`, the "!" bold; a click on it
+shows the rail.
+
 The context bar is drawn against `preamble_built`'s `context_window` and
 `trigger_at`. Per-file counts come from `tool_call_completed`'s `changes`,
 never from `details`, which has no fixed shape a client may rely on
@@ -296,7 +369,9 @@ it starts and after each turn.
 ### Swapped views
 
 A view swaps into the conversation area and takes all of it. Esc returns to
-the conversation. The views are:
+the conversation. Its top row, on the `surface` tint, is the view's name
+bold, its command dim ("  /context"), and "esc returns" dim, right-aligned;
+a click on it returns too. The views are:
 
 - **A delegate's or job's view.** Its header is a breadcrumb
   ("main › ◆ review: …"). A status card gives harness, model, calls, elapsed
@@ -335,7 +410,16 @@ the conversation. The views are:
   and messages, which takes the rest of the session's context total. Each
   of the first three is estimated from its bytes at the session's own
   tokens-per-byte rate, and the view says the sizes are approximate.
-  Until a request gives a rate, it shows the total alone.
+  Until a request gives a rate, it shows the total alone. It is drawn
+  indented two columns: "268k tokens" bold, then " · 26% of the 1M window ·
+  automatic handoff at 400k" dim; the bar, one █ run per category in its
+  colour, ▁ in `rule` for the room left, and │ in `attention` at the handoff
+  point, with "handoff 400k" in `attention` right-aligned under the marker;
+  one row per category, "■ " in its colour, the name padded to 20 columns,
+  the size and its share dim; then "Largest tool results" bold, one row
+  each, what it was dim and its size; and the note that sizes are
+  approximate, dim. Each category has its own colour; tool results are
+  `error`.
 - **Changed files:** the files Fiber changed, with the chosen file's hunks.
   The hunks are the workspace's current diff against `HEAD`, read when the
   file is chosen, so they include changes Fiber did not make; the title says
@@ -358,6 +442,7 @@ the conversation. The views are:
   layer each comes from. It edits a key through the same path as
   `fiber config set`, and says when a change needs a reload and what that
   costs. Ctrl+G opens the file.
+- **`/keys`:** the rebinding screen ("Bindings").
 - **`/skills`:** one row per skill with its name, one-line description, where
   it comes from (the repository, personal, an extension by name, or built in),
   whether the model can see it, any skill it shadows, and whether it is
@@ -371,15 +456,21 @@ the conversation. The views are:
 
 ### The working line
 
-The working line ("Working 11m 14s · esc to interrupt") sits at the bottom of
-the conversation, above the steering queue, not in the input box.
+The working line ("⠋ Working 11m 14s · esc to interrupt") sits at the bottom of
+the conversation, above the steering queue, not in the input box. It is
+indented two columns: a braille spinner (⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) in
+`attention`, "Working", then the elapsed time dim and " · esc to interrupt"
+dim, the hint only while nothing is open ("Keys").
 
-A glimmer runs across its word: a band three cells wide, in the spinner's
-colour, sweeps left to right, then rests. The spinners on a running group's
+A glimmer runs across its word: a band three cells wide sweeps left to right,
+its centre bold in `attention`, its two sides in `attention`, the rest of the
+word dim; it moves one cell a tick and rests for a few ticks past the word's
+end. The spinners on a running group's
 line and on running delegates spin on the same tick, about every 120 ms. While
 a turn runs they cost nothing extra, since the frame is drawn anyway. While
 only delegates run, the tick keeps running for their spinners. Under reduced
-motion the word and the spinners stay still.
+motion the word and the spinners stay still: the spinner is a ● and the word
+is plain.
 
 While Fiber waits to retry a failed model call, the working line says so:
 "↻ Retrying in 4s · rate_limited · attempt 2 of 4".
@@ -402,6 +493,18 @@ and each row is cut at the terminal's right edge. The
 second row opens with "N delegates running" and "N jobs running", so they are
 never cut; each opens a list of delegate or job cards in the conversation
 area. Clicking any other segment opens its card's view.
+
+The status line sits on the `panel` tint, one column in, with segments joined
+by a dim "  │  ". Each card's segments are short forms of its rows: the working
+directory, "git" dim and the branch in `secondary`; the model in `accent` and
+the thinking level in `attention`; the permission mode in `attention`; "ctx"
+dim, an 8-cell context bar and the size ("ctx ▆▆▆▆▆▆▆▆ 268k"), which opens the
+context breakdown; the cost and "cache" dim with its share; "tools N" dim and
+any down server in `error`; "±" dim, "N files" and the `added` and `removed`
+totals; "◆" in `secondary` before the delegates; "⚙" in `attention` before
+the jobs; and "Q" dim before the quota, with a limit nearly spent in `error`.
+With the rail hidden and sessions waiting, the first row opens with "N
+waiting" in `attention`.
 
 ### Shedding
 
@@ -437,16 +540,22 @@ arrived after `sessions` was sent.
 ### Turns
 
 - **One card per turn.** The prompt that starts a turn floats above its card,
-  as a tinted bubble on the right, at most about 70% of the width, with the
-  time under it. A steering message sits inside the card where it landed, as a
-  labelled rule ("steer · 14:15") over bold text. A dim ▣ line closes the card
+  after a blank row, as a bubble on the right in the `prompt` tint, at most 72%
+  of the width: the text padded one column on each side, a ▐ stripe in
+  `accent` at its right edge, and "you 14:12" dim and right-aligned under it.
+  A blank row separates the bubble from the card. The card is a `turn` slab
+  across the conversation's width, and its rows sit one column inside the
+  tint on each side. Blocks inside the card are separated by a blank row.
+  A steering message sits inside the card where it landed, as a labelled
+  rule over bold text: "steer" bold in `attention`, " · 14:15 " dim, then a
+  ─ rule in `rule` to the card's edge. A dim ▣ line closes the card
   with the outcome, duration, call count and the turn's usage, its delegates'
   spend during the turn included: "▣ completed · 38s · 12 calls · 18.2k tokens
   · $0.41 · $1.10 on subscription". A figure that is zero is left out, and a
   model with no price shows tokens only (`docs/model-routing.md`, "Cost").
-- **Replies lead, tool groups sit back.** Nothing inside the card is indented:
-  replies, summary lines, steering messages and answers all start at the
-  card's edge. A tool group has no band of its own, and its summary line is dim
+- **Replies lead, tool groups sit back.** Nothing inside the card is indented
+  past its one-column padding: replies, summary lines, steering messages and
+  answers all start at the same column. A tool group has no band of its own, and its summary line is dim
   throughout, the dot and the +/− counts included. Replies carry the full text
   colour.
 - **A streaming reply renders in place,** formatted as it arrives. The
@@ -454,12 +563,13 @@ arrived after `sessions` was sent.
   mouse wheel over the conversation scrolls it 3 rows a step, a starting
   point, not a measurement; PageUp and PageDown scroll a screen. The
   conversation's last column is its scroll bar and never holds text:
-  while the conversation has more rows than it shows, a thumb (█) on a
-  track (│) shows where the rows on screen sit among all of them. Either
-  pauses following when it scrolls up. When new output arrives while
-  scrolled up, a small overlay centred at the bottom of the conversation reads
-  "↓ New messages below" and jumps to the end on a click or End. It gives no
-  count, so it needs no row count. Nothing is added to the input box.
+  while the conversation has more rows than it shows, a thumb of ┃ in
+  `scroll`, with no track, shows where the rows on screen sit among all of
+  them. Either pauses following when it scrolls up. When new output arrives
+  while scrolled up, a pill centred on the conversation's bottom row reads
+  " ↓ New messages below · End " in `attention` on the `rule` tint, its ends
+  rounded by ▐ and ▌ in `rule`, and jumps to the end on a click or End. It
+  gives no count. Nothing is added to the input box.
 
 ### Tool groups and the ledger
 
@@ -477,17 +587,62 @@ arrived after `sessions` was sent.
 - **Clicking a row opens that call:** its diff, output or error.
 - **A call that changed a file is highlighted** in the ledger, with the file's
   name and its lines added and removed, so edits stand out from reads and
-  commands.
+  commands. Its counts are in `added` and `removed`, where every other result
+  is dim.
 - **Failed calls get no special treatment.** They are ordinary rows with their
   status. Nothing is hoisted above the fold.
+
+The summary line is one row, whatever runs: "● " dim, then the kinds in a
+fixed order, each "<verb> N <noun>" dim: read files, searched patterns,
+listed directories, edited files, wrote files, ran commands, started
+delegates, checked jobs, asked questions, called tools. The first word is
+capitalised. Read, edited and written files count distinct paths, and asked
+questions count questions, not calls. An edit's totals follow it, "+N" in
+`added` and "−N" in `removed`, both dim. Then ", thought N times" ("thought
+once"); while calls run, " · " and their targets, dim; while the model
+thinks, " · Thinking: <heading>" dim and italic. Right-aligned, dim, the
+group's duration and ▸ while closed or ▾ while open. What does not fit is
+cut with "…", so the duration and the toggle stay put.
+
+```
+● Read 34 files, searched 84 patterns, edited 24 files +175 −83, thought 3 times   4m 12s ▸
+```
+
+A ledger row is the step's number right-aligned in a five-column dim gutter
+on the step's first row, then a glyph: ○ in `attention` while the call runs or
+waits, ✓ in `success` once it completes, ⊘ dim when cancelled, ✗ dim
+otherwise. Then the call's kind in `info`, padded to nine columns, its target
+cut with "…", and its result: "N lines" for a read, "N matches" for a
+search, "N paths" for a listing, "+N −N" for an edit, "exit N · N lines" for
+a command, otherwise the first line of its output, all dim but the edit's
+counts. A running call reads "running" in `attention`, and an ask waiting on
+the person "waiting on you"; "cancelled", "denied" and a failure's
+"<code>: <message>" are dim. A thinking row is "○ Thinking: <heading>" or "+
+Thought: <heading> · 22s", dim and italic.
+
+```
+    3 + Thought: Finding the flaky lock · 8s
+      ✓ read     crates/hub/src/lock.rs                      212 lines
+      ✓ search   try_lock                                    9 matches
+    4 ✓ edit     crates/hub/src/lock.rs                      +12 −4
+      ○ shell    cargo test -p hub lock                      running
+```
+
+An opened call shows its output, or "<code>: <message>", under its row,
+indented eight columns, at most 20 lines, then "… N more lines" dim. An
+opened thought shows its text there.
+
+A group opens by a click, by Ctrl+O, when a search match falls inside its
+ledger, and when one of its calls asks the person.
 
 ### Thinking
 
 Thinking belongs to the group it starts, since a group runs from one reply to
 the next. The summary line counts it ("thought once") and, while it streams,
 ends with "Thinking: <latest heading>". Thinking with no tool call before the
-next reply is one dim line, "+ Thought: <first heading> · 22s", and clicking it
-shows the text. A heading is the first line of the thinking text that is a
+next reply is one dim italic line, "+ Thought: <first heading> · 22s", or
+"Thinking: <latest heading>" while it streams, and clicking it shows the
+text. A heading is the first line of the thinking text that is a
 Markdown heading (`#…`) or wholly bold (`**…**`), with the markers stripped,
 or the first non-empty line when there is none, cut to fit the line.
 "Thinking:" shows the latest heading in the step so far, and "+ Thought:" the
@@ -503,6 +658,14 @@ Queued steering messages sit above the input box, one row each, from the
 `steering_queue` event, so every attached client sees and edits the same
 queue. ⌥↑ and ⌥↓ select a row and load it into the input box, Enter sends
 `steer_drop` then `steer`, and ⌥X sends `steer_drop`. Each also has a mouse target.
+
+The queue is indented two columns under the working line: "• Steering, joins
+the turn at the next step" dim; each message "  ↳ <text>  ✕" dim, or "  ▸ "
+in `attention` and the text in the text colour while it is selected; then
+"⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to drop" dim. A click
+on a row selects it and a click on its ✕ drops it. While a message is being
+edited, the input box's stripe is `attention` and the box ends, right-aligned
+and dim, "editing a queued message · enter amends · ⌥x drops · esc stops".
 
 ### Interrupts
 
@@ -525,7 +688,19 @@ handoff ran, and a tinted band carries:
 - the time
 
 "▸ note" expands the note inside the band. While the note is being written the
-band says so, with a spinner. A second card continues the turn, and its ▣ line
+band says so, with a spinner.
+
+The band is one row on the `handoff` tint with ▄ and ▀ edges, across the
+conversation's width: " ⇄ " and "handoff" bold, both in `secondary`, then the
+trigger after " · ", dim; right-aligned, the sizes bold ("402k → 32k") and
+" · 14:20" dim. While the note is written the sizes read "writing the note…"
+dim; a failed or cancelled handoff reads "<outcome> · the context is
+unchanged" in `attention`.
+
+```
+ ⇄ handoff · automatic at 400k                         402k → 32k · 14:20
+```
+ A second card continues the turn, and its ▣ line
 closes it. A failed or cancelled handoff says the context is unchanged. The
 Session card's context bar drops to the new size.
 
@@ -547,18 +722,17 @@ The terminal shows Fiber's message as it is and never rewrites it
 - A turn that fails with `authentication_failed` offers "log in" as a click
   target on its error line ("Keys", `/login`).
 - `mcp_server_failed` is a ⚠ line in the conversation with its
-  `error.message`. A server that comes back writes `mcp_server_ready`, which
+  `error.message`: "⚠ " in `attention`, the message dim, wrapped under
+  itself. A server that comes back writes `mcp_server_ready`, which
   clears the Session card's mark in every client.
 
 ### Notices
 
-Notices float in the conversation's top-right corner until dismissed with ✕,
-under the search box and "Copied", newest on top, so nothing below the
-conversation ever moves.
+Notices are rows at the bottom of the conversation, above the working line,
+one row each until dismissed with ✕, oldest first: "  ⚠ " and the code in
+`attention`, " · " and the message dim, cut with "…", and a dim "✕"
+right-aligned. Clicking a notice shows the whole text in an overlay.
 
-- A notice is at most 40% of the conversation's width, up to 60 columns, and
-  wraps to 3 lines ending "… more". Clicking it shows the whole text in an
-  overlay.
 - At most 3 show, then "+N more", which lists them.
 - A notice that arrives during a drag waits for the release.
 - In the screen-reader mode notices are lines in reading order.
@@ -578,7 +752,7 @@ naming them all; clicking it shows each job's message.
 
 `/name <text>` names the session with the `name` driver command. The name is
 written to the log as `session_named`, so every client sees it. The session
-list, the header and the terminal title show it in place of the first prompt.
+list, the rail card and the terminal title show it in place of the first prompt.
 The model keeps the name current with `name_session` until a person's name
 pins it (`docs/tools.md`, "Naming the session").
 
@@ -631,6 +805,45 @@ An approval request is a panel at the bottom that replaces the input box
 - `/approvals` reopens the waiting queue at the first request. It is the key
   path for reopening a request put aside and for moving to the next.
 
+The panel is a slab with ▄ and ▀ edges, every row starting with a ▌ stripe
+and a space: the `approval` tint and an `attention` stripe for a standing
+ask, the `alert` tint and an `error` stripe for a reviewer's escalation.
+
+```
+▌ Approval 1 of 2 · main · irreversible                  esc puts it aside
+▌ shell cargo mutants -p hub
+▌ runs a command, writes files · asked by the project rule cargo
+▌
+▌ ▸ 1 Allow once
+▌   2 Allow for this session cargo mutants *
+▌   3 Always allow in this project cargo mutants *
+▌   4 Deny  type to add feedback
+▌
+▌ ↑↓ choose · enter confirms · typing goes to the feedback · click a choice
+```
+
+- The first row is "Approval k of n" bold in `attention`, which moves to the
+  next request on a click, " · " and the asking session in `attention`,
+  " · irreversible" in `error` when the call declares itself so, and "esc
+  puts it aside" dim, right-aligned.
+- Then the tool's name bold in `info` and its main argument bold, wrapped.
+- Then one dim facts line: the call's declared effects joined by ", ",
+  " · " and the paths it names, and
+  " · " and why it asked: "asked by the <scope> rule <prefix>", "a standing
+  ask rule matches it", "it would leave readonly", "the reviewer failed",
+  "the reviewer blocked the last calls: <reason>" or "the reviewer has
+  blocked too many calls: <reason>".
+- After a blank row, the choices, numbered: "▸ " in `attention` on the
+  focused one and two spaces on the others, the number dim, the label bold
+  when focused. The remembering choices end with the rule's prefix and " *"
+  in `info`. Deny ends with "  type to add feedback" dim, or the feedback as
+  typed with a cursor. The numbers label the rows; a digit typed is
+  feedback, like any other key.
+- After a blank row, the hint, dim.
+
+A request put aside leaves a row above the working line, "  ⚠ N approvals
+waiting · click to reopen", bold in `attention`, the ⚠ not bold.
+
 ### A question form
 
 An `ask_user` question form is a panel at the bottom that replaces the input
@@ -660,6 +873,62 @@ box, as an approval does (`docs/tools.md`, "Asking the person").
   shown. The call's ledger row reads "answered" or "declined", and the group
   line counts "asked 4 questions".
 
+The form is an `approval` slab with ▄ and ▀ edges, every row starting with a
+▌ stripe in `secondary` and a space:
+
+```
+▌ Question from main · 3 questions, any can be skipped · 1 of 2      esc: chat about this
+▌
+▌ ←  ✔ Scope    ☐ Tests    ☐ Docs    ✔ Submit  →
+▌
+▌ Which crates should the change touch?
+▌ choose any
+▌
+▌ ▸ 1 [x] hub  the session host
+▌   2 [ ] tui  the terminal
+▌   3 ✎ Type an answer, alone or with the options
+▌   Next →
+▌
+▌ ←→ question · ↑↓ choose · enter chooses and moves on · space toggles · type to answer in words
+```
+
+- The title row is "Question" bold in `secondary`, " from <session> · N
+  questions, any can be skipped" in `secondary`, " · k of n" bold in
+  `secondary` when more requests wait, and "esc: chat about this" dim,
+  right-aligned. A blank row follows.
+- The tab row: "← " dim, a tab per question, " ☐ <header> " or, once
+  answered, " ✔ <header> " in `accent`, the current tab reversed, then
+  " ✔ Submit " and " →" dim. A blank row follows.
+- The question bold, wrapped, with "choose any" dim under a multi-choice
+  question, then a blank row.
+- Each option: "▸ " in `secondary` on the cursor's row, its number dim, a
+  mark, "( )" or "(•)" for one choice and "[ ]" or "[x]" for any, in
+  `secondary` when chosen and dim otherwise, the label, bold when chosen and
+  underlined under the cursor, and its description dim. A digit chooses that
+  option, outside a row that takes text.
+- The row to answer in words, numbered after the options: "✎ " dim, then
+  "Type an answer, alone or with the options" dim ("Type an answer" with no
+  options), or the answer bold with a cursor.
+- In a multi-choice question, "Next →", or "Review →" on the last question,
+  in `secondary`, bold under the cursor.
+- After a blank row, the hint, dim: "←→ question · ↑↓ choose · enter chooses
+  and moves on · space toggles · type to answer in words".
+
+The Submit tab is "Review" bold, a blank row, one row per question, its
+header padded to 13 columns in `accent` and the answer bold or "skipped" dim,
+then "▸ " in `secondary`, "note" in `accent` and "Add a note on the whole
+form" dim, or the note bold, with a cursor. After a blank row, " Submit "
+reversed and " Chat about this " on the `rule` tint, then "  declines and
+ends the turn, so you can answer in your own words" dim; after a blank row,
+the hint, "←→ question · enter submits · type to add the note · esc: chat
+about this", dim.
+
+In the turn's card the answers are a rule like a steering message: "you
+answered" bold in `accent`, " · 14:16 " dim and a ─ rule in `rule`. Under it,
+each question's header padded to 13 columns in `accent`, then the answer bold
+or "skipped" dim, and "note" with the note in quotes, bold. A declined form
+reads "declined: the turn ended so you could answer in your own words" dim.
+
 The other interactions, `confirm`, `select`, `multi_select` and `text_input`, raised by an extension's `host.ask` and by MCP elicitation, are drawn as one-question forms: the same panel with no tab row, the question, then its rows, ending with "Chat about this". `confirm` shows two options, yes and no, and Enter on one replies `confirmed`. `select` shows the options, and Enter on one replies `labels` with that label. `multi_select` shows the options: Space toggles one, and Enter replies `labels`, possibly empty. `text_input` shows only the row to answer in words, and Enter replies `text` as typed. The last two end with a `Submit` row that does what Enter does, for the mouse. Esc, and "Chat about this", decline as on a form.
 
 ## Reading and copying
@@ -667,8 +936,9 @@ The other interactions, `confirm`, `select`, `multi_select` and `text_input`, ra
 ### Selection and copy
 
 Dragging selects conversation text, unwrapped and excluding the panel, and
-copies on release. "Copied" shows in the conversation's top-right corner,
-below the search box when it is open. The terminal owns Cmd+C (Ghostty binds
+copies on release. "Copied" shows in `info` in the conversation's top-right
+corner, below the search box when it is open. The selection is on the
+`selection` tint. The terminal owns Cmd+C (Ghostty binds
 `super+c=copy_to_clipboard`), which is why release copies.
 
 The copy goes through OSC 52 and, on a local session, the system clipboard
@@ -685,9 +955,12 @@ lines. It matches the unwrapped text and marks a match across the rows it
 wraps onto.
 
 The search bar floats over the conversation's top-right corner, as an
-editor's find box does, and the input box keeps its draft. Every match is
-marked, the current one brighter, with "3 of 41". A match inside a collapsed
-section expands it when it becomes the current match.
+editor's find box does, and the input box keeps its draft. It is 40 columns
+wide, a `surface` slab with ▄ and ▀ edges: " ⌕ " in `attention`, the query
+bold, a dim █, and right-aligned "3 of 41", or "no matches" or "type to
+search" dim. Every match is marked on the `match` tint, the current one on
+`match_current`. A match inside a collapsed section expands it when it
+becomes the current match.
 
 Matching is plain text: it folds case per character, matches literally, and
 keeps at most 10,000 matches ("10000+"). No model ranks the matches or
@@ -729,7 +1002,8 @@ copies with `y`.
   that blocks for up to 2 seconds, so Fiber reads terminal input itself
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
 - **Every action has a key.** Every action also has a mouse target or a slash
-  command, except editing the draft in the input box and search. A mouse target is drawn only where one fits naturally, never as a
+  command, except editing the draft in the input box and search, and choosing
+  in the model picker for this session only. A mouse target is drawn only where one fits naturally, never as a
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
@@ -772,6 +1046,11 @@ focus stop with no extra work, and nothing the mouse can reach is out of the
 keyboard's reach.
 
 ### The input box
+
+The input box is a `surface` slab with ▄ and ▀ edges across the
+conversation's width: a ▌ stripe in `accent`, a space, "› " in `info`, the
+draft, and the cursor, a dim █. While search is open, typing goes to the
+search box and the draft shows without a cursor.
 
 - Enter sends. Shift+Enter inserts a line break, with Ctrl+J for terminals
   without the kitty keyboard protocol. Pasted text keeps its line breaks. The box grows to about a third of
@@ -835,30 +1114,34 @@ keyboard's reach.
 | Drop it | `drop_steering` | ⌥X | its mouse target |
 | Reopen a request put aside, or move to the next, the oldest first, switching to its session | `next_request` | ⌥A | `/approvals`; click the badge or a waiting card |
 | Open the model picker | `model_picker` | Ctrl+L | `/model` |
+| Choose in the model picker for this session only | `session_only` | s | |
 | Open the key map | `key_map` | F1 | `/?` or `/help` |
 
 The key map, `/?` or `/help`, is an overlay over the conversation listing every
 binding by area with its other paths. Esc closes it. Ctrl+L opens the model picker,
 so it does not redraw the screen as it does in some terminal programs.
 
-Every action acts in some of five contexts, and the terminal is in exactly one
+Every action acts in some of six contexts, and the terminal is in exactly one
 of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
-  home screen's delete question or workspace picker, the key map, the model
-  picker, an approval or question, an offer, or the Ctrl+R panel; or the `/`
+  home screen's delete question or workspace picker, the key map,
+  an approval or question, an offer, or the Ctrl+R panel; or the `/`
   or `@` completion panel while focus is not in the conversation. An overlay's
   own keys, such as an approval's ↑ and ↓, are not bindings.
+- Picker: the model picker is open. Only its own keys and the global actions
+  act.
 - Search: conversation search is open.
 - Conversation: focus is in the conversation.
 - Steering: a queued steering message is selected.
 - Input: the input box has the keyboard, home with nothing open included.
 
-A global action acts in all five. The rest act only where they are listed:
+A global action acts in all six. The rest act only where they are listed:
 
 - Global: `close_or_interrupt`, `clear_then_quit`, `rail_row_n`,
   `toggle_ledgers`, `toggle_panel`, `toggle_rail`, `jump_to_end`,
   `next_request`, `key_map`.
+- Picker: `session_only`.
 - Input, Steering and Conversation: `go_home`, `new_session`,
   `open_in_editor`, `navigate`, `search`, `select_steering`, `drop_steering`,
   `model_picker`.
@@ -913,13 +1196,20 @@ No action can be bound to Ctrl+C, and `clear_then_quit` cannot be rebound,
 because the second Ctrl+C always quits ("Input and focus"). Either entry gives
 a `notice` and keeps the defaults.
 
-`/keys` opens the rebinding screen: every action with its id, description and
-current keys, the unbound ones included. Selecting an action and pressing a
-key binds it, so only a key the terminal actually delivers can be bound. A key
-already bound to another action shows inline, with a choice to swap or
-cancel. One key resets an action to its default. The screen saves only the
-bindings that differ from the defaults, so a default changed in a later
-release still applies.
+`/keys` opens the rebinding screen: every action with its keys, id and
+description, the unbound ones included. Selecting an action, pressing Enter
+and then a key binds it, so only a key the terminal actually delivers can be
+bound; an action with variants takes one key for each variant, in order. A key
+already bound to another action shows inline, with a choice to swap or cancel.
+A swap gives the other action, in that key's place, the key this action held
+for the same variant; when there is none, or it would clash, the other action
+loses that key's group instead. `r` resets an action to its defaults, through
+the same swap or cancel when a default is now another action's. Delete, or
+Backspace, unbinds it, saving `[]`. The screen's own keys are fixed: ↑ ↓
+PageUp PageDown move, and Esc cancels a capture or closes the screen, so Esc
+is bound only by hand. Ctrl+C still clears, then quits, there. The screen saves
+only the bindings that differ from the defaults, so a default changed in a
+later release still applies.
 
 ### Slash commands
 
@@ -929,7 +1219,7 @@ release still applies.
 | `/new` | Goes home with the cursor in the input box. |
 | `/resume` | Opens home at the session list. |
 | `/model` | Opens the model picker. |
-| `/thinking <level>` | Sets the thinking level, as choosing a chip in the model picker does: saved for the model unless marked as this session only (`docs/model-routing.md`, "Thinking"). |
+| `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. With no level, opens the model picker on the model's chips: Enter saves the level, `s` applies it to this session only. |
 | `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
 | `/scoped-models` | Chooses which models the model picker shows, saved as `scoped_models`. |
 | `/context` | Opens the context breakdown. |
@@ -1044,12 +1334,16 @@ fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
 
 ## Look
 
-- **Surfaces, not lines.** The person's messages, each turn's card, the input
-  box, the approval panel and each card sit on their own background tint, with
-  half-block edges (▄ above, ▀ below) and no borders.
+- **Surfaces, not lines.** The person's messages, each turn's card, code
+  blocks, the handoff band, the input box, the approval panel, the question
+  form, the search box and each panel card sit on their own background tint,
+  with half-block edges (▄ above, ▀ below) and no borders. An edge's cell
+  takes the surface's colour over the colour around it: the terminal's
+  background in the conversation, the turn's tint for a code block inside a
+  card, the `panel` tint for a panel card.
 - **A stripe marks state** on the side its surface is anchored to: ▌ on the
-  left for a queued steering message, a running or finished job and an
-  approval; ▐ on the right for the person's prompt bubble. The stripe is one
+  left for the input box, a running or finished job, an approval and a
+  question form; ▐ on the right for the person's prompt bubble. The stripe is one
   unbroken bar, because ▌ and ▐ fill half of each cell as Ghostty draws them.
   Where a terminal cannot draw it unbroken, there is no stripe. Fiber draws
   stripes in Ghostty, WezTerm and kitty, and not inside tmux or screen;
@@ -1059,23 +1353,47 @@ fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
   `xterm-kitty`, `wezterm` or one ending in `-direct`, which survives SSH where
   `COLORTERM` is usually dropped. Anywhere else the terminal has 256 colours,
   and each colour is the nearest entry of the xterm palette: the neutral tints
-  (`background`, `surface`, `surface_raised`, `prompt`, `code`, `hover`,
-  `selection`) take the grey ramp, the other tints take the colour cube so they
-  keep their hue and an alert stays red, and text takes either. The terminal's
+  (`background`, `panel`, `surface`, `surface_raised`, `turn`, `prompt`,
+  `code`, `approval`, `rule`, `hover`) take the grey ramp, the other tints take
+  the colour cube so they keep their hue and an alert stays red, and text
+  takes either. The terminal's
   own 16 colours are never used.
 - **`NO_COLOR`** set and not empty turns colour off: every role is the
   terminal's default colour. Bold, dim, reversed and underline stay, so focus,
   selection, matches and state words still show. A half-block edge draws as a blank,
   because with no tint there is no surface to edge, and its row stays.
-- **Markdown in replies:** headings in the theme's heading colour; code blocks
-  on a darker tint with syntax colours, line numbers, a language label and a
-  click-to-copy target; tables with a rule under the header and numbers
-  right-aligned; bullets in the accent colour.
+- **Markdown in replies:**
+  - Headings are bold in `heading`, their `#` markers stripped.
+  - Paragraphs are in the text colour, `**bold**` is bold with no colour of
+    its own, and inline code is in `info`, with no tint and its backticks
+    stripped.
+  - A bullet is "• " in `accent`, its wrapped lines hanging two columns in.
+  - A code block is a `code` slab with ▄ and ▀ edges. Its first row is the
+    language dim, one column in, and "click to copy" dim, right-aligned. Each
+    line is its number right-aligned in four columns in `rule`, two spaces,
+    then the code with syntax colours; a comment is italic as well.
+  - A table's header row is bold, and under each column is a ─ rule in
+    `rule` as wide as the column; columns are three spaces apart, and the
+    rules break with them. A column whose cells are all numbers is
+    right-aligned, in the text colour.
+
+```
+ rust                                                         click to copy
+   1  pub fn try_lock(path: &Path) -> Result<Lock> {
+   2      // one holder at a time
+   3      let file = File::create(path)?;
+
+Crate   Tests   Lines
+─────   ─────   ─────
+hub        41   3,120
+tui       212   9,804
+```
 
 ### Themes
 
 Fiber ships a dark and a light theme. A person adds their own as files in
-Fiber home and picks one in `/settings`, which writes `tui.theme`. With no
+Fiber home, an installed extension can carry more, and either is picked in
+`/settings`, which writes `tui.theme`. With no
 theme set, the theme follows the terminal's light or dark appearance and
 switches when the terminal reports a change.
 
@@ -1083,46 +1401,63 @@ A theme sets colours only. It gives each colour role a value, and an
 extension's spans name the same roles ("What a renderer returns"). Anything
 bigger goes through "Extension seams".
 
-The roles, in order:
+The roles, in order, with the dark theme's values:
 
-| Role | What it colours |
-|---|---|
-| `text` | the full text colour: replies, the draft, anything with no role of its own |
-| `muted` | what the doc calls dim as a colour: READY, line numbers, rules, block quote bars, grips, the scroll bar, the logo's counters |
-| `accent` | bullets, the logo's mark, WORKING, the spinner while a turn works, a running job's stripe, the steering and prompt stripes |
-| `heading` | markdown headings |
-| `success` | a finished job's stripe when it succeeded |
-| `warning` | RETRYING and its spinner, the context bar from 60% |
-| `error` | CRASHED, a failed job's stripe, an escalation's stripe, the context bar from 85%, "irreversible" in an approval's header |
-| `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe |
-| `added` | lines added: an edited file's `+N`, added lines in a diff |
-| `removed` | lines removed: an edited file's `−N`, removed lines in a diff |
-| `code_text` | code with no syntax role |
-| `keyword` | keywords |
-| `string` | string and character literals |
-| `comment` | comments |
-| `number` | number literals |
-| `function` | function and macro names |
-| `type` | type names |
-| `constant` | constants: `true`, `null`, `ALL_CAPS` names |
-| `operator` | operators |
-| `background` | every cell no surface covers, including the rail's and the panel's regions |
-| `surface` | the input box, cards, notices, the handoff band |
-| `surface_raised` | the card on screen, a hovered card, pickers |
-| `prompt` | the person's prompt bubble |
-| `code` | code blocks and inline code |
-| `approval` | the approval panel for a standing ask |
-| `alert` | the approval panel for a reviewer's escalation; red in both built-in themes |
-| `hover` | the click target under the pointer |
-| `selection` | selected text |
-| `match` | a search match |
-| `match_current` | the current search match |
+| Role | What it colours | Dark |
+|---|---|---|
+| `text` | the full text colour: replies, the draft, anything with no role of its own | the terminal's foreground |
+| `muted` | what the doc calls dim: READY, labels and hints, summary lines and results, the ▣ line, block quote bars, grips, the logo's counters | `text`, dim |
+| `accent` | bullets, the logo's mark, WORKING and the rail's spinner, a running job's stripe, the prompt and input stripes, the model's name, answered questions' headers, a quota bar | `#6eaafe` |
+| `heading` | markdown headings | `#ff9f43` |
+| `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded | `#6eaafe` |
+| `warning` | RETRYING and its spinner, a rail card's context bar from 60% | `#ff9f43` |
+| `error` | CRASHED, a failed job's stripe, an escalation's stripe, "irreversible" in an approval's header, a rail card's context bar from 85%, a down MCP server, a quota nearly spent, tool results in the context breakdown | `#ff5d73` |
+| `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the handoff marker, "steer", notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` |
+| `added` | lines added: an edited file's `+N`, added lines in a diff | `#6eaafe` |
+| `removed` | lines removed: an edited file's `−N`, removed lines in a diff | `#ff5d73` |
+| `code_text` | code with no syntax role | the terminal's foreground |
+| `keyword` | keywords | `#6eaafe` |
+| `string` | string and character literals | `#ce9178` |
+| `comment` | comments, which are also italic | `#7a7a8a` |
+| `number` | number literals | `#b5cea8` |
+| `function` | function and macro names | `#7dd3fc` |
+| `type` | type names | `#7dd3fc` |
+| `constant` | constants: `true`, `null`, `ALL_CAPS` names | `#7dd3fc` |
+| `operator` | operators | the terminal's foreground |
+| `info` | inline code, a call's kind, an approval's tool name and rule prefix, the input box's ›, "Copied", the context bar's fill | `#7dd3fc` |
+| `secondary` | the git branch, the handoff band's label, the question form's stripe, title and marks, the delegates' ◆ | `#b39ddb` |
+| `rule` | rules, line numbers, a bar's empty cells, the pill, a grip's column under the pointer, "Chat about this" | `#3a3a4a` |
+| `scroll` | the scroll bar's thumb | `#808080` |
+| `background` | every cell of the conversation no surface covers | the terminal's background |
+| `panel` | the rail's and the panel's regions, the narrow layout's status line | `#0c0c11` |
+| `surface` | the input box, the panel's cards, the search box, a swapped view's top row | `#1a1a22` |
+| `surface_raised` | the card on screen, a hovered card, pickers | `#3a3a4a` |
+| `turn` | a turn's card | `#101017` |
+| `prompt` | the person's prompt bubble | `#343541` |
+| `code` | code blocks | `#181821` |
+| `handoff` | the handoff band | `#1f1a2e` |
+| `approval` | the approval panel for a standing ask, and the question form | `#1a1a22` |
+| `alert` | the approval panel for a reviewer's escalation; red in both built-in themes | `#501c20` |
+| `hover` | the click target under the pointer where it has no tint; a target on a tint is drawn with that tint 0x14 lighter on each channel | `#1e1e26` |
+| `selection` | selected text | `#264f78` |
+| `match` | a search match, its text white | `#5a4a1a` |
+| `match_current` | the current search match, its text black | `#ff9f43` |
+
+In the dark theme `text`, `code_text`, `operator` and `background` are the
+terminal's own default colours, and `muted` is the text colour drawn dim, so
+the conversation sits on the terminal's own background. They stay the
+default at 256 colours. A theme file may still give any of them a `#rrggbb`.
+
+The dark theme, and every surface's look in this doc, is the prototype's
+([research/tui-prototype/src/main.rs](../research/tui-prototype/src/main.rs)),
+which the owner judged by eye.
 
 A stripe takes its state's colour, and the logo's five letters step through
 `heading`, `accent`, `string`, `type` and `keyword`.
 
-A theme is a file, `themes/<name>.json` in Fiber home, and `tui.theme` names it
-by `<name>`; `dark` and `light` always name the built-ins:
+A theme is a file, `themes/<name>.json` in Fiber home or in an installed
+extension (`docs/extensions.md`, "What a package holds"), and `tui.theme`
+names it by `<name>`; `dark` and `light` always name the built-ins:
 
 ```json
 {"base": "light", "roles": {"accent": "#0b7285", "alert": "#5f1e22"}}
@@ -1133,7 +1468,13 @@ keeps working when a role is added. `roles` maps role names to `#rrggbb`. The
 file is strict: any other key, an unknown role or a value that is not
 `#rrggbb` refuses the whole file. A file that is missing or refused shows one
 notice naming the theme and the reason, and the theme follows the terminal's
-appearance. Nothing writes the bad name back. Colours are given once, in 24
+appearance. Nothing writes the bad name back. Fiber home's file wins over an
+extension's, and between extensions the first by directory name in
+`extensions/` wins; `/settings` lists each name once. Only a missing file
+passes the name on: a file that is there but cannot be read or is refused is
+the theme. A damaged extension's themes are left out, as are a switched-off
+extension's (`extensions."<name>".enabled` is `false`): they are not listed,
+and a `tui.theme` naming one reads as a missing file. Colours are given once, in 24
 bits, and the 256-colour form is computed ("Look").
 
 ### Reduced motion
