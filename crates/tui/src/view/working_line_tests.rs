@@ -667,3 +667,39 @@ fn a_reply_quoting_the_band_text_does_not_spin() {
     assert_eq!(shown.matches(SPINNER[0]).count(), 1, "{shown}");
     assert!(shown.contains('●'), "{shown}");
 }
+
+#[test]
+fn rest_frames_keep_asking_for_the_next_frame() {
+    let (mut app, clock) = home_app(WALL - 674_000);
+    let origin = clock.origin();
+    app.set_now(origin, WALL);
+    // Frame 10 rests: no band draws, but the next boundary is asked, not
+    // the wall second two seconds out.
+    app.set_now(
+        origin.checked_add(Duration::from_millis(1_200)).expect("after the origin"),
+        WALL + 1_200,
+    );
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(1_320))
+    );
+    // Frame 17 sweeps again from the word's first cell.
+    app.set_now(
+        origin.checked_add(Duration::from_millis(2_040)).expect("after the origin"),
+        WALL + 2_040,
+    );
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let row = working_row(&buf, 80);
+    assert_eq!(
+        buf.cell((0, row)).and_then(|cell| cell.style().fg),
+        Some(crate::theme::Role::Accent.color())
+    );
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(2_160))
+    );
+}

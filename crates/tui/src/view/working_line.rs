@@ -35,17 +35,18 @@ pub(super) fn draw(
     let Some(rect) = super::put(buf, area, bottom, &laid.text, line) else {
         return;
     };
-    // The glimmer's band in the spinner's colour, the word plain: only
-    // a drawn band asks for the next frame.
-    if let Some(word) = &laid.word
-        && let Some(band) = app.motion().glimmer(word.len())
-    {
-        for cell in band {
-            let x = rect
-                .x
-                .saturating_add(u16::try_from(cell).unwrap_or(u16::MAX));
-            if let Some(into) = buf.cell_mut((x, rect.y)) {
-                into.set_style(style(Role::Accent));
+    // The glimmer's band in the spinner's colour, the word plain. The
+    // sweep resumes after its rest, so rest frames ask for the next
+    // boundary too: frame 17 would otherwise wait a whole second.
+    if let Some(word) = &laid.word {
+        if let Some(band) = app.motion().glimmer(word.len()) {
+            for cell in band {
+                let x = rect
+                    .x
+                    .saturating_add(u16::try_from(cell).unwrap_or(u16::MAX));
+                if let Some(into) = buf.cell_mut((x, rect.y)) {
+                    into.set_style(style(Role::Accent));
+                }
             }
         }
         app.motion().ask_frame();
