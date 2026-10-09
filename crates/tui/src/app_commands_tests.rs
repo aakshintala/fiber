@@ -144,10 +144,7 @@ fn slash_alone_shows_every_row_from_the_top() {
     type_text(&mut app, "/");
     let rows = shown(&app);
     assert_eq!(rows.len(), crate::slash::SHOWN);
-    assert_eq!(
-        rows.first().map(String::as_str),
-        Some("/home  Goes home.  command")
-    );
+    assert_eq!(rows.first(), table_lines().first());
     assert_eq!(selected(&app), rows.first().cloned());
 }
 
@@ -464,12 +461,12 @@ fn esc_closes_the_slash_panel_and_keeps_the_draft_until_it_is_emptied() {
     assert_eq!(app.completions(), None);
     app.on_key(Key::Backspace, now());
     type_text(&mut app, "/");
-    assert_eq!(shown(&app).len(), 8);
+    assert_eq!(shown(&app).len(), crate::slash::SHOWN);
     // A draft that stops starting with `/` also reopens it after Esc.
     app.on_key(Key::Esc, now());
     app.on_key(Key::CtrlC, now());
     type_text(&mut app, "/");
-    assert_eq!(shown(&app).len(), 8);
+    assert_eq!(shown(&app).len(), crate::slash::SHOWN);
 }
 
 #[test]
@@ -516,7 +513,7 @@ fn an_open_approval_panel_wins_over_the_slash_panel() {
     // slash panel shows again, still open.
     app.on_key(Key::Esc, now());
     assert!(app.panel().is_none());
-    assert_eq!(shown(&app).len(), 8);
+    assert_eq!(shown(&app).len(), crate::slash::SHOWN);
 }
 
 #[test]

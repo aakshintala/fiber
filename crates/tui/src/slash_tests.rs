@@ -1,6 +1,6 @@
 //! Tests for the `/` list.
 
-use super::{Row, SHOWN, filter, is_built_in, rows, window_start};
+use super::{BUILT_INS, Row, SHOWN, filter, is_built_in, rows, window_start};
 use contract::events::CommandInfo;
 
 /// A `commands` answer row for the skill `name`, with no hint.
@@ -22,7 +22,10 @@ fn built_ins_come_in_table_order_then_the_answer_rows() {
     let all = rows(&[skill("tdd"), skill("review")]);
     let all: Vec<&Row> = all.iter().collect();
     let built_ins = rows(&[]).len();
+    let table_names: Vec<&str> = BUILT_INS.iter().map(|(name, _, _)| *name).collect();
+    assert_eq!(table_names.len(), built_ins);
     let (table, answered) = all.split_at(built_ins);
+    assert_eq!(names(table), table_names);
     assert!(table.iter().all(|row| is_built_in(&row.name)));
     assert_eq!(names(answered), ["tdd", "review"]);
     assert!(table.iter().all(|row| row.tag == "command"));
