@@ -728,7 +728,8 @@ copies with `y`.
   that blocks for up to 2 seconds, so Fiber reads terminal input itself
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
 - **Every action has a key.** Every action also has a mouse target or a slash
-  command, except editing the draft in the input box and search. A mouse target is drawn only where one fits naturally, never as a
+  command, except editing the draft in the input box and search, and choosing
+  in the model picker for this session only. A mouse target is drawn only where one fits naturally, never as a
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
@@ -834,30 +835,34 @@ keyboard's reach.
 | Drop it | `drop_steering` | ⌥X | its mouse target |
 | Reopen a request put aside, or move to the next, the oldest first, switching to its session | `next_request` | ⌥A | `/approvals`; click the badge or a waiting card |
 | Open the model picker | `model_picker` | Ctrl+L | `/model` |
+| Choose in the model picker for this session only | `session_only` | s | |
 | Open the key map | `key_map` | F1 | `/?` or `/help` |
 
 The key map, `/?` or `/help`, is an overlay over the conversation listing every
 binding by area with its other paths. Esc closes it. Ctrl+L opens the model picker,
 so it does not redraw the screen as it does in some terminal programs.
 
-Every action acts in some of five contexts, and the terminal is in exactly one
+Every action acts in some of six contexts, and the terminal is in exactly one
 of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
-  home screen's delete question or workspace picker, the key map, the model
-  picker, an approval or question, an offer, or the Ctrl+R panel; or the `/`
+  home screen's delete question or workspace picker, the key map,
+  an approval or question, an offer, or the Ctrl+R panel; or the `/`
   or `@` completion panel while focus is not in the conversation. An overlay's
   own keys, such as an approval's ↑ and ↓, are not bindings.
+- Picker: the model picker is open. Only its own keys and the global actions
+  act.
 - Search: conversation search is open.
 - Conversation: focus is in the conversation.
 - Steering: a queued steering message is selected.
 - Input: the input box has the keyboard, home with nothing open included.
 
-A global action acts in all five. The rest act only where they are listed:
+A global action acts in all six. The rest act only where they are listed:
 
 - Global: `close_or_interrupt`, `clear_then_quit`, `rail_row_n`,
   `toggle_ledgers`, `toggle_panel`, `toggle_rail`, `jump_to_end`,
   `next_request`, `key_map`.
+- Picker: `session_only`.
 - Input, Steering and Conversation: `go_home`, `new_session`,
   `open_in_editor`, `navigate`, `search`, `select_steering`, `drop_steering`,
   `model_picker`.
@@ -928,7 +933,7 @@ release still applies.
 | `/new` | Goes home with the cursor in the input box. |
 | `/resume` | Opens home at the session list. |
 | `/model` | Opens the model picker. |
-| `/thinking <level>` | Sets the thinking level, as choosing a chip in the model picker does: saved for the model unless marked as this session only (`docs/model-routing.md`, "Thinking"). |
+| `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. With no level, opens the model picker on the model's chips: Enter saves the level, `s` applies it to this session only. |
 | `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
 | `/scoped-models` | Chooses which models the model picker shows, saved as `scoped_models`. |
 | `/context` | Opens the context breakdown. |

@@ -23,6 +23,11 @@ const EDITING: [&str; 10] = [
 /// the rule's "a mouse target or a slash command" in lowercase.
 const PATHS: [&str; 5] = ["/", "click", "drag", "select", "mouse target"];
 
+/// Actions with no other path, by the rule's exception: choosing in the
+/// model picker for this session only is a key alone
+/// (`docs/tui.md`, "Keys" › "Rules").
+const NO_OTHER_PATH: [&str; 1] = ["session_only"];
+
 /// The cells of each row of `docs/tui.md`'s "Bindings" table, header and
 /// rule left out, with the code marks dropped.
 fn doc_rows() -> Vec<Vec<String>> {
@@ -98,7 +103,7 @@ fn areas_run_in_order_from_their_first_ids() {
 fn every_action_has_a_key_and_a_mouse_target_or_a_slash_command() {
     for binding in BINDINGS {
         assert!(!binding.keys.is_empty(), "{} has no key", binding.id);
-        if EDITING.contains(&binding.id) {
+        if EDITING.contains(&binding.id) || NO_OTHER_PATH.contains(&binding.id) {
             continue;
         }
         assert!(
@@ -177,4 +182,14 @@ fn every_listed_default_key_shows_in_its_row() {
             );
         }
     }
+}
+
+#[test]
+fn session_only_has_no_other_path() {
+    let binding = BINDINGS
+        .iter()
+        .find(|binding| binding.id == "session_only")
+        .expect("session_only is a binding");
+    assert_eq!(binding.other_paths, "");
+    assert!(NO_OTHER_PATH.contains(&binding.id));
 }
