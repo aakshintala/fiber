@@ -1,5 +1,6 @@
 //! The `read` tool (`docs/tools.md`, "File tools").
 
+use std::path::Path;
 use std::sync::Arc;
 
 use contract::ErrorCode;
@@ -13,6 +14,7 @@ use crate::files::{
     InspectError, Inspected, ResolveError, Shared, declare, effects_error, failed, hash_bytes,
     inspect, resolve, string_argument, text_output, unsupported_message,
 };
+use crate::pdf::{PageRange, page_range};
 
 /// The tool's own cut (`docs/tools.md`, "Bounded results"): the default cap.
 /// The loop's bound sits above this, so a result is not cut twice and no
@@ -41,9 +43,10 @@ impl Tool for Read {
             name: "read".to_owned(),
             description:
                 "Reads a text file, or a PNG, JPEG, GIF or WebP image, which comes back as an \
-                 image. The text is the file's own, with no line numbers and no byte order mark. \
-                 `offset` is the first line, counted from 1. `limit` is how many lines. A \
-                 directory is not listed; use the shell."
+                 image, or a PDF, which comes back as a PDF. A PDF of more than 10 pages needs \
+                 `pages`, at most 20 pages a call. The text is the file's own, with no line \
+                 numbers and no byte order mark. `offset` is the first line, counted from 1. \
+                 `limit` is how many lines. A directory is not listed; use the shell."
                     .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -59,6 +62,10 @@ impl Tool for Read {
                     "limit": {
                         "type": "integer",
                         "description": "How many lines to return. The default is the rest of the file."
+                    },
+                    "pages": {
+                        "type": "string",
+                        "description": "For a PDF only: a page or a range such as `3` or `1-5`, counted from 1."
                     }
                 },
                 "required": ["path"],
@@ -93,6 +100,10 @@ impl Tool for Read {
             Ok(limit) => limit,
             Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
+        let pages = match page_range(arguments) {
+            Ok(pages) => pages,
+            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+        };
         let path = match resolve(self.shared.workspace(), &raw) {
             Ok(path) => path,
             Err(ResolveError::Arguments(message)) => {
@@ -114,9 +125,17 @@ impl Tool for Read {
         }
         // debt: the whole file is read into memory, a measured file that does not fit
         let text = match inspect(&path) {
-            Ok(Inspected::Text { text }) => text,
+            Ok(Inspected::Text { text }) => {
+                if let Err(output) = reject_pages(&path, pages) {
+                    return output;
+                }
+                text
+            }
             // `offset` and `limit` do not apply to an image.
             Ok(Inspected::Image { hash, .. }) => {
+                if let Err(output) = reject_pages(&path, pages) {
+                    return output;
+                }
                 let output = crate::image::read(self.shared.images(), &path, cancel);
                 // Seen for a later `write`: the bytes this read took in. A
                 // failed or cancelled read returned no image, so saw nothing.
@@ -129,7 +148,24 @@ impl Tool for Read {
                 }
                 return output;
             }
+            // `offset` and `limit` do not apply to a PDF.
+            Ok(Inspected::Pdf { hash, .. }) => {
+                let output = crate::pdf::read(self.shared.images(), &path, pages, cancel);
+                // Seen for a later `write`: the bytes this read took in. A
+                // failed or cancelled read returned no PDF, so saw nothing.
+                if output
+                    .content
+                    .iter()
+                    .any(|part| matches!(part, ContentPart::Pdf(_)))
+                {
+                    self.shared.set_seen(&path, hash);
+                }
+                return output;
+            }
             Ok(Inspected::Unsupported { kind, size, hint }) => {
+                if let Err(output) = reject_pages(&path, pages) {
+                    return output;
+                }
                 return failed(
                     ErrorCode::UnsupportedFile,
                     unsupported_message(&path, &kind, size, hint),
@@ -169,6 +205,26 @@ impl Tool for Read {
 
     fn guidelines(&self) -> Option<String> {
         crate::guidelines::of("read")
+    }
+}
+
+/// Fails the call when `pages` names a file that is not a PDF
+/// (`docs/tools.md`, "read"). `not_found` and path errors come first,
+/// because inspection runs first.
+#[allow(
+    clippy::result_large_err,
+    reason = "the error is the call's Output, returned unchanged"
+)]
+fn reject_pages(path: &Path, pages: Option<PageRange>) -> Result<(), Output> {
+    match pages {
+        Some(_) => Err(failed(
+            ErrorCode::InvalidArguments,
+            format!(
+                "`pages` applies only to a PDF, and `{}` is not one.",
+                path.display()
+            ),
+        )),
+        None => Ok(()),
     }
 }
 

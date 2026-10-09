@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 /// The largest per-protocol total the built-in definitions may take, in
 /// bytes. It started at the largest total at the commit that added the
 /// check, with no headroom.
-const BUDGET: usize = 9_327;
+const BUDGET: usize = 9_546;
 
 /// The Anthropic hosted tool type the budget measures
 /// (`config::Protocol::reads_web_search`); `openai-responses` reads
@@ -543,3 +543,4 @@ fn the_built_in_definitions_fit_their_budget() {
         panic!("{error}");
     }
 }
+

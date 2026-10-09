@@ -4,6 +4,7 @@
 mod ask_user;
 mod edit;
 mod files;
+mod pdf;
 mod guidelines;
 mod handoff;
 mod image;

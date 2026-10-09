@@ -137,6 +137,7 @@ fn a_regular_file_is_text() {
         Inspected::Text { text } => assert_eq!(text, "hi\n"),
         Inspected::Unsupported { kind, .. } => panic!("expected text, got {kind}"),
         Inspected::Image { kind, .. } => panic!("expected text, got {kind}"),
+        Inspected::Pdf { .. } => panic!("expected text, got a PDF"),
     }
 }
 
@@ -159,7 +160,9 @@ fn a_directory_is_unsupported() {
             assert!(message.contains(&path.display().to_string()), "{message}");
             assert!(message.contains(&size.to_string()), "{message}");
         }
-        Inspected::Text { .. } | Inspected::Image { .. } => panic!("expected a directory"),
+        Inspected::Text { .. } | Inspected::Image { .. } | Inspected::Pdf { .. } => {
+            panic!("expected a directory")
+        }
     }
 }
 
@@ -171,7 +174,9 @@ fn a_fifo_is_unsupported_without_opening_it() {
     assert!(status.success(), "mkfifo failed");
     match inspect(&path).unwrap() {
         Inspected::Unsupported { kind, .. } => assert!(kind.contains("fifo"), "{kind}"),
-        Inspected::Text { .. } | Inspected::Image { .. } => panic!("opening a fifo would block"),
+        Inspected::Text { .. } | Inspected::Image { .. } | Inspected::Pdf { .. } => {
+            panic!("opening a fifo would block")
+        }
     }
 }
 
@@ -182,7 +187,9 @@ fn a_socket_is_unsupported() {
     let listener = UnixListener::bind(&path).unwrap();
     match inspect(&path).unwrap() {
         Inspected::Unsupported { kind, .. } => assert!(kind.contains("socket"), "{kind}"),
-        Inspected::Text { .. } | Inspected::Image { .. } => panic!("expected a socket"),
+        Inspected::Text { .. } | Inspected::Image { .. } | Inspected::Pdf { .. } => {
+            panic!("expected a socket")
+        }
     }
     drop(listener);
 }
@@ -192,7 +199,9 @@ fn a_device_is_unsupported() {
     let path = Path::new("/dev/null");
     match inspect(path).unwrap() {
         Inspected::Unsupported { kind, .. } => assert!(kind.contains("device"), "{kind}"),
-        Inspected::Text { .. } | Inspected::Image { .. } => panic!("expected a device"),
+        Inspected::Text { .. } | Inspected::Image { .. } | Inspected::Pdf { .. } => {
+            panic!("expected a device")
+        }
     }
 }
 
@@ -214,13 +223,12 @@ fn recognised_magic_nul_and_invalid_utf8_are_typed() {
                 assert!(kind.contains(expect), "{name}: {kind}");
                 assert_eq!(size, u64::try_from(bytes.len()).unwrap(), "{name}");
             }
-            Inspected::Text { .. } | Inspected::Unsupported { .. } => {
+            Inspected::Text { .. } | Inspected::Unsupported { .. } | Inspected::Pdf { .. } => {
                 panic!("{name} was not an image")
             }
         }
     }
     let others: &[(&str, &[u8], &str)] = &[
-        ("a.pdf", b"%PDF-1.4", "PDF"),
         ("a.bin", b"hello\0world", "binary data"),
         ("a.dat", b"\xff\xfe", "not UTF-8 text"),
         ("a.riff", b"RIFF\x00\x00\x00\x00WAVErest", "binary data"),
@@ -229,16 +237,25 @@ fn recognised_magic_nul_and_invalid_utf8_are_typed() {
         let path = dir.path().join(name);
         fs::write(&path, bytes).unwrap();
         match inspect(&path).unwrap() {
-            Inspected::Unsupported { kind, size, hint } => {
+            Inspected::Unsupported { kind, size, .. } => {
                 assert!(kind.contains(expect), "{name}: {kind}");
                 assert_eq!(size, u64::try_from(bytes.len()).unwrap(), "{name}");
-                if kind.contains("PDF") {
-                    assert_eq!(hint, "PDFs are not read yet.", "{name}");
-                }
             }
-            Inspected::Text { .. } | Inspected::Image { .. } => {
+            Inspected::Text { .. } | Inspected::Image { .. } | Inspected::Pdf { .. } => {
                 panic!("{name} was read as text or an image")
             }
+        }
+    }
+    let pdf = dir.path().join("a.pdf");
+    let pdf_bytes = b"%PDF-1.4";
+    fs::write(&pdf, pdf_bytes).unwrap();
+    match inspect(&pdf).unwrap() {
+        Inspected::Pdf { size, hash } => {
+            assert_eq!(size, u64::try_from(pdf_bytes.len()).unwrap());
+            assert_eq!(hash, super::hash_bytes(pdf_bytes));
+        }
+        Inspected::Text { .. } | Inspected::Image { .. } | Inspected::Unsupported { .. } => {
+            panic!("a.pdf was not a PDF")
         }
     }
 }
@@ -359,6 +376,7 @@ fn riff_without_webp_and_webp_without_riff_are_text() {
             Inspected::Text { text } => assert_eq!(text.as_bytes(), *bytes),
             Inspected::Unsupported { kind, .. } => panic!("{name} was {kind}"),
             Inspected::Image { kind, .. } => panic!("{name} was {kind}"),
+            Inspected::Pdf { .. } => panic!("{name} was a PDF"),
         }
     }
 }
