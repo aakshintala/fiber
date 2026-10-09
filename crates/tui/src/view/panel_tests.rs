@@ -173,6 +173,11 @@ fn a_zero_context_window_has_no_context_rows() {
     assert!(
         drawn
             .iter()
+            .any(|row| row == "model  test/model · thinking high")
+    );
+    assert!(
+        drawn
+            .iter()
             .all(|row| !row.starts_with("context") && !row.contains('▆'))
     );
 }

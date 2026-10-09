@@ -740,6 +740,7 @@ fn no_query_without_the_session_card() {
         .launch
         .panel_cards = vec!["jobs".to_owned()];
     let out = opened(&mut app);
+    assert!(out.iter().any(|line| line["command"] == "subscribe"));
     assert!(ack(&mut app, &out).is_empty());
 }
 
@@ -965,6 +966,12 @@ fn a_blank_first_line_leaves_the_branch_row_out() {
     let out = opened(&mut app);
     let id = branch_query(&ack(&mut app, &out));
     answer(&mut app, &id, "\nmain\n");
+    app.on_line(live(SESSION, json!({"state": "streaming"})));
+    assert!(
+        crate::view::panel::rows(&app, 40)
+            .iter()
+            .any(|row| row.line.to_string() == "model  test/model")
+    );
     assert_eq!(app.panel_state().branch(), Some(&Branch::Absent));
 }
 
