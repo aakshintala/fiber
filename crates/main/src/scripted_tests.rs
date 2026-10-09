@@ -17,7 +17,7 @@ use contract::clock::Clock;
 use extensions::Providers;
 use serde_json::json;
 
-use super::{access, is_scripted, prepare, warm};
+use super::{access, credential, is_scripted, label, prepare, warm};
 use crate::lua_providers::Access;
 
 fn config(home: &Path, workspace: &Path, overrides: &[&str]) -> Config {
@@ -129,6 +129,7 @@ fn parts(
     global: &serde_json::Value,
     files: &[(&str, &str)],
     recorded: Option<&str>,
+    labels: crate::credential::Labels<'_>,
 ) -> Result<crate::Parts, contract::shapes::Failure> {
     let root = fakes::TempDir::new("fiber-scripted-parts");
     let home = root.path().join("home");
@@ -145,7 +146,7 @@ fn parts(
         workspace,
         Vec::new(),
         recorded,
-        None,
+        labels,
         None,
         clock,
         None,
@@ -161,6 +162,7 @@ fn a_scripted_session_starts_with_no_credential_and_no_warming() {
         &json!({"model": "scripted/s.json", "cache": {"warm_idle": true}}),
         &[("s.json", ONE_STEP)],
         None,
+        crate::credential::Labels::default(),
     )
     .unwrap();
     assert_eq!(parts.model.reference, "scripted/s.json");
@@ -180,6 +182,7 @@ fn a_resumed_scripted_session_starts_from_its_recorded_model() {
         &json!({"model": "scripted/other.json"}),
         &[("s.json", ONE_STEP)],
         Some("scripted/s.json"),
+        crate::credential::Labels::default(),
     )
     .unwrap();
     assert_eq!(parts.model.reference, "scripted/s.json");
@@ -191,6 +194,7 @@ fn a_scripted_reviewer_resolves_to_its_own_script() {
         &json!({"model": "scripted/s.json", "reviewer": {"model": "scripted/r.json"}}),
         &[("s.json", ONE_STEP), ("r.json", ONE_STEP)],
         None,
+        crate::credential::Labels::default(),
     )
     .unwrap();
     match &parts.reviewer {
@@ -201,15 +205,21 @@ fn a_scripted_reviewer_resolves_to_its_own_script() {
 
 #[test]
 fn a_missing_script_fails_io_failed_and_a_malformed_one_config_invalid() {
-    let missing = parts(&json!({"model": "scripted/s.json"}), &[], None)
-        .err()
-        .unwrap();
+    let missing = parts(
+        &json!({"model": "scripted/s.json"}),
+        &[],
+        None,
+        crate::credential::Labels::default(),
+    )
+    .err()
+    .unwrap();
     assert_eq!(missing.code, ErrorCode::IoFailed);
     assert!(missing.message.contains("s.json"), "{}", missing.message);
     let malformed = parts(
         &json!({"model": "scripted/s.json"}),
         &[("s.json", r#"{"steps": [{"text": "a"}, {"colour": 1}]}"#)],
         None,
+        crate::credential::Labels::default(),
     )
     .err()
     .unwrap();
@@ -223,5 +233,61 @@ fn a_missing_script_fails_io_failed_and_a_malformed_one_config_invalid() {
         malformed.message.contains("step 2"),
         "{}",
         malformed.message
+    );
+}
+
+#[test]
+fn a_scripted_provider_rejects_any_asked_label() {
+    let scripted = scripted_provider();
+    let failure = label(&scripted, Some("x")).unwrap_err();
+    assert_eq!(failure.code, ErrorCode::CredentialMissing);
+    assert_eq!(
+        failure.message,
+        "`scripted` has no credential label `x`. The labels for `scripted` are: none"
+    );
+    label(&scripted, None).unwrap();
+    let other = provider("openrouter", "openai-responses");
+    label(&other, Some("x")).unwrap();
+    label(&other, None).unwrap();
+}
+
+#[test]
+fn a_scripted_provider_records_no_label() {
+    let scripted = scripted_provider();
+    assert_eq!(credential(&scripted, "default".to_owned()), None);
+    let other = provider("openrouter", "openai-responses");
+    assert_eq!(
+        credential(&other, "work".to_owned()),
+        Some("work".to_owned())
+    );
+}
+
+#[test]
+fn parts_in_starts_a_scripted_session_with_no_label() {
+    let started = parts(
+        &json!({"model": "scripted/s.json"}),
+        &[("s.json", ONE_STEP)],
+        None,
+        crate::credential::Labels::new(None, Some("default")),
+    )
+    .unwrap();
+    assert_eq!(started.prompt.credential, None);
+}
+
+#[test]
+fn parts_in_rejects_an_asked_label_on_a_scripted_session() {
+    let failure = parts(
+        &json!({"model": "scripted/s.json"}),
+        &[("s.json", ONE_STEP)],
+        None,
+        crate::credential::Labels::new(Some("x"), None),
+    )
+    .err()
+    .unwrap();
+    assert_eq!(failure.code, ErrorCode::CredentialMissing);
+    assert!(
+        failure.message.ends_with("are: none"),
+        "{}",
+        failure.message
     );
 }

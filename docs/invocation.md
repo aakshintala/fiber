@@ -105,7 +105,7 @@ groups, then the flags and examples.
 | `fiber [--model <model>] [-c <key>=<value>]...` | Opens the terminal ("Two doors"). |
 | `ask [--model <model>] [-c <key>=<value>]... [--resume <id> [--credential <label>]] [--worktree] [<prompt>] [-]` | Runs one session of one turn; its events go to stdout. `--resume` sends the prompt to an existing session ("Lifecycle"). `--worktree` runs it in a new worktree ("Isolation"); with `--resume` it is a usage error, because a resumed session keeps its workspace. |
 | `resume [<id>] [--credential <label>]` | Opens a session in the terminal, resuming it if it has exited. With no id, opens home at the session list (`docs/tui.md`, "The session list"). |
-| `continue` | Opens the most recent session in this project, live or exited, in the terminal. With none, it is a usage error naming `fiber`. |
+| `continue` | Opens the most recent session in this project, the launch directory's own outside a git repository, live or exited, in the terminal. With none, it is a usage error naming `fiber`. |
 | `sessions [--all]` | Lists sessions: id, state, the name or first prompt, what it waits on, and spend. It takes `--json`. |
 | `sessions search [--all] <text>` | Searches the logs of past and running sessions for the text, as the `session_search` tool does (`docs/tools.md`, "Searching past sessions"). `--all` searches every project. It takes `--json`. |
 | `sessions delete [--cascade] [--yes] <id>` | Deletes a session ("Deleting and pruning"). |
@@ -113,7 +113,7 @@ groups, then the flags and examples.
 | `sessions prune [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]` | Deletes exited sessions older than the duration and removes kept worktrees that hold nothing to lose, then prints the space freed ("Deleting and pruning"). |
 | `models [<search>]` | Lists the models the installed providers serve: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. It takes `--json`. |
 
-`sessions`, `sessions search`, `sessions prune` and `continue` use the scope of the terminal's session list. Inside
+`sessions`, `sessions search` and `sessions prune` use the scope of the terminal's session list. Inside
 a git repository that is the repository's project, every worktree of it;
 outside one it is every project. `sessions --all` lists every project.
 
@@ -325,9 +325,11 @@ Fiber says no to a newer client's key instead of ignoring it.
 
 A session remembers the id of every command it accepted for as long as its
 process runs, and rejects a second command with the same id
-`duplicate_command`. A client that lost its connection resends every
+`duplicate_command`. A client that lost its connection resends each session
 command it had no answer for, with the same id, so a command that had
-already arrived is never applied twice.
+already arrived is rejected `duplicate_command` and never applied twice. A
+hub command with no answer when the connection dropped is not resent: it
+settles as "No answer before the connection was lost."
 
 `content` is content parts (`docs/events.md`, "Content parts"). A client sends
 an image part as `type`, `data`, the image's bytes in base64, and `mime_type`,
@@ -553,7 +555,8 @@ is still shutting down. The hub does not pass on a `closing` answer from it: it
 resumes the session and delivers the command. If that resume fails
 `session_held`, the hub waits for the old process to release the lock, up to
 the 5-second shutdown bound, and the client gets `session_held` only once the
-bound has passed. A command after `close` and before `fiber_exited` still gets
+bound has passed. Commands keep their order across that resume ("What the hub
+speaks"). A command after `close` and before `fiber_exited` still gets
 `closing`, except a `close` with `now`, which is accepted and upgrades the close.
 
 **A session that never got a prompt leaves nothing behind.** A session that
@@ -809,8 +812,10 @@ each session sees its clients leave. Neither stops a session.
 On SIGTERM, SIGINT or SIGHUP the hub sends each websocket a close message
 saying it is stopping, closes its local connections and exits. It does not
 drain, because it holds no session. A client reconnects and resends, with the
-same id, every command it had no answer for; a session that already accepted
-one rejects the copy `duplicate_command` ("The command line").
+same id, each session command it had no answer for; a session that already
+accepted one rejects the copy `duplicate_command` ("The command line"). A
+hub command with no answer is not resent: in the terminal it settles as "No
+answer before the connection was lost." and its text returns to the draft.
 
 ## The hub
 
@@ -888,6 +893,12 @@ websocket for everything it does.
   session first when it has exited, as "Lifecycle" describes. A session never
   knows whether a line came over a websocket. Events already name their
   session, so one connection carries several sessions' streams.
+- **Commands keep their order.** The hub passes one connection's commands to
+  a session in the order it read them, including commands it re-routes to a
+  resumed session after a `closing` answer, and the session's
+  acknowledgements come back in that order. A command the session answers
+  when it ends, such as `shell`, is acknowledged then, so the order holds
+  for acknowledgements as the session sends them.
 - **A command without one is for the hub.** These are the hub's commands:
 
 | Hub command | `args` | What it does |

@@ -14,6 +14,9 @@ mod bindings;
 mod catalogue;
 mod cells;
 mod clipboard;
+mod configure;
+#[cfg(test)]
+mod configure_fake;
 mod editor;
 mod event_loop;
 mod files;
@@ -35,18 +38,22 @@ mod markdown;
 mod model_picker;
 mod mouse;
 mod offer;
+mod open_at;
 mod opener;
 mod osc;
 mod pages;
 mod paste_image;
 #[cfg(test)]
 mod results_support;
+mod retry;
 mod rows;
 mod screen;
+mod settings_view;
 mod shell;
 mod slash;
 mod sources;
 mod stroke;
+mod swapped;
 mod term;
 mod theme;
 mod turn;
@@ -64,8 +71,11 @@ use crate::link::Line;
 pub use attention::Attention;
 
 pub use catalogue::{Catalogue, ModelEntry, ReadModels, Refresh};
+pub use configure::{Configure, ConfigureError, Layer, Saved, SettingRow, Shown, WriteScope};
 
 pub use home::Launch;
+
+pub use open_at::OpenAt;
 
 pub use look::ThemeSetting;
 
@@ -76,8 +86,8 @@ pub use jigs::{draw, hover_frames, measure_paging};
 pub use event_loop::run;
 
 /// Connects to the hub, starting one when none runs: the stream and the
-/// `hub_hello` it spoke first.
-pub type Connect = Box<dyn FnOnce() -> io::Result<(UnixStream, HubLine)> + Send>;
+/// `hub_hello` it spoke first. Called again for each reconnect.
+pub type Connect = Box<dyn FnMut() -> io::Result<(UnixStream, HubLine)> + Send>;
 
 /// Called once with the session id when `start` is accepted.
 pub type OnAttach = Box<dyn Fn(&SessionId) + Send>;

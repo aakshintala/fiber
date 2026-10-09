@@ -508,8 +508,31 @@ fn a_delayed_drain_still_feeds_the_fold() {
             .recv_timeout(Duration::from_millis(20))
             .expect_err("the fold waits for the drain");
     }
+    // The runner is waiting for the drain once it is parked at the stop
+    // bound; the clock stays still from here, so only the drain's end can
+    // wake it.
+    let at_bound = rig.clock.origin() + Duration::from_secs(30);
+    let mut parked_at_bound = false;
+    for _ in 0..150 {
+        if rig
+            .clock
+            .parked()
+            .iter()
+            .flatten()
+            .any(|until| *until >= at_bound)
+        {
+            parked_at_bound = true;
+            break;
+        }
+        rig.inbox
+            .recv_timeout(Duration::from_millis(20))
+            .expect_err("the fold waits for the drain");
+    }
+    assert!(parked_at_bound, "the runner waits for the drain");
     release_fifo(&release, b"go\n");
-    let notice = reported(&rig);
+    let Ok(Delivery::Job(notice)) = rig.inbox.recv_timeout(DEADLINE) else {
+        panic!("the drain's end did not wake the runner");
+    };
     assert_eq!(notice.completed.status, Outcome::Completed);
     assert_eq!(
         notice.delegate.as_ref().map(|finish| finish.text.clone()),

@@ -113,6 +113,9 @@ impl App {
         if let Some(effect) = self.model_picker_edit(&edit) {
             return effect;
         }
+        if let Some(effect) = self.config_view_edit(&edit) {
+            return effect;
+        }
         // Delete on a focused home row asks to delete it when it
         // exited, ahead of the focus early return below.
         if let Some(effect) = self.home_edit(&edit) {
@@ -439,8 +442,9 @@ impl App {
             "quit" => self.quit(),
             "approvals" => {
                 self.draft.clear();
-                self.open_first()
+                self.next_request()
             }
+            "settings" => self.open_config_view(super::ConfigView::Settings),
             // `?` and `help`.
             _ => {
                 self.draft.clear();
@@ -463,6 +467,7 @@ impl App {
         self.phase = Phase::Starting;
         self.clear_selection();
         self.screen.clear();
+        self.panel_state.reset();
         self.offer = crate::offer::Offer::default();
         self.overlays.slash_rows = slash::rows(&[]);
         self.overlays.commands_id = None;
@@ -471,7 +476,7 @@ impl App {
     /// The attached session, when the command can go out: with none
     /// attached, a notice and the draft cleared; with the link not up, the
     /// draft stays.
-    fn command_session(&mut self) -> Option<(contract::SessionId, bool)> {
+    pub(super) fn command_session(&mut self) -> Option<(contract::SessionId, bool)> {
         let Phase::Attached { session, busy } = &self.phase else {
             self.notices.push(NO_SESSION.to_owned());
             self.draft.clear();
@@ -596,7 +601,7 @@ impl App {
         let text = self.draft.expand();
         // A command sent after the connection is lost goes nowhere, so the
         // draft stays. An empty draft stays too, unless it holds an image.
-        if self.link == Link::Down {
+        if matches!(self.link, Link::Down | Link::Refused) {
             return Effect::None;
         }
         if !has_image && text.trim().is_empty() {

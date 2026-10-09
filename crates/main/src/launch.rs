@@ -61,6 +61,7 @@ pub(crate) fn launch(
         workspace,
         project,
         git,
+        open_at: tui::OpenAt::Home,
         hover,
         version: env!("CARGO_PKG_VERSION").to_owned(),
         model,
@@ -92,6 +93,8 @@ pub(crate) fn launch(
             bell: on(config, "tui.attention.bell"),
             title: on(config, "tui.attention.title"),
         },
+        // `main` gives the seam once it holds Fiber home.
+        configure: None,
     }
 }
 

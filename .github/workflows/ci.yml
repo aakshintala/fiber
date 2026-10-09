@@ -119,17 +119,30 @@ jobs:
           echo "ticket: ${number:-none}; bug: $bug"
           echo "bug=$bug" >>"$GITHUB_OUTPUT"
 
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-mutants
+
       - name: Plan
         id: plan
         env:
           MODE: ${{ steps.select.outputs.mode }}
           PACKAGES: ${{ steps.select.outputs.packages }}
           BUG: ${{ steps.ticket.outputs.bug || 'false' }}
+          BASE: ${{ steps.base.outputs.base }}
           # Mutants run on a ready pull request, a push, and a draft labelled `mutants`.
           MUTANTS: ${{ !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'mutants') }}
         run: |
+          # The shard count follows the diff's mutant count (docs/ci.md, "Mutation testing").
+          count=0
+          if [ "$MUTANTS" = true ] && [ "$MODE" != docs ]; then
+            git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
+            count=$(cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --list | wc -l)
+          fi
+          echo "mutants in the diff: $count"
           cargo xtask plan --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
-            --bug "$BUG" --mutants "$MUTANTS" | tee -a "$GITHUB_OUTPUT"
+            --bug "$BUG" --mutants "$MUTANTS" --mutant-count "$count" | tee -a "$GITHUB_OUTPUT"
 
   lint:
     name: Linux x86_64 checks

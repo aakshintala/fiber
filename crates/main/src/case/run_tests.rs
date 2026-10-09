@@ -11,12 +11,14 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::sync::{Condvar, Mutex, PoisonError, mpsc};
+use std::time::{Duration, Instant, SystemTime};
 
 use contract::SessionId;
-use contract::clock::Clock;
-use contract::events::{Event, FiberExited, TurnCompleted, TurnOutcome};
+use contract::clock::{Clock, Wake};
+use contract::events::{Event, FiberExited, TextDelta, TurnCompleted, TurnOutcome};
 use contract::shapes::{Tokens, Usage};
 use log::Log;
 use serde_json::{Value, json};
@@ -230,7 +232,7 @@ fn successful_initial_advances_do_not_close_before_the_until_event() {
 
     let failures = case.drive(
         Arc::clone(&driver) as Arc<dyn contract::extension::Drive>,
-        log,
+        log.watch_all(),
         Arc::new(r#loop::TurnCancel::default()),
     );
 
@@ -257,7 +259,7 @@ fn the_until_event_stops_driving_and_uses_the_short_exit_deadline() {
 
     let failures = case.drive(
         Arc::clone(&driver) as Arc<dyn contract::extension::Drive>,
-        log,
+        log.watch_all(),
         Arc::new(r#loop::TurnCancel::default()),
     );
 
@@ -298,7 +300,7 @@ fn exiting_before_the_next_advance_names_that_advance() {
 
     let failures = case.drive(
         driver as Arc<dyn contract::extension::Drive>,
-        log,
+        log.watch_all(),
         Arc::new(r#loop::TurnCancel::default()),
     );
 
@@ -336,7 +338,7 @@ fn a_missing_advance_fails_on_the_short_advance_wait() {
 
     let failures = case.drive(
         driver.clone() as Arc<dyn contract::extension::Drive>,
-        log,
+        log.watch_all(),
         Arc::new(r#loop::TurnCancel::default()),
     );
 
@@ -347,4 +349,127 @@ fn a_missing_advance_fails_on_the_short_advance_wait() {
         "{failures:?}"
     );
     assert_eq!(failures[1], "clock advance[1] was not reached");
+}
+
+/// A clock whose first `now()` waits until the test releases it, holding
+/// the driver in the window where it has started but not yet registered
+/// its watcher.
+struct GateClock {
+    origin: Instant,
+    entered: Arc<(Mutex<bool>, Condvar)>,
+    released: Arc<(Mutex<bool>, Condvar)>,
+    calls: AtomicUsize,
+}
+
+impl Clock for GateClock {
+    fn now(&self) -> Instant {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            let (entered, cvar) = &*self.entered;
+            *entered.lock().unwrap_or_else(PoisonError::into_inner) = true;
+            cvar.notify_all();
+            let (released, cvar) = &*self.released;
+            let guard = released.lock().unwrap_or_else(PoisonError::into_inner);
+            let (_guard, wait) = cvar
+                .wait_timeout_while(guard, Duration::from_secs(5), |open| !*open)
+                .unwrap_or_else(PoisonError::into_inner);
+            assert!(
+                !wait.timed_out(),
+                "the test did not release the gate clock within 5s"
+            );
+        }
+        self.origin
+    }
+
+    fn wall(&self) -> SystemTime {
+        SystemTime::UNIX_EPOCH
+            .checked_add(Duration::from_secs(1_700_000_000))
+            .unwrap_or(SystemTime::UNIX_EPOCH)
+    }
+
+    fn sleep(&self, _for: Duration) {}
+
+    fn wait_until(&self, _until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        wait(None);
+    }
+
+    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
+}
+
+#[test]
+fn an_ephemeral_line_written_right_after_start_reaches_the_driver() {
+    let entered = Arc::new((Mutex::new(false), Condvar::new()));
+    let released = Arc::new((Mutex::new(false), Condvar::new()));
+    let clock: Arc<dyn Clock> = Arc::new(GateClock {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the gate clock's origin is one Instant::now, as FakeClock::new"
+        )]
+        origin: Instant::now(),
+        entered: Arc::clone(&entered),
+        released: Arc::clone(&released),
+        calls: AtomicUsize::new(0),
+    });
+    let (_root, log) = session_log(&[]);
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: true,
+    });
+    let case = CaseRun::with_waits(
+        "run-loop".to_owned(),
+        vec![json!({"kind": "fiber_exited"})],
+        Host::default(),
+        Vec::new(),
+        Some(Selector {
+            kind: "assistant_message_delta".to_owned(),
+            nth: 1,
+        }),
+        clock,
+        TEST_WAITS,
+    );
+
+    let handle = case
+        .start(
+            Arc::clone(&driver) as Arc<dyn contract::extension::Drive>,
+            Arc::clone(&log),
+            Arc::new(r#loop::TurnCancel::default()),
+        )
+        .expect("start the case driver");
+
+    let (flag, cvar) = &*entered;
+    let guard = flag.lock().unwrap_or_else(PoisonError::into_inner);
+    let (_guard, wait) = cvar
+        .wait_timeout_while(guard, Duration::from_secs(5), |seen| !*seen)
+        .unwrap_or_else(PoisonError::into_inner);
+    assert!(
+        !wait.timed_out(),
+        "the case driver did not park in process_clock.now() within 5s"
+    );
+
+    log.append(
+        &Event::AssistantMessageDelta(TextDelta { text: "a".into() }),
+        None,
+        None,
+    )
+    .expect("append the race-window delta");
+
+    let (flag, cvar) = &*released;
+    *flag.lock().unwrap_or_else(PoisonError::into_inner) = true;
+    cvar.notify_all();
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let joiner = std::thread::spawn(move || {
+        let result = handle.join();
+        let _ignored = done_tx.send(());
+        result
+    });
+    assert!(
+        done_rx.recv_timeout(Duration::from_secs(5)).is_ok(),
+        "the case driver did not finish within 5s"
+    );
+    joiner
+        .join()
+        .expect("join the driver watcher")
+        .expect("join the case driver");
+    assert_eq!(case.verdict(), Some(Vec::new()));
 }

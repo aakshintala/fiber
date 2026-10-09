@@ -17,6 +17,7 @@ mod names;
 mod path;
 mod rules;
 mod secret;
+mod settings;
 mod write;
 
 use std::collections::BTreeMap;
@@ -49,6 +50,7 @@ pub use secret::{
     CredentialSource, credential_labels, delete_credential, delete_credential_held,
     read_credential, read_secret, store_credential, store_secret,
 };
+pub use settings::{SettingInfo, SettingValue, WriteScope};
 pub use write::{
     Layer, Scope, get_global, remove_extension_settings, replace_global, set, set_global,
     set_global_if_unset, write_atomic,

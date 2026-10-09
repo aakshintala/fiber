@@ -16,6 +16,8 @@ Usage: fiber <command> [arguments]
 
 Sessions:
   ask [--model <model>] [--resume <id>] [--worktree] [<prompt>] [-]  Run one session of one turn; its events go to stdout
+  resume [<id>]                                                      Open a session in the terminal, or home at the session list
+  continue                                                           Open the most recent session in this project
   sessions [--all] [--json]                                          List sessions: id, state, name, what it waits on, spend
   sessions search [--all] [--json] <text>                            Search the logs of past and running sessions for the text
   sessions delete [--cascade] [--yes] <id>                           Delete a session, and with --cascade the sessions that continue it
@@ -97,6 +99,15 @@ struct Cli {
 pub(crate) enum Commands {
     /// Run one session of one turn; its events go to stdout
     Ask(AskArgs),
+    /// Open a session in the terminal, or home at the session list
+    Resume {
+        /// The session: a full id or a unique prefix of one. With none,
+        /// home opens at the session list.
+        #[arg(value_name = "id", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        id: Option<String>,
+    },
+    /// Open the most recent session in this project
+    Continue,
     /// List sessions, or delete, export or prune them
     Sessions(SessionsArgs),
     /// List the models the installed providers serve

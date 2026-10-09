@@ -40,6 +40,8 @@ pub struct Launch {
     pub project: String,
     /// The launch directory is inside a git repository.
     pub git: bool,
+    /// Where the terminal opens (`docs/invocation.md`, "Commands and flags").
+    pub open_at: crate::OpenAt,
     /// `tui.hover`: with it off, mouse mode 1003 is never sent and nothing
     /// is tinted under the pointer.
     pub hover: bool,
@@ -76,6 +78,10 @@ pub struct Launch {
     /// `scoped_models`: the references the model picker shows; empty
     /// means every installed model (`docs/configuration.md`, "Keys").
     pub scoped_models: Vec<String>,
+    /// The seam the configuration views read and write through
+    /// (`docs/tui.md`, "Swapped views"); with none, each says it is not
+    /// available.
+    pub configure: Option<std::sync::Arc<dyn crate::Configure>>,
 }
 
 /// What home draws, built by [`crate::app::App::home_screen`].
@@ -249,6 +255,8 @@ pub(crate) struct Row {
     pub(crate) clients: u32,
     /// What a refusal says about the row, in place of its detail.
     pub(crate) note: Option<String>,
+    /// Its latest status; none for an unreadable row or a `recent` row.
+    pub(crate) status: Option<SessionStatus>,
 }
 
 /// The session list: live rows in feed order, then exited rows newest
@@ -351,6 +359,15 @@ impl Sessions {
     /// The live feed rows, in feed order.
     pub(crate) fn live(&self) -> Vec<&Row> {
         self.feed.iter().filter(|row| row.left.is_none()).collect()
+    }
+
+    /// The feed rows the rail draws as cards: live and crashed, not
+    /// exited, in feed order (`docs/tui.md`, "The rail").
+    pub(crate) fn cards(&self) -> Vec<&Row> {
+        self.feed
+            .iter()
+            .filter(|row| row.left != Some(Left::Exited))
+            .collect()
     }
 
     /// Flips the scope toggle: showing every project, or only the launch
@@ -482,10 +499,12 @@ pub(crate) fn from_status(envelope: &Envelope) -> Row {
             delegates: 0,
             clients: 0,
             note: None,
+            status: None,
         };
     };
     let (state, waiting) = state_of(&status.state);
     Row {
+        status: Some(status.clone()),
         key: 0,
         id: envelope.session_id.clone(),
         name: status.name,
@@ -566,6 +585,7 @@ pub(crate) fn recent_rows(result: &Value) -> Vec<Row> {
                         delegates,
                         clients,
                         note: None,
+                        status: None,
                     })
                 })
                 .collect()
@@ -647,7 +667,7 @@ pub(crate) fn cascade_line(row: &Row, others: &[SessionId]) -> String {
 /// each control character draws as a space, so a name never breaks the
 /// row's line or the delete question (`docs/tui.md`, "Naming the
 /// session"). The stored name keeps its characters.
-fn title(row: &Row) -> String {
+pub(crate) fn title(row: &Row) -> String {
     if row.name.is_empty() {
         row.id.0.clone()
     } else {

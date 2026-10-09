@@ -14,11 +14,14 @@ use crate::app::App;
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
+mod banner;
 pub(crate) mod chrome;
 #[path = "home_view.rs"]
 mod home;
 mod marks;
 mod offer;
+pub(crate) mod panel;
+pub(crate) mod rail;
 mod request;
 mod results;
 
@@ -62,12 +65,13 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 
 /// Draws `app` into `area` of `buf`, from the bottom up: the input box
 /// on the last rows with a completion panel above it, or the approval panel
-/// in their place, then the steering queue, the badge and the quit hint
-/// when shown, and the conversation in the rows left with the notices
-/// floating over its top-right corner, or the key map over them while it
-/// is open. A screen too short for them all drops the hint first, then the
-/// badge. A panel taller than the screen keeps its top, except that a
-/// question form scrolls to keep its cursor's row shown.
+/// in their place, then the steering queue, the reconnect banner, the
+/// badge and the quit hint when shown, and the conversation in the rows
+/// left with the notices floating over its top-right corner, or the key
+/// map over them while it is open. A screen too short for them all drops
+/// the hint first, then the badge. A panel taller than the screen keeps
+/// its top, except that a question form scrolls to keep its cursor's row
+/// shown.
 ///
 /// Returns the click targets drawn, in draw order. Last, the target under
 /// `pointer`, if any, gets [`HOVER_TINT`] as its background.
@@ -84,6 +88,25 @@ pub(crate) fn render(
         chrome::floor(line, area, buf);
         return Vec::new();
     }
+    // A configuration view takes home's place (`docs/tui.md`, "Swapped
+    // views"). Notices float above it (`docs/tui.md`, "Notices"), as
+    // over the conversation.
+    if app.config_view_open() && app.on_home() {
+        let mut targets = Vec::new();
+        crate::swapped::draw(app, area, buf, &mut targets);
+        notices(app, area, buf, &mut targets);
+        if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
+            for target in targets.iter().filter(|target| target.id == id) {
+                buf.set_style(target.rect, HOVER_TINT);
+            }
+        }
+        if let Some(id) = app.focused() {
+            for target in targets.iter().filter(|target| target.id == id) {
+                buf.set_style(target.rect, FOCUS_STYLE);
+            }
+        }
+        return targets;
+    }
     if let Some(screen) = app.home_screen() {
         return home::render(app, &screen, area, buf, pointer);
     }
@@ -92,6 +115,12 @@ pub(crate) fn render(
         None => area,
     };
     let mut targets = Vec::new();
+    if let Some(rect) = app.chrome().layout().and_then(|layout| layout.panel) {
+        panel::draw(app, rect, buf, &mut targets);
+    }
+    if let Some(rect) = app.chrome().layout().and_then(|layout| layout.rail) {
+        rail::draw(app, rect, buf, pointer, &mut targets);
+    }
     let mut bottom = area.bottom();
     if let Some(panel) = app.panel() {
         bottom = request::draw(&panel, area, bottom, buf, &mut targets);
@@ -134,6 +163,7 @@ pub(crate) fn render(
             });
         }
     }
+    banner::draw(app, area, buf, &mut bottom);
     if let Some(rect) = app
         .badge()
         .and_then(|badge| put(buf, area, &mut bottom, &badge, Style::default()))
@@ -155,6 +185,13 @@ pub(crate) fn render(
                 .scroll((to_u16(top), 0))
                 .render(conversation, buf);
             overlay_cross(buf, conversation, &mut targets);
+        }
+        // A configuration view swaps in for the conversation. Notices
+        // float above it (`docs/tui.md`, "Notices"), as over the
+        // conversation.
+        None if app.config_view_open() => {
+            crate::swapped::draw(app, conversation, buf, &mut targets);
+            notices(app, conversation, buf, &mut targets);
         }
         None => {
             // The repository offer swaps in for the conversation.
@@ -349,7 +386,8 @@ fn input_box(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
 /// shown form's caret wins over an open repository offer, which already
 /// gives the panel its keys.
 pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
-    if app.chrome().floor_line().is_some() {
+    // A configuration view draws its own caret.
+    if app.chrome().floor_line().is_some() || app.config_view_open() {
         return None;
     }
     if let Some(screen) = app.home_screen() {

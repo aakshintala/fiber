@@ -13,6 +13,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use config::{Config, ModelData, ProviderData, Secret};
+use contract::ErrorCode;
 use contract::signing::{self, SignRequest, Signer};
 use serde_json::{Map, Value, json};
 
@@ -56,12 +57,103 @@ pub struct LuaProvider {
     /// that label's token, never the previous one (`docs/model-routing.md`,
     /// "Keys, tokens and OAuth").
     token: Mutex<BTreeMap<CredentialPair, TokenState>>,
+    /// Completed call values, bounded per pair, plus the values currently
+    /// handed to running calls (`docs/errors.md`, "The shape").
+    used: Mutex<BTreeMap<CredentialPair, UsedState>>,
+}
+
+/// A token `credential()` returned, with the headers it returned with it: a
+/// request never pairs a token with another token's headers
+/// (`docs/model-routing.md`, "Keys, tokens and OAuth"). `Debug` prints no
+/// value: `Secret` prints redacted.
+#[derive(Debug, Clone)]
+struct Token {
+    secret: Secret,
+    expires: SystemTime,
+    headers: Vec<(String, Secret)>,
+}
+
+/// How many distinct values from completed calls `credentials()` retains
+/// besides the cached and in-flight values (`docs/errors.md`, "The shape").
+const USED_BOUND: usize = 16;
+
+/// One pair's completed-call history and the values owned by calls still
+/// running.
+#[derive(Debug, Default)]
+struct UsedState {
+    /// Distinct values from completed calls, oldest first.
+    completed: Vec<Secret>,
+    /// One entry per value per call still running.
+    active: Vec<Secret>,
+}
+
+impl UsedState {
+    /// Records `values` as owned by a call that starts now.
+    fn start(&mut self, values: &[Secret]) {
+        self.active.extend_from_slice(values);
+    }
+
+    /// Moves one call's values from the in-flight set to the bounded history.
+    fn finish(&mut self, values: &[Secret]) {
+        for value in values {
+            if let Some(held) = self
+                .active
+                .iter()
+                .position(|held| held.expose() == value.expose())
+            {
+                self.active.remove(held);
+            }
+            self.completed
+                .retain(|known| known.expose() != value.expose());
+            self.completed.push(value.clone());
+        }
+        let excess = self.completed.len().saturating_sub(USED_BOUND);
+        self.completed.drain(..excess);
+    }
+}
+
+/// Removes one `sign` call's values from its pair's running set when the
+/// call ends, however it ends.
+struct UsedGuard {
+    provider: Arc<LuaProvider>,
+    pair: CredentialPair,
+    values: Vec<Secret>,
+}
+
+impl Drop for UsedGuard {
+    fn drop(&mut self) {
+        self.provider.release_used(&self.pair, &self.values);
+    }
 }
 
 #[derive(Default)]
 struct TokenState {
-    current: Option<(Secret, SystemTime)>,
+    current: Option<Token>,
     refreshing: bool,
+}
+
+fn parse_credential_headers(
+    headers: Option<&Value>,
+) -> Result<Vec<(String, Secret)>, &'static str> {
+    match headers {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(list)) if list.is_empty() => Ok(Vec::new()),
+        Some(Value::Object(map)) => map
+            .iter()
+            .map(|(name, value)| {
+                let Value::String(value) = value else {
+                    return Err("`headers` with a value that is not a string");
+                };
+                Ok((name.clone(), Secret::new(value.clone())))
+            })
+            .collect(),
+        Some(Value::Array(_))
+        | Some(Value::Bool(_))
+        | Some(Value::Number(_))
+        | Some(Value::String(_)) => {
+            Err("something other than a table of header names to values for `headers`")
+        }
+    }
 }
 
 impl LuaProvider {
@@ -73,6 +165,7 @@ impl LuaProvider {
             name: name.into(),
             models: Mutex::default(),
             token: Mutex::default(),
+            used: Mutex::default(),
         })
     }
 
@@ -247,13 +340,26 @@ impl LuaProvider {
     // token expires. Report a failed refresh as a notice if tokens are seen
     // expiring mid-session.
     pub fn token(self: &Arc<Self>, pair: &CredentialPair) -> Result<Secret, Error> {
+        Ok(self.current(pair)?.secret)
+    }
+
+    /// The token and headers `credential()` last returned for `pair`. With
+    /// none, or one that has expired, it calls `credential()` and waits.
+    /// Within [`REFRESH_BEFORE`] of expiry it returns what it has and calls
+    /// `credential()` again on another thread, so a request never waits on
+    /// a refresh. The token and its headers come from one cache read, so a
+    /// request never pairs a new token with old headers
+    /// (`docs/model-routing.md`, "Keys, tokens and OAuth").
+    fn current(self: &Arc<Self>, pair: &CredentialPair) -> Result<Token, Error> {
         let mut tokens = lock(&self.token);
         let entry = tokens.entry(pair.clone()).or_default();
-        if let Some((token, expires)) = &entry.current
-            && let Ok(left) = expires.duration_since(self.extension.clock().wall())
+        if let Some(current) = &entry.current
+            && let Ok(left) = current
+                .expires
+                .duration_since(self.extension.clock().wall())
             && !left.is_zero()
         {
-            let token = token.clone();
+            let current = current.clone();
             let due = left <= REFRESH_BEFORE;
             if due && !entry.refreshing {
                 entry.refreshing = true;
@@ -269,12 +375,11 @@ impl LuaProvider {
                     }
                 });
             }
-            return Ok(token);
+            return Ok(current);
         }
         let fresh = self.fetch_token(pair)?;
-        let token = fresh.0.clone();
-        entry.current = Some(fresh);
-        Ok(token)
+        entry.current = Some(fresh.clone());
+        Ok(fresh)
     }
 
     /// The token `token()` returns; a failure as the signing seam carries it.
@@ -282,7 +387,13 @@ impl LuaProvider {
         self: &Arc<Self>,
         pair: &CredentialPair,
     ) -> Result<Secret, signing::Error> {
-        self.token(pair).map_err(|e| {
+        Ok(self.signing_token(pair)?.secret)
+    }
+
+    /// The token and headers `LuaSigner::sign` sends; a failure as the
+    /// signing seam carries it.
+    fn signing_token(self: &Arc<Self>, pair: &CredentialPair) -> Result<Token, signing::Error> {
+        self.current(pair).map_err(|e| {
             let message = detail(&e);
             if matches!(e, Error::Unattended { .. }) {
                 signing::Error::Unattended { message }
@@ -299,16 +410,67 @@ impl LuaProvider {
     /// refreshing when there is none. What `LuaSigner::credentials`
     /// redacts after `sign()` replaced the `authorization` header.
     pub fn cached_token(&self, pair: &CredentialPair) -> Option<Secret> {
+        self.cached(pair).map(|token| token.secret)
+    }
+
+    /// The token and headers the cache holds now, without fetching or
+    /// refreshing when there is none.
+    fn cached(&self, pair: &CredentialPair) -> Option<Token> {
         lock(&self.token)
             .get(pair)
-            .and_then(|entry| entry.current.as_ref())
-            .map(|(token, _)| token.clone())
+            .and_then(|entry| entry.current.clone())
+    }
+
+    /// Records `values` as owned by a `sign` call for `pair` that starts
+    /// now, and moves them to completed history when the guard drops
+    /// (`docs/errors.md`, "The shape").
+    fn hold_used(self: &Arc<Self>, pair: &CredentialPair, values: &[Secret]) -> UsedGuard {
+        lock(&self.used)
+            .entry(pair.clone())
+            .or_default()
+            .start(values);
+        UsedGuard {
+            provider: Arc::clone(self),
+            pair: pair.clone(),
+            values: values.to_vec(),
+        }
+    }
+
+    /// Forgets one ended `sign` call's `values` for `pair`.
+    fn release_used(&self, pair: &CredentialPair, values: &[Secret]) {
+        if let Some(entry) = lock(&self.used).get_mut(pair) {
+            entry.finish(values);
+        }
+    }
+
+    /// The values `credentials()` reports for `pair`: the cached values,
+    /// completed history, and values of calls still running. Each value is
+    /// listed once (`docs/errors.md`, "The shape").
+    fn signing_secrets(&self, pair: &CredentialPair) -> Vec<Secret> {
+        let mut secrets = Vec::new();
+        if let Some(current) = self.cached(pair) {
+            push_unique(&mut secrets, current.secret);
+            for (_, value) in current.headers {
+                push_unique(&mut secrets, value);
+            }
+        }
+        if let Some(entry) = lock(&self.used).get(pair) {
+            for value in entry.completed.iter().chain(&entry.active).cloned() {
+                push_unique(&mut secrets, value);
+            }
+        }
+        secrets
     }
 
     /// Calls `credential()` for `pair`, which returns `{ token, expires_at }`,
-    /// the expiry in seconds since the Unix epoch.
-    fn fetch_token(&self, pair: &CredentialPair) -> Result<(Secret, SystemTime), Error> {
-        let inner: Result<(Secret, SystemTime), Error> = (|| {
+    /// the expiry in seconds since the Unix epoch, and optionally `headers`,
+    /// a table of header names to values sent with the token on every signed
+    /// request, and the login's `email`, which any other call ignores
+    /// (`docs/extensions.md`, "What writing a provider looks like"). An
+    /// empty table, and an empty table encoded as `[]`, mean no headers, as
+    /// for `sign()`.
+    fn fetch_token(&self, pair: &CredentialPair) -> Result<Token, Error> {
+        let inner: Result<Token, Error> = (|| {
             let returned = self.extension.provider_credential(&self.name, pair)?;
             let token = returned
                 .get("token")
@@ -334,7 +496,18 @@ impl LuaProvider {
                     self.bad_return("credential", "a token that has already expired".into())
                 );
             }
-            Ok((Secret::new(token.to_owned()), expires))
+            // A numeric `headers` key cannot be seen here: `to_json` turns
+            // `{[42] = "v"}` into `{"42": "v"}` and `{[1] = "v"}` into
+            // an array, so `returned` refuses those before conversion, and
+            // this refuses the shapes that survive it (`docs/extensions.md`,
+            // "What writing a provider looks like").
+            let headers = parse_credential_headers(returned.get("headers"))
+                .map_err(|why| self.bad_return("credential", why.to_owned()))?;
+            Ok(Token {
+                secret: Secret::new(token.to_owned()),
+                expires,
+                headers,
+            })
         })();
         // A failed refresh has its own code, not `credential_failed`.
         inner.map_err(|e| {
@@ -408,8 +581,9 @@ impl Signer for LuaProvider {
 }
 
 /// One Lua provider's requests, signed (`docs/model-routing.md`, "Signing
-/// a request"): the `credential()` token as `authorization: Bearer`, then
-/// what `sign()` returns, which wins when it names `authorization` itself.
+/// a request"): the `credential()` token as `authorization: Bearer` and its
+/// `headers`, then what `sign()` returns, which wins when it names
+/// `authorization` itself.
 struct LuaSigner {
     provider: Arc<LuaProvider>,
     pair: CredentialPair,
@@ -420,42 +594,135 @@ struct LuaSigner {
 impl Signer for LuaSigner {
     fn sign(&self, request: &SignRequest<'_>) -> Result<Vec<(String, String)>, signing::Error> {
         let mut headers = Vec::new();
-        if self.credential {
-            let token = self.provider.credential_token(&self.pair)?;
-            headers.push((
-                "authorization".to_owned(),
-                format!("Bearer {}", token.expose()),
-            ));
-        }
-        if self.sign {
-            let seen: Vec<(String, String)> = request
-                .headers
-                .iter()
-                .cloned()
-                .chain(headers.iter().cloned())
-                .collect();
-            let signed = self.provider.sign(&SignRequest {
-                method: request.method,
-                url: request.url,
-                headers: &seen,
-                body: request.body,
-            })?;
-            if signed
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
-            {
-                headers.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+        let mut values = Vec::new();
+        let mut _used = None;
+        let current = if self.credential {
+            let current = self.provider.signing_token(&self.pair)?;
+            values.push(current.secret.clone());
+            values.extend(current.headers.iter().map(|(_, value)| value.clone()));
+            _used = Some(self.provider.hold_used(&self.pair, &values));
+            Some(current)
+        } else {
+            None
+        };
+
+        let result: Result<Vec<(String, String)>, signing::Error> = (|| {
+            if let Some(current) = &current {
+                // A header `credential()` must not return: `authorization`,
+                // and every header the request already carries, whatever
+                // their case (`docs/model-routing.md`, "Keys, tokens and
+                // OAuth").
+                for (name, _) in &current.headers {
+                    if name.eq_ignore_ascii_case("authorization")
+                        || request
+                            .headers
+                            .iter()
+                            .any(|(sent, _)| sent.eq_ignore_ascii_case(name))
+                    {
+                        return Err(signing::Error::Credential {
+                            code: ErrorCode::CredentialFailed,
+                            message: format!(
+                                "`{}`'s credential() returned `headers` with a name Fiber already sends: {name:?}.",
+                                self.provider.name(),
+                            ),
+                        });
+                    }
+                }
+                headers.push((
+                    "authorization".to_owned(),
+                    format!("Bearer {}", current.secret.expose()),
+                ));
+                for (name, value) in &current.headers {
+                    headers.push((name.clone(), value.expose().to_owned()));
+                }
             }
-            headers.extend(signed);
-        }
-        Ok(headers)
+            if self.sign {
+                let seen: Vec<(String, String)> = request
+                    .headers
+                    .iter()
+                    .cloned()
+                    .chain(headers.iter().cloned())
+                    .collect();
+                let signed = self.provider.sign(&SignRequest {
+                    method: request.method,
+                    url: request.url,
+                    headers: &seen,
+                    body: request.body,
+                })?;
+                if signed
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                {
+                    headers.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+                }
+                headers.extend(signed);
+            }
+            Ok(headers)
+        })();
+        result.map_err(|error| redact_signing_error(error, &values))
     }
 
     fn credentials(&self) -> Vec<Secret> {
         if !self.credential {
             return Vec::new();
         }
-        self.provider.cached_token(&self.pair).into_iter().collect()
+        self.provider.signing_secrets(&self.pair)
+    }
+}
+
+/// Redacts a returned signing error with the values this call owned, before
+/// the provider reads `credentials()` after `sign` returns (`docs/errors.md`,
+/// "The shape").
+fn redact_signing_error(error: signing::Error, values: &[Secret]) -> signing::Error {
+    let redact = |message: String| redact_values(&message, values);
+    match error {
+        signing::Error::Failed(message) => signing::Error::Failed(redact(message)),
+        signing::Error::NotHeaders(message) => signing::Error::NotHeaders(redact(message)),
+        signing::Error::Credential { code, message } => signing::Error::Credential {
+            code,
+            message: redact(message),
+        },
+        signing::Error::Unattended { message } => signing::Error::Unattended {
+            message: redact(message),
+        },
+    }
+}
+
+/// Replaces values owned by one call without scanning inserted placeholders.
+/// Longer values match first so an overlapping shorter value cannot leave a
+/// fragment; empty values are skipped so the scan always advances.
+fn redact_values(message: &str, values: &[Secret]) -> String {
+    let mut patterns: Vec<&str> = values
+        .iter()
+        .map(Secret::expose)
+        .filter(|value| !value.is_empty())
+        .collect();
+    patterns.sort_by_key(|value| std::cmp::Reverse(value.len()));
+    let mut redacted = String::with_capacity(message.len());
+    let mut rest = message;
+    while !rest.is_empty() {
+        if let Some(value) = patterns.iter().find(|value| rest.starts_with(**value)) {
+            redacted.push_str("[redacted]");
+            rest = rest.strip_prefix(*value).unwrap_or("");
+        } else if let Some(next) = rest.chars().next() {
+            redacted.push(next);
+            rest = rest.get(next.len_utf8()..).unwrap_or("");
+        } else {
+            break;
+        }
+    }
+    redacted
+}
+
+/// Pushes `secret` unless one with the same value is already listed, so
+/// `credentials()` names each value once for the redaction scan
+/// (`docs/errors.md`, "The shape").
+fn push_unique(secrets: &mut Vec<Secret>, secret: Secret) {
+    if !secrets
+        .iter()
+        .any(|known| known.expose() == secret.expose())
+    {
+        secrets.push(secret);
     }
 }
 

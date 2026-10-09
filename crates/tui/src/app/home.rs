@@ -12,7 +12,7 @@ use super::{App, Effect, Kind, Link, Phase, mint, session_command};
 use crate::focus::{Area, order};
 use crate::home::{
     HomeScreen, Launch, Left, Level, Sessions, Spot, State, Subs, cascade_line, delete_line,
-    dependents, from_status, line, opening, recent_rows, toggle_line,
+    dependents, from_status, line, recent_rows, toggle_line,
 };
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -20,8 +20,9 @@ use crate::mouse::{Target, TargetId};
 use crate::view::max_question_scroll;
 use contract::SessionId;
 
-#[path = "app_exit.rs"]
 mod exit;
+mod open_at;
+mod reset;
 
 /// Home's state: the launch description, and whether a `start` went out in
 /// this run, which hides the input box's placeholder.
@@ -320,7 +321,9 @@ impl App {
         let project = home.launch.project.clone();
         let scoped = home.launch.git && !home.sessions.show_all();
         let recent = recent_line(&recent, None, scoped.then_some(project.as_str()));
-        vec![json!({"id": feed, "command": "feed"}).to_string(), recent]
+        let mut out = vec![json!({"id": feed, "command": "feed"}).to_string(), recent];
+        out.extend(self.launch_lines());
+        out
     }
 
     /// Folds one hub line into the session list, with the lines to send;
@@ -359,6 +362,9 @@ impl App {
                     }
                     if let Some(ask) = self.take_ask(id) {
                         return Some(self.answer_ask(ask, accepted, &hub.payload));
+                    }
+                    if let Some(lines) = self.rail_answered(id, accepted, &hub.payload) {
+                        return Some(lines);
                     }
                     // A rejected `start` is home's blocker text, above the
                     // box until the next `start` goes out. Reading
@@ -402,9 +408,20 @@ impl App {
                             if let Some(home) = self.home.as_mut() {
                                 home.sessions.recent(rows, first);
                             }
+                            self.list_answered(first, true);
                         } else {
                             self.notices.push(refusal(&hub.payload));
+                            self.list_answered(first, false);
                         }
+                        return Some(Vec::new());
+                    }
+                    if accepted {
+                        let result = hub.payload.get("result");
+                        let result = result.unwrap_or(&serde_json::Value::Null);
+                        if self.sessions_accepted(id, result) {
+                            return Some(Vec::new());
+                        }
+                    } else if self.sessions_rejected(id) {
                         return Some(Vec::new());
                     }
                     None
@@ -413,6 +430,11 @@ impl App {
             },
             Line::Session(envelope) => {
                 if envelope.kind == "session_status" {
+                    // A delegate's own summary is for its parent's panel,
+                    // never the session list (`docs/tui.md`, "The panel").
+                    if self.delegate_status(envelope) {
+                        return Some(Vec::new());
+                    }
                     let session = envelope.session_id.clone();
                     let was_left = self
                         .home
@@ -423,6 +445,7 @@ impl App {
                     if let Some(home) = self.home.as_mut() {
                         home.sessions.status(row);
                     }
+                    self.note_feed(&session);
                     if was_left {
                         self.reconcile(&session);
                     }
@@ -489,6 +512,15 @@ impl App {
             home.subs.sent(id, session.clone(), level);
         }
         line
+    }
+
+    /// The level this connection holds or asks for `session` at, if any:
+    /// a delegate is subscribed once per attachment (`docs/invocation.md`,
+    /// `subscribe`).
+    pub(super) fn subscribed_level(&self, session: &SessionId) -> Option<Level> {
+        self.home
+            .as_ref()
+            .and_then(|home| home.subs.expected(session))
     }
 
     /// Leaves the session on screen for home: the conversation cleared
@@ -1172,11 +1204,19 @@ impl App {
         self.workspace.clone()
     }
 
+    /// Opens the row with `key` while home draws.
+    fn open_row(&mut self, key: u64) -> Effect {
+        if !self.on_home() {
+            return Effect::None;
+        }
+        self.open_entry(key)
+    }
+
     /// Opens the row with `key`: the subscribes its level needs, then the
     /// session's commands. The conversation clears as going home does,
     /// and the gate holds until the last subscribe is answered.
-    fn open_row(&mut self, key: u64) -> Effect {
-        if !self.on_home() || self.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
+    pub(super) fn open_entry(&mut self, key: u64) -> Effect {
+        if self.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
             return Effect::None;
         }
         let Some(row) = self
@@ -1198,24 +1238,7 @@ impl App {
             .home
             .as_ref()
             .and_then(|home| home.subs.expected(&session));
-        self.go_home();
-        self.attach(session.clone());
-        let levels = opening(expected);
-        let mut ack = String::new();
-        let mut lines = Vec::new();
-        for level in levels {
-            let (id, line) = subscribe_line(&session, *level);
-            if let Some(home) = self.home.as_mut() {
-                home.subs.sent(id.clone(), session.clone(), *level);
-            }
-            ack = id;
-            lines.push(line);
-        }
-        lines.push(self.ask_commands(&session));
-        if let Some(home) = self.home.as_mut() {
-            home.opening = Some(Opening { session, ack });
-        }
-        Effect::Send(lines)
+        Effect::Send(self.open_session(session, expected))
     }
 
     /// Records the acknowledgement of the in-flight subscribe `id`:
@@ -1327,7 +1350,7 @@ impl Home {
     /// new worktree switch off and keeping whether it is in git: the
     /// launch flag for the launch directory, else whether some row in
     /// that workspace is then.
-    fn choose(&mut self, workspace: String) {
+    pub(super) fn choose(&mut self, workspace: String) {
         self.chosen_git = if workspace == self.launch.workspace.display().to_string() {
             self.launch.git
         } else {
@@ -1379,7 +1402,7 @@ fn refusal_parts(payload: &serde_json::Map<String, Value>) -> (&str, String) {
     (code, refusal(payload))
 }
 /// A hub refusal's message, for a notice.
-fn refusal(payload: &serde_json::Map<String, Value>) -> String {
+pub(super) fn refusal(payload: &serde_json::Map<String, Value>) -> String {
     payload
         .get("message")
         .and_then(Value::as_str)
@@ -1388,5 +1411,5 @@ fn refusal(payload: &serde_json::Map<String, Value>) -> String {
 }
 
 #[cfg(test)]
-#[path = "app_home_tests.rs"]
+#[path = "home_tests.rs"]
 mod tests;

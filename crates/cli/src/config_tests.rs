@@ -574,6 +574,46 @@ fn config_set_of_an_unconfigured_model_warns_and_exits_zero() {
 }
 
 #[test]
+fn config_set_text_writes_and_returns_the_warning_lines() {
+    let setup = Setup::new();
+    install_host(&setup.home(), "acme", "acme", json!({"workspace": {}}));
+    let lines = super::config_set_text(
+        &setup.home(),
+        &setup.workspace(),
+        Layer::Global,
+        "model",
+        "acme/m",
+    )
+    .unwrap();
+    assert_eq!(
+        lines,
+        [
+            "fiber: The model `acme/m` needs the setting `workspace` for its base URL, \
+          which has no value."
+        ]
+    );
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(written, json!({"model": "acme/m"}));
+}
+
+#[test]
+fn config_set_text_refuses_a_repository_forbidden_key_without_writing() {
+    let setup = Setup::new();
+    let e = super::config_set_text(
+        &setup.home(),
+        &setup.workspace(),
+        Layer::Repository,
+        "tui.hover",
+        "false",
+    )
+    .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Usage);
+    assert!(!setup.workspace().join(".fiber/config.json").exists());
+}
+
+#[test]
 fn set_of_an_unconfigured_model_warns_and_writes() {
     for typed in ["acme/m", "acme/m:high", "m"] {
         let setup = Setup::new();

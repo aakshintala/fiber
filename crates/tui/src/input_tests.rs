@@ -1,6 +1,6 @@
 //! Tests for the draft editor.
 
-use super::Draft;
+use super::{Draft, Piece};
 
 /// A draft holding `text`, typed: characters and line breaks.
 fn typed(text: &str) -> Draft {
@@ -784,4 +784,12 @@ fn expand_shows_an_image_as_its_label() {
         with_image("look ", "AAA", " here").expand(),
         "look [Image #1] here"
     );
+}
+
+#[test]
+fn debug_prints_a_draft_and_its_pieces_redacted() {
+    let mut draft = Draft::default();
+    draft.insert('s');
+    assert_eq!(format!("{draft:?}"), "Draft(redacted)");
+    assert_eq!(format!("{:?}", Piece::Char('s')), "Piece(redacted)");
 }
