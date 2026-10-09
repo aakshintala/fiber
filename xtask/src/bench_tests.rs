@@ -535,7 +535,7 @@ fn a_failing_row_says_fail_and_the_failures_are_listed() {
         .nth(1)
         .unwrap_or_else(|| panic!("no failures section in:\n{failing}"));
     assert!(
-        listed.contains("- Session, idle, headless: median 12289 KiB"),
+        listed.contains("- Session, idle, headless: over budget: median 12289 KiB"),
         "{failing}"
     );
 }
@@ -886,14 +886,40 @@ fn the_backstop_has_no_base_column_and_fails_on_any_budget() {
 }
 
 #[test]
-fn a_self_check_the_base_fails_too_does_not_fail_the_head() {
+fn a_malformed_base_or_head_metric_excuses_nothing() {
+    let kib = json!([30000, 30000, 30000, 30000, 30000]);
+    let over_head = with_metric(head(), "session_idle_rss_kib", kib.clone());
+    // A base metric that is not an array, or has too few samples, proves nothing.
+    for bad in [json!("x"), json!([1, 2])] {
+        let base = with_metric(full_base(), "session_idle_rss_kib", bad);
+        let out = judge(&over_head, Some(&base), Event::PullRequest);
+        assert!(
+            has(&out.failures, "session_idle_rss_kib"),
+            "{:?}",
+            out.failures
+        );
+    }
+    // A head metric that is missing still fails when the base is over.
+    let mut missing = head();
+    missing["metrics"]
+        .as_object_mut()
+        .unwrap()
+        .remove("session_idle_rss_kib");
+    let over_base = with_metric(full_base(), "session_idle_rss_kib", kib);
+    let out = judge(&missing, Some(&over_base), Event::PullRequest);
+    assert!(
+        has(&out.failures, "session_idle_rss_kib"),
+        "{:?}",
+        out.failures
+    );
+}
+
+#[test]
+fn a_self_check_the_base_fails_too_still_fails_the_head() {
     let mut both = head();
     both["failures"] = json!(["hub did not exit"]);
     let mut base = full_base();
     base["failures"] = json!(["hub did not exit"]);
     let out = judge(&both, Some(&base), Event::PullRequest);
-    assert_eq!(out.failures, Vec::<String>::new());
-    assert!(out.comment.contains("hub did not exit"), "{}", out.comment);
-    let out = judge(&both, Some(&full_base()), Event::PullRequest);
-    assert!(has(&out.failures, "hub did not exit"));
+    assert!(has(&out.failures, "hub did not exit"), "{:?}", out.failures);
 }

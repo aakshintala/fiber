@@ -382,7 +382,9 @@ fn per_thread(list: List, ids: &[&str], head: Option<&Results>) -> (Vec<String>,
                 };
                 match checked {
                     Ok(None) => {}
-                    Ok(Some(broken)) => failures.push(format!("{id}: run {}: {broken}", i + 1)),
+                    Ok(Some(broken)) => {
+                        failures.push(format!("{OVER}{id}: run {}: {broken}", i + 1));
+                    }
                     Err(e) => failures.push(e),
                 }
             }
@@ -428,7 +430,7 @@ fn per_entry(
                     observed = shown;
                 }
                 if let Some(broken) = broken {
-                    failures.push(format!("{id}: run {}: {broken}", i + 1));
+                    failures.push(format!("{OVER}{id}: run {}: {broken}", i + 1));
                 }
             }
             Err(e) => failures.push(e),
@@ -523,16 +525,8 @@ pub(crate) fn report(
         (Event::PullRequest, Some(Ok(text))) => parse_results(text).ok(),
         _ => None,
     };
-    let mut also_at_base = Vec::new();
     if let Some(results) = &head {
-        for f in &results.failures {
-            // A self-check the base fails too is not the pull request's.
-            if base_parsed.as_ref().is_some_and(|b| b.failures.contains(f)) {
-                also_at_base.push(format!("self-check: {f}"));
-            } else {
-                failures.push(format!("self-check: {f}"));
-            }
-        }
+        failures.extend(results.failures.iter().map(|f| format!("self-check: {f}")));
         if results.idle_secs < MIN_IDLE_SECS {
             failures.push(format!(
                 "idle window of {} s, expected at least {MIN_IDLE_SECS} s",
@@ -597,16 +591,7 @@ pub(crate) fn report(
     }
 
     let idle_secs = head.as_ref().map(|h| h.idle_secs);
-    let mut comment = comment(&lines, &failures, &base, idle_secs);
-    if !also_at_base.is_empty() {
-        comment.push_str(&format!(
-            "\n### Over at base {base_commit}\n\n{}\n",
-            also_at_base
-                .iter()
-                .map(|f| format!("- {f}\n"))
-                .collect::<String>()
-        ));
-    }
+    let comment = comment(&lines, &failures, &base, idle_secs);
     Report { failures, comment }
 }
 
@@ -630,9 +615,14 @@ fn kib_ceiling(cell: &str, failures: &mut Vec<String>) -> bool {
     }
 }
 
-/// A base metric that is absent is not a budget the base is over.
-fn base_is_over(failures: &[String]) -> bool {
-    !failures.is_empty() && !failures.iter().any(|f| f.contains(": missing"))
+/// Starts each failure that is a measurement over its budget, as opposed to
+/// a result that is missing or malformed.
+const OVER: &str = "over budget: ";
+
+/// Whether `failures` are non-empty and all measured violations. Only these
+/// can be excused by a base that has them too.
+fn all_over(failures: &[String]) -> bool {
+    !failures.is_empty() && failures.iter().all(|f| f.starts_with(OVER))
 }
 
 /// One row's failures and its comment line. A memory or exact budget the base
@@ -731,7 +721,7 @@ fn judge(
             Check::Exact { rule, .. } => exact(rule, Some(b)).0,
             Check::Timing(_) => Vec::new(),
         });
-        if base_failures.is_some_and(|f| base_is_over(&f)) {
+        if all_over(&measured) && base_failures.is_some_and(|f| all_over(&f)) {
             line.base = format!("over at base {base_commit}");
             line.result = "over at base";
         } else {
@@ -765,7 +755,7 @@ fn memory(cell: &str, ids: &[&str], head: Option<&Results>, failures: &mut Vec<S
                 shown.push(format!("{id}: {value:.0} KiB"));
                 if value > limit {
                     failures.push(format!(
-                        "median {value:.0} KiB of {id} is over {limit:.0} KiB"
+                        "{OVER}median {value:.0} KiB of {id} is over {limit:.0} KiB"
                     ));
                 }
             }
