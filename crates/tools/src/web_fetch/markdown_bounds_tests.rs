@@ -504,10 +504,10 @@ proptest! {
 /// How long the linear hidden-close cases may take on the wall clock.
 const HIDDEN_LINEAR: Duration = Duration::from_secs(10);
 
-/// An unmatched hidden close scans nothing: each close pops at most to
-/// the matching open, so an end tag with no match is consumed and
-/// ignored in O(1). A per-close rescan at this size takes minutes;
-/// linear takes a fraction of a second in debug.
+/// An end tag that matches no open hidden element is consumed and leaves
+/// the open elements and their counts as they were. The deadline is a hang
+/// guard, not a timing assertion: a per-close rescan at this size takes
+/// minutes, linear work a fraction of a second in debug.
 #[test]
 fn half_a_million_unmatched_hidden_closes_stay_linear() {
     let n = 500_000;
@@ -526,10 +526,12 @@ fn half_a_million_unmatched_hidden_closes_stay_linear() {
             for _ in 0..n {
                 hidden.open(open, &tag);
             }
+            let before = hidden.above_counts();
             for _ in 0..n {
                 assert!(hidden.end(close), "{close}");
             }
             assert!(hidden.is_hidden(), "{open} {close}");
+            assert_eq!(hidden.above_counts(), before, "{open} {close}");
         });
     }
 }
