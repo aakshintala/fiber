@@ -198,9 +198,8 @@ fn rewrite(app: &mut App, action: &str, arguments: Value) {
     ));
 }
 
-/// Opens job `job`'s view, then probes it with a cursor move only a grid
-/// honors: `A`, home, `B` reads `B` on a grid and `AB` on lines.
-fn is_tty(app: &mut App, job: &str) -> bool {
+/// Opens job `job`'s view; opening sends or nothing, never anything else.
+fn open_job(app: &mut App, job: &str) {
     match app.open_item(&JobId(job.to_owned())) {
         Effect::None | Effect::Send(_) => {}
         Effect::Quit
@@ -214,6 +213,12 @@ fn is_tty(app: &mut App, job: &str) -> bool {
         | Effect::OpenFile(_)
         | Effect::ReadImage(_) => panic!("opening sends or nothing"),
     }
+}
+
+/// Opens job `job`'s view, then probes it with a cursor move only a grid
+/// honors: `A`, home, `B` reads `B` on a grid and `AB` on lines.
+fn is_tty(app: &mut App, job: &str) -> bool {
+    open_job(app, job);
     delta(app, job, "A\x1b[1;1HB");
     let rows = app.item_output_rows(80, 24);
     rows.first().is_some_and(|row| row.trim_end() == "B")
@@ -232,37 +237,13 @@ fn deltas_feed_one_jobs_output_in_order_and_never_anothers() {
     delta(&mut app, "j_1", "hello ");
     delta(&mut app, "j_2", "other");
     delta(&mut app, "j_1", "world");
-    match app.open_item(&JobId("j_1".to_owned())) {
-        Effect::None | Effect::Send(_) => {}
-        Effect::Quit
-        | Effect::ListFiles
-        | Effect::FindPause { .. }
-        | Effect::Search { .. }
-        | Effect::Editor { .. }
-        | Effect::Exit(_)
-        | Effect::Copy(_)
-        | Effect::OpenLink(_)
-        | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("opening sends or nothing"),
-    }
+    open_job(&mut app, "j_1");
     let rows = app.item_output_rows(80, 24);
     assert!(
         rows.first()
             .is_some_and(|row| row.starts_with("hello world"))
     );
-    match app.open_item(&JobId("j_2".to_owned())) {
-        Effect::None | Effect::Send(_) => {}
-        Effect::Quit
-        | Effect::ListFiles
-        | Effect::FindPause { .. }
-        | Effect::Search { .. }
-        | Effect::Editor { .. }
-        | Effect::Exit(_)
-        | Effect::Copy(_)
-        | Effect::OpenLink(_)
-        | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("opening sends or nothing"),
-    }
+    open_job(&mut app, "j_2");
     let rows = app.item_output_rows(80, 24);
     assert!(rows.first().is_some_and(|row| row.starts_with("other")));
 }
@@ -329,19 +310,7 @@ fn completion_drops_the_text_unless_its_view_is_open() {
     start_job(&mut app, "j_1", "a_1");
     delta(&mut app, "j_1", "gone");
     complete(&mut app, "j_1");
-    match app.open_item(&JobId("j_1".to_owned())) {
-        Effect::None | Effect::Send(_) => {}
-        Effect::Quit
-        | Effect::ListFiles
-        | Effect::FindPause { .. }
-        | Effect::Search { .. }
-        | Effect::Editor { .. }
-        | Effect::Exit(_)
-        | Effect::Copy(_)
-        | Effect::OpenLink(_)
-        | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("opening sends or nothing"),
-    }
+    open_job(&mut app, "j_1");
     let rows = app.item_output_rows(80, 24);
     assert!(rows.iter().all(|row| row.trim().is_empty()));
 }
@@ -352,19 +321,7 @@ fn completion_keeps_the_text_while_its_view_is_open() {
     opened(&mut app);
     start_job(&mut app, "j_1", "a_1");
     delta(&mut app, "j_1", "kept");
-    match app.open_item(&JobId("j_1".to_owned())) {
-        Effect::None | Effect::Send(_) => {}
-        Effect::Quit
-        | Effect::ListFiles
-        | Effect::FindPause { .. }
-        | Effect::Search { .. }
-        | Effect::Editor { .. }
-        | Effect::Exit(_)
-        | Effect::Copy(_)
-        | Effect::OpenLink(_)
-        | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("opening sends or nothing"),
-    }
+    open_job(&mut app, "j_1");
     complete(&mut app, "j_1");
     let rows = app.item_output_rows(80, 24);
     assert!(rows.first().is_some_and(|row| row.starts_with("kept")));
