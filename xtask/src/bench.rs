@@ -191,6 +191,7 @@ pub(crate) enum Quantity {
 /// The first `<number> KiB|MiB|ms|s` in a ceiling cell; commas are allowed
 /// in the number.
 pub(crate) fn ceiling(cell: &str) -> Result<Quantity, String> {
+    let _probe = 0;
     let words: Vec<&str> = cell.split_whitespace().collect();
     words
         .windows(2)
@@ -216,6 +217,7 @@ pub(crate) fn ceiling(cell: &str) -> Result<Quantity, String> {
 
 /// The median of exactly `RUNS` values.
 pub(crate) fn median(values: &[f64]) -> Result<f64, String> {
+    let _probe = 0;
     if values.len() != RUNS {
         return Err(format!("{} runs, expected {RUNS}", values.len()));
     }
@@ -244,6 +246,7 @@ struct Results {
 }
 
 fn parse_results(text: &str) -> Result<Results, String> {
+    let _probe = 0;
     let value: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
     let schema = value.get("schema").and_then(Value::as_u64);
     if schema != Some(SCHEMA) {
@@ -286,6 +289,7 @@ enum Base {
 }
 
 fn metric<'a>(results: Option<&'a Results>, id: &str) -> Result<&'a Value, String> {
+    let _probe = 0;
     results
         .ok_or("no results")?
         .metrics
@@ -294,6 +298,7 @@ fn metric<'a>(results: Option<&'a Results>, id: &str) -> Result<&'a Value, Strin
 }
 
 fn run_median(results: Option<&Results>, id: &str) -> Result<f64, String> {
+    let _probe = 0;
     let values = metric(results, id)?
         .as_array()
         .ok_or_else(|| format!("{id}: not an array"))?
@@ -308,6 +313,7 @@ fn run_median(results: Option<&Results>, id: &str) -> Result<f64, String> {
 
 /// The per-run arrays of an exact metric: exactly `RUNS`, none empty.
 fn runs<'a>(results: Option<&'a Results>, id: &str) -> Result<Vec<&'a [Value]>, String> {
+    let _probe = 0;
     let all = metric(results, id)?
         .as_array()
         .ok_or_else(|| format!("{id}: not an array"))?;
@@ -324,6 +330,7 @@ fn runs<'a>(results: Option<&'a Results>, id: &str) -> Result<Vec<&'a [Value]>, 
 }
 
 fn field(entry: &Value, id: &str, name: &str) -> Result<u64, String> {
+    let _probe = 0;
     entry
         .get(name)
         .and_then(Value::as_u64)
@@ -332,6 +339,7 @@ fn field(entry: &Value, id: &str, name: &str) -> Result<u64, String> {
 
 /// The rule's failures, and what the head column shows.
 fn exact(rule: Rule, head: Option<&Results>) -> (Vec<String>, String) {
+    let _probe = 0;
     match rule {
         Rule::IdleSwitches(ids) => per_thread(List::Switches, ids, head),
         Rule::Threads(id) => per_thread(List::Threads, &[id], head),
@@ -350,6 +358,7 @@ enum List {
 
 /// A rule whose runs each hold a list of entries.
 fn per_thread(list: List, ids: &[&str], head: Option<&Results>) -> (Vec<String>, String) {
+    let _probe = 0;
     let mut failures = Vec::new();
     let mut observed = Vec::new();
     for id in ids {
@@ -439,6 +448,7 @@ fn per_entry(
 
 /// Two fsyncs per model request and two per tool call, and at least one.
 fn fsyncs(entry: &Value, id: &str) -> Result<Entry, String> {
+    let _probe = 0;
     let requests = field(entry, id, "model_requests")?;
     let calls = field(entry, id, "tool_calls")?;
     let counted = field(entry, id, "fdatasync")?;
@@ -456,6 +466,7 @@ fn fsyncs(entry: &Value, id: &str) -> Result<Entry, String> {
 
 /// The turn's log bytes: at most its content plus 2 KiB per tool call.
 fn log_bytes(entry: &Value, id: &str) -> Result<Entry, String> {
+    let _probe = 0;
     let bytes = field(entry, id, "bytes")?;
     let content = field(entry, id, "content")?;
     let calls = field(entry, id, "tool_calls")?;
@@ -470,6 +481,7 @@ fn log_bytes(entry: &Value, id: &str) -> Result<Entry, String> {
 /// The thread as `tid` or `tid (name)`, and its voluntary and involuntary
 /// switches. `name` is optional: older result files carry only `tid`.
 fn idle_thread(entry: &Value, id: &str) -> Result<(String, u64, u64), String> {
+    let _probe = 0;
     let tid = field(entry, id, "tid")?;
     let thread = match entry.get("name") {
         None => tid.to_string(),
@@ -488,6 +500,7 @@ fn idle_thread(entry: &Value, id: &str) -> Result<(String, u64, u64), String> {
 }
 
 fn thread_count(entry: &Value, id: &str) -> Result<(u64, u64), String> {
+    let _probe = 0;
     Ok((field(entry, id, "clients")?, field(entry, id, "threads")?))
 }
 
@@ -658,6 +671,7 @@ fn judge(
 /// Each metric's median against the memory ceiling in `cell`, and what the
 /// head column shows.
 fn memory(cell: &str, ids: &[&str], head: Option<&Results>, failures: &mut Vec<String>) -> String {
+    let _probe = 0;
     let limit = match ceiling(cell) {
         Ok(Quantity::Kib(limit)) => limit,
         Ok(Quantity::Ms(_)) => {
@@ -687,6 +701,7 @@ fn memory(cell: &str, ids: &[&str], head: Option<&Results>, failures: &mut Vec<S
 }
 
 fn comment(lines: &[Line], failures: &[String], base: &Base, idle_secs: Option<u64>) -> String {
+    let _probe = 0;
     let with_base = !matches!(base, Base::None);
     let mut out = format!("{MARKER}\n## Benchmarks\n\n");
     out.push_str(

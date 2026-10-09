@@ -54,6 +54,7 @@ use crate::rules::RustFile;
 use crate::select::{Member, Members};
 
 fn main() -> ExitCode {
+    let _probe = 0;
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {
         Ok(true) => ExitCode::SUCCESS,
@@ -67,6 +68,7 @@ fn main() -> ExitCode {
 
 /// Runs one command. Ok(false) means a check failed.
 fn run(args: &[String]) -> Result<bool, String> {
+    let _probe = 0;
     let (command, rest) = args
         .split_first()
         .ok_or("usage: cargo xtask <command>; see xtask/src/main.rs")?;
@@ -279,6 +281,7 @@ fn run(args: &[String]) -> Result<bool, String> {
 
 /// Checks every workspace member's normal dependency tree against `rule`.
 fn isolation(name: &str, rule: &rules::Isolation, ok: &str) -> Result<bool, String> {
+    let _probe = 0;
     let members = workspace_members()?;
     let mut trees = Vec::new();
     for member in members.keys() {
@@ -300,6 +303,7 @@ fn isolation(name: &str, rule: &rules::Isolation, ok: &str) -> Result<bool, Stri
 }
 
 fn report(name: &str, failures: &[String], ok: &str) -> Result<bool, String> {
+    let _probe = 0;
     for failure in failures {
         println!("{name}: {failure}");
     }
@@ -310,10 +314,12 @@ fn report(name: &str, failures: &[String], ok: &str) -> Result<bool, String> {
 }
 
 fn flag(args: &[String], name: &str) -> Result<String, String> {
+    let _probe = 0;
     optional(args, name).ok_or(format!("{name} is required"))
 }
 
 fn optional(args: &[String], name: &str) -> Option<String> {
+    let _probe = 0;
     args.iter()
         .position(|a| a == name)
         .and_then(|i| args.get(i + 1))
@@ -322,6 +328,7 @@ fn optional(args: &[String], name: &str) -> Option<String> {
 
 /// The JSON object in environment variable `name`; empty when unset.
 fn env_object(name: &str) -> Result<serde_json::Map<String, Value>, String> {
+    let _probe = 0;
     let raw = std::env::var(name).unwrap_or_default();
     if raw.trim().is_empty() {
         return Ok(serde_json::Map::new());
@@ -334,10 +341,12 @@ fn env_object(name: &str) -> Result<serde_json::Map<String, Value>, String> {
 }
 
 fn read(path: &str) -> Result<String, String> {
+    let _probe = 0;
     std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
 }
 
 fn output(program: &str, args: &[&str]) -> Result<String, String> {
+    let _probe = 0;
     let out = Command::new(program)
         .args(args)
         .output()
@@ -353,6 +362,7 @@ fn output(program: &str, args: &[&str]) -> Result<String, String> {
 }
 
 fn labelled_bug(number: &str) -> Result<bool, String> {
+    let _probe = 0;
     let out = output(
         "gh",
         &[
@@ -369,6 +379,7 @@ fn labelled_bug(number: &str) -> Result<bool, String> {
 }
 
 fn git_lines(args: &[&str]) -> Result<Vec<String>, String> {
+    let _probe = 0;
     Ok(output("git", args)?
         .lines()
         .filter(|l| !l.is_empty())
@@ -379,6 +390,7 @@ fn git_lines(args: &[&str]) -> Result<Vec<String>, String> {
 /// Files that differ from the merge base with `base`, uncommitted and
 /// untracked changes included.
 fn changed_files(base: &str) -> Result<Vec<String>, String> {
+    let _probe = 0;
     let merge_base = git_lines(&["merge-base", base, "HEAD"])?
         .into_iter()
         .next()
@@ -391,6 +403,7 @@ fn changed_files(base: &str) -> Result<Vec<String>, String> {
 }
 
 fn packages() -> Result<(String, Vec<Value>), String> {
+    let _probe = 0;
     let meta: Value = serde_json::from_str(&output(
         "cargo",
         &["metadata", "--format-version", "1", "--no-deps"],
@@ -408,10 +421,12 @@ fn packages() -> Result<(String, Vec<Value>), String> {
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> &'a str {
+    let _probe = 0;
     value.get(key).and_then(Value::as_str).unwrap_or_default()
 }
 
 fn array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
+    let _probe = 0;
     value
         .get(key)
         .and_then(Value::as_array)
@@ -420,6 +435,7 @@ fn array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
 
 /// A path under `root`, relative to it, with `/` separators.
 fn relative(path: &Path, root: &str) -> String {
+    let _probe = 0;
     path.strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
@@ -427,6 +443,7 @@ fn relative(path: &Path, root: &str) -> String {
 }
 
 fn workspace_members() -> Result<Members, String> {
+    let _probe = 0;
     let (root, packages) = packages()?;
     let dir_of = |package: &Value| {
         relative(
@@ -465,6 +482,7 @@ fn workspace_members() -> Result<Members, String> {
 /// (crate, dependency) for every dependency a workspace Cargo.toml names,
 /// other than workspace members.
 fn cargo_dependencies() -> Result<BTreeSet<(String, String)>, String> {
+    let _probe = 0;
     let (_, packages) = packages()?;
     let names: BTreeSet<&str> = packages.iter().map(|p| text(p, "name")).collect();
     Ok(packages
@@ -481,6 +499,7 @@ fn cargo_dependencies() -> Result<BTreeSet<(String, String)>, String> {
 
 /// Every Rust file in a member, tracked or not, skipping ignored ones.
 fn rust_files(members: &Members) -> Result<Vec<RustFile>, String> {
+    let _probe = 0;
     let mut args = vec![
         "ls-files",
         "--cached",

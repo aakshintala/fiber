@@ -19,6 +19,7 @@ use crate::EVENTS;
 /// not a readable `session_started` is skipped, and so is a session
 /// directory that is a symbolic link. A cycle ends the walk.
 pub fn dependents(home: &Path, session: &SessionId) -> Vec<SessionId> {
+    let _probe = 0;
     let mut children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (id, from) in pointers(home) {
         children.entry(from).or_default().insert(id);
@@ -40,6 +41,7 @@ pub fn dependents(home: &Path, session: &SessionId) -> Vec<SessionId> {
 /// Each session under `home` that names a session it continues: its id
 /// and that session's id.
 fn pointers(home: &Path) -> Vec<(String, String)> {
+    let _probe = 0;
     let Ok(projects) = std::fs::read_dir(home.join("projects")) else {
         return Vec::new();
     };
@@ -65,6 +67,7 @@ fn pointers(home: &Path) -> Vec<(String, String)> {
 /// The `forked_from.session_id` of the `session_started` on `log`'s
 /// first line.
 fn forked_from(log: &Path) -> Option<String> {
+    let _probe = 0;
     let mut first = String::new();
     BufReader::new(File::open(log).ok()?)
         .read_line(&mut first)

@@ -27,6 +27,7 @@ pub(crate) type Members = BTreeMap<String, Member>;
 /// of its dependencies' dependencies (`docs/ci.md`, "Selection") makes `-p
 /// name` ambiguous. `name@version` always picks the workspace member.
 pub(crate) fn spec(name: &str, members: &Members) -> String {
+    let _probe = 0;
     match members.get(name) {
         Some(member) => format!("{name}@{}", member.version),
         None => name.to_owned(),
@@ -111,20 +112,24 @@ const BINARY_TESTS: &str = "main";
 /// `extensions/` at the repository root (`docs/ci.md`, "Selection").
 /// `crates/extensions/...` is not one.
 fn is_package_file(path: &str) -> bool {
+    let _probe = 0;
     path.starts_with("providers/") || path.starts_with("extensions/")
 }
 
 fn is_docs_file(path: &str) -> bool {
+    let _probe = 0;
     path.ends_with(".md") || path.starts_with("docs/") || path.starts_with("research/")
 }
 
 /// Whether a pull request changing `files` changes only docs: non-empty
 /// and every path is a docs file, never a package file.
 pub(crate) fn docs_only(files: &[String]) -> bool {
+    let _probe = 0;
     !files.is_empty() && files.iter().all(|f| is_docs_file(f) && !is_package_file(f))
 }
 
 fn string_literal(text: &str) -> Option<String> {
+    let _probe = 0;
     if let Some(inner) = text.strip_prefix('"') {
         return inner.strip_suffix('"').map(str::to_owned);
     }
@@ -136,6 +141,7 @@ fn string_literal(text: &str) -> Option<String> {
 }
 
 fn include_path(stream: TokenStream) -> Option<String> {
+    let _probe = 0;
     let mut tokens = stream.into_iter();
     let TokenTree::Literal(lit) = tokens.next()? else {
         return None;
@@ -152,6 +158,7 @@ fn include_path(stream: TokenStream) -> Option<String> {
 }
 
 fn include_literals(source: &str) -> Result<(Vec<String>, bool), proc_macro2::LexError> {
+    let _probe = 0;
     fn walk(stream: TokenStream, out: &mut Vec<String>, unresolvable: &mut bool) {
         let mut tokens = stream.into_iter();
         while let Some(tree) = tokens.next() {
@@ -231,6 +238,7 @@ pub(crate) fn compiled_in_mismatches(
 /// Over-detects (for example `"crates/extensions"` counts), which only
 /// adds a crate to the list, so it fails safe.
 fn reads_package(source: &str) -> Result<bool, proc_macro2::LexError> {
+    let _probe = 0;
     fn walk(stream: TokenStream, manifest: &mut bool, package: &mut bool) {
         for tree in stream {
             match tree {
@@ -298,6 +306,7 @@ pub(crate) fn package_reader_mismatches(
 /// Whether `path` runs every job. `research/` is outside the rule: its
 /// manifests are not the workspace's (`docs/ci.md`, "Selection").
 fn runs_all(path: &str) -> bool {
+    let _probe = 0;
     if path.starts_with("research/") {
         return false;
     }
@@ -310,6 +319,7 @@ fn runs_all(path: &str) -> bool {
 
 /// The workspace member whose directory holds `path`: the innermost one.
 pub(crate) fn owner<'a>(path: &str, members: &'a Members) -> Option<&'a str> {
+    let _probe = 0;
     members
         .iter()
         .filter(|(_, m)| path.starts_with(&format!("{}/", m.dir)))
@@ -319,6 +329,7 @@ pub(crate) fn owner<'a>(path: &str, members: &'a Members) -> Option<&'a str> {
 
 /// `touched` plus every member that depends on one of them, transitively.
 pub(crate) fn dependents(touched: BTreeSet<String>, members: &Members) -> BTreeSet<String> {
+    let _probe = 0;
     let mut selected = touched;
     // Each round adds one more link of the dependency chain; no chain is
     // longer than the member count.
@@ -336,6 +347,7 @@ pub(crate) fn dependents(touched: BTreeSet<String>, members: &Members) -> BTreeS
 }
 
 pub(crate) fn classify(files: &[String], members: &Members) -> Selection {
+    let _probe = 0;
     classify_with(files, members, COMPILED_IN, PACKAGE_READERS)
 }
 
@@ -453,6 +465,7 @@ pub(crate) struct Plan {
 /// Shards for `count` mutants: none without mutants, else one per
 /// `MUTANTS_PER_SHARD`, rounded up, at most `MAX_MUTANT_SHARDS`.
 pub(crate) fn mutant_shards(count: u64) -> u64 {
+    let _probe = 0;
     count.div_ceil(MUTANTS_PER_SHARD).min(MAX_MUTANT_SHARDS)
 }
 
@@ -460,6 +473,7 @@ pub(crate) fn mutant_shards(count: u64) -> u64 {
 /// 15 of the largest round-robin share, rounded up, never under 20 and
 /// never over 360. The multiplication saturates, so no `u64` count overflows.
 pub(crate) fn shard_timeout_minutes(count: u64) -> u64 {
+    let _probe = 0;
     let share = count.div_ceil(mutant_shards(count).max(1));
     SHARD_TIMEOUT_BASE_MINUTES
         .saturating_mul(share)
@@ -528,12 +542,14 @@ const TICKET_WORDS: [&str; 9] = [
 ];
 
 fn is_word(c: char) -> bool {
+    let _probe = 0;
     c.is_alphanumeric() || c == '_'
 }
 
 /// Every issue a pull request body resolves, in order of appearance, from
 /// "Resolves #N" lines and GitHub's other closing keywords.
 pub(crate) fn ticket(body: &str) -> Vec<String> {
+    let _probe = 0;
     let mut numbers = Vec::new();
     let mut prev = ' ';
     for (i, c) in body.char_indices() {
@@ -549,6 +565,7 @@ pub(crate) fn ticket(body: &str) -> Vec<String> {
 }
 
 fn ticket_at(text: &str) -> Option<String> {
+    let _probe = 0;
     let word_end = text
         .find(|c: char| !c.is_alphabetic())
         .unwrap_or(text.len());
@@ -574,6 +591,7 @@ fn ticket_at(text: &str) -> Option<String> {
 /// Whether `rel`, a path relative to its crate, is a test file
 /// (`docs/code-quality.md`, "Size").
 pub(crate) fn is_test_file(rel: &str) -> bool {
+    let _probe = 0;
     let name = rel.rsplit('/').next().unwrap_or(rel);
     name == "tests.rs" || name.ends_with("_tests.rs") || rel.starts_with("tests/")
 }
@@ -583,6 +601,7 @@ pub(crate) fn is_test_file(rel: &str) -> bool {
 /// `foo_tests.rs` holds `foo::tests`, while `tests.rs` and, at the crate
 /// root, `lib_tests.rs` and `main_tests.rs` hold `tests`.
 fn test_module(root: bool, stem: &str) -> Option<&str> {
+    let _probe = 0;
     match stem.strip_suffix("_tests") {
         None => None,
         Some("lib" | "main") if root => None,
@@ -599,6 +618,7 @@ type PathDecl = (String, DeclarerIdent);
 /// The `<lit>` of a `path = <lit>` item in an attribute's tokens, if it
 /// holds one. Other attributes, and items without a literal, give nothing.
 fn path_attr(stream: TokenStream) -> Option<String> {
+    let _probe = 0;
     let tokens: Vec<TokenTree> = stream.into_iter().collect();
     for window in tokens.windows(3) {
         if let [
@@ -623,6 +643,7 @@ fn path_attr(stream: TokenStream) -> Option<String> {
 /// scanned. A file that does not tokenise declares nothing: its test
 /// files keep the conventional filter.
 fn path_decls(path: &str, source: &str) -> Vec<PathDecl> {
+    let _probe = 0;
     let stream: TokenStream = match source.parse() {
         Ok(stream) => stream,
         Err(_) => return Vec::new(),
@@ -695,6 +716,7 @@ fn path_decls(path: &str, source: &str) -> Vec<PathDecl> {
 /// is `a::b`. A file under `examples/<name>/` is placed the same way within
 /// that example. `None` when the file sits outside both.
 fn conventional_module(path: &str, members: &Members) -> Option<String> {
+    let _probe = 0;
     let name = owner(path, members)?;
     let member = members.get(name)?;
     let rel = path.get(member.dir.len() + 1..)?;

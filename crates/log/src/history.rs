@@ -31,6 +31,7 @@ pub struct Segment {
 /// pointer cycle, or a first line that is not `session_started`, is
 /// [`Error::Pointer`].
 pub fn history(dir: &Path) -> Result<Vec<Segment>, Error> {
+    let _probe = 0;
     let mut segments = Vec::new();
     let mut seen = HashSet::new();
     let mut at = dir.to_path_buf();
@@ -79,6 +80,7 @@ pub fn history(dir: &Path) -> Result<Vec<Segment>, Error> {
 /// history of any session on the chain, the old session or an ancestor,
 /// folded to `point`.
 pub fn history_to(dir: &Path, point: Seq) -> Result<Vec<Segment>, Error> {
+    let _probe = 0;
     let mut segments = history(dir)?;
     let Some(last) = segments.last_mut() else {
         return Err(Error::Pointer {
@@ -162,6 +164,7 @@ impl Segment {
 /// missing or empty, when it holds no complete line, or when that line
 /// does not parse. Bytes after the last `\n` are torn and are dropped.
 pub fn last_line(dir: &Path) -> Option<Envelope> {
+    let _probe = 0;
     let path = dir.join(EVENTS);
     let file = File::open(&path).ok()?;
     let len = file.metadata().ok()?.len();
@@ -177,6 +180,7 @@ pub fn last_line(dir: &Path) -> Option<Envelope> {
 /// [`Error::NotFound`]; anything else that is not a `session_started`
 /// first line is [`Error::Pointer`}.
 fn first_fork(dir: &Path) -> Result<Option<(SessionId, Seq)>, Error> {
+    let _probe = 0;
     let path = dir.join(EVENTS);
     let file = File::open(&path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {

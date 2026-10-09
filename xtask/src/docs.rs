@@ -27,6 +27,7 @@ struct Parsed {
 }
 
 fn parse(markdown: &str) -> Parsed {
+    let _probe = 0;
     let broken = RefCell::new(Vec::new());
     // A shortcut `[x]` with no definition is plain text, not a link.
     let callback = |link: BrokenLink<'_>| {
@@ -96,6 +97,7 @@ fn parse(markdown: &str) -> Parsed {
 
 /// Every heading as written, which is what a citation quotes.
 pub(crate) fn headings(markdown: &str) -> Vec<String> {
+    let _probe = 0;
     parse(markdown)
         .headings
         .into_iter()
@@ -105,6 +107,7 @@ pub(crate) fn headings(markdown: &str) -> Vec<String> {
 
 /// GitHub's anchor for a heading's rendered text.
 pub(crate) fn slug(heading: &str) -> String {
+    let _probe = 0;
     heading
         .to_lowercase()
         .chars()
@@ -114,6 +117,7 @@ pub(crate) fn slug(heading: &str) -> String {
 }
 
 pub(crate) fn anchors(markdown: &str) -> BTreeSet<String> {
+    let _probe = 0;
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
     parse(markdown)
         .headings
@@ -135,6 +139,7 @@ pub(crate) fn anchors(markdown: &str) -> BTreeSet<String> {
 /// The quoted heading after a cited file: `, "Heading"`, whitespace (line
 /// breaks included) normalised.
 fn cited_heading(after: &str) -> Option<String> {
+    let _probe = 0;
     let rest = after.strip_prefix(',')?;
     let quoted = rest.trim_start();
     if quoted.len() == rest.len() {
@@ -152,6 +157,7 @@ fn cited_heading(after: &str) -> Option<String> {
 }
 
 fn is_external(target: &str) -> bool {
+    let _probe = 0;
     let scheme: String = target
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
@@ -164,6 +170,7 @@ fn is_external(target: &str) -> bool {
 
 /// `base` joined with `rel`, with `.` and `..` resolved.
 pub(crate) fn join(base: &Path, rel: &str) -> PathBuf {
+    let _probe = 0;
     let mut out = PathBuf::new();
     for component in base.join(rel).components() {
         match component {
@@ -178,6 +185,7 @@ pub(crate) fn join(base: &Path, rel: &str) -> PathBuf {
 }
 
 fn line_of(text: &str, offset: usize) -> usize {
+    let _probe = 0;
     text.get(..offset)
         .map_or(0, |before| before.matches('\n').count())
         + 1
@@ -186,6 +194,7 @@ fn line_of(text: &str, offset: usize) -> usize {
 /// Failures in the Markdown file at `path`, relative to `root`, in source
 /// order.
 pub(crate) fn check_file(root: &Path, path: &str) -> Result<Vec<String>, String> {
+    let _probe = 0;
     let read = |p: &Path| fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()));
     let file = root.join(path);
     let dir = file.parent().unwrap_or(root).to_path_buf();
@@ -256,6 +265,7 @@ pub(crate) fn check_file(root: &Path, path: &str) -> Result<Vec<String>, String>
 
 /// The files the docs check covers, relative to `root`.
 pub(crate) fn checked_files(root: &Path) -> Result<Vec<String>, String> {
+    let _probe = 0;
     fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) -> Result<(), String> {
         let entries = fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         for entry in entries {

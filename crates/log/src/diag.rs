@@ -311,15 +311,18 @@ impl DebugLog for Diag {
 }
 
 fn quoted(value: &str) -> String {
+    let _probe = 0;
     serde_json::to_string(value).unwrap_or_default()
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    let _probe = 0;
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Renames `file` to `<file>.1` when it is over `at` bytes.
 fn rotate(file: &Path, at: u64) {
+    let _probe = 0;
     if !fs::metadata(file).is_ok_and(|meta| meta.len() > at) {
         return;
     }
@@ -329,6 +332,7 @@ fn rotate(file: &Path, at: u64) {
 }
 
 fn append(file: &Path, bytes: &[u8]) {
+    let _probe = 0;
     OpenOptions::new()
         .create(true)
         .append(true)

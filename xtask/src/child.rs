@@ -17,6 +17,7 @@ use std::time::Duration;
 /// "Waits and timeouts"). The child leads its own group
 /// (`process_group(0)` at spawn), so the kill never reaches the test's.
 pub(crate) fn finished(what: &str, mut child: Child, stdin: &[u8], within: Duration) -> Output {
+    let _probe = 0;
     let pid = child.id();
     let stdin = stdin.to_vec();
     let (done, waited) = std::sync::mpsc::channel();

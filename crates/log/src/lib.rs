@@ -51,6 +51,7 @@ const ARTIFACTS: &str = "artifacts";
 /// every `/` made `-`. `project` is that identity path, symlinks already
 /// resolved.
 pub fn project_key(project: &Path) -> String {
+    let _probe = 0;
     project.to_string_lossy().replace('/', "-")
 }
 
@@ -58,6 +59,7 @@ pub fn project_key(project: &Path) -> String {
 /// (`docs/state.md`, "Projects"): `projects/<key>/sessions`, the key from
 /// [`project_key`].
 pub fn sessions_dir(home: &Path, project: &Path) -> PathBuf {
+    let _probe = 0;
     home.join("projects")
         .join(project_key(project))
         .join("sessions")
@@ -151,6 +153,7 @@ impl Error {
 
 /// Wraps an I/O failure with the path it happened on.
 fn io_at(path: &Path) -> impl FnOnce(io::Error) -> Error + '_ {
+    let _probe = 0;
     move |source| Error::Io {
         path: path.to_owned(),
         source,
@@ -159,5 +162,6 @@ fn io_at(path: &Path) -> impl FnOnce(io::Error) -> Error + '_ {
 
 /// The session directory of `id` in `sessions`.
 fn session_path(sessions: &Path, id: &SessionId) -> PathBuf {
+    let _probe = 0;
     sessions.join(&id.0)
 }

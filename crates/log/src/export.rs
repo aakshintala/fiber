@@ -16,6 +16,7 @@ use crate::{ARTIFACTS, EVENTS, Error, io_at, read::complete_len};
 /// and on any later failure `target` is removed again, so an export never
 /// leaves a half-written directory behind.
 pub fn export(dir: &Path, target: &Path) -> Result<(), Error> {
+    let _probe = 0;
     let source = dir.join(EVENTS);
     let bytes = fs::read(&source).map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound {
@@ -55,6 +56,7 @@ pub fn export(dir: &Path, target: &Path) -> Result<(), Error> {
 /// which `export` just created. The log was read before the artifacts are
 /// copied, so every artifact a copied line names already exists.
 fn write_export(complete: &[u8], dir: &Path, target: &Path, excluded: &Path) -> Result<(), Error> {
+    let _probe = 0;
     let events = target.join(EVENTS);
     fs::write(&events, complete).map_err(io_at(&events))?;
     copy_artifacts(&dir.join(ARTIFACTS), &target.join(ARTIFACTS), excluded)
@@ -65,6 +67,7 @@ fn write_export(complete: &[u8], dir: &Path, target: &Path, excluded: &Path) -> 
 /// every other entry is copied as bytes. A session with no `artifacts/`
 /// gets an empty one in the export.
 fn copy_artifacts(source: &Path, target: &Path, excluded: &Path) -> Result<(), Error> {
+    let _probe = 0;
     let entries = match fs::read_dir(source) {
         Ok(entries) => Some(entries),
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,

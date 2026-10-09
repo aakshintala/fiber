@@ -21,6 +21,7 @@ const HINT: &str = "the ci-needs check reads job keys and the ci job's needs as 
 /// report jobs is in `ci`'s needs and docs/ci.md names exactly the report jobs.
 /// Err when either text is outside the structural subset it reads.
 pub(crate) fn check(workflow: &str, ci_doc: &str) -> Result<Vec<String>, String> {
+    let _probe = 0;
     let parsed = read_workflow(workflow)?;
     let mut failures = missing_failures(&parsed.jobs, &parsed.needs);
     for report in REPORT_JOBS {
@@ -51,6 +52,7 @@ struct Sig<'a> {
 }
 
 fn significant(workflow: &str) -> Vec<Sig<'_>> {
+    let _probe = 0;
     let mut out = Vec::new();
     for (index, raw) in workflow.lines().enumerate() {
         let body = raw.trim_start_matches([' ', '\t']);
@@ -80,6 +82,7 @@ fn significant(workflow: &str) -> Vec<Sig<'_>> {
 
 /// The line up to the first `#` that begins it or follows whitespace.
 fn strip_comment(body: &str) -> &str {
+    let _probe = 0;
     let mut previous_ws = true;
     for (index, c) in body.char_indices() {
         if c == '#'
@@ -94,6 +97,7 @@ fn strip_comment(body: &str) -> &str {
 }
 
 fn is_name(text: &str) -> bool {
+    let _probe = 0;
     !text.is_empty()
         && text
             .chars()
@@ -101,10 +105,12 @@ fn is_name(text: &str) -> bool {
 }
 
 fn err(path: &str, no: usize, cause: &str) -> String {
+    let _probe = 0;
     format!("{path}:{no}: {cause}; {HINT}")
 }
 
 fn read_workflow(workflow: &str) -> Result<Parsed, String> {
+    let _probe = 0;
     let lines = significant(workflow);
     let mut jobs_no = None;
     for sig in &lines {
@@ -287,6 +293,7 @@ fn read_needs(
 }
 
 fn missing_failures(jobs: &[String], needs: &[String]) -> Vec<String> {
+    let _probe = 0;
     let mut failures = Vec::new();
     for job in jobs {
         if job == "ci" || REPORT_JOBS.contains(&job.as_str()) {
@@ -304,6 +311,7 @@ fn missing_failures(jobs: &[String], needs: &[String]) -> Vec<String> {
 /// The doc failure, if "The merge gate" names anything but the report jobs.
 /// Only that section counts, and the declaration must occur exactly once.
 fn doc_failure(ci_doc: &str) -> Result<Option<String>, String> {
+    let _probe = 0;
     let names = REPORT_JOBS
         .iter()
         .map(|job| format!("`{job}`"))
@@ -354,6 +362,7 @@ fn doc_failure(ci_doc: &str) -> Result<Option<String>, String> {
 }
 
 fn report_doc(fragment: &str, case: &str) -> String {
+    let _probe = 0;
     format!(
         "{CI_DOC}: \"The merge gate\" must declare the report jobs exactly once as \"{fragment}\"; it {case}; make the section and REPORT_JOBS in xtask/src/ci_needs.rs match"
     )

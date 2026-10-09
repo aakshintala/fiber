@@ -23,6 +23,7 @@ pub(crate) struct RustFile {
 }
 
 pub(crate) fn over_cap(files: &[RustFile]) -> Vec<String> {
+    let _probe = 0;
     files
         .iter()
         .filter(|f| !is_test_file(&f.rel))
@@ -69,6 +70,7 @@ pub(crate) const TUI: Isolation = Isolation {
 /// tree -p MEMBER -e normal --prefix none`: one line per crate, the crate's
 /// name first. `rule`'s members are exempt.
 pub(crate) fn leaks(trees: &[(String, String)], rule: &Isolation) -> Vec<String> {
+    let _probe = 0;
     let mut failures = BTreeSet::new();
     for (member, tree) in trees {
         if rule.members.contains(&member.as_str()) {
@@ -92,6 +94,7 @@ pub(crate) fn leaks(trees: &[(String, String)], rule: &Isolation) -> Vec<String>
 /// Whether Rust `source` uses the `unsafe` keyword. proc-macro2 tokenises
 /// it, so comments, literals and doc comments are never read as code.
 pub(crate) fn uses_unsafe(source: &str) -> Result<bool, proc_macro2::LexError> {
+    let _probe = 0;
     fn walk(stream: TokenStream) -> bool {
         stream.into_iter().any(|tree| match tree {
             TokenTree::Ident(ident) => ident == "unsafe",
@@ -105,6 +108,7 @@ pub(crate) fn uses_unsafe(source: &str) -> Result<bool, proc_macro2::LexError> {
 /// The body of the section under `heading`, up to the next heading of the
 /// same or a higher level.
 pub(crate) fn section<'a>(markdown: &'a str, heading: &str) -> Option<Vec<&'a str>> {
+    let _probe = 0;
     let level = |line: &str| {
         let hashes = line.chars().take_while(|c| *c == '#').count();
         (hashes > 0 && line.get(hashes..).is_some_and(|rest| rest.starts_with(' ')))
@@ -123,6 +127,7 @@ pub(crate) fn section<'a>(markdown: &'a str, heading: &str) -> Option<Vec<&'a st
 }
 
 fn is_separator(line: &str) -> bool {
+    let _probe = 0;
     line.contains('-')
         && line.starts_with('|')
         && line.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
@@ -130,6 +135,7 @@ fn is_separator(line: &str) -> bool {
 
 /// The cells of every table body row in `lines`.
 pub(crate) fn table_rows(lines: &[&str]) -> Vec<Vec<String>> {
+    let _probe = 0;
     let mut rows = Vec::new();
     for line in lines.iter().map(|l| l.trim()) {
         if is_separator(line) {
@@ -148,11 +154,13 @@ pub(crate) fn table_rows(lines: &[&str]) -> Vec<Vec<String>> {
 }
 
 fn unticked(cell: &str) -> String {
+    let _probe = 0;
     cell.trim_matches('`').to_owned()
 }
 
 /// (crate, file) pairs the `unsafe` table lists.
 pub(crate) fn unsafe_table(code_quality: &str) -> Result<BTreeSet<(String, String)>, String> {
+    let _probe = 0;
     let lines =
         section(code_quality, "`unsafe`").ok_or("docs/code-quality.md has no `unsafe` section")?;
     Ok(table_rows(&lines)
@@ -222,6 +230,7 @@ const SIGNAL_PATTERNS: &[(&str, bool)] = &[
 ];
 
 pub(crate) fn signal_sites(files: &[RustFile]) -> Vec<String> {
+    let _probe = 0;
     let mut failures = Vec::new();
     for f in files {
         if SIGNAL_ALLOWLIST.contains(&f.path.as_str()) {
@@ -247,6 +256,7 @@ pub(crate) fn signal_sites(files: &[RustFile]) -> Vec<String> {
 /// earlier text ends with a backslash, possibly followed by the closing
 /// quote or a newline escape.
 fn continues(line: &str) -> bool {
+    let _probe = 0;
     let trimmed = line.trim_end();
     let trimmed = trimmed.strip_suffix('"').unwrap_or(trimmed);
     let trimmed = trimmed.strip_suffix("\\n").unwrap_or(trimmed);
@@ -257,6 +267,7 @@ fn continues(line: &str) -> bool {
 /// the fragment continues through backslashes. A command names `kill` before
 /// its arguments, so only earlier lines count.
 fn chain_has_kill(lines: &[&str], index: usize) -> bool {
+    let _probe = 0;
     let (earlier, rest) = lines.split_at(index.min(lines.len()));
     let earlier = earlier.iter().rev().take_while(|line| continues(line));
     rest.iter()
@@ -268,6 +279,7 @@ fn chain_has_kill(lines: &[&str], index: usize) -> bool {
 /// Crate names in the tables of "Runtime dependencies" and "Tests and
 /// development tools".
 pub(crate) fn admitted(dependencies: &str) -> Result<BTreeSet<String>, String> {
+    let _probe = 0;
     let mut names = BTreeSet::new();
     for heading in ["Runtime dependencies", "Tests and development tools"] {
         let lines = section(dependencies, heading)
@@ -285,6 +297,7 @@ pub(crate) fn admitted(dependencies: &str) -> Result<BTreeSet<String>, String> {
 }
 
 fn unticked_trimmed(part: &str) -> String {
+    let _probe = 0;
     unticked(part.trim())
 }
 
