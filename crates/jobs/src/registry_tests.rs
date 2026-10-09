@@ -820,17 +820,31 @@ fn seam_writing(
     rx
 }
 
-/// A `tty` job whose terminal never takes another byte: waits for the
-/// clock to move until the write is cancelled, then reports nothing
-/// written, as a full queue does. The paired receiver fires once the
-/// write reaches the terminal.
-fn open_stuck(registry: &Arc<Registry>) -> (String, contract::jobs::Opened, mpsc::Receiver<()>) {
+/// Waits for `cancel` on `clock`, as a terminal whose queue stays full
+/// does: woken whenever the clock moves. Every caller moves the clock, so
+/// the wait always ends.
+/// Waits for `cancel` on `clock`, as a terminal whose queue stays full
+/// does: woken whenever the clock moves. Every caller moves the clock, so
+/// the wait always ends.
+fn wait_for_cancel(clock: &dyn contract::clock::Clock, cancel: &dyn contract::tool::Cancel) {
     struct Nudge(mpsc::Sender<()>);
     impl contract::clock::Wake for Nudge {
         fn wake(&self) {
             let _sent = self.0.send(());
         }
     }
+    let (tx, rx) = mpsc::channel();
+    let wake: Arc<dyn contract::clock::Wake> = Arc::new(Nudge(tx));
+    clock.subscribe(Arc::downgrade(&wake));
+    while !cancel.is_cancelled() {
+        // Bounded in real time: every path below moves the clock first.
+        if rx.recv_timeout(Duration::from_secs(10)).is_err() {
+            break;
+        }
+    }
+}
+
+fn open_stuck(registry: &Arc<Registry>) -> (String, contract::jobs::Opened, mpsc::Receiver<()>) {
     let (entry_tx, entry_rx) = mpsc::channel();
     let opened = registry
         .open(Opening {
@@ -840,16 +854,7 @@ fn open_stuck(registry: &Arc<Registry>) -> (String, contract::jobs::Opened, mpsc
             lines: false,
             input: Some(contract::jobs::Input(Box::new(move |_, clock, cancel| {
                 let _sent = entry_tx.send(());
-                let (tx, rx) = mpsc::channel();
-                let wake: Arc<dyn contract::clock::Wake> = Arc::new(Nudge(tx));
-                clock.subscribe(Arc::downgrade(&wake));
-                while !cancel.is_cancelled() {
-                    // Bounded in real time: every path below moves the
-                    // clock first.
-                    if rx.recv_timeout(Duration::from_secs(10)).is_err() {
-                        break;
-                    }
-                }
+                wait_for_cancel(clock, cancel);
                 Ok(0)
             }))),
         })
@@ -880,6 +885,48 @@ fn seam_write_times_out_once_the_deadline_passes_and_not_before() {
         matches!(&err, Err(contract::jobs::WriteError::Io(error))
             if error.kind() == std::io::ErrorKind::TimedOut
                 && error.to_string() == "The job's terminal did not take the input."),
+        "{err:?}"
+    );
+    drop(opened.end);
+}
+
+#[test]
+fn seam_write_behind_another_writer_still_times_out_at_the_deadline() {
+    let (_dir, clock, registry) = clocked_world();
+    // Another writer holds the terminal while the write arrives.
+    let held = Arc::new(Mutex::new(()));
+    let guard = held.lock().unwrap();
+    let waiting = Arc::clone(&held);
+    let (entry_tx, entry_rx) = mpsc::channel();
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "sleep infinity".into(),
+            stop: Stop(Box::new(|| {})),
+            lines: false,
+            input: Some(contract::jobs::Input(Box::new(move |_, clock, cancel| {
+                let _sent = entry_tx.send(());
+                let _other = waiting.lock().unwrap();
+                wait_for_cancel(clock, cancel);
+                Ok(0)
+            }))),
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    let rx = seam_writing(&registry, &id, "hi".to_owned());
+    entry_rx
+        .recv_timeout(DEADLINE)
+        .expect("the write reached the terminal");
+    // The other writer releases, long after, on the wall clock: the
+    // deadline on the session clock still bounds the write.
+    drop(guard);
+    clock.advance(Duration::from_millis(1001));
+    let err = rx
+        .recv_timeout(DEADLINE)
+        .expect("the write returned at its deadline");
+    assert!(
+        matches!(&err, Err(contract::jobs::WriteError::Io(error))
+            if error.kind() == std::io::ErrorKind::TimedOut),
         "{err:?}"
     );
     drop(opened.end);

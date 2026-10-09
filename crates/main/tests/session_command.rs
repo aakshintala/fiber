@@ -2454,7 +2454,9 @@ fn job_input_types_into_a_tty_job_and_its_output_arrives() {
     assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
     let echo = until(&client, "the typed output", |line| {
         line["kind"] == "job_delta"
-            && line["payload"]["text"].as_str().is_some_and(|text| text.contains("hi"))
+            && line["payload"]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("hi"))
     });
     assert_eq!(
         echo.last().unwrap()["payload"]["job_id"],

@@ -2,251 +2,16 @@
 //! the boundaries against finished, plain and delegate views, and Esc,
 //! Ctrl+C and a down link falling through as today.
 
-use std::path::PathBuf;
-
-use contract::SessionId;
 use contract::clock::Clock;
 use serde_json::{Value, json};
 
 use super::super::super::{App, Effect};
+use super::super::testkit::{
+    DELEGATE_A, SESSION, commands, complete, home, job_started, mark_tty, opened, opened_item,
+    session_line, start_delegate, start_job,
+};
 use super::{encode, encode_edit, is_tty};
-use crate::home::Launch;
 use crate::keys::{Edit, Key};
-use crate::link::Line;
-
-const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
-const DELEGATE_A: &str = "s_dddddddddddddddd";
-
-/// An app on home at 80x24, drawing the default cards.
-fn home() -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        rail_share: 15.0,
-        panel_share: 21.0,
-        panel_cards: ["session", "changed_files", "delegates", "jobs", "quota"]
-            .map(str::to_owned)
-            .to_vec(),
-        ..Default::default()
-    });
-    app.set_size(80, 24);
-    app
-}
-
-/// A `hub_hello` this terminal reads.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
-}
-
-/// One envelope of the attached session.
-fn session_line(kind: &str, payload: Value) -> Line {
-    Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
-        session_id: SessionId(SESSION.to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: Some(contract::ActionId("a_1".to_owned())),
-        seq: None,
-        payload: payload.as_object().cloned().unwrap_or_default(),
-    })
-}
-
-/// Parses command lines going out.
-fn commands(lines: Vec<String>) -> Vec<Value> {
-    lines
-        .iter()
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
-        .collect()
-}
-
-/// The `subscribe` lines among `out`.
-fn subscribes(out: &[Value]) -> Vec<Value> {
-    out.iter()
-        .filter(|line| line["command"] == "subscribe")
-        .cloned()
-        .collect()
-}
-
-/// Links the app and opens the attached session through home.
-fn opened(app: &mut App) {
-    let lines = commands(app.on_line(hello()));
-    assert_eq!(lines.len(), 2);
-    app.on_line(live(SESSION, json!({"state": "streaming"})));
-    let key = app
-        .home_screen()
-        .map(|screen| {
-            screen
-                .rows
-                .into_iter()
-                .map(|(key, _, _)| key)
-                .collect::<Vec<_>>()
-        })
-        .and_then(|keys| keys.into_iter().next())
-        .unwrap_or_else(|| panic!("a row"));
-    let out = match app.on_click(crate::mouse::TargetId::Home(crate::home::Spot::Entry(key))) {
-        Effect::Send(lines) => commands(lines),
-        Effect::None
-        | Effect::Quit
-        | Effect::ListFiles
-        | Effect::FindPause { .. }
-        | Effect::Search { .. }
-        | Effect::Editor { .. }
-        | Effect::Exit(_)
-        | Effect::Copy(_)
-        | Effect::OpenLink(_)
-        | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("opening sends"),
-    };
-    let id = out
-        .iter()
-        .rfind(|line| line["command"] == "subscribe")
-        .and_then(|line| line["id"].as_str())
-        .unwrap_or_else(|| panic!("a subscribe"))
-        .to_owned();
-    app.on_line(session_accepted(SESSION, &id));
-}
-
-/// A live `session_status` for `session` in `state`.
-fn live(session: &str, state: Value) -> Line {
-    let mut payload = json!({
-        "name": "fix the parser", "workspace": "/w", "project": "-w",
-        "since": 0,
-        "spend": {"tokens": {"input": 1, "cache_read": 0,
-            "cache_write": {}, "output": 2},
-            "cost": 0.0, "subscription_cost": 0.0},
-        "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
-    });
-    for (key, value) in state.as_object().cloned().unwrap_or_default() {
-        payload[key] = value;
-    }
-    Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
-        session_id: SessionId(session.to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload: payload.as_object().cloned().unwrap_or_default(),
-    })
-}
-
-/// A session `command_accepted` for `id` from `session`.
-fn session_accepted(session: &str, id: &str) -> Line {
-    let mut payload = serde_json::Map::new();
-    payload.insert("command_id".to_owned(), Value::String(id.to_owned()));
-    Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
-        session_id: SessionId(session.to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload,
-    })
-}
-
-/// Folds a Fiber delegate as job `job` with session `delegate`.
-fn start_delegate(app: &mut App, job: &str, delegate: &str) {
-    app.on_line(session_line(
-        "job_started",
-        json!({"job_id": job, "description": format!("task {job}"),
-            "output_path": "/tmp/out"}),
-    ));
-    app.on_line(session_line(
-        "delegate_started",
-        json!({"job_id": job,
-            "delegate_session_id": delegate,
-            "harness": "fiber", "model": "test/model", "workspace": "/w"}),
-    ));
-}
-
-/// Folds a plain job as `job`, with no pseudo-terminal.
-fn start_job(app: &mut App, job: &str) {
-    app.on_line(session_line(
-        "job_started",
-        json!({"job_id": job, "description": format!("task {job}"),
-            "output_path": "/tmp/out"}),
-    ));
-}
-
-/// Folds a `shell` call asking for a pseudo-terminal on action `a_1`, so
-/// the next `job_started` on that action takes a grid.
-fn mark_tty(app: &mut App) {
-    app.on_line(session_line(
-        "tool_call_requested",
-        json!({"name": "shell", "arguments": {"tty": true}}),
-    ));
-}
-
-/// One `job_started` at `ts` from tool call `action`.
-fn job_started(app: &mut App, job: &str, description: &str, ts: u64, action: &str) {
-    app.on_line(Line::Session(contract::Envelope {
-        kind: "job_started".to_owned(),
-        session_id: SessionId(SESSION.to_owned()),
-        ts,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: Some(contract::ActionId(action.to_owned())),
-        seq: None,
-        payload: json!({"job_id": job, "description": description,
-            "output_path": "/tmp/out"})
-        .as_object()
-        .cloned()
-        .unwrap_or_default(),
-    }));
-}
-
-/// Folds the attached session's `job_completed` for `job`.
-fn complete(app: &mut App, job: &str) {
-    app.on_line(session_line(
-        "job_completed",
-        json!({"job_id": job, "status": "completed"}),
-    ));
-}
-
-/// Opens `job`'s item view, returning the parsed lines going out.
-fn open(app: &mut App, job: &str) -> Vec<Value> {
-    match app.open_item(&contract::JobId(job.to_owned())) {
-        Effect::Send(lines) => commands(lines),
-        Effect::None => Vec::new(),
-        Effect::Quit
-        | Effect::ListFiles
-        | Effect::FindPause { .. }
-        | Effect::Search { .. }
-        | Effect::Editor { .. }
-        | Effect::Exit(_)
-        | Effect::Copy(_)
-        | Effect::OpenLink(_)
-        | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("opening sends or nothing"),
-    }
-}
-
-/// Acknowledges every `subscribe` in `out` from its session.
-fn ack_all(app: &mut App, out: &[Value]) {
-    for line in subscribes(out) {
-        let id = line["id"].as_str().unwrap_or_else(|| panic!("an id"));
-        let session = line["session_id"]
-            .as_str()
-            .unwrap_or_else(|| panic!("a session"));
-        app.on_line(session_accepted(session, id));
-    }
-}
-
-/// Opens `job`'s item view, acknowledged.
-fn opened_item(app: &mut App, job: &str) {
-    let out = open(app, job);
-    ack_all(app, &out);
-}
 
 /// Opens a running `tty` job's view, acknowledged.
 fn open_tty(app: &mut App, job: &str) {
@@ -532,5 +297,63 @@ fn keys_with_the_approval_panel_open_do_not_send() {
     // End falls through the panel to the screen behind: without the
     // guard it would type into the job.
     assert!(job_inputs(app.on_key(Key::End, clock.now())).is_empty());
+    assert!(app.panel().is_some());
+}
+
+#[test]
+fn rail_keys_in_a_running_tty_job_view_send_job_input() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    open_tty(&mut app, "j_9");
+    let alt_r = job_inputs(app.on_key(Key::AltR, clock.now()));
+    assert_eq!(alt_r.len(), 1);
+    assert_eq!(alt_r[0]["args"], json!({"job_id": "j_9", "text": "\x1br"}));
+    let alt_3 = job_inputs(app.on_key(Key::AltDigit(3), clock.now()));
+    assert_eq!(alt_3.len(), 1);
+    assert_eq!(alt_3[0]["args"], json!({"job_id": "j_9", "text": "\x1b3"}));
+}
+
+#[test]
+fn rail_keys_fall_through_to_the_rail_outside_a_running_tty_job() {
+    let clock = fakes::clock::FakeClock::new();
+    // A finished `tty` job, a plain job and a delegate: the rail keeps
+    // Alt+R and Alt+3 as today, sending nothing.
+    for open in ["tty", "plain", "delegate"] {
+        let mut app = home();
+        opened(&mut app);
+        match open {
+            "tty" => {
+                open_tty(&mut app, "j_9");
+                complete(&mut app, "j_9");
+            }
+            "plain" => {
+                start_job(&mut app, "j_1");
+                opened_item(&mut app, "j_1");
+            }
+            _ => {
+                start_delegate(&mut app, "j_1", DELEGATE_A);
+                opened_item(&mut app, "j_1");
+            }
+        }
+        assert_eq!(app.on_key(Key::AltR, clock.now()), Effect::None, "{open}");
+        assert_eq!(
+            app.on_key(Key::AltDigit(3), clock.now()),
+            Effect::None,
+            "{open}"
+        );
+    }
+}
+
+#[test]
+fn rail_keys_with_the_approval_panel_open_do_not_send() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    open_tty(&mut app, "j_9");
+    approval(&mut app);
+    assert!(app.panel().is_some());
+    assert_eq!(app.on_key(Key::AltR, clock.now()), Effect::None);
+    assert_eq!(app.on_key(Key::AltDigit(3), clock.now()), Effect::None);
     assert!(app.panel().is_some());
 }

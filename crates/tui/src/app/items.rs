@@ -15,6 +15,9 @@ use crate::tty_screen::Output;
 
 pub(crate) mod keys;
 
+#[cfg(test)]
+pub(crate) mod testkit;
+
 pub(crate) mod output;
 pub(crate) mod retry;
 
@@ -482,12 +485,14 @@ impl App {
         self.item_job_send(keys::encode_edit(edit))
     }
 
-    /// Sends `text` as `job_input` for the open job: `None` for a finished
-    /// job, a non-`tty` job, a delegate, or a link that is down, so each
-    /// falls through as today. `None` too while an approval or question
-    /// takes keys and edits, as [`crate::input::route`] does for the draft.
-    fn item_job_send(&mut self, text: String) -> Option<Effect> {
-        if self.queue.open() {
+    /// The job input goes to while its view owns it: the attached session,
+    /// which owns the job, and the open job's id. `None` unless the job is
+    /// open, running, typed live and not a delegate, on a live link, with
+    /// no approval or question open. Both key paths consult it before the
+    /// draft does, so the rail and the input box never steal the job's
+    /// keys; the guards exist once, here.
+    pub(super) fn item_job_target(&self) -> Option<(SessionId, JobId)> {
+        if self.queue.open() || self.link != Link::Up {
             return None;
         }
         let open = self.items.open.as_ref()?;
@@ -498,11 +503,13 @@ impl App {
         let Phase::Attached { session, .. } = &self.phase else {
             return None;
         };
-        if self.link != Link::Up {
-            return None;
-        }
-        let session = session.clone();
-        let job_id = open.job_id.clone();
+        Some((session.clone(), open.job_id.clone()))
+    }
+
+    /// Sends `text` as `job_input` for the open job, or `None` when its
+    /// view does not own input.
+    fn item_job_send(&mut self, text: String) -> Option<Effect> {
+        let (session, job_id) = self.item_job_target()?;
         let id = mint();
         let line = session_command(
             &id,
