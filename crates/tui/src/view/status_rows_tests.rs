@@ -258,6 +258,87 @@ fn an_empty_row_two_takes_no_row() {
     assert_eq!(rows[bottom - 2], ">", "{}", screen);
 }
 
+/// A `session_status` with billed `cost` and `subscription` spend.
+fn spend_status(cost: serde_json::Value, subscription: f64) -> Line {
+    session_line(
+        SESSION,
+        "session_status",
+        serde_json::json!({
+            "name": "one", "workspace": "/w", "project": "-w", "state": "idle",
+            "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": cost, "subscription_cost": subscription},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        }),
+    )
+}
+
+/// A `preamble_built` setting `budget.usd`.
+fn budget_preamble(budget: f64) -> Line {
+    session_line(
+        SESSION,
+        "preamble_built",
+        serde_json::json!({
+            "reason": "start", "model": "test/model", "context_window": 1000,
+            "tool_choice": "auto", "cache_lifetime": "5m",
+            "system_prompt": "", "tools": [], "budget": budget,
+        }),
+    )
+}
+
+#[test]
+fn the_spend_segment_reads_against_the_budget() {
+    let mut app = attached(100, 30);
+    app.on_line(budget_preamble(5.0));
+    app.on_line(spend_status(serde_json::json!(1.25), 0.0));
+    let (screen, _) = draw(&app, 100, 30);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(rows[rows.len() - 1].contains("$1.25 of $5.00"), "{screen}");
+
+    let mut app = attached(100, 30);
+    app.on_line(spend_status(serde_json::json!(1.25), 0.0));
+    let (screen, _) = draw(&app, 100, 30);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(rows[rows.len() - 1].contains("$1.25"), "{screen}");
+    assert!(!screen.contains("of $"), "{screen}");
+}
+
+#[test]
+fn the_budget_comparison_counts_billed_spend_only() {
+    // $1 billed plus $9 on subscription against a $5 budget: the
+    // subscription bills nothing per call.
+    let mut app = attached(100, 30);
+    app.on_line(budget_preamble(5.0));
+    app.on_line(spend_status(serde_json::json!(1.0), 9.0));
+    let (screen, _) = draw(&app, 100, 30);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(rows[rows.len() - 1].contains("$1.00 of $5.00"), "{screen}");
+    assert!(!screen.contains("$10.00"), "{screen}");
+
+    // Subscription-only: billed $0 against the budget.
+    let mut app = attached(100, 30);
+    app.on_line(budget_preamble(5.0));
+    app.on_line(spend_status(serde_json::json!(0.0), 9.0));
+    let (screen, _) = draw(&app, 100, 30);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(rows[rows.len() - 1].contains("$0.00 of $5.00"), "{screen}");
+}
+
+#[test]
+fn the_spend_segment_reads_unknown_when_billed_cost_is_null() {
+    // A budget is set but the billed cost is not known yet.
+    let mut app = attached(100, 30);
+    app.on_line(budget_preamble(5.0));
+    app.on_line(spend_status(serde_json::Value::Null, 0.0));
+    let (screen, _) = draw(&app, 100, 30);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(
+        rows[rows.len() - 1].contains("unknown of $5.00"),
+        "{screen}"
+    );
+}
+
 #[test]
 fn n_waiting_leads_row_one_while_the_rail_is_not_drawn() {
     let mut app = attached(110, 30);
@@ -418,6 +499,15 @@ fn narrow_with_widget_open() {
     app.on_click(TargetId::Panel(Spot::Widget));
     let (screen, _) = draw(&app, 100, 30);
     insta::assert_snapshot!("narrow_with_widget_open", screen);
+}
+
+#[test]
+fn narrow_with_budget() {
+    let mut app = attached(100, 30);
+    app.on_line(budget_preamble(5.0));
+    app.on_line(spend_status(serde_json::json!(1.25), 0.0));
+    let (screen, _) = draw(&app, 100, 30);
+    insta::assert_snapshot!("narrow_with_budget", screen);
 }
 
 #[test]

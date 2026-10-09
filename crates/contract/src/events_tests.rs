@@ -514,7 +514,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "preamble_built",
             json!({"reason": "switch", "model": "p/m", "context_window": 200000,
-            "trigger_at": 140000, "thinking": "high", "tool_choice": "auto",
+            "trigger_at": 140000, "budget": 2.5, "thinking": "high", "tool_choice": "auto",
             "cache_lifetime": "1h", "credential": "work", "system_prompt": "s",
             "tools": [{"name": "read", "registered_by": "e", "deferred": false,
             "definition": {"type": "object"}}],

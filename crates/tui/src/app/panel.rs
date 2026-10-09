@@ -68,6 +68,7 @@ pub(crate) struct PanelState {
     thinking: Option<String>,
     window: Option<u64>,
     trigger_at: Option<u64>,
+    budget: Option<f64>,
     turns: u64,
     started_at: Option<u64>,
     speed: Option<u64>,
@@ -105,6 +106,9 @@ impl PanelState {
                     self.thinking = built.thinking;
                     self.window = Some(built.context_window);
                     self.trigger_at = built.trigger_at;
+                    // The latest build's budget is the one in force; a
+                    // build without one clears it.
+                    self.budget = built.budget;
                 }
             }
             "model_changed" => {
@@ -242,6 +246,12 @@ impl PanelState {
     /// The latest `preamble_built`'s handoff point, in tokens.
     pub(crate) fn trigger_at(&self) -> Option<u64> {
         self.trigger_at
+    }
+
+    /// The latest `preamble_built`'s budget, in US dollars; `None` when
+    /// it set none.
+    pub(crate) fn budget(&self) -> Option<f64> {
+        self.budget
     }
 
     /// How many turns have started.

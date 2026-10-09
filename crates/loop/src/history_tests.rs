@@ -106,6 +106,7 @@ fn built(credential: Option<&str>) -> Event {
         model: "fake/model-1".to_owned(),
         context_window: 200_000,
         trigger_at: None,
+        budget: None,
         thinking: None,
         tool_choice: "auto".to_owned(),
         cache_lifetime: CacheLifetime::OneHour,
