@@ -219,7 +219,7 @@ fn mask_centres_an_off_centre_test_font_at_exact_pixels() {
     let ascent = font
         .metrics(Size::new(scale), LocationRef::default())
         .ascent;
-    let baseline = ascent + (HEIGHT as f32 - ascent) / 2.0;
+    let baseline = ascent;
     let (_, _, width, height) = ink_box(&rasterise(&font, scale, 0, baseline)).unwrap();
     // The name region has 132 even horizontal and 23 odd vertical pixels spare.
     assert_eq!((WIDTH - WAVE_PX - width, HEIGHT - height), (132, 23));

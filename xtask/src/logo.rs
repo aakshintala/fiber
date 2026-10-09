@@ -202,7 +202,7 @@ pub(crate) fn mask(font: &[u8]) -> Result<Vec<u8>, String> {
     let location = LocationRef::default();
     let scale = fit_scale(ink_box(&rasterise(&font, PROBE, 0, 112.0)));
     let ascent = font.metrics(Size::new(scale), location).ascent;
-    let baseline = ascent + (HEIGHT as f32 - ascent) / 2.0;
+    let baseline = ascent;
     let mut glyphs = rasterise(&font, scale, 0, baseline);
     if let Some((left, top, width, height)) = ink_box(&glyphs) {
         let spare_w = (WIDTH - WAVE_PX) as f32 - width as f32;
