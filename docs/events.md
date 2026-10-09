@@ -1309,6 +1309,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `recent` | `sessions`, an array of `recent.jsonl` rows, newest first, at most 50, delegates skipped (`docs/state.md`, "What each part holds"), over the hub (`docs/invocation.md`, "The hub") |
 | `sessions` | `live`, an array with one object per running top-level session: `session_id` (string) and `status`, its latest `session_status` payload; and `exited`, an array of `recent.jsonl` rows, newest first, delegates and running sessions left out (`docs/state.md`, "What each part holds"), over the hub (`docs/invocation.md`, "The hub") |
 | `prompt_history` | `prompts`, an array of prompt history lines, newest first, each a whole line as `history.jsonl` holds it (`docs/state.md`, "What each part holds"), at most 256; and `before` (integer), the byte offset where the oldest returned line starts, present only when older lines remain, sent back to read the next page, over the hub (`docs/invocation.md`, "The hub") |
+| `read_file` | `data` (string), the file's bytes in standard base64, and `mime_type` (string), its media type from the file name's extension, `application/octet-stream` when Fiber does not know it, over the hub (`docs/invocation.md`, "A session's files") |
 | `status` | `running` (boolean, always true), `fiber_version` (string) and `clients` (integer, the open connections, the asker included), over the hub (`docs/invocation.md`, "The hub") |
 
 #### `command_rejected`
