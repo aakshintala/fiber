@@ -17,8 +17,8 @@ mod read;
 mod resolve;
 mod scan;
 mod search;
-mod weak_emit;
 mod usage;
+mod weak_emit;
 mod write;
 
 use std::io;
@@ -36,8 +36,8 @@ pub use scan::{
     Hold, SessionLock, Started, last_ts, remaining, session_bytes, started_sessions, try_hold,
 };
 pub use search::{Identity, SessionScan};
-pub use weak_emit::WeakEmit;
 pub use usage::usage;
+pub use weak_emit::WeakEmit;
 pub use write::Log;
 
 /// The log's name in a session directory.

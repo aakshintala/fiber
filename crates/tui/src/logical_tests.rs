@@ -136,7 +136,10 @@ fn every_char_maps_back_to_its_row_or_to_a_joining_space() {
 fn matches_folds_case_per_character() {
     // ASCII folds; an empty query matches nothing.
     assert_eq!(matches("Hello there", "hello"), vec![0..5]);
-    assert_eq!(matches("Hello there", ""), Vec::<std::ops::Range<usize>>::new());
+    assert_eq!(
+        matches("Hello there", ""),
+        Vec::<std::ops::Range<usize>>::new()
+    );
     // `É` folds to `é`, one character to one.
     assert_eq!(matches("ÉTÉ", "été"), vec![0..3]);
     // `İ` lowercases to two characters, so it compares as itself.

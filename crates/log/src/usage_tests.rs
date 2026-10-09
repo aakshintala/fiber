@@ -5,12 +5,7 @@ use contract::GenerationId;
 use contract::events::UsageRecorded;
 use contract::shapes::{Tokens, Usage};
 
-fn call(
-    generation: &str,
-    tokens: Tokens,
-    cost: Option<f64>,
-    subscription: bool,
-) -> UsageRecorded {
+fn call(generation: &str, tokens: Tokens, cost: Option<f64>, subscription: bool) -> UsageRecorded {
     UsageRecorded {
         generation_id: GenerationId(generation.to_owned()),
         model: "provider/model".to_owned(),
@@ -66,7 +61,10 @@ fn a_known_billed_cost_survives_an_unknown_billed_cost() {
         call("g1", empty_tokens(), Some(0.25), false),
         call("g2", empty_tokens(), None, false),
     ];
-    assert_eq!(usage(calls.iter()), expected(empty_tokens(), Some(0.25), 0.0));
+    assert_eq!(
+        usage(calls.iter()),
+        expected(empty_tokens(), Some(0.25), 0.0)
+    );
 }
 
 #[test]
@@ -75,7 +73,10 @@ fn subscription_calls_do_not_count_as_billed() {
         call("g1", empty_tokens(), Some(0.5), true),
         call("g2", empty_tokens(), None, true),
     ];
-    assert_eq!(usage(calls.iter()), expected(empty_tokens(), Some(0.0), 0.5));
+    assert_eq!(
+        usage(calls.iter()),
+        expected(empty_tokens(), Some(0.0), 0.5)
+    );
 }
 
 #[test]
@@ -84,7 +85,10 @@ fn billed_and_subscription_costs_are_separate() {
         call("g1", empty_tokens(), Some(0.25), false),
         call("g2", empty_tokens(), Some(0.5), true),
     ];
-    assert_eq!(usage(calls.iter()), expected(empty_tokens(), Some(0.25), 0.5));
+    assert_eq!(
+        usage(calls.iter()),
+        expected(empty_tokens(), Some(0.25), 0.5)
+    );
 }
 
 #[test]
@@ -95,11 +99,7 @@ fn cache_writes_sum_by_lifetime() {
     ];
     assert_eq!(
         usage(calls.iter()),
-        expected(
-            tokens(0, 0, &[("5m", 5), ("1h", 18)], 0),
-            None,
-            0.0
-        )
+        expected(tokens(0, 0, &[("5m", 5), ("1h", 18)], 0), None, 0.0)
     );
 }
 
@@ -108,7 +108,12 @@ fn token_sums_saturate() {
     let calls = [
         call(
             "g1",
-            tokens(u64::MAX - 1, u64::MAX - 1, &[("5m", u64::MAX - 1)], u64::MAX - 1),
+            tokens(
+                u64::MAX - 1,
+                u64::MAX - 1,
+                &[("5m", u64::MAX - 1)],
+                u64::MAX - 1,
+            ),
             None,
             false,
         ),
