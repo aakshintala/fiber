@@ -347,3 +347,44 @@ fn dropping_the_loop_before_the_connect_is_stepped_ends_the_read() {
     drop(lp);
     signalled(&gone, "the hub thread to end");
 }
+
+#[test]
+fn watch_matches_a_marker_only_at_its_full_length() {
+    let mut pty = open();
+    let frames = watch(&pty.main, vec![b"lost" as &[u8]]);
+    pty.slave
+        .write_all(b"los")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    match frames.recv_timeout(QUIET) {
+        Ok(chunk) => panic!("a marker one byte short matched: {chunk:?}"),
+        Err(mpsc::RecvTimeoutError::Timeout) => {}
+        Err(err) => panic!("the watcher ended before the marker: {err}"),
+    }
+    pty.slave
+        .write_all(b"t")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(
+        watched(&frames, "the marker at its full length"),
+        b"lost",
+        "the chunk ends with the marker and starts at the first byte"
+    );
+}
+
+#[test]
+fn watch_cuts_a_chunk_at_each_marker_in_one_write() {
+    let mut pty = open();
+    let frames = watch(&pty.main, vec![b"one" as &[u8], b"two" as &[u8]]);
+    pty.slave
+        .write_all(b"one two")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(
+        watched(&frames, "the first marker"),
+        b"one",
+        "the first chunk ends with the first marker"
+    );
+    assert_eq!(
+        watched(&frames, "the second marker"),
+        b" two",
+        "the second chunk starts after the first marker"
+    );
+}
