@@ -610,9 +610,11 @@ impl Clock for HoldingClock {
         self.inner.wait_until(until, wait);
         if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
             self.left.lock().unwrap().send(()).unwrap();
-            match self.moved.lock().unwrap().recv_timeout(DEADLINE) {
-                Ok(_) | Err(_) => {}
-            }
+            self.moved
+                .lock()
+                .unwrap()
+                .recv_timeout(DEADLINE)
+                .expect("the held worker was never released: the clock did not move");
         }
     }
     fn subscribe(&self, waker: std::sync::Weak<dyn contract::clock::Wake>) {
