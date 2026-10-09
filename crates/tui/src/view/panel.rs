@@ -192,12 +192,11 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     if let Some(span) = span {
         let from = skip.max(span.start);
         let to = skip.saturating_add(drawn).min(span.end);
-        if from < to {
-            delegates::ask(
-                app,
-                from.saturating_sub(span.start)..to.saturating_sub(span.start),
-            );
-        }
+        // Empty or reversed ranges contain no delegate state row.
+        delegates::ask(
+            app,
+            from.saturating_sub(span.start)..to.saturating_sub(span.start),
+        );
     }
 }
 

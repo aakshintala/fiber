@@ -10,6 +10,7 @@ use fakes::clock::FakeClock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
+use super::{Drawn, spin};
 use crate::app::App;
 use crate::keys::{Key, Mouse, MouseKind};
 use crate::link::Line;
@@ -456,6 +457,68 @@ fn running_first() -> (App, Arc<FakeClock>) {
         app.on_line(prompt(format!("after {n}")));
     }
     (app, clock)
+}
+
+#[test]
+fn a_mark_at_column_zero_can_spin_when_its_line_wraps() {
+    let (mut app, clock) = running();
+    let origin = clock.origin();
+    app.set_now(origin, 0);
+    let area = Rect::new(0, 0, 4, 2);
+    let mut buf = Buffer::empty(area);
+    // At column zero, a two-row line still has its mark on the first row.
+    // `col > 0` must be false, and the conjunction must not hide the spin.
+    spin(
+        &app,
+        &mut buf,
+        area,
+        Drawn {
+            y: 0,
+            col: 0,
+            first_row_shown: true,
+            rows: 2,
+            count: 1,
+        },
+    );
+    assert_eq!(buf.cell((0, 0)).map(|cell| cell.symbol()), Some(SPINNER[0]));
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(120))
+    );
+}
+
+#[test]
+fn a_zero_height_area_does_not_reserve_a_new_messages_row() {
+    let (mut app, clock) = running_first();
+    let origin = clock.origin();
+    app.on_key(Key::PageUp, clock.now());
+    app.on_line(session_line(
+        "assistant_message_delta",
+        serde_json::json!({"text": "streamed"}),
+        Some("a_2"),
+    ));
+    assert!(app.has_new());
+    app.set_now(origin, 0);
+    let area = Rect::new(0, 1, 4, 0);
+    let mut buf = Buffer::empty(area);
+    // The zero-height area has no row to reserve; the mark at y=0 remains
+    // before its bottom at 1 and asks for the next frame.
+    spin(
+        &app,
+        &mut buf,
+        area,
+        Drawn {
+            y: 0,
+            col: 0,
+            first_row_shown: true,
+            rows: 1,
+            count: 1,
+        },
+    );
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(120))
+    );
 }
 
 #[test]

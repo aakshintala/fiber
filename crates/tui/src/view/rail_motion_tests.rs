@@ -9,7 +9,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
-use super::draw;
+use super::{draw, pulse};
 use crate::app::App;
 use crate::home::Launch;
 use crate::keys::{Mouse, MouseKind};
@@ -138,6 +138,24 @@ fn rail_card_pulse_bright() {
     assert_eq!(glyph.fg, Some(Role::Attention.color()));
     assert_eq!(stripe.fg, Some(Role::Attention.color()));
     assert!(app.take_wake().is_some());
+}
+
+#[test]
+fn a_crashed_waiting_card_does_not_pulse() {
+    let clock = FakeClock::new();
+    let mut app = app();
+    app.on_line(waiting(A, WALL));
+    app.on_line(status(B, json!({"state": "idle"}), WALL));
+    app.set_now(clock.origin(), WALL);
+    let mut card = app
+        .rail_cards()
+        .and_then(|(cards, _)| cards.into_iter().next())
+        .expect("a rail card")
+        .clone();
+    card.left = Some(crate::home::Left::Crashed);
+    // The row is Waiting but already left; either fact alone cannot make
+    // the rail's live-card pulse branch true.
+    assert_eq!(pulse(&app, &card), None);
 }
 
 #[test]

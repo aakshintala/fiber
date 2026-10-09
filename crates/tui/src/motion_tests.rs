@@ -115,6 +115,8 @@ fn the_earliest_ask_wins_and_take_clears_it() {
     let origin = fakes::clock::FakeClock::new().origin();
     let mut live = motion(origin);
     live.ask_frame();
+    // Repeating the same ask has no observable effect.
+    live.ask_frame();
     // Time moves on: the next ask is later, and the earlier one wins.
     live.set_now(
         origin
@@ -319,6 +321,63 @@ fn ask_pulse_asks_the_next_four_tick_boundary_then_the_end() {
     motion.set_now(origin, wall + 10_000);
     motion.ask_pulse(&waiting_row(wall));
     assert_eq!(motion.take_wake(), None);
+}
+
+#[test]
+fn ask_pulse_uses_tick_count_not_elapsed_milliseconds_as_frame() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    let wall = 1_700_000_000_000;
+    let mut motion = Motion::default();
+    motion.set_now(origin, wall);
+    // At 120 ms, elapsed time is one frame. Dividing by TICK asks at
+    // frame 4 (480 ms); multiplying would defer the ask to the pulse end.
+    motion.set_now(
+        origin
+            .checked_add(Duration::from_millis(120))
+            .expect("after the origin"),
+        wall + 120,
+    );
+    motion.ask_pulse(&waiting_row(wall));
+    assert_eq!(
+        motion.take_wake(),
+        origin.checked_add(Duration::from_millis(480))
+    );
+}
+
+#[test]
+fn ask_pulse_rounds_up_to_the_next_four_frame_boundary() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    let wall = 1_700_000_000_000;
+    let mut motion = Motion::default();
+    motion.set_now(origin, wall);
+    // At frame 1, the next four-frame boundary is frame 4 (480 ms).
+    // Multiplying by four would ask at frame 20 (2,400 ms).
+    motion.set_now(
+        origin
+            .checked_add(Duration::from_millis(120))
+            .expect("after the origin"),
+        wall + 120,
+    );
+    motion.ask_pulse(&waiting_row(wall));
+    assert_eq!(
+        motion.take_wake(),
+        origin.checked_add(Duration::from_millis(480))
+    );
+}
+
+#[test]
+fn glimmer_clipped_at_its_start_returns_no_empty_band() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    let mut motion = motion(origin);
+    // Frame 4 starts the band at cell 2. A two-cell word clamps its end
+    // to cell 2, so the empty intersection is None, not Some(2..2).
+    motion.set_now(
+        origin
+            .checked_add(Duration::from_millis(480))
+            .expect("after the origin"),
+        0,
+    );
+    assert_eq!(motion.glimmer(2), None);
 }
 
 #[test]

@@ -229,10 +229,9 @@ impl Motion {
 
     /// Keeps the earliest ask: the loop arms the tick with it.
     fn ask(&self, at: Instant) {
-        let earlier = self.wake.get().is_none_or(|wake| at < wake);
-        if earlier {
-            self.wake.set(Some(at));
-        }
+        // Equal asks name the same observable wake, so only the minimum matters.
+        self.wake
+            .set(Some(self.wake.get().map_or(at, |wake| wake.min(at))));
     }
 }
 

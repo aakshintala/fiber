@@ -69,6 +69,33 @@ fn lines(app: &App, text: usize) -> Vec<String> {
         .collect()
 }
 
+/// An app with one running delegate and its first row in the panel.
+fn one_delegate() -> (App, usize) {
+    let clock = FakeClock::new();
+    let mut app = attached(200, 40);
+    app.on_line(session_line(
+        "session_status",
+        json!({
+            "name": "one", "workspace": "/w", "project": "-w", "state": "idle",
+            "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0}),
+    ));
+    delegate(&mut app, "j_1", "alpha");
+    app.set_now(clock.origin(), 0);
+    let (_, span) = crate::view::panel::rows_and_delegates(&app, 200);
+    (app, span.expect("a delegates span").start)
+}
+
+/// Draws the panel at `height` rows.
+fn draw_panel(app: &App, height: u16) {
+    let area = Rect::new(0, 0, 200, height);
+    let mut buf = Buffer::empty(area);
+    crate::view::panel::draw(app, area, &mut buf, &mut Vec::new());
+}
+
 /// Subscribes `job`'s delegate session in `state`.
 fn subscribe(app: &mut App, job: &str, state: serde_json::Value) {
     let session = format!("s_{job:0>16}");
@@ -192,6 +219,35 @@ fn only_a_description_row_drawn_asks_nothing() {
     // Its state row asks.
     ask(&app, span.start..span.start + 1);
     assert!(app.take_wake().is_some());
+}
+
+#[test]
+fn panel_draw_asks_when_a_delegate_state_row_intersects_the_drawn_rows() {
+    let (app, start) = one_delegate();
+    // `height - 1` rows draw: this includes the delegate's first state row.
+    let height = u16::try_from(start.saturating_add(2)).expect("panel height");
+    draw_panel(&app, height);
+    assert!(app.take_wake().is_some());
+}
+
+#[test]
+fn panel_draw_does_not_ask_when_the_delegate_span_starts_at_the_drawn_end() {
+    let (app, start) = one_delegate();
+    // `height - 1` rows draw, ending exactly where the span starts. The
+    // empty intersection must not schedule a frame.
+    let height = u16::try_from(start.saturating_add(1)).expect("panel height");
+    draw_panel(&app, height);
+    assert_eq!(app.take_wake(), None);
+}
+
+#[test]
+fn panel_draw_handles_a_delegate_span_two_rows_past_the_drawn_end() {
+    let (app, start) = one_delegate();
+    assert!(start >= 2);
+    // Two fewer rows than needed to reach the delegate span: from > to.
+    let height = u16::try_from(start.saturating_sub(1)).expect("panel height");
+    draw_panel(&app, height);
+    assert_eq!(app.take_wake(), None);
 }
 
 #[test]
