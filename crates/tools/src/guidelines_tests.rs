@@ -23,12 +23,12 @@ fn guidelines_md_bytes_are_pinned() {
     let bytes = include_bytes!("../prompt/guidelines.md");
     assert_eq!(
         bytes.len(),
-        1133,
+        1264,
         "length changed: edit is a reviewed change"
     );
     assert_eq!(
         fnv1a(bytes),
-        0xc2f6797ff96ad579,
+        0x441b11994d5ae352,
         "bytes changed: edit is a reviewed change"
     );
 }
@@ -46,6 +46,7 @@ fn each_builtin_tool_returns_its_section() {
             .unwrap()
             .contains("Commands run with no terminal")
     );
+    assert!(of("skill").unwrap().contains("load it with `skill`"));
 }
 
 #[test]

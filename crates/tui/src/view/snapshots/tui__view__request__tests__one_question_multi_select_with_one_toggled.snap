@@ -1,0 +1,16 @@
+---
+source: crates/tui/src/view/request_tests.rs
+expression: "screen(&multi, 60, 12).0"
+---
+
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  question · s_aaaaaaaaaaaaaaaa · 1 of 1
+  Pick some?
+  › [x] alpha
+    [ ] beta
+    [ ] gamma
+    Submit
+    Chat about this
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -77,7 +77,6 @@ pub fn run(
     // The model lists are read off the loop: taken out before home
     // keeps the launch description.
     let models = std::mem::take(&mut launch.models);
-    let save = launch.save.take();
     app.set_configure(launch.configure.take());
     app.set_home(launch);
     app.set_size(width, height);
@@ -110,7 +109,6 @@ pub fn run(
             .map(|argv| argv.into_iter().map(str::to_owned).collect()),
         title: osc::Title::default(),
         shape: osc::Shape::default(),
-        save,
         retry: Some(Arc::clone(&retry)),
         tick: crate::tick::TickThread::idle(),
     };
@@ -226,8 +224,6 @@ struct Loop<B: Backend> {
     title: osc::Title,
     /// The pointer shape last written.
     shape: osc::Shape,
-    /// Saves a dragged share to the global configuration, if any.
-    save: Option<crate::Save>,
     /// The hub thread's permit to connect again (`docs/tui.md`, "A
     /// dropped connection"); none in tests with no hub thread.
     retry: Option<Arc<Retry>>,
@@ -498,17 +494,11 @@ impl<B: Backend> Loop<B> {
         self.frame(rx)
     }
 
-    /// Saves the shares a drag's release queued, in order. A failed
-    /// save is a notice, so it shows on the frame drawn next.
+    /// Saves the shares a drag's release queued, in order, through the
+    /// configuration seam.
     fn save_shares(&mut self) {
         for (key, share) in self.app.take_saves() {
-            let Some(save) = &self.save else {
-                continue;
-            };
-            if let Err(message) = save(key, share) {
-                self.app
-                    .push_notice(format!("Could not save {key}: {message}"));
-            }
+            self.app.save_share(key, share);
         }
     }
 

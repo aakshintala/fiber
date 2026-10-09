@@ -254,6 +254,10 @@ fn resumed_session(
         resolve,
     );
     crate::shutdown::arm(signals);
+    let skills: Arc<dyn contract::skills::Skills> = Arc::new(r#loop::SkillReader::new(
+        prompt_inputs.clone(),
+        Path::new(&folded.workspace),
+    ));
     let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
         fiber,
         &home,
@@ -265,6 +269,7 @@ fn resumed_session(
         mcp.specs,
         web_search.as_deref(),
         &delegates,
+        skills,
         extensions.tools(),
     ) {
         Ok(built) => built,
