@@ -298,3 +298,66 @@ fn dropping_a_holding_server_releases_its_client() {
         .expect("the drop sends the held reply");
     assert_eq!(status, 400);
 }
+
+#[test]
+fn each_request_records_its_raw_body() {
+    let server = OauthServer::start(vec![OauthReply::pending(), OauthReply::pending()]);
+    post(&server, "/device/token", r#"{"client_id":"app_x"}"#);
+    post(&server, "/token", "");
+
+    let requests = server.requests();
+    assert_eq!(requests[0].body, r#"{"client_id":"app_x"}"#);
+    assert_eq!(requests[1].body, "");
+}
+
+#[test]
+fn jwt_builds_three_parts_with_the_claims_in_the_middle() {
+    let token = jwt(&serde_json::json!({
+        "https://api.openai.com/auth": { "chatgpt_account_id": "acct_1" },
+        "exp": 1791403200,
+    }));
+    let parts: Vec<&str> = token.split('.').collect();
+    let [header, claims, signature] = parts.as_slice() else {
+        panic!("not three parts: {token}");
+    };
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&base64url_decode(header)).unwrap(),
+        serde_json::json!({"alg": "none"})
+    );
+    let decoded: serde_json::Value = serde_json::from_slice(&base64url_decode(claims)).unwrap();
+    assert_eq!(
+        decoded["https://api.openai.com/auth"]["chatgpt_account_id"],
+        "acct_1"
+    );
+    assert_eq!(decoded["exp"], 1791403200);
+    assert_eq!(*signature, "");
+    assert!(
+        !token.contains('=') && !token.contains('+') && !token.contains('/'),
+        "{token}"
+    );
+}
+
+/// Decodes base64url without padding, the inverse of the test helper's
+/// encoding, so the test reads what `jwt` wrote.
+fn base64url_decode(text: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut bits: u32 = 0;
+    let mut held = 0;
+    for byte in text.bytes() {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'-' => 62,
+            b'_' => 63,
+            _ => panic!("not base64url: {text}"),
+        } as u32;
+        bits = (bits << 6) | value;
+        held += 6;
+        if held >= 8 {
+            held -= 8;
+            out.push(((bits >> held) & 0xff) as u8);
+        }
+    }
+    out
+}

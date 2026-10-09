@@ -21,10 +21,10 @@ use mlua::Thread;
 
 use crate::Error;
 use crate::host::{self, Reply, Request, exec};
-use crate::oauth::{self, Browser, Deliver};
+use crate::oauth::{self, Browser, Deliver, Holder};
 
 use super::hub::{Hub, Job, Phase, Progress, Shared, not_registered, timed_out};
-use super::{GRACE, LOAD_TIMEOUT, LuaExtension, Step, Target, Vm, asks, expired};
+use super::{CredentialFor, GRACE, LOAD_TIMEOUT, LuaExtension, Step, Target, Vm, asks, expired};
 
 /// A callback suspended on a host call. Its deadline keeps running.
 struct Parked {
@@ -522,13 +522,13 @@ fn settle(
             }
             (None, None)
         }
-        Request::Callback { port } => {
+        Request::Callback { port, path } => {
             // The listener starts under the admission lock, so no cancel
             // or stop lands between admission and the bind; a failure is
             // delivered after releasing it.
             #[cfg(test)]
             settle_hook(&target, Pause::Start);
-            let started = oauth::listen(port, &deliver);
+            let started = oauth::listen(port, path.clone(), &deliver);
             drop(shared);
             let cancel = match started {
                 Ok(cancel) => Some(cancel),
@@ -640,7 +640,7 @@ fn settle(
             // delivers its error after.
             let cancel = match &target {
                 Target::Provider {
-                    credential: Some(pair),
+                    credential: Some(CredentialFor::Stored(pair)),
                     ..
                 } => {
                     #[cfg(test)]
@@ -654,6 +654,17 @@ fn settle(
                             None
                         }
                     }
+                }
+                Target::Provider {
+                    credential: Some(CredentialFor::Login(slot)),
+                    ..
+                } => {
+                    // A login holds no file: its slot is ready at once, and
+                    // `fiber login` stores what it holds after the flow
+                    // (`docs/model-routing.md`, "Logging in").
+                    drop(shared);
+                    deliver(Reply::Lock(Ok(Holder::Login(Arc::clone(slot)))));
+                    None
                 }
                 Target::Provider {
                     name,

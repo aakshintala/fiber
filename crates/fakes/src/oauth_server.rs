@@ -66,8 +66,41 @@ impl OauthReply {
 pub struct OauthRequest {
     /// The request target, such as `/token`.
     pub path: String,
+    /// The raw request body, for requests that are not form-encoded.
+    pub body: String,
     /// The form body's fields in order, percent-decoded.
     pub form: Vec<(String, String)>,
+}
+
+/// Builds an unsigned test JWT carrying `claims`: an `{"alg":"none"}`
+/// header and the claims as base64url without padding, with an empty
+/// signature (`docs/testing.md`, "Fakes"). Hand-written so the fake takes
+/// no encoding dependency.
+pub fn jwt(claims: &serde_json::Value) -> String {
+    format!(
+        "{}.{}.",
+        base64url(br#"{"alg":"none"}"#),
+        base64url(claims.to_string().as_bytes())
+    )
+}
+
+/// Base64url without padding.
+fn base64url(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let mut bits: u32 = 0;
+        for byte in chunk {
+            bits = (bits << 8) | u32::from(*byte);
+        }
+        bits <<= 8 * (3 - chunk.len());
+        for i in 0..chunk.len() + 1 {
+            // Six bits name one of the 64 letters.
+            let at = ((bits >> (18 - 6 * i)) & 0x3f) as usize;
+            out.push(ALPHABET.get(at).copied().unwrap_or(b'?') as char);
+        }
+    }
+    out
 }
 
 /// A fake token endpoint listening on a local port. Dropping it closes the
@@ -105,6 +138,7 @@ impl OauthServer {
             .into_iter()
             .map(|request| OauthRequest {
                 path: request.path,
+                body: String::from_utf8_lossy(&request.body).into_owned(),
                 form: decode_form(&String::from_utf8_lossy(&request.body)),
             })
             .collect()

@@ -539,6 +539,11 @@ impl Providers {
         Ok(notices)
     }
 
+    /// The extension that registered `name`, if a Lua extension did.
+    pub fn extension_of(&self, name: &str) -> Option<&str> {
+        self.extension_of.get(name).map(String::as_str)
+    }
+
     /// The installed data of `name`: the data file's, else one naming only
     /// the provider, as [`LuaProvider::has_credential`] reads it.
     pub fn data(&self, name: &str) -> ProviderData {

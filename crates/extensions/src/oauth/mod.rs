@@ -9,7 +9,7 @@
 //! keeps the sender while the callback waits, so a callback that ends, times
 //! out or is dropped frees its port and stops contending for the lock.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -18,19 +18,21 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender, TryRecvError};
 use std::thread;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use config::{CredentialFile, CredentialLock};
-use contract::clock::Clock;
-use mlua::{Lua, Table, UserData, UserDataMethods, Value as LuaValue};
+use config::CredentialFile;
+use mlua::{Lua, Table, Value as LuaValue};
 use ring::digest;
 use ring::rand::{SecureRandom, SystemRandom};
-use serde_json::Value;
 
-use crate::host::{self, Reply};
-use crate::lua_provider::{CredentialPair, REFRESH_BEFORE};
+mod held;
+
+pub(crate) use held::{Held, Holder, LoginSlot};
+
+use crate::host::Reply;
+use crate::lua_provider::CredentialPair;
 
 /// How often an off-thread wait looks at its cancel receiver.
 const POLL: Duration = Duration::from_millis(20);
@@ -58,6 +60,8 @@ pub(crate) type Deliver = Arc<dyn Fn(Reply) + Send + Sync>;
 pub trait Browser: Send + Sync {
     /// Shows `url` and tries to open it.
     fn open(&self, url: &str);
+    /// Shows the device-code `code` to enter at `url`; opens nothing.
+    fn show(&self, url: &str, code: &str);
     /// Whether a person is attached to answer a login now. Read before each
     /// interactive step.
     fn attended(&self) -> bool;
@@ -89,6 +93,14 @@ impl Default for SystemBrowser {
 }
 
 impl Browser for SystemBrowser {
+    fn show(&self, url: &str, code: &str) {
+        // Told, never opened: the person types the code at the URL
+        // (`docs/extensions.md`, "Host calls").
+        match writeln!(io::stderr(), "Go to {url} and enter the code {code}") {
+            Ok(()) | Err(_) => {}
+        }
+    }
+
     fn open(&self, url: &str) {
         match writeln!(io::stderr(), "{url}") {
             Ok(()) | Err(_) => {}
@@ -188,8 +200,12 @@ function oauth.callback(opts)
   if math.type(port) ~= "integer" or port < 1 or port > 65535 then
     error("host.oauth.callback: `port` must be a whole number from 1 to 65535", 2)
   end
+  local path = type(opts) == "table" and opts.path or nil
+  if path ~= nil and (type(path) ~= "string" or path:sub(1, 1) ~= "/") then
+    error("host.oauth.callback: `path` must be a string starting with `/`", 2)
+  end
   need_person("callback")
-  local query, code, message = yield(tag, "callback", { port = port })
+  local query, code, message = yield(tag, "callback", { port = port, path = path })
   if query == nil then error(failure(code, message), 0) end
   return query
 end
@@ -198,6 +214,27 @@ function oauth.poll(opts)
   in_callback("poll")
   if type(opts) ~= "table" or type(opts.url) ~= "string" then
     error("host.oauth.poll: `url` must be a string", 2)
+  end
+  -- A device-code endpoint answers 403 or 404 while the person has not
+  -- approved yet, so those statuses wait like `authorization_pending`
+  -- (`docs/extensions.md`, "Host calls").
+  local pending = opts.pending
+  if pending ~= nil then
+    if type(pending) ~= "table" then
+      error("host.oauth.poll: `pending` must be a list of whole-number statuses from 100 to 599", 2)
+    end
+    local count, top = 0, 0
+    for key, status in pairs(pending) do
+      if math.type(key) ~= "integer" or key < 1
+        or math.type(status) ~= "integer" or status < 100 or status > 599 then
+        error("host.oauth.poll: `pending` must be a list of whole-number statuses from 100 to 599", 2)
+      end
+      count = count + 1
+      if key > top then top = key end
+    end
+    if top ~= count then
+      error("host.oauth.poll: `pending` must be a list of whole-number statuses from 100 to 599", 2)
+    end
   end
   local interval = opts.interval
   if interval == nil then interval = 5 end
@@ -214,26 +251,34 @@ function oauth.poll(opts)
   while true do
     need_person("poll")
     local reply = host.http(request)
-    local ok, body = pcall(json.decode, reply.body)
-    -- A JSON array decodes to a Lua table too: only a `{` after any
-    -- space opens the object ruling 17 requires.
-    if not ok or type(body) ~= "table" or reply.body:match("^%s*(.)") ~= "{" then
-      error(failure("unreadable_reply", "host.oauth.poll: status " .. reply.status .. " with a body that is not a JSON object"), 0)
+    local waiting = false
+    if pending ~= nil then
+      for _, status in ipairs(pending) do
+        if reply.status == status then waiting = true end
+      end
     end
-    local code = body.error
-    if code == nil then
-      if reply.status < 200 or reply.status > 299 then
-        error(failure("http_error", "host.oauth.poll: status " .. reply.status), 0)
+    if not waiting then
+      local ok, body = pcall(json.decode, reply.body)
+      -- A JSON array decodes to a Lua table too: only a `{` after any
+      -- space opens the object ruling 17 requires.
+      if not ok or type(body) ~= "table" or reply.body:match("^%s*(.)") ~= "{" then
+        error(failure("unreadable_reply", "host.oauth.poll: status " .. reply.status .. " with a body that is not a JSON object"), 0)
       end
-      return body
-    elseif code == "slow_down" then
-      interval = interval + 5
-      if interval > 3600 then
-        error(failure("rate_limited", "host.oauth.poll: the server asked for more than 3600 seconds between polls"), 0)
+      local code = body.error
+      if code == nil then
+        if reply.status < 200 or reply.status > 299 then
+          error(failure("http_error", "host.oauth.poll: status " .. reply.status), 0)
+        end
+        return body
+      elseif code == "slow_down" then
+        interval = interval + 5
+        if interval > 3600 then
+          error(failure("rate_limited", "host.oauth.poll: the server asked for more than 3600 seconds between polls"), 0)
+        end
+      elseif code ~= "authorization_pending" then
+        local detail = type(body.error_description) == "string" and (": " .. body.error_description) or ""
+        error(failure("authentication_failed", "host.oauth.poll: " .. tostring(code) .. detail), 0)
       end
-    elseif code ~= "authorization_pending" then
-      local detail = type(body.error_description) == "string" and (": " .. body.error_description) or ""
-      error(failure("authentication_failed", "host.oauth.poll: " .. tostring(code) .. detail), 0)
     end
     yield(tag, "sleep", interval)
   end
@@ -254,9 +299,22 @@ function oauth.refresh(fn)
       if message == nil then error(code, 0) else error(failure(code, message), 0) end
     end
     if stored ~= nil and not held:due(stored) then return stored end
-    local fresh = attempt(fn, stored)
+    -- A login holds no file: its function runs directly, so nothing it
+    -- raises is recorded as a refresh failure, and the login reports it
+    -- (`docs/model-routing.md`, "Logging in").
+    local fresh
+    if held:login() then
+      fresh = fn(stored)
+    else
+      fresh = attempt(fn, stored)
+    end
     local _, wcode, wmessage = held:write(fresh)
     if wcode ~= nil then
+      -- An expired value outside a login maps as a rejected refresh; inside
+      -- one the login reports it (`docs/extensions.md`, "Host calls").
+      if not held:login() and wmessage ~= nil then
+        error(failure(wcode, wmessage, "refresh:reached"), 0)
+      end
       if wmessage == nil then error(wcode, 0) else error(failure(wcode, wmessage), 0) end
     end
     return fresh
@@ -303,6 +361,37 @@ pub(crate) fn install(
         open_browser.open(&url);
         Ok(mlua::MultiValue::new())
     })?;
+    let show_browser = Arc::clone(&browser);
+    let show_raw = lua.create_function(move |lua, (url, code): (LuaValue, LuaValue)| {
+        // `show` runs on the thread like `open`: it shows the code and
+        // opens nothing, so it never yields (`docs/extensions.md`, "Host
+        // calls").
+        let (LuaValue::String(url), LuaValue::String(code)) = (&url, &code) else {
+            return crate::host::failure::raw_string(
+                lua,
+                "host.oauth.show: `url` and `code` must be strings".to_owned(),
+            );
+        };
+        let (Ok(url), Ok(code)) = (url.to_str(), code.to_str()) else {
+            return crate::host::failure::raw_string(
+                lua,
+                "host.oauth.show: `url` and `code` must be strings".to_owned(),
+            );
+        };
+        if !show_browser.attended() {
+            return crate::host::failure::raw_failure(
+                lua,
+                &contract::ErrorCode::AuthenticationFailed,
+                "host.oauth.show needs a person to log in, and nobody is attached".to_owned(),
+            );
+        }
+        show_browser.show(&url, &code);
+        Ok(mlua::MultiValue::new())
+    })?;
+    oauth.set(
+        "show",
+        crate::host::failure::wrap_with_boundary(lua, show_raw, &failure, Some("unattended:show"))?,
+    )?;
     oauth.set(
         "open",
         crate::host::failure::wrap_with_boundary(lua, open_raw, &failure, Some("unattended:open"))?,
@@ -352,114 +441,6 @@ fn challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, verifier.as_bytes()))
 }
 
-/// A stored credential held under its lock, as Lua sees it. `release()` and
-/// a collected handle both free the lock.
-pub(crate) struct Held {
-    lock: RefCell<Option<CredentialLock>>,
-    clock: Arc<dyn Clock>,
-}
-
-impl Held {
-    pub(crate) fn new(lock: CredentialLock, clock: Arc<dyn Clock>) -> Self {
-        Self {
-            lock: RefCell::new(Some(lock)),
-            clock,
-        }
-    }
-
-    /// Whether `stored` needs refreshing: not a usable credential, or one
-    /// that expires within [`REFRESH_BEFORE`].
-    fn due(&self, stored: &Value) -> bool {
-        let now = self
-            .clock
-            .wall()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
-        let window = i64::try_from(REFRESH_BEFORE.as_secs()).unwrap_or(i64::MAX);
-        usable(stored).is_none_or(|expires| expires <= now.saturating_add(window))
-    }
-}
-
-/// The expiry of a stored credential: an object with a non-empty string
-/// `token` and an integer `expires_at`. None for anything else.
-fn usable(value: &Value) -> Option<i64> {
-    let token = value.get("token").and_then(Value::as_str)?;
-    if token.is_empty() {
-        return None;
-    }
-    value.get("expires_at").and_then(Value::as_i64)
-}
-
-impl UserData for Held {
-    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method("read", |lua, this, ()| {
-            // A coded failure returns `(nil, code, message)` for the refresh
-            // half to raise as the table; no longer held returns
-            // `(nil, message)` for it to raise as the string.
-            let held = this.lock.borrow();
-            let Some(lock) = held.as_ref() else {
-                return crate::host::failure::raw_string(
-                    lua,
-                    "host.oauth.refresh: the credential is no longer held".to_owned(),
-                );
-            };
-            match lock.read() {
-                Ok(None) => Ok(mlua::MultiValue::from_vec(vec![LuaValue::Nil])),
-                Ok(Some(value)) => Ok(mlua::MultiValue::from_vec(vec![host::to_lua(lua, &value)?])),
-                Err(e) => crate::host::failure::raw_failure(
-                    lua,
-                    &contract::ErrorCode::IoFailed,
-                    e.to_string(),
-                ),
-            }
-        });
-        methods.add_method("due", |_, this, stored: LuaValue| {
-            Ok(host::to_json(&stored).map_or(true, |value| this.due(&value)))
-        });
-        methods.add_method("write", |lua, this, fresh: LuaValue| {
-            let value = match host::to_json(&fresh) {
-                Ok(value) => value,
-                Err(err) => {
-                    return crate::host::failure::raw_string(
-                        lua,
-                        format!(
-                            "host.oauth.refresh: {}",
-                            err.to_string().lines().next().unwrap_or_default()
-                        ),
-                    );
-                }
-            };
-            if usable(&value).is_none() {
-                return crate::host::failure::raw_string(
-                    lua,
-                    "host.oauth.refresh: the function must return a table with a `token` string and an `expires_at` whole number of seconds".to_owned(),
-                );
-            }
-            let held = this.lock.borrow();
-            let Some(lock) = held.as_ref() else {
-                return crate::host::failure::raw_string(
-                    lua,
-                    "host.oauth.refresh: the credential is no longer held".to_owned(),
-                );
-            };
-            match lock.write(&value) {
-                Ok(()) => Ok(mlua::MultiValue::from_vec(vec![])),
-                Err(e) => {
-                    crate::host::failure::raw_failure(
-                        lua,
-                        &contract::ErrorCode::IoFailed,
-                        e.to_string(),
-                    )
-                }
-            }
-        });
-        methods.add_method("release", |_, this, ()| {
-            this.lock.borrow_mut().take();
-            Ok(())
-        });
-    }
-}
-
 /// Binds the callback listener: loopback only.
 fn bind(port: u16) -> io::Result<TcpListener> {
     TcpListener::bind((Ipv4Addr::LOCALHOST, port))
@@ -468,7 +449,11 @@ fn bind(port: u16) -> io::Result<TcpListener> {
 /// Binds `port` and serves one request off the thread, delivering its query.
 /// Ok: the cancel handle; dropping it ends the listener and frees the port.
 /// Err: nothing listens and nothing was delivered; the caller delivers it.
-pub(crate) fn listen(port: u16, deliver: &Deliver) -> Result<Sender<()>, Reply> {
+pub(crate) fn listen(
+    port: u16,
+    path: Option<String>,
+    deliver: &Deliver,
+) -> Result<Sender<()>, Reply> {
     // A port that cannot be bound is `io_failed`; a request whose query
     // cannot be read is `unreadable_reply`, both raised as `{ code,
     // message }` by the callback half.
@@ -489,7 +474,7 @@ pub(crate) fn listen(port: u16, deliver: &Deliver) -> Result<Sender<()>, Reply> 
     let spawned = thread::Builder::new()
         .name("oauth callback".to_owned())
         .spawn(move || {
-            if let Some(result) = serve(&listener, &stop) {
+            if let Some(result) = serve(&listener, &stop, &path) {
                 send(Reply::Query(result));
             }
         });
@@ -503,11 +488,15 @@ type Query = Result<Vec<(String, String)>, (contract::ErrorCode, String)>;
 
 /// Serves connections until one is a request, then returns its query. None
 /// when cancelled.
-fn serve(listener: &TcpListener, stop: &mpsc::Receiver<()>) -> Option<Query> {
+fn serve(
+    listener: &TcpListener,
+    stop: &mpsc::Receiver<()>,
+    path: &Option<String>,
+) -> Option<Query> {
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
-                if let Some(result) = answer(stream, stop) {
+                if let Some(result) = answer(stream, stop, path) {
                     return Some(result);
                 }
             }
@@ -523,8 +512,14 @@ fn serve(listener: &TcpListener, stop: &mpsc::Receiver<()>) -> Option<Query> {
 }
 
 /// Answers one connection. Some once it was a request, well formed or not
-/// in its query. None when the connection said nothing usable.
-fn answer(mut stream: TcpStream, stop: &mpsc::Receiver<()>) -> Option<Query> {
+/// in its query. None when the connection said nothing usable, or when it
+/// asked for another path than the callback serves: that gets a 404 and the
+/// listener keeps waiting (`docs/extensions.md`, "Host calls").
+fn answer(
+    mut stream: TcpStream,
+    stop: &mpsc::Receiver<()>,
+    path: &Option<String>,
+) -> Option<Query> {
     // A BSD accept inherits the listener's non-blocking mode.
     stream.set_nonblocking(false).ok()?;
     stream.set_read_timeout(Some(POLL)).ok()?;
@@ -540,6 +535,12 @@ fn answer(mut stream: TcpStream, stop: &mpsc::Receiver<()>) -> Option<Query> {
         respond(&mut stream, "400 Bad Request");
         return None;
     };
+    if let Some(served) = path
+        && target.split_once('?').map_or(target, |(path, _)| path) != *served
+    {
+        respond(&mut stream, "404 Not Found");
+        return None;
+    }
     match parse_query(target.split_once('?').map_or("", |(_, query)| query)) {
         Ok(pairs) => {
             respond(&mut stream, "200 OK");
@@ -701,7 +702,7 @@ pub(crate) fn lock(
         .spawn(move || {
             loop {
                 match file.try_lock() {
-                    Ok(Some(lock)) => return send(Reply::Lock(Ok(lock))),
+                    Ok(Some(lock)) => return send(Reply::Lock(Ok(Holder::File(lock)))),
                     Ok(None) => {}
                     Err(e) => {
                         return send(Reply::Lock(Err(crate::host::LockError::Coded((

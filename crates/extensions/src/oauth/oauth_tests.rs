@@ -1,5 +1,8 @@
 use std::net::SocketAddr;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::UNIX_EPOCH;
+
+use contract::clock::Clock;
 
 use super::*;
 
@@ -139,7 +142,7 @@ fn due_judges_a_stored_credential_by_the_clock() {
         .try_lock()
         .unwrap()
         .unwrap();
-    let held = Held::new(lock, clock);
+    let held = Held::new(Holder::File(lock), clock);
     let due = |expires: i64| held.due(&serde_json::json!({ "token": "t", "expires_at": expires }));
     assert!(!due(wall + 301));
     assert!(due(wall + 300));
@@ -286,7 +289,7 @@ fn a_port_that_cannot_be_bound_is_io_failed() {
     let deliver: Deliver = Arc::new(move |reply| match tx.send(reply) {
         Ok(()) | Err(_) => {}
     });
-    let Err(reply) = listen(port, &deliver) else {
+    let Err(reply) = listen(port, None, &deliver) else {
         panic!("a taken port was bound");
     };
     let (code, message) = failed(reply);
@@ -305,7 +308,7 @@ fn a_request_whose_query_cannot_be_read_is_unreadable_reply() {
     let deliver: Deliver = Arc::new(move |reply| match tx.send(reply) {
         Ok(()) | Err(_) => {}
     });
-    let Ok(cancel) = listen(port, &deliver) else {
+    let Ok(cancel) = listen(port, None, &deliver) else {
         panic!("the listener binds");
     };
     let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
@@ -412,16 +415,18 @@ fn a_credential_file_that_cannot_be_read_or_written_is_io_failed() {
     // An unreadable file fails the read.
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
     let clock = fakes::clock::FakeClock::new();
-    let held = Held::new(file.try_lock().unwrap().unwrap(), clock);
+    let held = Held::new(Holder::File(file.try_lock().unwrap().unwrap()), clock);
     let (code, message) = failed(held, "held:read()");
     assert_eq!(code, "io_failed");
     assert!(message.contains("default"), "{message}");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    // A read-only directory fails the atomic write's rename.
+    // A read-only directory fails the atomic write's rename. The value is
+    // one `write` would otherwise accept: an expired one is refused before
+    // any write is attempted (`docs/extensions.md`, "Host calls").
     let clock = fakes::clock::FakeClock::new();
-    let held = Held::new(file.try_lock().unwrap().unwrap(), clock);
+    let held = Held::new(Holder::File(file.try_lock().unwrap().unwrap()), clock);
     std::fs::set_permissions(&cred_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
-    let (code, message) = failed(held, "held:write({ token = 't', expires_at = 1 })");
+    let (code, message) = failed(held, "held:write({ token = 't', expires_at = 1700003600 })");
     assert_eq!(code, "io_failed");
     assert!(message.contains("default"), "{message}");
     std::fs::set_permissions(&cred_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -454,14 +459,14 @@ fn a_malformed_or_symlinked_credential_is_io_failed_through_held() {
     let path = dir.path().join("credentials").join("acme").join("default");
     std::fs::write(&path, b"not json").unwrap();
     let clock = fakes::clock::FakeClock::new();
-    let held = Held::new(file.try_lock().unwrap().unwrap(), clock);
+    let held = Held::new(Holder::File(file.try_lock().unwrap().unwrap()), clock);
     assert_eq!(triple(held, "held:read()"), "io_failed");
     std::fs::remove_file(&path).unwrap();
     let elsewhere = dir.path().join("elsewhere");
     std::fs::write(&elsewhere, b"{}").unwrap();
     std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
     let clock = fakes::clock::FakeClock::new();
-    let held = Held::new(file.try_lock().unwrap().unwrap(), clock);
+    let held = Held::new(Holder::File(file.try_lock().unwrap().unwrap()), clock);
     assert_eq!(triple(held, "held:read()"), "io_failed");
 }
 
@@ -530,7 +535,10 @@ fn refresh_passes_the_original_failure_table_through_unchanged() {
         .unwrap()
         .unwrap();
     lua.globals()
-        .set("held", Held::new(lock, fakes::clock::FakeClock::new()))
+        .set(
+            "held",
+            Held::new(Holder::File(lock), fakes::clock::FakeClock::new()),
+        )
         .unwrap();
     let same: bool = lua
         .load(
@@ -562,7 +570,10 @@ fn a_refresh_function_raising_a_string_reaches_coroutine_resume_as_credential_fa
         .unwrap()
         .unwrap();
     lua.globals()
-        .set("held", Held::new(lock, fakes::clock::FakeClock::new()))
+        .set(
+            "held",
+            Held::new(Holder::File(lock), fakes::clock::FakeClock::new()),
+        )
         .unwrap();
     let (code, message): (String, String) = lua
         .load(
@@ -588,7 +599,7 @@ fn a_held_write_with_no_usable_credential_is_a_string() {
     let dir = fakes::TempDir::new("fiber-oauth-held-string");
     let file = CredentialFile::new(dir.path(), "acme", "default").unwrap();
     let lock = file.try_lock().unwrap().unwrap();
-    let held = Held::new(lock, fakes::clock::FakeClock::new());
+    let held = Held::new(Holder::File(lock), fakes::clock::FakeClock::new());
     let lua = Lua::new();
     lua.globals().set("held", held).unwrap();
     // The raw method returns `(nil, message)`, which the refresh half raises
@@ -611,7 +622,7 @@ fn a_held_read_after_release_is_a_string() {
     let dir = fakes::TempDir::new("fiber-oauth-held-released");
     let file = CredentialFile::new(dir.path(), "acme", "default").unwrap();
     let lock = file.try_lock().unwrap().unwrap();
-    let held = Held::new(lock, fakes::clock::FakeClock::new());
+    let held = Held::new(Holder::File(lock), fakes::clock::FakeClock::new());
     let lua = Lua::new();
     lua.globals().set("held", held).unwrap();
     lua.load("held:release()").exec().unwrap();
@@ -620,4 +631,93 @@ fn a_held_read_after_release_is_a_string() {
     assert_eq!(values.len(), 2, "a string failure returns one message");
     assert_eq!(values[0], mlua::Value::Nil);
     assert!(matches!(values[1], mlua::Value::String(_)));
+}
+
+#[test]
+fn a_login_hold_reads_nil_and_keeps_writes_in_its_slot() {
+    let slot: LoginSlot = Arc::new(Mutex::new(None));
+    let clock = fakes::clock::FakeClock::new();
+    let wall = i64::try_from(clock.wall().duration_since(UNIX_EPOCH).unwrap().as_secs()).unwrap();
+    let held = Held::new(Holder::Login(Arc::clone(&slot)), clock);
+    assert!(held.login());
+
+    let lua = Lua::new();
+    lua.globals().set("held", held).unwrap();
+    // A login holds no file: its function logs in when it sees nil.
+    let read: mlua::Value = lua.load("return held:read()").eval().unwrap();
+    assert_eq!(read, mlua::Value::Nil);
+    // `login()` on the Rust side agrees.
+    let login: bool = lua.load("return held:login()").eval().unwrap();
+    assert!(login);
+
+    let write = |method: &str| {
+        let values: mlua::MultiValue = lua.load(format!("return {method}")).eval().unwrap();
+        assert!(values.into_vec().is_empty(), "{method} returned values");
+    };
+    write(&format!(
+        "held:write({{ token = 't', expires_at = {} }})",
+        wall + 3600
+    ));
+    assert_eq!(
+        slot.lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|value| value.get("token"))
+            .and_then(serde_json::Value::as_str),
+        Some("t")
+    );
+    // A second write replaces the first.
+    write(&format!(
+        "held:write({{ token = 'u', expires_at = {} }})",
+        wall + 7200
+    ));
+    assert_eq!(
+        slot.lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|value| value.get("token"))
+            .and_then(serde_json::Value::as_str),
+        Some("u")
+    );
+    // An unusable value is refused with the existing message, and an
+    // expired one with the expired code and message; neither touches the
+    // slot.
+    let returned = |method: &str| {
+        let values: mlua::MultiValue = lua.load(format!("return {method}")).eval().unwrap();
+        values.into_vec()
+    };
+    let unusable = returned("held:write({ token = 't' })");
+    let [mlua::Value::Nil, mlua::Value::String(message)] = unusable.as_slice() else {
+        panic!("an unusable write returned no string failure: {unusable:?}");
+    };
+    let message = message.to_str().unwrap().to_owned();
+    assert!(message.contains("`token` string"), "{message}");
+    let expired = returned(&format!(
+        "held:write({{ token = 't', expires_at = {wall} }})"
+    ));
+    let [
+        mlua::Value::Nil,
+        mlua::Value::String(code),
+        mlua::Value::String(message),
+    ] = expired.as_slice()
+    else {
+        panic!("an expired write returned no failure triple: {expired:?}");
+    };
+    assert_eq!(code.to_str().unwrap(), "authentication_failed");
+    let message = message.to_str().unwrap().to_owned();
+    assert!(message.contains("has already expired"), "{message}");
+    assert_eq!(
+        slot.lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|value| value.get("token"))
+            .and_then(serde_json::Value::as_str),
+        Some("u")
+    );
+    // Releasing the slot keeps what it holds.
+    let () = lua.load("held:release()").exec().unwrap();
+    assert!(
+        slot.lock().unwrap().is_some(),
+        "release dropped the login's result"
+    );
 }

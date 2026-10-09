@@ -702,7 +702,11 @@ fn held_lock(tag: &str) -> (fakes::TempDir, config::CredentialFile, host::Reply)
     let home = fakes::TempDir::new(&format!("fiber-lua-{tag}"));
     let file = config::CredentialFile::new(home.path(), "acme", "default").unwrap();
     let lock = file.try_lock().unwrap().unwrap();
-    (home, file, host::Reply::Lock(Ok(lock)))
+    (
+        home,
+        file,
+        host::Reply::Lock(Ok(crate::oauth::Holder::File(lock))),
+    )
 }
 
 #[test]

@@ -76,12 +76,33 @@ fiber.command("pkce", { timeout = 60000, run = function()
   return json.encode(host.oauth.pkce())
 end })
 
+fiber.command("show", { timeout = 60000, run = function(text)
+  local args = opts_from(text)
+  host.oauth.show(args.url, args.code)
+  return "shown"
+end })
+
 fiber.command("poll", { timeout = 60000, run = function(base)
   return json.encode(host.oauth.poll({
     url = base .. "/device/token",
     body = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&device_code=d",
     headers = { ["content-type"] = "application/x-www-form-urlencoded" },
   }))
+end })
+
+fiber.command("poll_pending", { timeout = 60000, run = function(base)
+  return json.encode(host.oauth.poll({
+    url = base .. "/device/token",
+    pending = { 403, 404 },
+    body = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&device_code=d",
+    headers = { ["content-type"] = "application/x-www-form-urlencoded" },
+  }))
+end })
+
+fiber.command("poll_pending_caught", { timeout = 60000, run = function(text)
+  local ok, err = pcall(host.oauth.poll, opts_from(text))
+  if ok then return "ok" end
+  return type(err) .. "\n" .. tostring(err)
 end })
 
 fiber.command("refresh", { timeout = 60000, run = function()
@@ -119,6 +140,8 @@ fiber.provider("acme", { credential = { timeout = 60000, run = function()
     if mode == "notoken" then return { expires_at = 1700003600 } end
     if mode == "numbertoken" then return { token = 5, expires_at = 1700003600 } end
     if mode == "floatexpiry" then return { token = "t", expires_at = 1.5 } end
+    if mode == "expired_equal" then return { token = "t", expires_at = 1700000000 } end
+    if mode == "expired_past" then return { token = "t", expires_at = 1 } end
     if mode == "wantnil" and stored ~= nil then error("stored was not nil") end
     if mode == "wantold" and stored.token ~= "old" then error("stored was not the old credential") end
     local reply = host.http({
@@ -177,6 +200,10 @@ fiber.provider("acme", { credential = { timeout = 60000, run = function()
       headers = { ["content-type"] = "application/x-www-form-urlencoded" },
     })
     return { token = reply.access_token, expires_at = 1700003600 }
+  end
+  if mode == "show" then
+    host.oauth.show(url .. "/device", "ABCD-1234")
+    return { token = "unreached", expires_at = 1700003600 }
   end
   if mode == "refresh_poll" then
     return host.oauth.refresh(function(stored)
@@ -427,6 +454,7 @@ fn listening(
 #[derive(Default)]
 struct Recording {
     opened: Mutex<Vec<String>>,
+    shown: Mutex<Vec<(String, String)>>,
     attended: AtomicUsize,
 }
 
@@ -445,6 +473,7 @@ impl Recording {
     fn times(n: usize) -> Self {
         Self {
             opened: Mutex::new(Vec::new()),
+            shown: Mutex::new(Vec::new()),
             attended: AtomicUsize::new(n),
         }
     }
@@ -452,11 +481,22 @@ impl Recording {
     fn opened(&self) -> Vec<String> {
         self.opened.lock().unwrap().clone()
     }
+
+    fn shown(&self) -> Vec<(String, String)> {
+        self.shown.lock().unwrap().clone()
+    }
 }
 
 impl Browser for Recording {
     fn open(&self, url: &str) {
         self.opened.lock().unwrap().push(url.to_owned());
+    }
+
+    fn show(&self, url: &str, code: &str) {
+        self.shown
+            .lock()
+            .unwrap()
+            .push((url.to_owned(), code.to_owned()));
     }
 
     fn attended(&self) -> bool {
@@ -1515,4 +1555,191 @@ end } })
     let error = finish(&rx).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("host.oauth.open"), "{error}");
+}
+
+// -------------------------------------------------------------------- show
+
+#[test]
+fn show_reaches_the_browser_with_the_url_and_the_code_and_opens_nothing() {
+    let env = Env::new();
+    let browser = Arc::new(Recording::always());
+    let ext = Arc::new(env.bare(INIT, "fixture").with_browser(browser.clone()));
+    let text = "{ url = \"https://auth.example/device\", code = \"ABCD-1234\" }";
+    assert_eq!(run(&ext, "show", text).unwrap(), "shown");
+    assert_eq!(
+        browser.shown(),
+        [(
+            "https://auth.example/device".to_owned(),
+            "ABCD-1234".to_owned()
+        )]
+    );
+    assert!(browser.opened().is_empty());
+}
+
+#[test]
+fn show_names_non_string_arguments_before_anything_is_shown() {
+    let env = Env::new();
+    let browser = Arc::new(Recording::always());
+    let ext = Arc::new(env.bare(INIT, "fixture").with_browser(browser.clone()));
+    for text in [
+        "{ url = 5, code = \"ABCD-1234\" }",
+        "{ url = \"https://auth.example/device\" }",
+        "{ url = \"https://auth.example/device\", code = 5 }",
+    ] {
+        let message = lua_message(&run(&ext, "show", text).unwrap_err());
+        assert!(
+            message.contains("`url` and `code` must be strings"),
+            "{text}: {message}"
+        );
+    }
+    assert!(browser.shown().is_empty());
+}
+
+#[test]
+fn show_with_nobody_attached_is_authentication_failed_and_shows_nothing() {
+    let env = Env::new();
+    let browser = Arc::new(Recording::never());
+    let ext = login_with(&env, browser.clone());
+    let server = OauthServer::start(vec![]);
+    let provider = env.provider(&ext, &server, "show");
+    let error = finish(&start_token(&provider)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
+    assert!(error.to_string().contains("host.oauth.show"), "{error}");
+    assert!(browser.shown().is_empty());
+}
+
+#[test]
+fn an_attended_show_returns_without_a_token_request() {
+    let env = Env::new();
+    let browser = Arc::new(Recording::always());
+    let ext = login_with(&env, browser.clone());
+    let server = OauthServer::start(vec![]);
+    let provider = env.provider(&ext, &server, "show");
+    assert_eq!(finish(&start_token(&provider)).unwrap(), "unreached");
+    assert_eq!(
+        browser.shown(),
+        [(format!("{}/device", server.url()), "ABCD-1234".to_owned())]
+    );
+    assert!(server.requests().is_empty());
+}
+
+// ------------------------------------------------------- poll with pending
+
+#[test]
+fn poll_with_pending_waits_through_the_listed_statuses() {
+    let env = Env::new();
+    let ext = env.extension();
+    let server = device_server(vec![
+        OauthReply::raw(
+            403,
+            r#"{"error":{"code":"deviceauth_authorization_pending"}}"#,
+        ),
+        OauthReply::raw(404, "not here"),
+        OauthReply::token("at", "rt", 3600),
+    ]);
+    let rx = start(&ext, "poll_pending", &server.url());
+    for step in [5, 10] {
+        assert!(
+            env.clock.await_parked(wake(&env, step), WAIT),
+            "the poll never parked for its {step}-second wake within {WAIT:?}"
+        );
+        env.clock.advance(Duration::from_secs(5));
+    }
+    let token: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
+    assert_eq!(token["access_token"], "at");
+    assert_eq!(server.request_count(), 3);
+}
+
+#[test]
+fn poll_pending_that_is_not_a_status_list_is_a_calling_code_error() {
+    let env = Env::new();
+    let ext = env.extension();
+    let server = device_server(vec![OauthReply::token("at", "rt", 3600)]);
+    for (pending, wanted) in [
+        ("\"403\"", "must be a list"),
+        ("403", "must be a list"),
+        ("{ 403.5 }", "must be a list"),
+        ("{ 99 }", "must be a list"),
+        ("{ 600 }", "must be a list"),
+        ("{ [2] = 403 }", "must be a list"),
+    ] {
+        let opts = format!(
+            "{{ url = \"{}/device/token\", pending = {pending} }}",
+            server.url()
+        );
+        let caught = run(&ext, "poll_pending_caught", &opts).unwrap();
+        let (kind, message) = caught.split_once('\n').unwrap();
+        assert_eq!(kind, "string", "{pending}: {caught}");
+        assert!(message.contains(wanted), "{pending}: {message}");
+    }
+    assert!(server.requests().is_empty());
+}
+
+// ------------------------------------------------------- callback with path
+
+#[test]
+fn callback_with_a_path_ignores_other_paths_and_serves_its_own() {
+    let env = Env::new();
+    let ext = env.extension();
+    let port = free_port();
+    let deadline = env.clock.now() + TIMEOUT;
+    let rx = start(
+        &ext,
+        "callback_opts",
+        &format!("{{ port = {port}, path = \"/auth/callback\" }}"),
+    );
+    await_callbacks_parked(&env, deadline, 1, 1);
+    let favicon = get(port, "GET /favicon.ico HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(favicon.starts_with("HTTP/1.1 404"), "{favicon}");
+    assert!(
+        rx.try_recv().is_err(),
+        "another path's 404 ended the callback"
+    );
+    get(
+        port,
+        "GET /auth/callback?code=c&state=s HTTP/1.1\r\nHost: x\r\n\r\n",
+    );
+    let query: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
+    assert_eq!(query["code"], "c");
+    assert_eq!(query["state"], "s");
+}
+
+#[test]
+fn callback_path_must_be_a_string_starting_with_a_slash() {
+    let env = Env::new();
+    let ext = env.extension();
+    for path in ["\"auth/callback\"", "\"\"", "5"] {
+        let opts = format!("{{ port = {}, path = {path} }}", free_port());
+        let message = lua_message(&run(&ext, "callback_opts", &opts).unwrap_err());
+        assert!(message.contains("`path` must be"), "{path}: {message}");
+    }
+}
+
+// -------------------------------------------- an already-expired refreshed value
+
+#[test]
+fn a_refresh_returning_an_expired_value_is_authentication_failed_and_stores_nothing() {
+    for (mode, expires) in [("expired_equal", WALL), ("expired_past", 1)] {
+        let env = Env::new();
+        let ext = env.extension();
+        let server = OauthServer::start(vec![]);
+        // Due within the refresh window, so the function runs; what it
+        // returns is already expired, so nothing is stored.
+        env.store(&json!({ "token": "old", "expires_at": WALL + 60 }));
+        let before = fs::read(env.credential()).unwrap();
+        let provider = env.provider(&ext, &server, mode);
+        let error = finish(&start_token(&provider)).unwrap_err();
+        assert_eq!(
+            error.code(),
+            ErrorCode::AuthenticationFailed,
+            "{mode}: {error}"
+        );
+        assert!(
+            error.to_string().contains("has already expired"),
+            "{mode}: {error}"
+        );
+        assert_eq!(fs::read(env.credential()).unwrap(), before, "{mode}");
+        assert_eq!(server.request_count(), 0, "{mode}");
+        let _ = expires;
+    }
 }
