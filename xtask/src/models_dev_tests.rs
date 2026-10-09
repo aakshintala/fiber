@@ -1,6 +1,8 @@
 //! Unit tests for the models.dev generator: one small inline catalog
 //! per rule.
 
+use std::time::Duration;
+
 use serde_json::json;
 
 use crate::test_dir::TestDir;
@@ -620,6 +622,17 @@ fn assert_curl_argv(url: &str) {
     assert_eq!(argv, ["curl", "-fsSL", "--max-time", "120", url]);
 }
 
+/// One deadline for every blocking `fetch` below (`docs/testing.md`,
+/// "Waits and timeouts"): a mutant that hangs `fetch` fails here,
+/// not on nextest's kill.
+const FETCH_WITHIN: Duration = Duration::from_secs(4);
+
+/// `fetch` on a thread, received under `FETCH_WITHIN`.
+fn fetched(url: &str) -> Result<Vec<u8>, String> {
+    let url = url.to_owned();
+    fakes::within("models-dev fetch", FETCH_WITHIN, move || fetch(&url))
+}
+
 /// A `file://` URL for `dir` joining `name`, which no test writes.
 fn missing_url(dir: &TestDir, name: &str) -> String {
     format!("file://{}", dir.path().join(name).display())
@@ -632,11 +645,11 @@ fn fetch_reads_a_file_url() {
     dir.write("catalog.json", "{\"anthropic\":{\"models\":{}}}");
     let file = dir.path().join("catalog.json");
     let url = format!("file://{}", file.display());
-    assert_eq!(fetch(&url).unwrap(), std::fs::read(&file).unwrap());
+    assert_eq!(fetched(&url).unwrap(), std::fs::read(&file).unwrap());
     // The other half of the contract, so this case also fails when the
     // exit-status check flips: a missing file is an error, not bytes.
     let missing = missing_url(&dir, "missing.json");
-    assert!(fetch(&missing).is_err(), "{missing}");
+    assert!(fetched(&missing).is_err(), "{missing}");
 }
 
 #[test]
@@ -644,7 +657,7 @@ fn fetch_names_a_failed_curl() {
     assert_curl_argv("https://models.dev/api.json");
     let dir = TestDir::new("models-dev-fetch-fail");
     let missing = missing_url(&dir, "missing.json");
-    let error = fetch(&missing).unwrap_err();
+    let error = fetched(&missing).unwrap_err();
     assert!(error.contains("exit status"), "{error}");
     assert!(error.contains(&missing), "{error}");
     // And reading a file still works, so this case also fails when the
@@ -652,7 +665,7 @@ fn fetch_names_a_failed_curl() {
     dir.write("catalog.json", "{}");
     let file = dir.path().join("catalog.json");
     let url = format!("file://{}", file.display());
-    assert_eq!(fetch(&url).unwrap(), std::fs::read(&file).unwrap());
+    assert_eq!(fetched(&url).unwrap(), std::fs::read(&file).unwrap());
 }
 
 #[test]
