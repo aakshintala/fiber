@@ -439,6 +439,21 @@ fn wait_calls(rig: &Rig, n: usize) {
     );
 }
 
+/// Wakes the runner through one refused-watch backoff: the runner parks
+/// at `at`, the test advances `gap`, and the watch runs again
+/// (docs/testing.md, "Waits and timeouts": a test advances a fake clock
+/// only after a signal that the code under test is waiting on that
+/// clock). The caller counts `at` cumulatively from the first call, with
+/// backoff 50, 100, 200, 400, 800 ms, then 1 s.
+fn wake_retry(rig: &Rig, at: std::time::Instant, gap: Duration, calls: usize) {
+    assert!(
+        rig.clock.await_parked(at, DEADLINE),
+        "the runner parks until {at:?}"
+    );
+    rig.clock.advance(gap);
+    wait_calls(rig, calls);
+}
+
 /// Waits until `shell` writes its readiness file: its traps are armed, so
 /// a stop from here cannot land before them.
 fn wait_ready(path: &std::path::Path) {
@@ -961,22 +976,34 @@ fn the_cap_at_an_exact_boundary_trips_only_past_it() {
         ]),
     ]);
     // Ten bytes: exactly at the cap. Neither the new line, its replay,
-    // nor a backoff wake may stop the delegate for that. Either receive
-    // failing fast: a report here means the cap tripped at the boundary,
-    // and swallowing it would hang the fifo write below on a dead child.
+    // nor a backoff wake may stop the delegate for that. Each receive
+    // below must time out: a report here means the cap tripped at the
+    // boundary, and swallowing it would hang the fifo write below on a
+    // dead child (docs/testing.md, "Waits and timeouts": a receive
+    // with a bound, not a sleep).
     std::fs::write(&rig.events, "0123456789").unwrap();
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
     rig.start(&shell, BOUND, 10);
-    for _ in 0..6 {
-        rig.clock.advance(Duration::from_millis(100));
+    // Calls 1 and 2 are `Closed` with the new line and its replay;
+    // calls 3 and 4 are refused backoff wakes.
+    wait_calls(&rig, 1);
+    let mut at = rig.script.calls()[0];
+    for (gap, calls) in [(50, 2), (100, 3), (200, 4)] {
+        at += Duration::from_millis(gap);
+        wake_retry(&rig, at, Duration::from_millis(gap), calls);
         if rig.inbox.recv_timeout(Duration::from_millis(20)).is_ok() {
             panic!("exactly at the cap is not past it");
         }
-        assert!(
-            rig.inbox.try_recv().is_err(),
-            "exactly at the cap is not past it"
-        );
+    }
+    // The fourth call is refused, so the backoff is 400 ms.
+    at += Duration::from_millis(400);
+    assert!(
+        rig.clock.await_parked(at, DEADLINE),
+        "the runner parks until {at:?}"
+    );
+    if rig.inbox.recv_timeout(Duration::from_millis(20)).is_ok() {
+        panic!("exactly at the cap is not past it");
     }
     std::fs::write(&rig.events, "01234567890").unwrap();
     release_fifo(&fifo, b"go\n");
@@ -1040,8 +1067,14 @@ fn a_stop_before_the_cap_keeps_cancelled() {
     rig.start(&shell, BOUND, 10);
     wait_ready(&ready);
     assert_eq!(rig.registry.stop_delegates(), 1);
-    for _ in 0..5 {
-        rig.clock.advance(Duration::from_millis(100));
+    // The watch is refused every time, so from call 1 the runner parks
+    // at 50, 150 and 350 ms on (backoff 50, 100, 200 ms): the runner
+    // passes after the stop with the log exactly at the cap.
+    wait_calls(&rig, 1);
+    let mut at = rig.script.calls()[0];
+    for (gap, calls) in [(50, 2), (100, 3), (200, 4)] {
+        at += Duration::from_millis(gap);
+        wake_retry(&rig, at, Duration::from_millis(gap), calls);
     }
     // Past the cap, but the stop was first: the end stays `cancelled`.
     std::fs::write(&rig.events, "01234567890").unwrap();
