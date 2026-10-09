@@ -24,6 +24,7 @@ use crate::keys::{Button, Event, MouseKind, Parser, Reply};
 use crate::link::{self, Line};
 use crate::look::Look;
 use crate::mouse::Pointer;
+use crate::retry::Retry;
 use crate::screen::Screen;
 use crate::sources::{Reader, spawn_hub, spawn_resize};
 use crate::{Connect, Input, OnAttach, clipboard, editor, files, osc, term};
@@ -70,6 +71,7 @@ pub fn run(
     app.set_keys(std::mem::take(&mut launch.keys));
     app.set_home(launch);
     app.set_size(width, height);
+    let retry = Retry::new(&clock);
     let mut terminal = Loop {
         app,
         parser: Parser::default(),
@@ -96,6 +98,7 @@ pub fn run(
         open_command: crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
             .map(|argv| argv.into_iter().map(str::to_owned).collect()),
         title: osc::Title::default(),
+        retry: Some(Arc::clone(&retry)),
     };
     terminal.app.set_opener(terminal.open_command.is_some());
     terminal
@@ -113,7 +116,7 @@ pub fn run(
         .tty
         .as_ref()
         .and_then(|tty| Reader::spawn(tty, tx.clone()));
-    spawn_hub(connect, tx.clone());
+    spawn_hub(connect, tx.clone(), retry, Arc::clone(&terminal.clock));
     if let Some(signals) = signals {
         spawn_resize(signals, tx);
     }
@@ -189,6 +192,9 @@ struct Loop<B: Backend> {
     open_command: Option<Vec<String>>,
     /// The window title last written.
     title: osc::Title,
+    /// The hub thread's permit to connect again (`docs/tui.md`, "A
+    /// dropped connection"); none in tests with no hub thread.
+    retry: Option<Arc<Retry>>,
 }
 
 /// The most lines one `history` answer holds (`docs/invocation.md`,
@@ -336,11 +342,9 @@ impl<B: Backend> Loop<B> {
             Input::ConnectFailed(error) => {
                 self.app
                     .connect_failed(format!("Could not reach the hub: {error}"));
+                self.retry_later();
             }
-            Input::Disconnected => {
-                self.hub = None;
-                self.app.disconnected();
-            }
+            Input::Disconnected => self.on_disconnected(),
             Input::Files { generation, result } => self.app.on_files(generation, result),
             Input::Image { ticket, result } => self.app.on_image(ticket, result),
             Input::FindDue(generation) => {
@@ -497,7 +501,7 @@ impl<B: Backend> Loop<B> {
                     return link::history_answer(&line);
                 }
                 Input::Disconnected => {
-                    self.lost();
+                    self.on_disconnected();
                     return Err(LOST.to_owned());
                 }
                 other @ (Input::Bytes(_)
@@ -512,7 +516,24 @@ impl<B: Backend> Loop<B> {
         }
     }
 
-    /// The connection ended during a fetch: nothing more is asked.
+    /// The hub connection ended: the reader sends this once per stream,
+    /// so each ended connection gives the hub thread one permit.
+    fn on_disconnected(&mut self) {
+        self.hub = None;
+        self.app.disconnected();
+        self.retry_later();
+    }
+
+    /// Gives the hub thread its permit for one failure, after the delay
+    /// the app names; none once the hub refused this terminal's schema.
+    fn retry_later(&mut self) {
+        if let (Some(delay), Some(retry)) = (self.app.next_retry(), &self.retry) {
+            retry.give(delay);
+        }
+    }
+
+    /// The connection ended during a fetch: nothing more is asked. The
+    /// reader's end of the stream gives the permit.
     fn lost(&mut self) {
         self.hang_up();
         self.app.disconnected();
@@ -588,6 +609,17 @@ impl<B: Backend> Loop<B> {
     }
 }
 
+/// The loop is gone: the hub thread stops waiting for a permit, and a
+/// reader blocked on the stream sees its end.
+impl<B: Backend> Drop for Loop<B> {
+    fn drop(&mut self) {
+        if let Some(retry) = &self.retry {
+            retry.quit();
+        }
+        self.hang_up();
+    }
+}
+
 /// Whether `line` answers command `id`.
 fn answers(line: &Envelope, id: &str) -> bool {
     matches!(line.kind.as_str(), "command_accepted" | "command_rejected")
@@ -629,3 +661,7 @@ mod look_tests;
 #[cfg(test)]
 #[path = "lib_paste_tests.rs"]
 mod paste_tests;
+
+#[cfg(test)]
+#[path = "lib_reconnect_tests.rs"]
+mod reconnect_tests;

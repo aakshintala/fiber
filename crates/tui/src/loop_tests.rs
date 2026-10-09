@@ -152,6 +152,7 @@ fn opened() -> (
         copy_command: None,
         open_command: None,
         title: crate::osc::Title::default(),
+        retry: None,
     };
     let (tx, rx) = mpsc::channel();
     (lp, theirs, tx, rx)
@@ -363,6 +364,22 @@ fn a_lost_connection_ends_the_wait_with_the_notice() {
     assert!(!lp.app.pages().part(0).is_some());
     // The rows stay, blank.
     assert!(!shown(&lp).contains("first"));
+}
+
+#[test]
+fn a_drop_during_a_history_fetch_gives_one_retry() {
+    let (mut lp, theirs, tx, rx) = opened();
+    let retry = crate::retry::Retry::new(&lp.clock);
+    lp.retry = Some(Arc::clone(&retry));
+    let script: Script = Box::new(|_| vec![Input::Disconnected]);
+    serve(theirs, tx.clone(), script);
+    let lp = run(lp, rx, &tx, to_the_top());
+    // One drop, one permit: the first delay.
+    assert_eq!(retry.held(), Some(Duration::from_millis(500)));
+    assert_eq!(
+        lp.app.banner().as_deref(),
+        Some("Connection lost · reconnecting (attempt 1)…")
+    );
 }
 
 #[test]

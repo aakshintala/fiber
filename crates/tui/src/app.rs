@@ -53,6 +53,7 @@ mod mouse;
 mod offer;
 pub(crate) mod panel;
 mod paste;
+mod reconnect;
 pub(crate) mod results;
 mod screen;
 mod select;
@@ -161,9 +162,11 @@ enum Link {
     Waiting,
     /// The hub spoke a `hub_hello` this terminal reads.
     Up,
-    /// The hub could not be reached, was refused, or hung up. Nothing goes
-    /// out again; reconnecting is a later ticket.
+    /// The hub could not be reached or hung up; the terminal retries with
+    /// backoff (`docs/tui.md`, "A dropped connection").
     Down,
+    /// The hub runs a schema this terminal cannot read: never retried.
+    Refused,
 }
 
 /// What clicking a line, or Enter on it, opens, keyed by an id that stays
@@ -250,6 +253,9 @@ pub(crate) struct App {
     /// What the hub's `attention` lines queued (`docs/tui.md`, "Getting
     /// the person's attention").
     attention: attention::State,
+    /// Failures since the hub was last reached (`docs/tui.md`, "A dropped
+    /// connection").
+    reconnect: reconnect::Reconnect,
 }
 
 impl App {
@@ -286,6 +292,7 @@ impl App {
             keyboard: keyboard::Keyboard::default(),
             opener: false,
             attention: attention::State::default(),
+            reconnect: reconnect::Reconnect::default(),
         }
     }
 
@@ -402,10 +409,13 @@ impl App {
     }
 
     /// The hub could not be reached, or runs a schema this terminal cannot
-    /// read: the notice, and a held `start` fails as if rejected.
+    /// read: the notice for the first failure in a run, and a held `start`
+    /// fails as if rejected.
     pub(crate) fn connect_failed(&mut self, notice: String) {
         self.link = Link::Down;
-        self.notices.push(notice);
+        if self.notice_due() {
+            self.notices.push(notice);
+        }
         self.held.clear();
         if let Phase::Pending { command_id } = &self.phase {
             let id = command_id.clone();
@@ -414,9 +424,9 @@ impl App {
         self.settle();
     }
 
-    /// The hub connection ended. Reconnecting is a later ticket. A
-    /// connection never connected, refused for its schema version, keeps
-    /// the notice that says why.
+    /// The hub connection ended; the loop retries it. A connection never
+    /// connected, refused for its schema version, keeps the notice that
+    /// says why.
     pub(crate) fn disconnected(&mut self) {
         if self.link == Link::Up {
             self.link = Link::Down;
@@ -516,8 +526,8 @@ impl App {
     }
 
     /// The conversation's rows: the screen less the header, the input box
-    /// or the panel in its place, the steering queue, the badge and the
-    /// hint. None on a screen too short for them.
+    /// or the panel in its place, the steering queue, the banner, the badge
+    /// and the hint. None on a screen too short for them.
     pub(crate) fn conversation_height(&self) -> usize {
         let input = self.panel().map_or(self.input_height(), |panel| {
             panel
@@ -532,6 +542,7 @@ impl App {
             + input
             + self.completion_rows()
             + self.steering().len()
+            + usize::from(self.banner().is_some())
             + usize::from(self.badge().is_some())
             + usize::from(self.hint());
         usize::from(self.screen.height()).saturating_sub(below)
@@ -641,14 +652,19 @@ impl App {
         match hub.kind.as_str() {
             "hub_hello" if hub.schema_version == contract::SCHEMA_VERSION => {
                 self.link = Link::Up;
-                std::mem::take(&mut self.held)
+                let mut lines = std::mem::take(&mut self.held);
+                lines.extend(self.reconnected());
+                lines
             }
             "hub_hello" => {
+                // The hub was reached, so the refusal always says why.
+                self.hub_reached();
                 self.connect_failed(format!(
                     "The hub runs schema version {}; this terminal reads {}.",
                     hub.schema_version,
                     contract::SCHEMA_VERSION
                 ));
+                self.link = Link::Refused;
                 Vec::new()
             }
             "command_accepted" => {

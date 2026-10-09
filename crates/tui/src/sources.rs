@@ -8,9 +8,11 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 
+use contract::clock::Clock;
 use signal_hook::iterator::Signals;
 
 use crate::link;
+use crate::retry::Retry;
 use crate::{Connect, Input};
 
 /// The input reader's state, shared with the loop under one mutex.
@@ -166,20 +168,35 @@ fn read_input(mut tty: File, mut woken: &PipeReader, gate: &Gate, tx: &Sender<In
 }
 
 /// Connects to the hub on its own thread, after the first frame, then
-/// reads its lines.
-pub(crate) fn spawn_hub(connect: Connect, tx: Sender<Input>) {
+/// reads its lines. After each failed connect or ended connection it waits
+/// for the loop's permit and the delay it names, then connects again
+/// (`docs/tui.md`, "A dropped connection"). It ends when the loop quits or
+/// is gone.
+pub(crate) fn spawn_hub(
+    mut connect: Connect,
+    tx: Sender<Input>,
+    retry: Arc<Retry>,
+    clock: Arc<dyn Clock>,
+) {
     let hub = builder("tui-hub").spawn(move || {
-        let connected = connect().and_then(|(stream, hello)| {
-            let reader = stream.try_clone()?;
-            Ok((stream, reader, hello))
-        });
-        match connected {
-            Ok((stream, reader, hello)) => {
-                if tx.send(Input::Connected(stream, hello)).is_ok() {
-                    link::read_lines(reader, &tx);
+        loop {
+            let connected = connect().and_then(|(stream, hello)| {
+                let reader = stream.try_clone()?;
+                Ok((stream, reader, hello))
+            });
+            let sent = match connected {
+                Ok((stream, reader, hello)) => {
+                    let sent = tx.send(Input::Connected(stream, hello));
+                    if sent.is_ok() {
+                        link::read_lines(reader, &tx);
+                    }
+                    sent
                 }
+                Err(error) => tx.send(Input::ConnectFailed(error.to_string())),
+            };
+            if sent.is_err() || !retry.wait(clock.as_ref()) {
+                return;
             }
-            Err(error) => drop(tx.send(Input::ConnectFailed(error.to_string()))),
         }
     });
     drop(hub);
