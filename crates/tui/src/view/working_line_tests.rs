@@ -422,6 +422,9 @@ fn a_marked_line_under_new_messages_below_does_not_spin() {
     ));
     let shown = screen(&app);
     assert!(shown.contains("New messages below"), "{shown}");
+    // The covered mark schedules nothing: it is the only mark on
+    // screen, and with no home there is no working line to ask.
+    assert_eq!(app.take_wake(), None);
     // One row higher the same line spins: following again draws it.
     app.on_key(Key::End, now);
     let followed = screen(&app);
