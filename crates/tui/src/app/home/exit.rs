@@ -168,5 +168,5 @@ impl App {
 }
 
 #[cfg(test)]
-#[path = "app_exit_tests.rs"]
+#[path = "exit_tests.rs"]
 mod tests;

@@ -104,6 +104,64 @@ impl Setup {
             &json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}}),
         );
     }
+
+    /// The project's sessions directory, through the canonical workspace,
+    /// as the project key names it.
+    fn sessions(&self) -> PathBuf {
+        let workspace = fs::canonicalize(self.workspace()).unwrap();
+        let key = workspace.to_string_lossy().replace('/', "-");
+        self.home().join("projects").join(key).join("sessions")
+    }
+
+    /// The one session in [`Setup::sessions`].
+    fn only_session(&self) -> String {
+        let mut ids: Vec<String> = fs::read_dir(self.sessions())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(ids.len(), 1, "one session");
+        ids.pop().unwrap()
+    }
+
+    /// Runs `fiber` with `args` headless in its own process group,
+    /// waiting under the test's [`Deadline`]. A watchdog beside it kills
+    /// that group if this process dies first.
+    fn fiber(&self, args: &[&str]) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+        command
+            .args(args)
+            .current_dir(self.workspace())
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", self.root.path())
+            .env("FIBER_HOME", self.home())
+            .env("FIBER_TEST_FAKE_KEY", "sk-test")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (child, watchdog) = spawn_watched(&mut command);
+        let group = child.id();
+        let guard = KillGroup(group);
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+        let output = match finished.recv_timeout(self.deadline.left()) {
+            Ok(output) => output.unwrap(),
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
+        };
+        assert!(
+            fakes::group_empties(group, self.deadline.left()),
+            "`fiber` left a process in its group behind"
+        );
+        std::mem::forget(guard);
+        watchdog.stand_down(self.deadline.cleanup());
+        output
+    }
 }
 
 /// A pseudo-terminal at 60x12. The main side stays open while the run uses
@@ -191,12 +249,23 @@ impl Run {
     /// Spawns `fiber` with no arguments on a pty: standard input, output
     /// and error all on the terminal side, as on a real terminal.
     fn terminal(setup: &Setup) -> Self {
-        Self::terminal_with(setup, &[])
+        Self::terminal_full(setup, &[], &[])
     }
 
     /// Spawns `fiber` as [`terminal`] does, with `env` added to the
     /// child's environment.
     fn terminal_with(setup: &Setup, env: &[(&str, &str)]) -> Self {
+        Self::terminal_full(setup, env, &[])
+    }
+
+    /// Spawns `fiber` as [`terminal`] does, with `args` after the binary.
+    fn terminal_args(setup: &Setup, args: &[&str]) -> Self {
+        Self::terminal_full(setup, &[], args)
+    }
+
+    /// Spawns `fiber` as [`terminal`] does, with `env` added to the
+    /// child's environment and `args` after the binary.
+    fn terminal_full(setup: &Setup, env: &[(&str, &str)], args: &[&str]) -> Self {
         let terminal = Terminal::open();
         let sessions = Watchdog::matching(setup.workspace().to_str().unwrap());
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
@@ -210,6 +279,7 @@ impl Run {
         for (key, value) in env {
             command.env(key, value);
         }
+        command.args(args);
         command
             .stdin(terminal.stdin())
             .stdout(terminal.stdin())
@@ -362,6 +432,28 @@ fn hello() -> Response {
         json!({"type": "response.output_text.delta", "delta": "lo."}),
         json!({"type": "response.output_item.done", "item": {
             "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
+        }}),
+        json!({"type": "response.completed", "response": {
+            "id": "resp_1", "status": "completed",
+            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
+        }}),
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+/// A reply saying `text` in two deltas.
+fn reply(text: &str) -> Response {
+    let at = text.len() / 2;
+    let (first, rest) = text.split_at(at);
+    let events = [
+        json!({"type": "response.output_text.delta", "delta": first}),
+        json!({"type": "response.output_text.delta", "delta": rest}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "message", "content": [{"type": "output_text", "text": text}]
         }}),
         json!({"type": "response.completed", "response": {
             "id": "resp_1", "status": "completed",
@@ -567,22 +659,104 @@ fn resize_redraws_the_input_line_on_the_new_last_row() {
 #[test]
 fn without_a_tty_bare_fiber_names_ask() {
     let deadline = Deadline::start();
-    assert_names_ask(deadline, Stdio::piped(), "standard input and output");
+    assert_names_ask(deadline, Stdio::piped(), "standard input and output", &[]);
 }
 
 #[test]
 fn a_tty_on_standard_input_alone_is_not_enough() {
     let deadline = Deadline::start();
     let terminal = Terminal::open();
-    assert_names_ask(deadline, terminal.stdin(), "standard output");
+    assert_names_ask(deadline, terminal.stdin(), "standard output", &[]);
 }
 
-/// Runs bare `fiber` with `stdin` and standard output and error piped:
-/// with no tty on `missing`, it exits 2 naming `fiber ask`.
-fn assert_names_ask(deadline: Deadline, stdin: Stdio, missing: &str) {
+#[test]
+fn resume_and_continue_without_a_tty_name_ask() {
+    let deadline = Deadline::start();
+    for args in [&["resume", "s_1"][..], &["resume"][..], &["continue"][..]] {
+        assert_names_ask(deadline, Stdio::piped(), "standard input and output", args);
+        let terminal = Terminal::open();
+        assert_names_ask(deadline, terminal.stdin(), "standard output", args);
+    }
+}
+
+#[test]
+fn resume_opens_the_session_a_prefix_names() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([reply("Hello.")]).unwrap();
+    setup.provider(&server);
+    let asked = setup.fiber(&["ask", "say hi"]);
+    assert_eq!(asked.status.code(), Some(0));
+    let id = setup.only_session();
+    let mut run = Run::terminal_args(&setup, &["resume", &id[..4]]);
+    run.read_until(">");
+    run.read_until("Hello.");
+    run.write(b"\x03\x03\r");
+    run.read_until("\x1b[?25h");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn continue_opens_the_latest_session() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([reply("First."), reply("Second.")]).unwrap();
+    setup.provider(&server);
+    assert_eq!(setup.fiber(&["ask", "first"]).status.code(), Some(0));
+    assert_eq!(setup.fiber(&["ask", "second"]).status.code(), Some(0));
+    let mut run = Run::terminal_args(&setup, &["continue"]);
+    run.read_until(">");
+    run.read_until("Second.");
+    run.write(b"\x03\x03\r");
+    run.read_until("\x1b[?25h");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn resume_without_an_id_opens_home_at_the_session_list() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([reply("Hello.")]).unwrap();
+    setup.provider(&server);
+    let asked = setup.fiber(&["ask", "say hi"]);
+    assert_eq!(asked.status.code(), Some(0));
+    let mut run = Run::terminal_args(&setup, &["resume"]);
+    run.read_until(">");
+    // The exited session is listed by its first prompt.
+    run.read_until("say hi");
+    // The list is focused, so Enter opens the row: the reply shows.
+    run.write(b"\r");
+    run.read_until("Hello.");
+    run.write(b"\x03\x03\r");
+    run.read_until("\x1b[?25h");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn continue_with_no_session_is_a_usage_error() {
+    let setup = Setup::new();
+    let mut run = Run::terminal_args(&setup, &["continue"]);
+    run.read_until("No session in this project to continue");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn resume_with_an_unknown_prefix_fails_before_any_frame() {
+    let setup = Setup::new();
+    let mut run = Run::terminal_args(&setup, &["resume", "s_zzz"]);
+    run.read_until("no session at");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(1));
+}
+
+/// Runs `fiber` with `args`, `stdin` and standard output and error
+/// piped: with no tty on `missing`, it exits 2 naming `fiber ask`.
+fn assert_names_ask(deadline: Deadline, stdin: Stdio, missing: &str, args: &[&str]) {
     let setup = Setup::within(deadline);
     let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
     command
+        .args(args)
         .current_dir(setup.workspace())
         .env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())

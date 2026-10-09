@@ -45,13 +45,13 @@ mod focus;
 mod form;
 #[path = "history.rs"]
 mod history;
-#[path = "app_home.rs"]
 mod home;
 mod keyboard;
 mod links;
 #[path = "app_mouse.rs"]
 mod mouse;
 mod offer;
+pub(crate) mod panel;
 mod paste;
 pub(crate) mod results;
 mod screen;
@@ -236,6 +236,8 @@ pub(crate) struct App {
     regions: crate::focus::Regions,
     /// What the person chose to show: the panel's hide.
     chrome: chrome::Chrome,
+    /// The attached session's folded panel data (`docs/tui.md`, "The panel").
+    panel_state: panel::PanelState,
     /// The drag selecting conversation text, and a copy waiting on dropped
     /// pages (`docs/tui.md`, "Selection and copy").
     select: select::Selection,
@@ -278,6 +280,7 @@ impl App {
             stops: Vec::new(),
             regions: crate::focus::Regions::default(),
             chrome: chrome::Chrome::default(),
+            panel_state: panel::PanelState::default(),
             select: select::Selection::default(),
             find: find::Find::default(),
             keyboard: keyboard::Keyboard::default(),
@@ -293,6 +296,7 @@ impl App {
             session,
             busy: false,
         };
+        self.panel_state.attached();
     }
 
     /// Hands one key to what is on top: the key map, the approval panel, a
@@ -671,8 +675,10 @@ impl App {
                     if !self.history_rejected(&id, &message) {
                         self.rejected(&id, message);
                     }
+                    self.panel_refused(&id)
+                } else {
+                    Vec::new()
                 }
-                Vec::new()
             }
             "attention" => {
                 self.attention_line(&hub.payload);
@@ -768,6 +774,7 @@ impl App {
             send.extend(lines);
             return send;
         }
+        send.extend(self.panel_line(envelope));
         if envelope.kind == "turn_started"
             && let Some(started) = read!(envelope, TurnStarted)
         {

@@ -19,6 +19,7 @@ pub(crate) mod chrome;
 mod home;
 mod marks;
 mod offer;
+pub(crate) mod panel;
 mod request;
 mod results;
 
@@ -92,6 +93,9 @@ pub(crate) fn render(
         None => area,
     };
     let mut targets = Vec::new();
+    if let Some(rect) = app.chrome().layout().and_then(|layout| layout.panel) {
+        panel::draw(app, rect, buf, &mut targets);
+    }
     let mut bottom = area.bottom();
     if let Some(panel) = app.panel() {
         bottom = request::draw(&panel, area, bottom, buf, &mut targets);

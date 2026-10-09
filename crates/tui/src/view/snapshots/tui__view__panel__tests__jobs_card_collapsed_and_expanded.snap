@@ -1,0 +1,8 @@
+---
+source: crates/tui/src/view/panel_tests.rs
+expression: "super::super::text(&buf)"
+---
+
+  2 jobs running
+    build the workspace
+    test the workspace
