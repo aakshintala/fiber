@@ -1019,12 +1019,12 @@ fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
   box, the approval panel and each card sit on their own background tint, with
   half-block edges (▄ above, ▀ below) and no borders.
 - **A stripe marks state** on the side its surface is anchored to: ▌ on the
-  left for a steering message, a running or finished job and an approval; ▐ on
-  the right for the person's prompt bubble. The stripe is one unbroken bar,
-  because ▌ and ▐ fill half of each cell as Ghostty draws them. Where a
-  terminal cannot draw it unbroken, there is no stripe. Fiber draws stripes
-  in Ghostty, WezTerm and kitty, and not inside tmux or screen; elsewhere
-  the stripe's cell keeps its tint.
+  left for a queued steering message, a running or finished job and an
+  approval; ▐ on the right for the person's prompt bubble. The stripe is one
+  unbroken bar, because ▌ and ▐ fill half of each cell as Ghostty draws them.
+  Where a terminal cannot draw it unbroken, there is no stripe. Fiber draws
+  stripes in Ghostty, WezTerm and kitty, and not inside tmux or screen;
+  elsewhere the stripe's cell keeps its tint.
 - **Colours come from the theme,** in truecolour where the terminal has it:
   `COLORTERM` of `truecolor` or `24bit`, or a `TERM` of `xterm-ghostty`,
   `xterm-kitty`, `wezterm` or one ending in `-direct`, which survives SSH where
@@ -1077,8 +1077,8 @@ The roles, in order:
 | `type` | type names |
 | `constant` | constants: `true`, `null`, `ALL_CAPS` names |
 | `operator` | operators |
-| `background` | every cell no surface covers |
-| `surface` | the input box, cards, notices, the rail's and the panel's regions, the handoff band |
+| `background` | every cell no surface covers, including the rail's and the panel's regions |
+| `surface` | the input box, cards, notices, the handoff band |
 | `surface_raised` | the card on screen, a hovered card, pickers |
 | `prompt` | the person's prompt bubble |
 | `code` | code blocks and inline code |
