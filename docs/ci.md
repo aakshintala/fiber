@@ -358,7 +358,8 @@ Node.js version GitHub currently supports. An action still on a deprecated
 Node.js version is moved to its newest major before it is pinned.
 
 No job polls the Actions API in a loop. The backstop's one lookup of the
-last passing `main` commit is the only Actions API call a workflow makes.
+last passing `main` commit is the only Actions API call a workflow makes to
+find a run; the backstop's cache pruning also lists and deletes cache entries.
 Agents wait on the `CI` check with `gh-ci`, never with a `gh run watch`
 loop, because such loops have tripped GitHub's Actions rate limit. `gh-ci` is
 a small `gh` wrapper that waits with few API calls; it lives in the owner's
