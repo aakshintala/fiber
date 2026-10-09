@@ -101,6 +101,12 @@ fn a_live_codex_turn_replies() {
     let completed = lines
         .iter()
         .find(|line| line["kind"] == "turn_completed")
-        .unwrap();
-    assert!(!completed["payload"]["text"].as_str().unwrap().is_empty());
+        .unwrap_or_else(|| panic!("no turn_completed in {stdout}"));
+    assert_eq!(completed["payload"]["outcome"], "completed", "{stdout}");
+    let text = lines
+        .iter()
+        .find(|line| line["kind"] == "text_completed")
+        .and_then(|line| line["payload"]["text"].as_str())
+        .unwrap_or_else(|| panic!("no text_completed with text in {stdout}"));
+    assert!(!text.is_empty(), "{stdout}");
 }
