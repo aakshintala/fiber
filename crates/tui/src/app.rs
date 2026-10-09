@@ -435,6 +435,7 @@ impl App {
             self.link = Link::Down;
             self.notices.push("Connection lost.".to_owned());
         }
+        self.sessions_dropped();
         self.find_lost();
         self.abandon_copy();
         self.settle();

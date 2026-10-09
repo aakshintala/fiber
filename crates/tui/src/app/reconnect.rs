@@ -213,6 +213,14 @@ impl App {
         }
     }
 
+    /// The link dropped: the waiting `sessions` answer, if any, is gone,
+    /// so one arriving before the next `hub_hello` matches nothing and
+    /// drops no rows.
+    pub(super) fn sessions_dropped(&mut self) {
+        self.reconnect.sessions = None;
+        self.reconnect.fresh.clear();
+    }
+
     /// The `sessions` answer with `id`: when it is the one waiting, drop
     /// every live row its running set omits, except one with a feed line
     /// after `sessions` was sent, and take the wait off. A stale id, from

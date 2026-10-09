@@ -294,3 +294,21 @@ fn exited_rows_survive_sessions() {
     fold(&mut app, sessions_answer(&sessions_id(&out), &[]));
     assert_eq!(rows(&app), ["○  old work"]);
 }
+
+#[test]
+fn a_sessions_answer_after_a_drop_before_the_next_hello_drops_nothing() {
+    let mut app = home();
+    linked(&mut app);
+    fold(&mut app, live(S_B, "tidy docs"));
+    let out = reconnect(&mut app);
+    let old = sessions_id(&out);
+    // A later disconnect before the answer: the wait is gone.
+    app.disconnected();
+    app.next_retry();
+    fold(&mut app, sessions_answer(&old, &[]));
+    assert_eq!(rows(&app), ["✓  tidy docs"]);
+    // The next connection reconciles afresh.
+    let again = fold(&mut app, hello());
+    fold(&mut app, sessions_answer(&sessions_id(&again), &[]));
+    assert!(rows(&app).is_empty());
+}
