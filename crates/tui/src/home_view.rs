@@ -385,6 +385,10 @@ pub(super) fn render(
                 rect: Rect::new(placed.x, row_y, placed.width, 1),
             });
         }
+        // A drawn row's spinner moves on the tick.
+        if let Some(row) = app.row_by_key(*key) {
+            app.motion().ask_spin(row);
+        }
         row_y = row_y.saturating_add(1);
     }
     // The workspace picker draws above the box, upward from its top
@@ -523,3 +527,7 @@ pub(super) fn cursor(app: &App, screen: &HomeScreen, area: Rect) -> Option<Posit
 #[cfg(test)]
 #[path = "home_view_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "home_view_motion_tests.rs"]
+mod motion_tests;

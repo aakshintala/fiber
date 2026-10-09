@@ -1,0 +1,16 @@
+---
+source: crates/tui/src/view/working_line_tests.rs
+expression: screen(&app)
+---
+
+
+
+
+
+
+
+
+                                                         go
+                                                       00:00
+⇄ Handoff · automatic at 400.0k · ⠋ writing the note…
+>

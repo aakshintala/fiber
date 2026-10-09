@@ -7,13 +7,13 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::App;
 use crate::app::rail::Spot;
 use crate::format;
-use crate::home::{Left, Row, State, glyph, title};
+use crate::home::{Left, Row, State, title};
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
 
@@ -173,8 +173,10 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
     } else {
         Role::Surface
     };
-    // debt: a waiting card holds still; its 10-second pulse comes with the working line's tick; upgrade trigger: #686 lands.
-    let stripe = Span::styled("▌", style(tone(row)));
+    // A waiting card pulses its stripe for its first ten seconds, then
+    // holds still, so a screen with nothing working draws no frames
+    // (`docs/tui.md`, "The rail").
+    let stripe = Span::styled("▌", stripe_style(app, row));
     let texts = [
         first_row(app, row, text),
         vec![Span::raw(format::cut(&title(row), text))],
@@ -211,6 +213,28 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
     });
 }
 
+/// A card's stripe and glyph style: the pulse bright or dim while it
+/// runs, else its state's colour (`docs/tui.md`, "The rail").
+fn stripe_style(app: &App, row: &Row) -> ratatui::style::Style {
+    match pulse(app, row) {
+        Some(true) => style(Role::Attention),
+        Some(false) => style(Role::Attention).add_modifier(Modifier::DIM),
+        None => style(tone(row)),
+    }
+}
+
+/// Whether the card pulses, and bright: waiting live with a status, ten
+/// seconds from its start.
+fn pulse(app: &App, row: &Row) -> Option<bool> {
+    if row.left.is_none() && row.state == State::Waiting {
+        row.status
+            .as_ref()
+            .and_then(|status| app.motion().pulse(status.since))
+    } else {
+        None
+    }
+}
+
 /// A card's first row: its number dim, the glyph and word in its state's
 /// colour, and at the right how long it has been in that state, dim; a
 /// crashed card's ✕ takes the time's place, and an unreadable row has no
@@ -232,7 +256,10 @@ fn first_row(app: &App, row: &Row, text: usize) -> Vec<Span<'static>> {
     sides(
         vec![
             Span::styled(number, style(Role::Muted)),
-            Span::styled(format!(" {} {}", glyph(row), word(row)), style(tone(row))),
+            Span::styled(
+                format!(" {} {}", app.motion().glyph(row), word(row)),
+                stripe_style(app, row),
+            ),
         ],
         vec![Span::styled(right, style(Role::Muted))],
         text,
@@ -364,6 +391,16 @@ pub(crate) fn draw(
                 .saturating_add(u16::try_from(top.saturating_sub(skip)).unwrap_or(u16::MAX));
             let high = u16::try_from(bottom.saturating_sub(top)).unwrap_or(u16::MAX);
             visible.push((top, y, high, key));
+            // The tick runs only while a drawn card moves: a spin while
+            // its glyph row shows, a pulse for every card in view.
+            if let Some((cards, _)) = app.rail_cards()
+                && let Some(card) = cards.iter().find(|card| card.key == key)
+            {
+                if (skip..end).contains(&first) {
+                    app.motion().ask_spin(card);
+                }
+                app.motion().ask_pulse(card);
+            }
         }
     }
     let mut hovered = None;
@@ -435,3 +472,7 @@ fn foot(row: &Row, area: Rect, buf: &mut Buffer) {
 #[cfg(test)]
 #[path = "rail_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "rail_motion_tests.rs"]
+mod motion_tests;

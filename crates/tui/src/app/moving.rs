@@ -68,6 +68,12 @@ impl App {
     pub(crate) fn working_row_shown(&self) -> bool {
         self.banner().is_some() || self.working_line().is_some()
     }
+
+    /// Home's row with `key`, live or exited; what the drawn home rows
+    /// ask their spin for.
+    pub(crate) fn row_by_key(&self, key: u64) -> Option<&crate::home::Row> {
+        self.home.as_ref()?.sessions.by_key(key)
+    }
 }
 
 #[cfg(test)]

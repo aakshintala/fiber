@@ -12,7 +12,7 @@ use super::{App, Effect, Kind, Link, Phase, mint, session_command};
 use crate::focus::{Area, order};
 use crate::home::{
     HomeScreen, Launch, Left, Level, Sessions, Spot, State, Subs, cascade_line, delete_line,
-    dependents, from_status, line, recent_rows, toggle_line,
+    dependents, from_status, line, line_with, recent_rows, toggle_line,
 };
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -270,7 +270,7 @@ impl App {
                     // has none.
                     (
                         row.key,
-                        line(row, &home.launch.project),
+                        line_with(row, &home.launch.project, self.motion.glyph(row)),
                         row.state != State::Unreadable,
                     )
                 })

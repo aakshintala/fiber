@@ -545,3 +545,125 @@ fn a_group_line_whose_first_row_is_hidden_asks_nothing() {
     assert!(!shown.contains(SPINNER[0]), "{shown}");
     assert_eq!(app.take_wake(), None);
 }
+
+#[test]
+fn handoff_band_writing_spinner() {
+    let (mut app, clock) = writing_band(60, 12);
+    app.set_now(clock.origin(), 0);
+    insta::assert_snapshot!("handoff_band_writing_spinner", screen(&app));
+}
+
+/// An app with a writing handoff band at `width` by `height`.
+fn writing_band(width: u16, height: u16) -> (App, Arc<FakeClock>) {
+    let clock = FakeClock::new();
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(width, height);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.on_line(session_line(
+        "turn_started",
+        serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(session_line(
+        "preamble_built",
+        serde_json::json!({"reason": "start", "model": "fake/m",
+            "context_window": 1_000_000, "tool_choice": "auto",
+            "cache_lifetime": "5m", "system_prompt": "", "tools": [],
+            "trigger_at": 400_000}),
+        None,
+    ));
+    app.on_line(session_line(
+        "handoff_started",
+        serde_json::json!({"trigger": "auto"}),
+        None,
+    ));
+    (app, clock)
+}
+
+#[test]
+fn a_hidden_writing_band_asks_nothing() {
+    let (mut app, clock) = writing_band(60, 12);
+    // Fourteen prompts below: the band scrolls wholly above.
+    for n in 1..=14 {
+        app.on_line(prompt(format!("prompt {n}")));
+    }
+    app.set_now(clock.origin(), 0);
+    let shown = screen(&app);
+    assert!(!shown.contains(SPINNER[0]), "{shown}");
+    assert_eq!(app.take_wake(), None);
+}
+
+#[test]
+fn a_wrapped_writing_band_keeps_its_still_form() {
+    let (mut app, clock) = writing_band(30, 12);
+    app.set_now(clock.origin(), 0);
+    // The band wraps so its dot lands on the second row past the
+    // width: the mark never spins a row it does not start.
+    let area = Rect::new(0, 0, 30, 12);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    assert!(text(&buf).contains('●'), "{}", text(&buf));
+    assert!(!text(&buf).contains(SPINNER[0]), "{}", text(&buf));
+    assert_eq!(app.take_wake(), None);
+}
+
+#[test]
+fn a_mark_past_the_width_draws_nothing() {
+    // The band's dot sits at column 34: at widths 34 and 32 it is past
+    // the row, so nothing draws and nothing asks.
+    for width in [34, 32] {
+        let (mut app, clock) = writing_band(width, 12);
+        app.set_now(clock.origin(), 0);
+        let area = Rect::new(0, 0, width, 12);
+        let mut buf = Buffer::empty(area);
+        render(&app, area, &mut buf, None);
+        assert!(!text(&buf).contains(SPINNER[0]), "{width}: {}", text(&buf));
+        assert_eq!(app.take_wake(), None, "{width}");
+    }
+}
+
+#[test]
+fn a_reply_quoting_the_band_text_does_not_spin() {
+    let clock = FakeClock::new();
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.on_line(session_line(
+        "turn_started",
+        serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    // A reply quoting the band's eventual text carries no mark: text
+    // while a note is being written is the note's, not a reply, so the
+    // quote comes first.
+    app.on_line(session_line(
+        "assistant_message_started",
+        serde_json::json!({}),
+        Some("a_m"),
+    ));
+    app.on_line(session_line(
+        "text_completed",
+        serde_json::json!({"text": "⇄ Handoff · automatic at 400.0k · ● writing the note…"}),
+        Some("a_m"),
+    ));
+    app.on_line(session_line(
+        "preamble_built",
+        serde_json::json!({"reason": "start", "model": "fake/m",
+            "context_window": 1_000_000, "tool_choice": "auto",
+            "cache_lifetime": "5m", "system_prompt": "", "tools": [],
+            "trigger_at": 400_000}),
+        None,
+    ));
+    app.on_line(session_line(
+        "handoff_started",
+        serde_json::json!({"trigger": "auto"}),
+        None,
+    ));
+    app.set_now(clock.origin(), 0);
+    let shown = screen(&app);
+    // Exactly one spinner: the band's. The quote keeps its dot.
+    assert_eq!(shown.matches(SPINNER[0]).count(), 1, "{shown}");
+    assert!(shown.contains('●'), "{shown}");
+}

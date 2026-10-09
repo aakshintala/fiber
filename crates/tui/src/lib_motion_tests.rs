@@ -21,11 +21,16 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(10);
 
-/// One session envelope.
-fn session_line(kind: &str, payload: serde_json::Value, action: Option<&str>) -> Line {
+/// One session envelope for `session`.
+fn session_line_for(
+    session: &str,
+    kind: &str,
+    payload: serde_json::Value,
+    action: Option<&str>,
+) -> Line {
     Line::Session(contract::Envelope {
         kind: kind.to_owned(),
-        session_id: contract::SessionId(SESSION.to_owned()),
+        session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         turn_id: None,
@@ -33,6 +38,11 @@ fn session_line(kind: &str, payload: serde_json::Value, action: Option<&str>) ->
         seq: None,
         payload: payload.as_object().cloned().unwrap_or_default(),
     })
+}
+
+/// One session envelope.
+fn session_line(kind: &str, payload: serde_json::Value, action: Option<&str>) -> Line {
+    session_line_for(SESSION, kind, payload, action)
 }
 
 /// A loop with a running group: a turn, its step and its requested call.
@@ -216,8 +226,8 @@ fn hello() -> Line {
     })
 }
 
-/// A `session_status` for the attached session in `state`.
-fn status(state: serde_json::Value) -> Line {
+/// A `session_status` for `session` in `state`.
+fn status_for(session: &str, state: serde_json::Value) -> Line {
     let mut payload = serde_json::json!({
         "name": "fix the parser", "workspace": "/w",
         "project": "-w", "state": "idle", "since": 1_700_000_000_000u64,
@@ -229,7 +239,12 @@ fn status(state: serde_json::Value) -> Line {
     for (key, value) in state.as_object().cloned().unwrap_or_default() {
         payload[key] = value;
     }
-    session_line("session_status", payload, None)
+    session_line_for(session, "session_status", payload, None)
+}
+
+/// A `session_status` for the attached session in `state`.
+fn status(state: serde_json::Value) -> Line {
+    status_for(SESSION, state)
 }
 
 #[test]
@@ -252,6 +267,48 @@ fn under_reduced_motion_a_working_line_arms_its_next_second() {
         lp.tick.armed(),
         origin.checked_add(Duration::from_millis(1_000))
     );
+}
+
+#[test]
+fn a_waiting_card_arms_for_ten_seconds_then_stops() {
+    let (mut lp, _) = super::new_loop(TestBackend::new(200, 40), None);
+    let clock = FakeClock::new();
+    lp.clock = clock.clone();
+    let origin = clock.origin();
+    // Home and two live sessions, one waiting since the wall time: the
+    // rail draws at 200 columns.
+    lp.app.set_home(crate::home::Launch {
+        workspace: std::path::PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        ..Default::default()
+    });
+    lp.app.attach(contract::SessionId(SESSION.to_owned()));
+    lp.app.set_size(200, 40);
+    lp.screen
+        .resize(200, 40)
+        .unwrap_or_else(|err| panic!("resize: {err:?}"));
+    lp.app.on_line(status(serde_json::json!({"state": "waiting",
+        "waiting": {"request_id": "r_1", "kind": "approval", "summary": "shell"}})));
+    lp.app.on_line(status_for(
+        "s_bbbbbbbbbbbbbbbb",
+        serde_json::json!({"state": "idle"}),
+    ));
+    // Steps at T+0 and T+9 990 arm the pulse's next change.
+    assert_eq!(step(&mut lp, Input::Resize), None);
+    assert_eq!(
+        lp.tick.armed(),
+        origin.checked_add(Duration::from_millis(480))
+    );
+    clock.advance(Duration::from_millis(9_990));
+    assert_eq!(step(&mut lp, Input::Resize), None);
+    assert_eq!(
+        lp.tick.armed(),
+        origin.checked_add(Duration::from_millis(10_000))
+    );
+    // At T+10 000 the pulse holds still: nothing arms.
+    clock.advance(Duration::from_millis(10));
+    assert_eq!(step(&mut lp, Input::Resize), None);
+    assert_eq!(lp.tick.armed(), None);
 }
 
 #[test]

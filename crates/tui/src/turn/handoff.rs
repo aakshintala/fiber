@@ -17,7 +17,7 @@ use super::crash::{self, Aside};
 use super::{Entry, Fold, Turn, open};
 use crate::app::{Target, read};
 use crate::format;
-use crate::rows::Rows;
+use crate::rows::{RowText, Rows};
 use crate::theme::Role;
 
 /// The band's tint.
@@ -144,8 +144,9 @@ impl Band {
     /// Its lines: the band, then "▸ note" once there is a note, and the
     /// note under it when open.
     pub(crate) fn rows(&self, out: &mut Rows) {
+        let writing = matches!(self.state, State::Writing);
         let state = match &self.state {
-            State::Writing => "writing the note…".to_owned(),
+            State::Writing => "● writing the note…".to_owned(),
             State::Done { before, after } => {
                 let after = after.map_or_else(|| "…".to_owned(), size);
                 format!("{} → {after}", size(*before))
@@ -154,7 +155,21 @@ impl Band {
             State::Unchanged(Some(message)) => format!("context unchanged · {message}"),
         };
         let band = format!("⇄ Handoff · {} · {state}", self.trigger);
-        out.push((Line::styled(band, TINT), None));
+        // While the note is being written the band's dot spins on the
+        // tick; a finished band marks nothing.
+        if writing {
+            let before = format!("⇄ Handoff · {} · ", self.trigger);
+            let col = u16::try_from(crate::format::width(&before)).unwrap_or(u16::MAX);
+            out.push_text(
+                (Line::styled(band, TINT), None),
+                RowText {
+                    spin: Some(col),
+                    ..RowText::plain()
+                },
+            );
+        } else {
+            out.push((Line::styled(band, TINT), None));
+        }
         let note = self.note();
         if matches!(self.state, State::Writing) || note.is_empty() {
             return;

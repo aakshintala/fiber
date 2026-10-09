@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use ratatui::buffer::Buffer;
 
+use crate::home::{self, Row};
 use crate::tick::TICK;
 
 /// The spinner's ten frames, one per tick.
@@ -17,6 +18,9 @@ pub(crate) const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴"
 /// The spinner's still form: what shows under reduced motion and with no
 /// time set (`docs/tui.md`, "State glyphs").
 pub(crate) const STILL: &str = "●";
+/// How long a waiting card pulses from its state's start, in
+/// milliseconds (`docs/tui.md`, "The rail").
+pub(crate) const PULSE_MS: u64 = 10_000;
 
 /// What moves on screen, and when it next moves. The epoch is the first
 /// `now` given; a frame is one [`TICK`] from it.
@@ -90,6 +94,79 @@ impl Motion {
         self.ask_frame();
     }
 
+    /// This frame's glyph for `row`: the spinner while its session
+    /// works, else the still glyph. Reads the frame and asks for
+    /// nothing.
+    pub(crate) fn glyph(&self, row: &Row) -> &'static str {
+        if Self::spins(row) {
+            self.spinner()
+        } else {
+            home::glyph(row)
+        }
+    }
+
+    /// Whether `row`'s glyph moves: a live row in a working state.
+    pub(crate) fn spins(row: &Row) -> bool {
+        row.left.is_none() && matches!(row.state, home::State::Working | home::State::Retrying)
+    }
+
+    /// Asks for the next frame when `row`'s glyph moves. Nothing under
+    /// reduced motion or with no time set.
+    pub(crate) fn ask_spin(&self, row: &Row) {
+        if Self::spins(row) {
+            self.ask_frame();
+        }
+    }
+
+    /// Whether `row`'s waiting pulse shows, and bright: ten seconds from
+    /// `since_ms`, bright on every other four frames. A `since` after now
+    /// counts as no wait. Reads the frame and asks for nothing.
+    pub(crate) fn pulse(&self, since_ms: u64) -> Option<bool> {
+        if self.reduced {
+            return None;
+        }
+        let (Some(frame), Some((_, wall))) = (self.frame(), self.now) else {
+            return None;
+        };
+        if wall.saturating_sub(since_ms) >= PULSE_MS {
+            return None;
+        }
+        Some(frame / 4 % 2 == 0)
+    }
+
+    /// Asks for the pulse's next change while `row` waits: the next
+    /// four-frame boundary, and the pulse's end. Nothing once it holds
+    /// still.
+    pub(crate) fn ask_pulse(&self, row: &Row) {
+        let Some((now, wall)) = self.now else {
+            return;
+        };
+        if self.reduced {
+            return;
+        }
+        let Some(since) = pulse_since(row) else {
+            return;
+        };
+        if wall.saturating_sub(since) >= PULSE_MS {
+            return;
+        }
+        let Some(epoch) = self.epoch else {
+            return;
+        };
+        let frame = now.saturating_duration_since(epoch).as_millis() / TICK.as_millis();
+        // The next four-frame boundary past this one.
+        let next = frame / 4 * 4;
+        let step = u32::try_from(next.saturating_add(4)).unwrap_or(u32::MAX);
+        if let Some(at) = epoch.checked_add(TICK.checked_mul(step).unwrap_or(Duration::MAX)) {
+            self.ask(at);
+        }
+        let end = since.saturating_add(PULSE_MS);
+        let at = now
+            .checked_add(Duration::from_millis(end.saturating_sub(wall)))
+            .unwrap_or(now);
+        self.ask(at);
+    }
+
     /// The frame's wall time, in milliseconds since the epoch; none with
     /// no time set.
     pub(crate) fn wall_ms(&self) -> Option<u64> {
@@ -156,6 +233,16 @@ impl Motion {
         if earlier {
             self.wake.set(Some(at));
         }
+    }
+}
+
+/// A live waiting row's pulse start: its status's `since`. Rows that
+/// left, rows not waiting and rows with no status hold still.
+fn pulse_since(row: &Row) -> Option<u64> {
+    if row.left.is_none() && row.state == home::State::Waiting {
+        row.status.as_ref().map(|status| status.since)
+    } else {
+        None
     }
 }
 
