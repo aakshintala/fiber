@@ -201,9 +201,11 @@ pub(crate) fn render(
                         // the last column to the bar.
                         // The rows draw in the scroll bar's rows area, one
                         // column narrower than the conversation, leaving
-                        // the last column to the bar.
-                        let (rows, _) = scroll_bar::split(conversation);
+                        // the last column to the bar, which draws before
+                        // the marks over it.
+                        let (rows, bar) = scroll_bar::split(conversation);
                         conversation_rows(app, rows, buf, &mut targets);
+                        scroll_bar::draw(app, bar, buf);
                         marks::draw(app, conversation, buf, &mut targets);
                     }
                 },

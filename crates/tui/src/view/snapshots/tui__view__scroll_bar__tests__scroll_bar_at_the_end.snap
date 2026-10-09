@@ -1,15 +1,16 @@
 ---
-source: crates/tui/src/view_tests.rs
-expression: after
+source: crates/tui/src/view/scroll_bar_tests.rs
+assertion_line: 216
+expression: "crate::view::text(&buf)"
 ---
-▣ completed                         Notice 3.              ✕
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀Notice 2.              ✕
-                                    Notice 1.              ✕
-                                    +1 more
-                                                ▀▀▀▀▀▀▀▀▀▀▀│
+▣ completed                                                │
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀│
+                                               ▄▄▄▄▄▄▄▄▄▄▄▄│
+                                                prompt 14 ▐│
+                                               ▀▀▀▀▀▀▀▀▀▀▀▀│
                                                       00:00│
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄│
-▣ completed                                                █
+▣ completed                                                │
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀█
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 >

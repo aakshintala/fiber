@@ -280,8 +280,8 @@ fn page_down_to_the_bottom_follows_again() {
     app.on_key(Key::PageUp, now);
     let shown = screen(&app);
     let shown: Vec<&str> = shown.lines().collect();
-    assert_eq!(shown[0], time, "one page up moves eight rows");
-    assert_eq!(shown[1], format!("{:>59}", "▄".repeat(12)));
+    assert_eq!(shown[0], format!("{time}│"), "one page up moves eight rows");
+    assert_eq!(shown[1], format!("{:>59}│", "▄".repeat(12)));
     assert!(shown[2].contains("prompt 27"), "{shown:?}");
     // One page down lands exactly on the bottom, which follows again: new
     // output scrolls in with no overlay.
@@ -345,7 +345,7 @@ fn draw_folds_an_events_file() {
     assert_eq!(
         shown,
         format!(
-            "{}\n{}\n>\n{}\n",
+            "{}█\n{}\n>\n{}\n",
             "▀".repeat(19),
             "▄".repeat(20),
             "▀".repeat(20)
@@ -401,7 +401,10 @@ fn the_overlay_never_covers_the_input_line() {
     app.on_line(delta("s_aaaaaaaaaaaaaaaa", "a_1", "streamed"));
     assert!(app.has_new());
     assert_eq!(sized(&mut app, 30, 1), ">\n");
-    assert_eq!(sized(&mut app, 30, 2), "    ↓ New messages below\n>\n");
+    assert_eq!(
+        sized(&mut app, 30, 2),
+        "    ↓ New messages below     █\n>\n"
+    );
 }
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
@@ -1004,8 +1007,10 @@ fn a_card_row_wrapped_by_the_view_is_tinted_on_every_row() {
         .iter()
         .position(|row| row.contains("▣"))
         .expect("a closing line");
-    // "▣ completed · 4 calls" is 21 columns: two view rows.
-    assert!(shown[closing + 1].ends_with("s"), "{shown:?}");
+    // "▣ completed · 4 calls" is 21 columns: two view rows, the word
+    // wrap putting "calls" on the second whatever the bar draws
+    // after it.
+    assert!(shown[closing + 1].starts_with("calls"), "{shown:?}");
     let surface = crate::theme::Role::Surface.color();
     let row = u16::try_from(closing).unwrap_or(u16::MAX);
     assert_eq!(buf[(0, row)].bg, surface);

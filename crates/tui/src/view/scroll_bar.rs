@@ -42,14 +42,13 @@ pub(crate) fn thumb(top: usize, total: usize, track: u16) -> Option<Range<u16>> 
         return None;
     }
     let total128 = u128::try_from(total).ok()?;
-    let track128 = u128::try_from(track).ok()?;
+    let track128 = u128::from(track);
     let size128 = (track128 * track128 / total128).max(1);
     let size = u16::try_from(size128).ok()?;
     let span = total - usize::from(track);
     let free = track.checked_sub(size)?;
     let clamped = top.min(span);
-    let start128 =
-        u128::try_from(clamped).ok()? * u128::try_from(free).ok()? / u128::try_from(span).ok()?;
+    let start128 = u128::try_from(clamped).ok()? * u128::from(free) / u128::try_from(span).ok()?;
     let start = u16::try_from(start128).ok()?;
     let end = start.checked_add(size)?;
     Some(start..end)

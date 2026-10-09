@@ -481,7 +481,7 @@ fn a_bare_url_in_a_prompt_bubble_is_on_its_drawn_cells() {
             .map(|x| buf[(x, y)].symbol().to_owned())
             .collect();
         if let Some(at) = row.find("http") {
-            col = Some(area.x.saturating_add(at as u16));
+            col = Some(area.x.saturating_add(u16::try_from(at).unwrap_or(u16::MAX)));
             break;
         }
     }
