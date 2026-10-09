@@ -229,7 +229,9 @@ jobs:
       - name: Install zsh and fish
         if: runner.os == 'Linux'
         timeout-minutes: 5
-        run: sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
+        run: |
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
+          sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
       - name: Install fish
         if: runner.os == 'macOS'
         run: brew install fish
@@ -293,7 +295,9 @@ jobs:
       # and fish (crates/main/tests/completion.rs).
       - name: Install zsh and fish
         timeout-minutes: 5
-        run: sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
+        run: |
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
+          sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
       - name: cargo mutants --in-diff
         run: |
           git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
@@ -351,7 +355,9 @@ jobs:
         timeout-minutes: 5
         run: |
           rustup target add x86_64-unknown-linux-musl
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
           sudo apt-get $APT_OPTS update
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
           sudo apt-get $APT_OPTS install -y --no-install-recommends musl-tools time
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
