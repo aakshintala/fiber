@@ -4,7 +4,7 @@ expression: "sized(&mut app, 60, 16)"
 ---
                                                       00:00│
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄│
-• Read 1 file, edited 1 file +3 −1, ran 1 command, thought…│
+• Read 1 file, edited 1 file +3 −1, ran 1 command, t… · 12s│
   1 + Thought: Find the test · 4s                          █
     read src/a.rs                                          █
     edit src/a.rs +3 −1                                    █

@@ -554,7 +554,7 @@ impl Group {
         if failed > 0 {
             parts.push(count(failed, "failed model call", "failed model calls"));
         }
-        if running {
+        let elapsed = if running {
             let flight: Vec<String> = self
                 .calls()
                 .filter(|call| call.status.is_none())
@@ -574,10 +574,28 @@ impl Group {
                     None => "Thinking".to_owned(),
                 });
             }
+            None
         } else {
-            parts.extend(seconds(self.last.saturating_sub(self.first)));
-        }
-        if parts.is_empty() {
+            seconds(self.last.saturating_sub(self.first))
+        };
+        // A finished group's duration stays whole at the end of the line:
+        // what does not fit is cut from the descriptive part with "…", so
+        // the duration is still there (`docs/tui.md`, "Tool groups and the
+        // ledger").
+        let body = parts.join(" · ");
+        let suffix = elapsed.as_deref().map(|span| {
+            if body.is_empty() {
+                format!(" {span}")
+            } else {
+                format!(" · {span}")
+            }
+        });
+        let head = if body.is_empty() {
+            "•".to_owned()
+        } else {
+            format!("• {body}")
+        };
+        if body.is_empty() && suffix.is_none() {
             return;
         }
         // A running summary line carries its spinner's cell: the draw
@@ -591,12 +609,21 @@ impl Group {
         } else {
             RowText::plain()
         };
-        let mut line = format!("• {}", parts.join(" · "));
+        let mut line = match &suffix {
+            Some(tail) => format!("{head}{tail}"),
+            None => head.clone(),
+        };
         // What does not fit is cut with "…", so the line never wraps
         // (`docs/tui.md`, "Tool groups and the ledger").
         let max = usize::from(width);
         if self::width(&line) > max {
-            line = format!("{}…", cut(&line, max.saturating_sub(1)));
+            match &suffix {
+                Some(tail) => {
+                    let keep = max.saturating_sub(self::width(tail) + self::width("…"));
+                    line = format!("{}…{tail}", cut(&head, keep));
+                }
+                None => line = format!("{}…", cut(&line, max.saturating_sub(1))),
+            }
         }
         out.push_text(
             (
