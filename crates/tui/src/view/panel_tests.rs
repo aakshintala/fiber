@@ -317,9 +317,7 @@ fn the_budget_comparison_counts_billed_spend_only() {
         "{drawn:?}"
     );
     assert!(
-        drawn
-            .iter()
-            .any(|row| row == "cost on subscription  $9.00"),
+        drawn.iter().any(|row| row == "cost on subscription  $9.00"),
         "{drawn:?}"
     );
     // Subscription-only: billed $0 against the budget.
