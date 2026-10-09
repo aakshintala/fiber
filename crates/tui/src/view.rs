@@ -26,6 +26,7 @@ pub(crate) mod panel;
 pub(crate) mod rail;
 pub(crate) mod request;
 mod results;
+pub(crate) mod scroll_bar;
 pub(crate) mod status_rows;
 mod steering_queue;
 mod working_line;
@@ -195,7 +196,13 @@ pub(crate) fn render(
                         overlay_cross(buf, conversation, &mut targets);
                     }
                     None => {
-                        conversation_rows(app, conversation, buf, &mut targets);
+                        // The rows draw in the scroll bar's rows area, one
+                        // column narrower than the conversation, leaving
+                        // the last column to the bar, which draws before
+                        // the marks over it.
+                        let (rows, bar) = scroll_bar::split(conversation);
+                        conversation_rows(app, rows, buf, &mut targets);
+                        scroll_bar::draw(app, bar, buf);
                         marks::draw(app, conversation, buf, &mut targets);
                     }
                 },

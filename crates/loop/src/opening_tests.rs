@@ -64,7 +64,7 @@ fn canon(path: &Path) -> PathBuf {
 fn date_of_pins_epoch_leap_day_year_end_and_midnight_edge() {
     // Each `(seconds, date)` is midnight UTC of `date`, written as
     // literals independent of the code under test: flipping any operator
-    // in `civil_from_days` moves one of them.
+    // in `contract::clock::utc_date_of_secs` moves one of them.
     let cases = [
         (0_u64, "1970-01-01"),
         (946_598_400_u64, "1999-12-31"),

@@ -461,10 +461,10 @@ fn a_click_on_new_messages_below_jumps_to_the_end() {
         ],
     );
     assert!(lp.app.has_new());
-    // The overlay's 20 cells are centred on row 8: columns 20 to 39.
-    feed(&mut lp, vec![click(19, 8)]);
+    // The overlay's 20 cells are centred on row 8: columns 19 to 38.
+    feed(&mut lp, vec![click(18, 8)]);
     assert!(lp.app.has_new());
-    feed(&mut lp, vec![click(39, 8)]);
+    feed(&mut lp, vec![click(38, 8)]);
     assert!(!lp.app.has_new());
     assert_eq!(lp.app.top(), None);
 }
@@ -670,13 +670,14 @@ fn hover_over_a_group_line_tints_only_its_row() {
     lp.screen.backend_mut().drawn.clear();
     feed(&mut lp, vec![motion(5, group)]);
     let drawn = &lp.screen.backend().drawn;
-    assert_eq!(drawn.len(), 60);
+    assert_eq!(drawn.len(), 59);
     assert!(drawn.iter().all(|&(_, y)| y == group), "{drawn:?}");
     let mut lp = grouped(TestBackend::new(60, 12));
     feed(&mut lp, vec![motion(5, group)]);
     let buf = lp.screen.backend().buffer();
     for y in 0..12 {
-        for x in 0..60 {
+        // The rows' 59 columns: the bar's column keeps its background.
+        for x in 0..59 {
             let bg = buf.cell((x, y)).map(|cell| cell.bg);
             // The written frame is painted: the hover role's colour.
             let hover = crate::look::Look::default().colour(crate::theme::Role::Hover);
