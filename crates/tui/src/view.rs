@@ -26,6 +26,7 @@ pub(crate) mod panel;
 pub(crate) mod rail;
 pub(crate) mod request;
 mod results;
+pub(crate) mod scroll_bar;
 pub(crate) mod status_rows;
 mod steering_queue;
 mod working_line;
