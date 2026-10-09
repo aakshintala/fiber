@@ -1010,12 +1010,13 @@ session's `session_status` turns to `waiting`, and when a turn ends and the
 session turns `idle`.
 
 Attention covers the transitions the hub sees, so it is best effort. The hub
-can miss one in three cases. A session drops `session_status` lines for a hub
+can miss one in four cases. A session drops `session_status` lines for a hub
 that falls too far behind. The hub reads only the last 64 KiB of a session's
 log when it first sees the session idle, so it misses a turn that ended
-further back. It also skips a turn whose end is stamped before the hub started,
-which can happen to a recent turn when the wall clock is set back. The feed
-has the same exposure, and the session's next status change corrects both.
+further back. A session that closes right after a turn ends may exit before
+the hub sees it `idle`, and then no `finished` line is sent. It also skips a
+turn whose end is stamped before the hub started, which can happen to a recent
+turn when the wall clock is set back. The feed has the same exposure, and the session's next status change corrects both.
 
 Delivering it to a device that is not connected, through Apple's or Google's
 push service, Web Push, ntfy or anything else, happens outside the hub: a
