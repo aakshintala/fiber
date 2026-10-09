@@ -78,27 +78,6 @@ pub(super) fn open() -> Pair {
     }
 }
 
-/// Reads exactly `n` bytes with one named deadline.
-fn read_exact(main: &File, n: usize, what: &str) -> Vec<u8> {
-    let mut dup = main.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
-    let (done, finished) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("lib-read".to_owned())
-        .spawn(move || {
-            let mut buf = vec![0u8; n];
-            let read = dup.read_exact(&mut buf).map(|()| buf);
-            match done.send(read) {
-                Ok(()) | Err(_) => {}
-            }
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
-    match finished.recv_timeout(DEADLINE) {
-        Ok(Ok(buf)) => buf,
-        Ok(Err(err)) => panic!("waited {DEADLINE:?} for {what}: {err}"),
-        Err(_) => panic!("waited {DEADLINE:?} for {what}"),
-    }
-}
-
 /// Whether canonical mode, echo and signals are on. Compared flag by flag:
 /// the kernel may set `PENDIN` on its own, so a whole-struct equality would
 /// be brittle.
@@ -316,6 +295,7 @@ fn a_kitty_reply_is_recorded() {
 #[test]
 fn the_first_kitty_reply_pushes_the_flags_once() {
     let pair = open();
+    let frames = watch(&pair.main, vec![b"END" as &[u8]]);
     let tty = pair
         .slave
         .try_clone()
@@ -335,7 +315,7 @@ fn the_first_kitty_reply_pushes_the_flags_once() {
         .write_all(b"END")
         .unwrap_or_else(|err| panic!("write: {err}"));
     assert_eq!(
-        read_until(&pair.main, b"END", "the kitty push"),
+        watched(&frames, "the kitty push"),
         [
             b"\x1b[>1u".to_vec(),
             crate::osc::title("fiber"),
@@ -514,18 +494,13 @@ fn a_schema_mismatch_says_so_and_hangs_up() {
 #[test]
 fn restore_puts_back_what_setup_changed() {
     let pair = open();
-    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
     let start = "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
-    assert_eq!(
-        read_exact(&pair.main, start.len(), "the start bytes"),
-        start.as_bytes()
-    );
-    crate::restore();
     let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
-    assert_eq!(
-        read_exact(&pair.main, end.len(), "the restore bytes"),
-        end.as_bytes()
-    );
+    let frames = watch(&pair.main, vec![start.as_bytes(), end.as_bytes()]);
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    assert_eq!(watched(&frames, "the start bytes"), start.as_bytes());
+    crate::restore();
+    assert_eq!(watched(&frames, "the restore bytes"), end.as_bytes());
     assert!(is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
@@ -534,6 +509,8 @@ fn restore_puts_back_what_setup_changed() {
 #[test]
 fn resize_redraws_at_the_new_size() {
     let pair = open();
+    // The test never reads the pty: the watcher drains it to end of file.
+    let _frames = watch(&pair.main, Vec::new());
     rustix::termios::tcsetwinsize(
         &pair.slave,
         rustix::termios::Winsize {
@@ -880,9 +857,10 @@ fn next_bytes(rx: &mpsc::Receiver<Input>, what: &str) -> Vec<u8> {
 #[test]
 fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     let mut pair = open();
-    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
     let start = "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
-    read_exact(&pair.main, start.len(), "the start bytes");
+    let restore = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    let frames = watch(&pair.main, vec![restore.as_bytes(), b"ENDMARK" as &[u8]]);
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
     let tty = pair
         .slave
         .try_clone()
@@ -926,18 +904,22 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
     // The terminal was restored, then set up again with hover and kitty's
-    // flags.
-    let restore = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
-    let echoed = read_until(&pair.main, restore.as_bytes(), "the restore bytes");
-    assert!(echoed.ends_with(restore.as_bytes()));
+    // flags. The mark is written after the hand-over returns.
+    (&pair.slave)
+        .write_all(b"ENDMARK")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let suspended = watched(&frames, "the restore bytes");
+    assert!(
+        suspended.starts_with(start.as_bytes()),
+        "the restore chunk starts with the start bytes: {suspended:?}"
+    );
     // In between, the cooked terminal echoed the program's line.
     let resumed = "typed\r\n\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[>1u\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n";
-    assert_eq!(
-        read_until(&pair.main, resumed.as_bytes(), "the resume bytes"),
-        resumed.as_bytes()
-    );
     let title = crate::osc::title("fiber");
-    assert_eq!(read_exact(&pair.main, title.len(), "the title"), title);
+    assert_eq!(
+        watched(&frames, "the mark"),
+        [resumed.as_bytes(), title.as_slice(), b"ENDMARK".as_slice()].concat()
+    );
     // The reader runs again.
     pair.main
         .write_all(b"k")
@@ -1015,16 +997,9 @@ fn feed_within(mut lp: Loop<TestBackend>, inputs: Vec<Input>) -> (i32, String) {
 #[test]
 fn ctrl_g_puts_the_editors_text_in_the_draft_and_the_loop_reads_on() {
     let pair = open();
+    // The watcher drains what the terminal is sent, so no write blocks.
+    let _frames = watch(&pair.main, Vec::new());
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    // Drain what the terminal is sent, so no write blocks.
-    let mut main = pair
-        .main
-        .try_clone()
-        .unwrap_or_else(|err| panic!("dup: {err}"));
-    std::thread::Builder::new()
-        .name("lib-drain".to_owned())
-        .spawn(move || io::copy(&mut main, &mut io::sink()))
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
     let tty = pair
         .slave
         .try_clone()
@@ -1065,6 +1040,7 @@ fn ctrl_g_with_no_editor_says_so_and_the_loop_reads_on() {
 #[test]
 fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
     let pair = open();
+    let frames = watch(&pair.main, vec![b"\x1b]52;c;bGV0IGEgPSAxOw==\x07" as &[u8]]);
     let dir = fakes::TempDir::new("tui-copy");
     let out = dir.path().join("copied").display().to_string();
     let ready = fakes::children::Ready::new(dir.path());
@@ -1149,7 +1125,7 @@ fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
         b"\x1b]52;c;bGV0IGEgPSAxOw==\x07".to_vec(),
     ]
     .concat();
-    assert_eq!(read_exact(&pair.main, osc.len(), "the OSC 52 bytes"), osc);
+    assert_eq!(watched(&frames, "the OSC 52 bytes"), osc);
     ready.wait(DEADLINE);
     assert_eq!(
         std::fs::read_to_string(&out).ok().as_deref(),
@@ -1573,6 +1549,7 @@ fn run_close_all_with_a_lost_hub_still_prints_the_resume_line() {
 #[test]
 fn run_writes_the_title_once_until_it_changes() {
     let pair = open();
+    let frames = watch(&pair.main, vec![b"ENDMARK" as &[u8]]);
     let tty = pair
         .slave
         .try_clone()
@@ -1595,7 +1572,7 @@ fn run_writes_the_title_once_until_it_changes() {
     (&pair.slave)
         .write_all(b"ENDMARK")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let written = read_until(&pair.main, b"ENDMARK", "the mark");
+    let written = watched(&frames, "the mark");
     let expected = [
         crate::osc::title("fiber"),
         crate::osc::title("✓ fix the parser · fiber"),
