@@ -787,7 +787,7 @@ fn the_open_notice_overlay_hides_the_conversation_targets() {
 }
 
 #[test]
-fn a_click_on_a_failed_logins_line_hits_log_in() {
+fn a_click_on_a_failed_logins_line_opens_the_login_view() {
     use crate::app::Target;
     use crate::mouse::TargetId;
     use serde_json::json;
@@ -801,10 +801,11 @@ fn a_click_on_a_failed_logins_line_hits_log_in() {
     ]);
     let line = row_of(&lp, "✗ The key was refused.");
     assert_eq!(hit_at(&lp, 0, line), Some(TargetId::Line(Target::Login)));
-    // The login view is #678's; the click changes nothing yet.
-    let before = shown(&lp);
+    // With no seam the view says it is not available.
     feed(&mut lp, vec![click(0, line)]);
-    assert_eq!(shown(&lp), before);
+    let shown = shown(&lp);
+    assert!(shown.contains("Log in"), "{shown}");
+    assert!(shown.contains("Not available in this terminal."), "{shown}");
 }
 
 #[test]

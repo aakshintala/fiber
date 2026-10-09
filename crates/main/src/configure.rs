@@ -4,13 +4,15 @@
 //! view is about, and lists the themes in Fiber home's `themes/`. The
 //! terminal loads configuration with no `-c`, so no row comes from one.
 
+mod login;
+
 use std::path::{Path, PathBuf};
 
 use config::{Config, SettingValue, Source, Sources};
 use contract::shapes::Failure;
 use tui::{
-    ConfigureError, Layer, Revoked, RuleRow, RulesScope, RulesSection, Saved, SettingRow, Shown,
-    WriteScope,
+    ConfigureError, Layer, LoginTarget, Revoked, RuleRow, RulesScope, RulesSection, Saved,
+    SettingRow, Shown, Stored, WriteScope,
 };
 
 /// The seam over Fiber home.
@@ -218,6 +220,21 @@ impl tui::Configure for Seam {
         } else {
             Revoked::Stale
         })
+    }
+
+    // `/login`.
+
+    fn login_targets(&self) -> Result<Vec<LoginTarget>, ConfigureError> {
+        login::targets(&self.home)
+    }
+
+    fn store_key(
+        &self,
+        name: &str,
+        label: Option<&str>,
+        key: contract::Secret,
+    ) -> Result<Stored, ConfigureError> {
+        login::store(&self.home, name, label, key)
     }
 
     fn themes(&self) -> Vec<String> {

@@ -28,8 +28,8 @@ use serde_json::{Value, json};
 use doors::failure;
 
 use super::{
-    KeyReader, LoginIo, LogoutTarget, Plain, credential_key, finish, login, logout, run_login,
-    run_logout, write_prompt,
+    KeyReader, LoginIo, LoginName, LoginStored, LogoutTarget, Plain, credential_key, finish, login,
+    login_store, login_targets, logout, run_login, run_logout, write_prompt,
 };
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
@@ -747,6 +747,144 @@ fn login_of_an_unknown_provider_is_a_usage_failure() {
         panic!("waited {CHILD_DEADLINE:?} for `fiber login` of an unknown provider to exit");
     };
     assert_eq!(status.code(), Some(2), "{status}");
+}
+
+#[test]
+fn login_targets_list_providers_then_secrets() {
+    let setup = Setup::new();
+    setup.install("beta", None, None);
+    setup.install("alpha", None, None);
+    setup.declare("acme", &["beta", "acme.api_key"]);
+    assert_eq!(
+        login_targets(&setup.home()).unwrap(),
+        [
+            LoginName::Provider("alpha".to_owned()),
+            LoginName::Provider("beta".to_owned()),
+            LoginName::Secret("acme.api_key".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn login_targets_with_nothing_installed_is_empty() {
+    let setup = Setup::new();
+    assert!(login_targets(&setup.home()).unwrap().is_empty());
+}
+
+#[test]
+fn login_store_stores_the_key_and_the_first_label() {
+    let setup = Setup::new();
+    setup.install("acme", None, None);
+    let stored = login_store(&setup.home(), "acme", None, Secret::new(KEY.into())).unwrap();
+    assert_eq!(
+        stored,
+        LoginStored {
+            path: "credentials/acme/default".to_owned(),
+            replaced: false,
+        }
+    );
+    assert_eq!(setup.stored("acme", "default").as_deref(), Some(KEY));
+    assert_eq!(
+        setup.global(),
+        json!({"providers": {"acme": {"credential": "default"}}})
+    );
+}
+
+#[test]
+fn login_store_under_a_label() {
+    let setup = Setup::new();
+    setup.install("acme", None, None);
+    let stored = login_store(&setup.home(), "acme", Some("work"), Secret::new(KEY.into())).unwrap();
+    assert_eq!(stored.path, "credentials/acme/work");
+    assert!(!stored.replaced);
+    assert_eq!(setup.stored("acme", "work").as_deref(), Some(KEY));
+}
+
+#[test]
+fn login_store_refuses_an_already_stored_label_without_the_cli_hint() {
+    let setup = Setup::new();
+    setup.install("acme", None, None);
+    store_credential(&setup.home(), "acme", "default", &Secret::new("old".into())).unwrap();
+    let error = login_store(&setup.home(), "acme", None, Secret::new(KEY.into())).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Usage);
+    assert_eq!(
+        error.message,
+        "credentials/acme/default is already stored; log in under another label with --as <label>, or run `fiber logout acme --as default` first."
+    );
+    assert_eq!(setup.stored("acme", "default").as_deref(), Some("old"));
+    assert!(!setup.home().join("config.json").exists());
+}
+
+#[test]
+fn login_store_refuses_an_empty_key_and_stores_nothing() {
+    let setup = Setup::new();
+    setup.install("acme", None, None);
+    let error = login_store(&setup.home(), "acme", None, Secret::new(String::new())).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Usage);
+    assert_eq!(error.message, "No key was given; nothing was stored.");
+    assert!(!setup.home().join("credentials/acme/default").exists());
+    assert!(!setup.home().join("config.json").exists());
+}
+
+#[test]
+fn login_store_replaces_a_declared_secret_and_says_so() {
+    let setup = Setup::new();
+    setup.declare("acme", &["acme.api_key"]);
+    let first = login_store(
+        &setup.home(),
+        "acme.api_key",
+        None,
+        Secret::new("v1".into()),
+    )
+    .unwrap();
+    assert_eq!(
+        first,
+        LoginStored {
+            path: "credentials/acme.api_key".to_owned(),
+            replaced: false,
+        }
+    );
+    let second = login_store(
+        &setup.home(),
+        "acme.api_key",
+        None,
+        Secret::new("v2".into()),
+    )
+    .unwrap();
+    assert_eq!(second.path, "credentials/acme.api_key");
+    assert!(second.replaced);
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/acme.api_key")).unwrap(),
+        "v2"
+    );
+}
+
+#[test]
+fn login_store_of_an_unknown_name_is_a_usage_refusal() {
+    let setup = Setup::new();
+    let error = login_store(&setup.home(), "nope", None, Secret::new(KEY.into())).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Usage);
+    assert_eq!(
+        error.message,
+        "`nope` is neither an installed provider nor a declared secret; no provider is installed, and no installed extension declares a secret."
+    );
+    assert!(!setup.home().join("credentials").exists());
+}
+
+#[test]
+fn login_store_while_another_holds_the_lock_stores_nothing() {
+    let setup = Setup::new();
+    setup.install("acme", None, None);
+    let held = CredentialFile::new(&setup.home(), "acme", "default")
+        .unwrap()
+        .try_lock()
+        .unwrap()
+        .unwrap();
+    let error = login_store(&setup.home(), "acme", None, Secret::new(KEY.into())).unwrap_err();
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert_eq!(error.message, "another login for acme is running");
+    drop(held);
+    assert_eq!(setup.stored("acme", "default"), None);
 }
 
 #[path = "login_label_tests.rs"]

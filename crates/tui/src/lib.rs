@@ -34,6 +34,7 @@ mod layout;
 mod link;
 mod local_time;
 mod logical;
+mod login_view;
 mod look;
 mod markdown;
 mod mouse;
@@ -73,8 +74,8 @@ use crate::link::Line;
 pub use attention::Attention;
 
 pub use configure::{
-    Configure, ConfigureError, Layer, Revoked, RuleRow, RulesScope, RulesSection, Saved,
-    SettingRow, Shown, WriteScope,
+    Configure, ConfigureError, Layer, LoginKind, LoginTarget, Revoked, RuleRow, RulesScope,
+    RulesSection, Saved, SettingRow, Shown, Stored, WriteScope,
 };
 
 pub use home::Launch;

@@ -33,6 +33,8 @@ impl App {
                 Effect::None
             }
             TargetId::Line(copy @ Target::Copy { .. }) => self.copy(copy),
+            // A failed login offers the login view (`docs/tui.md`, "Turns").
+            TargetId::Line(Target::Login) => self.open_config_view(super::ConfigView::Login),
             TargetId::Line(line) => {
                 self.open(line);
                 Effect::None

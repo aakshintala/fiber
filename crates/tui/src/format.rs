@@ -437,7 +437,7 @@ pub(crate) fn code(code: &ErrorCode) -> String {
 /// when the provider said something, its words dim under it. A failed
 /// login offers "log in" on the ✗ line.
 pub(crate) fn failure(error: &Failure, out: &mut Rows) {
-    // #678 builds the login view `Target::Login` opens.
+    // A failed login offers the login view (`docs/tui.md`, "Turns").
     let login = (error.code == ErrorCode::AuthenticationFailed).then_some(Target::Login);
     let line = format!("✗ {} · {}", error.message, code(&error.code));
     out.push((Line::raw(line), login));
