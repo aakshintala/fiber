@@ -66,6 +66,48 @@ fn login_provider_returns_the_extension_s_provider() {
 }
 
 #[test]
+fn login_provider_applies_the_manifest_memory_cap_in_mib() {
+    let root = fakes::TempDir::new("fiber-login-provider-memory");
+    let home = root.path().join("home");
+    install(&home, "acme-ext", "acme");
+    let dir = home.join("extensions").join("acme-ext");
+    fs::write(
+        dir.join("extension.json"),
+        json!({
+            "name": "acme-ext",
+            "version": "v1.0.0",
+            "fiber": "0.1.0",
+            "api": 1,
+            "memory_mib": 2,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut init = format!("-- {}\n", "x".repeat(1_200_000));
+    init.push_str(
+        r#"fiber.provider("acme", {
+          credential = { timeout = 60000, run = function()
+            return { token = "t", expires_at = 4102444800 }
+          end }
+        })"#,
+    );
+    fs::write(dir.join("init.lua"), init).unwrap();
+    let (providers, notices) = Providers::load(&home).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+
+    let provider = login_provider(
+        &home,
+        &providers,
+        "acme",
+        Arc::new(SystemBrowser::default()),
+        FakeClock::new(),
+    )
+    .unwrap();
+
+    assert_eq!(provider.functions().unwrap(), ["credential"]);
+}
+
+#[test]
 fn login_provider_for_a_provider_no_extension_registers_is_provider_missing() {
     let root = fakes::TempDir::new("fiber-login-provider-missing");
     let home = root.path().join("home");

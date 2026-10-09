@@ -25,7 +25,7 @@ use fakes::clock::FakeClock;
 use fakes::{OauthReply, OauthServer, jwt};
 use serde_json::{Value, json};
 
-use super::{Attended, browser_login};
+use super::{Attended, browser_login, login_with};
 use crate::login::{LoginIo, Plain, login};
 
 /// How long a test waits for one call or one child.
@@ -619,9 +619,120 @@ fn device_on_a_declared_secret_is_a_usage_error() {
     );
 }
 
+#[derive(Default)]
+struct RecordingBrowser {
+    calls: Mutex<Vec<String>>,
+}
+
+impl Browser for RecordingBrowser {
+    fn open(&self, url: &str) {
+        self.calls.lock().unwrap().push(format!("open:{url}"));
+    }
+
+    fn show(&self, url: &str, code: &str) {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("show:{url}:{code}"));
+    }
+
+    fn attended(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn attended_browser_delegates_open_and_show_to_its_inner_browser() {
+    let inner = Arc::new(RecordingBrowser::default());
+    let attended = Attended(Arc::clone(&inner) as Arc<dyn Browser>);
+
+    attended.open("https://auth.example/authorize");
+    attended.show("https://auth.example/device", "ABCD-1234");
+
+    assert_eq!(
+        inner.calls.lock().unwrap().as_slice(),
+        [
+            "open:https://auth.example/authorize",
+            "show:https://auth.example/device:ABCD-1234"
+        ]
+    );
+}
+
 #[test]
 fn fiber_login_is_attended_whatever_stdin_is() {
     assert!(Attended::attached().attended());
+}
+
+#[test]
+fn login_with_runs_the_provider_and_prints_its_stored_result() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let dir = home.join("extensions").join("acme-ext");
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({ "name": "acme-ext", "version": "v1.0.0", "fiber": "0.1.0", "api": 1 }).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("providers/acme.json"),
+        json!({
+            "name": "acme",
+            "login": "browser",
+            "models": [{
+                "id": "m",
+                "protocol": "openai-responses",
+                "base_url": "http://127.0.0.1:1/v1",
+                "context_window": 1000
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("init.lua"),
+        r#"fiber.provider("acme", {
+          credential = { timeout = 60000, run = function()
+            local stored = host.oauth.refresh(function()
+              return { token = "test-token", expires_at = 4102444800 }
+            end)
+            return { token = stored.token, expires_at = stored.expires_at, email = "alice@example.com" }
+          end }
+        })"#,
+    )
+    .unwrap();
+    let providers = setup.providers();
+    let mut output = Vec::new();
+    let mut stdin = Cursor::new(String::new());
+    let mut keys = Plain;
+
+    login_with(
+        &mut LoginIo {
+            home: &home,
+            providers: &providers,
+            terminal: false,
+            stdin: &mut stdin,
+            err: &mut output,
+            keys: &mut keys,
+            device: false,
+            clock: setup.clock(),
+        },
+        "acme",
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        "fiber: stored credentials/acme/alice@example.com\n"
+    );
+    let credential: Value =
+        serde_json::from_slice(&fs::read(home.join("credentials/acme/alice@example.com")).unwrap())
+            .unwrap();
+    assert_eq!(
+        credential,
+        json!({"token": "test-token", "expires_at": 4102444800u64})
+    );
 }
 
 #[test]

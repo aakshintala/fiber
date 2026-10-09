@@ -103,6 +103,33 @@ fn a_taken_port_is_an_error() {
     assert!(bind(port).is_err());
 }
 
+#[derive(Clone)]
+struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+impl Write for CaptureWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn the_system_browser_shows_device_instructions_to_its_sink() {
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let browser = SystemBrowser::with_writer("unused", CaptureWriter(Arc::clone(&output)));
+
+    browser.show("https://auth.example/device", "ABCD-1234");
+
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "Go to https://auth.example/device and enter the code ABCD-1234\n"
+    );
+}
+
 #[test]
 fn the_system_browser_starts_its_program_with_the_url() {
     let dir = fakes::TempDir::new("fiber-browser");
@@ -153,22 +180,53 @@ fn due_judges_a_stored_credential_by_the_clock() {
 }
 
 #[test]
-fn a_login_holder_never_prints_its_tokens() {
-    let clock = fakes::clock::FakeClock::new();
+fn holder_and_held_debug_output_is_exact_and_redacted() {
+    let root = fakes::TempDir::new("fiber-held-debug");
+    let lock = CredentialFile::new(root.path(), "codex", "default")
+        .unwrap()
+        .try_lock()
+        .unwrap()
+        .unwrap();
+    let expected_file = format!("File({lock:?})");
+    let file_holder = Holder::File(lock);
+    assert_eq!(format!("{file_holder:?}"), expected_file);
+    let held_file = Held::new(file_holder, fakes::clock::FakeClock::new());
+    assert_eq!(format!("{held_file:?}"), "Held { holder: \"file\", .. }");
+
+    let filled_lock = CredentialFile::new(root.path(), "codex", "filled")
+        .unwrap()
+        .try_lock()
+        .unwrap()
+        .unwrap();
+    filled_lock
+        .write(&serde_json::json!({
+            "token": "file-secret-token",
+            "expires_at": 4_102_444_800u64,
+        }))
+        .unwrap();
+    let expected_filled_file = format!("File({filled_lock:?})");
+    assert!(!expected_filled_file.contains("file-secret-token"));
+    assert_eq!(
+        format!("{:?}", Holder::File(filled_lock)),
+        expected_filled_file
+    );
+
+    let empty: LoginSlot = Arc::new(Mutex::new(None));
+    assert_eq!(
+        format!("{:?}", Holder::Login(Arc::clone(&empty))),
+        "Login(false)"
+    );
+
     let slot: LoginSlot = Arc::new(Mutex::new(Some(serde_json::json!({
         "token": "sk-live-secret-token",
         "refresh_token": "rt-live-secret",
         "expires_at": 4_102_444_800u64,
         "account_id": "acct_1",
     }))));
-    let holder = Holder::Login(Arc::clone(&slot));
-    let printed = format!("{holder:?}");
-    assert!(!printed.contains("sk-live-secret-token"), "{printed}");
-    assert!(!printed.contains("rt-live-secret"), "{printed}");
-    let held = Held::new(holder, clock);
-    let printed = format!("{held:?}");
-    assert!(!printed.contains("sk-live-secret-token"), "{printed}");
-    assert!(!printed.contains("rt-live-secret"), "{printed}");
+    let login_holder = Holder::Login(Arc::clone(&slot));
+    assert_eq!(format!("{login_holder:?}"), "Login(true)");
+    let held_login = Held::new(login_holder, fakes::clock::FakeClock::new());
+    assert_eq!(format!("{held_login:?}"), "Held { holder: \"login\", .. }");
     // The slot still holds its value: the redaction is in the printing,
     // not a wipe.
     assert!(slot.lock().unwrap().is_some());

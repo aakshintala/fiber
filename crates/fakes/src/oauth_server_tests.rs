@@ -311,6 +311,23 @@ fn each_request_records_its_raw_body() {
 }
 
 #[test]
+fn base64url_matches_reference_vectors_without_padding() {
+    let vectors: &[(&[u8], &str)] = &[
+        (b"", ""),
+        (b"f", "Zg"),
+        (b"fo", "Zm8"),
+        (b"foo", "Zm9v"),
+        (b"foob", "Zm9vYg"),
+        (b"fooba", "Zm9vYmE"),
+        (b"foobar", "Zm9vYmFy"),
+        (&[0xff, 0xff, 0xff], "____"),
+    ];
+    for (bytes, expected) in vectors {
+        assert_eq!(base64url(bytes), *expected, "{bytes:?}");
+    }
+}
+
+#[test]
 fn jwt_builds_three_parts_with_the_claims_in_the_middle() {
     let token = jwt(&serde_json::json!({
         "https://api.openai.com/auth": { "chatgpt_account_id": "acct_1" },

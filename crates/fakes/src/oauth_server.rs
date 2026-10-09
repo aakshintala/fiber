@@ -91,7 +91,8 @@ fn base64url(bytes: &[u8]) -> String {
     for chunk in bytes.chunks(3) {
         let mut bits: u32 = 0;
         for byte in chunk {
-            bits = (bits << 8) | u32::from(*byte);
+            // The new byte occupies bits disjoint from the shifted prefix.
+            bits = (bits << 8) + u32::from(*byte);
         }
         bits <<= 8 * (3 - chunk.len());
         for i in 0..chunk.len() + 1 {

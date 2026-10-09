@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender, TryRecvError};
 use std::thread;
 use std::time::Duration;
@@ -71,6 +72,7 @@ pub trait Browser: Send + Sync {
 /// or `xdg-open` (elsewhere) is started with it.
 pub struct SystemBrowser {
     program: PathBuf,
+    stderr: Mutex<Box<dyn Write + Send>>,
 }
 
 impl SystemBrowser {
@@ -78,6 +80,15 @@ impl SystemBrowser {
     pub fn with_program(program: impl Into<PathBuf>) -> Self {
         Self {
             program: program.into(),
+            stderr: Mutex::new(Box::new(io::stderr())),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_writer(program: impl Into<PathBuf>, writer: impl Write + Send + 'static) -> Self {
+        Self {
+            program: program.into(),
+            stderr: Mutex::new(Box::new(writer)),
         }
     }
 }
@@ -96,13 +107,21 @@ impl Browser for SystemBrowser {
     fn show(&self, url: &str, code: &str) {
         // Told, never opened: the person types the code at the URL
         // (`docs/extensions.md`, "Host calls").
-        match writeln!(io::stderr(), "Go to {url} and enter the code {code}") {
+        let mut stderr = self
+            .stderr
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match writeln!(stderr, "Go to {url} and enter the code {code}") {
             Ok(()) | Err(_) => {}
         }
     }
 
     fn open(&self, url: &str) {
-        match writeln!(io::stderr(), "{url}") {
+        let mut stderr = self
+            .stderr
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match writeln!(stderr, "{url}") {
             Ok(()) | Err(_) => {}
         }
         // The URL is shown, so a browser that will not start is not an error.

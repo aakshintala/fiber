@@ -19,12 +19,12 @@ use super::{LoginIo, chosen_label, config_failure, credential_key, installed, st
 /// The system browser as `fiber login` runs it: a person is attached,
 /// whatever stdin is, since a person ran the command
 /// (`docs/model-routing.md`, "Logging in").
-pub(crate) struct Attended(SystemBrowser);
+pub(crate) struct Attended(Arc<dyn Browser>);
 
 impl Attended {
     /// The system browser with a person attached.
     pub(crate) fn attached() -> Arc<dyn Browser> {
-        Arc::new(Self(SystemBrowser::default()))
+        Arc::new(Self(Arc::new(SystemBrowser::default())))
     }
 }
 
