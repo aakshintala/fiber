@@ -207,8 +207,9 @@ jobs:
         # A draft runs Linux x86_64 only; marking it ready runs all three (docs/ci.md).
         runner: ${{ github.event.pull_request.draft && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "ubuntu-24.04-arm", "macos-26"]') }}
     runs-on: ${{ matrix.runner }}
-    # Medians: Linux 4 min, macOS 7 min.
-    timeout-minutes: ${{ matrix.runner == 'macos-26' && 15 || 10 }}
+    # Warm medians: Linux 4 min, macOS 7 min. Cold runs reach 9 min on both,
+    # so the bound is twice that (docs/ci.md, "Job time limits").
+    timeout-minutes: 20
     env:
       BASE: ${{ needs.select.outputs.base }}
     steps:
@@ -338,9 +339,10 @@ jobs:
     if: fromJSON(needs.select.outputs.jobs).release
     runs-on: ubuntu-24.04
     # The release build, the debug benchmark harness build, the paging jig's
-    # head and base builds and the benchmarks ran in about 7.5 minutes on the
-    # pull request that added the jig (docs/ci.md, "Job time limits").
-    timeout-minutes: 15
+    # head and base builds and the benchmarks take about 7 minutes warm and
+    # about 14 minutes cold; the bound is twice the cold run (docs/ci.md,
+    # "Job time limits").
+    timeout-minutes: 30
     env:
       BASE: ${{ needs.select.outputs.base }}
       # C code (lua-src, ring) compiles against musl's headers; the Rust linker stays the default.

@@ -349,7 +349,9 @@ changes a widely used function, so its bound is twice that slow group, not
 twice the median. A shard of up to 15 mutants gets 20 minutes. A larger
 shard, which only the cap makes, gets 20 minutes per 15 of its mutants,
 rounded up, at most 360 minutes, GitHub's limit for a job. The selection
-computes it (`cargo xtask plan`). The median behind each bound is a comment beside its
+computes it (`cargo xtask plan`). A job that builds the workspace is bounded at
+twice its cold-cache duration, since a pull request's first run after a cache
+eviction or a `Cargo.lock` change builds cold. The median behind each bound is a comment beside its
 `timeout-minutes` line. A job that gains work past its bound has the bound
 raised in its workflow.
 
