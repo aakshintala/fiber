@@ -4603,7 +4603,7 @@ mod tests {
             all,
             [
                 "--home empty, sessions, hover-workspace, hover-worktree, hover-model, hover-thinking, worktree-on, worktree-off, picker-recent, picker-typed",
-                "--overlay keymap, keymap-narrow, quit, delete, history, notice, close-mouse",
+                "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, notice, close-mouse",
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only",
             ]
         );

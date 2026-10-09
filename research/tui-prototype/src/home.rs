@@ -28,8 +28,8 @@ const CASES: &[Case<Look>] = &[
     Case { name: "hover-thinking", help: "the thinking chip hovered", check: "the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Thinking), ..base() } },
     Case { name: "worktree-on", help: "new worktree switched on", check: "the switch should read `[● new worktree]` in blue.", build: || base() },
     Case { name: "worktree-off", help: "new worktree switched off", check: "the switch should read `[○ new worktree]` dim.", build: || Look { worktree: false, ..base() } },
-    Case { name: "picker-recent", help: "workspace picker over home, recents", check: "the picker should float over home with even ▄ ▀ edges, four recent workspaces, the first row marked with ▌ on the lighter tint.", build: || Look { picker: Some(Picker::Recent), ..base() } },
-    Case { name: "picker-typed", help: "workspace picker with a typed path", check: "the typed row should read `› ~/work/fi█` with `fiber` and `fiber-worktrees` under it, the first marked; the recents below dimmed.", build: || Look { picker: Some(Picker::Typed), ..base() } },
+    Case { name: "picker-recent", help: "workspace picker over home, recents", check: "the picker should float centred over home with ▄ ▀ edges and the ▌ stripe; `Workspaces` bold accent; four recent workspaces, the first `›` on a full-width accent bar; a bold-key legend foot.", build: || Look { picker: Some(Picker::Recent), ..base() } },
+    Case { name: "picker-typed", help: "workspace picker with a typed path", check: "the typed row should read `› ~/work/fi█` with `fiber` and `fiber-worktrees` under it, the first `›` on the accent bar; the recents below dimmed; same frame and legend foot.", build: || Look { picker: Some(Picker::Typed), ..base() } },
 ];
 
 /// `--home`, for `--help` and `check/home.md`.
@@ -37,8 +37,6 @@ pub(crate) const SURFACE: Surface = Surface { flag: "--home", file: "home", titl
 
 /// The home input box and session list width at 160 columns.
 const HOME_W: usize = 84;
-/// The picker's width.
-const PICK_W: usize = 60;
 /// The fixture's version, as docs/tui.md's logo reads.
 const VERSION: &str = "0.0.1";
 
@@ -235,40 +233,38 @@ fn session_rows(w: usize) -> Vec<Vec<Span<'static>>> {
         .collect()
 }
 
-/// The workspace picker over home: recent workspaces, or the typed-path row
-/// with its completions over the recents.
-fn picker(p: Picker, w: usize) -> Vec<super::Row> {
-    let mut inner = vec![row(vec![sp(" Workspaces", bold())])];
+/// The workspace picker's rows at an inner width: the typed-path row with
+/// its completions over the recents, or recents alone. The first row rides
+/// a full-width selection bar.
+fn picker_body(p: Picker) -> Vec<super::Row> {
+    let mut out = vec![];
     if p == Picker::Typed {
-        inner.push(row(vec![
-            sp("  ", Style::new()),
+        out.push(row(vec![
             sp("› ", fg(CYAN)),
             sp(TYPED, Style::new()),
             sp("█", dim()),
         ]));
         for (i, name) in COMPLETIONS.iter().enumerate() {
             if i == 0 {
-                inner.push(super::Row {
-                    spans: vec![sp("▌ ", fg(BLUE)), sp(*name, bold())],
-                    bg: Some(lift(SEL)),
-                    ..Default::default()
-                });
+                out.extend(super::panel::bar(vec![row(vec![
+                    sp("› ", bold()),
+                    sp(*name, bold()),
+                ])]));
             } else {
-                inner.push(row(vec![sp("  ", Style::new()), sp(*name, Style::new())]));
+                out.push(row(vec![sp("  ", Style::new()), sp(*name, Style::new())]));
             }
         }
-        inner.push(row(vec![sp("  ── recents ──", dim())]));
+        out.push(row(vec![sp("── recents ──", dim())]));
     }
     for (i, r) in RECENTS.iter().enumerate() {
         let selected = p == Picker::Recent && i == 0;
         if selected {
-            inner.push(super::Row {
-                spans: vec![sp("▌ ", fg(BLUE)), sp(r.to_string(), Style::new())],
-                bg: Some(lift(SEL)),
-                ..Default::default()
-            });
+            out.extend(super::panel::bar(vec![row(vec![
+                sp("› ", bold()),
+                sp(r.to_string(), bold()),
+            ])]));
         } else {
-            inner.push(row(vec![
+            out.push(row(vec![
                 sp("  ", Style::new()),
                 sp(
                     r.to_string(),
@@ -281,7 +277,30 @@ fn picker(p: Picker, w: usize) -> Vec<super::Row> {
             ]));
         }
     }
-    slab(inner, SEL, None, w)
+    out
+}
+
+/// The workspace picker over home: recent workspaces, or the typed-path row
+/// with its completions over the recents, in the shared panel frame with a
+/// bold-key legend foot.
+fn picker(p: Picker, cols: usize) -> Vec<super::Row> {
+    const TITLE: &str = "Workspaces";
+    let probe = picker_body(p);
+    let natural = probe
+        .iter()
+        .map(|r| super::width(&r.spans))
+        .max()
+        .unwrap_or(0)
+        .max(TITLE.width())
+        .max("↑↓ move · enter open · esc closes".width());
+    let w = super::panel::fit_width(natural, 55, cols);
+    let inner = super::panel::inner_w(w);
+    super::panel::frame(
+        Some(super::panel::title_row(TITLE, None, inner)),
+        picker_body(p),
+        Some(super::panel::footer_legend(&[("↑↓", "move"), ("enter", "open"), ("esc", "closes")], inner)),
+        w,
+    )
 }
 
 // ============================================================ frame
@@ -371,9 +390,10 @@ fn frame(c: &Look, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
         );
     }
     if let Some(p) = c.picker {
-        let pw = PICK_W.min(cols.saturating_sub(4)).max(20);
-        let px0 = cols.saturating_sub(pw) / 2;
-        for (k, r) in picker(p, pw).into_iter().enumerate() {
+        let rows = picker(p, cols);
+        let pw = super::width(&rows[0].spans);
+        let px0 = super::panel::x_for(pw, cols);
+        for (k, r) in rows.into_iter().enumerate() {
             let bg = r.bg;
             put(&mut screen, 12 + k, px0, pw, r.spans, bg);
         }
@@ -443,5 +463,40 @@ mod tests {
     #[test]
     fn logo_is_four_rows_tall() {
         assert_eq!(logo(HOME_W).len(), 4);
+    }
+
+    fn text(c: &Look, cols: usize, rows: usize) -> String {
+        frame(c, cols, rows)
+            .into_iter()
+            .map(|ps| {
+                ps.iter()
+                    .map(|p| p.row.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_workspace_picker_is_a_panel_with_a_bar_and_legend() {
+        let c = crate::cases::lookup(CASES, "picker-recent").unwrap();
+        let t = text(&c, 160, 48);
+        assert!(t.contains("Workspaces"));
+        assert!(t.contains("› "));
+        assert!(t.contains("~/work/fiber-worktrees"));
+        assert!(t.contains("↑↓ move · enter open · esc closes"));
+        // Centred: the picker's edges sit inside the margins, not full width.
+        let fr = frame(&c, 160, 48);
+        let edge = fr
+            .iter()
+            .flat_map(|ps| ps)
+            .find(|p| p.row.spans.iter().any(|s| s.content.contains("▄▄")))
+            .unwrap();
+        assert!(edge.x > 0, "picker flush left");
+        assert!(edge.x + edge.w < 160, "picker fills the row");
+        let typed = text(&crate::cases::lookup(CASES, "picker-typed").unwrap(), 160, 48);
+        assert!(typed.contains("› ~/work/fi"));
+        assert!(typed.contains("── recents ──"));
     }
 }
