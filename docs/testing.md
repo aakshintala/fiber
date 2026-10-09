@@ -193,6 +193,10 @@ is a real child session process, because it is Fiber. The fakes are:
 - a refused address, loopback port 1: a connect is reset, and a bind of port 0
   never draws it, so no concurrent listener can take it
 - a second client on a session's socket, including a slow watcher
+- a fake clock, whose time moves only when the test advances it;
+  `advance_marked` marks each thread's latest park, so `await_parked_since`
+  waits for that thread's next park after the advance even when an event
+  woke it out of its park before the advance
 - a counting allocator, which counts the blocks of 1 MiB or more a thread
   holds at once, and the bytes it allocated and has not freed, from the
   scope's start and never below 0; each block of 64 KiB or more takes a
