@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use contract::events::UsageRecorded;
+use contract::events::{CommandAccepted, CommandRejected, CommandResult};
 use contract::{Envelope, SessionId};
 
 use super::{App, Effect};
@@ -17,6 +18,7 @@ use crate::login_view::Login;
 use crate::rules_view::Rules;
 use crate::settings_view::{Act, Ctx, Settings};
 use crate::swapped::{Frame, List, Spot};
+use crate::tools_view::Tools;
 
 /// What a view says when the terminal was given no seam.
 const UNAVAILABLE: &str = "Not available in this terminal.";
@@ -26,6 +28,8 @@ const UNAVAILABLE: &str = "Not available in this terminal.";
 pub(crate) enum ConfigView {
     /// `/settings`.
     Settings,
+    /// `/tools`.
+    Tools,
     /// `/rules`.
     Rules,
     /// `/login`.
@@ -37,6 +41,8 @@ pub(crate) enum ConfigView {
 enum Open {
     /// `/settings`.
     Settings(Settings),
+    /// `/tools`.
+    Tools(Tools),
     /// `/rules`.
     Rules(Rules),
     /// `/login`.
@@ -74,6 +80,7 @@ impl App {
                 let workspace = self.workspace();
                 Open::Settings(Settings::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
+            (Some(seam), ConfigView::Tools) => return self.open_tools(seam),
             (Some(seam), ConfigView::Rules) => {
                 let workspace = self.workspace();
                 Open::Rules(Rules::open(&self.config_ctx(seam.as_ref(), &workspace)))
@@ -83,11 +90,27 @@ impl App {
                 Open::Login(Login::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
             (None, ConfigView::Settings) => Open::Unavailable("Settings"),
+            (None, ConfigView::Tools) => Open::Unavailable("Tools"),
             (None, ConfigView::Rules) => Open::Unavailable("Rules"),
             (None, ConfigView::Login) => Open::Unavailable("Log in"),
         };
         self.config_views.open = Some(open);
         Effect::None
+    }
+
+    /// Opens `/tools` on the session on screen: sends the `tools` command
+    /// and opens the view waiting for its answer. With no session
+    /// attached the notice is pushed and nothing opens.
+    fn open_tools(&mut self, seam: Arc<dyn Configure>) -> Effect {
+        let Some((session, _)) = self.command_session() else {
+            return Effect::None;
+        };
+        let id = super::mint();
+        let line = super::session_command(&id, "tools", &session, None).to_string();
+        let workspace = self.workspace();
+        let ctx = self.config_ctx(seam.as_ref(), &workspace);
+        self.config_views.open = Some(Open::Tools(Tools::open(id, &ctx)));
+        Effect::Send(vec![line])
     }
 
     /// Whether a configuration view is open.
@@ -130,6 +153,7 @@ impl App {
                 let ctx = self.config_ctx(seam.as_ref(), &workspace);
                 match &mut self.config_views.open {
                     Some(Open::Settings(settings)) => settings.key(key, &ctx),
+                    Some(Open::Tools(tools)) => tools.key(key, &ctx),
                     Some(Open::Rules(rules)) => rules.key(key, &ctx),
                     Some(Open::Login(login)) => login.key(key, &ctx),
                     Some(Open::Unavailable(_)) | None => esc(key),
@@ -153,6 +177,10 @@ impl App {
                         settings.edit_key(edit.clone());
                         Act::Stay
                     }
+                    Some(Open::Tools(tools)) => {
+                        tools.edit_key(edit);
+                        Act::Stay
+                    }
                     Some(Open::Rules(rules)) => rules.edit_key(edit, &ctx),
                     Some(Open::Login(login)) => {
                         login.edit_key(edit);
@@ -170,17 +198,18 @@ impl App {
     pub(in crate::app) fn config_view_click(&mut self, spot: Spot) -> Effect {
         let act = match (self.config_views.seam.clone(), spot) {
             (_, Spot::Close) => Act::Close,
-            (Some(seam), Spot::Row(_) | Spot::Revoke(_)) => {
+            (Some(seam), Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_)) => {
                 let workspace = self.workspace();
                 let ctx = self.config_ctx(seam.as_ref(), &workspace);
                 match &mut self.config_views.open {
                     Some(Open::Settings(settings)) => settings.click(spot, &ctx),
+                    Some(Open::Tools(tools)) => tools.click(spot, &ctx),
                     Some(Open::Rules(rules)) => rules.click(spot, &ctx),
                     Some(Open::Login(login)) => login.click(spot, &ctx),
                     Some(Open::Unavailable(_)) | None => Act::Stay,
                 }
             }
-            (None, Spot::Row(_) | Spot::Revoke(_)) => Act::Stay,
+            (None, Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_)) => Act::Stay,
         };
         self.config_act(act)
     }
@@ -211,6 +240,7 @@ impl App {
             .map(|(_, tokens)| *tokens);
         Some(match self.config_views.open.as_ref()? {
             Open::Settings(settings) => settings.frame(usage),
+            Open::Tools(tools) => tools.frame(usage),
             Open::Rules(rules) => rules.frame(),
             Open::Login(login) => login.frame(),
             Open::Unavailable(title) => Frame {
@@ -241,8 +271,51 @@ impl App {
             match &mut self.config_views.open {
                 Some(Open::Settings(settings)) => settings.reread(&ctx),
                 Some(Open::Rules(rules)) => rules.reread(&ctx),
-                Some(Open::Login(_) | Open::Unavailable(_)) | None => {}
+                Some(Open::Tools(_) | Open::Login(_) | Open::Unavailable(_)) | None => {}
             }
+        }
+    }
+
+    /// Folds a `command_accepted` or `command_rejected` on the session on
+    /// screen into the open `/tools` view: only the answer to the command
+    /// it sent fills it. Every other line, and any line with another view
+    /// open, does nothing.
+    pub(in crate::app) fn config_views_line(&mut self, envelope: &Envelope) {
+        if !matches!(self.config_views.open, Some(Open::Tools(_))) {
+            return;
+        }
+        let Some(seam) = self.config_views.seam.clone() else {
+            return;
+        };
+        let workspace = self.workspace();
+        let ctx = self.config_ctx(seam.as_ref(), &workspace);
+        let Some(Open::Tools(tools)) = &mut self.config_views.open else {
+            return;
+        };
+        match envelope.kind.as_str() {
+            "command_accepted" => {
+                if let Some(accepted) = super::read!(envelope, CommandAccepted)
+                    && let Some(CommandResult::Tools { tools: answered }) = accepted.result
+                {
+                    tools.answered(&accepted.command_id.0, &answered, &ctx);
+                }
+            }
+            "command_rejected" => {
+                if let Some(rejected) = super::read!(envelope, CommandRejected)
+                    && let Some(id) = rejected.command_id
+                {
+                    tools.rejected(&id.0, &rejected.message);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A hub `command_rejected` for the `tools` command the view sent
+    /// shows its message: only for its id.
+    pub(in crate::app) fn config_views_refused(&mut self, id: &str, message: &str) {
+        if let Some(Open::Tools(tools)) = &mut self.config_views.open {
+            tools.rejected(id, message);
         }
     }
 

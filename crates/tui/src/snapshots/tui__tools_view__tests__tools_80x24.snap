@@ -1,0 +1,29 @@
+---
+source: crates/tui/src/tools_view_tests.rs
+assertion_line: 653
+expression: "text.join(\"\\n\")"
+---
+Tools                                                                          ✕
+Built-in                                        state     size
+  read                                          full      100 bytes
+Extension memory      this project  everywhere  state     size
+  notes                   [x]          [x]      full      100 bytes
+MCP server docs       this project  everywhere  state     size
+  gone                    [x]          [ ]      off
+  search                  [x]          ›[x]     deferred  about 460 tokens
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+↑↓ move · ←→ choose a switch · Space switch · Esc close

@@ -52,6 +52,233 @@ pub fn set(
     key: &str,
     value: Value,
 ) -> Result<(), ConfigError> {
+    let (file, source) = layer_file(home, workspace, project, layer)?;
+    let (segments, notices) = checked(key, value.clone(), &source)?;
+    if !notices.is_empty() {
+        return Err(ConfigError::Refused {
+            key: key.into(),
+            file,
+            why: refused_why(&segments, &source),
+        });
+    }
+    update(&file, &segments, value, false).map(|_| ())
+}
+
+/// One change to a list of names in one layer's file (`/tools`, `/skills`).
+pub struct ListEdit<'a> {
+    /// The list's dotted key.
+    pub key: &'a str,
+    /// The name to add or remove.
+    pub name: &'a str,
+    /// What to do to the list.
+    pub change: ListChange,
+    /// The list in force below this file, when its file sets none.
+    pub inherited: Option<&'a [String]>,
+}
+
+/// What a [`ListEdit`] does to its list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListChange {
+    /// Adds the name, starting from the inherited list (or none) when the file holds no list.
+    Add,
+    /// Removes every copy of the name, starting likewise.
+    Remove,
+    /// Adds the name only when a list is in force (the file's or the
+    /// inherited one) and lacks it: `tools.enabled` when a tool is switched
+    /// on, decided under the file's lock.
+    AddIfListed,
+}
+
+/// Applies `edits` to `layer`'s file under one lock and one write; `true`
+/// when it wrote. A failure before the rename leaves the file unchanged; a
+/// failure after it, syncing the directory, returns `Err` with the new
+/// content already in place.
+pub fn edit_list(
+    home: &Path,
+    workspace: &Path,
+    project: &ProjectKey,
+    layer: Layer,
+    edits: &[ListEdit<'_>],
+) -> Result<bool, ConfigError> {
+    if edits.is_empty() {
+        return Ok(false);
+    }
+    let (file, source) = layer_file(home, workspace, project, layer)?;
+    let _lock = locked(&file)?;
+    let mut root = read(&file)?.unwrap_or_else(|| Value::Object(Map::new()));
+    let mut changed = false;
+    for edit in edits {
+        if apply_edit(&mut root, edit, &source, &file)? {
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(false);
+    }
+    write_root(&file, &root)?;
+    Ok(true)
+}
+
+/// Applies one edit to the file's in-memory root; whether its list changed.
+/// Every edit is type-checked as `set` checks it, changed or not, so a key
+/// the layer may not set is refused even when it would change nothing.
+fn apply_edit(
+    root: &mut Value,
+    edit: &ListEdit<'_>,
+    source: &Source,
+    file: &Path,
+) -> Result<bool, ConfigError> {
+    let segments = path::parse(edit.key).ok_or_else(|| ConfigError::Override {
+        arg: edit.key.into(),
+    })?;
+    let resolved = resolve_spelling(root, &segments);
+    let shown = path::display(&resolved);
+    // The file's list at the leaf, else the one the file inherits.
+    let current: Option<Vec<String>> = match path::get(root, &resolved) {
+        None => edit.inherited.map(|list| list.to_vec()),
+        Some(Value::Array(items)) if items.iter().all(Value::is_string) => Some(
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+        ),
+        Some(other) => {
+            check_list(&shown, edit.key, &resolved, other.clone(), source, file)?;
+            None
+        }
+    };
+    let name = edit.name.to_owned();
+    match edit.change {
+        ListChange::Add => {
+            let mut list = current.clone().unwrap_or_default();
+            if list.iter().any(|n| n == edit.name) {
+                check_list(&shown, edit.key, &resolved, strings_of(&list), source, file)?;
+                return Ok(false);
+            }
+            list.push(name);
+            check_list(&shown, edit.key, &resolved, strings_of(&list), source, file)?;
+            path::set(root, &resolved, Value::Array(list_into(list)));
+            Ok(true)
+        }
+        ListChange::Remove => {
+            let mut list = current.clone().unwrap_or_default();
+            if !list.iter().any(|n| n == edit.name) {
+                check_list(&shown, edit.key, &resolved, strings_of(&list), source, file)?;
+                return Ok(false);
+            }
+            list.retain(|n| n != edit.name);
+            check_list(&shown, edit.key, &resolved, strings_of(&list), source, file)?;
+            path::set(root, &resolved, Value::Array(list_into(list)));
+            Ok(true)
+        }
+        ListChange::AddIfListed => match current {
+            Some(mut list) if !list.iter().any(|n| n == edit.name) => {
+                list.push(name);
+                check_list(&shown, edit.key, &resolved, strings_of(&list), source, file)?;
+                path::set(root, &resolved, Value::Array(list_into(list)));
+                Ok(true)
+            }
+            Some(list) => {
+                check_list(&shown, edit.key, &resolved, strings_of(&list), source, file)?;
+                Ok(false)
+            }
+            None => {
+                check_list(
+                    &shown,
+                    edit.key,
+                    &resolved,
+                    Value::Array(Vec::new()),
+                    source,
+                    file,
+                )?;
+                Ok(false)
+            }
+        },
+    }
+}
+
+/// The leaf list the file already holds under one spelling of an
+/// extension's name keeps that spelling; a new list joins an existing
+/// spelling of the same extension; else the key's own spelling stands. One
+/// leaf is resolved at a time, so two lists may keep different spellings
+/// without one key ever being set under both (`docs/configuration.md`,
+/// "Keys").
+fn resolve_spelling(root: &Value, segments: &[String]) -> Vec<String> {
+    let [area, name, rest @ ..] = segments else {
+        return segments.to_vec();
+    };
+    if area != "extensions" {
+        return segments.to_vec();
+    }
+    let mut same: Vec<String> = root
+        .get("extensions")
+        .and_then(Value::as_object)
+        .map(|extensions| {
+            extensions
+                .keys()
+                .filter(|key| crate::names::full_name(key) == crate::names::full_name(name))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    same.sort();
+    let holds = |key: &String| {
+        let mut at = vec!["extensions".to_owned(), key.clone()];
+        at.extend(rest.iter().cloned());
+        path::get(root, &at).is_some()
+    };
+    let chosen = same.iter().find(|key| holds(key)).or_else(|| same.first());
+    match chosen {
+        Some(key) => {
+            let mut resolved = vec!["extensions".to_owned(), key.clone()];
+            resolved.extend(rest.iter().cloned());
+            resolved
+        }
+        None => segments.to_vec(),
+    }
+}
+
+/// Type-checks `value` for `shown` as `set` checks it: a notice is the same
+/// refusal `set` returns.
+fn check_list(
+    shown: &str,
+    key: &str,
+    segments: &[String],
+    value: Value,
+    source: &Source,
+    file: &Path,
+) -> Result<(), ConfigError> {
+    let (_, notices) = checked(shown, value, source)?;
+    if notices.is_empty() {
+        return Ok(());
+    }
+    Err(ConfigError::Refused {
+        key: key.into(),
+        file: file.to_path_buf(),
+        why: refused_why(segments, source),
+    })
+}
+
+fn strings_of(list: &[String]) -> Value {
+    Value::Array(
+        list.iter()
+            .map(|name| Value::String(name.clone()))
+            .collect(),
+    )
+}
+
+fn list_into(list: Vec<String>) -> Vec<Value> {
+    list.into_iter().map(Value::String).collect()
+}
+
+/// The file and source `set` and `edit_list` write through for `layer`.
+fn layer_file(
+    home: &Path,
+    workspace: &Path,
+    project: &ProjectKey,
+    layer: Layer,
+) -> Result<(PathBuf, Source), ConfigError> {
     let (file, source) = match layer {
         Layer::Global => {
             let file = home.join("config.json");
@@ -79,15 +306,7 @@ pub fn set(
         plain(&workspace.join(".fiber"), true)?;
         plain(&file, false)?;
     }
-    let (segments, notices) = checked(key, value.clone(), &source)?;
-    if !notices.is_empty() {
-        return Err(ConfigError::Refused {
-            key: key.into(),
-            file,
-            why: refused_why(&segments, &source),
-        });
-    }
-    update(&file, &segments, value, false).map(|_| ())
+    Ok((file, source))
 }
 
 /// Why `set` refused `key`: the notice `keys::check` pushed, read back off
@@ -417,6 +636,33 @@ pub(crate) fn before_rename(hook: impl Fn() + 'static) {
     BEFORE_RENAME.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
 }
 
+/// Where [`fail_at`] injects a write failure in `write_atomic`.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stage {
+    /// Before the rename: the file is left unchanged.
+    BeforeRename,
+    /// After the rename, syncing the directory: the new content is in place.
+    AfterRename,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_AT: std::cell::Cell<Option<Stage>> = const { std::cell::Cell::new(None) };
+}
+
+/// Injects an I/O failure at `stage` in `write_atomic` on this thread;
+/// `None` clears it. Test-only; non-test builds never fail.
+#[cfg(test)]
+pub(crate) fn fail_at(stage: Option<Stage>) {
+    FAIL_AT.with(|cell| cell.set(stage));
+}
+
+#[cfg(test)]
+fn fail_stage() -> Option<Stage> {
+    FAIL_AT.with(|cell| cell.get())
+}
+
 /// Writes `bytes` to a temporary file created with `mode` beside `file`,
 /// syncs it, and renames it over `file`, so a reader sees the old file or the
 /// new one, never half.
@@ -443,9 +689,19 @@ pub fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> Result<(), ConfigEr
                     hook();
                 }
             });
+            #[cfg(test)]
+            if fail_stage() == Some(Stage::BeforeRename) {
+                return Err(std::io::Error::other("injected"));
+            }
             fs::rename(&tmp, file)
         })
-        .and_then(|()| File::open(dir)?.sync_all());
+        .and_then(|()| {
+            #[cfg(test)]
+            if fail_stage() == Some(Stage::AfterRename) {
+                return Err(std::io::Error::other("injected"));
+            }
+            File::open(dir)?.sync_all()
+        });
     if written.is_err() {
         fs::remove_file(&tmp).unwrap_or(());
     }
@@ -461,6 +717,10 @@ fn write_synced(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
     out.write_all(bytes)?;
     out.sync_all()
 }
+
+#[cfg(test)]
+#[path = "write_lock_tests.rs"]
+mod lock_tests;
 
 #[cfg(test)]
 mod tests {

@@ -333,7 +333,7 @@ impl Login {
     pub(crate) fn click(&mut self, spot: Spot, ctx: &Ctx<'_>) -> Act {
         match spot {
             Spot::Close => Act::Close,
-            Spot::Revoke(_) => Act::Stay,
+            Spot::Switch { .. } | Spot::Revoke(_) => Act::Stay,
             Spot::Row(at) => {
                 if matches!(self.mode, Mode::Panel(_)) {
                     return Act::Stay;

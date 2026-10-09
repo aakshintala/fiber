@@ -250,7 +250,7 @@ fn millis(config: &Config, server: &str, field: &str, default: Duration) -> Dura
         .unwrap_or(default)
 }
 
-fn strings(value: &Value) -> Vec<String> {
+pub(crate) fn strings(value: &Value) -> Vec<String> {
     value
         .as_array()
         .map(|items| {

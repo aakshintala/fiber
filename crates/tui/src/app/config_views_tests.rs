@@ -449,6 +449,28 @@ fn without_a_seam_only_esc_closes_the_view() {
     assert!(!app.config_view_open());
 }
 
+/// A connected app attached to [`SESSION`], with `seam`: the link is up,
+/// so a command can go out.
+fn connected(seam: Option<Arc<Fake>>) -> App {
+    let mut app = home(seam);
+    app.on_line(crate::link::Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app
+}
+
+/// Types `/tools` and presses Enter.
+fn slash_tools(app: &mut App) -> Effect {
+    for ch in "/tools".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    app.on_key(Key::Enter, now())
+}
+
 /// Types `/rules` and presses Enter.
 fn slash_rules(app: &mut App) -> Effect {
     for ch in "/rules".chars() {
@@ -457,6 +479,171 @@ fn slash_rules(app: &mut App) -> Effect {
     app.on_key(Key::Enter, now())
 }
 
+/// The command lines an effect sends, parsed.
+fn sent(effect: Effect) -> Vec<serde_json::Value> {
+    match effect {
+        Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_default())
+            .collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => Vec::new(),
+    }
+}
+
+/// Opens `/tools` on a connected app and returns the sent command's id.
+fn open_tools(app: &mut App) -> String {
+    let lines = sent(slash_tools(app));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "tools");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    lines[0]["id"].as_str().unwrap_or_default().to_owned()
+}
+
+fn tools_answer() -> serde_json::Value {
+    serde_json::json!({"tools": [
+        {"name": "read", "source": "builtin", "state": "full", "bytes": 10},
+        {"name": "mcp__m__x", "source": "mcp", "server": "m",
+         "tool": "x", "state": "deferred", "bytes": 1}]})
+}
+
+#[test]
+fn slash_tools_with_no_session_is_the_notice_and_opens_nothing() {
+    let mut app = home(Some(fake()));
+    assert_eq!(slash_tools(&mut app), Effect::None);
+    assert_eq!(app.notices.newest(), Some("No session on screen."));
+    assert!(!app.config_view_open());
+}
+
+#[test]
+fn slash_tools_sends_tools_for_the_session_on_screen() {
+    let mut app = connected(Some(fake()));
+    let id = open_tools(&mut app);
+    assert!(id.starts_with("c_"), "{id}");
+    assert!(app.config_view_open());
+    let frame = app.config_view_screen().expect("the view is open");
+    assert_eq!(frame.title, "Tools");
+    assert!(
+        frame
+            .below
+            .first()
+            .is_some_and(|line| line == "Reading the tools…")
+    );
+}
+
+#[test]
+fn the_answer_to_the_sent_id_fills_the_view() {
+    let mut app = connected(Some(fake()));
+    let id = open_tools(&mut app);
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": "c_other", "result": tools_answer()}),
+    ));
+    let frame = app.config_view_screen().expect("the view is open");
+    assert!(
+        frame
+            .below
+            .first()
+            .is_some_and(|line| line == "Reading the tools…"),
+        "{frame:?}"
+    );
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": tools_answer()}),
+    ));
+    let frame = app.config_view_screen().expect("the view is open");
+    assert!(
+        frame.rows.iter().any(|row| row[0].0.contains("read")),
+        "{frame:?}"
+    );
+    assert!(
+        frame.rows.iter().any(|row| row[0].0.contains('x')),
+        "{frame:?}"
+    );
+}
+
+#[test]
+fn a_session_rejection_of_tools_shows_its_message() {
+    let mut app = connected(Some(fake()));
+    let id = open_tools(&mut app);
+    app.on_line(session_line(
+        "command_rejected",
+        serde_json::json!({"command_id": id, "code": "busy", "message": "Busy."}),
+    ));
+    let frame = app.config_view_screen().expect("the view is open");
+    assert_eq!(frame.below, vec!["Busy.".to_owned()]);
+}
+
+#[test]
+fn a_hub_rejection_of_tools_shows_its_message() {
+    let mut app = connected(Some(fake()));
+    let id = open_tools(&mut app);
+    app.on_line(crate::link::Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"command_id": id, "code": "busy", "message": "Busy."})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }));
+    let frame = app.config_view_screen().expect("the view is open");
+    assert_eq!(frame.below, vec!["Busy.".to_owned()]);
+}
+
+#[test]
+fn without_a_seam_tools_says_not_available() {
+    let mut app = connected(None);
+    assert_eq!(slash_tools(&mut app), Effect::None);
+    let frame = app.config_view_screen().expect("the view is open");
+    assert_eq!(frame.title, "Tools");
+    assert_eq!(
+        frame.below,
+        vec!["Not available in this terminal.".to_owned()]
+    );
+}
+
+#[test]
+fn a_click_on_the_panels_tools_line_opens_the_tools_view() {
+    let mut app = connected(Some(fake()));
+    let effect = app.on_click(crate::mouse::TargetId::Panel(
+        crate::app::panel::Spot::Tools,
+    ));
+    let lines = sent(effect);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "tools");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert!(app.config_view_open());
+    let frame = app.config_view_screen().expect("the view is open");
+    assert_eq!(frame.title, "Tools");
+}
+
+#[test]
+fn left_and_right_reach_the_tools_view_not_the_draft() {
+    let mut app = connected(Some(fake()));
+    let id = open_tools(&mut app);
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": tools_answer()}),
+    ));
+    // Select the MCP row: heading, read, heading, x.
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
+    app.on_edit(Edit::Right);
+    let frame = app.config_view_screen().expect("the view is open");
+    assert!(frame.rows[3][3].0.contains('›'), "{frame:?}");
+    assert!(app.input().is_empty());
+}
 /// A seam with one global rule on line 1.
 fn rules_fake() -> (Arc<Fake>, String) {
     let fake = fake();

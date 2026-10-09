@@ -38,6 +38,11 @@ struct Call {
 }
 
 impl McpTool {
+    /// The server's own tool name, sent as `tools/call`'s `name`.
+    pub(crate) fn tool_name(&self) -> &str {
+        &self.call.tool
+    }
+
     /// Declares `tool` of `server`: the qualified name, the server's
     /// description and schema, and `hints` already resolved (the person's
     /// override replaces the server's set as a whole). Calls run through

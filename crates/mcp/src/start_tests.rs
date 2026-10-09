@@ -120,9 +120,23 @@ fn tools_of_two_servers_declare_in_one_sorted_order() {
     let started = start_within(specs, first.workspace(), first.clock());
     assert!(started.failed.is_empty());
     assert_eq!(names(&started), ["mcp__one__zeta", "mcp__two__alpha"]);
-    for info in &started.infos {
-        assert!(matches!(info.source, ToolSource::Mcp { .. }));
-    }
+    assert_eq!(
+        started
+            .infos
+            .iter()
+            .map(|info| info.source.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            ToolSource::Mcp {
+                server: "one".into(),
+                tool: "zeta".into()
+            },
+            ToolSource::Mcp {
+                server: "two".into(),
+                tool: "alpha".into()
+            },
+        ]
+    );
     started.servers.stop();
 }
 
@@ -233,6 +247,26 @@ fn a_long_qualified_name_is_cut() {
     let name = names(&started).pop().expect("one tool");
     assert_eq!(name.chars().count(), crate::name::MAX_NAME_LEN);
     assert!(name.starts_with("mcp__ssss"));
+    started.servers.stop();
+}
+
+#[test]
+fn a_cut_name_keeps_the_servers_own_tool_name() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "tool"}]));
+    setup.result("tool", r#"{"content":[]}"#);
+    let server = "s".repeat(crate::name::MAX_NAME_LEN);
+    let spec = setup.spec(&server);
+    let started = start_within(vec![spec], setup.workspace(), setup.clock());
+    let info = started.infos.first().expect("one tool");
+    assert_eq!(info.name.chars().count(), crate::name::MAX_NAME_LEN);
+    assert_eq!(
+        info.source,
+        ToolSource::Mcp {
+            server,
+            tool: "tool".to_owned()
+        }
+    );
     started.servers.stop();
 }
 

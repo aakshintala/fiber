@@ -1351,7 +1351,7 @@ that disables tools. The session runs anyway.
 
 - `/tools` in the terminal, and the `tools` driver command
   (`docs/invocation.md`), list every declared tool with:
-  - its source: built-in, extension or MCP server
+  - its source: built-in, extension or MCP server; an MCP tool's source also gives the server's own name for it, which the server's `tools.enabled` and `tools.disabled` name
   - its state: full, deferred or loaded
   - its approximate size in tokens
 - A tool's size in tokens is estimated from its size in bytes. The
