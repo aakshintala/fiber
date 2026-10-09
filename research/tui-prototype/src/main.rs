@@ -3397,17 +3397,18 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     let mut prev_buf: Option<Buffer> = None;
     let mut frames: u64 = 0;
 
-    let mut ui = Ui::default();
-    ui.rail = a.rail;
-    ui.density = a.density.min(2);
-    ui.rail_share = a.rail_share.clamp(1.0, 90.0);
-    ui.panel_share = a.panel_share.clamp(1.0, 90.0);
+    let mut ui = Ui {
+        // `--completions CASE` starts with its query already typed
+        input: a.completions.as_deref().map_or_else(String::new, completions::input_for),
+        rail: a.rail,
+        density: a.density.min(2),
+        rail_share: a.rail_share.clamp(1.0, 90.0),
+        panel_share: a.panel_share.clamp(1.0, 90.0),
+        picker: a.picker.as_deref().map(model_picker::for_case),
+        completions: a.completions.as_deref().map(completions::for_case),
+        ..Default::default()
+    };
     model_picker::set_still(a.static_);
-    ui.picker = a.picker.as_deref().map(model_picker::for_case);
-    ui.completions = a.completions.as_deref().map(|c| {
-        ui.input = completions::input_for(c);
-        completions::for_case(c)
-    });
     let mut rd = input::Reader::new()?;
     let mut cmds = match &a.commands {
         Some(p) => Some(std::fs::OpenOptions::new().create(true).append(true).open(p)?),

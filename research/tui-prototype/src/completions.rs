@@ -422,6 +422,14 @@ mod tests {
     use super::*;
     use crate::{plain, width};
 
+    fn ui_with(input: &str, case: &str) -> Ui {
+        Ui {
+            input: input.into(),
+            completions: Some(for_case(case)),
+            ..Default::default()
+        }
+    }
+
     fn text(rows: &[Row]) -> String {
         rows.iter().map(plain).collect::<Vec<_>>().join("\n")
     }
@@ -573,9 +581,7 @@ mod tests {
 
     #[test]
     fn movement_clamps_at_both_ends() {
-        let mut ui = Ui::default();
-        ui.input = "/re".into();
-        ui.completions = Some(for_case("slash-filtered"));
+        let mut ui = ui_with("/re", "slash-filtered");
         let n = matches_len(&ui.input);
         assert!(n > 1, "the filter leaves room to move");
         move_focus(&mut ui, -1);
@@ -607,17 +613,14 @@ mod tests {
 
     #[test]
     fn tab_completes_and_enter_runs() {
-        let mut ui = Ui::default();
-        ui.input = "/re".into();
-        ui.completions = Some(for_case("slash-filtered"));
+        let mut ui = ui_with("/re", "slash-filtered");
         complete(&mut ui, false);
         assert_eq!(ui.input, "/review ", "tab completes the focused row");
         assert!(ui.completions.is_some(), "tab keeps the panel open");
         complete(&mut ui, true);
         assert!(ui.completions.is_none(), "enter closes the panel");
         // `@` inserts the file's path as text
-        ui.input = "@test".into();
-        ui.completions = Some(for_case("at"));
+        let mut ui = ui_with("@test", "at");
         complete(&mut ui, true);
         assert!(ui.input.contains("lock.rs"), "enter inserts the path");
         assert!(ui.completions.is_none());
