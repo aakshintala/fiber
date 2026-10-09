@@ -102,6 +102,7 @@ fn a_reads_call_runs_and_its_result_goes_to_the_model() {
     assert_eq!(
         requests[1].conversation.last(),
         Some(&Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: done.action_id.clone().unwrap(),
             text: "Sunny.".into(),
             is_error: false,

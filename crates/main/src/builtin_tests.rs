@@ -122,7 +122,7 @@ fn the_driver_shell_runs_echo() {
         .iter()
         .find_map(|part| match part {
             ContentPart::Text { text } => Some(text.as_str()),
-            ContentPart::Image { .. } | ContentPart::Unknown => None,
+            ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown => None,
         })
         .expect("echo wrote text");
     assert!(text.contains("hi"), "{text}");

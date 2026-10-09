@@ -597,12 +597,14 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
             model: "opencode/muse-spark-1.3-contributor".into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_2".into()),
             text: "bad arguments".into(),
             is_error: false,
             images: Vec::new(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_1".into()),
             text: "18 C, clear".into(),
             is_error: false,
@@ -1106,6 +1108,7 @@ fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
                 model: "opencode/muse-spark-1.3-contributor".into(),
             },
             Input::ToolResult {
+                pdfs: Vec::new(),
                 action_id: ActionId("a_1".into()),
                 text: "boom".into(),
                 is_error,
@@ -1157,6 +1160,7 @@ fn image_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> 
             model: "opencode/muse-spark-1.3-contributor".into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_1".into()),
             text: text.into(),
             is_error: false,
@@ -1172,6 +1176,79 @@ fn png_ref(path: &str) -> contract::provider::ImageRef {
         width: 2,
         height: 1,
     }
+}
+
+/// A conversation whose one tool result carries a PDF.
+fn pdf_conversation(pdf: contract::provider::PdfRef) -> Vec<Input> {
+    vec![
+        Input::ToolCall {
+            action_id: ActionId("a_1".into()),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "a.pdf"}),
+                provider_id: Some(ProviderCallId("call_1".into())),
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+            model: "opencode/muse-spark-1.3-contributor".into(),
+        },
+        Input::ToolResult {
+            action_id: ActionId("a_1".into()),
+            text: "PDF: 2 pages.\n".into(),
+            is_error: false,
+            images: Vec::new(),
+            pdfs: vec![pdf],
+        },
+    ]
+}
+
+fn pdf_ref(path: &str) -> contract::provider::PdfRef {
+    contract::provider::PdfRef {
+        path: path.into(),
+        page_count: 2,
+        pages: None,
+    }
+}
+
+fn pdf_output(server: &ProviderServer) -> Value {
+    sent_body(server, 0)["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == "function_call_output")
+        .unwrap()["output"]
+        .clone()
+}
+
+#[test]
+fn a_stored_pdf_is_sent_as_an_input_file_part_after_the_text() {
+    let session = fakes::TempDir::new("fiber-responses-request-pdf");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/p_1.pdf"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: pdf_conversation(pdf_ref("artifacts/p_1.pdf")),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    assert_eq!(
+        pdf_output(&server),
+        json!([
+            {"type": "input_text", "text": "PDF: 2 pages.\n"},
+            {"type": "input_file", "filename": "p_1.pdf",
+             "file_data": "data:application/pdf;base64,YWJjZA=="},
+        ])
+    );
 }
 
 fn image_output(server: &ProviderServer) -> Value {

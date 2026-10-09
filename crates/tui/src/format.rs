@@ -322,7 +322,7 @@ pub(crate) fn detail(done: &ToolCallCompleted) -> String {
         .iter()
         .filter_map(|part| match part {
             ContentPart::Text { text } => Some(text.as_str()),
-            ContentPart::Image { .. } | ContentPart::Unknown => None,
+            ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown => None,
         })
         .collect::<Vec<_>>()
         .join("\n")
