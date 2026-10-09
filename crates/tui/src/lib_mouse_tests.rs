@@ -123,7 +123,7 @@ fn wheeling_down_three_rows_from_three_above_the_bottom_follows_again() {
 #[test]
 fn wheeling_up_pages_history_like_page_up() {
     let mut wheeled = following();
-    feed(&mut wheeled, (0..120).map(|_| wheel_up(10, 5)).collect());
+    feed(&mut wheeled, (0..200).map(|_| wheel_up(10, 5)).collect());
     let mut paged = following();
     feed(&mut paged, (0..80).map(|_| page_up()).collect());
     assert_eq!(wheeled.app.top(), Some(0));
@@ -405,9 +405,9 @@ fn a_click_on_the_badge_reopens_the_approval_queue() {
     feed(&mut lp, vec![offering("r_1"), esc()]);
     assert!(lp.app.panel().is_none());
     // A click beside the badge does nothing.
-    feed(&mut lp, vec![click(30, 10)]);
+    feed(&mut lp, vec![click(30, 8)]);
     assert!(lp.app.panel().is_none());
-    feed(&mut lp, vec![click(29, 10)]);
+    feed(&mut lp, vec![click(29, 8)]);
     assert!(lp.app.panel().is_some());
 }
 
@@ -418,8 +418,8 @@ fn a_press_and_release_split_across_reads_still_click() {
     feed(
         &mut lp,
         vec![
-            Input::Bytes(b"\x1b[<0;1;11M".to_vec()),
-            Input::Bytes(b"\x1b[<0;2;11m".to_vec()),
+            Input::Bytes(b"\x1b[<0;1;9M".to_vec()),
+            Input::Bytes(b"\x1b[<0;2;9m".to_vec()),
         ],
     );
     assert!(lp.app.panel().is_some());
@@ -459,10 +459,10 @@ fn a_click_on_new_messages_below_jumps_to_the_end() {
         ],
     );
     assert!(lp.app.has_new());
-    // The overlay's 20 cells are centred on row 10: columns 20 to 39.
-    feed(&mut lp, vec![click(19, 10)]);
+    // The overlay's 20 cells are centred on row 8: columns 20 to 39.
+    feed(&mut lp, vec![click(19, 8)]);
     assert!(lp.app.has_new());
-    feed(&mut lp, vec![click(39, 10)]);
+    feed(&mut lp, vec![click(39, 8)]);
     assert!(!lp.app.has_new());
     assert_eq!(lp.app.top(), None);
 }
@@ -481,11 +481,11 @@ fn hover_writes_only_when_the_target_under_the_pointer_changes() {
         bytes
     };
     assert_eq!(wrote(&mut lp, motion(40, 5)), 0, "off every target");
-    assert!(wrote(&mut lp, motion(2, 10)) > 0, "onto the badge");
-    assert_eq!(wrote(&mut lp, motion(2, 10)), 0, "the same cell");
-    assert_eq!(wrote(&mut lp, motion(29, 10)), 0, "the same target");
-    assert!(wrote(&mut lp, motion(30, 10)) > 0, "off the badge");
-    assert_eq!(wrote(&mut lp, motion(31, 10)), 0, "still off");
+    assert!(wrote(&mut lp, motion(2, 8)) > 0, "onto the badge");
+    assert_eq!(wrote(&mut lp, motion(2, 8)), 0, "the same cell");
+    assert_eq!(wrote(&mut lp, motion(29, 8)), 0, "the same target");
+    assert!(wrote(&mut lp, motion(30, 8)) > 0, "off the badge");
+    assert_eq!(wrote(&mut lp, motion(31, 8)), 0, "still off");
 }
 
 #[test]
@@ -493,10 +493,10 @@ fn hover_redraws_only_the_targets_row() {
     let (mut lp, _) = new_loop(Cells::default(), None);
     feed(&mut lp, vec![offering("r_1"), esc()]);
     lp.screen.backend_mut().drawn.clear();
-    feed(&mut lp, vec![motion(2, 10)]);
+    feed(&mut lp, vec![motion(2, 8)]);
     let drawn = &lp.screen.backend().drawn;
     assert_eq!(drawn.len(), 30);
-    assert!(drawn.iter().all(|&(x, y)| y == 10 && x < 30), "{drawn:?}");
+    assert!(drawn.iter().all(|&(x, y)| y == 8 && x < 30), "{drawn:?}");
 }
 
 #[test]
@@ -506,10 +506,10 @@ fn with_hover_off_motion_writes_nothing_and_clicks_still_work() {
     lp.hover = false;
     feed(&mut lp, vec![offering("r_1"), esc()]);
     let before = sink.len();
-    feed(&mut lp, vec![motion(2, 10)]);
+    feed(&mut lp, vec![motion(2, 8)]);
     assert_eq!(sink.len(), before);
     assert_eq!(lp.pointer.at, None);
-    feed(&mut lp, vec![click(2, 10)]);
+    feed(&mut lp, vec![click(2, 8)]);
     assert!(lp.app.panel().is_some());
 }
 
@@ -574,8 +574,8 @@ impl Backend for Cells {
 #[test]
 fn hover_frames_counts_the_bytes_each_report_wrote() {
     let events = include_str!("../examples/hover.jsonl");
-    // The request is put aside: the badge is on row 10 of 60x12.
-    let bytes = crate::hover_frames(events, 60, 12, &[(3, 10), (4, 10), (3, 0), (3, 0)])
+    // The request is put aside: the badge is on row 8 of 60x12.
+    let bytes = crate::hover_frames(events, 60, 12, &[(3, 8), (4, 8), (3, 0), (3, 0)])
         .unwrap_or_else(|error| panic!("hover_frames: {error}"));
     assert_eq!(bytes.len(), 4);
     assert!(bytes[0] > 0);
@@ -712,15 +712,15 @@ fn a_click_on_a_steering_row_selects_it_into_the_draft() {
             None,
         ),
     ]);
-    // The queue's rows sit on rows 9 and 10, above the input line.
-    assert_eq!(row_of(&lp, "↳ use the parser"), 9);
-    assert_eq!(row_of(&lp, "↳ and test it"), 10);
-    // Beside a row's text is no target.
+    // The queue's rows sit on rows 7 and 8, above the input box's edges.
+    assert_eq!(row_of(&lp, "▌ ↳ use the parser"), 7);
+    assert_eq!(row_of(&lp, "▌ ↳ and test it"), 8);
+    // The edge row below the queue is no target.
     feed(&mut lp, vec![click(40, 9)]);
     assert_eq!(lp.app.input().expand(), "mine");
-    feed(&mut lp, vec![click(3, 9)]);
+    feed(&mut lp, vec![click(3, 7)]);
     assert_eq!(lp.app.input().expand(), "use the parser");
-    assert_eq!(row_of(&lp, "▸ use the parser"), 9);
+    assert_eq!(row_of(&lp, "▌ ▸ use the parser"), 7);
     // Esc puts the stashed draft back.
     feed(&mut lp, vec![esc()]);
     assert_eq!(lp.app.input().expand(), "mine");
@@ -902,19 +902,23 @@ fn a_click_on_a_steering_rows_cross_drops_it_and_its_text_still_selects() {
             None,
         )],
     );
-    // Rows 8 to 10 above the input line; Fiber's own row has no ✕.
+    // Rows 6 to 8 above the input box's edges; Fiber's own row has no ✕.
     let rows: Vec<String> = shown(&lp).lines().map(str::to_owned).collect();
-    assert!(rows[8].ends_with('✕') && rows[9].ends_with('✕'), "{rows:?}");
-    assert!(!rows[10].contains('✕'), "{rows:?}");
-    assert_eq!(hit_at(&lp, 59, 10), None);
-    feed(&mut lp, vec![click(59, 8)]);
+    assert!(rows[6].ends_with('✕') && rows[7].ends_with('✕'), "{rows:?}");
+    assert!(!rows[8].contains('✕'), "{rows:?}");
+    // Fiber's own row is a steering target with no ✕ on it.
+    assert!(matches!(
+        hit_at(&lp, 59, 8),
+        Some(crate::mouse::TargetId::Steering(2))
+    ));
+    feed(&mut lp, vec![click(59, 6)]);
     let (_, dropped) = super::tests::command(BufReader::new(theirs), "the steer_drop");
     assert_eq!(dropped["command"], "steer_drop");
     assert_eq!(dropped["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(dropped["args"], json!({"command_id": "c_1"}));
     // The ✕ selects nothing; the row's text still selects it.
     assert_eq!(lp.app.input().expand(), "");
-    feed(&mut lp, vec![click(3, 9)]);
+    feed(&mut lp, vec![click(3, 7)]);
     assert_eq!(lp.app.input().expand(), "and test it");
 }
 
@@ -974,7 +978,7 @@ fn hover_never_tints_a_turn() {
     // The `hover` jig's frames write what they wrote before turns were
     // stops, byte for byte.
     let events = include_str!("../examples/hover.jsonl");
-    let bytes = crate::hover_frames(events, 60, 12, &[(3, 10), (4, 10), (3, 0), (3, 0)])
+    let bytes = crate::hover_frames(events, 60, 12, &[(3, 8), (4, 8), (3, 0), (3, 0)])
         .unwrap_or_else(|error| panic!("hover_frames: {error}"));
     assert_eq!(bytes.len(), 4);
     assert!(bytes[0] > 0);

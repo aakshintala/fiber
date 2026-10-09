@@ -6,6 +6,7 @@ use std::ops::Range;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::App;
@@ -13,6 +14,7 @@ use crate::app::panel::{Branch, Spot};
 use crate::format;
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
+use crate::surface;
 
 pub(crate) mod delegates;
 
@@ -75,10 +77,13 @@ pub(crate) fn cards(list: &[String], widgets: &[(&str, &str)]) -> Vec<Card> {
     out
 }
 
-/// One drawn row: its line and the target it is, if any.
+/// One drawn row: its line, the target it is, if any, the tint behind a
+/// card's text row, and whether it is a card's edge row.
 pub(crate) struct Row {
     pub(crate) line: Line<'static>,
     pub(crate) spot: Option<Spot>,
+    pub(crate) tint: Option<Role>,
+    pub(crate) edge: bool,
 }
 
 /// Every card's rows, top to bottom, with one blank row between cards;
@@ -98,7 +103,7 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
     let mut out = Vec::new();
     let mut span = None;
     for card in cards(app.panel_cards(), &names) {
-        let mut drawn = card_rows(app, &card, text);
+        let drawn = card_rows(app, &card, text);
         if drawn.is_empty() {
             continue;
         }
@@ -106,19 +111,42 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
             out.push(Row {
                 line: Line::raw(""),
                 spot: None,
+                tint: None,
+                edge: false,
             });
         }
+        // Each card sits on its own surface tint with half-block edges
+        // (`docs/tui.md`, "Look"); the blank row between cards stays
+        // untinted.
+        let edge = usize::from(width.saturating_sub(1));
+        let card_start = out.len();
+        out.push(Row {
+            line: surface::edge_row(edge, Role::Surface, true),
+            spot: None,
+            tint: None,
+            edge: true,
+        });
         if card == Card::Delegates {
-            span = Some(out.len()..out.len().saturating_add(drawn.len()));
+            span = Some(card_start..card_start + drawn.len() + 2);
         }
-        out.append(&mut drawn);
+        out.extend(drawn.into_iter().map(|mut row| {
+            row.tint = Some(Role::Surface);
+            row
+        }));
+        out.push(Row {
+            line: surface::edge_row(edge, Role::Surface, false),
+            spot: None,
+            tint: None,
+            edge: true,
+        });
     }
     (out, span)
 }
 
-/// Draws every card's rows into the panel rect: card text at `area.x + 2`,
-/// `area.width - 3` columns wide, the first card on `area.y + 1`. Styles
-/// set the foreground only, so the region's tint stays.
+/// Draws every card's rows into the panel rect: each card on its surface
+/// tint from the column's second column, its text at `area.x + 2`,
+/// `area.width - 3` columns wide, the first card on `area.y + 1`. The
+/// blank row between cards stays untinted.
 pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     let text = text_width(area.width);
     let width = u16::try_from(text).unwrap_or(u16::MAX);
@@ -130,19 +158,31 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
         .panel_state()
         .scroll()
         .min(rows.len().saturating_sub(height));
+    let card_x = area.x.saturating_add(1);
+    let card_w = area.width.saturating_sub(1);
     let x = area.x.saturating_add(2);
     let mut y = area.y.saturating_add(1);
     for row in rows.iter().skip(skip) {
         if y >= area.bottom() {
             break;
         }
-        buf.set_line(x, y, &row.line, width);
-        if let Some(spot) = row.spot {
-            let wide = u16::try_from(row.line.width().min(text)).unwrap_or(u16::MAX);
-            targets.push(Target {
-                id: TargetId::Panel(spot),
-                rect: Rect::new(x, y, wide, 1),
-            });
+        if row.edge {
+            buf.set_line(card_x, y, &row.line, card_w);
+        } else {
+            if let Some(tint) = row.tint {
+                buf.set_style(
+                    Rect::new(card_x, y, card_w, 1),
+                    Style::new().bg(tint.color()),
+                );
+            }
+            buf.set_line(x, y, &row.line, width);
+            if let Some(spot) = row.spot {
+                let wide = u16::try_from(row.line.width().min(text)).unwrap_or(u16::MAX);
+                targets.push(Target {
+                    id: TargetId::Panel(spot),
+                    rect: Rect::new(x, y, wide, 1),
+                });
+            }
         }
         y = y.saturating_add(1);
     }
@@ -167,6 +207,8 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
         out.push(Row {
             line: Line::raw(format::cut(&format!("{waiting} waiting"), text)),
             spot: Some(Spot::Waiting),
+            tint: None,
+            edge: false,
         });
     }
     if let Some(status) = panel.status() {
@@ -204,6 +246,8 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
         out.push(Row {
             line: context_bar(context.tokens, window, panel.trigger_at(), text),
             spot: None,
+            tint: None,
+            edge: false,
         });
         if let Some(trigger) = panel.trigger_at() {
             let handoff = format!(
@@ -213,6 +257,8 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             out.extend(format::wrap(&handoff, text).into_iter().map(|row| Row {
                 line: Line::styled(row, style(Role::Muted)),
                 spot: None,
+                tint: None,
+                edge: false,
             }));
         }
     }
@@ -316,6 +362,8 @@ fn branch_row(app: &App, text: usize) -> Option<Row> {
     Some(Row {
         line: Line::raw(format::cut(&format!("branch  {branch}"), text)),
         spot: Some(Spot::Branch),
+        tint: None,
+        edge: false,
     })
 }
 
@@ -324,6 +372,8 @@ fn plain(text: String) -> Row {
     Row {
         line: Line::raw(text),
         spot: None,
+        tint: None,
+        edge: false,
     }
 }
 
@@ -367,10 +417,14 @@ fn widget_rows(app: &App, at: usize, text: usize) -> Vec<Row> {
             style(Role::Muted),
         ),
         spot: None,
+        tint: None,
+        edge: false,
     }];
     out.extend(widget.lines.iter().map(|line| Row {
         line: Line::raw(format::cut(line, text)),
         spot: None,
+        tint: None,
+        edge: false,
     }));
     out
 }
@@ -407,6 +461,8 @@ fn changed_files_rows(app: &App, text: usize) -> Vec<Row> {
                 Span::styled(format!("\u{2212}{removed}"), style(Role::Removed)),
             ]),
             spot: None,
+            tint: None,
+            edge: false,
         });
     }
     let (files, added, removed) = changes.iter().fold(
@@ -454,6 +510,8 @@ fn jobs_rows(app: &App, text: usize) -> Vec<Row> {
             text,
         )),
         spot: Some(Spot::Jobs),
+        tint: None,
+        edge: false,
     }];
     if panel.jobs_open() {
         out.extend(

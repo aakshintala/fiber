@@ -100,7 +100,7 @@ fn spawn_run(connect: crate::Connect, clock: &Arc<FakeClock>) -> (Pair, Receiver
 /// to and including each marker in order, then keeps reading and
 /// discards. A test takes each marker with one `recv_timeout` so a full
 /// pty never blocks the terminal's frames.
-fn watch(main: &File, markers: Vec<&'static [u8]>) -> Receiver<Vec<u8>> {
+pub(super) fn watch(main: &File, markers: Vec<&'static [u8]>) -> Receiver<Vec<u8>> {
     let mut dup = main.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
@@ -133,7 +133,7 @@ fn watch(main: &File, markers: Vec<&'static [u8]>) -> Receiver<Vec<u8>> {
 }
 
 /// Takes one watched marker within [`DEADLINE`].
-fn watched(frames: &Receiver<Vec<u8>>, what: &str) -> Vec<u8> {
+pub(super) fn watched(frames: &Receiver<Vec<u8>>, what: &str) -> Vec<u8> {
     frames
         .recv_timeout(DEADLINE)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for {what}: {err}"))

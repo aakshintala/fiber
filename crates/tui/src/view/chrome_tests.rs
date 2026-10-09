@@ -98,7 +98,7 @@ fn attached_160x40_with_the_panel() {
     assert_eq!(buf.cell((126, 18)).map(|cell| cell.symbol()), Some(" "));
     assert_eq!(
         cursor(&app, Rect::new(0, 0, 160, 40)),
-        Some(Position::new(2, 39))
+        Some(Position::new(2, 38))
     );
 }
 
@@ -201,4 +201,23 @@ fn grip_excludes_the_bottom_edge() {
     assert_eq!(symbol(5, &buf), Some("⋮".to_owned()));
     assert_eq!(symbol(6, &buf), Some("⋮".to_owned()));
     assert_eq!(symbol(7, &buf), Some(" ".to_owned()));
+}
+
+#[test]
+fn the_regions_keep_the_surface_tint() {
+    use crate::theme::Role;
+    let app = app(160, 40, false);
+    let (buf, _) = draw(&app, 160, 40);
+    // The panel's region keeps the surface tint (`docs/tui.md`,
+    // "Themes"): a cell no card covers carries it.
+    let surface = Role::Surface.color();
+    let panel = app
+        .chrome()
+        .layout()
+        .expect("a layout")
+        .panel
+        .expect("a panel");
+    for x in panel.left()..panel.right() {
+        assert_eq!(buf[(x, panel.y)].bg, surface);
+    }
 }

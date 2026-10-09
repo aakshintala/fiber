@@ -3,14 +3,14 @@ source: crates/tui/src/view_tests.rs
 expression: after
 ---
                                     Notice 3.              ✕
-▣ completed                         Notice 2.              ✕
+                                    Notice 2.              ✕
                                     Notice 1.              ✕
-                                    +1 more
-▣ completed
-                                                   prompt 3
+▣ completed                         +1 more
+                                                 ▄▄▄▄▄▄▄▄▄▄▄
+                                                  prompt 4 ▐
+                                                 ▀▀▀▀▀▀▀▀▀▀▀
                                                        00:00
 ▣ completed
-                                                   prompt 4
-                                                       00:00
-▣ completed
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 >
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

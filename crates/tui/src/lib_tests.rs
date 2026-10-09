@@ -508,14 +508,13 @@ fn a_schema_mismatch_says_so_and_hangs_up() {
 fn restore_puts_back_what_setup_changed() {
     let pair = open();
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    let start =
-        "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+    let start = "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
     assert_eq!(
         read_exact(&pair.main, start.len(), "the start bytes"),
         start.as_bytes()
     );
     crate::restore();
-    let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
     assert_eq!(
         read_exact(&pair.main, end.len(), "the restore bytes"),
         end.as_bytes()
@@ -540,11 +539,17 @@ fn resize_redraws_at_the_new_size() {
     .unwrap_or_else(|err| panic!("winsize: {err}"));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(pair.slave));
     feed(&mut lp, vec![Input::Bytes(b"hi".to_vec()), Input::Resize]);
-    // The input line draws on the new last row; the test backend keeps its
-    // 60x12 buffer, cleared by the resize.
+    // The input line draws one row above the new last row, under its top
+    // edge; the test backend keeps its 60x12 buffer, cleared by the
+    // resize.
     let shown = crate::view::text(lp.screen.backend().buffer());
     let rows: Vec<&str> = shown.lines().collect();
-    assert_eq!(rows.get(9).copied(), Some("> hi"));
+    assert_eq!(rows.get(8).copied(), Some("> hi"));
+    assert!(
+        rows.get(9)
+            .is_some_and(|row| row.chars().all(|ch| ch == '▀')),
+        "{rows:?}"
+    );
     assert!(rows.iter().skip(10).all(|row| row.is_empty()));
 }
 
@@ -581,12 +586,16 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     // two queries, then the first frame before anything is written to the
     // master.
     let expected =
-        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
     let start = read_exact(&pair.main, expected.len(), "the start bytes");
     assert_eq!(start, expected);
     // On home the input line is not on the last row: the first frame is
     // read through the placeholder, whose letters are written together.
-    read_until(&pair.main, b"shortcuts", "the first frame");
+    let frames = super::reconnect_tests::watch(&pair.main, vec![
+        b"shortcuts",
+        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h",
+    ]);
+    super::reconnect_tests::watched(&frames, "the first frame");
     // The slave is in raw mode while running.
     let raw = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&before));
@@ -607,8 +616,8 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     assert!(is_cooked(&after));
     // After the last frame the output holds the restore bytes.
     let marker =
-        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
-    let tail = read_until(&pair.main, marker, "the restore bytes");
+        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    let tail = super::reconnect_tests::watched(&frames, "the restore bytes");
     assert_eq!(
         tail.get(tail.len().saturating_sub(marker.len())..),
         Some(marker.as_slice())
@@ -647,7 +656,7 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
     assert_eq!(code, 0);
     read_until(
         &pair.main,
-        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h",
+        b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h",
         "the restore bytes",
     );
     assert!(is_cooked(
@@ -805,7 +814,7 @@ fn the_screen_shows_the_cursor_at_the_draft() {
     feed(&mut lp, vec![Input::Bytes(b"ab\x1b[D".to_vec())]);
     let backend = lp.screen.backend_mut();
     assert!(backend.cursor_visible());
-    backend.assert_cursor_position((3, 11));
+    backend.assert_cursor_position((3, 10));
 }
 
 #[test]
@@ -838,8 +847,7 @@ fn next_bytes(rx: &mpsc::Receiver<Input>, what: &str) -> Vec<u8> {
 fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     let mut pair = open();
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    let start =
-        "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+    let start = "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
     read_exact(&pair.main, start.len(), "the start bytes");
     let tty = pair
         .slave
@@ -885,11 +893,11 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     ));
     // The terminal was restored, then set up again with hover and kitty's
     // flags.
-    let restore = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    let restore = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
     let echoed = read_until(&pair.main, restore.as_bytes(), "the restore bytes");
     assert!(echoed.ends_with(restore.as_bytes()));
     // In between, the cooked terminal echoed the program's line.
-    let resumed = "typed\r\n\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[>1u";
+    let resumed = "typed\r\n\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[>1u\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n";
     assert_eq!(
         read_until(&pair.main, resumed.as_bytes(), "the resume bytes"),
         resumed.as_bytes()
@@ -1309,7 +1317,7 @@ fn hub_status(session: &str, state: &str) -> String {
 
 /// The terminal's restore bytes, after its last frame.
 const RESTORE: &[u8] =
-    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
 /// Runs the terminal on a pty with `hub` as its hub stream: the pty pair,
 /// and the exit code once it quits.
@@ -1342,7 +1350,7 @@ fn spawn_run(hub: UnixStream) -> (Pair, mpsc::Receiver<i32>) {
 /// Reads the start bytes and the first frame.
 fn first_frame(pair: &Pair) {
     let expected =
-        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[?u\x1b[c";
+        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
     assert_eq!(
         read_exact(&pair.main, expected.len(), "the start bytes"),
         expected

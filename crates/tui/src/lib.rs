@@ -8,9 +8,11 @@
 //! before it draws.
 
 mod app;
+mod appearance;
 mod approvals;
 mod attention;
 mod bindings;
+mod bubble;
 mod cells;
 mod clipboard;
 mod configure;
@@ -52,6 +54,7 @@ mod shell;
 mod slash;
 mod sources;
 mod stroke;
+mod surface;
 mod swapped;
 mod term;
 mod theme;

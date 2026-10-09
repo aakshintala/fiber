@@ -131,3 +131,74 @@ fn run_shows_a_theme_files_notice() {
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
     assert_eq!(code, 0);
 }
+
+/// A 4x2 screen painted with a following look, after one draw of [`hi`].
+fn following() -> Screen<TestBackend> {
+    drawn(look(ThemeSetting::Follow, &[("COLORTERM", "truecolor")]))
+}
+
+#[test]
+fn a_new_look_keeps_the_reported_appearance() {
+    use crate::look::Appearance;
+    let mut screen = following();
+    screen.appearance(Appearance::Light);
+    // A picked theme still follows the light terminal: the carried report
+    // re-resolves it before it is stored.
+    screen.set_look(look(ThemeSetting::Follow, &[("COLORTERM", "truecolor")]));
+    let mut app = App::new(std::path::PathBuf::from("/w"));
+    screen.draw_with(&mut app, None, hi).expect("a draw");
+    assert_eq!(
+        screen.backend().buffer()[(3, 1)].bg,
+        Color::Rgb(0xfa, 0xfa, 0xfa)
+    );
+}
+
+#[test]
+fn a_light_report_repaints_the_unchanged_frame_light() {
+    use crate::look::Appearance;
+    let mut screen = following();
+    screen.appearance(Appearance::Light);
+    // The report cleared the kept frame, so the same frame paints again,
+    // light this time.
+    let mut app = App::new(std::path::PathBuf::from("/w"));
+    screen.draw_with(&mut app, None, hi).expect("a draw");
+    assert_eq!(
+        screen.backend().buffer()[(3, 1)].bg,
+        Color::Rgb(0xfa, 0xfa, 0xfa)
+    );
+}
+
+#[test]
+fn a_fixed_dark_theme_stays_dark_after_a_light_report() {
+    use crate::look::Appearance;
+    let mut screen = following();
+    screen.set_look(look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]));
+    screen.appearance(Appearance::Light);
+    let mut app = App::new(std::path::PathBuf::from("/w"));
+    screen.draw_with(&mut app, None, hi).expect("a draw");
+    assert_eq!(
+        screen.backend().buffer()[(3, 1)].bg,
+        Color::Rgb(0x1e, 0x21, 0x27)
+    );
+}
+
+#[test]
+fn a_light_report_through_the_loop_repaints_light() {
+    use super::tests::new_loop;
+    use crate::Input;
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (_, step_rx) = mpsc::channel();
+    assert_eq!(lp.step(Input::Bytes(Vec::new()), &step_rx), None);
+    assert_eq!(
+        lp.screen.backend().buffer()[(0, 0)].bg,
+        Color::Rgb(0x1e, 0x21, 0x27)
+    );
+    assert_eq!(
+        lp.step(Input::Bytes(b"\x1b[?997;2n".to_vec()), &step_rx),
+        None
+    );
+    assert_eq!(
+        lp.screen.backend().buffer()[(0, 0)].bg,
+        Color::Rgb(0xfa, 0xfa, 0xfa)
+    );
+}

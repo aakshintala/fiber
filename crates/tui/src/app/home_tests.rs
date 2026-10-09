@@ -89,7 +89,15 @@ fn the_zone_survives_a_session_switch() {
     // 2026-10-08T14:15Z, 10:15 in New York.
     app.on_line(turn_started_at("s_bbbbbbbbbbbbbbbb", "go", 1791468900000));
     let texts: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
-    assert_eq!(texts, vec![" go ".to_owned(), "10:15".to_owned()]);
+    assert_eq!(
+        texts,
+        vec![
+            "▄▄▄▄▄".to_owned(),
+            " go ▐".to_owned(),
+            "▀▀▀▀▀".to_owned(),
+            "10:15".to_owned()
+        ]
+    );
 }
 
 #[test]
