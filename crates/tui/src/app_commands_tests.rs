@@ -202,10 +202,10 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
         selected(&app).as_deref(),
         Some("/home  Goes home.  command")
     );
-    for _ in 0..9 {
+    for _ in 0..10 {
         app.on_key(Key::Down, now());
     }
-    // The handoff command, after the added `/context` and `/usage` rows.
+    // The handoff command, after the added `/context`, `/usage` and `/skills` rows.
     assert_eq!(
         selected(&app).as_deref(),
         Some("/handoff [instructions]  Starts a handoff.  command")
@@ -219,7 +219,7 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
         completions
             .and_then(|c| c.lines.first().cloned())
             .as_deref(),
-        Some("/tools  Opens the tools view.  command")
+        Some("/context  Opens the context breakdown.  command")
     );
     app.on_key(Key::Down, now());
     app.on_key(Key::Down, now());

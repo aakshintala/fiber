@@ -1,0 +1,29 @@
+---
+source: crates/tui/src/skills_view_tests.rs
+assertion_line: 823
+expression: "text.join(\"\\n\")"
+---
+Skills                                                                         ✕
+skill               this project  everywhere  visibility     source          des
+  tdd                   [x]          [x]      model sees it  repository      Tes
+  tdd                   ›[x]         [x]      shadowed       personal        Min
+  recall                [x]          [x]      person only    extension memory  R
+  built                 [x]          [ ]      off            built in        Bui
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Mine.
+shadowed by /w/.fiber/skills/tdd/SKILL.md
+↑↓ move · ←→ choose a switch · Space switch · Enter text · Ctrl+G open the file

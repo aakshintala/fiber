@@ -54,6 +54,7 @@ mod rules_view;
 mod screen;
 mod settings_view;
 mod shell;
+mod skills_view;
 mod slash;
 mod sources;
 mod stroke;
@@ -81,8 +82,8 @@ pub use attention::Attention;
 
 pub use configure::{
     Configure, ConfigureError, Layer, LoginKind, LoginTarget, Revoked, RuleRow, RulesScope,
-    RulesSection, Saved, SettingRow, Shown, Stored, SwitchScope, ToolGroup, ToolLists,
-    ToolSwitches, WriteScope,
+    RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup,
+    ToolLists, ToolSwitches, WriteScope,
 };
 
 pub use home::Launch;
