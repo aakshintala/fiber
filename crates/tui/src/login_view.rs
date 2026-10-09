@@ -355,8 +355,12 @@ impl Login {
             && let Some(target) = self.targets.get(panel.target)
         {
             let name = target.name.as_str();
+            // A refused store keeps its message in `said`: draw it above
+            // the prompts so the failure is visible with the panel open.
+            let mut lines = self.said.clone();
             if target.kind == LoginKind::Secret {
-                below = vec![format!("Value for {name}:")];
+                lines.push(format!("Value for {name}:"));
+                below = lines;
                 let dots = panel.key.dots();
                 field = Some((dots.clone(), dots.chars().count()));
                 footer = "Enter store · Esc cancel".to_owned();
@@ -369,18 +373,16 @@ impl Login {
                         } else {
                             label
                         };
-                        below = vec![
-                            format!("Label (--as): {shown}."),
-                            format!("Key for {name}:"),
-                        ];
+                        lines.push(format!("Label (--as): {shown}."));
+                        lines.push(format!("Key for {name}:"));
+                        below = lines;
                         let dots = panel.key.dots();
                         field = Some((dots.clone(), dots.chars().count()));
                     }
                     Focus::Label => {
-                        below = vec![
-                            format!("Key for {name}: {}", panel.key.dots()),
-                            "Label (--as), empty for default:".to_owned(),
-                        ];
+                        lines.push(format!("Key for {name}: {}", panel.key.dots()));
+                        lines.push("Label (--as), empty for default:".to_owned());
+                        below = lines;
                         field = Some((label.clone(), panel.label.position()));
                     }
                 }

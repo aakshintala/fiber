@@ -465,18 +465,63 @@ fn a_refusal_clears_the_key_and_keeps_the_label() {
     assert!(panel_open(&login));
     assert_eq!(
         login.frame().below,
-        ["Label (--as): work.".to_owned(), "Key for acme:".to_owned(),]
+        [
+            "credentials/acme/default is already stored".to_owned(),
+            "Label (--as): work.".to_owned(),
+            "Key for acme:".to_owned(),
+        ]
     );
     assert_eq!(login.frame().field, Some((String::new(), 0)));
+    // The refusal stays drawn with the panel open: the key field is empty
+    // and focused, the label is still there, and the key never appears.
+    let screen = drawn(&login, 80, 24);
+    assert!(
+        screen.contains("credentials/acme/default is already stored"),
+        "{screen}"
+    );
+    assert!(!screen.contains("sk-x"), "{screen}");
     // The key field is empty and focused: typing dots again, and the label
     // is still there.
     typed(&mut login, &fake, "z");
     assert_eq!(login.frame().field, Some(("•".to_owned(), 1)));
+    assert!(
+        drawn(&login, 80, 24).contains("credentials/acme/default is already stored"),
+        "{}",
+        drawn(&login, 80, 24)
+    );
     press(&mut login, &fake, &[Key::Tab]);
     assert_eq!(login.frame().field, Some(("work".to_owned(), 4)));
+    assert!(
+        login
+            .frame()
+            .below
+            .contains(&"credentials/acme/default is already stored".to_owned())
+    );
     assert_eq!(
         fake.stores(),
         [("acme".to_owned(), Some("work".to_owned()))]
+    );
+}
+
+#[test]
+fn a_secret_refusal_shows_the_message_and_clears_the_value() {
+    let fake = refusing_fake("No value was given; nothing was stored.");
+    let mut login = Login::open(&ctx(&fake));
+    open_secret_panel(&mut login, &fake);
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    assert!(panel_open(&login));
+    assert_eq!(
+        login.frame().below,
+        [
+            "No value was given; nothing was stored.".to_owned(),
+            "Value for acme.api_key:".to_owned(),
+        ]
+    );
+    assert_eq!(login.frame().field, Some((String::new(), 0)));
+    let screen = drawn(&login, 80, 24);
+    assert!(
+        screen.contains("No value was given; nothing was stored."),
+        "{screen}"
     );
 }
 
