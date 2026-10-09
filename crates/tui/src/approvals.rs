@@ -17,6 +17,8 @@ use crate::app::session_command;
 use crate::keys::{Edit, Key};
 
 pub(crate) mod form;
+#[cfg(test)]
+mod one_question;
 
 /// The envelope kinds the queue folds, from any session.
 pub(crate) const KINDS: [&str; 5] = [
