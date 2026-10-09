@@ -85,8 +85,12 @@ fn a_cell_with_a_spot_gets_a_target_over_its_text() {
     let mut shown = frame(0);
     shown.below.clear();
     shown.rows = vec![vec![
-        ("ab".to_owned(), None),
-        ("[x]".to_owned(), Some(Spot::Switch { row: 0, at: 0 })),
+        ("ab".to_owned(), None, Ink::Plain),
+        (
+            "[x]".to_owned(),
+            Some(Spot::Switch { row: 0, at: 0 }),
+            Ink::Plain,
+        ),
     ]];
     let mut targets = Vec::new();
     render(&shown, area, &mut buf, &mut targets);
