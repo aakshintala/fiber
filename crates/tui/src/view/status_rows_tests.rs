@@ -326,6 +326,20 @@ fn the_budget_comparison_counts_billed_spend_only() {
 }
 
 #[test]
+fn the_spend_segment_reads_unknown_when_billed_cost_is_null() {
+    // A budget is set but the billed cost is not known yet.
+    let mut app = attached(100, 30);
+    app.on_line(budget_preamble(5.0));
+    app.on_line(spend_status(serde_json::Value::Null, 0.0));
+    let (screen, _) = draw(&app, 100, 30);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(
+        rows[rows.len() - 1].contains("unknown of $5.00"),
+        "{screen}"
+    );
+}
+
+#[test]
 fn n_waiting_leads_row_one_while_the_rail_is_not_drawn() {
     let mut app = attached(110, 30);
     app.on_line(idle(SESSION, "one"));
