@@ -9,6 +9,7 @@ mod input;
 mod lua;
 mod model_picker;
 mod paged;
+mod panel;
 
 use crossterm::{execute, terminal};
 use input::{Ev, Key, Mouse};
