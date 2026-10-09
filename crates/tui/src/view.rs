@@ -24,6 +24,7 @@ pub(crate) mod panel;
 pub(crate) mod rail;
 mod request;
 mod results;
+pub(crate) mod status_rows;
 
 pub(crate) use home::max_question_scroll;
 
@@ -105,6 +106,7 @@ pub(crate) fn render(
     if let Some(panel) = app.panel() {
         bottom = request::draw(&panel, area, bottom, buf, &mut targets);
     }
+    status_rows::draw_status(app, area, buf, &mut bottom, &mut targets);
     if app.panel().is_none() {
         let (rows, top, _, _) = input_box(app, area.width);
         let below = bottom;
@@ -123,6 +125,7 @@ pub(crate) fn render(
             }
         }
     }
+    status_rows::draw_widget(app, area, buf, &mut bottom, &mut targets);
     // The steering queue sits above the input box, its newest row lowest;
     // a row a `steer` sent ends in a ✕ that drops it.
     let drops = app.steering_drops();
