@@ -53,7 +53,6 @@ fn row_one(app: &App, width: usize) -> Option<StatusRow> {
     let line = Line::raw(format::cut(&text, width));
     let spots = spots
         .into_iter()
-        .filter(|(start, _, _)| usize::from(*start) < width)
         .map(|(start, wide, spot)| {
             let end = start
                 .saturating_add(wide)

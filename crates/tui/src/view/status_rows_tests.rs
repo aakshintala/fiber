@@ -584,6 +584,66 @@ fn the_draft_cursor_tracks_the_kept_status_rows_on_short_screens() {
     );
 }
 
+/// The waiting spots of the status rows at `width`: their offset and width.
+fn waiting_spots(app: &App, width: u16) -> Vec<(u16, u16)> {
+    crate::view::status_rows::status(app, width)
+        .into_iter()
+        .flat_map(|row| row.spots)
+        .filter(|(_, _, spot)| matches!(spot, Spot::Waiting))
+        .map(|(start, wide, _)| (start, wide))
+        .collect()
+}
+
+#[test]
+fn a_status_segment_at_the_row_width_has_no_target() {
+    // Row one is "1 file +10 −2 · 1 waiting": the waiting segment starts
+    // after the file totals and the separator.
+    let mut app = attached_with(110, 30, &["changed_files", "session"]);
+    app.on_line(changed_call(serde_json::json!([
+        {"path": "src/a.rs", "added": 10, "removed": 2},
+    ])));
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(waiting(OTHER));
+    app.on_key(Key::AltR, fakes::clock::FakeClock::new().now());
+    let whole = waiting_spots(&app, 110);
+    assert_eq!(whole.len(), 1, "{whole:?}");
+    let (start, wide) = whole[0];
+    assert_eq!(wide, u16::try_from("1 waiting".len()).unwrap_or(u16::MAX));
+    // A segment starting exactly at the row's width has no target.
+    assert!(waiting_spots(&app, start).is_empty(), "start {start}");
+    // A segment starting beyond the row's width has no target either.
+    assert!(waiting_spots(&app, start - 1).is_empty(), "start {start}");
+    // A segment ending exactly at the row's width keeps its full width.
+    assert_eq!(waiting_spots(&app, start + wide), vec![(start, wide)]);
+}
+
+#[test]
+fn the_widget_target_sits_on_the_first_line_only() {
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(widget("ex", "wid", &["abc", "def"]));
+    app.on_click(TargetId::Panel(Spot::Widget));
+    let (screen, targets) = draw(&app, 100, 30);
+    let rows: Vec<&str> = screen.lines().collect();
+    let first = rows
+        .iter()
+        .position(|row| row.contains("▾ abc"))
+        .expect("the open widget's first line");
+    assert!(rows[first + 1].contains("def"), "{screen}");
+    let at: Vec<Rect> = targets
+        .iter()
+        .filter(|target| target.id == TargetId::Panel(Spot::Widget))
+        .map(|target| target.rect)
+        .collect();
+    assert_eq!(at.len(), 1, "{screen}");
+    assert_eq!(
+        at[0].y,
+        u16::try_from(first).unwrap_or(u16::MAX),
+        "{screen}"
+    );
+    assert_eq!(at[0].height, 1, "{screen}");
+}
+
 /// An approval panel asking to run `ls`.
 fn approval() -> Line {
     session_line(
