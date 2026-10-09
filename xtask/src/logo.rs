@@ -99,12 +99,10 @@ pub(crate) fn wave(width: u32, height: u32) -> Vec<u8> {
         let centre = 30.0 + 22.0 * (std::f32::consts::TAU * 2.0 * row as f32 / height as f32).sin();
         for x in 0..edge {
             let distance = (x as f32 - centre).abs();
-            if distance < STROKE {
-                let cover = 1.0 - distance / STROKE;
-                let smooth = cover * cover * (3.0 - 2.0 * cover);
-                if let Some(slot) = line.get_mut(x as usize) {
-                    *slot = alpha(smooth);
-                }
+            let cover = (1.0 - distance / STROKE).clamp(0.0, 1.0);
+            let smooth = cover * cover * (3.0 - 2.0 * cover);
+            if let Some(slot) = line.get_mut(x as usize) {
+                *slot = alpha(smooth);
             }
         }
     }

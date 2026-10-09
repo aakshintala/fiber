@@ -6,6 +6,13 @@ fn flag(args: &[&str]) -> Vec<String> {
 }
 
 #[test]
+fn alpha_rounds_and_clamps_coverage_to_a_byte() {
+    for (cover, expected) in [(0.0, 0), (0.5, 128), (1.0, 255), (2.0, 255), (-1.0, 0)] {
+        assert_eq!(alpha(cover), expected, "cover {cover}");
+    }
+}
+
+#[test]
 fn wave_stays_inside_its_region_and_is_not_empty() {
     let bytes = wave(WIDTH, HEIGHT);
     assert_eq!(bytes.len(), WIDTH as usize * HEIGHT as usize);
@@ -15,6 +22,30 @@ fn wave_stays_inside_its_region_and_is_not_empty() {
             assert_eq!(*ink, 0, "ink at column {}", at % WIDTH as usize);
         }
     }
+}
+
+#[test]
+fn wave_has_exact_sine_centres_and_strict_stroke_edges() {
+    let width = 64usize;
+    let bytes = wave(u32::try_from(width).unwrap(), 8);
+    let pixel = |x: usize, y: usize| bytes[y * width + x];
+
+    assert_eq!(pixel(30, 0), 255);
+    assert_eq!(pixel(23, 0), 11);
+    assert_eq!(pixel(22, 0), 0, "distance exactly STROKE has no coverage");
+    assert_eq!(pixel(21, 0), 0, "pixels beyond STROKE have no coverage");
+    assert_eq!(pixel(52, 1), 255, "the sine reaches its rightmost centre");
+    assert_eq!(pixel(45, 1), 11);
+    assert_eq!(pixel(44, 1), 0);
+    assert_eq!(pixel(8, 3), 255, "the sine reaches its leftmost centre");
+    assert_eq!(pixel(1, 3), 11);
+    assert_eq!(pixel(0, 3), 0);
+}
+
+#[test]
+fn wave_is_empty_when_either_dimension_is_zero() {
+    assert!(wave(0, 3).is_empty(), "zero width");
+    assert!(wave(3, 0).is_empty(), "zero height");
 }
 
 #[test]
@@ -134,6 +165,8 @@ fn fit_scale_fits_the_probe_into_the_name_region() {
     assert_eq!(fit_scale(Some(full)), PROBE);
     let half = (0, 0, (WIDTH - WAVE_PX - 16) / 2, (HEIGHT - 24) / 2);
     assert_eq!(fit_scale(Some(half)), 2.0 * PROBE);
+    assert_eq!(fit_scale(Some((0, 0, 282, 34))), 200.0);
+    assert_eq!(fit_scale(Some((0, 0, 141, 68))), 200.0);
 }
 
 /// Ink in a mask at `x >= WAVE_PX`: the name's left, top, width and
@@ -165,33 +198,9 @@ fn name_ink_box(bytes: &[u8]) -> Option<(usize, usize, usize, usize)> {
 }
 
 #[test]
-fn mask_centres_the_name_horizontally() {
+fn mask_centres_the_test_font_at_exact_pixels() {
     let bytes = mask(&minimal_font()).unwrap();
-    let (left, _top, width, _height) = name_ink_box(&bytes).unwrap();
-    assert_eq!(
-        left, 68,
-        "the name starts 8 pixels past the wave region, centred in it"
-    );
-    let stride = WIDTH as usize;
-    let left_margin = left - WAVE_PX as usize;
-    let right_margin = stride - (left + width);
-    assert!(
-        left_margin.abs_diff(right_margin) <= 1,
-        "margins {left_margin} and {right_margin} differ by more than a pixel"
-    );
-}
-
-#[test]
-fn mask_centres_the_name_vertically() {
-    let bytes = mask(&minimal_font()).unwrap();
-    let (_left, top, _width, height) = name_ink_box(&bytes).unwrap();
-    assert_eq!(top, 11, "the name sits 11 rows down, centred vertically");
-    let stride = HEIGHT as usize;
-    let bottom_margin = stride - (top + height);
-    assert!(
-        top.abs_diff(bottom_margin) <= 1,
-        "margins {top} and {bottom_margin} differ by more than a pixel"
-    );
+    assert_eq!(name_ink_box(&bytes), Some((68, 11, 564, 137)));
 }
 
 #[test]
@@ -253,6 +262,47 @@ fn pen_shifts_and_flips_a_quadratic_segment() {
         "the control point and the end move with the start"
     );
     assert!(segments.next().is_none());
+}
+
+#[test]
+fn pen_shifts_and_flips_a_line_segment() {
+    let mut builder = PathBuilder::new();
+    {
+        let mut pen = Pen {
+            builder: &mut builder,
+            dx: 10.0,
+            dy: 100.0,
+        };
+        pen.move_to(1.0, 2.0);
+        pen.line_to(7.0, 11.0);
+    }
+    let path = builder.finish().unwrap();
+    let mut segments = path.segments();
+    assert!(
+        matches!(segments.next(), Some(PathSegment::MoveTo(end)) if end.x == 11.0 && end.y == 98.0)
+    );
+    assert!(
+        matches!(segments.next(), Some(PathSegment::LineTo(end)) if end.x == 17.0 && end.y == 89.0)
+    );
+    assert!(segments.next().is_none());
+}
+
+#[test]
+fn pen_closes_a_contour() {
+    let mut builder = PathBuilder::new();
+    {
+        let mut pen = Pen {
+            builder: &mut builder,
+            dx: 10.0,
+            dy: 100.0,
+        };
+        pen.move_to(1.0, 2.0);
+        pen.line_to(7.0, 11.0);
+        pen.close();
+    }
+    let path = builder.finish().unwrap();
+    let segments: Vec<_> = path.segments().collect();
+    assert!(matches!(segments.last(), Some(PathSegment::Close)));
 }
 
 #[test]
@@ -501,6 +551,15 @@ fn test_font(sizes: &[(i16, i16)]) -> Vec<u8> {
         font.extend_from_slice(&table.1);
     }
     font
+}
+
+#[test]
+fn usage_names_the_flags_and_font_download() {
+    let text = usage();
+    assert!(text.starts_with("usage:"));
+    assert!(text.contains("--font"));
+    assert!(text.contains("--out"));
+    assert!(text.contains("https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304"));
 }
 
 #[test]
