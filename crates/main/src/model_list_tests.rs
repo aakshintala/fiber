@@ -185,6 +185,24 @@ fn references(catalogue: &tui::Catalogue) -> Vec<&str> {
         .collect()
 }
 
+/// One named wall-clock deadline for every blocking read.
+const DEADLINE: Duration = Duration::from_secs(20);
+
+/// `read` with `Stale` or `Every` on its own thread under [`DEADLINE`]:
+/// it joins discovery threads (`docs/testing.md`, "Waits and timeouts").
+fn bounded(
+    setup: &Setup,
+    clock: &Arc<fakes::clock::FakeClock>,
+    refresh: tui::Refresh,
+) -> Result<tui::Catalogue, String> {
+    let home = setup.home();
+    let workspace = setup.workspace();
+    let clock = Arc::clone(clock);
+    fakes::within("the model list read", DEADLINE, move || {
+        read(&home, &workspace, refresh, &installed(home.as_path(), &clock))
+    })
+}
+
 /// A `models()` listing response with these ids.
 fn listing(ids: &[&str]) -> fakes::Response {
     let data: Vec<_> = ids
@@ -443,35 +461,17 @@ fn stale_refreshes_with_the_age_check_and_every_without() {
     setup.install_lua("acme-ext", &server_models(&server.url()));
     let clock = Arc::new(fakes::clock::FakeClock::new());
     // No cached copy: the first read runs `models()` at once.
-    let catalogue = read(
-        &setup.home(),
-        &setup.workspace(),
-        tui::Refresh::Stale,
-        &installed(&setup.home(), &clock),
-    )
-    .unwrap();
+    let catalogue = bounded(&setup, &clock, tui::Refresh::Stale).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
     assert_eq!(server.requests().len(), 1);
     // A fresh list is not stale: no refresh runs.
-    let catalogue = read(
-        &setup.home(),
-        &setup.workspace(),
-        tui::Refresh::Stale,
-        &installed(&setup.home(), &clock),
-    )
-    .unwrap();
+    let catalogue = bounded(&setup, &clock, tui::Refresh::Stale).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
     assert_eq!(server.requests().len(), 1);
     // An old list refreshes with the age check, and the refreshed list
     // replaces the cached one.
     age_cache(&setup, "acme", Duration::from_secs(25 * 60 * 60));
-    let catalogue = read(
-        &setup.home(),
-        &setup.workspace(),
-        tui::Refresh::Stale,
-        &installed(&setup.home(), &clock),
-    )
-    .unwrap();
+    let catalogue = bounded(&setup, &clock, tui::Refresh::Stale).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1", "acme/m2"]);
     assert_eq!(server.requests().len(), 2);
 }
@@ -484,23 +484,11 @@ fn every_refreshes_whatever_the_cache_holds() {
             .unwrap();
     setup.install_lua("acme-ext", &server_models(&server.url()));
     let clock = Arc::new(fakes::clock::FakeClock::new());
-    let catalogue = read(
-        &setup.home(),
-        &setup.workspace(),
-        tui::Refresh::Stale,
-        &installed(&setup.home(), &clock),
-    )
-    .unwrap();
+    let catalogue = bounded(&setup, &clock, tui::Refresh::Stale).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
     // The cache is fresh, but `Every` refreshes anyway, and the
     // refreshed list replaces the cached one.
-    let catalogue = read(
-        &setup.home(),
-        &setup.workspace(),
-        tui::Refresh::Every,
-        &installed(&setup.home(), &clock),
-    )
-    .unwrap();
+    let catalogue = bounded(&setup, &clock, tui::Refresh::Every).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1", "acme/m2"]);
 }
 
@@ -511,22 +499,10 @@ fn a_failed_refresh_is_a_notice_and_the_cached_list_stays() {
     let server = fakes::ProviderServer::start([listing(&["m1"])]).unwrap();
     setup.install_lua("acme-ext", &server_models(&server.url()));
     let clock = Arc::new(fakes::clock::FakeClock::new());
-    let catalogue = read(
-        &setup.home(),
-        &setup.workspace(),
-        tui::Refresh::Stale,
-        &installed(&setup.home(), &clock),
-    )
-    .unwrap();
+    let catalogue = bounded(&setup, &clock, tui::Refresh::Stale).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
     age_cache(&setup, "acme", Duration::from_secs(25 * 60 * 60));
-    let catalogue = read(
-        &setup.home(),
-        &setup.workspace(),
-        tui::Refresh::Stale,
-        &installed(&setup.home(), &clock),
-    )
-    .unwrap();
+    let catalogue = bounded(&setup, &clock, tui::Refresh::Stale).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
     assert!(
         catalogue
@@ -544,13 +520,7 @@ fn a_cached_lua_only_provider_lists_without_loading() {
     let server = fakes::ProviderServer::start([listing(&["m1"])]).unwrap();
     setup.install_lua("acme-ext", &server_models(&server.url()));
     let clock = Arc::new(fakes::clock::FakeClock::new());
-    let catalogue = read(
-        &setup.home(),
-        &setup.workspace(),
-        tui::Refresh::Stale,
-        &installed(&setup.home(), &clock),
-    )
-    .unwrap();
+    let catalogue = bounded(&setup, &clock, tui::Refresh::Stale).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
     // The list is cached now: a `Cached` read serves it with no extension.
     let called = Cell::new(false);
