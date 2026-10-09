@@ -54,6 +54,7 @@ mod links;
 mod model_picker;
 #[path = "app_mouse.rs"]
 mod mouse;
+mod moving;
 mod offer;
 pub(crate) mod panel;
 mod paste;
@@ -284,6 +285,9 @@ pub(crate) struct App {
     /// Failures since the hub was last reached (`docs/tui.md`, "A dropped
     /// connection").
     reconnect: reconnect::Reconnect,
+    /// What moves on screen, and when it next moves (`docs/tui.md`,
+    /// "The working line").
+    motion: crate::motion::Motion,
 }
 
 impl App {
@@ -328,6 +332,7 @@ impl App {
             config_views: config_views::ConfigViews::default(),
             session_views: session_views::SessionViews::default(),
             reconnect: reconnect::Reconnect::default(),
+            motion: crate::motion::Motion::default(),
         }
     }
 
@@ -615,7 +620,7 @@ impl App {
             + input
             + self.completion_rows()
             + self.steering().len()
-            + usize::from(self.banner().is_some())
+            + usize::from(self.working_row_shown())
             + usize::from(self.badge().is_some())
             + usize::from(self.hint())
     }

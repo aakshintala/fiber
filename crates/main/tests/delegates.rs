@@ -459,21 +459,23 @@ fn a_delegate_runs_to_its_end_and_its_finish_wakes_the_parent() {
     ])
     .unwrap();
     let child = ProviderServer::start([text_reply(&full)]).unwrap();
-    // Held until the parent's ending-notice turn is in flight: the
-    // delegate then ends after it, so the wake turn carries the finish
-    // alone, whatever the scheduling.
+    // Held until the parent's ending-notice turn has ended: a finish that
+    // lands earlier joins that turn at a step boundary, so the wake turn
+    // carries the finish alone only when the delegate ends after it.
     child.hold();
     providers(&setup, &parent, &child);
     standing_allow(&setup);
     slow_idle(&setup);
 
-    let running = Running::spawn(&setup, &["ask", "scan the tree"]);
-    assert!(
-        parent.await_requests(4, Duration::from_secs(5)),
-        "the parent's ending-notice turn was requested"
-    );
+    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    let mut ended = 0;
+    let mut lines = running.wait_line("the ending notice's turn end", |line| {
+        ended += usize::from(line["kind"] == "turn_completed");
+        ended == 2
+    });
     child.release();
-    let (status, lines, stderr) = running.wait();
+    let (status, rest, stderr) = running.wait();
+    lines.extend(rest);
     let ask = Ask {
         code: status.code(),
         lines,

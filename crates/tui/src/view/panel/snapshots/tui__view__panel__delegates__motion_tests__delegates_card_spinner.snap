@@ -1,0 +1,8 @@
+---
+source: crates/tui/src/view/panel/delegates_motion_tests.rs
+expression: shown
+---
+⠋ WORKING  test/model
+  alpha
+⠋ fiber  test/model
+  beta

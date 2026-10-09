@@ -1,0 +1,5 @@
+---
+source: crates/tui/src/view/working_line_tests.rs
+expression: text(&buf)
+---
+Working 11m 14s

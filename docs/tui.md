@@ -359,7 +359,7 @@ A glimmer runs across its word: a band three cells wide, in the spinner's
 colour, sweeps left to right, then rests. The spinners on a running group's
 line and on running delegates spin on the same tick, about every 120 ms. While
 a turn runs they cost nothing extra, since the frame is drawn anyway. While
-only delegates or jobs run, the tick keeps running for them. Under reduced
+only delegates run, the tick keeps running for their spinners. Under reduced
 motion the word and the spinners stay still.
 
 While Fiber waits to retry a failed model call, the working line says so:

@@ -251,6 +251,7 @@ pub(super) fn new_loop<B: Backend>(
         save: None,
         shape: crate::osc::Shape::default(),
         retry: None,
+        tick: crate::tick::TickThread::idle(),
     };
     (lp, attached)
 }
@@ -1647,6 +1648,7 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         save: None,
         shape: crate::osc::Shape::default(),
         retry: None,
+        tick: crate::tick::TickThread::idle(),
     };
     // No hub: a frame fetches no history, so nothing arrives here.
     let (_hub, idle) = mpsc::channel();
@@ -1749,6 +1751,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for FindDue: {err}"))
         {
             Input::FindDue(generation) => generations.push(generation),
+            Input::Tick => panic!("a pause sent a tick"),
             Input::Bytes(_)
             | Input::Hub(_)
             | Input::Connected(..)
@@ -2060,3 +2063,6 @@ fn opening_the_picker_asks_stale_through_the_loop() {
     assert_eq!(lp.step(answer, &idle), None);
     assert_eq!(lp.app.take_reads(), None);
 }
+
+#[path = "lib_motion_tests.rs"]
+mod motion;

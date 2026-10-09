@@ -28,6 +28,7 @@ pub(crate) mod request;
 mod results;
 pub(crate) mod status_rows;
 mod steering_queue;
+mod working_line;
 
 pub(crate) use home::max_question_scroll;
 
@@ -90,6 +91,9 @@ pub(crate) fn render(
     buf: &mut Buffer,
     pointer: Option<(u16, u16)>,
 ) -> Vec<Target> {
+    // The frame's asks start here: `Screen::draw_with` may render twice,
+    // and the loop takes what the drawn frame asked.
+    app.motion().clear_wake();
     // Below the floor one line shows, home included; home draws while no
     // session is on screen; the conversation draws in its column once one
     // attaches.
@@ -144,6 +148,7 @@ pub(crate) fn render(
     steering_queue::draw(app, area, &mut bottom, buf, &mut targets);
     status_rows::draw_delegates(app, area, buf, &mut bottom);
     banner::draw(app, area, buf, &mut bottom);
+    working_line::draw(app, area, buf, &mut bottom, &mut targets);
     if let Some(rect) = app
         .badge()
         .and_then(|badge| put(buf, area, &mut bottom, &badge, Style::default()))
@@ -376,6 +381,7 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         first,
         lines,
         turns,
+        spins,
     } = app.shown(top, height);
     let mut start = first;
     let overlay = app.has_new() && area.height > 0;
@@ -418,7 +424,7 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         }
     }
     // A line wholly above `top` or below `end` shows no rows.
-    for (line, rows, open) in lines {
+    for (at, (line, rows, open)) in lines.into_iter().enumerate() {
         let next = start.saturating_add(rows);
         let skip = top.saturating_sub(start);
         let count = next.min(end).saturating_sub(start.max(top));
@@ -434,6 +440,25 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
             .style(fill)
             .scroll((to_u16(skip), 0))
             .render(rect, buf);
+        // A marked line spins its cell on the working line's tick; the
+        // mark is the builders' promise that the line moves.
+        if let Some(col) = spins
+            .iter()
+            .find_map(|(marked, col)| (*marked == at).then_some(*col))
+        {
+            working_line::spin(
+                app,
+                buf,
+                area,
+                working_line::Drawn {
+                    y,
+                    col,
+                    first_row_shown: skip == 0,
+                    rows,
+                    count,
+                },
+            );
+        }
         if let Some(open) = open {
             let height = rect.height.min(last.saturating_sub(rect.y));
             // A code block's copy target is its `copy` cells, not the line.

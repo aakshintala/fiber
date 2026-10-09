@@ -39,6 +39,7 @@ mod login_view;
 mod look;
 mod markdown;
 mod model_picker;
+mod motion;
 mod mouse;
 mod offer;
 mod open_at;
@@ -61,12 +62,14 @@ mod surface;
 mod swapped;
 mod term;
 mod theme;
+mod tick;
 mod tools_view;
 mod turn;
 mod turn_text;
 mod usage_view;
 mod view;
 mod window;
+mod working;
 
 use std::io;
 use std::os::unix::net::UnixStream;
@@ -146,6 +149,10 @@ pub(crate) enum Input {
     /// A model-list read answered: the installed models, or why they
     /// could not be read. An answer for a closed loop is dropped.
     Models(Result<Catalogue, String>),
+    /// The working line's timer passed: the frame the tick armed drew,
+    /// and the next moving frame arms it again (`docs/tui.md`, "The
+    /// working line").
+    Tick,
 }
 
 /// Restores the terminal [`run`] set up: turns mouse reporting off, leaves

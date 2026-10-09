@@ -40,6 +40,13 @@ pub(crate) fn launch(
         .get("tui.hover", None)
         .and_then(|(value, _)| value.as_bool())
         .unwrap_or(true);
+    // `tui.reduced_motion`, defaulting to off (`docs/configuration.md`).
+    // Unlike the `on` helper's keys, an absent key means stillness is
+    // not asked for.
+    let reduced_motion = config
+        .get("tui.reduced_motion", None)
+        .and_then(|(value, _)| value.as_bool())
+        .unwrap_or(false);
     // `model` and `thinking`, unset for the chips' defaults
     // (`docs/configuration.md`).
     let model = config
@@ -63,6 +70,7 @@ pub(crate) fn launch(
         git,
         open_at: tui::OpenAt::Home,
         hover,
+        reduced_motion,
         version: env!("CARGO_PKG_VERSION").to_owned(),
         model,
         thinking,

@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::app::Target;
 use crate::markdown::style;
-use crate::rows::{Join, Rows};
+use crate::rows::{Join, RowText, Rows};
 use crate::theme::Role;
 use crate::turn::{Group, Thought, target_id};
 
@@ -425,10 +425,9 @@ pub(crate) fn failure(error: &Failure, out: &mut Rows) {
 }
 
 /// "↻ Retrying in 4s · rate_limited · attempt 2 of 4": the wait rounded up
-/// to whole seconds. `attempt` is the one about to be made, of the
+/// to whole seconds in `secs`. `attempt` is the one about to be made, of the
 /// `last_attempt` the retry policy allows.
-pub(crate) fn retry(retry: &RetryScheduled, attempt: u32) -> Line<'static> {
-    let secs = retry.delay_ms.div_ceil(1000);
+pub(crate) fn retry(retry: &RetryScheduled, attempt: u32, secs: u64) -> Line<'static> {
     Line::raw(format!(
         "↻ Retrying in {secs}s · {} · attempt {} of {}",
         code(&retry.code),
@@ -554,10 +553,24 @@ impl Group {
         if parts.is_empty() {
             return;
         }
-        out.push((
-            dim(format!("• {}", parts.join(" · "))),
-            self.key.as_deref().map(|key| Target::Group(target_id(key))),
-        ));
+        // A running summary line carries its spinner's cell: the draw
+        // site spins it on the working line's tick, so keyed and keyless
+        // running groups both move (`docs/tui.md`, "The working line").
+        let text = if running {
+            RowText {
+                spin: Some(0),
+                ..RowText::plain()
+            }
+        } else {
+            RowText::plain()
+        };
+        out.push_text(
+            (
+                dim(format!("• {}", parts.join(" · "))),
+                self.key.as_deref().map(|key| Target::Group(target_id(key))),
+            ),
+            text,
+        );
         // An open approval shows its call whatever the group's own state.
         // A group with no key has no target, and draws as it is on a
         // search draw too: a match there is one nothing could reveal

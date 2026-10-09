@@ -123,6 +123,36 @@ fn tui_hover_defaults_to_on_and_reads_off() {
 }
 
 #[test]
+fn reduced_motion_comes_from_config_default_off() {
+    let dir = fakes::TempDir::new("fiber-launch-reduced");
+    let workspace = dir.path().to_path_buf();
+    let off = config(dir.path(), &workspace, Vec::new());
+    assert!(
+        !launch(
+            workspace.clone(),
+            &workspace,
+            &off,
+            tui::ThemeSetting::Follow
+        )
+        .reduced_motion
+    );
+    let on = config(
+        dir.path(),
+        &workspace,
+        vec!["tui.reduced_motion=true".to_owned()],
+    );
+    assert!(
+        launch(
+            workspace.clone(),
+            &workspace,
+            &on,
+            tui::ThemeSetting::Follow
+        )
+        .reduced_motion
+    );
+}
+
+#[test]
 fn shares_and_cards_come_from_config_with_defaults() {
     let dir = fakes::TempDir::new("fiber-launch-shares");
     let workspace = dir.path().to_path_buf();

@@ -108,6 +108,7 @@ pub fn run(
         shape: osc::Shape::default(),
         save,
         retry: Some(Arc::clone(&retry)),
+        tick: crate::tick::TickThread::idle(),
     };
     terminal.app.set_opener(terminal.open_command.is_some());
     terminal
@@ -115,6 +116,11 @@ pub fn run(
         .set_osc9(crate::attention::supported(&terminal.var));
     // Whether stripes draw is read once, before the first frame.
     crate::surface::init(&|name| std::env::var(name).ok());
+    // The first frame's time: elapsed times and animation agree from it.
+    terminal.app.set_now(
+        terminal.clock.now(),
+        contract::clock::wall_ms(terminal.clock.wall()),
+    );
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
     if terminal.screen.draw(&mut terminal.app, None).is_err() {
@@ -132,10 +138,15 @@ pub fn run(
         .as_ref()
         .and_then(|tty| Reader::spawn(tty, tx.clone()));
     spawn_hub(connect, tx.clone(), retry, Arc::clone(&terminal.clock));
+    // The tick runs only while something drawn moves: the first frame's
+    // asks arm it, and the loop re-arms it after every frame.
+    terminal.tick.start(Arc::clone(&terminal.clock), tx.clone());
+    terminal.tick.arm(terminal.app.take_wake());
     if let Some(signals) = signals {
         spawn_resize(signals, tx);
     }
     let code = terminal.run(&rx);
+    terminal.tick.stop();
     // One resume line per live session: collected first, then the hub
     // hangs up, the terminal is restored, and the lines print in cooked
     // mode, each ending in a newline.
@@ -216,6 +227,9 @@ struct Loop<B: Backend> {
     /// The hub thread's permit to connect again (`docs/tui.md`, "A
     /// dropped connection"); none in tests with no hub thread.
     retry: Option<Arc<Retry>>,
+    /// The working line's timer: armed after every frame with the next
+    /// moving frame's deadline (`docs/tui.md`, "The working line").
+    tick: crate::tick::TickThread,
 }
 
 /// The most lines one `history` answer holds (`docs/invocation.md`,
@@ -248,8 +262,10 @@ impl<B: Backend> Loop<B> {
     /// Handles one input, loads the pages the frame needs, and draws what
     /// changed. Returns the exit code when the terminal quits.
     fn step(&mut self, input: Input, rx: &Receiver<Input>) -> Option<i32> {
-        self.app
-            .set_wall(contract::clock::wall_ms(self.clock.wall()));
+        self.app.set_now(
+            self.clock.now(),
+            contract::clock::wall_ms(self.clock.wall()),
+        );
         let before = self.app.session().cloned();
         match input {
             Input::Bytes(bytes) => {
@@ -392,6 +408,9 @@ impl<B: Backend> Loop<B> {
                 let lines = self.app.find_due(generation);
                 self.send(&lines);
             }
+            // Its frame already drew: the next moving frame arms the
+            // tick again below.
+            Input::Tick => self.tick.ack(),
             Input::Resize => {
                 if let Some(Ok((width, height))) = self.tty.as_ref().map(term::size) {
                     self.app.set_size(width, height);
@@ -426,6 +445,9 @@ impl<B: Backend> Loop<B> {
         if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
             return Some(1);
         }
+        // What the frame asked wakes the tick: nothing moving arms
+        // nothing.
+        self.tick.arm(self.app.take_wake());
         self.write_title();
         self.write_shape();
         self.write_alerts();
@@ -573,9 +595,13 @@ impl<B: Backend> Loop<B> {
                 return Err(LOST.to_owned());
             };
             match input {
-                Input::Hub(Line::Session(line)) if answers(&line, id) => {
+                Input::Hub(Line::Session(line)) if link::answers(&line, id) => {
                     return link::history_answer(&line);
                 }
+                // A tick while a frame waits for history is acked and
+                // dropped, not stashed: the frame asks again after it
+                // draws.
+                Input::Tick => self.tick.ack(),
                 Input::Disconnected => {
                     self.on_disconnected();
                     return Err(LOST.to_owned());
@@ -732,16 +758,6 @@ impl<B: Backend> Drop for Loop<B> {
         }
         self.hang_up();
     }
-}
-
-/// Whether `line` answers command `id`.
-fn answers(line: &Envelope, id: &str) -> bool {
-    matches!(line.kind.as_str(), "command_accepted" | "command_rejected")
-        && line
-            .payload
-            .get("command_id")
-            .and_then(serde_json::Value::as_str)
-            == Some(id)
 }
 
 #[cfg(test)]

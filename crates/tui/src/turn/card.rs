@@ -92,8 +92,6 @@ impl Turn {
             let ms = ts.saturating_sub(self.started);
             let closing = format::closing(head, ms, self.calls, &self.spend.usage());
             out.push((format::dim(closing), None));
-        } else if let Some((retry, attempt)) = &self.retry {
-            out.push((format::retry(retry, *attempt), None));
         }
         let last = out.len() > from;
         if !broken {
