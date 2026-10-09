@@ -547,7 +547,8 @@ impl App {
     }
 
     /// A key while the key map is open: ↑ ↓ PageUp PageDown scroll it, Esc
-    /// closes it, other keys do nothing. `None` while it is closed.
+    /// closes it, other keys do nothing. `None` while it is closed, and
+    /// for Ctrl+C, which arms quit past the key map.
     pub(super) fn keymap_key(&mut self, key: &Key) -> Option<Effect> {
         let top = self.overlays.keymap?;
         let height = self.conversation_height();
@@ -561,6 +562,8 @@ impl App {
         let last = total.saturating_sub(height);
         self.overlays.keymap = match key {
             Key::Esc => None,
+            // Ctrl+C arms quit past the key map: quitting keeps its key.
+            Key::CtrlC => return None,
             Key::Up => Some(top.saturating_sub(1)),
             Key::Down => Some(top.saturating_add(1).min(last)),
             Key::PageUp => Some(top.saturating_sub(page)),
@@ -568,7 +571,6 @@ impl App {
             Key::Char(_)
             | Key::Backspace
             | Key::Enter
-            | Key::CtrlC
             | Key::End
             | Key::AltA
             | Key::AltUp
