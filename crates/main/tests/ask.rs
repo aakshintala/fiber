@@ -816,6 +816,38 @@ fn two_prompts_or_none_is_a_usage_error() {
 }
 
 #[test]
+fn opencode_providers_name_the_opencode_extension() {
+    let setup = Setup::new();
+    for reference in [
+        "opencode-go/muse-spark-1.3-contributor",
+        "opencode-zen/muse-spark-1.3",
+    ] {
+        let run = setup.fiber(&["ask", "--model", reference, "hi"], None);
+        assert_pre_session(&run, 1, "extension_missing");
+        let message = run.last()["payload"]["error"]["message"].as_str().unwrap();
+        let provider = reference.split('/').next().unwrap();
+        assert_eq!(
+            message,
+            format!(
+                "The provider `{provider}` is not installed. Run `fiber extension install opencode`."
+            )
+        );
+    }
+}
+
+#[test]
+fn a_provider_no_first_party_package_serves_names_no_extension() {
+    let setup = Setup::new();
+    let run = setup.fiber(&["ask", "--model", "nobody-serves/x", "hi"], None);
+    assert_pre_session(&run, 1, "extension_missing");
+    let message = run.last()["payload"]["error"]["message"].as_str().unwrap();
+    assert_eq!(
+        message,
+        "The provider `nobody-serves` is not installed. Install the extension that provides it with `fiber extension install <name or URL>`."
+    );
+}
+
+#[test]
 fn a_failure_before_any_session_ends_stdout_with_fiber_exited_and_no_session_id() {
     let setup = Setup::new();
 
