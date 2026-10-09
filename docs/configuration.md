@@ -534,6 +534,8 @@ provider extension declares") lists:
   providers in one package that share a key name the same directory. A provider
   whose token expires, such as an OAuth login, declares a Lua `credential()`
   function instead.
+- `login` is `browser` for a provider whose `fiber login` runs its
+  `credential()` login instead of reading a key. Absent means a key.
 - `compat` is a flat object of the flags the protocol reads. Fiber never
   guesses a flag, and a flag that is absent is not set:
 

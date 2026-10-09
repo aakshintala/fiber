@@ -1328,6 +1328,14 @@ fn main_reads_a_package() -> RustFile {
     )
 }
 
+fn cli_reads_a_package() -> RustFile {
+    package_src(
+        "cli",
+        "crates/cli/src/login/browser_tests.rs",
+        "fn copy() -> PathBuf {\n    std::path::PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../providers/codex\")\n}\n",
+    )
+}
+
 fn extensions_reads_a_package() -> RustFile {
     package_src(
         "extensions",
@@ -1346,6 +1354,7 @@ fn xtask_reads_a_package() -> RustFile {
 
 fn package_ok_files() -> Vec<RustFile> {
     vec![
+        cli_reads_a_package(),
         config_reads_a_package(),
         extensions_reads_a_package(),
         main_reads_a_package(),
@@ -1357,6 +1366,15 @@ fn package_ok_files() -> Vec<RustFile> {
 /// tests name them, so the selection tests keep the smaller fixture.
 fn package_members() -> Members {
     let mut members = members_with_tools();
+    members.insert(
+        "cli".to_owned(),
+        Member {
+            dir: "crates/cli".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            library: true,
+        },
+    );
     members.insert(
         "xtask".to_owned(),
         Member {
@@ -1398,6 +1416,7 @@ fn a_listed_crate_with_no_reading_source_fails() {
     assert_eq!(
         package_reader_mismatches(&[config_reads_a_package()], &package_members()).unwrap(),
         [
+            "cli: listed as reading a first-party package, but no source reads one",
             "extensions: listed as reading a first-party package, but no source reads one",
             "main: listed as reading a first-party package, but no source reads one",
             "xtask: listed as reading a first-party package, but no source reads one"

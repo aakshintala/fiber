@@ -16,6 +16,7 @@ mod hooks;
 mod host;
 mod install;
 mod installed;
+mod login;
 mod lua;
 mod lua_cost;
 mod lua_provider;
@@ -43,8 +44,11 @@ pub use install::Provenance;
 pub use installed::{
     Damaged, Installed, Listing, Removal, is_enabled, list, package_names, removal,
 };
+pub use login::login_provider;
 pub use lua::{LuaExtension, MEMORY_CAP};
-pub use lua_provider::{CredentialPair, LuaProvider, REFRESH_BEFORE};
+pub use lua_provider::{
+    CredentialPair, LoggedIn, LoginMethod, LuaProvider, REFRESH_BEFORE, StoredLogin,
+};
 pub use manage::{Item, Plan, Request, plan};
 pub use oauth::{Browser, SystemBrowser};
 pub use prepare::platform;

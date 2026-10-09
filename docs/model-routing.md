@@ -47,8 +47,9 @@ With `gpt-6-luna` the endpoint accepted
 `usage_limit_reached` or `usage_not_included` to `quota_exceeded`, on any
 endpoint and whatever the HTTP status, and never retries it. No other vendor
 sends these codes, so the match needs no flag. When the body has `resets_at`
-(Unix seconds), the milliseconds until then become the error's `retry_after_ms`, and
-the message names the reset time. `rate_limit_exceeded` stays `rate_limited`.
+(Unix seconds), the milliseconds from the reply's `Date` header until then
+become the error's `retry_after_ms`, and
+the message names the reset time. Without a usable `Date`, no wait is set. `rate_limit_exceeded` stays `rate_limited`.
 No usage-limit reply has been probed: the match rests on the reference
 implementations ([research/codex-responses-probe](../research/codex-responses-probe/README.md),
 "The usage-limit error body").
@@ -286,6 +287,8 @@ Most of a provider is data. For the provider:
 - its name, which is the first half of every model reference
 - how its credential is found (see [Credentials](#credentials)), or a
   `credential()` function that returns a token
+- `login`, when `fiber login` runs that function as a login instead of
+  reading a key: `browser`, whose device-code form takes `--device`
 - headers sent on every request
 - a `sign()` function, if every request must carry a signature
 - `reviewer_model`, optional: one of its models that reviews calls when
@@ -716,7 +719,8 @@ Without `--as`, the label is the account's email when the login reveals one,
 as `credential()`'s `email` does, and `default` otherwise. A login whose label is
 already stored is refused, and the message names `--as`. The first label a
 provider stores is written to `providers."<name>".credential` in the global
-file, unless that key is already set.
+file, unless that key is already set. A provider that logs in by browser
+also takes `--device`, which logs in with a device code instead.
 
 ### Which credential a session uses
 

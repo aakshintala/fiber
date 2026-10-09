@@ -119,6 +119,7 @@ fn data(name: &str, credential_name: Option<&str>) -> config::ProviderData {
         placeholders: BTreeMap::new(),
         models: Vec::new(),
         reviewer_model: None,
+        login: None,
     }
 }
 

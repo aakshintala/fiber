@@ -20,8 +20,8 @@ use std::time::{Duration, Instant};
 use contract::clock::Clock;
 use serde_json::{Value, json};
 
-use crate::oauth::{Browser, SystemBrowser};
-use crate::{CredentialPair, Error, host};
+use crate::oauth::{Browser, LoginSlot, SystemBrowser};
+use crate::{CredentialPair, Error, host, lua_provider::LoginMethod};
 
 /// Each Lua extension's default memory cap (`docs/extensions.md`, "Loading,
 /// and cost when nothing is loaded"). Past it, an allocation is a Lua error in
@@ -529,8 +529,8 @@ impl LuaExtension {
     /// Runs `credential` of the provider `provider` for `pair`, passing the
     /// session's label and the stored credential's name, and returns what it
     /// returned, as JSON (`docs/model-routing.md`, "Keys, tokens and
-    /// OAuth"). The only call whose target carries a credential pair, so
-    /// the only one `host.oauth.refresh` refreshes.
+    /// OAuth"). The only call whose target carries a stored credential, so
+    /// the only one `host.oauth.refresh` refreshes against a file.
     pub(crate) fn provider_credential(
         &self,
         provider: &str,
@@ -540,9 +540,49 @@ impl LuaExtension {
             Target::Provider {
                 name: provider.to_owned(),
                 function: "credential",
-                credential: Some(pair.clone()),
+                credential: Some(CredentialFor::Stored(pair.clone())),
             },
             json!({"label": pair.label, "credential": pair.credential}),
+        )
+    }
+
+    /// Runs `credential` of the provider `provider` as a login, passing the
+    /// stored credential's name, the `--as` label when one was given, and
+    /// whether the person chose the browser or a device code, and returns
+    /// what it returned, as JSON (`docs/model-routing.md`, "Logging in").
+    /// During the call `host.oauth.refresh` holds no file: what its function
+    /// returns is kept in `slot` for `fiber login`, which stores it after
+    /// the flow.
+    pub(crate) fn provider_login(
+        &self,
+        provider: &str,
+        credential: &str,
+        label: Option<&str>,
+        method: LoginMethod,
+        slot: LoginSlot,
+    ) -> Result<Value, Error> {
+        let login = match method {
+            LoginMethod::Browser => "browser",
+            LoginMethod::Device => "device",
+        };
+        let mut arg = serde_json::Map::from_iter([
+            (
+                "credential".to_owned(),
+                Value::String(credential.to_owned()),
+            ),
+            ("login".to_owned(), Value::String(login.to_owned())),
+        ]);
+        if let Some(label) = label {
+            arg.insert("label".to_owned(), Value::String(label.to_owned()));
+        }
+        let arg = Value::Object(arg);
+        self.call(
+            Target::Provider {
+                name: provider.to_owned(),
+                function: "credential",
+                credential: Some(CredentialFor::Login(slot)),
+            },
+            arg,
         )
     }
 
@@ -629,6 +669,17 @@ impl Queued {
     }
 }
 
+/// What a `credential` call refreshes: a stored pair's file, or a login's
+/// result slot, which holds no file (`docs/model-routing.md`, "Logging
+/// in").
+#[derive(Clone)]
+pub(crate) enum CredentialFor {
+    /// The session's stored credential and label.
+    Stored(CredentialPair),
+    /// A login's result slot.
+    Login(LoginSlot),
+}
+
 /// What a call runs.
 #[derive(Clone)]
 enum Target {
@@ -640,10 +691,10 @@ enum Target {
         name: String,
         /// `models`, `quota`, `credential`, `sign` or `cost`.
         function: &'static str,
-        /// The stored credential and label the call is for: `Some` only
-        /// for `credential`, whose `host.oauth.refresh` locks and reads
-        /// exactly this pair's file.
-        credential: Option<CredentialPair>,
+        /// What the call refreshes: `Some` only for `credential`, whose
+        /// `host.oauth.refresh` locks and reads exactly this pair's file,
+        /// or fills its login slot.
+        credential: Option<CredentialFor>,
     },
     /// A hook `fiber.hook` registered.
     Hook {
