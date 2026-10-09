@@ -30,6 +30,8 @@ pub(crate) enum Spot {
     /// The Session card's "N waiting" while the rail is not drawn: shows
     /// the rail (`docs/tui.md`, "Shedding").
     Waiting,
+    /// The narrow layout's widget row: expands or collapses it.
+    Widget,
 }
 
 /// What the branch query last answered.
@@ -518,6 +520,7 @@ impl App {
                 Effect::Send(vec![line])
             }
             Spot::Waiting => self.show_rail(),
+            Spot::Widget => self.toggle_widget_row(),
         }
     }
 }

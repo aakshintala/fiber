@@ -1,0 +1,15 @@
+---
+source: crates/tui/src/view/status_rows_tests.rs
+assertion_line: 390
+expression: screen
+---
+one
+
+
+
+
+
+
+>
+test/model · $1.50
+1 job running

@@ -1,0 +1,45 @@
+---
+source: crates/tui/src/view/drag_tests.rs
+assertion_line: 153
+expression: "crate::view::text(&buf)"
+---
+  w                   $0.00 +  one
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                  directory  /w
+▌ 1 ✓ READY                0s                                                                                                                                   model  test/model
+▌ one                                                                                                                                                           tokens in / out  1 / 2
+▌                                                                                                                                                               cache hits  0%
+▌ $0.00
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ 2 ✓ READY                0s
+▌ two
+▌
+▌ $0.00
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+
+
+
+
+
+                              ⋮                                                                                                                               ⋮
+                              ⋮  rail 15.5% · 31 cols                                                                                                         ⋮
+                              ⋮                                                                                                                               ⋮
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                               >

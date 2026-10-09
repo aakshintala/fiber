@@ -16,6 +16,7 @@ use crate::mouse::{self, Target, TargetId};
 
 mod banner;
 pub(crate) mod chrome;
+mod drag;
 #[path = "home_view.rs"]
 mod home;
 mod marks;
@@ -24,6 +25,7 @@ pub(crate) mod panel;
 pub(crate) mod rail;
 mod request;
 mod results;
+pub(crate) mod status_rows;
 
 pub(crate) use home::max_question_scroll;
 
@@ -63,9 +65,10 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
     paragraph(line).line_count(width).max(1)
 }
 
-/// Draws `app` into `area` of `buf`, from the bottom up: the input box
-/// on the last rows with a completion panel above it, or the approval panel
-/// in their place, then the steering queue, the reconnect banner, the
+/// Draws `app` into `area` of `buf`, from the bottom up: the narrow
+/// layout's status rows on the last rows, then the input box with a
+/// completion panel above it, or the approval panel in their place, then
+/// the steering queue, the reconnect banner, the
 /// badge and the quit hint when shown, and the conversation in the rows
 /// left with the notices floating over its top-right corner, or the key
 /// map over them while it is open. A screen too short for them all drops
@@ -122,6 +125,7 @@ pub(crate) fn render(
         rail::draw(app, rect, buf, pointer, &mut targets);
     }
     let mut bottom = area.bottom();
+    status_rows::draw_status(app, area, buf, &mut bottom, &mut targets);
     if let Some(panel) = app.panel() {
         bottom = request::draw(&panel, area, bottom, buf, &mut targets);
     }
@@ -143,6 +147,7 @@ pub(crate) fn render(
             }
         }
     }
+    status_rows::draw_widget(app, area, buf, &mut bottom, &mut targets);
     // The steering queue sits above the input box, its newest row lowest;
     // a row a `steer` sent ends in a ✕ that drops it.
     let drops = app.steering_drops();
@@ -163,6 +168,7 @@ pub(crate) fn render(
             });
         }
     }
+    status_rows::draw_delegates(app, area, buf, &mut bottom);
     banner::draw(app, area, buf, &mut bottom);
     if let Some(rect) = app
         .badge()
@@ -219,6 +225,7 @@ pub(crate) fn render(
             notices(app, conversation, buf, &mut targets);
         }
     }
+    drag::draw(app, buf, pointer);
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {
             buf.set_style(target.rect, HOVER_TINT);
@@ -404,7 +411,7 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     // A shown panel wins over the offer: the panel takes the keys, so a
     // form's caret takes the cursor.
     if let Some(panel) = app.panel() {
-        return request::caret(&panel, area, area.bottom());
+        return request::caret(&panel, area, status_rows::input_bottom(app, area));
     }
     // The offer hides the draft's cursor while it swaps in for the
     // conversation.
@@ -418,7 +425,9 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     }
     let (rows, _, row, col) = input_box(app, area.width);
     let below = to_u16(rows.len().saturating_sub(row));
-    let y = area.bottom().checked_sub(below).filter(|y| *y >= area.y)?;
+    let y = status_rows::input_bottom(app, area)
+        .checked_sub(below)
+        .filter(|y| *y >= area.y)?;
     let x = area.x.saturating_add(col.min(area.width.saturating_sub(1)));
     Some(Position::new(x, y))
 }

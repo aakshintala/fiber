@@ -835,6 +835,7 @@ fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
         Err(e) => return fail(failed(ErrorCode::IoFailed, format!("the terminal: {e}"))),
     };
     let theme = theme_setting::setting(&home, &config, &|path| std::fs::read_to_string(path));
+    let save = launch::save(home.clone());
     let seam: Arc<dyn tui::Configure> = Arc::new(configure::Seam::new(home.clone()));
     let hub_clock = Arc::clone(&clock);
     // The picker's model lists: the cached copy at once, refreshed in the
@@ -856,6 +857,7 @@ fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
     launch.models = Some(models);
     launch.configure = Some(seam);
     launch.open_at = open_at;
+    launch.save = Some(save);
     tui::run(tty, launch, connect, Box::new(crash::attach), clock)
 }
 

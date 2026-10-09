@@ -68,6 +68,88 @@ pub(crate) fn floor_line(width: u16, height: u16) -> Option<String> {
         .then(|| format!("Fiber needs {columns}×{rows} · now {width}×{height}"))
 }
 
+/// A draggable edge: the rail's last column, the panel's first, or the
+/// hidden rail's grip (`docs/tui.md`, "Layout", "Shedding").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Edge {
+    Rail,
+    Panel,
+    Grip,
+}
+
+/// The edge in column `col` of `layout`, if any.
+pub(crate) fn edge_at(layout: &Layout, col: u16) -> Option<Edge> {
+    if layout
+        .rail
+        .is_some_and(|rail| col == rail.right().saturating_sub(1))
+    {
+        return Some(Edge::Rail);
+    }
+    if layout.panel.is_some_and(|panel| col == panel.x) {
+        return Some(Edge::Panel);
+    }
+    if layout.grip.is_some_and(|grip| col == grip.x) {
+        return Some(Edge::Grip);
+    }
+    None
+}
+
+/// The edge's column as a rect, full height; `None` when that region is
+/// not drawn.
+pub(crate) fn edge_rect(layout: &Layout, edge: Edge) -> Option<Rect> {
+    match edge {
+        Edge::Rail => layout
+            .rail
+            .map(|rail| Rect::new(rail.right().saturating_sub(1), rail.y, 1, rail.height)),
+        Edge::Panel => layout
+            .panel
+            .map(|panel| Rect::new(panel.x, panel.y, 1, panel.height)),
+        Edge::Grip => layout.grip,
+    }
+}
+
+/// The width a drag of `edge` to column `col` gives on a `screen`-wide
+/// layout, before the rail's floor: the rail (and the grip) `col + 1`,
+/// the panel `screen - col` kept at its floor; each kept at its ceiling
+/// and so the conversation keeps CONVERSATION_MIN beside what else is
+/// drawn.
+#[allow(
+    clippy::manual_clamp,
+    reason = "a resize can cross the bounds, where `clamp` panics"
+)]
+pub(crate) fn dragged(edge: Edge, col: u16, screen: u16, layout: &Layout) -> u16 {
+    match edge {
+        Edge::Rail => {
+            let panel = layout.panel.map_or(0, |panel| panel.width);
+            col.saturating_add(1).min(RAIL_CEILING).min(
+                screen
+                    .saturating_sub(CONVERSATION_MIN)
+                    .saturating_sub(panel),
+            )
+        }
+        Edge::Grip => col
+            .saturating_add(1)
+            .min(RAIL_CEILING)
+            .min(screen.saturating_sub(CONVERSATION_MIN)),
+        Edge::Panel => {
+            let left = layout.rail.map_or_else(
+                || layout.grip.map_or(0, |grip| grip.width),
+                |rail| rail.width,
+            );
+            screen
+                .saturating_sub(col)
+                .max(PANEL_FLOOR)
+                .min(PANEL_CEILING)
+                .min(screen.saturating_sub(CONVERSATION_MIN).saturating_sub(left))
+        }
+    }
+}
+
+/// `width` as a share of `screen`, in percent rounded to one decimal.
+pub(crate) fn share_for(width: u16, screen: u16) -> f64 {
+    (f64::from(width) * 1000.0 / f64::from(screen)).round() / 10.0
+}
+
 /// A region's width: `share` percent of `width`, rounded, kept from `floor`
 /// to `ceiling`. `round` takes a half away from zero, which for a
 /// width is half up.
@@ -76,7 +158,7 @@ pub(crate) fn floor_line(width: u16, height: u16) -> Option<String> {
     clippy::cast_sign_loss,
     reason = "the value is clamped to floor..=ceiling, both u16, before the cast"
 )]
-fn share_of(width: u16, share: f64, floor: u16, ceiling: u16) -> u16 {
+pub(crate) fn share_of(width: u16, share: f64, floor: u16, ceiling: u16) -> u16 {
     let target = f64::from(width) * share / 100.0;
     target.round().clamp(f64::from(floor), f64::from(ceiling)) as u16
 }

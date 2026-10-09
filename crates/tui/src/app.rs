@@ -41,6 +41,7 @@ mod config_views;
 #[path = "copy.rs"]
 pub(crate) mod copy;
 mod delegates;
+mod drag;
 mod find;
 #[path = "app_focus.rs"]
 mod focus;
@@ -61,6 +62,7 @@ mod reconnect;
 pub(crate) mod results;
 mod screen;
 mod select;
+mod status_rows;
 
 use screen::Screen;
 
@@ -246,6 +248,11 @@ pub(crate) struct App {
     regions: crate::focus::Regions,
     /// What the person chose to show: the panel's hide.
     chrome: chrome::Chrome,
+    /// The drag resizing the rail or the panel, and the shares waiting
+    /// to be saved.
+    drag: drag::DragState,
+    /// The narrow layout's rows below the conversation.
+    status_rows: status_rows::StatusRowsState,
     /// The attached session's folded panel data (`docs/tui.md`, "The panel").
     panel_state: panel::PanelState,
     /// Each delegate's latest `session_status`, by session: what the
@@ -303,6 +310,8 @@ impl App {
             stops: Vec::new(),
             regions: crate::focus::Regions::default(),
             chrome: chrome::Chrome::default(),
+            drag: drag::DragState::default(),
+            status_rows: status_rows::StatusRowsState::default(),
             panel_state: panel::PanelState::default(),
             delegate_rows: HashMap::new(),
             rail_state: rail::RailState::default(),
@@ -575,8 +584,17 @@ impl App {
 
     /// The conversation's rows: the screen less the header, the input box
     /// or the panel in its place, the steering queue, the banner, the badge
-    /// and the hint. None on a screen too short for them.
+    /// and the hint, and the narrow layout's rows under the conversation.
+    /// None on a screen too short for them.
     pub(crate) fn conversation_height(&self) -> usize {
+        let below = self.below_rows();
+        usize::from(self.screen.height()).saturating_sub(below + self.narrow_rows(below))
+    }
+
+    /// The rows below the conversation before the narrow layout's rows:
+    /// the header, the input box or the panel in its place, the steering
+    /// queue, the banner, the badge and the hint.
+    pub(crate) fn below_rows(&self) -> usize {
         let input = self.panel().map_or(self.input_height(), |panel| {
             panel
                 .lines
@@ -586,14 +604,13 @@ impl App {
                 })
                 .sum()
         });
-        let below = self.chrome.header_rows()
+        self.chrome.header_rows()
             + input
             + self.completion_rows()
             + self.steering().len()
             + usize::from(self.banner().is_some())
             + usize::from(self.badge().is_some())
-            + usize::from(self.hint());
-        usize::from(self.screen.height()).saturating_sub(below)
+            + usize::from(self.hint())
     }
 
     /// The approval panel, while it is open.

@@ -78,6 +78,9 @@ pub struct Launch {
     /// `scoped_models`: the references the model picker shows; empty
     /// means every installed model (`docs/configuration.md`, "Keys").
     pub scoped_models: Vec<String>,
+    /// Saves a share the person dragged to the global configuration;
+    /// `None` saves nothing.
+    pub save: Option<crate::Save>,
     /// The seam the configuration views read and write through
     /// (`docs/tui.md`, "Swapped views"); with none, each says it is not
     /// available.
