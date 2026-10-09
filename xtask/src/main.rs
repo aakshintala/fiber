@@ -27,6 +27,9 @@
 //!   against the budget table and writes the pull request comment; exit 1
 //!   when a budget, a head self-check or the table mapping fails
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `check-docs`, `ci-needs`: the checks
+//! - `logo-mask --font <path> [--out <path>]`: regenerates the logo's alpha
+//!   mask from JetBrains Mono ExtraBold; the font is downloaded by whoever
+//!   regenerates and never committed
 
 #![allow(
     clippy::print_stdout,
@@ -37,6 +40,7 @@
 mod bench;
 mod ci_needs;
 mod docs;
+mod logo;
 mod rules;
 mod select;
 #[cfg(test)]
@@ -250,6 +254,7 @@ fn run(args: &[String]) -> Result<bool, String> {
             &ci_needs::check(&read(ci_needs::WORKFLOW)?, &read(ci_needs::CI_DOC)?)?,
             "every job but ci and the report jobs is in the ci job's needs",
         ),
+        "logo-mask" => logo::run(rest),
         "bench-report" => {
             let event = bench::Event::parse(&flag(rest, "--event")?)?;
             let comment_path = flag(rest, "--comment")?;

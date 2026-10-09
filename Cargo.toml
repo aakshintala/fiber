@@ -8,6 +8,7 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
+ab_glyph = "0.2.32"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 serde = { version = "1", features = ["derive"] }
