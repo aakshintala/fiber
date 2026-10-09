@@ -645,6 +645,8 @@ box, as an approval does (`docs/tools.md`, "Asking the person").
   shown. The call's ledger row reads "answered" or "declined", and the group
   line counts "asked 4 questions".
 
+The other interactions, `confirm`, `select`, `multi_select` and `text_input`, raised by an extension's `host.ask` and by MCP elicitation, are drawn as one-question forms: the same panel with no tab row, the question, then its rows, ending with "Chat about this". `confirm` shows two options, yes and no, and Enter on one replies `confirmed`. `select` shows the options, and Enter on one replies `labels` with that label. `multi_select` shows the options: Space toggles one, and Enter replies `labels`, possibly empty. `text_input` shows only the row to answer in words, and Enter replies `text` as typed. The last two end with a `Submit` row that does what Enter does, for the mouse. Esc, and "Chat about this", decline as on a form.
+
 ## Reading and copying
 
 ### Selection and copy

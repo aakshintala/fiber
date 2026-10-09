@@ -88,7 +88,7 @@ impl OneQuestion {
                 Kind::Confirm | Kind::Select | Kind::MultiSelect => {}
             },
             Key::Backspace => {
-                if self.kind == Kind::TextInput && self.at == Row::Words {
+                if self.at == Row::Words {
                     form::delete_before(&mut self.words, &mut self.caret);
                 }
             }
@@ -127,7 +127,7 @@ impl OneQuestion {
                 }
             }
             Edit::Left | Edit::Right => {
-                if self.kind == Kind::TextInput && self.at == Row::Words {
+                if self.at == Row::Words {
                     form::move_caret(&self.words, &mut self.caret, *edit == Edit::Right);
                 }
             }
@@ -306,20 +306,19 @@ impl OneQuestion {
 
     /// Types one character and takes the cursor to the words row.
     fn type_char(&mut self, ch: char) {
-        if self.kind == Kind::TextInput {
-            form::insert_at(&mut self.words, &mut self.caret, ch);
-            self.at = Row::Words;
-        }
+        form::insert_at(&mut self.words, &mut self.caret, ch);
+        self.at = Row::Words;
     }
 
     /// Toggles the selected multi-choice option when the cursor is on one.
     fn toggle(&mut self) {
-        if self.kind == Kind::MultiSelect {
-            if let Row::Option(option) = self.at {
+        match self.at {
+            Row::Option(option) => {
                 if let Some(toggled) = self.toggled.get_mut(option) {
                     *toggled = !*toggled;
                 }
             }
+            Row::Words | Row::Submit | Row::Chat => {}
         }
     }
 

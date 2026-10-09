@@ -283,6 +283,33 @@ fn text_cursor_edits_do_nothing_off_the_words_row() {
 }
 
 #[test]
+fn backspace_and_arrows_off_words_leave_text_and_caret_unchanged() {
+    let mut backspace = OneQuestion::text_input("Words?".to_owned());
+    type_text(&mut backspace, "ab");
+    press(&mut backspace, &[Key::Down, Key::Backspace]);
+    type_text(&mut backspace, "x");
+    assert_eq!(
+        lines(&backspace).get(2).map(String::as_str),
+        Some("› ✎ abx")
+    );
+
+    let mut left = OneQuestion::text_input("Words?".to_owned());
+    type_text(&mut left, "ab");
+    press(&mut left, &[Key::Down]);
+    left.on_edit(&Edit::Left);
+    type_text(&mut left, "x");
+    assert_eq!(lines(&left).get(2).map(String::as_str), Some("› ✎ abx"));
+
+    let mut right = OneQuestion::text_input("Words?".to_owned());
+    type_text(&mut right, "ab");
+    right.on_edit(&Edit::Left);
+    press(&mut right, &[Key::Down]);
+    right.on_edit(&Edit::Right);
+    type_text(&mut right, "x");
+    assert_eq!(lines(&right).get(2).map(String::as_str), Some("› ✎ axb"));
+}
+
+#[test]
 fn text_input_paste_turns_control_characters_into_spaces() {
     let mut question = OneQuestion::text_input("Words?".to_owned());
     question.on_edit(&Edit::Paste("a\nb\tc".to_owned()));
@@ -381,6 +408,19 @@ fn tabs_are_inert_and_typing_on_option_kinds_changes_nothing() {
     question.on_edit(&Edit::Paste("x\ny".to_owned()));
     assert_eq!(lines(&question), before);
     assert_eq!(question.answer(), before_answer);
+}
+
+#[test]
+fn space_on_multi_select_submit_and_chat_does_nothing() {
+    let mut question = multi_select();
+    press(&mut question, &[Key::Down, Key::Down, Key::Down]);
+    let submit = lines(&question);
+    press(&mut question, &[Key::Char(' ')]);
+    assert_eq!(lines(&question), submit);
+    press(&mut question, &[Key::Down]);
+    let chat = lines(&question);
+    press(&mut question, &[Key::Char(' ')]);
+    assert_eq!(lines(&question), chat);
 }
 
 #[test]
