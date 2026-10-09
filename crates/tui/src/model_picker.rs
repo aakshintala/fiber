@@ -223,11 +223,10 @@ impl ModelPicker {
         open.chips = chips;
         open.touched = touched;
         // A read answering over the checklist keeps each kept model's
-        // mark, and a new model starts marked from the saved list. Any
-        // other open keeps no marks.
-        open.marks = if open.marks.is_empty() {
-            Vec::new()
-        } else {
+        // mark, and a new row starts marked from the saved list, even
+        // when the open began with no catalogue. Any other open keeps
+        // no marks.
+        open.marks = if open.mode == Mode::Scope {
             self.catalogue
                 .models
                 .iter()
@@ -239,6 +238,8 @@ impl ModelPicker {
                         .unwrap_or_else(|| self.scoped.contains(&entry.reference))
                 })
                 .collect()
+        } else {
+            Vec::new()
         };
     }
 

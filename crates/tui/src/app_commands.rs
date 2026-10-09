@@ -437,10 +437,7 @@ impl App {
                 self.open_model_picker(crate::model_picker::Mode::Choose)
             }
             "thinking" => self.thinking_command(&rest),
-            "scoped-models" => {
-                self.draft.clear();
-                self.scoped_models_command()
-            }
+            "scoped-models" => self.scoped_models_command(),
             "panel" => {
                 self.draft.clear();
                 self.toggle_panel()
