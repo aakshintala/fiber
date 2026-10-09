@@ -49,43 +49,26 @@ pub(crate) fn lay(working: &Working, now_ms: Option<u64>, width: u16) -> Laid {
     }
     let tail = " · esc to interrupt";
     let room = usize::from(width);
-    if format::width(&text) + format::width(tail) <= room {
+    let (text, interrupt) = if format::width(&text) + format::width(tail) <= room {
         let start = u16::try_from(format::width(&text) + format::width(" · ")).unwrap_or(u16::MAX);
         let end = u16::try_from(format::width(&text) + format::width(tail)).unwrap_or(u16::MAX);
         text.push_str(tail);
-        Laid {
-            word: Some(0..format::width("Working")),
-            interrupt: Some(start..end),
-            retrying: false,
-            next_ms: next_second(now_ms, working.started_ms),
-            text,
-        }
+        (text, Some(start..end))
     } else if format::width(&text) <= room {
-        Laid {
-            word: Some(0..format::width("Working")),
-            interrupt: None,
-            retrying: false,
-            next_ms: next_second(now_ms, working.started_ms),
-            text,
-        }
+        (text, None)
     } else if format::width("Working") <= room {
-        Laid {
-            word: Some(0..format::width("Working")),
-            interrupt: None,
-            retrying: false,
-            next_ms: next_second(now_ms, working.started_ms),
-            text: String::from("Working"),
-        }
+        (String::from("Working"), None)
     } else {
-        let text = format::cut("Working", room);
-        let cells = format::width(&text);
-        Laid {
-            word: Some(0..cells),
-            interrupt: None,
-            retrying: false,
-            next_ms: next_second(now_ms, working.started_ms),
-            text,
-        }
+        (format::cut("Working", room), None)
+    };
+    // Every branch starts the text with the word, whole or cut.
+    let word = format::width("Working").min(format::width(&text));
+    Laid {
+        text,
+        word: Some(0..word),
+        interrupt,
+        retrying: false,
+        next_ms: next_second(now_ms, working.started_ms),
     }
 }
 
