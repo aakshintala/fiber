@@ -5,7 +5,7 @@
 
 mod batch;
 
-use batch::batch;
+use batch::{batch, batchable};
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -257,20 +257,34 @@ impl<B: Backend> Loop<B> {
                     Err(_) => return 0,
                 },
             };
+            // Only a batch starting with a hub line or tick holds: a
+            // key, click or resize folds nothing into a held page, and
+            // opening a delegate swaps the shown screen, which must
+            // never happen mid-hold. A hub batch folds before it counts:
+            // the open page is counted once for the batch, not once per
+            // changed line, and the batch settles once at its end, when
+            // the counts are exact.
+            let held = batchable(&first);
             let inputs = batch(first, &mut self.stash, rx);
-            // A batch folds before it counts: the open page is counted
-            // once for the batch, not once per changed line, and the
-            // batch settles once at its end, when the counts are exact.
-            // Holding one line counts it once at the end, as counting it
-            // at once would, so every batch holds.
-            self.app.begin_batch();
+            if held {
+                self.app.begin_batch();
+            }
+            let mut code = None;
             for input in inputs {
                 self.wakeups = self.wakeups.saturating_add(1);
-                if let Some(code) = self.handle(input) {
-                    return code;
+                if let Some(quit) = self.handle(input) {
+                    code = Some(quit);
+                    break;
                 }
             }
-            self.app.end_batch();
+            // The batch's end runs on every path out, so a quit never
+            // leaves the hold set.
+            if held {
+                self.app.end_batch();
+            }
+            if let Some(code) = code {
+                return code;
+            }
             if let Some(code) = self.frame(rx) {
                 return code;
             }
