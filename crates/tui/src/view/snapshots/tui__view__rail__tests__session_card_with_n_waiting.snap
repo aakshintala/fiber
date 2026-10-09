@@ -1,0 +1,44 @@
+---
+source: crates/tui/src/view/rail_tests.rs
+expression: text(&buf)
+---
+ fix the parser
+                                                                                                                                2 waiting
+                                                                                                                                directory  …sers/you/work/fiber
+                                                                                                                                model  test/model
+                                                                                                                                tokens in / out  1 / 2
+                                                                                                                                cache hits  0%
+
+
+
+
+
+
+
+
+
+
+
+
+
+⋮                                                                                                                             ⋮
+⋮                                                                                                                             ⋮
+⋮                                                                                                                             ⋮
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ >

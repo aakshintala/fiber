@@ -246,6 +246,7 @@ impl App {
             | TargetId::CloseOverlay
             | TargetId::Offer(_)
             | TargetId::Panel(_)
+            | TargetId::Rail(_)
             | TargetId::Form(_)
             | TargetId::View(_) => None,
         }

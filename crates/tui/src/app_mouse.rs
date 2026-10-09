@@ -22,7 +22,7 @@ impl App {
         self.history.cancel();
         self.copied = false;
         let effect = match target {
-            TargetId::Badge => self.open_first(),
+            TargetId::Badge => self.next_request(),
             TargetId::Link { .. } => self.follow_link(target),
             TargetId::FindCount => {
                 self.open_results();
@@ -67,6 +67,7 @@ impl App {
             TargetId::Form(spot) => self.form_click(spot),
             TargetId::View(spot) => self.config_view_click(spot),
             TargetId::Panel(spot) => self.panel_click(spot),
+            TargetId::Rail(spot) => self.rail_click(spot),
             TargetId::Token(number) => self.open_token(number),
             TargetId::Turn(_) => Effect::None,
         };
@@ -82,12 +83,12 @@ impl App {
     }
 
     /// The mouse wheel scrolls what it is over (`docs/tui.md`, "Turns",
-    /// "The panel", "Layout"): over the panel it scrolls only the panel;
-    /// over the conversation's visible rows it scrolls the conversation by
-    /// [`WHEEL_ROWS`] rows, but only while a session is on screen and no
-    /// swapped view covers the conversation. Over the rail, the header, or
-    /// below the conversation it scrolls the conversation not at all; the
-    /// rail's own wheel scrolling is #669 Part 4's.
+    /// "The panel", "The rail", "Layout"): over the panel it scrolls only
+    /// the panel; over the rail, only the rail; over the conversation's
+    /// visible rows it scrolls the conversation by [`WHEEL_ROWS`] rows, but
+    /// only while a session is on screen and no swapped view covers the
+    /// conversation. Over the header or below the conversation it scrolls
+    /// the conversation not at all.
     pub(crate) fn on_wheel(&mut self, mouse: &Mouse) {
         let up = match mouse.kind {
             MouseKind::WheelUp => true,
@@ -111,6 +112,14 @@ impl App {
             && self.over_conversation(at)
         {
             self.scroll_conversation(up);
+        }
+        let over_rail = self
+            .chrome()
+            .regions()
+            .rail
+            .is_some_and(|rail| rail.contains(Position::new(mouse.col, mouse.row)));
+        if over_rail {
+            self.scroll_rail(up);
         }
     }
 

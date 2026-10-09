@@ -504,6 +504,17 @@ impl Queue {
         first.is_some()
     }
 
+    /// Shows the request `request_id` from `session` while it waits; a
+    /// request answered or not queued shows nothing.
+    pub(crate) fn open_request(&mut self, session: &SessionId, request_id: &str) {
+        let at = self.requests.iter().position(|request| {
+            request.session == *session && request.request_id == request_id && request.waiting()
+        });
+        if let Some(at) = at {
+            self.show(at);
+        }
+    }
+
     /// Folds one of [`KINDS`] from any session: the call, the request and
     /// its resolution. Only a `form` interaction is queued.
     pub(crate) fn fold(&mut self, envelope: &Envelope) {
