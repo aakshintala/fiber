@@ -31,7 +31,7 @@ use contract::{ErrorCode, SessionId};
 use serde_json::Value;
 
 use crate::connection::Hub;
-use crate::feed::last_kind;
+use crate::feed::follow::last_kind;
 use crate::start::{self, Bind};
 
 /// Why a relayed command's session could not be reached: the rejection's

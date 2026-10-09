@@ -22,8 +22,10 @@ use std::time::Duration;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
+use super::follow::{how_left, last_kind};
 use super::*;
 use crate::fake::{FakeSession, status, status_line};
+use crate::recent::RecentRow;
 
 /// One named deadline per wait: the feed answers before it.
 const DEADLINE: Duration = Duration::from_secs(10);

@@ -21,7 +21,7 @@ use std::thread;
 use serde_json::{Map, Value};
 
 use crate::connection::{Hub, lock};
-use crate::feed::kind_of;
+use crate::feed::follow::kind_of;
 use crate::relay::Relays;
 
 /// Per connection, in `Relays`: what the sweep needs.
