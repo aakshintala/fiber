@@ -102,7 +102,11 @@ pub fn filter_files<'a>(all: &'a [&'static str], query: &str) -> Vec<&'a str> {
 /// The focused row, clamped into the filtered list wherever it is used, so
 /// rendering and selection always agree on the same row.
 fn clamped(focus: usize, len: usize) -> usize {
-    if len == 0 { 0 } else { focus.min(len - 1) }
+    if len == 0 {
+        0
+    } else {
+        focus.min(len - 1)
+    }
 }
 
 pub struct State {
