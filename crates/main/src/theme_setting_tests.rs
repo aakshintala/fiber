@@ -240,6 +240,34 @@ fn a_home_read_error_other_than_absence_is_the_theme() {
 }
 
 #[test]
+fn a_package_read_error_other_than_absence_is_the_theme() {
+    let home = fakes::TempDir::new("fiber-theme-package-denied");
+    healthy(home.path(), "a");
+    healthy(home.path(), "b");
+    let a_file = home
+        .path()
+        .join("extensions")
+        .join("a")
+        .join("themes")
+        .join("dusk.json");
+    let denied = |path: &Path| {
+        if path == a_file {
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied"))
+        } else if path.starts_with(home.path().join("extensions").join("b")) {
+            panic!("asked {path:?}");
+        } else {
+            Err(io::Error::new(io::ErrorKind::NotFound, "gone"))
+        }
+    };
+    let (got, asked) = named_with(home.path(), "dusk", &denied);
+    let tui::ThemeSetting::File { text, .. } = got else {
+        panic!("not a theme file");
+    };
+    assert_eq!(text, Err("denied".to_owned()));
+    assert_eq!(asked.last(), Some(&a_file));
+}
+
+#[test]
 fn the_first_package_by_directory_name_wins() {
     let home = fakes::TempDir::new("fiber-theme-order");
     healthy(home.path(), "b");
