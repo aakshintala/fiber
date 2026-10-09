@@ -364,12 +364,10 @@ fn dark_cell(cell: &str, role: Role) -> Shade {
 
 #[test]
 fn the_dark_theme_is_the_doc_table() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/tui.md");
-    let doc =
-        std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+    let doc = include_str!("../../../docs/tui.md");
     let names: Vec<&str> = Role::ALL.into_iter().map(Role::name).collect();
-    assert_eq!(doc_roles(&doc), names);
-    let dark = doc_dark(&doc);
+    assert_eq!(doc_roles(doc), names);
+    let dark = doc_dark(doc);
     assert_eq!(dark.len(), ROLES, "{dark:?}");
     for (role, cell) in Role::ALL.into_iter().zip(dark.iter()) {
         assert_eq!(
