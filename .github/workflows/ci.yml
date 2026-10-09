@@ -223,31 +223,6 @@ jobs:
           tool: cargo-nextest
       # The completion tests load `fiber completion`'s scripts in bash, zsh
       # and fish (crates/main/tests/completion.rs).
-      - name: TEMP probe apt hang
-        if: matrix.runner == 'ubuntu-24.04'
-        timeout-minutes: 5
-        run: |
-          cat >"$RUNNER_TEMP/trickle.py" <<'PY'
-          import socket, threading, time
-          srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-          srv.bind(("127.0.0.1", 3129)); srv.listen(50)
-          def hold(c):
-              try:
-                  c.recv(65536)
-                  while True:
-                      c.sendall(b"X"); time.sleep(5)
-              except Exception:
-                  pass
-          while True:
-              c, _ = srv.accept()
-              threading.Thread(target=hold, args=(c,), daemon=True).start()
-          PY
-          python3 "$RUNNER_TEMP/trickle.py" &
-          sleep 1
-          start=$(date +%s)
-          APT_OPTS="-o Acquire::http::Proxy=http://127.0.0.1:3129 -o Acquire::Retries=0" \
-            scripts/install-shells 2>&1 | while IFS= read -r l; do echo "t+$(( $(date +%s) - start ))s $l"; done || true
-          echo "total $(( $(date +%s) - start ))s"
       - name: Install zsh and fish
         if: runner.os == 'Linux'
         timeout-minutes: 5
