@@ -478,13 +478,25 @@ fn received(starter: &FakeStarter) -> Vec<(String, String)> {
     starter
         .received()
         .iter()
-        .map(|text| {
-            let line: Value = serde_json::from_str(text).unwrap();
-            (
-                line["id"].as_str().unwrap().to_owned(),
-                line["command"].as_str().unwrap().to_owned(),
-            )
-        })
+        .map(|text| received_line(text))
+        .collect()
+}
+
+/// One received line as `(id, command)`.
+fn received_line(text: &str) -> (String, String) {
+    let line: Value = serde_json::from_str(text).unwrap();
+    (
+        line["id"].as_str().unwrap().to_owned(),
+        line["command"].as_str().unwrap().to_owned(),
+    )
+}
+
+/// What the fake sessions received on each connection, as `(id, command)`.
+fn received_by_connection(starter: &FakeStarter) -> Vec<Vec<(String, String)>> {
+    starter
+        .received_by_connection()
+        .iter()
+        .map(|conn| conn.iter().map(|text| received_line(text)).collect())
         .collect()
 }
 
@@ -616,12 +628,25 @@ fn two_commands_answered_closing_reach_one_resumed_session() {
     let starter = FakeStarter::bind_hold_and_append_started(&temp.dir);
     let hub = temp.hub(starter.clone());
     let mut client = Client::connect(&hub);
+    // Holds the relay thread on its first answer until both commands
+    // reached the dying process, so the second answer re-routes while the
+    // first re-route is still opening: the interleaving that reorders.
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_replay_filter) = Some(Box::new(move |_, _| {
+        parked_tx.send(()).unwrap_or(());
+        let _released = release_rx.recv_timeout(DEADLINE);
+    }));
     client.send("c_1", "reply");
     client.send("c_2", "steer");
+    parked_rx
+        .recv_timeout(DEADLINE)
+        .expect("the relay reads the first closing answer");
     assert!(
         dying.await_received(2, DEADLINE),
         "both commands were answered closing"
     );
+    release_tx.send(()).unwrap_or(());
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
         temp.clock.await_parked(until, DEADLINE),
@@ -639,6 +664,228 @@ fn two_commands_answered_closing_reach_one_resumed_session() {
             ("c_2".into(), "steer".into())
         ]
     );
+    assert_eq!(
+        received_by_connection(&starter),
+        [[
+            ("c_1".into(), "reply".into()),
+            ("c_2".into(), "steer".into())
+        ]],
+        "one connection for both"
+    );
+}
+
+#[test]
+fn a_command_read_while_a_reroute_opens_follows_it_on_one_connection() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let dying = closing_session(&temp);
+    let starter = FakeStarter::bind_hold_and_append_started(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "reply");
+    // The first answer re-routed: its entry is gone at base, so the next
+    // lookup finds nothing and opens a second relay.
+    let until = temp.clock.origin() + HELD_POLL;
+    assert!(
+        temp.clock.await_parked(until, DEADLINE),
+        "the hub waits out the exiting process"
+    );
+    let (parked_tx, parked_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_relay) = Some(Box::new(move || {
+        parked_tx.send(()).unwrap_or(());
+    }));
+    client.send("c_2", "steer");
+    parked_rx
+        .recv_timeout(DEADLINE)
+        .expect("the second command is routed");
+    let (parked_tx, parked_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_relay) = Some(Box::new(move || {
+        parked_tx.send(()).unwrap_or(());
+    }));
+    client.subscribe("c_3", "full");
+    parked_rx
+        .recv_timeout(DEADLINE)
+        .expect("the third command is routed");
+    assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
+    temp.clock.advance(HELD_POLL);
+    assert_eq!(client.acknowledged("the reply"), "c_1");
+    assert_eq!(client.acknowledged("the steer"), "c_2");
+    assert_eq!(client.acknowledged("the subscribe"), "c_3");
+    assert_eq!(starter.resumed().len(), 1, "one resume for all three");
+    assert_eq!(
+        received_by_connection(&starter),
+        [[
+            ("c_1".into(), "reply".into()),
+            ("c_2".into(), "steer".into()),
+            ("c_3".into(), "subscribe".into()),
+        ]],
+        "one connection for all three"
+    );
+}
+
+#[test]
+fn a_command_whose_write_to_the_exiting_relay_fails_follows_the_rerouted_one() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let dying = closing_session(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    // Parks the relay thread on the first answer, before it settles, so
+    // the next command's write lands on the exiting relay.
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_replay_filter) = Some(Box::new(move |_, _| {
+        parked_tx.send(()).unwrap_or(());
+        let _released = release_rx.recv_timeout(DEADLINE);
+    }));
+    client.send("c_1", "reply");
+    parked_rx
+        .recv_timeout(DEADLINE)
+        .expect("the relay reads the closing answer");
+    assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
+    let (routed_tx, routed_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_relay) = Some(Box::new(move || {
+        routed_tx.send(()).unwrap_or(());
+    }));
+    client.send("c_2", "steer");
+    routed_rx
+        .recv_timeout(DEADLINE)
+        .expect("the second command is queued");
+    release_tx.send(()).unwrap_or(());
+    temp.clock.advance(HELD_POLL);
+    assert_eq!(client.acknowledged("the reply"), "c_1");
+    assert_eq!(client.acknowledged("the steer"), "c_2");
+    assert_eq!(starter.resumed().len(), 1, "one resume for both");
+    assert_eq!(
+        received_by_connection(&starter),
+        [[
+            ("c_1".into(), "reply".into()),
+            ("c_2".into(), "steer".into())
+        ]],
+        "one connection for both"
+    );
+}
+
+#[test]
+fn answers_buffered_before_a_failed_write_are_still_read() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let dying = closing_session(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    // Parks the relay thread on its first line: all three commands are
+    // written to the exiting relay, and their answers wait in its kernel
+    // buffer.
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_replay_filter) = Some(Box::new(move |_, _| {
+        parked_tx.send(()).unwrap_or(());
+        let _released = release_rx.recv_timeout(DEADLINE);
+    }));
+    client.send("c_1", "reply");
+    client.send("c_2", "steer");
+    client.subscribe("c_3", "full");
+    parked_rx
+        .recv_timeout(DEADLINE)
+        .expect("the relay reads the first answer");
+    assert!(
+        dying.await_received(3, DEADLINE),
+        "the dying process answered all three"
+    );
+    assert!(
+        dying.await_accepted(1, DEADLINE),
+        "the dying process wrote the acceptance"
+    );
+    assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
+    let (routed_tx, routed_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_relay) = Some(Box::new(move || {
+        routed_tx.send(()).unwrap_or(());
+    }));
+    client.send("c_4", "reply");
+    routed_rx
+        .recv_timeout(DEADLINE)
+        .expect("the fourth command is queued");
+    release_tx.send(()).unwrap_or(());
+    // Every command was answered, so each gets an acknowledgement in the
+    // order it was read: the third's is the dying process's acceptance,
+    // forwarded once the resumed session answered the two commands ahead
+    // of it.
+    assert_eq!(client.acknowledged("the reply"), "c_1");
+    assert_eq!(client.acknowledged("the steer"), "c_2");
+    assert_eq!(client.acknowledged("the subscribe"), "c_3");
+    assert_eq!(client.acknowledged("the second reply"), "c_4");
+    assert_eq!(starter.resumed().len(), 1, "one resume");
+    assert_eq!(
+        received_by_connection(&starter),
+        [[
+            ("c_1".into(), "reply".into()),
+            ("c_2".into(), "steer".into()),
+            ("c_4".into(), "reply".into()),
+        ]],
+        "one connection, without the accepted subscribe"
+    );
+}
+
+#[test]
+fn commands_held_behind_a_failed_reroute_are_each_refused_in_order() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let dying = closing_session(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "reply");
+    let until = temp.clock.origin() + HELD_POLL;
+    assert!(
+        temp.clock.await_parked(until, DEADLINE),
+        "the hub waits out the exiting process"
+    );
+    let (routed_tx, routed_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_relay) = Some(Box::new(move || {
+        routed_tx.send(()).unwrap_or(());
+    }));
+    client.send("c_2", "steer");
+    // The exiting process never ends: each command is refused with its
+    // own shutdown bound, in the order it was read.
+    for k in 1..=polls() {
+        let until = temp.clock.origin() + HELD_POLL * k;
+        assert!(
+            temp.clock.await_parked(until, DEADLINE),
+            "the hub waits poll {k} inside the bound"
+        );
+        temp.clock.advance(HELD_POLL);
+    }
+    let line = client.next("the first refusal");
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1");
+    assert_eq!(line["payload"]["code"], "session_held");
+    for k in 1..=polls() {
+        let until = temp.clock.origin() + SHUTDOWN_BOUND + HELD_POLL * k;
+        assert!(
+            temp.clock.await_parked(until, DEADLINE),
+            "the hub waits poll {k} inside the second bound"
+        );
+        temp.clock.advance(HELD_POLL);
+    }
+    let line = client.next("the second refusal");
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_2");
+    assert_eq!(line["payload"]["code"], "session_held");
+    assert!(
+        routed_rx.recv_timeout(DEADLINE).is_ok(),
+        "the second command was routed"
+    );
+    assert!(starter.resumed().is_empty(), "no resume while held");
+    assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
+    client.send("c_3", "reply");
+    assert_eq!(client.acknowledged("the reply"), "c_3");
+    assert_eq!(received(&starter), [("c_3".into(), "reply".into())]);
 }
 
 #[test]
@@ -1105,7 +1352,9 @@ fn an_accepted_subscribe_is_replayed(prior: Option<&str>) {
         .recv_timeout(DEADLINE)
         .expect("the relay parks before keeping the subscribe");
     assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
-    *crate::connection::lock(&hub.before_join) = Some(Box::new(move || {
+    // The reconnect queues behind the parked acknowledgement: once it is
+    // routed, the parked thread is released to keep the level it read.
+    *crate::connection::lock(&hub.after_relay) = Some(Box::new(move || {
         release_tx.send(()).unwrap_or(());
     }));
     client.send(reply, "reply");
@@ -1150,4 +1399,208 @@ fn a_subscribe_accepted_as_the_session_dies_is_replayed() {
 #[test]
 fn a_level_change_accepted_as_the_session_dies_is_replayed() {
     an_accepted_subscribe_is_replayed(Some("summary"));
+}
+
+#[test]
+fn the_last_queued_command_holds_the_relay_until_its_queue_is_empty() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let dying = closing_session(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "reply");
+    let until = temp.clock.origin() + HELD_POLL;
+    assert!(
+        temp.clock.await_parked(until, DEADLINE),
+        "the hub waits out the exiting process"
+    );
+    let (routed_tx, routed_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_relay) = Some(Box::new(move || {
+        routed_tx.send(()).unwrap_or(());
+    }));
+    client.send("c_2", "steer");
+    routed_rx
+        .recv_timeout(DEADLINE)
+        .expect("the second command is queued");
+    // Holds the relay thread after it pops its last queued command and
+    // before it routes it: a command read meanwhile still queues on it.
+    let (popped_tx, popped_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.on_pass_on) = Some(Box::new(move |passed| {
+        let crate::retire::PassOn::Popped(id) = passed else {
+            panic!("the queue is passed on, not dropped");
+        };
+        popped_tx.send(id).unwrap_or(());
+        let _released = release_rx.recv_timeout(DEADLINE);
+    }));
+    assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
+    temp.clock.advance(HELD_POLL);
+    assert_eq!(
+        popped_rx
+            .recv_timeout(DEADLINE)
+            .expect("the queue is passed on"),
+        "c_2"
+    );
+    let (routed_tx, routed_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_relay) = Some(Box::new(move || {
+        routed_tx.send(()).unwrap_or(());
+    }));
+    client.send("c_3", "reply");
+    routed_rx
+        .recv_timeout(DEADLINE)
+        .expect("the third command queues on the held relay");
+    release_tx.send(()).unwrap_or(());
+    assert_eq!(client.acknowledged("the reply"), "c_1");
+    assert_eq!(client.acknowledged("the steer"), "c_2");
+    assert_eq!(client.acknowledged("the second reply"), "c_3");
+    assert_eq!(starter.resumed().len(), 1, "one resume for all three");
+    assert_eq!(
+        received_by_connection(&starter),
+        [[
+            ("c_1".into(), "reply".into()),
+            ("c_2".into(), "steer".into()),
+            ("c_3".into(), "reply".into()),
+        ]],
+        "one connection for all three"
+    );
+}
+
+#[test]
+fn a_client_that_leaves_drops_the_queue_and_passes_nothing_on() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let dying = closing_session(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.send("c_1", "reply");
+    let until = temp.clock.origin() + HELD_POLL;
+    assert!(
+        temp.clock.await_parked(until, DEADLINE),
+        "the hub waits out the exiting process"
+    );
+    let (routed_tx, routed_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_relay) = Some(Box::new(move || {
+        routed_tx.send(()).unwrap_or(());
+    }));
+    client.send("c_2", "steer");
+    routed_rx
+        .recv_timeout(DEADLINE)
+        .expect("the second command is queued");
+    let (dropped_tx, dropped_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.on_pass_on) = Some(Box::new(move |passed| {
+        let crate::retire::PassOn::Dropped(queued) = passed else {
+            panic!("the queue is dropped, not passed on");
+        };
+        dropped_tx.send(queued).unwrap_or(());
+    }));
+    drop(client);
+    let (gone_tx, gone_rx) = mpsc::channel();
+    let gone_hub = Arc::clone(&hub);
+    thread::spawn(move || {
+        while gone_hub.clients() != 0 {
+            thread::yield_now();
+        }
+        gone_tx.send(()).unwrap_or(());
+    });
+    gone_rx
+        .recv_timeout(DEADLINE)
+        .expect("the hub drops the disconnected client");
+    assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
+    temp.clock.advance(HELD_POLL);
+    assert_eq!(
+        dropped_rx
+            .recv_timeout(DEADLINE)
+            .expect("the queue is cleared"),
+        1,
+        "the queued command is dropped"
+    );
+    assert!(
+        starter.await_received(1, DEADLINE),
+        "the in-flight re-route finished"
+    );
+    assert_eq!(received(&starter), [("c_1".into(), "reply".into())]);
+}
+
+#[test]
+fn an_acknowledgement_is_forwarded_before_the_next_queued_command_passes_on() {
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let dying = closing_session(&temp);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    // Parks the relay thread on its first line: both commands are written
+    // to the exiting relay, and their answers wait in its kernel buffer.
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_replay_filter) = Some(Box::new(move |_, _| {
+        parked_tx.send(()).unwrap_or(());
+        let _released = release_rx.recv_timeout(DEADLINE);
+    }));
+    client.send("c_1", "reply");
+    client.subscribe("c_2", "full");
+    parked_rx
+        .recv_timeout(DEADLINE)
+        .expect("the relay reads the first answer");
+    assert!(
+        dying.await_received(2, DEADLINE),
+        "the dying process answered both"
+    );
+    assert!(
+        dying.await_accepted(1, DEADLINE),
+        "the dying process wrote the acceptance"
+    );
+    release_tx.send(()).unwrap_or(());
+    let until = temp.clock.origin() + HELD_POLL;
+    assert!(
+        temp.clock.await_parked(until, DEADLINE),
+        "the hub waits out the exiting process"
+    );
+    let (routed_tx, routed_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.after_relay) = Some(Box::new(move || {
+        routed_tx.send(()).unwrap_or(());
+    }));
+    client.send("c_3", "steer");
+    routed_rx
+        .recv_timeout(DEADLINE)
+        .expect("the third command is queued");
+    // The forwarded acknowledgement and the pass-on, in order: a pass-on
+    // before the forward logs `Popped` first.
+    let log: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let (go_tx, go_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.before_accepted) = Some(Box::new(move |line, _| {
+        assert!(crate::relay::acknowledges(line, "c_2"), "{line:?}");
+        go_rx
+            .recv_timeout(DEADLINE)
+            .expect("the test releases the forward");
+    }));
+    let logging = Arc::clone(&log);
+    *crate::connection::lock(&hub.on_pass_on) = Some(Box::new(move |passed| {
+        let crate::retire::PassOn::Popped(id) = passed else {
+            panic!("the queue is passed on, not dropped");
+        };
+        logging.lock().unwrap().push(format!("Popped({id})"));
+    }));
+    assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
+    temp.clock.advance(HELD_POLL);
+    assert_eq!(client.acknowledged("the reply"), "c_1");
+    // Armed once the first acknowledgement is read: the next forward is
+    // the held acceptance, so the one-shot hook cannot be consumed first
+    // by the resumed session's answer.
+    let logging = Arc::clone(&log);
+    *crate::connection::lock(&hub.before_forward) = Some(Box::new(move |line, _| {
+        if crate::relay::acknowledges(line, "c_2") {
+            logging.lock().unwrap().push("Forward(c_2)".to_owned());
+        }
+    }));
+    go_tx.send(()).unwrap_or(());
+    assert_eq!(client.acknowledged("the subscribe"), "c_2");
+    assert_eq!(client.acknowledged("the steer"), "c_3");
+    assert_eq!(*log.lock().unwrap(), ["Forward(c_2)", "Popped(c_3)"]);
+    assert_eq!(starter.resumed().len(), 1, "one resume");
 }

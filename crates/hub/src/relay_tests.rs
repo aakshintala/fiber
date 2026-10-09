@@ -26,6 +26,7 @@ fn a_stale_relay_never_overwrites_a_reconnects_subscription() {
             kept: Kept::default(),
             replayed: Replayed::default(),
             thread: None,
+            retiring: None,
         }
     }
     let line = |id: &str, level: &str| {
@@ -69,6 +70,7 @@ fn a_stale_relay_never_drops_a_reconnect_to_the_same_session() {
             kept: Kept::default(),
             replayed: Replayed::default(),
             thread: None,
+            retiring: None,
         }
     }
     let sid = "s_0123456789abcdef";
@@ -100,6 +102,7 @@ fn relay_slots_drop_only_their_own_entry() {
             kept: Kept::default(),
             replayed: Replayed::default(),
             thread: None,
+            retiring: None,
         }
     }
     let entries = [
@@ -125,6 +128,7 @@ fn an_accepted_subscribe_replaces_the_kept_one() {
             kept: Kept::default(),
             replayed: Replayed::default(),
             thread: None,
+            retiring: None,
         }
     }
     let line = |id: &str, command: &str| {
@@ -183,6 +187,7 @@ fn an_accepted_command_that_is_not_subscribe_changes_nothing() {
             kept: Kept::default(),
             replayed: Replayed::default(),
             thread: None,
+            retiring: None,
         }
     });
     relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, line("c_1", "prompt"));
@@ -215,6 +220,7 @@ fn only_an_accepted_full_subscribe_returns_the_waiting_first_prompt() {
         kept: Kept::default(),
         replayed: Replayed::default(),
         thread: None,
+        retiring: None,
     });
     let first = crate::first::First::new(std::sync::Arc::default());
     relays
@@ -324,6 +330,36 @@ fn hub(held: &fakes::TempDir) -> crate::connection::Hub {
     )
 }
 
+fn start_relay_thread(
+    session: &'static str,
+    epoch: u64,
+    reader: UnixStream,
+    hub: std::sync::Arc<crate::connection::Hub>,
+    writer: std::sync::Arc<std::sync::Mutex<UnixStream>>,
+    relays: std::sync::Arc<std::sync::Mutex<Relays>>,
+    kept: Kept,
+) -> std::thread::JoinHandle<()> {
+    let order = crate::connection::lock(&relays).order.clone();
+    std::thread::Builder::new()
+        .name("hub-relay-test".to_owned())
+        .spawn(move || {
+            relay(
+                RelayThread {
+                    epoch,
+                    replayed: Replayed::default(),
+                    kept,
+                    order,
+                },
+                session,
+                reader,
+                &hub,
+                &writer,
+                &relays,
+            );
+        })
+        .unwrap()
+}
+
 #[test]
 fn an_accepted_prompt_ack_settles_to_nothing() {
     let held = fakes::TempDir::new("rs");
@@ -350,6 +386,7 @@ fn an_accepted_prompt_ack_settles_to_nothing() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_1".to_owned(),
         command("c_1", "prompt"),
+        true,
     )]));
     assert!(settle(&ack("c_1"), &kept, &hub, sid, false).is_none());
     assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
@@ -362,6 +399,7 @@ fn an_accepted_prompt_ack_settles_to_nothing() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_2".to_owned(),
         command("c_2", "subscribe"),
+        true,
     )]));
     match settle(&ack("c_2"), &kept, &hub, sid, false) {
         Some(Settled::Subscribed(line)) => assert_eq!(line, command("c_2", "subscribe")),
@@ -390,6 +428,7 @@ fn a_rejected_subscribe_settles_to_nothing() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_1".to_owned(),
         subscribe("c_1"),
+        true,
     )]));
     assert!(
         settle(
@@ -407,13 +446,14 @@ fn a_rejected_subscribe_settles_to_nothing() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_2".to_owned(),
         subscribe("c_2"),
+        true,
     )]));
     assert!(settle(&rejected("c_2", "closing"), &kept, &hub, sid, false).is_none());
     assert!(kept.lock().unwrap().is_empty(), "the rejection is consumed");
 }
 
 #[test]
-fn a_reconnect_proceeds_without_a_thread_or_after_a_panic() {
+fn a_relay_without_a_thread_is_recovered_with_its_queue_first() {
     use std::io::{BufRead, BufReader};
     use std::net::Shutdown;
     use std::sync::{Arc, Mutex};
@@ -438,10 +478,11 @@ fn a_reconnect_proceeds_without_a_thread_or_after_a_panic() {
         .unwrap();
         let clock = fakes::clock::FakeClock::new();
         let timed: Arc<dyn contract::clock::Clock> = clock;
+        let starter = crate::fake::FakeStarter::bind_and_hold(&dir);
         let hub = Arc::new(crate::connection::Hub::new(
             &dir,
             "0.0.0",
-            Arc::new(crate::fake::FakeStarter::bind_and_hold(&dir)),
+            Arc::new(starter.clone()),
             Arc::clone(&timed),
             crate::diag::Diag::open(&dir, timed),
         ));
@@ -450,41 +491,50 @@ fn a_reconnect_proceeds_without_a_thread_or_after_a_panic() {
         let (writer, _peer) = UnixStream::pair().unwrap();
         writer.shutdown(Shutdown::Both).unwrap_or(());
         let thread = if panics {
-            Some(
-                std::thread::Builder::new()
-                    .spawn(|| panic!("the old relay thread panicked"))
-                    .unwrap(),
-            )
+            let thread = std::thread::Builder::new()
+                .spawn(|| panic!("the old relay thread panicked"))
+                .unwrap();
+            while !thread.is_finished() {
+                std::thread::yield_now();
+            }
+            Some(thread)
         } else {
             None
         };
+        let mut queued = serde_json::Map::new();
+        queued.insert("id".to_owned(), Value::String("c_1".to_owned()));
+        queued.insert("command".to_owned(), Value::String("reply".to_owned()));
+        queued.insert("args".to_owned(), Value::Object(serde_json::Map::new()));
+        let kept: Kept = Arc::new(Mutex::new(vec![("c_1".to_owned(), queued, false)]));
         crate::connection::lock(&relays).entries.push(Relay {
             session: SID.to_owned(),
             epoch,
             writer,
-            kept: Kept::default(),
+            kept,
             replayed: Replayed::default(),
             thread,
+            retiring: Some(crate::retire::Retire::Dead),
         });
         let (client_write, client_read) = UnixStream::pair().unwrap();
         client_read.set_read_timeout(Some(DEADLINE)).unwrap();
         let client_writer: Arc<Mutex<UnixStream>> = Arc::new(Mutex::new(client_write));
         let mut stripped = serde_json::Map::new();
-        stripped.insert("id".to_owned(), Value::String("c_1".to_owned()));
+        stripped.insert("id".to_owned(), Value::String("c_2".to_owned()));
         stripped.insert("command".to_owned(), Value::String("reply".to_owned()));
         stripped.insert("args".to_owned(), Value::Object(serde_json::Map::new()));
-        // The reconnect and the join block, so the route runs on a thread
-        // and its completion is received with the deadline.
+        // The recovery opens the resumed session, so the route runs on a
+        // thread and its completion is received with the deadline.
         let (done, finished) = std::sync::mpsc::channel();
         let routed_relays = Arc::clone(&relays);
         std::thread::spawn(move || {
             route(
-                &contract::CommandId("c_1".to_owned()),
+                &contract::CommandId("c_2".to_owned()),
                 SID,
                 stripped,
                 &hub,
                 &client_writer,
                 &routed_relays,
+                None,
                 false,
             );
             done.send(()).unwrap_or(());
@@ -493,16 +543,42 @@ fn a_reconnect_proceeds_without_a_thread_or_after_a_panic() {
             .recv_timeout(DEADLINE)
             .expect("the route returns before its deadline");
         let mut read = BufReader::new(client_read);
-        let mut text = String::new();
-        read.read_line(&mut text)
-            .expect("the resumed session acknowledges the command");
-        let line: Value = serde_json::from_str(text.trim_end()).unwrap();
-        assert_eq!(line["kind"], "command_accepted", "{line}");
-        assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+        for expected in ["c_1", "c_2"] {
+            let mut text = String::new();
+            read.read_line(&mut text)
+                .unwrap_or_else(|_| panic!("the resumed session acknowledges {expected}"));
+            let line: Value = serde_json::from_str(text.trim_end()).unwrap();
+            assert_eq!(line["kind"], "command_accepted", "{line}");
+            assert_eq!(line["payload"]["command_id"], expected, "{line}");
+        }
         assert_eq!(
             crate::connection::lock(&relays).entries.len(),
             1,
             "the dead entry is gone; only the reconnect's remains"
+        );
+        let got: Vec<(String, String)> = starter
+            .received()
+            .iter()
+            .map(|text| {
+                let line: Value = serde_json::from_str(text).unwrap();
+                (
+                    line["id"].as_str().unwrap().to_owned(),
+                    line["command"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("c_1".into(), "reply".into()),
+                ("c_2".into(), "reply".into())
+            ],
+            "the queue goes first, on one connection"
+        );
+        assert_eq!(
+            starter.received_by_connection().len(),
+            1,
+            "panics: {panics}"
         );
     }
 }
@@ -517,8 +593,11 @@ fn an_accepted_rewind_settles_to_the_session_it_names() {
         .as_object()
         .unwrap()
         .clone();
-    let kept: Kept =
-        std::sync::Arc::new(std::sync::Mutex::new(vec![("c_rw1".to_owned(), command)]));
+    let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "c_rw1".to_owned(),
+        command,
+        true,
+    )]));
     let ack = serde_json::to_vec(&json!({
         "kind": "command_accepted", "ts": 1, "schema_version": 1,
         "payload": {"command_id": "c_rw1", "result": {"new_session_id": next}},
@@ -540,6 +619,7 @@ fn a_rewind_without_a_minted_session_settles_to_nothing() {
         std::sync::Arc::new(std::sync::Mutex::new(vec![(
             "c_rw1".to_owned(),
             command.as_object().unwrap().clone(),
+            true,
         )]))
     };
     let rewind = json!({"id": "c_rw1", "command": "rewind", "args": {}});
@@ -586,7 +666,11 @@ fn an_accepted_prompt_naming_a_minted_session_starts_nothing() {
         .as_object()
         .unwrap()
         .clone();
-    let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![("c_p1".to_owned(), prompt)]));
+    let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "c_p1".to_owned(),
+        prompt,
+        true,
+    )]));
     // Only a rewind starts a session, whatever result an acknowledgement carries.
     let ack = serde_json::to_vec(&json!({
         "kind": "command_accepted", "ts": 1, "schema_version": 1,
@@ -622,32 +706,267 @@ fn muted_drops_each_replay_once() {
 }
 
 #[test]
-fn transfer_drops_a_dead_relay_and_reports_it() {
-    let mut relays = Relays::default();
-    let sid = "s_aaaaaaaaaaaaaaaa";
+fn a_failed_transfer_leaves_a_dead_relay_that_a_route_recovers() {
+    use std::io::{BufRead, BufReader};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    const DEADLINE: Duration = Duration::from_secs(10);
+    const SID: &str = "s_0123456789abcdef";
+    let held = fakes::TempDir::new("rd");
+    let dir = held.path().join("h");
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = dir.join("w");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let log_dir = dir.join("projects").join("-p").join("sessions").join(SID);
+    std::fs::create_dir_all(&log_dir).unwrap();
+    std::fs::write(
+        log_dir.join("events.jsonl"),
+        format!(
+            "{{\"kind\":\"session_started\",\"seq\":0,\"session_id\":\"{SID}\",\"payload\":{{\"workspace\":\"{}\"}}}}\n{{}}\n",
+            workspace.display()
+        ),
+    )
+    .unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let timed: Arc<dyn contract::clock::Clock> = clock;
+    let starter = crate::fake::FakeStarter::bind_and_hold(&dir);
+    let hub = Arc::new(crate::connection::Hub::new(
+        &dir,
+        "0.0.0",
+        Arc::new(starter.clone()),
+        Arc::clone(&timed),
+        crate::diag::Diag::open(&dir, timed),
+    ));
+    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
     let line = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
         .as_object()
         .unwrap()
         .clone();
-    let epoch = relays.mint();
+    let epoch = crate::connection::lock(&relays).mint();
     let (writer, peer) = UnixStream::pair().unwrap();
     writer.shutdown(std::net::Shutdown::Both).unwrap_or(());
     drop(peer);
-    relays.entries.push(Relay {
-        session: sid.to_owned(),
+    crate::connection::lock(&relays).entries.push(Relay {
+        session: SID.to_owned(),
         epoch,
         writer,
         kept: Kept::default(),
         replayed: Replayed::default(),
         thread: None,
+        retiring: None,
     });
-    assert!(!relays.transfer(sid, &line));
-    assert!(relays.entries.is_empty(), "the dead relay is dropped");
-    assert_eq!(
-        relays.subscription(sid),
-        Some(line),
-        "the level is kept anyway"
+    assert!(crate::connection::lock(&relays).transfer(SID, &line));
+    {
+        let held = crate::connection::lock(&relays);
+        assert_eq!(held.entries.len(), 1, "the dead relay stays");
+        assert!(
+            held.entries[0].retiring.is_some(),
+            "the failed write retires it"
+        );
+        assert!(held.entries[0].thread.is_none(), "no thread was taken");
+        assert_eq!(held.subscription(SID), Some(line), "the level is kept");
+    }
+    // A route for the session recovers the dead relay: the kept level is
+    // replayed before the command on the resumed session.
+    let (client_write, client_read) = UnixStream::pair().unwrap();
+    client_read.set_read_timeout(Some(DEADLINE)).unwrap();
+    let client_writer: Arc<Mutex<UnixStream>> = Arc::new(Mutex::new(client_write));
+    let mut stripped = serde_json::Map::new();
+    stripped.insert("id".to_owned(), Value::String("c_1".to_owned()));
+    stripped.insert("command".to_owned(), Value::String("reply".to_owned()));
+    stripped.insert("args".to_owned(), Value::Object(serde_json::Map::new()));
+    route(
+        &contract::CommandId("c_1".to_owned()),
+        SID,
+        stripped,
+        &hub,
+        &client_writer,
+        &relays,
+        None,
+        false,
     );
+    let mut read = BufReader::new(client_read);
+    let mut text = String::new();
+    read.read_line(&mut text)
+        .expect("the resumed session acknowledges the command");
+    let ack: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    assert_eq!(ack["payload"]["command_id"], "c_1", "{ack}");
+    let got: Vec<(String, String)> = starter
+        .received()
+        .iter()
+        .map(|text| {
+            let line: Value = serde_json::from_str(text).unwrap();
+            (
+                line["id"].as_str().unwrap().to_owned(),
+                line["command"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(got[0].1, "subscribe", "the replay goes first");
+    assert!(got[0].0.starts_with("c_"), "{got:?}");
+    assert_ne!(got[0].0, "c_1", "the replay carries an id of the hub's own");
+    assert_eq!(got[1], ("c_1".into(), "reply".into()));
+}
+
+#[test]
+fn a_recovered_command_never_queues_behind_an_older_relay() {
+    use std::io::{BufRead, BufReader};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    const DEADLINE: Duration = Duration::from_secs(10);
+    const SID: &str = "s_0123456789abcdef";
+    let held = fakes::TempDir::new("rc");
+    let dir = held.path().join("h");
+    std::fs::create_dir_all(&dir).unwrap();
+    let workspace = dir.join("w");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let log_dir = dir.join("projects").join("-p").join("sessions").join(SID);
+    std::fs::create_dir_all(&log_dir).unwrap();
+    std::fs::write(
+        log_dir.join("events.jsonl"),
+        format!(
+            "{{\"kind\":\"session_started\",\"seq\":0,\"session_id\":\"{SID}\",\"payload\":{{\"workspace\":\"{}\"}}}}\n{{}}\n",
+            workspace.display()
+        ),
+    )
+    .unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let timed: Arc<dyn contract::clock::Clock> = clock;
+    let starter = crate::fake::FakeStarter::bind_and_hold(&dir);
+    let hub = Arc::new(crate::connection::Hub::new(
+        &dir,
+        "0.0.0",
+        Arc::new(starter.clone()),
+        Arc::clone(&timed),
+        crate::diag::Diag::open(&dir, timed),
+    ));
+    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+    let command = |id: &str, command: &str| {
+        let mut stripped = serde_json::Map::new();
+        stripped.insert("id".to_owned(), Value::String(id.to_owned()));
+        stripped.insert("command".to_owned(), Value::String(command.to_owned()));
+        stripped.insert("args".to_owned(), Value::Object(serde_json::Map::new()));
+        stripped
+    };
+    // A retiring relay holding a queued command, with a live thread.
+    let retired = crate::connection::lock(&relays).mint();
+    let (park_tx, park_rx) = std::sync::mpsc::channel::<()>();
+    let parked = std::thread::Builder::new()
+        .name("parked-relay".to_owned())
+        .spawn(move || {
+            let parked = park_rx.recv_timeout(DEADLINE);
+            assert!(
+                matches!(parked, Err(std::sync::mpsc::RecvTimeoutError::Disconnected)),
+                "the test releases the parked relay before its deadline"
+            );
+        })
+        .unwrap();
+    let (retired_write, _) = UnixStream::pair().unwrap();
+    crate::connection::lock(&relays).entries.push(Relay {
+        session: SID.to_owned(),
+        epoch: retired,
+        writer: retired_write,
+        kept: Arc::new(Mutex::new(vec![(
+            "c_4".to_owned(),
+            command("c_4", "reply"),
+            false,
+        )])),
+        replayed: Replayed::default(),
+        thread: Some(parked),
+        retiring: Some(crate::retire::Retire::Exited),
+    });
+    // A newer dead relay holding an unsent command, with no thread.
+    let dead = crate::connection::lock(&relays).mint();
+    assert!(dead > retired);
+    let (dead_write, dead_peer) = UnixStream::pair().unwrap();
+    dead_write.shutdown(std::net::Shutdown::Both).unwrap_or(());
+    drop(dead_peer);
+    crate::connection::lock(&relays).entries.push(Relay {
+        session: SID.to_owned(),
+        epoch: dead,
+        writer: dead_write,
+        kept: Arc::new(Mutex::new(vec![(
+            "c_2".to_owned(),
+            command("c_2", "reply"),
+            false,
+        )])),
+        replayed: Replayed::default(),
+        thread: None,
+        retiring: Some(crate::retire::Retire::Dead),
+    });
+    // A pass-on from the retiring relay routes with its bound: the dead
+    // relay recovers its queue with that bound, never from the top, so
+    // nothing queues behind the older relay's command.
+    let (client_write, client_read) = UnixStream::pair().unwrap();
+    client_read.set_read_timeout(Some(DEADLINE)).unwrap();
+    let client_writer: Arc<Mutex<UnixStream>> = Arc::new(Mutex::new(client_write));
+    let (done, finished) = std::sync::mpsc::channel();
+    let routed = Arc::clone(&relays);
+    let passing = command("c_3", "steer");
+    std::thread::spawn(move || {
+        route(
+            &contract::CommandId("c_3".to_owned()),
+            SID,
+            passing,
+            &hub,
+            &client_writer,
+            &routed,
+            Some(retired),
+            false,
+        );
+        done.send(()).unwrap_or(());
+    });
+    finished
+        .recv_timeout(DEADLINE)
+        .expect("the route returns before its deadline");
+    let mut read = BufReader::new(client_read);
+    for expected in ["c_2", "c_3"] {
+        let mut text = String::new();
+        read.read_line(&mut text)
+            .unwrap_or_else(|_| panic!("the resumed session acknowledges {expected}"));
+        let line: Value = serde_json::from_str(text.trim_end()).unwrap();
+        assert_eq!(line["kind"], "command_accepted", "{line}");
+        assert_eq!(line["payload"]["command_id"], expected, "{line}");
+    }
+    let got: Vec<(String, String)> = starter
+        .received()
+        .iter()
+        .map(|text| {
+            let line: Value = serde_json::from_str(text).unwrap();
+            (
+                line["id"].as_str().unwrap().to_owned(),
+                line["command"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("c_2".into(), "reply".into()),
+            ("c_3".into(), "steer".into())
+        ],
+        "the recovered queue goes first, on one connection"
+    );
+    assert_eq!(starter.received_by_connection().len(), 1);
+    let held = crate::connection::lock(&relays);
+    assert_eq!(
+        held.entries.len(),
+        2,
+        "the older relay still holds its queue"
+    );
+    let older = held
+        .entries
+        .iter()
+        .find(|entry| entry.epoch == retired)
+        .unwrap();
+    let queued: Vec<String> = crate::connection::lock(&older.kept)
+        .iter()
+        .map(|(id, _, _)| id.clone())
+        .collect();
+    assert_eq!(queued, vec!["c_4".to_owned()]);
+    drop(park_tx);
 }
 
 #[test]
@@ -672,13 +991,142 @@ fn a_failed_transfer_unmutes_only_its_own_minted_id() {
         kept: Kept::default(),
         replayed: std::sync::Arc::clone(&replayed),
         thread: None,
+        retiring: None,
     });
-    assert!(!relays.transfer(sid, &line));
+    assert!(relays.transfer(sid, &line));
     assert_eq!(
         *replayed.lock().unwrap(),
         vec!["c_unrelated".to_owned()],
         "the failed write's minted mute is removed and the other stays"
     );
+    assert_eq!(relays.entries.len(), 1, "the dead relay stays");
+}
+
+#[test]
+fn an_exited_relay_never_keeps_an_accepted_level() {
+    let line = |id: &str| {
+        json!({"id": id, "command": "subscribe", "args": {"level": "full"}})
+            .as_object()
+            .unwrap()
+            .clone()
+    };
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let mut relays = Relays::default();
+    let epoch = relays.mint();
+    let (writer, _) = UnixStream::pair().unwrap();
+    relays.entries.push(Relay {
+        session: sid.to_owned(),
+        epoch,
+        writer,
+        kept: Kept::default(),
+        replayed: Replayed::default(),
+        thread: None,
+        retiring: Some(crate::retire::Retire::Exited),
+    });
+    assert!(relays.accepted(sid, epoch, line("c_1")).is_none());
+    assert_eq!(
+        relays.subscription(sid),
+        None,
+        "an exited relay keeps no level"
+    );
+    // A relay a failed write retired still keeps, as the joined path did.
+    let epoch = relays.mint();
+    let (writer, _) = UnixStream::pair().unwrap();
+    relays.entries.push(Relay {
+        session: sid.to_owned(),
+        epoch,
+        writer,
+        kept: Kept::default(),
+        replayed: Replayed::default(),
+        thread: None,
+        retiring: Some(crate::retire::Retire::Dead),
+    });
+    assert!(relays.accepted(sid, epoch, line("c_2")).is_none());
+    assert_eq!(
+        relays.subscription(sid),
+        Some(line("c_2")),
+        "a dead relay keeps the level"
+    );
+}
+
+#[test]
+fn a_transfer_with_only_retiring_relays_keeps_the_level_and_opens_nothing() {
+    let line = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let mut relays = Relays::default();
+    let epoch = relays.mint();
+    let (writer, _peer) = UnixStream::pair().unwrap();
+    let replayed = Replayed::default();
+    relays.entries.push(Relay {
+        session: sid.to_owned(),
+        epoch,
+        writer,
+        kept: Kept::default(),
+        replayed: std::sync::Arc::clone(&replayed),
+        thread: None,
+        retiring: Some(crate::retire::Retire::Exited),
+    });
+    assert!(
+        relays.transfer(sid, &line),
+        "nothing more is needed: the next open replays the level"
+    );
+    assert_eq!(relays.subscription(sid), Some(line));
+    assert_eq!(relays.entries.len(), 1, "no relay is opened");
+    assert!(
+        replayed.lock().unwrap().is_empty(),
+        "nothing is written to the retiring relay"
+    );
+}
+
+#[test]
+fn a_transfer_lands_on_the_live_relay() {
+    use std::io::{BufRead, BufReader};
+    let line = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let mut relays = Relays::default();
+    // An older retiring relay never takes the transfer.
+    let stale = relays.mint();
+    let (stale_write, _) = UnixStream::pair().unwrap();
+    relays.entries.push(Relay {
+        session: sid.to_owned(),
+        epoch: stale,
+        writer: stale_write,
+        kept: Kept::default(),
+        replayed: Replayed::default(),
+        thread: None,
+        retiring: Some(crate::retire::Retire::Exited),
+    });
+    let live = relays.mint();
+    let (writer, peer) = UnixStream::pair().unwrap();
+    let replayed: Replayed = Replayed::default();
+    relays.entries.push(Relay {
+        session: sid.to_owned(),
+        epoch: live,
+        writer,
+        kept: Kept::default(),
+        replayed: std::sync::Arc::clone(&replayed),
+        thread: None,
+        retiring: None,
+    });
+    assert!(relays.transfer(sid, &line));
+    assert_eq!(relays.subscription(sid), Some(line));
+    let mut read = BufReader::new(peer);
+    let mut text = String::new();
+    read.read_line(&mut text)
+        .expect("the transfer writes the level");
+    let sent: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(sent["command"], "subscribe");
+    assert_eq!(sent["args"], json!({"level": "full"}));
+    let id = sent["id"].as_str().unwrap().to_owned();
+    assert!(id.starts_with("c_"), "{sent}");
+    assert_ne!(id, "c_sub1", "the transfer carries an id of the hub's own");
+    assert_eq!(*replayed.lock().unwrap(), vec![id]);
 }
 
 #[test]
@@ -730,12 +1178,14 @@ fn a_transfer_registers_before_the_session_can_answer() {
             let relays = std::sync::Arc::clone(&relays);
             let replayed = std::sync::Arc::clone(&replayed);
             let kept = std::sync::Arc::clone(&kept);
+            let order = crate::connection::lock(&relays).order.clone();
             move || {
                 relay(
                     RelayThread {
                         epoch,
                         replayed,
                         kept,
+                        order,
                     },
                     SID,
                     relay_end,
@@ -753,6 +1203,7 @@ fn a_transfer_registers_before_the_session_can_answer() {
         kept,
         replayed,
         thread: None,
+        retiring: None,
     });
     let (reply_tx, reply_rx) = mpsc::channel();
     let fake = std::thread::Builder::new()
@@ -841,4 +1292,552 @@ fn a_transfer_registers_before_the_session_can_answer() {
         Some("session_status"),
         "the transferred acknowledgement never reaches the client"
     );
+}
+
+#[test]
+fn the_acknowledgement_queue_orders_a_retiring_relays_handovers() {
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+    const DEADLINE: Duration = Duration::from_secs(4);
+    const SID: &str = "s_0123456789abcdef";
+    const OTHER: &str = "s_aaaaaaaaaaaaaaaa";
+    const EPOCH: u64 = 7;
+    const NEWER: u64 = 8;
+    let stripped = |command: &str| {
+        let mut stripped = serde_json::Map::new();
+        stripped.insert("id".to_owned(), Value::String("x".to_owned()));
+        stripped.insert("command".to_owned(), Value::String(command.to_owned()));
+        stripped
+    };
+    let id = |id: &str| contract::CommandId(id.to_owned());
+    // A command the session answers when it ends is never queued and never
+    // recorded: it holds back nothing behind it.
+    assert!(crate::retire::AckOrder::is_shell_ended(&stripped("shell")));
+    assert!(!crate::retire::AckOrder::is_shell_ended(&stripped("reply")));
+    assert!(!crate::retire::AckOrder::is_shell_ended(
+        &serde_json::Map::new()
+    ));
+    let order = Arc::new(crate::retire::AckOrder::default());
+    crate::retire::enqueue_new(&order, SID, &id("c_shell"), &stripped("shell"));
+    assert_eq!(order.session_for("c_shell"), None);
+    crate::retire::enqueue_new(&order, SID, &id("c_1"), &stripped("reply"));
+    assert_eq!(order.session_for("c_1").as_deref(), Some(SID));
+    // Read order, and a second enqueue of the same command changes nothing.
+    order.enqueue(SID, "c_2");
+    order.enqueue(SID, "c_1");
+    order.enqueue(OTHER, "c_other");
+    assert_eq!(order.session_for("c_2").as_deref(), Some(SID));
+    // Nothing re-routed: every wait returns at once, on any epoch, even
+    // for a command never queued.
+    order.wait_rerouted(SID, EPOCH, "c_2");
+    order.wait_rerouted(SID, NEWER, "c_2");
+    order.wait_rerouted(SID, EPOCH, "c_missing");
+    // A queued command that never reached a session is not recorded, so
+    // waiting for it cannot hold back passing it on: only a handover waits.
+    order.wait_rerouted(SID, EPOCH, "c_3");
+    // The handover waits until the re-routed answer is forwarded.
+    order.mark_rerouted("c_1", SID, EPOCH);
+    let (done_tx, done_rx) = mpsc::channel();
+    let waiting = Arc::clone(&order);
+    std::thread::Builder::new()
+        .name("ack-order-wait".to_owned())
+        .spawn(move || {
+            waiting.wait_rerouted(SID, EPOCH, "c_2");
+            done_tx.send(()).unwrap_or(());
+        })
+        .unwrap();
+    order.done(SID, "c_1");
+    done_rx
+        .recv_timeout(DEADLINE)
+        .expect("the handover follows the re-routed answer");
+    // One entry, not two: the second enqueue changed nothing.
+    assert_eq!(order.session_for("c_1"), None);
+    order.wait_rerouted(SID, EPOCH, "c_2");
+    // An empty drop changes nothing.
+    order.drop_ids(&[]);
+    order.wait_rerouted(SID, EPOCH, "c_2");
+    // A dropped handover holds back nothing behind it.
+    order.mark_rerouted("c_2", SID, EPOCH);
+    order.enqueue(SID, "c_3");
+    order.drop_ids(&[(SID.to_owned(), "c_2".to_owned())]);
+    order.wait_rerouted(SID, EPOCH, "c_3");
+    order.done(SID, "c_3");
+    order.done(OTHER, "c_other");
+    assert_eq!(order.session_for("c_2"), None);
+    assert_eq!(order.session_for("c_3"), None);
+    assert_eq!(order.session_for("c_other"), None);
+}
+
+#[test]
+fn refusing_a_missing_relay_writes_the_rejection_and_releases_its_acknowledgement() {
+    use std::io::{BufRead, BufReader};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    const DEADLINE: Duration = Duration::from_secs(4);
+    const SID: &str = "s_0123456789abcdef";
+
+    let held = fakes::TempDir::new("rn");
+    let hub = Arc::new(hub(&held));
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let order = crate::connection::lock(&relays).order.clone();
+    order.enqueue(SID, "c_missing");
+    let (writer, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let (session, gone) = UnixStream::pair().unwrap();
+    drop(gone);
+    let replay = json!({"id": "c_sub", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let command = json!({"id": "c_missing", "command": "reply", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+
+    attach(
+        SID,
+        session,
+        &hub,
+        &writer,
+        &relays,
+        Some(replay),
+        Some((
+            contract::CommandId("c_missing".to_owned()),
+            Vec::new(),
+            command,
+        )),
+    );
+
+    let mut read = BufReader::new(peer);
+    let mut text = String::new();
+    read.read_line(&mut text)
+        .expect("the missing relay is refused within the deadline");
+    let answer: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(answer["kind"], "command_rejected");
+    assert_eq!(answer["payload"]["code"], "session_not_found");
+    assert_eq!(answer["payload"]["command_id"], "c_missing");
+    assert_eq!(order.session_for("c_missing"), None);
+}
+
+#[test]
+fn acknowledgement_wait_ignores_other_sessions_epochs_and_itself() {
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+    const DEADLINE: Duration = Duration::from_secs(4);
+    const SID: &str = "s_0123456789abcdef";
+    const OTHER: &str = "s_aaaaaaaaaaaaaaaa";
+    const EPOCH: u64 = 7;
+    const NEWER: u64 = 8;
+
+    fn returns_without_waiting(
+        held_session: &str,
+        held_epoch: u64,
+        held_id: &str,
+        session: &str,
+        epoch: u64,
+        id: &str,
+    ) {
+        let order = Arc::new(crate::retire::AckOrder::default());
+        order.mark_rerouted(held_id, held_session, held_epoch);
+        let waiting = Arc::clone(&order);
+        let session = session.to_owned();
+        let id = id.to_owned();
+        let (returned_tx, returned_rx) = mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("ack-order-boundary".to_owned())
+            .spawn(move || {
+                waiting.wait_rerouted(&session, epoch, &id);
+                returned_tx.send(()).unwrap_or(());
+            })
+            .unwrap();
+        let timely = returned_rx.recv_timeout(DEADLINE).is_ok();
+        order.done(held_session, held_id);
+        if !timely {
+            returned_rx
+                .recv_timeout(DEADLINE)
+                .expect("releasing the handover wakes the bounded waiter");
+        }
+        thread.join().unwrap();
+        assert!(timely, "an unrelated handover must not hold this wait");
+    }
+
+    returns_without_waiting(SID, EPOCH, "c_self", SID, EPOCH, "c_self");
+    returns_without_waiting(OTHER, EPOCH, "c_other", SID, EPOCH, "c_wait");
+    returns_without_waiting(SID, NEWER, "c_newer", SID, EPOCH, "c_wait");
+}
+
+#[test]
+fn forwarding_does_not_wait_for_a_different_epoch_to_retire() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+    const DEADLINE: Duration = Duration::from_secs(4);
+    const SID: &str = "s_0123456789abcdef";
+    const EPOCH: u64 = 7;
+    const NEWER: u64 = 8;
+
+    let held = fakes::TempDir::new("rf");
+    let hub = Arc::new(hub(&held));
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let (other_writer, _other_peer) = UnixStream::pair().unwrap();
+    crate::connection::lock(&relays).entries.push(Relay {
+        session: SID.to_owned(),
+        epoch: NEWER,
+        writer: other_writer,
+        kept: Kept::default(),
+        replayed: Replayed::default(),
+        thread: None,
+        retiring: Some(crate::retire::Retire::Exited),
+    });
+    let (client, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    let client = Arc::new(Mutex::new(client));
+    let order = crate::connection::lock(&relays).order.clone();
+    let kept: Kept = Arc::new(Mutex::new(vec![(
+        "c_later".to_owned(),
+        json!({"id": "c_later", "command": "reply", "args": {}})
+            .as_object()
+            .unwrap()
+            .clone(),
+        true,
+    )]));
+    order.enqueue(SID, "c_later");
+    order.mark_rerouted("c_earlier", SID, EPOCH);
+    let (noticed_tx, noticed_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.before_forward) = Some(Box::new(move |_, _| {
+        noticed_tx.send(()).unwrap_or(());
+    }));
+    let (session, mut session_peer) = UnixStream::pair().unwrap();
+    let thread = start_relay_thread(
+        SID,
+        EPOCH,
+        session,
+        Arc::clone(&hub),
+        Arc::clone(&client),
+        Arc::clone(&relays),
+        kept,
+    );
+    session_peer
+        .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_later\"}}\n")
+        .unwrap();
+    session_peer.flush().unwrap();
+    let timely = noticed_rx.recv_timeout(DEADLINE).is_ok();
+    if !timely {
+        order.done(SID, "c_earlier");
+    }
+    let mut read = BufReader::new(peer);
+    let mut text = String::new();
+    read.read_line(&mut text)
+        .expect("the later acknowledgement is forwarded");
+    session_peer
+        .shutdown(std::net::Shutdown::Both)
+        .unwrap_or(());
+    thread.join().unwrap();
+    assert!(timely, "a different epoch must not hold back this forward");
+}
+
+#[test]
+fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+    const DEADLINE: Duration = Duration::from_secs(4);
+    const SID: &str = "s_0123456789abcdef";
+    const EPOCH: u64 = 7;
+
+    fn run_case(entry_session: &str, entry_epoch: u64, expect_pop: bool) {
+        let held = fakes::TempDir::new("ri");
+        let hub = Arc::new(hub(&held));
+        let relays = Arc::new(Mutex::new(Relays::default()));
+        let kept: Kept = Arc::new(Mutex::new(vec![
+            (
+                "c_ack".to_owned(),
+                json!({"id": "c_ack", "command": "reply", "args": {}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                true,
+            ),
+            (
+                "c_queued".to_owned(),
+                json!({"id": "c_queued", "command": "reply", "args": {}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                false,
+            ),
+        ]));
+        let (entry_writer, _entry_peer) = UnixStream::pair().unwrap();
+        crate::connection::lock(&relays).entries.push(Relay {
+            session: entry_session.to_owned(),
+            epoch: entry_epoch,
+            writer: entry_writer,
+            kept: Kept::default(),
+            replayed: Replayed::default(),
+            thread: None,
+            retiring: Some(crate::retire::Retire::Exited),
+        });
+        let order = crate::connection::lock(&relays).order.clone();
+        order.enqueue(SID, "c_ack");
+        order.enqueue(SID, "c_queued");
+        let (passed_tx, passed_rx) = mpsc::channel();
+        *crate::connection::lock(&hub.on_pass_on) = Some(Box::new(move |passed| {
+            passed_tx.send(passed).unwrap_or(());
+        }));
+        let (client, client_peer) = UnixStream::pair().unwrap();
+        client_peer.set_read_timeout(Some(DEADLINE)).unwrap();
+        let client = Arc::new(Mutex::new(client));
+        let (session, mut session_peer) = UnixStream::pair().unwrap();
+        let thread = start_relay_thread(
+            SID,
+            EPOCH,
+            session,
+            Arc::clone(&hub),
+            client,
+            Arc::clone(&relays),
+            kept,
+        );
+        session_peer
+            .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_ack\"}}\n")
+            .unwrap();
+        session_peer.flush().unwrap();
+        let passed = passed_rx.recv_timeout(DEADLINE);
+        let mut client_peer = client_peer;
+        let mut text = String::new();
+        std::io::BufReader::new(&mut client_peer)
+            .read_line(&mut text)
+            .unwrap();
+        session_peer
+            .shutdown(std::net::Shutdown::Both)
+            .unwrap_or(());
+        thread.join().unwrap();
+        if expect_pop {
+            assert!(matches!(passed, Ok(crate::retire::PassOn::Popped(id)) if id == "c_queued"));
+        } else {
+            assert!(
+                passed.is_err(),
+                "an unrelated retiring relay does not pass the queue"
+            );
+        }
+    }
+
+    run_case(SID, EPOCH, true);
+    run_case(SID, EPOCH + 1, false);
+}
+
+#[test]
+fn passing_an_empty_queue_does_not_finish_its_retiring_relay() {
+    use std::io::{BufRead, Write};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    const DEADLINE: Duration = Duration::from_secs(4);
+    const SID: &str = "s_0123456789abcdef";
+    const EPOCH: u64 = 7;
+    let held = fakes::TempDir::new("rp");
+    let hub = Arc::new(hub(&held));
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let kept: Kept = Arc::new(Mutex::new(vec![(
+        "c_ack".to_owned(),
+        json!({"id": "c_ack", "command": "reply", "args": {}})
+            .as_object()
+            .unwrap()
+            .clone(),
+        true,
+    )]));
+    let (entry_writer, _entry_peer) = UnixStream::pair().unwrap();
+    crate::connection::lock(&relays).entries.push(Relay {
+        session: SID.to_owned(),
+        epoch: EPOCH,
+        writer: entry_writer,
+        kept: Arc::clone(&kept),
+        replayed: Replayed::default(),
+        thread: None,
+        retiring: Some(crate::retire::Retire::Exited),
+    });
+    let order = crate::connection::lock(&relays).order.clone();
+    order.enqueue(SID, "c_ack");
+    let (client, client_peer) = UnixStream::pair().unwrap();
+    client_peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    let client = Arc::new(Mutex::new(client));
+    let (session, mut session_peer) = UnixStream::pair().unwrap();
+    let thread = start_relay_thread(
+        SID,
+        EPOCH,
+        session,
+        Arc::clone(&hub),
+        client,
+        Arc::clone(&relays),
+        kept,
+    );
+    session_peer
+        .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_ack\"}}\n")
+        .unwrap();
+    session_peer
+        .write_all(b"{\"kind\":\"session_status\"}\n")
+        .unwrap();
+    session_peer.flush().unwrap();
+    let mut read = std::io::BufReader::new(client_peer);
+    let mut acknowledgement = String::new();
+    read.read_line(&mut acknowledgement).unwrap();
+    assert!(acknowledgement.contains("c_ack"));
+    let mut status = String::new();
+    read.read_line(&mut status).unwrap();
+    assert!(status.contains("session_status"));
+    let remains = crate::connection::lock(&relays)
+        .entries
+        .iter()
+        .any(|entry| entry.session == SID && entry.epoch == EPOCH);
+    session_peer
+        .shutdown(std::net::Shutdown::Both)
+        .unwrap_or(());
+    thread.join().unwrap();
+    assert!(remains, "pass_on leaves an empty retiring queue in the map");
+}
+
+#[test]
+fn a_relay_end_drops_sent_commands_and_clears_only_unsent_commands() {
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+    const DEADLINE: Duration = Duration::from_secs(4);
+    const SID: &str = "s_0123456789abcdef";
+    let held = fakes::TempDir::new("rd");
+    let hub = Arc::new(hub(&held));
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let order = crate::connection::lock(&relays).order.clone();
+    let kept: Kept = Arc::new(Mutex::new(vec![
+        ("c_sent".to_owned(), serde_json::Map::new(), true),
+        ("c_unsent1".to_owned(), serde_json::Map::new(), false),
+        ("c_unsent2".to_owned(), serde_json::Map::new(), false),
+    ]));
+    for id in ["c_sent", "c_unsent1", "c_unsent2"] {
+        order.enqueue(SID, id);
+    }
+    let (passed_tx, passed_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.on_pass_on) = Some(Box::new(move |passed| {
+        passed_tx.send(passed).unwrap_or(());
+    }));
+    let (client, _client_peer) = UnixStream::pair().unwrap();
+    let client = Arc::new(Mutex::new(client));
+    let (session, session_peer) = UnixStream::pair().unwrap();
+    let thread = start_relay_thread(
+        SID,
+        7,
+        session,
+        Arc::clone(&hub),
+        client,
+        Arc::clone(&relays),
+        Arc::clone(&kept),
+    );
+    session_peer
+        .shutdown(std::net::Shutdown::Both)
+        .unwrap_or(());
+    let passed = passed_rx
+        .recv_timeout(DEADLINE)
+        .expect("the relay end drains and clears its queue");
+    thread.join().unwrap();
+
+    assert!(matches!(passed, crate::retire::PassOn::Dropped(2)));
+    assert!(kept.lock().unwrap().is_empty());
+    for id in ["c_sent", "c_unsent1", "c_unsent2"] {
+        assert_eq!(order.session_for(id), None);
+    }
+}
+
+#[test]
+fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
+    use std::io::{BufRead, Write};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    const DEADLINE: Duration = Duration::from_secs(4);
+    const SID: &str = "s_0123456789abcdef";
+    let held = fakes::TempDir::new("rk");
+    let hub = Arc::new(hub(&held));
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let kept: Kept = Arc::new(Mutex::new(vec![(
+        "c_known".to_owned(),
+        json!({"id": "c_known", "command": "reply", "args": {}})
+            .as_object()
+            .unwrap()
+            .clone(),
+        true,
+    )]));
+    let (entry_writer, _entry_peer) = UnixStream::pair().unwrap();
+    crate::connection::lock(&relays).entries.push(Relay {
+        session: SID.to_owned(),
+        epoch: 1,
+        writer: entry_writer,
+        kept: Arc::clone(&kept),
+        replayed: Replayed::default(),
+        thread: None,
+        retiring: None,
+    });
+    let order = crate::connection::lock(&relays).order.clone();
+    order.enqueue(SID, "c_known");
+    let (client, client_peer) = UnixStream::pair().unwrap();
+    client_peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    let client = Arc::new(Mutex::new(client));
+    let (session, mut session_peer) = UnixStream::pair().unwrap();
+    let thread = start_relay_thread(
+        SID,
+        1,
+        session,
+        Arc::clone(&hub),
+        client,
+        Arc::clone(&relays),
+        Arc::clone(&kept),
+    );
+    let mut read = std::io::BufReader::new(client_peer);
+    session_peer
+        .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_unknown\"}}\n")
+        .unwrap();
+    session_peer.flush().unwrap();
+    let mut unknown = String::new();
+    let suppressed = match read.read_line(&mut unknown) {
+        Err(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ),
+        Ok(_) => false,
+    };
+    session_peer
+        .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_known\"}}\n")
+        .unwrap();
+    session_peer.flush().unwrap();
+    let mut known = String::new();
+    read.read_line(&mut known).unwrap();
+    session_peer
+        .shutdown(std::net::Shutdown::Both)
+        .unwrap_or(());
+    thread.join().unwrap();
+
+    let known: Value = serde_json::from_str(known.trim_end()).unwrap();
+    assert!(suppressed, "an unknown acknowledgement is not forwarded");
+    assert_eq!(known["payload"]["command_id"], "c_known");
+}
+
+#[test]
+fn a_transfer_does_not_use_another_sessions_live_relay() {
+    let sid = "s_0123456789abcdef";
+    let other = "s_aaaaaaaaaaaaaaaa";
+    let line = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let mut relays = Relays::default();
+    let (writer, _peer) = UnixStream::pair().unwrap();
+    let replayed = Replayed::default();
+    relays.entries.push(Relay {
+        session: other.to_owned(),
+        epoch: 1,
+        writer,
+        kept: Kept::default(),
+        replayed: std::sync::Arc::clone(&replayed),
+        thread: None,
+        retiring: None,
+    });
+
+    assert!(!relays.transfer(sid, &line));
+    assert_eq!(relays.subscription(sid), Some(line));
+    assert!(replayed.lock().unwrap().is_empty());
 }
