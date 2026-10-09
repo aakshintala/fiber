@@ -30,8 +30,9 @@ const CONNECT_POLL: Duration = Duration::from_millis(10);
 pub type Hub = (UnixStream, HubLine);
 
 /// Connects to the hub's socket in `home`, starting one through `start`
-/// when none runs. `start` runs once at most. Returns the stream and the
-/// `hub_hello` it spoke first, which must arrive within [`CONNECT_DEADLINE`].
+/// when none runs. `start` runs once at most per attempt, so a retry
+/// after the idle-exit race may start a new hub. Returns the stream and the
+/// `hub_hello` it spoke first, which must arrive within [`CONNECT_DEADLINE`]..
 pub fn connect(
     home: &Path,
     start: &mut dyn FnMut() -> io::Result<()>,
@@ -43,8 +44,10 @@ pub fn connect(
 /// [`connect`], with `hub_hello` due by `deadline` on `clock`: the same
 /// absolute deadline bounds both connection attempts and the handshake,
 /// so a peer that closes just before it leaves no fresh deadline for the
-/// retry. Past it the connect fails `TimedOut`. `before_read` runs after
-/// each handshake read's deadline check, just before the read.
+/// retry. Between the attempts the client pauses one poll, so the exiting
+/// hub's listener is gone, and `start` may run again. Past it the connect
+/// fails `TimedOut`. `before_read` runs after each handshake read's
+/// deadline check, just before the read.
 pub fn connect_until(
     home: &Path,
     start: &mut dyn FnMut() -> io::Result<()>,
@@ -54,22 +57,36 @@ pub fn connect_until(
 ) -> io::Result<Hub> {
     let total = deadline.saturating_duration_since(clock.now());
     let mut started = false;
-    // EOF before `hub_hello` is the idle-exit race: the whole connect is
-    // retried once, with the same deadline.
-    for _ in 0..2 {
-        match poll_until(
-            home,
-            &mut started,
-            start,
-            clock,
-            deadline,
-            total,
-            before_read,
-        ) {
-            Ok(hub) => return Ok(hub),
-            Err(Poll::Race) => {}
-            Err(Poll::Failed(error)) => return Err(error),
-        }
+    match poll_until(
+        home,
+        &mut started,
+        start,
+        clock,
+        deadline,
+        total,
+        before_read,
+    ) {
+        Ok(hub) => return Ok(hub),
+        Err(Poll::Race) => {}
+        Err(Poll::Failed(error)) => return Err(error),
+    }
+    // EOF before `hub_hello` is the idle-exit race: the hub exited before
+    // the handshake, so the retry pauses one poll for its listener to go
+    // away, then may start a new hub when the socket is gone.
+    started = false;
+    clock.sleep(CONNECT_POLL);
+    match poll_until(
+        home,
+        &mut started,
+        start,
+        clock,
+        deadline,
+        total,
+        before_read,
+    ) {
+        Ok(hub) => return Ok(hub),
+        Err(Poll::Race) => {}
+        Err(Poll::Failed(error)) => return Err(error),
     }
     Err(io::Error::new(
         io::ErrorKind::UnexpectedEof,
@@ -77,7 +94,9 @@ pub fn connect_until(
     ))
 }
 /// [`connect`], with `hub_hello` due within `hello_within` of the socket
-/// accepting, on `clock`. Past it the connect fails `TimedOut`.
+/// accepting, on `clock`. Between the attempts the client pauses one poll,
+/// so the exiting hub's listener is gone, and `start` may run again. Past
+/// it the connect fails `TimedOut`.
 pub fn connect_within(
     home: &Path,
     start: &mut dyn FnMut() -> io::Result<()>,
@@ -85,14 +104,20 @@ pub fn connect_within(
     hello_within: Duration,
 ) -> io::Result<Hub> {
     let mut started = false;
-    // EOF before `hub_hello` is the idle-exit race: the whole connect is
-    // retried once.
-    for _ in 0..2 {
-        match poll(home, &mut started, start, clock, hello_within) {
-            Ok(hub) => return Ok(hub),
-            Err(Poll::Race) => {}
-            Err(Poll::Failed(error)) => return Err(error),
-        }
+    match poll(home, &mut started, start, clock, hello_within) {
+        Ok(hub) => return Ok(hub),
+        Err(Poll::Race) => {}
+        Err(Poll::Failed(error)) => return Err(error),
+    }
+    // EOF before `hub_hello` is the idle-exit race: the hub exited before
+    // the handshake, so the retry pauses one poll for its listener to go
+    // away, then may start a new hub when the socket is gone.
+    started = false;
+    clock.sleep(CONNECT_POLL);
+    match poll(home, &mut started, start, clock, hello_within) {
+        Ok(hub) => return Ok(hub),
+        Err(Poll::Race) => {}
+        Err(Poll::Failed(error)) => return Err(error),
     }
     Err(io::Error::new(
         io::ErrorKind::UnexpectedEof,
