@@ -726,6 +726,23 @@ impl contract::jobs::Jobs for Registry {
         Registry::open(self, opening)
     }
 
+    /// Writes `text` to a running job started with `tty`, at once, with a
+    /// cancel that never fires: no wait for output, as the driver command
+    /// is accepted once written.
+    fn write(&self, job_id: &JobId, text: &str) -> Result<(), contract::jobs::WriteError> {
+        let (typer, _) = match self.typer_of(&job_id.0) {
+            Ok(found) => found,
+            Err(WriteError::Unknown | WriteError::Ended(_)) => {
+                return Err(contract::jobs::WriteError::NotRunning);
+            }
+            Err(WriteError::NotTty) => return Err(contract::jobs::WriteError::NotTty),
+            Err(WriteError::Io(error)) => return Err(contract::jobs::WriteError::Io(error)),
+        };
+        typer(text.as_bytes(), self.clock.as_ref(), &Never)
+            .map(|_| ())
+            .map_err(contract::jobs::WriteError::Io)
+    }
+
     fn stop(&self, job_id: &JobId) -> bool {
         match self.send_stop(&job_id.0) {
             Ok(Some(stop)) => {
@@ -792,6 +809,18 @@ impl contract::jobs::Jobs for Registry {
 
 fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
     inner.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A cancel that never fires: [`contract::jobs::Jobs::write`] types at
+/// once, with no wait for output.
+struct Never;
+
+impl Cancel for Never {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+
+    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
 }
 
 #[cfg(test)]

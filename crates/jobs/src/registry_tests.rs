@@ -804,6 +804,71 @@ fn a_write_that_typed_less_than_it_was_given_says_so() {
     drop(opened.end);
 }
 
+/// Types through the [`Jobs`] seam, not the inherent `write` that waits:
+/// the driver command is accepted once written.
+fn seam_write(
+    registry: &Arc<Registry>,
+    job_id: &JobId,
+    text: &str,
+) -> Result<(), contract::jobs::WriteError> {
+    <Registry as Jobs>::write(registry.as_ref(), job_id, text)
+}
+
+#[test]
+fn seam_write_types_into_a_running_tty_job_at_once() {
+    let (_dir, _clock, registry) = clocked_world();
+    let (id, opened, typed) = open_tty(&registry, b"");
+    seam_write(&registry, &JobId(id.clone()), "hi\x1b[A").unwrap();
+    assert_eq!(*typed.lock().unwrap(), b"hi\x1b[A");
+    drop(opened.end);
+}
+
+#[test]
+fn seam_write_misses_a_non_tty_an_unknown_or_an_ended_job() {
+    let (_dir, _clock, registry) = clocked_world();
+    let plain = registry.open(opening("ls")).unwrap();
+    assert!(matches!(
+        seam_write(&registry, &plain.started.job_id, "x"),
+        Err(contract::jobs::WriteError::NotTty)
+    ));
+    assert!(matches!(
+        seam_write(&registry, &JobId("j_missing".into()), "x"),
+        Err(contract::jobs::WriteError::NotRunning)
+    ));
+    let (id, tty, typed) = open_tty(&registry, b"");
+    (tty.end.0)(ended_ok(&id));
+    assert!(matches!(
+        seam_write(&registry, &JobId(id), "x"),
+        Err(contract::jobs::WriteError::NotRunning)
+    ));
+    assert!(
+        typed.lock().unwrap().is_empty(),
+        "a write reached an ended job"
+    );
+    drop(plain.end);
+}
+
+#[test]
+fn seam_write_reports_a_failed_terminal_write_as_io() {
+    let (_dir, _clock, registry) = clocked_world();
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "cat".into(),
+            stop: Stop(Box::new(|| {})),
+            lines: false,
+            input: Some(contract::jobs::Input(Box::new(|_, _, _| {
+                Err(std::io::Error::other("the terminal is closed"))
+            }))),
+        })
+        .unwrap();
+    assert!(matches!(
+        seam_write(&registry, &opened.started.job_id, "x"),
+        Err(contract::jobs::WriteError::Io(_))
+    ));
+    drop(opened.end);
+}
+
 #[test]
 fn an_ended_job_drops_its_input() {
     let (_dir, _clock, registry) = clocked_world();
