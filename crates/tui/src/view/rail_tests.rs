@@ -713,7 +713,7 @@ fn session_card_with_n_waiting() {
 }
 
 #[test]
-fn the_rail_region_is_not_tinted() {
+fn the_rail_region_keeps_the_surface_tint() {
     let app = two(20.0, json!({}));
     let buf = screen(&app);
     let rail = app
@@ -721,10 +721,11 @@ fn the_rail_region_is_not_tinted() {
         .layout()
         .and_then(|layout| layout.rail)
         .expect("a rail");
-    // Below the cards the rail keeps the background: no surface tint.
+    // Below the cards the rail keeps the surface tint (`docs/tui.md`,
+    // "Themes").
     let surface = Role::Surface.color();
     for x in rail.left()..rail.right() {
-        assert_ne!(
+        assert_eq!(
             buf[(x, rail.bottom().saturating_sub(1))].bg,
             surface,
             "column {x}"
