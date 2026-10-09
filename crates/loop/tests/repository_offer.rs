@@ -579,17 +579,46 @@ fn a_required_item_a_person_skips_fails_nothing() {
 /// What one unattended run wrote and returned.
 type Unattended = (Session, Vec<Envelope>, Result<(), r#loop::Error>);
 
+/// Starts one prompt with nobody to answer: the log watcher and the run's
+/// result channel, with `go` already sent.
+fn start_unattended(
+    code: &Arc<Fake>,
+    clients: Option<u32>,
+    answerable: bool,
+) -> (Session, Watcher, mpsc::Receiver<Result<(), r#loop::Error>>) {
+    let mut session = session(code, clients, vec![Scripted::text("Hello.")]).answerable(answerable);
+    let all = session.log.watch();
+    let finished = spawn_run(&mut session);
+    session.inbox.send(delivery("go")).unwrap();
+    (session, all, finished)
+}
+
+/// Closes a run that may already have ended on its own. A run that fails at
+/// once drops the inbox's receiver, so the send errors; the caller's
+/// `ended` still asserts the run returned.
+fn close_if_running(session: &Session) {
+    session.inbox.send(Delivery::Close(ignore())).unwrap_or(());
+}
+
 /// Runs one prompt with nobody to answer: every line written, and what
 /// `run` returned.
 fn unattended(code: &Arc<Fake>, clients: Option<u32>, answerable: bool) -> Unattended {
-    let mut session = session(code, clients, vec![Scripted::text("Hello.")]).answerable(answerable);
-    let mut all = session.log.watch();
-    let finished = spawn_run(&mut session);
-    session.inbox.send(delivery("go")).unwrap();
-    close(&session);
+    let (session, mut all, finished) = start_unattended(code, clients, answerable);
+    close_if_running(&session);
     let ran = ended(&finished);
     let lines = drain(&mut all);
     (session, lines, ran)
+}
+
+#[test]
+fn closing_after_a_failed_run_has_ended_is_not_a_send_failure() {
+    let code = Fake::new(vec![item(OfferedKind::McpServer, "db", true)]);
+    let (session, _all, finished) = start_unattended(&code, Some(0), true);
+    // Hold the close until the run has returned and dropped its inbox.
+    let ran = ended(&finished);
+    assert!(session.inbox.send(Delivery::Close(ignore())).is_err());
+    close_if_running(&session);
+    ran.expect_err("a required item fails the run");
 }
 
 fn skipped(name: &str, words: &str) -> String {

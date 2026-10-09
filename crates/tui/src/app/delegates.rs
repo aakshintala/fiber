@@ -108,6 +108,11 @@ impl App {
             if self.subscribed_level(&session).is_some() {
                 continue;
             }
+            // A session waiting on a retry goes out through the
+            // reconciler, not from the card.
+            if self.items.wants.contains_key(&session) {
+                continue;
+            }
             // A refused subscribe is tried again on the next open only.
             if !self.panel_state.try_delegate(&session) {
                 continue;

@@ -56,6 +56,11 @@ impl App {
             if *key != Key::CtrlF {
                 return None;
             }
+            // While an item view is open search opens nothing: it scans
+            // the attached session's history.
+            if self.item_open() {
+                return Some(Effect::None);
+            }
             // Home draws no conversation, and over the offer the offer's
             // own keys win; both leave Ctrl+F unhandled above, so the bar
             // opens only on a session's conversation.

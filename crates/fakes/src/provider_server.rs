@@ -150,6 +150,9 @@ impl Request {
 /// more.
 const DEFAULT_BODY_LIMIT: usize = 64;
 
+/// How long [`ProviderServer::hold`] keeps a response for its release.
+const HELD_LIMIT: Duration = Duration::from_secs(10);
+
 /// Answers one request from its content: the recorded request, so an answer
 /// can depend on the request's body or on an earlier request's.
 pub type Responder = std::sync::Arc<dyn Fn(&Request) -> Response + Send + Sync>;
@@ -169,6 +172,10 @@ struct State {
     stopping: bool,
     /// When set, a recorded request is not answered until [`ProviderServer::release`].
     hold: bool,
+    /// The number (1-based) of the first request a hold applies to.
+    hold_from: usize,
+    /// How long a held response waits for its release.
+    hold_within: Duration,
     /// Held responses [`ProviderServer::release_one`] has let go.
     permits: usize,
     /// Stalled responses that sent their partial body.
@@ -188,6 +195,8 @@ impl Default for State {
             body_limit: Some(DEFAULT_BODY_LIMIT),
             stopping: false,
             hold: false,
+            hold_from: 1,
+            hold_within: HELD_LIMIT,
             permits: 0,
             partial: 0,
             closed: 0,
@@ -349,7 +358,19 @@ impl ProviderServer {
     /// still recorded first, so [`ProviderServer::await_requests`] sees it
     /// while the client waits for the body.
     pub fn hold(&self) {
-        lock(&self.state).hold = true;
+        self.hold_from(1, HELD_LIMIT);
+    }
+
+    /// As [`ProviderServer::hold`], for the `number`th request and every
+    /// later one (1-based): earlier requests are answered at once. A held
+    /// response nobody releases within `within` is answered with a 500
+    /// naming the hold, so a test that never releases fails instead of
+    /// hanging.
+    pub fn hold_from(&self, number: usize, within: Duration) {
+        let mut state = lock(&self.state);
+        state.hold = true;
+        state.hold_from = number;
+        state.hold_within = within;
     }
 
     /// Sends the responses [`ProviderServer::hold`] is holding.
@@ -504,10 +525,24 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
             // sees a connection closed with no response.
             return Ok(());
         }
-        if state.hold {
-            while state.hold && state.permits == 0 && !state.stopping {
-                state = arrived.wait(state).unwrap_or_else(PoisonError::into_inner);
+        if state.hold && state.requests.len() >= state.hold_from {
+            let within = state.hold_within;
+            let (waited, timeout) = arrived
+                .wait_timeout_while(state, within, |state| {
+                    state.hold && state.permits == 0 && !state.stopping
+                })
+                .unwrap_or_else(PoisonError::into_inner);
+            if timeout.timed_out() {
+                drop(waited);
+                return write_response(
+                    reader.get_mut(),
+                    &Response::status(
+                        500,
+                        r#"{"error":"fakes: a held response was never released"}"#,
+                    ),
+                );
             }
+            state = waited;
             // A still-held request takes one released permit. The wait
             // above only ends with no permit left when the hold is already
             // gone or the server is stopping, which clears the hold first,

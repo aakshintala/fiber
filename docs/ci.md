@@ -49,7 +49,10 @@ A branch does not have to be up to date with `main` to merge, and there is no
 merge queue. The backstop on `main` catches two pull requests that each
 passed alone but break together.
 
-A newer push to a pull request cancels that pull request's older run.
+A newer push to a pull request cancels that pull request's older run. Pushes
+to `main` share one group that cancels nothing: the running backstop finishes
+and a newer push waits, replacing any older one that waits ("The backstop on
+`main`").
 
 ## Selection
 
@@ -135,8 +138,8 @@ On Linux x86_64 alone:
 - the built-in tool definitions within their byte budget, with each
   definition's size printed
 - mutation testing: `cargo-mutants --in-diff`, split across runners. It runs
-  on a ready pull request, on a push to `main`, and on a draft pull request
-  that carries the label `mutants`; an unlabelled draft skips it, and adding
+  on a ready pull request and on a draft pull request
+  that carries the label `mutants`, never on a push to `main`; an unlabelled draft skips it, and adding
   the label starts a run. The selection counts the diff's mutants
   (`cargo mutants --list`) and plans one shard per 15 of them, rounded up, at
   most 32; a diff with no mutants starts none. Recent runs (#1461, #1395)
@@ -220,7 +223,7 @@ opened.
 
 ## The backstop on `main`
 
-Every push to `main` runs the backstop. It runs the lint, test, mutant and
+Every push to `main` runs the backstop. It runs the lint, test and
 release jobs the selection chooses from the diff
 since the last `main` commit whose backstop passed. The tests run on all
 three platforms, and it compiles
@@ -231,13 +234,26 @@ and the selection includes that crate. The release job runs on every push
 and stores that commit's stripped binary in the build cache, for a later
 pull request's base.
 
-When lint, the tests, the mutants or the release job fail, the backstop opens an issue, or
+One backstop runs and one waits. All pushes to `main` share a concurrency group
+that cancels nothing, so the running backstop finishes, which lets `main` record
+a pass during a stream of merges, and GitHub replaces a waiting backstop with
+the newest push. The newest backstop's selection covers every commit it
+replaced, because it diffs from the last passing commit. A replaced commit
+stores no release binary; a pull request based on one compares against the
+nearest ancestor that has one ("On every pull request that changes code").
+
+The backstop runs no mutants. Each pull request already tests its own diff
+("On every pull request that changes code"), and a second run on `main` would
+repeat that cost.
+
+When lint, the tests or the release job fail, the backstop opens an issue, or
 comments on the open one. It
 never blocks a merge.
 
 The backstop is the only run that saves the build cache. Pull requests
 restore it and never write it, so branches do not fill the repository's
-10 GB cache.
+10 GB cache. The test job saves its cache once the workspace build succeeded,
+even when a later check fails, and saves nothing when the build fails.
 
 ## Toolchain
 
