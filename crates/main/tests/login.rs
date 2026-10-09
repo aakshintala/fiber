@@ -17,7 +17,7 @@ mod support;
 
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
@@ -317,7 +317,7 @@ fn echoes(terminal: &fs::File) -> bool {
 /// What `fiber` wrote to its terminal, read on a thread so a wait can have a
 /// deadline.
 struct Screen {
-    chunks: Receiver<Option<String>>,
+    chunks: Receiver<String>,
     typed: fs::File,
     seen: String,
     deadline: Deadline,
@@ -325,22 +325,14 @@ struct Screen {
 
 impl Screen {
     fn new(terminal: &Terminal, deadline: Deadline) -> Self {
-        let mut reader = fs::File::from(terminal.main.try_clone().unwrap());
+        let reader = fs::File::from(terminal.main.try_clone().unwrap());
         let (send, chunks) = mpsc::channel();
-        thread::spawn(move || {
-            let mut buffer = [0u8; 4096];
-            // A read error is the end of the terminal, on Linux as well as
-            // on macOS.
-            while let Ok(n) = reader.read(&mut buffer) {
-                if n == 0
-                    || send
-                        .send(Some(String::from_utf8_lossy(&buffer[..n]).into()))
-                        .is_err()
-                {
-                    return;
-                }
-            }
-            send.send(None).unwrap_or(());
+        // A read error is the end of the terminal, on Linux as well as
+        // on macOS. The channel's disconnect when the reader ends is the
+        // end of the terminal.
+        fakes::pty::read_to_eof(reader, move |bytes| {
+            send.send(String::from_utf8_lossy(bytes).into())
+                .unwrap_or(());
         });
         Self {
             chunks,
@@ -357,8 +349,8 @@ impl Screen {
         while !self.seen[mark..].contains(text) {
             // Each chunk has the deadline: a terminal that goes quiet fails.
             match self.chunks.recv_timeout(self.deadline.left()) {
-                Ok(Some(chunk)) => self.seen.push_str(&chunk),
-                Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Ok(chunk) => self.seen.push_str(&chunk),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
                     panic!(
                         "the terminal ended before {text:?}: {:?}",
                         &self.seen[mark..]

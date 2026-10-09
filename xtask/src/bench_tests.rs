@@ -109,6 +109,7 @@ fn judge_doc(doc: &str, head: &Value, base: Option<&Value>, event: Event) -> Rep
         &head.to_string(),
         base.map(|b| Ok(b.to_string())),
         event,
+        "base0000",
     )
 }
 
@@ -379,6 +380,7 @@ fn malformed_head_json_fails_and_still_writes_the_comment() {
         "{not json",
         Some(Ok(base().to_string())),
         Event::PullRequest,
+        "base0000",
     );
     assert!(!out.failures.is_empty());
     assert_eq!(out.comment.lines().next(), Some(MARKER));
@@ -430,6 +432,7 @@ fn a_failed_base_passes_and_shows_why() {
         &head().to_string(),
         Some(Err("base.json: no such file".to_owned())),
         Event::PullRequest,
+        "base0000",
     );
     assert_eq!(out.failures, Vec::<String>::new());
     assert!(out.comment.contains("base failed: base.json: no such file"));
@@ -532,7 +535,7 @@ fn a_failing_row_says_fail_and_the_failures_are_listed() {
         .nth(1)
         .unwrap_or_else(|| panic!("no failures section in:\n{failing}"));
     assert!(
-        listed.contains("- Session, idle, headless: median 12289 KiB"),
+        listed.contains("- Session, idle, headless: over budget: median 12289 KiB"),
         "{failing}"
     );
 }
@@ -778,4 +781,163 @@ fn a_malformed_base_paging_timing_shows_base_failed() {
     assert_eq!(out.failures, Vec::<String>::new());
     let row = row(&out.comment, "`paging` jig, open pass");
     assert!(row.contains("base failed: paging_open_ms"), "{row}");
+}
+
+/// The base with the head's memory and exact metrics, for the over-at-base
+/// tests.
+fn full_base() -> Value {
+    let mut full = head();
+    full["metrics"]["session_start_ms"] = json!([0.6, 0.6, 0.6, 0.6, 0.6]);
+    full
+}
+
+fn noisy_run() -> Value {
+    json!([{"tid": 4102, "voluntary": 1, "involuntary": 0}])
+}
+
+#[test]
+fn a_budget_over_at_base_and_head_passes_marked_with_the_base() {
+    let over = json!([
+        quiet_run(),
+        quiet_run(),
+        quiet_run(),
+        quiet_run(),
+        noisy_run()
+    ]);
+    let over_head = with_metric(head(), "session_idle_switches", over.clone());
+    let over_base = with_metric(full_base(), "session_idle_switches", over);
+    let out = judge(&over_head, Some(&over_base), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
+    let line = row(&out.comment, "Idle CPU");
+    assert!(line.contains("over at base base0000"), "{line}");
+    assert!(line.ends_with("| over at base |"), "{line}");
+
+    let kib = json!([30000, 30000, 30000, 30000, 30000]);
+    let over_head = with_metric(head(), "session_idle_rss_kib", kib.clone());
+    let over_base = with_metric(full_base(), "session_idle_rss_kib", kib);
+    let out = judge(&over_head, Some(&over_base), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
+}
+
+#[test]
+fn a_budget_over_at_head_and_met_at_base_fails() {
+    let over = json!([
+        quiet_run(),
+        quiet_run(),
+        quiet_run(),
+        quiet_run(),
+        noisy_run()
+    ]);
+    let over_head = with_metric(head(), "session_idle_switches", over);
+    let out = judge(&over_head, Some(&full_base()), Event::PullRequest);
+    assert!(has(&out.failures, "4102"), "{:?}", out.failures);
+
+    let kib = json!([30000, 30000, 30000, 30000, 30000]);
+    let over_head = with_metric(head(), "session_idle_rss_kib", kib);
+    let out = judge(&over_head, Some(&full_base()), Event::PullRequest);
+    assert!(
+        has(&out.failures, "session_idle_rss_kib"),
+        "{:?}",
+        out.failures
+    );
+}
+
+#[test]
+fn a_head_over_budget_with_no_base_binary_is_judged_alone() {
+    let kib = json!([30000, 30000, 30000, 30000, 30000]);
+    let over_head = with_metric(head(), "session_idle_rss_kib", kib);
+    let out = report(DOC, &over_head.to_string(), None, Event::PullRequest, "");
+    assert!(
+        has(&out.failures, "session_idle_rss_kib"),
+        "{:?}",
+        out.failures
+    );
+    let out = report(
+        DOC,
+        &over_head.to_string(),
+        Some(Err("base.json: no such file".to_owned())),
+        Event::PullRequest,
+        "",
+    );
+    assert!(
+        has(&out.failures, "session_idle_rss_kib"),
+        "{:?}",
+        out.failures
+    );
+}
+
+#[test]
+fn the_backstop_has_no_base_column_and_fails_on_any_budget() {
+    let kib = json!([30000, 30000, 30000, 30000, 30000]);
+    let over = with_metric(head(), "session_idle_rss_kib", kib);
+    let out = report(
+        DOC,
+        &over.to_string(),
+        Some(Ok(over.to_string())),
+        Event::Push,
+        "base0000",
+    );
+    assert!(
+        has(&out.failures, "session_idle_rss_kib"),
+        "{:?}",
+        out.failures
+    );
+    assert!(!out.comment.contains("over at base"), "{}", out.comment);
+}
+
+#[test]
+fn a_malformed_base_or_head_metric_excuses_nothing() {
+    let kib = json!([30000, 30000, 30000, 30000, 30000]);
+    let over_head = with_metric(head(), "session_idle_rss_kib", kib.clone());
+    // A base metric that is not an array, or has too few samples, proves nothing.
+    for bad in [json!("x"), json!([1, 2])] {
+        let base = with_metric(full_base(), "session_idle_rss_kib", bad);
+        let out = judge(&over_head, Some(&base), Event::PullRequest);
+        assert!(
+            has(&out.failures, "session_idle_rss_kib"),
+            "{:?}",
+            out.failures
+        );
+    }
+    // A head metric that is missing still fails when the base is over.
+    let mut missing = head();
+    missing["metrics"]
+        .as_object_mut()
+        .unwrap()
+        .remove("session_idle_rss_kib");
+    let over_base = with_metric(full_base(), "session_idle_rss_kib", kib);
+    let out = judge(&missing, Some(&over_base), Event::PullRequest);
+    assert!(
+        has(&out.failures, "session_idle_rss_kib"),
+        "{:?}",
+        out.failures
+    );
+}
+
+#[test]
+fn a_self_check_the_base_fails_too_still_fails_the_head() {
+    let mut both = head();
+    both["failures"] = json!(["hub did not exit"]);
+    let mut base = full_base();
+    base["failures"] = json!(["hub did not exit"]);
+    let out = judge(&both, Some(&base), Event::PullRequest);
+    assert!(has(&out.failures, "hub did not exit"), "{:?}", out.failures);
+}
+
+#[test]
+fn a_wrong_unit_ceiling_fails_even_when_the_base_is_over() {
+    let kib = json!([30000, 30000, 30000, 30000, 30000]);
+    let over_head = with_metric(head(), "session_idle_rss_kib", kib.clone());
+    let over_base = with_metric(full_base(), "session_idle_rss_kib", kib);
+    let out = judge_doc(
+        &doc_with("12 MiB peak RSS", "12 ms"),
+        &over_head,
+        Some(&over_base),
+        Event::PullRequest,
+    );
+    assert!(
+        has(&out.failures, "not a memory ceiling"),
+        "{:?}",
+        out.failures
+    );
 }
