@@ -64,7 +64,7 @@ pub(crate) struct PanelState {
     down: BTreeSet<String>,
     changes: BTreeMap<String, (u64, u64)>,
     jobs: Vec<(JobId, String)>,
-    delegate_jobs: BTreeSet<JobId>,
+    delegates: BTreeMap<JobId, DelegateStarted>,
     jobs_open: bool,
     due: bool,
     asked: Option<String>,
@@ -153,7 +153,7 @@ impl PanelState {
             }
             "delegate_started" => {
                 if let Some(started) = super::read!(envelope, DelegateStarted) {
-                    self.delegate_jobs.insert(started.job_id);
+                    self.delegates.insert(started.job_id.clone(), started);
                 }
             }
             "job_completed" => {
@@ -256,8 +256,22 @@ impl PanelState {
 
     /// The delegates' jobs: a delegate is a job with a `delegate_started`
     /// (`docs/events.md`, "`delegate_started`").
-    pub(crate) fn delegate_jobs(&self) -> &BTreeSet<JobId> {
-        &self.delegate_jobs
+    pub(crate) fn delegate_jobs(&self) -> &BTreeMap<JobId, DelegateStarted> {
+        &self.delegates
+    }
+
+    /// Running delegates in job start order, each with its job's
+    /// description: a job with a `delegate_started` and no `job_completed`
+    /// yet (`docs/events.md`, "`delegate_started`").
+    pub(crate) fn running_delegates(&self) -> Vec<(&DelegateStarted, &str)> {
+        self.jobs
+            .iter()
+            .filter_map(|(id, description)| {
+                self.delegates
+                    .get(id)
+                    .map(|started| (started, description.as_str()))
+            })
+            .collect()
     }
 
     /// Whether the Jobs card lists its jobs.
