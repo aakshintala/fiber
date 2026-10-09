@@ -51,19 +51,47 @@ fn a_live_codex_turn_replies() {
     let watchdog = fakes::Watchdog::group(group);
     let (done, finished) = mpsc::channel();
     std::thread::spawn(move || done.send(child.wait_with_output()));
-    let Ok(received) = finished.recv_timeout(LIVE_DEADLINE) else {
-        fakes::kill_group(group, "KILL").unwrap();
-        let killed = finished
-            .recv_timeout(REAP_DEADLINE)
-            .map(|output| output.map(|output| output.status.signal()));
+    let first = finished.recv_timeout(LIVE_DEADLINE);
+    let timed_out = first.is_err();
+    let mut received = match first {
+        Ok(output) => Some(output),
+        Err(_) => {
+            fakes::kill_group(group, "KILL").unwrap_or(false);
+            finished.recv_timeout(REAP_DEADLINE).ok()
+        }
+    };
+    if received.is_none() {
+        fakes::kill_group(group, "KILL").unwrap_or(false);
+        received = finished.recv_timeout(REAP_DEADLINE).ok();
+    }
+
+    let empty = fakes::group_empties(group, REAP_DEADLINE);
+    if !empty {
+        fakes::kill_group(group, "KILL").unwrap_or(false);
+    }
+    let cleaned = empty || fakes::group_empties(group, REAP_DEADLINE);
+    watchdog.stand_down(REAP_DEADLINE);
+    assert!(
+        cleaned,
+        "the live turn left process group {group} behind after cleanup"
+    );
+
+    if timed_out {
+        let killed = received
+            .as_ref()
+            .and_then(|output| output.as_ref().ok())
+            .map(|output| output.status.signal());
         assert!(
-            matches!(killed, Ok(Ok(Some(9)))),
+            matches!(killed, Some(Some(9))),
             "the live turn was not reaped as killed within {REAP_DEADLINE:?}: {killed:?}"
         );
         panic!("the live turn did not exit within {LIVE_DEADLINE:?}");
+    }
+    let output = match received {
+        Some(Ok(output)) => output,
+        Some(Err(error)) => panic!("waiting for the live turn failed: {error}"),
+        None => panic!("the live turn was not reaped within {REAP_DEADLINE:?}"),
     };
-    watchdog.stand_down(REAP_DEADLINE);
-    let output = received.unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(output.status.success(), "{stdout}");
     let lines: Vec<serde_json::Value> = stdout

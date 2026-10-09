@@ -286,29 +286,31 @@ fn browser_flow(
     server: &OauthServer,
 ) -> Result<String, Failure> {
     let _ = server;
-    thread::scope(|scope| {
-        let (tx, rx) = mpsc::channel();
-        scope.spawn(move || {
-            tx.send(browser_login(
-                &setup.home(),
-                providers,
-                "codex",
-                label,
-                LoginMethod::Browser,
-                Arc::clone(browser) as Arc<dyn Browser>,
-                setup.clock(),
-            ))
-            .unwrap();
-        });
-        let url = await_opened(opened);
-        let port = free_port_of(&url);
-        redirect(
-            port,
-            &format!("/auth/callback?code=authcode-1&state={}", state_of(&url)),
+    let (tx, rx) = mpsc::channel();
+    let (home, providers, label) = (setup.home(), providers.clone(), label.map(str::to_owned));
+    let (browser, clock) = (Arc::clone(browser) as Arc<dyn Browser>, setup.clock());
+    thread::spawn(move || {
+        let result = browser_login(
+            &home,
+            &providers,
+            "codex",
+            label.as_deref(),
+            LoginMethod::Browser,
+            browser,
+            clock,
         );
-        rx.recv_timeout(WAIT)
-            .unwrap_or_else(|_| panic!("the login did not return within {WAIT:?}"))
-    })
+        match tx.send(result) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let url = await_opened(opened);
+    let port = free_port_of(&url);
+    redirect(
+        port,
+        &format!("/auth/callback?code=authcode-1&state={}", state_of(&url)),
+    );
+    rx.recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("the login did not return within {WAIT:?}"))
 }
 
 /// The redirect port the authorize URL names.
