@@ -454,17 +454,28 @@ fn wait_ready(path: &std::path::Path) {
 }
 
 /// Waits, driving the fake clock, until `pgid` leaves the jobs list:
-/// retirement runs on wakes. Panics boundedly instead of asserting on a
-/// list the runner has not reached yet.
-fn wait_retired(clock: &FakeClock, pgid: u32) {
-    for _ in 0..400 {
-        if !listed(pgid) {
-            return;
+/// retirement runs on wakes. One wall-clock deadline covers the whole
+/// wait (docs/testing.md, "Waits and timeouts"): the wait fails naming
+/// the pgid instead of hanging. Each advance goes only to the retire
+/// park's own `until` (docs/testing.md, "Waits and timeouts": a test
+/// advances a fake clock only after a signal that the code under test is
+/// waiting on that clock); with no park ahead the wait yields.
+fn wait_retired(clock: &Arc<FakeClock>, pgid: u32) {
+    within(&format!("pgid {pgid} retires"), DEADLINE, {
+        let clock = Arc::clone(clock);
+        move || loop {
+            if !listed(pgid) {
+                return;
+            }
+            match park_ahead(&clock) {
+                Some(until) => match until.checked_duration_since(clock.now()) {
+                    Some(gap) if gap <= super::POLL => clock.advance(gap),
+                    _ => thread::yield_now(),
+                },
+                None => thread::yield_now(),
+            }
         }
-        clock.advance(Duration::from_millis(50));
-        thread::yield_now();
-    }
-    panic!("pgid {pgid} was not retired");
+    });
 }
 
 /// How many SIGKILLs went to `pgid` so far.
@@ -1118,9 +1129,6 @@ fn a_member_outliving_a_stop_is_killed_and_the_job_still_cancels() {
         pids_exit(&[survivor], DEADLINE),
         "the surviving member got SIGKILL"
     );
-    for _ in 0..5 {
-        rig.clock.advance(Duration::from_secs(1));
-    }
     assert!(
         group_empties(pgid, DEADLINE),
         "the group retires once it is empty"
