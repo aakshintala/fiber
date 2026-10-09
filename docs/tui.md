@@ -1122,7 +1122,9 @@ appearance. Nothing writes the bad name back. Fiber home's file wins over an
 extension's, and between extensions the first by directory name in
 `extensions/` wins; `/settings` lists each name once. Only a missing file
 passes the name on: a file that is there but cannot be read or is refused is
-the theme. A damaged extension's themes are left out. Colours are given once, in 24
+the theme. A damaged extension's themes are left out, as are a switched-off
+extension's (`extensions."<name>".enabled` is `false`): they are not listed,
+and a `tui.theme` naming one reads as a missing file. Colours are given once, in 24
 bits, and the 256-colour form is computed ("Look").
 
 ### Reduced motion

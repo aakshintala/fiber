@@ -3,7 +3,7 @@
 
 use std::fs;
 
-use super::package_dirs;
+use super::{is_enabled, package_dirs, package_names};
 
 /// A healthy install record, as `extensions/<dir>/.fiber.json` holds it.
 const RECORD: &str = r#"{"name":"x","version":"1.0.0","requested":true,"source":{"path":"/p"}}"#;
@@ -76,4 +76,63 @@ fn a_non_utf8_healthy_directory_is_returned_exactly_once() {
     fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("mkdir: {e}"));
     fs::write(dir.join(".fiber.json"), RECORD).unwrap_or_else(|e| panic!("write: {e}"));
     assert_eq!(package_dirs(home.path()), vec![dir]);
+}
+
+#[test]
+fn package_names_pairs_each_record_name_with_its_directory() {
+    let home = fakes::TempDir::new("fiber-package-names");
+    for (dir, name) in [("b", "bravo"), ("a", "alpha")] {
+        let record = format!(
+            r#"{{"name":"{name}","version":"1.0.0","requested":true,"source":{{"path":"/p"}}}}"#
+        );
+        write_record(home.path(), dir, &record);
+    }
+    assert_eq!(
+        package_names(home.path()),
+        [
+            ("alpha".to_owned(), home.path().join("extensions").join("a")),
+            ("bravo".to_owned(), home.path().join("extensions").join("b")),
+        ]
+    );
+}
+
+/// The configuration for `home` holding `text` as its global file.
+fn config_with(home: &std::path::Path, text: &str) -> config::Config {
+    std::fs::create_dir_all(home).unwrap_or_else(|e| panic!("mkdir: {e}"));
+    std::fs::write(home.join("config.json"), text).unwrap_or_else(|e| panic!("write: {e}"));
+    let project = config::ProjectKey::new("-w").unwrap_or_else(|err| panic!("key: {err}"));
+    config::Config::load(config::Sources {
+        home: home.to_path_buf(),
+        workspace: home.to_path_buf(),
+        project,
+        overrides: Vec::new(),
+    })
+    .unwrap_or_else(|err| panic!("config: {err}"))
+}
+
+#[test]
+fn an_extension_is_enabled_unless_switched_off() {
+    let home = fakes::TempDir::new("fiber-enabled-default");
+    let config = config_with(home.path(), "{}");
+    assert!(is_enabled(&config, "acme"));
+}
+
+#[test]
+fn an_explicit_true_leaves_the_extension_enabled() {
+    let home = fakes::TempDir::new("fiber-enabled-true");
+    let config = config_with(
+        home.path(),
+        r#"{"extensions": {"acme": {"enabled": true}}}"#,
+    );
+    assert!(is_enabled(&config, "acme"));
+}
+
+#[test]
+fn false_switches_the_extension_off() {
+    let home = fakes::TempDir::new("fiber-enabled-false");
+    let config = config_with(
+        home.path(),
+        r#"{"extensions": {"acme": {"enabled": false}}}"#,
+    );
+    assert!(!is_enabled(&config, "acme"));
 }

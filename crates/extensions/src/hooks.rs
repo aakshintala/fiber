@@ -139,12 +139,7 @@ impl SessionExtensions {
         }
         let mut started: Vec<Started> = Vec::new();
         for item in installed {
-            let quoted = format!("extensions.\"{}\"", item.name);
-            let enabled = config
-                .get(&format!("{quoted}.enabled"), None)
-                .and_then(|(value, _)| value.as_bool())
-                .unwrap_or(true);
-            if !enabled {
+            if !crate::is_enabled(config, &item.name) {
                 continue;
             }
             let slug = match crate::install::slug(&item.name) {

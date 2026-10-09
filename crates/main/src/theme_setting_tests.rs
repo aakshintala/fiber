@@ -106,11 +106,19 @@ fn bad_names_are_refused_without_a_read() {
 /// A healthy install record, as `extensions/<dir>/.fiber.json` holds it.
 const RECORD: &str = r#"{"name":"x","version":"1.0.0","requested":true,"source":{"path":"/p"}}"#;
 
-/// Makes `dir` a healthy extension in `home`.
-fn healthy(home: &Path, dir: &str) {
+/// Makes `dir` a healthy extension in `home` named `name`.
+fn healthy_named(home: &Path, dir: &str, name: &str) {
     let path = home.join("extensions").join(dir);
     std::fs::create_dir_all(&path).unwrap_or_else(|e| panic!("mkdir: {e}"));
-    std::fs::write(path.join(".fiber.json"), RECORD).unwrap_or_else(|e| panic!("write: {e}"));
+    let record = format!(
+        r#"{{"name":"{name}","version":"1.0.0","requested":true,"source":{{"path":"/p"}}}}"#
+    );
+    std::fs::write(path.join(".fiber.json"), record).unwrap_or_else(|e| panic!("write: {e}"));
+}
+
+/// Makes `dir` a healthy extension in `home`.
+fn healthy(home: &Path, dir: &str) {
+    healthy_named(home, dir, "x");
 }
 
 /// Writes `text` to the theme file `name` in `dir`, making it.
@@ -131,7 +139,7 @@ fn named_with(
         asked.borrow_mut().push(path.to_path_buf());
         answer(path)
     };
-    let got = named(home, Some(name), &read);
+    let got = named(home, Some(name), &read, &|_: &str| true);
     (got, asked.into_inner())
 }
 
@@ -377,7 +385,10 @@ fn names_lists_home_and_package_themes_once_sorted() {
     let acme = home.path().join("extensions").join("acme").join("themes");
     write_theme(&acme, "dusk.json");
     write_theme(&acme, "tide.json");
-    assert_eq!(names(home.path()), ["dusk", "solar", "tide"]);
+    assert_eq!(
+        names(home.path(), &|_: &str| true),
+        ["dusk", "solar", "tide"]
+    );
 }
 
 #[test]
@@ -402,7 +413,7 @@ fn names_leaves_out_what_loading_refuses() {
     }
     write_theme(&home_themes, "a.b.json");
     write_theme(&acme_themes, "tide.json");
-    assert_eq!(names(home.path()), ["a.b", "tide"]);
+    assert_eq!(names(home.path(), &|_: &str| true), ["a.b", "tide"]);
 }
 
 #[test]
@@ -429,11 +440,174 @@ fn a_linked_package_theme_file_loads() {
     std::fs::write(&target, "linked").unwrap_or_else(|e| panic!("write: {e}"));
     std::os::unix::fs::symlink(&target, acme_themes.join("dusk.json"))
         .unwrap_or_else(|e| panic!("link: {e}"));
-    let got = named(home.path(), Some("dusk"), &|path| {
-        std::fs::read_to_string(path)
-    });
+    let got = named(
+        home.path(),
+        Some("dusk"),
+        &|path| std::fs::read_to_string(path),
+        &|_: &str| true,
+    );
     let tui::ThemeSetting::File { name, text } = got else {
         panic!("not a theme file");
     };
     assert_eq!((name.as_str(), text), ("dusk", Ok("linked".to_owned())));
+}
+
+/// The setting for `name` in `home`, asking only enabled extensions.
+/// The reader answers `answer` per path.
+fn named_enabled(
+    home: &Path,
+    name: &str,
+    answer: &dyn Fn(&Path) -> io::Result<String>,
+    enabled: &dyn Fn(&str) -> bool,
+) -> (tui::ThemeSetting, Vec<PathBuf>) {
+    let asked = RefCell::new(Vec::new());
+    let read = |path: &Path| {
+        asked.borrow_mut().push(path.to_path_buf());
+        answer(path)
+    };
+    let got = named(home, Some(name), &read, enabled);
+    (got, asked.into_inner())
+}
+
+#[test]
+fn a_disabled_extensions_file_reads_as_absent() {
+    let home = fakes::TempDir::new("fiber-theme-disabled-absent");
+    healthy_named(home.path(), "acme", "acme");
+    let acme_file = home
+        .path()
+        .join("extensions")
+        .join("acme")
+        .join("themes")
+        .join("dusk.json");
+    let answers = [(acme_file.clone(), "acme".to_owned())]
+        .into_iter()
+        .collect();
+    let (got, asked) = named_enabled(home.path(), "dusk", &found(&answers), &|_: &str| false);
+    let tui::ThemeSetting::File { name, text } = got else {
+        panic!("not a theme file");
+    };
+    assert_eq!(name, "dusk");
+    // The disabled file is skipped, so the text is home's absence error:
+    // one notice, then the terminal follows its appearance.
+    assert_eq!(text, Err("gone".to_owned()));
+    assert_eq!(asked, [home.path().join("themes").join("dusk.json")]);
+}
+
+#[test]
+fn an_explicitly_enabled_extension_still_supplies_its_file() {
+    let home = fakes::TempDir::new("fiber-theme-enabled-true");
+    healthy_named(home.path(), "acme", "acme");
+    let acme_file = home
+        .path()
+        .join("extensions")
+        .join("acme")
+        .join("themes")
+        .join("dusk.json");
+    let answers = [(acme_file.clone(), "acme".to_owned())]
+        .into_iter()
+        .collect();
+    let (got, _) = named_enabled(home.path(), "dusk", &found(&answers), &|name| {
+        assert_eq!(name, "acme");
+        true
+    });
+    let tui::ThemeSetting::File { text, .. } = got else {
+        panic!("not a theme file");
+    };
+    assert_eq!(text, Ok("acme".to_owned()));
+}
+
+#[test]
+fn a_disabled_extensions_same_named_file_is_skipped_for_a_later_enabled_one() {
+    let home = fakes::TempDir::new("fiber-theme-disabled-order");
+    healthy_named(home.path(), "aaa", "off");
+    healthy_named(home.path(), "zzz", "on");
+    let answers = [
+        (
+            home.path()
+                .join("extensions")
+                .join("aaa")
+                .join("themes")
+                .join("dusk.json"),
+            "off".to_owned(),
+        ),
+        (
+            home.path()
+                .join("extensions")
+                .join("zzz")
+                .join("themes")
+                .join("dusk.json"),
+            "on".to_owned(),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let enabled = |name: &str| name != "off";
+    let (got, asked) = named_enabled(home.path(), "dusk", &found(&answers), &enabled);
+    let tui::ThemeSetting::File { text, .. } = got else {
+        panic!("not a theme file");
+    };
+    assert_eq!(text, Ok("on".to_owned()));
+    assert_eq!(
+        asked,
+        [
+            home.path().join("themes").join("dusk.json"),
+            home.path()
+                .join("extensions")
+                .join("zzz")
+                .join("themes")
+                .join("dusk.json"),
+        ]
+    );
+}
+
+#[test]
+fn names_leaves_out_a_disabled_extensions_themes() {
+    let home = fakes::TempDir::new("fiber-theme-names-disabled");
+    healthy_named(home.path(), "acme", "acme");
+    healthy_named(home.path(), "other", "other");
+    write_theme(
+        &home.path().join("extensions").join("acme").join("themes"),
+        "dusk.json",
+    );
+    write_theme(
+        &home.path().join("extensions").join("other").join("themes"),
+        "tide.json",
+    );
+    assert_eq!(names(home.path(), &|name| name != "acme"), ["tide"]);
+}
+
+#[test]
+fn setting_with_a_disabled_extension_reads_it_as_absent() {
+    let home = fakes::TempDir::new("fiber-theme-setting-disabled");
+    healthy_named(home.path(), "acme", "acme");
+    std::fs::create_dir_all(home.path().join("extensions").join("acme").join("themes"))
+        .unwrap_or_else(|e| panic!("mkdir: {e}"));
+    std::fs::write(
+        home.path()
+            .join("extensions")
+            .join("acme")
+            .join("themes")
+            .join("dusk.json"),
+        "acme",
+    )
+    .unwrap_or_else(|e| panic!("write: {e}"));
+    std::fs::write(
+        home.path().join("config.json"),
+        r#"{"extensions": {"acme": {"enabled": false}}, "tui": {"theme": "dusk"}}"#,
+    )
+    .unwrap_or_else(|e| panic!("write: {e}"));
+    let project = config::ProjectKey::new("-w").unwrap_or_else(|err| panic!("key: {err}"));
+    let config = Config::load(Sources {
+        home: home.path().to_path_buf(),
+        workspace: home.path().to_path_buf(),
+        project,
+        overrides: Vec::new(),
+    })
+    .unwrap_or_else(|err| panic!("config: {err}"));
+    let got = setting(home.path(), &config, &|path| std::fs::read_to_string(path));
+    let tui::ThemeSetting::File { name, text } = got else {
+        panic!("not a theme file");
+    };
+    assert_eq!(name, "dusk");
+    assert!(text.is_err(), "{text:?}");
 }

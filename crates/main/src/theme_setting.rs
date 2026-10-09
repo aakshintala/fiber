@@ -10,10 +10,11 @@ use config::Config;
 /// The theme `tui.theme` names. Unset or `auto` follows the terminal's
 /// appearance; `dark` and `light` are always the built-ins and read
 /// nothing; any other name is `themes/<name>.json` in `home`, then in each
-/// healthy installed extension's, read with `read`, its contents or the
+/// healthy, enabled installed extension's, read with `read`, its contents or the
 /// read error carried as text. Fiber home wins over any extension, and
 /// between extensions the first by directory name in `extensions/` wins.
-/// Only an absent file passes the name on: a file that is there but is
+/// A switched-off extension's themes are not listed or loaded: one naming
+/// them reads as a missing file. Only an absent file passes the name on: a file that is there but is
 /// refused, or whose read fails with any error other than `NotFound`, is
 /// the theme. A name that fails the shared rule is refused unread, so
 /// `tui.theme` never reaches outside `themes/`.
@@ -25,15 +26,19 @@ pub(crate) fn setting(
     let name = config
         .get("tui.theme", None)
         .and_then(|(value, _)| value.as_str().map(str::to_owned));
-    named(home, name.as_deref(), read)
+    let enabled = |extension: &str| extensions::is_enabled(config, extension);
+    named(home, name.as_deref(), read, &enabled)
 }
 
 /// The theme `name` gives `tui.theme`, by the rules [`setting`] reads it
-/// with: what `/settings` applies when a theme is chosen.
+/// with: what `/settings` applies when a theme is chosen. `enabled`
+/// names the extensions that load; a switched-off extension's files are
+/// skipped, as if missing.
 pub(crate) fn named(
     home: &Path,
     name: Option<&str>,
     read: &dyn Fn(&Path) -> io::Result<String>,
+    enabled: &dyn Fn(&str) -> bool,
 ) -> tui::ThemeSetting {
     match name {
         None | Some("auto") => tui::ThemeSetting::Follow,
@@ -45,7 +50,7 @@ pub(crate) fn named(
         },
         Some(name) => tui::ThemeSetting::File {
             name: name.to_owned(),
-            text: lookup(home, name, read),
+            text: lookup(home, name, read, enabled),
         },
     }
 }
@@ -61,13 +66,16 @@ fn is_name(name: &str) -> bool {
 }
 
 /// The text of the theme `name`: Fiber home's `themes/<name>.json`, then
-/// each healthy extension's in directory order. Only absence passes the
+/// each healthy, enabled extension's in directory order. A switched-off
+/// extension's file is skipped, so a later enabled extension's same-named
+/// file still supplies the theme. Only absence passes the
 /// name on; when every source lacks the file, the text is home's
 /// `NotFound` error string.
 fn lookup(
     home: &Path,
     name: &str,
     read: &dyn Fn(&Path) -> io::Result<String>,
+    enabled: &dyn Fn(&str) -> bool,
 ) -> Result<String, String> {
     let file = format!("{name}.json");
     let home_error = match read(&home.join("themes").join(&file)) {
@@ -75,7 +83,10 @@ fn lookup(
         Err(error) if error.kind() == io::ErrorKind::NotFound => error,
         Err(error) => return Err(error.to_string()),
     };
-    for package in extensions::package_dirs(home) {
+    for (extension, package) in extensions::package_names(home) {
+        if !enabled(&extension) {
+            continue;
+        }
         match read(&package.join("themes").join(&file)) {
             Ok(text) => return Ok(text),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -86,12 +97,15 @@ fn lookup(
 }
 
 /// Every theme [`named`] can load, each once, sorted: Fiber home's
-/// `themes/` and each healthy installed extension's.
-pub(crate) fn names(home: &Path) -> Vec<String> {
+/// `themes/` and each healthy, enabled installed extension's. A
+/// switched-off extension contributes none.
+pub(crate) fn names(home: &Path, enabled: &dyn Fn(&str) -> bool) -> Vec<String> {
     let mut names = Vec::new();
     collect(&home.join("themes"), &mut names);
-    for package in extensions::package_dirs(home) {
-        collect(&package.join("themes"), &mut names);
+    for (extension, package) in extensions::package_names(home) {
+        if enabled(&extension) {
+            collect(&package.join("themes"), &mut names);
+        }
     }
     names.sort();
     names.dedup();

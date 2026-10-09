@@ -174,14 +174,25 @@ pub(crate) fn read(home: &Path) -> Result<Listing, Error> {
     Ok(Listing { installed, damaged })
 }
 
-/// The directories of the healthy installed extensions: every
+/// Whether the extension `name` loads: `extensions."<name>".enabled`,
+/// default true (`docs/configuration.md`, "Keys").
+pub fn is_enabled(config: &config::Config, name: &str) -> bool {
+    let quoted = format!("extensions.\"{name}\".enabled");
+    config
+        .get(&quoted, None)
+        .and_then(|(value, _)| value.as_bool())
+        .unwrap_or(true)
+}
+
+/// The healthy installed extensions' names beside their directories: every
 /// `extensions/<dir>/` whose install record reads, sorted by directory
 /// file name. Best-effort and infallible: a missing or unreadable
 /// `extensions/`, an unreadable entry, a name starting with `.` (an
 /// install in progress) and a directory whose record is missing or
 /// unreadable each contribute nothing. Only the record is read; no
-/// manifest, Lua or repository code is loaded.
-pub fn package_dirs(home: &Path) -> Vec<PathBuf> {
+/// manifest, Lua or repository code is loaded. The name is the record's,
+/// as installed.
+pub fn package_names(home: &Path) -> Vec<(String, PathBuf)> {
     let root = home.join("extensions");
     let Ok(entries) = fs::read_dir(&root) else {
         return Vec::new();
@@ -192,13 +203,27 @@ pub fn package_dirs(home: &Path) -> Vec<PathBuf> {
             continue;
         }
         let dir = entry.path();
-        if Record::read(&dir).is_err() {
+        let Ok(record) = Record::read(&dir) else {
             continue;
-        }
-        dirs.push(dir);
+        };
+        dirs.push((record.name, dir));
     }
-    dirs.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    dirs.sort_by(|a, b| a.1.file_name().cmp(&b.1.file_name()));
     dirs
+}
+
+/// The directories of the healthy installed extensions: every
+/// `extensions/<dir>/` whose install record reads, sorted by directory
+/// file name. Best-effort and infallible: a missing or unreadable
+/// `extensions/`, an unreadable entry, a name starting with `.` (an
+/// install in progress) and a directory whose record is missing or
+/// unreadable each contribute nothing. Only the record is read; no
+/// manifest, Lua or repository code is loaded.
+pub fn package_dirs(home: &Path) -> Vec<PathBuf> {
+    package_names(home)
+        .into_iter()
+        .map(|(_, dir)| dir)
+        .collect()
 }
 
 /// What `fiber extension remove` will delete, worked out under the lock. Dropping it

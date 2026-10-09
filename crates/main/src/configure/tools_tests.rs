@@ -45,7 +45,7 @@ fn switches_list_each_server_and_extension_that_has_tool_lists() {
         &dirs.project_file(&workspace),
         r#"{"extensions": {"memory": {"tools": {"enabled": ["x"]}}}}"#,
     );
-    let seam = Seam::new(dirs.home());
+    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
     let groups: Vec<ToolGroup> = switches(&seam, &workspace)
         .into_iter()
         .map(|switches| switches.group)
@@ -65,7 +65,7 @@ fn this_project_is_the_effective_lists_and_everywhere_the_globals() {
         &dirs.project_file(&workspace),
         r#"{"mcp": {"servers": {"gh": {"tools": {"disabled": ["b"]}}}}}"#,
     );
-    let seam = Seam::new(dirs.home());
+    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
     let found = switches(&seam, &workspace)
         .into_iter()
         .find(|switches| switches.group == gh())
@@ -84,7 +84,7 @@ fn switching_off_in_this_project_starts_from_the_inherited_list() {
         &dirs.home().join("config.json"),
         r#"{"mcp": {"servers": {"gh": {"tools": {"disabled": ["a"]}}}}}"#,
     );
-    let seam = Seam::new(dirs.home());
+    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
     seam.switch_tool(&workspace, &gh(), "b", SwitchScope::Project, false)
         .unwrap_or_else(|e| panic!("switch: {e}"));
     assert_eq!(
@@ -109,7 +109,7 @@ fn the_inherited_list_is_the_repositorys_over_the_globals() {
         &workspace.join(".fiber/config.json"),
         r#"{"mcp": {"servers": {"gh": {"tools": {"disabled": ["r"]}}}}}"#,
     );
-    let seam = Seam::new(dirs.home());
+    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
     seam.write_switch(&workspace, &gh(), "b", SwitchScope::Project, false)
         .unwrap_or_else(|e| panic!("switch: {e}"));
     assert_eq!(
@@ -126,7 +126,7 @@ fn switching_off_everywhere_writes_only_the_global_file() {
         &dirs.project_file(&workspace),
         r#"{"mcp": {"servers": {"gh": {"tools": {"disabled": ["p"]}}}}}"#,
     );
-    let seam = Seam::new(dirs.home());
+    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
     seam.write_switch(&workspace, &gh(), "b", SwitchScope::Everywhere, false)
         .unwrap_or_else(|e| panic!("switch: {e}"));
     assert_eq!(
@@ -148,7 +148,7 @@ fn switching_on_removes_the_name_and_adds_it_to_an_enabled_list_that_lacks_it() 
         r#"{"mcp": {"servers": {"gh": {
             "tools": {"enabled": ["x"], "disabled": ["t"]}}}}}"#,
     );
-    let seam = Seam::new(dirs.home());
+    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
     seam.write_switch(&workspace, &gh(), "t", SwitchScope::Project, true)
         .unwrap_or_else(|e| panic!("switch: {e}"));
     let tools = &read(&dirs.project_file(&workspace))["mcp"]["servers"]["gh"]["tools"];
@@ -164,7 +164,7 @@ fn switching_on_with_no_enabled_list_writes_no_enabled_key() {
         &dirs.project_file(&workspace),
         r#"{"mcp": {"servers": {"gh": {"tools": {"disabled": ["t"]}}}}}"#,
     );
-    let seam = Seam::new(dirs.home());
+    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
     seam.write_switch(&workspace, &gh(), "t", SwitchScope::Project, true)
         .unwrap_or_else(|e| panic!("switch: {e}"));
     let tools = &read(&dirs.project_file(&workspace))["mcp"]["servers"]["gh"]["tools"];
@@ -181,7 +181,7 @@ fn switching_on_a_tool_the_enabled_list_names_leaves_that_list() {
         r#"{"mcp": {"servers": {"gh": {
             "tools": {"enabled": ["t"], "disabled": ["t"]}}}}}"#,
     );
-    let seam = Seam::new(dirs.home());
+    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
     seam.write_switch(&workspace, &gh(), "t", SwitchScope::Project, true)
         .unwrap_or_else(|e| panic!("switch: {e}"));
     let tools = &read(&dirs.project_file(&workspace))["mcp"]["servers"]["gh"]["tools"];
@@ -197,7 +197,7 @@ fn an_extension_switch_writes_under_the_files_spelling() {
         &dirs.project_file(&workspace),
         r#"{"extensions": {"memory": {"tools": {"disabled": []}}}}"#,
     );
-    let seam = Seam::new(dirs.home());
+    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
     seam.write_switch(&workspace, &memory(), "t", SwitchScope::Project, false)
         .unwrap_or_else(|e| panic!("switch: {e}"));
     let root = read(&dirs.project_file(&workspace));
@@ -219,7 +219,7 @@ fn an_extension_switch_writes_under_the_files_spelling() {
 fn a_server_named_with_a_dot_is_written_under_its_whole_name() {
     let dirs = Dirs::new();
     let workspace = dirs.workspace("one");
-    let seam = Seam::new(dirs.home());
+    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
     seam.write_switch(
         &workspace,
         &ToolGroup::Mcp("a.b".to_owned()),
@@ -242,7 +242,7 @@ fn a_name_holding_a_quote_is_left_out() {
         &dirs.home().join("config.json"),
         r#"{"mcp": {"servers": {"a\"b": {"tools": {"disabled": ["x"]}}}}, "extensions": {"a\"b": {"tools": {"disabled": ["x"]}}}}"#,
     );
-    let seam = Seam::new(dirs.home());
+    let seam = Seam::new(dirs.home(), std::sync::Arc::new(|_: &str| true));
     let groups: Vec<ToolGroup> = switches(&seam, &workspace)
         .into_iter()
         .map(|switches| switches.group)

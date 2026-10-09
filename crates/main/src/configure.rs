@@ -10,6 +10,7 @@ mod skills;
 mod tools;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use config::{Config, SettingValue, Source, Sources};
 use contract::shapes::Failure;
@@ -21,12 +22,17 @@ use tui::{
 /// The seam over Fiber home.
 pub(crate) struct Seam {
     home: PathBuf,
+    /// Whether an installed extension's themes load: the launch
+    /// configuration's `extensions."<name>".enabled`. `/settings` has no
+    /// workspace, so the lookup is fixed at launch.
+    enabled: Arc<dyn Fn(&str) -> bool + Send + Sync>,
 }
 
 impl Seam {
-    /// The seam over Fiber home `home`.
-    pub(crate) fn new(home: PathBuf) -> Self {
-        Self { home }
+    /// The seam over Fiber home `home`. `enabled` names the extensions
+    /// whose themes list and load.
+    pub(crate) fn new(home: PathBuf, enabled: Arc<dyn Fn(&str) -> bool + Send + Sync>) -> Self {
+        Self { home, enabled }
     }
 
     /// The configuration `workspace`'s project and repository give.
@@ -241,13 +247,16 @@ impl tui::Configure for Seam {
     }
 
     fn themes(&self) -> Vec<String> {
-        crate::theme_setting::names(&self.home)
+        crate::theme_setting::names(&self.home, self.enabled.as_ref())
     }
 
     fn theme(&self, name: &str) -> tui::ThemeSetting {
-        crate::theme_setting::named(&self.home, Some(name), &|path| {
-            std::fs::read_to_string(path)
-        })
+        crate::theme_setting::named(
+            &self.home,
+            Some(name),
+            &|path| std::fs::read_to_string(path),
+            self.enabled.as_ref(),
+        )
     }
 
     fn tool_switches(&self, workspace: &Path) -> Result<Vec<ToolSwitches>, ConfigureError> {

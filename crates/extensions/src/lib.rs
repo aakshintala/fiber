@@ -40,7 +40,9 @@ pub use host::Session;
 pub use host::exec::kill_every_group;
 pub use host::script::{ExecEntry, ExecReply, HostScript, HttpEntry, json_matches};
 pub use install::Provenance;
-pub use installed::{Damaged, Installed, Listing, Removal, list, package_dirs, removal};
+pub use installed::{
+    Damaged, Installed, Listing, Removal, is_enabled, list, package_dirs, package_names, removal,
+};
 pub use lua::{LuaExtension, MEMORY_CAP};
 pub use lua_provider::{CredentialPair, LuaProvider, REFRESH_BEFORE};
 pub use manage::{Item, Plan, Request, plan};
