@@ -49,6 +49,8 @@ pub(crate) enum TargetId {
     Offer(crate::offer::Spot),
     /// A tab or row of the question form on the request panel.
     Form(crate::approvals::form::Spot),
+    /// A configuration view's ✕ or row (`docs/tui.md`, "Swapped views").
+    View(crate::swapped::Spot),
 }
 
 /// One click target as drawn: what it does and the cells it covers.

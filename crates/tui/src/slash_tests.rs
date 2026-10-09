@@ -28,6 +28,7 @@ fn built_ins_come_in_table_order_then_the_answer_rows() {
             "new",
             "resume",
             "panel",
+            "settings",
             "handoff",
             "name",
             "reload",
@@ -40,8 +41,8 @@ fn built_ins_come_in_table_order_then_the_answer_rows() {
             "review"
         ]
     );
-    assert!(all.iter().take(12).all(|row| row.tag == "command"));
-    assert!(all.iter().skip(12).all(|row| row.tag == "skill"));
+    assert!(all.iter().take(13).all(|row| row.tag == "command"));
+    assert!(all.iter().skip(13).all(|row| row.tag == "skill"));
     assert_eq!(
         all.iter()
             .find(|row| row.name == "tdd")

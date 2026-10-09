@@ -1,0 +1,173 @@
+//! Every configuration key with its effective value and layer, as the
+//! terminal's `/settings` lists them (`docs/tui.md`, "Swapped views";
+//! `docs/configuration.md`, "Keys", "Layers").
+
+use std::collections::BTreeMap;
+
+use serde_json::Value;
+
+use crate::keys::{self, Scope};
+use crate::path::{display, get};
+use crate::secret::CredentialSource;
+use crate::{Config, Layer, Source};
+
+/// Which files a key may be written to ("What a repository may set").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteScope {
+    /// The global and the project's file, and the repository's when `repo`.
+    Any {
+        /// Whether a repository may set it.
+        repo: bool,
+    },
+    /// Only Fiber home's `config.json`.
+    GlobalOnly,
+    /// Only a repository's own file.
+    RepoOnly,
+    /// Only the person's own files: the global and the project's file.
+    PersonFiles,
+}
+
+/// A key's effective value as `/settings` shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingValue {
+    /// No layer sets it and it has no default.
+    Unset,
+    /// The effective value and the highest layer setting it.
+    Value(Value, Source),
+    /// A list whose layers all apply (`skills.disabled`): each name with
+    /// the lowest layer listing it.
+    Union(Vec<(String, Source)>),
+    /// A value that may hold a secret, described without it: a credential
+    /// source's kind and a command's program, or an `env` map's names.
+    Redacted(String, Source),
+}
+
+/// One configuration key as `/settings` lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettingInfo {
+    /// The dotted key, a name holding a `.` quoted.
+    pub key: String,
+    /// Its effective value.
+    pub value: SettingValue,
+    /// The files it may be written to.
+    pub scope: WriteScope,
+}
+
+/// The list key whose layers all apply ("Layers").
+const UNION: &str = "skills.disabled";
+
+impl Config {
+    /// Every key "Keys" names with no `*` in its path, and every instance
+    /// of a `*` key some layer sets, sorted by key. A credential source
+    /// shows its kind and a command's program only, and a server's `env`
+    /// its variable names only: their values may be secrets.
+    pub fn settings(&self) -> Vec<SettingInfo> {
+        let mut found: BTreeMap<String, Vec<String>> = keys::plain_paths()
+            .map(|path| {
+                let segments: Vec<String> = path.split('.').map(str::to_owned).collect();
+                (display(&segments), segments)
+            })
+            .collect();
+        for (_, layer) in &self.layers {
+            instances(layer, &mut Vec::new(), &mut found);
+        }
+        found
+            .into_iter()
+            .filter_map(|(key, segments)| {
+                let row = keys::leaf(&segments)?;
+                let scope = match row.scope {
+                    Scope::Any => WriteScope::Any { repo: row.repo },
+                    Scope::GlobalOnly => WriteScope::GlobalOnly,
+                    Scope::RepoOnly => WriteScope::RepoOnly,
+                    Scope::PersonFiles => WriteScope::PersonFiles,
+                };
+                let value = self.setting(&key, &segments);
+                Some(SettingInfo { key, value, scope })
+            })
+            .collect()
+    }
+
+    /// The value `layer`'s own file sets at `key`, ignoring every other
+    /// layer: what a write to that file starts from.
+    pub fn in_layer(&self, key: &str, layer: Layer) -> Option<Value> {
+        let segments = crate::path::parse(key)?;
+        self.layers
+            .iter()
+            .find(|(source, _)| {
+                matches!(
+                    (source, layer),
+                    (Source::Global(_), Layer::Global)
+                        | (Source::Project(_), Layer::Project)
+                        | (Source::Repository(_), Layer::Repository)
+                )
+            })
+            .and_then(|(_, value)| get(value, &segments).cloned())
+    }
+
+    /// One key's value as `/settings` shows it.
+    fn setting(&self, key: &str, segments: &[String]) -> SettingValue {
+        if key == UNION {
+            let mut names: Vec<(String, Source)> = Vec::new();
+            for (source, layer) in &self.layers {
+                let items = get(layer, segments).and_then(Value::as_array);
+                for name in items.into_iter().flatten().filter_map(Value::as_str) {
+                    if !names.iter().any(|(seen, _)| seen == name) {
+                        names.push((name.to_owned(), source.clone()));
+                    }
+                }
+            }
+            if !names.is_empty() {
+                return SettingValue::Union(names);
+            }
+        }
+        let Some((value, source)) = self.get(key, None) else {
+            return SettingValue::Unset;
+        };
+        match segments {
+            [providers, _, credentials, _]
+                if providers == "providers" && credentials == "credentials" =>
+            {
+                SettingValue::Redacted(described(&value), source)
+            }
+            [mcp, servers, _, env] if mcp == "mcp" && servers == "servers" && env == "env" => {
+                let names: Vec<&str> = value
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|map| map.keys().map(String::as_str))
+                    .collect();
+                SettingValue::Redacted(format!("names {}", names.join(", ")), source)
+            }
+            _ => SettingValue::Value(value, source),
+        }
+    }
+}
+
+/// A credential source without its secret: its kind, and a command by its
+/// program alone, since its arguments may hold a key.
+fn described(value: &Value) -> String {
+    match serde_json::from_value::<CredentialSource>(value.clone()) {
+        Ok(CredentialSource::Env(name)) => format!("env {name}"),
+        Ok(CredentialSource::File(file)) => format!("file {}", file.display()),
+        Ok(CredentialSource::Command(argv)) => {
+            format!("command {}", argv.first().map_or("", String::as_str))
+        }
+        Err(_) => "unreadable".to_owned(),
+    }
+}
+
+/// Every key path under `value` that names a row of "Keys", by its dotted
+/// form.
+fn instances(value: &Value, path: &mut Vec<String>, found: &mut BTreeMap<String, Vec<String>>) {
+    let Some(map) = value.as_object() else {
+        return;
+    };
+    for (name, inner) in map {
+        path.push(name.clone());
+        if keys::leaf(path).is_some() {
+            found.insert(display(path), path.clone());
+        } else {
+            instances(inner, path, found);
+        }
+        path.pop();
+    }
+}

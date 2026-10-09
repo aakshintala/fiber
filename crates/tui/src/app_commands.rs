@@ -97,6 +97,9 @@ impl App {
     pub(crate) fn on_edit(&mut self, edit: Edit) -> Effect {
         self.armed_at = None;
         self.history.cancel();
+        if let Some(effect) = self.config_view_edit(&edit) {
+            return effect;
+        }
         // Delete on a focused home row asks to delete it when it
         // exited, ahead of the focus early return below.
         if let Some(effect) = self.home_edit(&edit) {
@@ -412,6 +415,7 @@ impl App {
                 self.draft.clear();
                 self.open_first()
             }
+            "settings" => self.open_config_view(super::ConfigView::Settings),
             // `?` and `help`.
             _ => {
                 self.draft.clear();

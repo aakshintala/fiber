@@ -21,7 +21,17 @@ pub(crate) fn setting(
     let name = config
         .get("tui.theme", None)
         .and_then(|(value, _)| value.as_str().map(str::to_owned));
-    match name.as_deref() {
+    named(home, name.as_deref(), read)
+}
+
+/// The theme `name` gives `tui.theme`, by the rules [`setting`] reads it
+/// with: what `/settings` applies when a theme is chosen.
+pub(crate) fn named(
+    home: &Path,
+    name: Option<&str>,
+    read: &dyn Fn(&Path) -> io::Result<String>,
+) -> tui::ThemeSetting {
+    match name {
         None | Some("auto") => tui::ThemeSetting::Follow,
         Some("dark") => tui::ThemeSetting::Dark,
         Some("light") => tui::ThemeSetting::Light,

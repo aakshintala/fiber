@@ -59,6 +59,7 @@ fn sent(effect: Effect) -> Vec<Value> {
         | Effect::Exit(_)
         | Effect::Copy(_)
         | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
         | Effect::Quit
         | Effect::ListFiles
         | Effect::FindPause { .. }

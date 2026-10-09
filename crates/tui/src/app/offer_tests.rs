@@ -104,7 +104,8 @@ fn sent(effect: Effect) -> Vec<Value> {
         | Effect::Editor { .. }
         | Effect::Exit(_)
         | Effect::Copy(_)
-        | Effect::OpenLink(_) => Vec::new(),
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => Vec::new(),
     }
 }
 

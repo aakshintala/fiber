@@ -33,7 +33,7 @@ mod sessions_search;
 mod table;
 
 pub use approve::approve;
-pub use config::{config_get, config_set};
+pub use config::{config_get, config_set, config_set_text};
 pub use extension::{extension_install, extension_list, extension_remove, extension_update};
 pub use extension_test::extension_test;
 pub use hub_service::{hub_install, hub_restart, hub_uninstall};

@@ -1,0 +1,306 @@
+//! Tests for the configuration views on the app: opening `/settings` on
+//! home and attached, the keys a view takes and the ones it leaves, the
+//! seam's absence, the editor's return and the theme a choice queues
+//! (`docs/tui.md`, "Swapped views").
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+
+use super::super::{App, Effect};
+use super::ConfigView;
+use crate::Configure;
+use crate::configure::{Layer, Shown, WriteScope};
+use crate::configure_fake::{Fake, file, row};
+use crate::home::Launch;
+use crate::keys::Key;
+use crate::link::Line;
+use crate::mouse::TargetId;
+use crate::swapped::Spot;
+
+const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
+
+/// A seam over two rows.
+fn fake() -> Arc<Fake> {
+    let mut fake = Fake::new(vec![
+        row(
+            "handoff.tokens",
+            Shown::Value("400000".to_owned()),
+            "default",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "tui.theme",
+            Shown::Unset,
+            "default",
+            WriteScope::Any { repo: false },
+        ),
+    ]);
+    fake.themes = vec!["solar".to_owned()];
+    Arc::new(fake)
+}
+
+/// An app on home at 80x24 in `/w`, with `seam`.
+fn home(seam: Option<Arc<Fake>>) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        ..Default::default()
+    });
+    app.set_configure(seam.map(|seam| seam as Arc<dyn Configure>));
+    app.set_size(80, 24);
+    app
+}
+
+/// An app attached to [`SESSION`], with `seam`.
+fn attached(seam: Option<Arc<Fake>>) -> App {
+    let mut app = home(seam);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app
+}
+
+/// Types `/settings` and presses Enter.
+fn slash_settings(app: &mut App) -> Effect {
+    for ch in "/settings".chars() {
+        app.on_key(Key::Char(ch), Instant::now());
+    }
+    app.on_key(Key::Enter, Instant::now())
+}
+
+/// The screen's rows as text.
+fn screen(app: &App) -> Vec<String> {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    (0..24)
+        .map(|y| {
+            (0..80)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect()
+}
+
+/// A session line of `kind` on [`SESSION`].
+fn session_line(kind: &str, payload: serde_json::Value) -> Line {
+    Line::Session(contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+#[test]
+fn slash_settings_opens_the_view_attached_and_on_home() {
+    let seam = fake();
+    let mut app = home(Some(Arc::clone(&seam)));
+    assert_eq!(slash_settings(&mut app), Effect::None);
+    assert!(app.config_view_open());
+    assert!(app.input().is_empty());
+    let rows = screen(&app);
+    assert!(
+        rows.first().is_some_and(|row| row.starts_with("Settings")),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.starts_with("handoff.tokens")),
+        "{rows:?}"
+    );
+    assert_eq!(seam.reads(), [PathBuf::from("/w")]);
+
+    let mut app = attached(Some(seam));
+    slash_settings(&mut app);
+    assert!(app.config_view_open());
+    let rows = screen(&app);
+    assert!(
+        rows.iter().any(|row| row.starts_with("Settings")),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.starts_with("handoff.tokens")),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn esc_and_the_x_close_it_and_send_nothing() {
+    let seam = fake();
+    let mut app = attached(Some(Arc::clone(&seam)));
+    slash_settings(&mut app);
+    assert_eq!(app.on_key(Key::Esc, Instant::now()), Effect::None);
+    assert!(!app.config_view_open());
+    slash_settings(&mut app);
+    assert_eq!(app.on_click(TargetId::View(Spot::Close)), Effect::None);
+    assert!(!app.config_view_open());
+    assert!(seam.writes().is_empty());
+}
+
+#[test]
+fn every_key_but_ctrl_c_lands_in_the_view() {
+    let mut app = attached(Some(fake()));
+    slash_settings(&mut app);
+    for key in [Key::Char('x'), Key::Tab, Key::BackTab, Key::AltP, Key::F1] {
+        assert_eq!(
+            app.on_key(key.clone(), Instant::now()),
+            Effect::None,
+            "{key:?}"
+        );
+    }
+    assert!(app.input().is_empty());
+    assert!(app.keymap_top().is_none());
+    assert!(app.config_view_open());
+}
+
+#[test]
+fn ctrl_c_still_reaches_the_quit_flow() {
+    let mut app = attached(Some(fake()));
+    slash_settings(&mut app);
+    let now = Instant::now();
+    assert_eq!(app.on_key(Key::CtrlC, now), Effect::None);
+    let later = now.checked_add(Duration::from_millis(10)).unwrap_or(now);
+    assert_eq!(app.on_key(Key::CtrlC, later), Effect::Quit);
+}
+
+#[test]
+fn an_approval_waits_until_the_view_closes() {
+    let mut app = attached(Some(fake()));
+    slash_settings(&mut app);
+    app.on_line(session_line(
+        "tool_call_requested",
+        serde_json::json!({"name": "shell", "arguments": {"command": "ls"}}),
+    ));
+    app.on_line(session_line(
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"],
+            "reversible": true, "step": "review"}),
+    ));
+    assert!(app.panel().is_some());
+    // The first Esc closes the view; the panel keeps its request.
+    app.on_key(Key::Esc, Instant::now());
+    assert!(!app.config_view_open());
+    assert!(app.panel().is_some());
+}
+
+#[test]
+fn opening_a_view_drops_its_unsaved_field() {
+    let seam = fake();
+    let mut app = attached(Some(Arc::clone(&seam)));
+    slash_settings(&mut app);
+    app.on_key(Key::Enter, Instant::now());
+    app.on_key(Key::Char('9'), Instant::now());
+    assert!(
+        app.config_view_screen()
+            .is_some_and(|frame| frame.field.is_some())
+    );
+    app.open_config_view(ConfigView::Settings);
+    assert!(
+        app.config_view_screen()
+            .is_some_and(|frame| frame.field.is_none())
+    );
+    assert!(seam.writes().is_empty());
+}
+
+#[test]
+fn without_a_seam_the_view_says_not_available() {
+    let mut app = attached(None);
+    slash_settings(&mut app);
+    let frame = app.config_view_screen();
+    assert_eq!(
+        frame.map(|frame| frame.below),
+        Some(vec!["Not available in this terminal.".to_owned()])
+    );
+    assert_eq!(app.on_key(Key::CtrlG, Instant::now()), Effect::None);
+    assert_eq!(app.on_click(TargetId::View(Spot::Row(0))), Effect::None);
+    app.on_key(Key::Esc, Instant::now());
+    assert!(!app.config_view_open());
+}
+
+#[test]
+fn ctrl_g_returns_the_file_to_open() {
+    let mut app = attached(Some(fake()));
+    slash_settings(&mut app);
+    assert_eq!(
+        app.on_key(Key::CtrlG, Instant::now()),
+        Effect::OpenFile(file(Layer::Global))
+    );
+}
+
+#[test]
+fn file_closed_rereads_the_rows() {
+    let seam = fake();
+    let mut app = attached(Some(Arc::clone(&seam)));
+    slash_settings(&mut app);
+    app.config_file_closed(Ok(()));
+    assert_eq!(seam.reads().len(), 2);
+    assert_eq!(app.notices.newest(), None);
+}
+
+#[test]
+fn a_file_error_is_a_notice() {
+    let mut app = attached(Some(fake()));
+    slash_settings(&mut app);
+    app.config_file_closed(Err("The editor exited with status 1.".to_owned()));
+    assert_eq!(
+        app.notices.newest(),
+        Some("The editor exited with status 1.")
+    );
+}
+
+#[test]
+fn a_usage_line_sets_the_reload_cost() {
+    let mut app = attached(Some(fake()));
+    app.on_line(session_line(
+        "usage_recorded",
+        serde_json::json!({"generation_id": "g_1", "model": "a/b",
+            "tokens": {"input": 1000, "cache_read": 200000,
+                "cache_write": {"1h": 34}, "output": 5000},
+            "input_bytes": 1, "cost": null}),
+    ));
+    // A copy of another session's call, and an extension's, change
+    // nothing.
+    app.on_line(session_line(
+        "usage_recorded",
+        serde_json::json!({"generation_id": "g_2", "model": "a/b",
+            "tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 0},
+            "input_bytes": 1, "cost": null, "origin_session_id": "s_bbbbbbbbbbbbbbbb"}),
+    ));
+    app.on_line(session_line(
+        "usage_recorded",
+        serde_json::json!({"generation_id": "g_3", "model": "a/b",
+            "tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 0},
+            "input_bytes": 1, "cost": null, "extension": "x"}),
+    ));
+    slash_settings(&mut app);
+    let below = app.config_view_screen().map(|frame| frame.below);
+    assert_eq!(
+        below,
+        Some(vec![
+            "Applies on /reload, which rebuilds the cache: about 201,034 tokens.".to_owned()
+        ])
+    );
+}
+
+#[test]
+fn a_theme_choice_is_taken_once() {
+    let mut app = attached(Some(fake()));
+    slash_settings(&mut app);
+    for key in [Key::Down, Key::Enter, Key::Up, Key::Up, Key::Enter] {
+        app.on_key(key, Instant::now());
+    }
+    assert!(matches!(
+        app.take_theme_choice(),
+        Some(crate::ThemeSetting::Follow)
+    ));
+    assert!(app.take_theme_choice().is_none());
+}

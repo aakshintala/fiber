@@ -1297,6 +1297,7 @@ fn lines(targets: &[crate::mouse::Target]) -> Vec<(crate::app::Target, Rect)> {
             | crate::mouse::TargetId::Link { .. }
             | crate::mouse::TargetId::FindCount
             | crate::mouse::TargetId::FindResult(_)
+            | crate::mouse::TargetId::View(_)
             | crate::mouse::TargetId::MoreNotices => None,
         })
         .collect()

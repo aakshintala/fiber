@@ -568,7 +568,8 @@ fn refolding_leaves_session_state_alone() {
         | Effect::Editor { .. }
         | Effect::Exit(_)
         | Effect::Copy(_)
-        | Effect::OpenLink(_) => Vec::new(),
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => Vec::new(),
     };
     assert!(
         sent.iter().any(|line| line.contains("\"steer\"")),
@@ -1571,7 +1572,8 @@ fn a_resumed_crash_leaves_the_session_idle() {
         | Effect::Editor { .. }
         | Effect::Exit(_)
         | Effect::Copy(_)
-        | Effect::OpenLink(_) => panic!("expected a sent line"),
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => panic!("expected a sent line"),
     };
     assert_eq!(sent.len(), 1);
     let command: Value = serde_json::from_str(&sent[0]).unwrap_or_default();

@@ -13,6 +13,7 @@ mod case;
 mod cli;
 mod clock;
 mod completion;
+mod configure;
 mod connect;
 mod cost;
 mod crash;
@@ -834,13 +835,15 @@ fn terminal(fiber: Result<PathBuf, String>) -> i32 {
         Err(e) => return fail(failed(ErrorCode::IoFailed, format!("the terminal: {e}"))),
     };
     let theme = theme_setting::setting(&home, &config, &|path| std::fs::read_to_string(path));
+    let seam: Arc<dyn tui::Configure> = Arc::new(configure::Seam::new(home.clone()));
     let hub_clock = Arc::clone(&clock);
     let connect: tui::Connect = Box::new(move || {
         let mut start = || start_hub(fiber.clone());
         doors::hub::connect(&home, &mut start, hub_clock.as_ref())
     });
     let identity = doors::project(&workspace);
-    let launch = launch::launch(workspace, &identity, &config, theme);
+    let mut launch = launch::launch(workspace, &identity, &config, theme);
+    launch.configure = Some(seam);
     tui::run(tty, launch, connect, Box::new(crash::attach), clock)
 }
 

@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/settings_view_tests.rs
+expression: "drawn(&settings, Some(180_000), 80, 24)"
+---
+Settings                                                                       ✕
+diagnostics.level                  "info"  default
+handoff.tokens                     400000  default
+model                              "a/b"  global
+providers.openai.credentials.work  command op  global
+repository_extensions              unset  default
+skills.disabled                    a (global), b (project)  global + project
+tui.hover                          true  default
+tui.theme                          unset  default
+
+
+
+
+
+
+
+
+
+
+
+
+
+Applies on /reload, which rebuilds the cache: about 180,000 tokens.
+↑↓ move · Enter edit · Ctrl+G open the file · Esc close

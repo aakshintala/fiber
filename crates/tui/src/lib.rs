@@ -13,6 +13,9 @@ mod attention;
 mod bindings;
 mod cells;
 mod clipboard;
+mod configure;
+#[cfg(test)]
+mod configure_fake;
 mod editor;
 mod event_loop;
 mod files;
@@ -40,10 +43,12 @@ mod pages;
 mod results_support;
 mod rows;
 mod screen;
+mod settings_view;
 mod shell;
 mod slash;
 mod sources;
 mod stroke;
+mod swapped;
 mod term;
 mod theme;
 mod turn;
@@ -59,6 +64,8 @@ use contract::{HubLine, SessionId};
 use crate::link::Line;
 
 pub use attention::Attention;
+
+pub use configure::{Configure, ConfigureError, Layer, Saved, SettingRow, Shown, WriteScope};
 
 pub use home::Launch;
 

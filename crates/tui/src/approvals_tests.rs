@@ -541,7 +541,8 @@ mod through_the_app {
             | Effect::Editor { .. }
             | Effect::Exit(_)
             | Effect::Copy(_)
-            | Effect::OpenLink(_) => {
+            | Effect::OpenLink(_)
+            | Effect::OpenFile(_) => {
                 panic!("expected one line")
             }
         }
