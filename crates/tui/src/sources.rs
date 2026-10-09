@@ -185,12 +185,17 @@ pub(crate) fn spawn_hub(
                 Ok((stream, reader, hello))
             });
             // A failed send means the loop is gone, and its drop quits the
-            // wait below.
+            // wait below. The read is watched so quitting before the loop
+            // adopts the connection still ends it.
             match connected {
                 Ok((stream, reader, hello)) => {
+                    if !retry.track(&reader) {
+                        return;
+                    }
                     if tx.send(Input::Connected(stream, hello)).is_ok() {
                         link::read_lines(reader, &tx);
                     }
+                    retry.untrack();
                 }
                 Err(error) => drop(tx.send(Input::ConnectFailed(error.to_string()))),
             }

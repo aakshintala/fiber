@@ -110,3 +110,42 @@ fn quit_during_the_timed_wait_returns_false_without_advancing() {
     assert!(!result(&rx));
     assert_eq!(clock.now(), clock.origin());
 }
+
+#[test]
+fn track_succeeds_until_quit_then_refuses() {
+    let (_clock, retry) = permit();
+    let (ours, _theirs) =
+        std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    assert!(retry.track(&ours));
+    retry.untrack();
+    assert!(retry.lock().watched.is_none());
+    retry.quit();
+    assert!(!retry.track(&ours));
+}
+
+#[test]
+fn quit_shuts_down_the_watched_read() {
+    let (_clock, retry) = permit();
+    let (ours, theirs) =
+        std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    assert!(retry.track(&ours));
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("retry-shutdown".to_owned())
+        .spawn(move || {
+            let mut buf = [0u8; 1];
+            // The peer's end sees the shutdown as the read's end.
+            let ended = std::io::Read::read(&mut &theirs, &mut buf)
+                .map(|read| read == 0)
+                .unwrap_or(true);
+            done.send(ended).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    retry.quit();
+    assert!(
+        finished
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the shutdown read: {err}")),
+        "the watched shutdown ends the read"
+    );
+}

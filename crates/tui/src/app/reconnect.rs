@@ -104,6 +104,13 @@ impl App {
         });
     }
 
+    /// Whether `id` is a written command kept for resending: a failed
+    /// resend leaves its pending entry alone, so the next connection sends
+    /// it again (`docs/invocation.md`, "The command line").
+    pub(super) fn is_kept(&self, id: &str) -> bool {
+        self.reconnect.kept.iter().any(|kept| kept.id == id)
+    }
+
     /// A command's answer, from the hub or a session: its line is no
     /// longer kept.
     pub(super) fn answered_line(&mut self, line: &Line) {

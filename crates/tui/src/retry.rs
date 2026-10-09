@@ -4,6 +4,7 @@
 //! delay given means no attempt: a refused schema never retries, and with
 //! no timer the idle terminal does nothing ("Performance").
 
+use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
@@ -21,6 +22,10 @@ struct Gate {
     delay: Option<Duration>,
     /// The loop is gone: the thread ends. Never cleared.
     quit: bool,
+    /// The hub thread's current stream, to shut down on quit: quitting
+    /// before the loop adopts the connection still ends its read
+    /// (`docs/tui.md`, "A dropped connection").
+    watched: Option<UnixStream>,
 }
 
 impl Wake for Retry {
@@ -40,6 +45,7 @@ impl Retry {
             gate: Mutex::new(Gate {
                 delay: None,
                 quit: false,
+                watched: None,
             }),
             changed: Condvar::new(),
         });
@@ -54,10 +60,36 @@ impl Retry {
         self.changed.notify_all();
     }
 
-    /// Ends the thread's wait, now and for every later one.
+    /// Ends the thread's wait, now and for every later one, and shuts
+    /// down the stream it watches, if any, so a read started before the
+    /// loop adopted the connection still ends.
     pub(crate) fn quit(&self) {
-        self.lock().quit = true;
+        let watched = {
+            let mut gate = self.lock();
+            gate.quit = true;
+            std::mem::take(&mut gate.watched)
+        };
+        if let Some(stream) = watched {
+            stream.shutdown(std::net::Shutdown::Both).unwrap_or(());
+        }
         self.changed.notify_all();
+    }
+
+    /// Watches `stream` for [`Retry::quit`]: false when the loop already
+    /// quit, so the caller ends without reading. The watch ends at
+    /// [`Retry::untrack`].
+    pub(crate) fn track(&self, stream: &UnixStream) -> bool {
+        let mut gate = self.lock();
+        if gate.quit {
+            return false;
+        }
+        gate.watched = stream.try_clone().ok();
+        true
+    }
+
+    /// Forgets the stream [`Retry::track`] watches.
+    pub(crate) fn untrack(&self) {
+        self.lock().watched = None;
     }
 
     /// Blocks until a delay is given and has passed on `clock`: true then,

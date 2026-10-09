@@ -679,6 +679,32 @@ fn a_written_close_then_home_then_reconnect_resends_it_and_its_answer_settles() 
             .iter()
             .all(|kept| kept.id != id_of(&close[0]))
     );
+    assert!(
+        !app.pending.contains_key(&id_of(&close[0])),
+        "the resent close's answer settles its pending entry"
+    );
+    let again = parsed(&reconnect(&mut app));
+    assert!(!names(&again).contains(&"close".to_owned()));
+}
+
+#[test]
+fn a_rejected_resent_close_from_another_session_notes_and_settles() {
+    let mut app = home();
+    linked(&mut app);
+    started(&mut app, S_A);
+    let close = parsed(&sent(&mut app, |app| enter(app, "/close")));
+    assert!(app.session().is_none());
+    let lines = parsed(&reconnect(&mut app));
+    assert_eq!(lines[2]["id"], close[0]["id"]);
+    fold(&mut app, refused(S_A, &id_of(&close[0]), "busy", "Busy."));
+    assert!(!app.pending.contains_key(&id_of(&close[0])));
+    assert!(
+        app.reconnect
+            .kept
+            .iter()
+            .all(|kept| kept.id != id_of(&close[0]))
+    );
+    assert_eq!(app.notice(), Some("Busy."));
     let again = parsed(&reconnect(&mut app));
     assert!(!names(&again).contains(&"close".to_owned()));
 }
@@ -788,6 +814,35 @@ fn an_unwritten_line_still_fails_back_to_the_draft() {
     assert_eq!(app.draft(), "hi");
     let again = parsed(&reconnect(&mut app));
     assert_eq!(names(&again), ["subscribe", "commands", "feed", "recent"]);
+}
+
+#[test]
+fn a_failed_resend_keeps_the_line_and_leaves_the_draft() {
+    let mut app = home();
+    linked(&mut app);
+    let opening = started(&mut app, S_A);
+    let id = prompt_id(&opening);
+    let resent = reconnect(&mut app)
+        .into_iter()
+        .find(|line| {
+            serde_json::from_str::<Value>(line)
+                .map(|line| line["id"] == id)
+                .unwrap_or(false)
+        })
+        .unwrap_or_else(|| panic!("the prompt is resent"));
+    // The resend never goes out: the write fails.
+    app.write_failed(&[resent]);
+    assert_eq!(app.draft(), "");
+    assert!(app.pending.contains_key(&id));
+    assert!(app.reconnect.kept.iter().any(|kept| kept.id == id));
+    let again = parsed(&reconnect(&mut app));
+    let prompts: Vec<&Value> = again
+        .iter()
+        .filter(|line| line["command"] == "prompt")
+        .collect();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0]["id"], id);
+    assert_eq!(app.draft(), "");
 }
 
 #[test]

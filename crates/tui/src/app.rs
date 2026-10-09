@@ -440,8 +440,11 @@ impl App {
     }
 
     /// Writing `unsent`, command lines this app made, to the hub failed:
-    /// the connection is lost, and their commands fail as if rejected, so
-    /// a draft they carried returns to an empty draft. A close from the
+    /// the connection is lost, and the commands never written fail as if
+    /// rejected, so a draft they carried returns to an empty draft. A line
+    /// already written and kept for resending keeps its pending entry and
+    /// leaves the draft alone, so the next connection sends it again
+    /// (`docs/invocation.md`, "The command line"). A close from the
     /// quit question that was never written keeps its resume line.
     pub(crate) fn write_failed(&mut self, unsent: &[String]) {
         self.home_unsent(unsent);
@@ -451,6 +454,9 @@ impl App {
                 .ok()
                 .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
             {
+                if self.is_kept(&id) {
+                    continue;
+                }
                 self.fail(&id);
             }
         }
@@ -784,6 +790,29 @@ impl App {
         }
         let mut send = self.reply_ack(envelope);
         if self.session() != Some(&envelope.session_id) {
+            // A resent command for another session settles its pending
+            // entry when its answer arrives, as on screen
+            // (`docs/invocation.md`, "The command line"). `reply_ack`
+            // above already settled a `reply`, including its decline's
+            // `cancel`, so a second settle here finds nothing to do.
+            match envelope.kind.as_str() {
+                "command_accepted" => {
+                    if let Some(accepted) = read!(envelope, CommandAccepted) {
+                        // No `commands_answered`: a `commands` answer from
+                        // another session is ignored, and a resent command
+                        // needs only its pending entry closed.
+                        self.pending.remove(&accepted.command_id.0);
+                    }
+                }
+                "command_rejected" => {
+                    if let Some(rejected) = read!(envelope, CommandRejected)
+                        && let Some(id) = rejected.command_id
+                    {
+                        self.refused(&id.0, &rejected.code, rejected.message);
+                    }
+                }
+                _ => {}
+            }
             return send;
         }
         // The search's fetch answers here, never in the pages: its lines

@@ -295,3 +295,24 @@ fn dropping_the_loop_ends_a_hub_thread_that_reads() {
     drop(lp);
     signalled(&gone, "the hub thread to end");
 }
+
+#[test]
+fn dropping_the_loop_before_the_connect_is_stepped_ends_the_read() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let retry = Retry::new(&lp.clock);
+    lp.retry = Some(Arc::clone(&retry));
+    let (ours, _theirs) = pair();
+    let (tx, rx) = mpsc::channel();
+    let (connect, _called, gone) = dial(vec![(ours, hello())]);
+    spawn_hub(connect, tx, retry, Arc::clone(&lp.clock));
+    match rx.recv_timeout(DEADLINE) {
+        Ok(Input::Connected(..)) => {}
+        Ok(_) => panic!("the first input is the connection"),
+        Err(err) => panic!("waited {DEADLINE:?} for the connection: {err}"),
+    }
+    // The queued connection is never stepped, so the loop holds no
+    // stream: only the permit's shutdown of the watched read ends it.
+    // The hub's end stays open throughout.
+    drop(lp);
+    signalled(&gone, "the hub thread to end");
+}
