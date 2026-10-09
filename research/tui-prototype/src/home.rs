@@ -14,22 +14,26 @@ use super::{
 };
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
+use crate::cases::{Case as CaseDoc, Surface};
 use std::io::{self, Write};
 use unicode_width::UnicodeWidthStr;
 
 /// Every `--home` case, named in README.md.
-pub(crate) const CASES: &[&str] = &[
-    "empty",
-    "sessions",
-    "hover-workspace",
-    "hover-worktree",
-    "hover-model",
-    "hover-thinking",
-    "worktree-on",
-    "worktree-off",
-    "picker-recent",
-    "picker-typed",
+pub(crate) const CASES: &[CaseDoc] = &[
+    CaseDoc { name: "empty", help: "no sessions yet: logo, input box, chips", check: "the logo should read as pixel letters four rows tall (⌇ in accent, the name in the accent gradient, `0.0.1` dim on the last row); under it the large input box with `/? for shortcuts`, the chip row and `enter starts a session`; under the box one dim `No sessions yet` line; the key hint at the foot." },
+    CaseDoc { name: "sessions", help: "six exited sessions listed", check: "six exited rows, each `○ name · spend`, the three outside the launch project with their workspace's last segment; the long pi-rig name should fit without pushing the spend off the row." },
+    CaseDoc { name: "hover-workspace", help: "the workspace chip hovered", check: "the one chip should sit lighter than its neighbours while keeping its own text colour." },
+    CaseDoc { name: "hover-worktree", help: "the worktree switch hovered", check: "the switch chip should sit lighter with its ● still blue." },
+    CaseDoc { name: "hover-model", help: "the model chip hovered", check: "the one chip should sit lighter than its neighbours while keeping its own text colour." },
+    CaseDoc { name: "hover-thinking", help: "the thinking chip hovered", check: "the one chip should sit lighter than its neighbours while keeping its own text colour." },
+    CaseDoc { name: "worktree-on", help: "new worktree switched on", check: "the switch should read `[● new worktree]` in blue." },
+    CaseDoc { name: "worktree-off", help: "new worktree switched off", check: "the switch should read `[○ new worktree]` dim." },
+    CaseDoc { name: "picker-recent", help: "workspace picker over home, recents", check: "the picker should float over home with even ▄ ▀ edges, four recent workspaces, the first row marked with ▌ on the lighter tint." },
+    CaseDoc { name: "picker-typed", help: "workspace picker with a typed path", check: "the typed row should read `› ~/work/fi█` with `fiber` and `fiber-worktrees` under it, the first marked; the recents below dimmed." },
 ];
+
+/// `--home`, for `--help` and `check/home.md`.
+pub(crate) const SURFACE: Surface = Surface { flag: "--home", file: "home", title: "Home (#1628)", cases: CASES };
 
 /// The home input box and session list width at 160 columns.
 const HOME_W: usize = 84;
@@ -444,7 +448,7 @@ pub(crate) fn run_home(a: &Args, term: &mut Term) -> io::Result<String> {
     let Some(c) = parse(&name) else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("unknown --home case {name:?}; one of: {}", CASES.join(", ")),
+            format!("unknown --home case {name:?}; one of: {}", crate::cases::names(CASES)),
         ));
     };
     draw(term, &c)?;
@@ -473,7 +477,7 @@ mod tests {
 
     #[test]
     fn every_case_parses_and_unknown_does_not() {
-        assert!(CASES.iter().all(|n| parse(n).is_some()));
+        assert!(CASES.iter().all(|c| parse(c.name).is_some()));
         assert_eq!(CASES.len(), 10);
         assert!(parse("nope").is_none());
     }

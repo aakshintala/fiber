@@ -2,6 +2,7 @@
 //! context breakdown. Fixture data only: the stream names just the current model,
 //! so the providers, roles, thinking levels and rebuild costs below are made up.
 
+use crate::cases::{Case, Surface};
 use crate::input::{Key, Mods};
 use crate::{bold, dim, fg, hot_row, row, sp, width, Act, Row, Ui, BLUE, ORANGE, SEL, SPIN};
 use ratatui::style::Style;
@@ -172,6 +173,19 @@ pub struct State {
     pub still: bool,
 }
 
+/// Every `--picker` case.
+pub(crate) const CASES: &[Case] = &[
+    Case { name: "list", help: "providers and models, current marked", check: "three providers with a dozen models between them, roles on the rows, `● current` on claude-opus-5-5, its level chips on the row below." },
+    Case { name: "levels", help: "the current model's thinking chips focused", check: "the current model's thinking chips focused (`[high]`), the rest dim." },
+    Case { name: "scoped", help: "five scoped models only", check: "five models only, a `scoped · 5 of 12` chip and a `[show all]` toggle." },
+    Case { name: "scoped-all", help: "all models, scoped ones marked", check: "all twelve models, the scoped five marked `· scoped`." },
+    Case { name: "refreshing", help: "one provider refreshing", check: "openai-codex reads `⟳ refreshing` with a still spinner glyph, the other two `updated … ago`, and a `⟳ refresh all` button sits at the controls row's right end." },
+    Case { name: "session-only", help: "a model picked for this session only", check: "claude-sonnet-5-5 focused with `ⓢ this session only · nothing saved` under it and its rebuild cost on its row." },
+];
+
+/// `--picker`, for `--help` and `check/model-picker.md`.
+pub(crate) const SURFACE: Surface = Surface { flag: "--picker", file: "model-picker", title: "Model picker (#1629)", cases: CASES };
+
 pub fn for_case(case: &str) -> State {
     let mut s = State {
         still: STILL.load(Relaxed),
@@ -192,7 +206,7 @@ pub fn for_case(case: &str) -> State {
             s.focus = 1;
             s.session_only = Some(1);
         }
-        _ => panic!("--picker list|levels|scoped|scoped-all|refreshing|session-only"),
+        _ => panic!("--picker {}", crate::cases::names(CASES).replace(", ", "|")),
     }
     s
 }
