@@ -226,9 +226,13 @@ fn signal_pid(id: u32) {
     let Some(pid) = pid_of(id) else {
         return;
     };
-    match rustix::process::kill_process(pid, Signal::KILL) {
-        Ok(_) | Err(_) => {}
-    }
+    // Best-effort SIGKILL: the child may have exited already (ESRCH),
+    // so the result is discarded.
+    #[allow(
+        clippy::let_underscore_must_use,
+        reason = "SIGKILL to a child that may have exited races: ESRCH is expected"
+    )]
+    let _ = rustix::process::kill_process(pid, Signal::KILL);
 }
 
 /// How the worker's wait ended.
@@ -290,7 +294,6 @@ fn read_stdout(stdout: &mut ChildStdout, out: &mut Vec<u8>, eof: &mut bool, cap:
             Ok(read) => {
                 out.extend_from_slice(buf.get(..read).unwrap_or_default());
             }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return,
             Err(_) => {
                 *eof = true;
