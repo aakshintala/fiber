@@ -51,28 +51,27 @@ impl Want {
 
 impl App {
     /// A delegate subscribe was refused: `session_not_found` while the
-    /// parent lists it running waits [`RETRY`] and goes out again; any
-    /// other code drops the wish, and an open view shows the message.
+    /// parent lists it running waits [`RETRY`] from the frame's injected
+    /// time and goes out again; without a frame time (only tests that
+    /// drive no clock) or any other code, the wish drops and an open view
+    /// shows the message.
     pub(in crate::app) fn subscribe_refused(
         &mut self,
         session: SessionId,
         code: &str,
         message: &str,
     ) {
-        if code == "session_not_found" && self.delegate_running(&session) && self.connected() {
-            // The retry waits from the frame's injected time, set on
-            // every loop input; without it the wish sends on the next
-            // reconciliation instead.
-            let retry_at = self
-                .motion()
-                .now_instant()
-                .and_then(|now| now.checked_add(RETRY));
+        if code == "session_not_found"
+            && self.delegate_running(&session)
+            && self.connected()
+            && let Some(now) = self.motion().now_instant()
+        {
             let want = self
                 .items
                 .wants
                 .entry(session)
                 .or_insert_with(Want::summary);
-            want.retry_at = retry_at;
+            want.retry_at = now.checked_add(RETRY);
             return;
         }
         self.items.wants.remove(&session);
