@@ -19,13 +19,15 @@ pub(crate) mod chrome;
 mod drag;
 #[path = "home_view.rs"]
 mod home;
+mod input_box;
 mod marks;
 mod offer;
 pub(crate) mod panel;
 pub(crate) mod rail;
-mod request;
+pub(crate) mod request;
 mod results;
 pub(crate) mod status_rows;
+mod steering_queue;
 mod working_line;
 
 pub(crate) use home::max_question_scroll;
@@ -41,6 +43,10 @@ pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Role::Approval.color());
 
 /// The approval panel's tint when the reviewer escalated.
 pub(crate) const ALERT_TINT: Style = Style::new().bg(Role::Alert.color());
+
+/// The input box's tint: its rows sit on the surface colour
+/// (`docs/tui.md`, "Look").
+pub(crate) const SURFACE_TINT: Style = Style::new().bg(Role::Surface.color());
 
 /// A notice's tint.
 const NOTICE_TINT: Style = Style::new().bg(Role::Surface.color());
@@ -134,44 +140,12 @@ pub(crate) fn render(
         bottom = request::draw(&panel, area, bottom, buf, &mut targets);
     }
     if app.panel().is_none() {
-        let (rows, top, _, _) = input_box(app, area.width);
-        let below = bottom;
-        for row in rows.iter().rev() {
-            put(buf, area, &mut bottom, row, Style::default());
-        }
-        token_targets(app, area, below, (top, rows.len()), &mut targets);
-        if let Some(completions) = app.completions() {
-            for (at, line) in completions.lines.iter().enumerate().rev() {
-                let style = if completions.selected == Some(at) {
-                    Style::new().add_modifier(Modifier::REVERSED)
-                } else {
-                    Style::default()
-                };
-                put(buf, area, &mut bottom, line, style);
-            }
-        }
+        input_box::draw(app, area, &mut bottom, buf, &mut targets);
     }
     status_rows::draw_widget(app, area, buf, &mut bottom, &mut targets);
     // The steering queue sits above the input box, its newest row lowest;
     // a row a `steer` sent ends in a ✕ that drops it.
-    let drops = app.steering_drops();
-    for (at, row) in app.steering().iter().enumerate().rev() {
-        let Some(rect) = put(buf, area, &mut bottom, row, Style::default()) else {
-            continue;
-        };
-        targets.push(Target {
-            id: TargetId::Steering(at),
-            rect,
-        });
-        if drops.get(at) == Some(&true) && area.width > 0 {
-            let close = Rect::new(area.right().saturating_sub(1), rect.y, 1, 1);
-            buf.set_string(close.x, close.y, "✕", Style::default());
-            targets.push(Target {
-                id: TargetId::DropSteering(at),
-                rect: close,
-            });
-        }
-    }
+    steering_queue::draw(app, area, &mut bottom, buf, &mut targets);
     status_rows::draw_delegates(app, area, buf, &mut bottom);
     banner::draw(app, area, buf, &mut bottom);
     working_line::draw(app, area, buf, &mut bottom, &mut targets);
@@ -241,38 +215,6 @@ pub(crate) fn render(
         }
     }
     targets
-}
-
-/// Pushes a target over the cells of each paste token's label the input
-/// box shows: the box's `shown` rows, from draft row `top`, end on the row
-/// above `below`.
-fn token_targets(
-    app: &App,
-    area: Rect,
-    below: u16,
-    (top, shown): (usize, usize),
-    targets: &mut Vec<Target>,
-) {
-    for span in app.input().token_spans(area.width) {
-        let Some(up) = span
-            .row
-            .checked_sub(top)
-            .and_then(|at| shown.checked_sub(at))
-            .filter(|up| *up > 0)
-        else {
-            continue;
-        };
-        let Some(y) = below.checked_sub(to_u16(up)).filter(|y| *y >= area.y) else {
-            continue;
-        };
-        let end = span.end.min(area.width);
-        if span.start < end {
-            targets.push(Target {
-                id: TargetId::Token(span.number),
-                rect: Rect::new(area.x.saturating_add(span.start), y, end - span.start, 1),
-            });
-        }
-    }
 }
 
 /// Puts `text` on the row above `bottom` and moves `bottom` up to it,
@@ -374,23 +316,6 @@ fn notices(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     }
 }
 
-/// The input box's shown rows, the draft row they start at, and the
-/// cursor's row in them and column: at most [`App::input_height`] rows,
-/// scrolled so the cursor's row shows.
-fn input_box(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
-    let draft = app.input();
-    let (row, col) = draft.cursor(width);
-    let height = app.input_height();
-    let top = row.saturating_add(1).saturating_sub(height);
-    let rows = draft
-        .rows(width)
-        .into_iter()
-        .skip(top)
-        .take(height)
-        .collect();
-    (rows, top, row.saturating_sub(top), col)
-}
-
 /// Where the terminal cursor shows: at the draft's cursor while the input
 /// box has focus, at a question form's text cursor while its words row has
 /// the cursor, `None` while navigating, any other panel or the repository
@@ -427,8 +352,7 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     if let Some(bar) = app.find_bar() {
         return marks::bar_cursor(&bar, area);
     }
-    let (rows, _, row, col) = input_box(app, area.width);
-    let below = to_u16(rows.len().saturating_sub(row));
+    let (below, col) = input_box::cursor_row(app, area.width, usize::from(area.height));
     let y = status_rows::input_bottom(app, area)
         .checked_sub(below)
         .filter(|y| *y >= area.y)?;

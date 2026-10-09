@@ -13,7 +13,7 @@ use ratatui::style::Style;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
 use crate::app::App;
-use crate::look::Look;
+use crate::look::{Appearance, Look};
 use crate::mouse::Target;
 use crate::theme::Role;
 use crate::view;
@@ -54,10 +54,21 @@ impl<B: Backend> Screen<B> {
         })
     }
 
-    /// Paints every later frame with `look`; the next draw repaints whole.
-    pub(crate) fn set_look(&mut self, look: Look) {
+    /// Paints every later frame with `look`, carrying the last reported
+    /// appearance into it so a picked theme keeps following the terminal;
+    /// the next draw repaints whole.
+    pub(crate) fn set_look(&mut self, mut look: Look) {
+        look.appearance(self.look.reported());
         self.look = look;
         self.last = None;
+    }
+
+    /// Records the terminal's reported `appearance`, repainting whole
+    /// when the colours changed (`docs/tui.md`, "Themes").
+    pub(crate) fn appearance(&mut self, appearance: Appearance) {
+        if self.look.appearance(appearance) {
+            self.last = None;
+        }
     }
 
     /// Draws `app`, the cursor shown at the draft's cursor or hidden,

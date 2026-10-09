@@ -2,6 +2,8 @@
 source: crates/tui/src/turn_tests.rs
 expression: "texts(&app).join(\"\\n\")"
 ---
- go 
+▄▄▄▄▄
+ go ▐
+▀▀▀▀▀
 00:00
 • 1 failed model call

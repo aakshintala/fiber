@@ -196,14 +196,14 @@ fn form_scrolled_to_the_cursor_at_40x10() {
     insta::assert_snapshot!("form_scrolled_to_the_cursor_at_40x10", shown);
     // "Chat about this" is the panel's last row, and no target is drawn
     // for a row scrolled off.
-    assert_eq!(shown.lines().last(), Some("› Chat about this"));
-    assert_eq!(rect_of(&targets, Spot::Chat), Some(Rect::new(0, 9, 40, 1)));
+    assert_eq!(shown.lines().last(), Some("  › Chat about this"));
+    assert_eq!(rect_of(&targets, Spot::Chat), Some(Rect::new(2, 9, 38, 1)));
     assert!(spots(&targets).iter().all(|(_, rect)| rect.height > 0));
     // The first option shows only its second row, and its target only
     // that row.
     assert_eq!(
         rect_of(&targets, Spot::Option(0)),
-        Some(Rect::new(0, 0, 40, 1))
+        Some(Rect::new(2, 0, 38, 1))
     );
     // Back up to the first option, the header shows again.
     for _ in 0..6 {
@@ -259,7 +259,7 @@ fn drawn(panel: &Panel, height: u16) -> (String, u16, Vec<Target>) {
 #[test]
 fn a_panel_exactly_as_tall_as_its_space_does_not_scroll() {
     let (shown, top, targets) = drawn(&numbered(4, true), 4);
-    assert_eq!(shown, "l0\nl1\nl2\nl3\n");
+    assert_eq!(shown, "  l0\n  l1\n  l2\n  l3\n");
     assert_eq!(top, 0);
     assert_eq!(targets.len(), 1);
 }
@@ -267,7 +267,7 @@ fn a_panel_exactly_as_tall_as_its_space_does_not_scroll() {
 #[test]
 fn one_row_taller_scrolls_by_one() {
     let (shown, top, targets) = drawn(&numbered(5, true), 4);
-    assert_eq!(shown, "l1\nl2\nl3\nl4\n");
+    assert_eq!(shown, "  l1\n  l2\n  l3\n  l4\n");
     assert_eq!(top, 0);
     // Line 0 is scrolled off, so its target is not drawn.
     assert!(targets.is_empty());
@@ -276,30 +276,31 @@ fn one_row_taller_scrolls_by_one() {
 #[test]
 fn a_panel_shorter_than_its_space_sits_at_the_bottom() {
     let (shown, top, _) = drawn(&numbered(2, true), 4);
-    assert_eq!(shown, "\n\nl0\nl1\n");
-    assert_eq!(top, 2);
+    assert_eq!(shown, "▄▄▄▄▄▄▄▄▄▄\n  l0\n  l1\n▀▀▀▀▀▀▀▀▀▀\n");
+    assert_eq!(top, 0);
 }
 
 #[test]
 fn an_approval_taller_than_its_space_keeps_its_top() {
     let (shown, top, _) = drawn(&numbered(5, false), 4);
-    assert_eq!(shown, "l0\nl1\nl2\nl3\n");
+    assert_eq!(shown, "▌ l0\n▌ l1\n▌ l2\n▌ l3\n");
     assert_eq!(top, 0);
 }
 
 #[test]
 fn a_line_partly_scrolled_off_shows_its_last_rows() {
-    // Line 0 wraps to two rows at 10 columns; the cursor's line 2 needs
-    // one row scrolled off, so line 0 shows only its second row.
+    // Line 0 wraps to three rows at the inset width of 8; the cursor's
+    // line 2 needs two rows scrolled off, so line 0 shows only its last
+    // row.
     let mut panel = numbered(3, true);
     if let Some(first) = panel.lines.first_mut() {
         *first = "aaaa bbbb cccc".to_owned();
     }
     let (shown, _, targets) = drawn(&panel, 3);
-    assert_eq!(shown, "cccc\nl1\nl2\n");
+    assert_eq!(shown, "  cccc\n  l1\n  l2\n");
     assert_eq!(
         targets.first().map(|target| target.rect),
-        Some(Rect::new(0, 0, 10, 1))
+        Some(Rect::new(2, 0, 8, 1))
     );
 }
 
@@ -394,13 +395,14 @@ fn an_option_that_wraps_has_one_target_covering_both_rows() {
     assert_eq!(rect.height, 2, "{shown}");
     let rows: Vec<&str> = shown.lines().collect();
     let first = rows.get(usize::from(rect.y)).copied().unwrap_or_default();
-    assert!(first.starts_with("› ( ) one"), "{shown}");
+    assert!(first.starts_with("  › ( ) one"), "{shown}");
 }
 
 #[test]
 fn tab_targets_are_drawn_only_while_the_tab_line_fits() {
-    // "[Base]  Name  Submit" is 20 cells.
-    for (width, tabs) in [(19, 0), (20, 3)] {
+    // "[Base]  Name  Submit" is 20 cells, so at the inset width it fits
+    // one row from width 22.
+    for (width, tabs) in [(21, 0), (22, 3)] {
         let app = asking(base_and_name(false), width, 40);
         let (shown, targets) = screen(&app, width, 40);
         let drawn = spots(&targets)
@@ -424,13 +426,16 @@ fn each_tab_target_covers_its_cells() {
     // A wide character's second cell reads as a space in the screen's text.
     assert_eq!(
         rows.get(usize::from(y)).copied(),
-        Some("[名 前 ]  Name  Submit")
+        Some("  [名 前 ]  Name  Submit")
     );
-    assert_eq!(rect_of(&targets, Spot::Tab(0)), Some(Rect::new(0, y, 6, 1)));
-    assert_eq!(rect_of(&targets, Spot::Tab(1)), Some(Rect::new(8, y, 4, 1)));
+    assert_eq!(rect_of(&targets, Spot::Tab(0)), Some(Rect::new(2, y, 6, 1)));
+    assert_eq!(
+        rect_of(&targets, Spot::Tab(1)),
+        Some(Rect::new(10, y, 4, 1))
+    );
     assert_eq!(
         rect_of(&targets, Spot::Tab(2)),
-        Some(Rect::new(14, y, 6, 1))
+        Some(Rect::new(16, y, 6, 1))
     );
 }
 
@@ -448,7 +453,7 @@ fn form_words_row_scrolled_to_the_caret_at_30x12() {
     let area = Rect::new(0, 0, 30, 12);
     let row = shown
         .lines()
-        .position(|row| row.starts_with("› ✎"))
+        .position(|row| row.trim_start().starts_with("› ✎"))
         .and_then(|row| u16::try_from(row).ok());
     assert_eq!(
         super::super::cursor(&app, area).map(|at| (at.x, Some(at.y))),
@@ -463,12 +468,12 @@ fn the_caret_stops_at_the_last_column() {
     let area = Rect::new(0, 0, 10, 4);
     assert_eq!(
         super::caret(&panel, area, area.bottom()),
-        Some(ratatui::layout::Position::new(9, 3))
+        Some(ratatui::layout::Position::new(9, 2))
     );
     panel.caret = Some((1, 9));
     assert_eq!(
         super::caret(&panel, area, area.bottom()),
-        Some(ratatui::layout::Position::new(9, 3))
+        Some(ratatui::layout::Position::new(9, 2))
     );
 }
 
@@ -481,6 +486,138 @@ fn a_caret_on_a_line_scrolled_off_is_not_drawn() {
     panel.caret = Some((1, 1));
     assert_eq!(
         super::caret(&panel, area, area.bottom()),
-        Some(ratatui::layout::Position::new(1, 0))
+        Some(ratatui::layout::Position::new(3, 0))
     );
+}
+
+/// An approval panel of `lines`, escalated when `alert`: no cursor, so the
+/// stripe draws.
+fn approval(lines: &[&str], alert: bool) -> Panel {
+    Panel {
+        lines: lines.iter().map(|line| (*line).to_owned()).collect(),
+        alert,
+        spots: Vec::new(),
+        cursor: None,
+        caret: None,
+    }
+}
+
+/// Draws `panel` into a 40-wide, `height`-row area, returning the rows, the
+/// buffer and the targets.
+fn surfaced(panel: &Panel, height: u16) -> (String, Buffer, Vec<Target>) {
+    let area = Rect::new(0, 0, 40, height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    draw(panel, area, area.bottom(), &mut buf, &mut targets);
+    (text(&buf), buf, targets)
+}
+
+#[test]
+fn approval_with_stripe_and_edges() {
+    let (shown, _, _) = surfaced(
+        &approval(
+            &["approve shell echo hi?", "allow once · for this session"],
+            false,
+        ),
+        12,
+    );
+    insta::assert_snapshot!("approval_with_stripe_and_edges", shown);
+}
+
+#[test]
+fn alert_with_stripe_and_edges() {
+    let (shown, _, _) = surfaced(
+        &approval(&["the reviewer escalated", "allow once · deny"], true),
+        12,
+    );
+    insta::assert_snapshot!("alert_with_stripe_and_edges", shown);
+}
+
+#[test]
+fn the_panel_tint_covers_its_rows_and_edges() {
+    use crate::theme::Role;
+    for (alert, tint, stripe) in [
+        (false, Role::Approval, Role::Attention),
+        (true, Role::Alert, Role::Error),
+    ] {
+        let (_, buf, _) = surfaced(&approval(&["line one", "line two"], alert), 12);
+        // Two text rows with an edge above and below.
+        for y in [9, 10] {
+            for x in 0..40 {
+                assert_eq!(buf[(x, y)].bg, tint.color(), "alert {alert}, ({x}, {y})");
+            }
+            assert_eq!(buf[(0, y)].symbol(), "▌");
+            assert_eq!(buf[(0, y)].fg, stripe.color());
+        }
+        for (y, edge) in [(8, "▄"), (11, "▀")] {
+            for x in 0..40 {
+                assert_eq!(buf[(x, y)].symbol(), edge);
+                assert_eq!(buf[(x, y)].fg, tint.color(), "alert {alert}, ({x}, {y})");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_form_has_edges_and_no_stripe() {
+    let (_, buf, _) = surfaced(&numbered(3, true), 12);
+    // Three text rows with an edge above and below, and no stripe cell.
+    for y in [8, 9, 10] {
+        for x in 0..10 {
+            assert_eq!(buf[(x, y)].bg, crate::theme::Role::Approval.color());
+        }
+    }
+    for cell in &buf.content {
+        assert_ne!(cell.symbol(), "▌");
+    }
+    for x in 0..10 {
+        assert_eq!(buf[(x, 7)].symbol(), "▄");
+        assert_eq!(buf[(x, 11)].symbol(), "▀");
+    }
+}
+
+#[test]
+fn spots_and_the_caret_shift_by_the_inset() {
+    let mut panel = numbered(2, true);
+    panel.spots = vec![PanelSpot {
+        line: 0,
+        cols: Some((1, 4)),
+        spot: Spot::Chat,
+    }];
+    panel.caret = Some((0, 5));
+    let area = Rect::new(0, 0, 40, 12);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    draw(&panel, area, area.bottom(), &mut buf, &mut targets);
+    // Past the stripe and the gap: two columns in.
+    assert_eq!(rect_of(&targets, Spot::Chat), Some(Rect::new(3, 9, 3, 1)));
+    assert_eq!(
+        super::caret(&panel, area, area.bottom()),
+        Some(ratatui::layout::Position::new(7, 9))
+    );
+}
+
+#[test]
+fn height_counts_rows_at_the_inset_and_the_edges() {
+    use super::height;
+    let panel = approval(&["abcdefgh"], false);
+    // The word wraps at the inset: 4 rows at width 2, 8 at width 3, 3 at
+    // width 5.
+    for (width, total) in [(2, 4), (3, 8), (5, 3)] {
+        assert_eq!(height(&panel, width, total + 1), total, "width {width}");
+        assert_eq!(height(&panel, width, total + 2), total + 2, "width {width}");
+        assert_eq!(height(&panel, width, total + 4), total + 2, "width {width}");
+    }
+}
+
+#[test]
+fn a_narrow_approval_has_no_stripe() {
+    let panel = approval(&["hi"], false);
+    let area = Rect::new(0, 0, 2, 6);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    draw(&panel, area, area.bottom(), &mut buf, &mut targets);
+    for cell in &buf.content {
+        assert_ne!(cell.symbol(), "▌");
+    }
 }

@@ -414,14 +414,15 @@ fn the_form_keys_go_through_the_keyset() {
     assert!(panel(&app).contains(&"› (•) main (Recommended) · the default".to_owned()));
     stroke(&mut app, "right");
     assert_eq!(tab_line(&app), "Base ✓  [Name]  Submit");
-    // Six panel lines on the bottom rows: the words row is the fourth.
-    assert_eq!(caret(&app), Some((4, 9)));
+    // Six panel lines on the bottom rows: the words row is the fourth,
+    // inset two columns with the bottom edge below.
+    assert_eq!(caret(&app), Some((6, 8)));
     for ch in "ab".chars() {
         press(&mut app, Key::Char(ch));
     }
-    assert_eq!(caret(&app), Some((6, 9)));
+    assert_eq!(caret(&app), Some((8, 8)));
     stroke(&mut app, "left");
-    assert_eq!(caret(&app), Some((5, 9)));
+    assert_eq!(caret(&app), Some((7, 8)));
     assert_eq!(tab_line(&app), "Base ✓  [Name ✓]  Submit");
     stroke(&mut app, "shift+tab");
     assert_eq!(tab_line(&app), "[Base ✓]  Name ✓  Submit");

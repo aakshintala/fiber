@@ -48,6 +48,8 @@ pub(crate) fn rows(app: &App, text: usize) -> Vec<Row> {
                     Span::raw(started.model.clone()),
                 ]),
                 spot: None,
+                tint: None,
+                edge: false,
             });
         } else {
             // An unsubscribed delegate runs by definition: its glyph spins
@@ -63,11 +65,15 @@ pub(crate) fn rows(app: &App, text: usize) -> Vec<Row> {
                     Span::raw(started.model.clone()),
                 ]),
                 spot: None,
+                tint: None,
+                edge: false,
             });
         }
         out.push(Row {
             line: Line::raw(format::cut(&format!("  {description}"), text)),
             spot: None,
+            tint: None,
+            edge: false,
         });
     }
     out

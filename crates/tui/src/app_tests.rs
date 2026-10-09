@@ -669,11 +669,15 @@ fn turn_started_sets_busy_and_completed_clears_it() {
     assert_eq!(
         texts(&app),
         vec![
-            " hi ".to_owned(),
+            "▄▄▄▄▄".to_owned(),
+            " hi ▐".to_owned(),
+            "▀▀▀▀▀".to_owned(),
             "00:00".to_owned(),
             "steer · more".to_owned(),
             "▣ completed".to_owned(),
-            " next ".to_owned(),
+            "▄▄▄▄▄▄▄".to_owned(),
+            " next ▐".to_owned(),
+            "▀▀▀▀▀▀▀".to_owned(),
             "00:00".to_owned(),
         ]
     );
@@ -686,7 +690,7 @@ fn failed_turn_says_why_before_it_closes() {
     attach(&mut app, clock.now(), "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
     app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "failed"));
-    assert_eq!(texts(&app)[2..], ["✗ boom · io_failed", "▣ failed"]);
+    assert_eq!(texts(&app)[4..], ["✗ boom · io_failed", "▣ failed"]);
 }
 
 #[test]
@@ -734,7 +738,9 @@ fn each_action_streams_its_own_reply() {
     assert_eq!(
         texts(&app),
         vec![
-            " hi ".to_owned(),
+            "▄▄▄▄▄".to_owned(),
+            " hi ▐".to_owned(),
+            "▀▀▀▀▀".to_owned(),
             "00:00".to_owned(),
             "one more".to_owned(),
             "two".to_owned()
@@ -778,18 +784,18 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = app();
     app.set_size(60, 12);
-    assert_eq!(app.conversation_height(), 11);
+    assert_eq!(app.conversation_height(), 9);
     app.on_key(Key::CtrlC, now);
-    assert_eq!(app.conversation_height(), 10);
+    assert_eq!(app.conversation_height(), 8);
     // A notice floats over the conversation and takes no row.
     connect(&mut app);
     app.disconnected();
-    assert_eq!(app.conversation_height(), 10);
+    assert_eq!(app.conversation_height(), 8);
     app.on_key(Key::Char('x'), now);
-    assert_eq!(app.conversation_height(), 11);
+    assert_eq!(app.conversation_height(), 9);
     app.attach(contract::SessionId(S_A.to_owned()));
     app.on_line(steering_queue(S_A, &[("a", Some("c_1")), ("b", None)]));
-    assert_eq!(app.conversation_height(), 9);
+    assert_eq!(app.conversation_height(), 7);
     app.set_size(60, 1);
     assert_eq!(app.conversation_height(), 0);
 }
@@ -1431,18 +1437,18 @@ fn the_input_box_grows_to_a_third_of_the_screen() {
     let mut app = app();
     app.set_size(60, 12);
     assert_eq!(app.input_height(), 1);
-    assert_eq!(app.conversation_height(), 11);
+    assert_eq!(app.conversation_height(), 9);
     for _ in 0..2 {
         app.on_edit(Edit::ShiftEnter);
     }
     assert_eq!(app.input_height(), 3);
-    assert_eq!(app.conversation_height(), 9);
+    assert_eq!(app.conversation_height(), 7);
     for _ in 0..5 {
         app.on_edit(Edit::ShiftEnter);
     }
     // 12 / 3 rows at most.
     assert_eq!(app.input_height(), 4);
-    assert_eq!(app.conversation_height(), 8);
+    assert_eq!(app.conversation_height(), 6);
     app.set_size(60, 14);
     assert_eq!(app.input_height(), 4);
     app.set_size(60, 15);

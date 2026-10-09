@@ -19,9 +19,6 @@ mod logo;
 /// The home input box's tint.
 const BOX_TINT: Style = Style::new().bg(Role::Surface.color());
 
-/// The home input box's half-block edges, in the box tint's colour.
-const BOX_EDGE: Style = Style::new().fg(Role::Surface.color());
-
 /// The workspace picker's tint.
 const PICKER_TINT: Style = Style::new().bg(Role::SurfaceRaised.color());
 
@@ -217,14 +214,20 @@ pub(super) fn render(
         );
         blocker_y = blocker_y.saturating_add(1);
     }
-    put(
+    // The box's edges above and below its draft and chip rows
+    // (`docs/tui.md`, "Look").
+    crate::surface::draw_edges(
         buf,
-        area,
-        placed.x,
-        placed.box_top,
-        &"▄".repeat(usize::from(placed.width)),
-        placed.width,
-        BOX_EDGE,
+        ratatui::layout::Rect::new(
+            placed.x,
+            placed.draft_top,
+            placed.width,
+            placed
+                .chip
+                .saturating_sub(placed.draft_top)
+                .saturating_add(1),
+        ),
+        Role::Surface,
     );
     for (at, row) in placed.shown.iter().enumerate() {
         let y = placed.draft_top.saturating_add(super::to_u16(at));
@@ -270,15 +273,6 @@ pub(super) fn render(
         }
         chip_x = chip_x.saturating_add(wide);
     }
-    put(
-        buf,
-        area,
-        placed.x,
-        placed.edge,
-        &"▀".repeat(usize::from(placed.width)),
-        placed.width,
-        BOX_EDGE,
-    );
     // The session list draws under the box, down to the row above the
     // foot, scrolling past the screen. The scope toggle heads it while
     // it shows; each row is a target opening its session. The focused

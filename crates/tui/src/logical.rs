@@ -62,8 +62,9 @@ pub(crate) fn logical(rows: &[Row], texts: &[RowText]) -> Vec<Logical> {
     out
 }
 
-/// The row's text after its first `text.skip` cells, trailing whitespace
-/// trimmed, and the byte in `line.to_string()` it starts at.
+/// The row's text between its decoration: after its first `text.skip`
+/// cells and before its last `text.tail` ones, trailing whitespace
+/// trimmed, and the byte in `line.to_string()` the text starts at.
 pub(crate) fn line_text(line: &Line<'_>, text: &RowText) -> (usize, String) {
     let whole = line.to_string();
     let mut used = 0u16;
@@ -77,7 +78,27 @@ pub(crate) fn line_text(line: &Line<'_>, text: &RowText) -> (usize, String) {
         let cells = crate::format::width(ch.encode_utf8(&mut buf));
         used = used.saturating_add(u16::try_from(cells).unwrap_or(u16::MAX));
     }
-    let body = whole.get(start..).unwrap_or_default().trim_end().to_owned();
+    // The last `tail` cells are decoration too: a glyph is never split,
+    // so a cell count past a glyph's start stops before the glyph.
+    let mut end = whole.len();
+    let mut left = text.tail;
+    for (at, ch) in whole.char_indices().rev() {
+        if left == 0 {
+            break;
+        }
+        let mut buf = [0u8; 4];
+        let cells = crate::format::width(ch.encode_utf8(&mut buf));
+        if cells > usize::from(left) {
+            break;
+        }
+        left = left.saturating_sub(u16::try_from(cells).unwrap_or(u16::MAX));
+        end = at;
+    }
+    let body = whole
+        .get(start..end)
+        .unwrap_or_default()
+        .trim_end()
+        .to_owned();
     (start, body)
 }
 

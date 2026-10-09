@@ -3,6 +3,7 @@ source: crates/tui/src/view/panel_tests.rs
 expression: "super::super::text(&draw_panel(&app))"
 ---
 
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
   directory  …/you/work/fiber
   model  test/model · thinkin
   context  50% of 1.0k tokens
@@ -18,3 +19,4 @@ expression: "super::super::text(&draw_panel(&app))"
   output speed, last reply  2
   turns  1
   tools  relay down
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

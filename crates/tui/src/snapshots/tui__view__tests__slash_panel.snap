@@ -1,9 +1,7 @@
 ---
 source: crates/tui/src/view_tests.rs
-expression: "screen_at(&mut app, 80, 24)"
+expression: "sized(&mut app, 80, 24)"
 ---
-
-
 
 
 
@@ -25,4 +23,6 @@ expression: "screen_at(&mut app, 80, 24)"
 /home  Goes home.  command
 /handoff [instructions]  Starts a handoff.  command
 /help  Opens the key map.  command
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 > /h
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

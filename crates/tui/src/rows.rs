@@ -27,6 +27,9 @@ pub(crate) struct RowText {
     /// The leading cells that are decoration, not text: quote bars, a hang
     /// indent, a code gutter, the bubble's pad.
     pub(crate) skip: u16,
+    /// The trailing cells that are decoration, not text: the bubble's
+    /// right pad and stripe.
+    pub(crate) tail: u16,
     /// The whole row is decoration and adds no text: a code block's header.
     pub(crate) decoration: bool,
     /// The links drawn on the row: each one's cells in the line and its
@@ -48,6 +51,7 @@ impl RowText {
         Self {
             join: Join::Break,
             skip: 0,
+            tail: 0,
             decoration: false,
             links: Vec::new(),
             scopes: Vec::new(),

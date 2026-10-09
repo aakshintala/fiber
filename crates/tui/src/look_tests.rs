@@ -293,9 +293,11 @@ fn new_with_dark_light_follow_and_a_file() {
         colour(&light, Role::Background),
         Color::Rgb(0xfa, 0xfa, 0xfa)
     );
-    // Before the terminal reports its appearance, following is dark.
-    assert_eq!(look(ThemeSetting::Follow, &vars), dark);
-    assert_eq!(Look::default(), dark);
+    // Before the terminal reports its appearance, following is dark: the
+    // same colours, while only the follower re-resolves on a report.
+    let follow = look(ThemeSetting::Follow, &vars);
+    assert_eq!(follow.colour(Role::Text), dark.colour(Role::Text));
+    assert_eq!(Look::default().colour(Role::Text), dark.colour(Role::Text));
     let (solar, notice) = Look::new(
         ThemeSetting::File {
             name: "solar".to_owned(),
@@ -309,4 +311,72 @@ fn new_with_dark_light_follow_and_a_file() {
         colour(&solar, Role::Background),
         Color::Rgb(0xfa, 0xfa, 0xfa)
     );
+}
+
+/// A look that follows the terminal on `vars`.
+fn following(vars: &[(&str, &str)]) -> Look {
+    look(ThemeSetting::Follow, vars)
+}
+
+#[test]
+fn follow_switches_on_a_report() {
+    use super::Appearance;
+    let vars = [("COLORTERM", "truecolor")];
+    let mut followed = following(&vars);
+    let dark = look(ThemeSetting::Dark, &vars);
+    let light = look(ThemeSetting::Light, &vars);
+    assert_eq!(followed.colour(Role::Text), dark.colour(Role::Text));
+    assert!(followed.appearance(Appearance::Light));
+    assert_eq!(followed.colour(Role::Text), light.colour(Role::Text));
+    assert!(followed.appearance(Appearance::Dark));
+    assert_eq!(followed.colour(Role::Text), dark.colour(Role::Text));
+}
+
+#[test]
+fn a_fixed_theme_ignores_reports_but_records_them() {
+    use super::Appearance;
+    let vars = [("COLORTERM", "truecolor")];
+    for setting in [
+        ThemeSetting::Dark,
+        ThemeSetting::Light,
+        ThemeSetting::File {
+            name: "solar".to_owned(),
+            text: Ok(r##"{"base": "light", "roles": {"accent": "#0b7285"}}"##.to_owned()),
+        },
+    ] {
+        let mut fixed = look(setting, &vars);
+        let before = fixed.colour(Role::Text);
+        assert!(!fixed.appearance(Appearance::Light));
+        assert_eq!(fixed.reported(), Appearance::Light);
+        assert_eq!(fixed.colour(Role::Text), before);
+        assert!(!fixed.appearance(Appearance::Dark));
+        assert_eq!(fixed.reported(), Appearance::Dark);
+        assert_eq!(fixed.colour(Role::Text), before);
+    }
+}
+
+#[test]
+fn the_same_appearance_is_no_change() {
+    use super::Appearance;
+    let vars = [("COLORTERM", "truecolor")];
+    let mut followed = following(&vars);
+    assert!(!followed.appearance(Appearance::Dark));
+    assert!(followed.appearance(Appearance::Light));
+    assert!(!followed.appearance(Appearance::Light));
+}
+
+#[test]
+fn a_refused_file_follows() {
+    use super::Appearance;
+    let vars = [("COLORTERM", "truecolor")];
+    let mut refused = look(
+        ThemeSetting::File {
+            name: "solar".to_owned(),
+            text: Err("gone".to_owned()),
+        },
+        &vars,
+    );
+    let light = look(ThemeSetting::Light, &vars);
+    assert!(refused.appearance(Appearance::Light));
+    assert_eq!(refused.colour(Role::Text), light.colour(Role::Text));
 }

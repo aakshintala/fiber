@@ -173,10 +173,12 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
     } else {
         Role::Surface
     };
-    // A waiting card pulses its stripe for its first ten seconds, then
-    // holds still, so a screen with nothing working draws no frames
+    // The stripe is main's surface cell (on or off with the stripes), and a
+    // waiting card pulses its colour for its first ten seconds, then holds
+    // still, so a screen with nothing working draws no frames
     // (`docs/tui.md`, "The rail").
-    let stripe = Span::styled("▌", stripe_style(app, row));
+    let mut stripe = crate::surface::stripe_cell(tone(row), tint, false);
+    stripe.style = stripe.style.patch(stripe_style(app, row));
     let texts = [
         first_row(app, row, text),
         vec![Span::raw(format::cut(&title(row), text))],
@@ -184,7 +186,7 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
         usage(row, text, width >= BAR_FROM),
     ];
     out.push(RailRow {
-        line: Line::styled("▄".repeat(card_w), style(tint)),
+        line: crate::surface::edge_row(card_w, tint, true),
         tint: None,
         spots: Vec::new(),
         start: Some(row.key),
@@ -206,7 +208,7 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
         });
     }
     out.push(RailRow {
-        line: Line::styled("▀".repeat(card_w), style(tint)),
+        line: crate::surface::edge_row(card_w, tint, false),
         tint: None,
         spots: Vec::new(),
         start: None,

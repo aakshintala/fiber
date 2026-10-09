@@ -30,6 +30,7 @@ impl Track {
         self.texts.push(RowText {
             join,
             skip,
+            tail: 0,
             decoration,
             links,
             scopes: Vec::new(),

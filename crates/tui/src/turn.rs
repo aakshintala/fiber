@@ -562,7 +562,7 @@ impl Turn {
     pub(crate) fn rows(&self, width: u16, zone: &TimeZone, out: &mut Rows) {
         for prompt in &self.prompts {
             let before = out.len();
-            format::bubble(prompt, width, out);
+            crate::bubble::rows(prompt, width, out);
             if out.len() > before
                 && let Some(time) = crate::local_time::time_of_day(self.started, zone)
             {

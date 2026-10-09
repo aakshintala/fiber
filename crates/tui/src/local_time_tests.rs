@@ -72,8 +72,8 @@ fn the_time_row_is_a_dim_right_aligned_row_with_no_target() {
     let mut out = Rows::default();
     turn.rows(80, &zone, &mut out);
     let (rows, _) = out.into_parts();
-    assert_eq!(rows.len(), 2);
-    let (line, target) = &rows[1];
+    assert_eq!(rows.len(), 4);
+    let (line, target) = &rows[3];
     assert_eq!(line.to_string(), "14:15");
     assert!(line.alignment == Some(Alignment::Right));
     assert!(line.style.add_modifier.contains(Modifier::DIM));
@@ -84,5 +84,5 @@ fn the_time_row_is_a_dim_right_aligned_row_with_no_target() {
     let mut out = Rows::default();
     turn.rows(80, &zone, &mut out);
     let (rows, _) = out.into_parts();
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 3);
 }

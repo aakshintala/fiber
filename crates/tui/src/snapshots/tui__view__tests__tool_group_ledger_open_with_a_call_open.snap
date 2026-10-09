@@ -2,9 +2,7 @@
 source: crates/tui/src/view_tests.rs
 expression: "sized(&mut app, 60, 16)"
 ---
-
-
-                                       fix the failing test
+                                     ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
                                                        00:00
 • Read 1 file, edited 1 file +3 −1, ran 1 command, thought
 once · 12s
@@ -17,4 +15,6 @@ once · 12s
 Fixed.
 ▣ completed · 38s · 3 calls · 18.2k tokens · $0.41 · $1.10
 on subscription
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 >
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

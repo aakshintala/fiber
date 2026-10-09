@@ -8,9 +8,11 @@
 //! before it draws.
 
 mod app;
+mod appearance;
 mod approvals;
 mod attention;
 mod bindings;
+mod bubble;
 mod cells;
 mod clipboard;
 mod configure;
@@ -32,6 +34,7 @@ mod layout;
 mod link;
 mod local_time;
 mod logical;
+mod login_view;
 mod look;
 mod markdown;
 mod motion;
@@ -53,6 +56,7 @@ mod shell;
 mod slash;
 mod sources;
 mod stroke;
+mod surface;
 mod swapped;
 mod term;
 mod theme;
@@ -73,8 +77,8 @@ use crate::link::Line;
 pub use attention::Attention;
 
 pub use configure::{
-    Configure, ConfigureError, Layer, Revoked, RuleRow, RulesScope, RulesSection, Saved,
-    SettingRow, Shown, WriteScope,
+    Configure, ConfigureError, Layer, LoginKind, LoginTarget, Revoked, RuleRow, RulesScope,
+    RulesSection, Saved, SettingRow, Shown, Stored, WriteScope,
 };
 
 pub use home::Launch;

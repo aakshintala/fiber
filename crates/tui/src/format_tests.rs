@@ -261,23 +261,6 @@ fn wrap_joined_marks_word_and_character_breaks() {
 }
 
 #[test]
-fn bubble_rows_skip_the_pad_and_join_their_continuations() {
-    use crate::rows::Join::{Break, Wrap, WrapSpace};
-    use crate::rows::Rows;
-    // 70% of 14 is 9 columns, 7 inside the padding.
-    let mut out = Rows::default();
-    super::bubble("hello world abcdefghij", 14, &mut out);
-    let (rows, texts) = out.into_parts();
-    let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
-    assert_eq!(shown, [" hello   ", " world   ", " abcdefg ", " hij     "]);
-    let joins: Vec<_> = texts.iter().map(|text| (text.join, text.skip)).collect();
-    assert_eq!(
-        joins,
-        [(Break, 1), (WrapSpace, 1), (WrapSpace, 1), (Wrap, 1)]
-    );
-}
-
-#[test]
 fn answer_rows_match_the_result_lines_ask_user_writes() {
     use super::{answer_row, note_row};
     let labels = ["main (Recommended)".to_owned(), "dev".to_owned()];

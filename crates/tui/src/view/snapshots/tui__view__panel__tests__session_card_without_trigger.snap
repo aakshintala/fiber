@@ -3,6 +3,7 @@ source: crates/tui/src/view/panel_tests.rs
 expression: "super::super::text(&draw_panel(&app))"
 ---
 
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
   directory  …sers/you/work/fiber
   model  test/model · thinking hi
   context  50% of 1.0k tokens
@@ -10,3 +11,4 @@ expression: "super::super::text(&draw_panel(&app))"
   tokens in / out  1.1k / 200
   cache hits  9%
   cost billed  $0.41
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

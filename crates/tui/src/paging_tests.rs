@@ -1771,7 +1771,13 @@ fn a_reloaded_page_shows_the_same_time_row_as_live() {
     let time = crate::local_time::time_of_day(1700, &zone).expect("a time");
     assert_eq!(
         texts(&live),
-        vec![" go ".to_owned(), time, "▣ completed".to_owned()]
+        vec![
+            "▄▄▄▄▄".to_owned(),
+            " go ▐".to_owned(),
+            "▀▀▀▀▀".to_owned(),
+            time,
+            "▣ completed".to_owned()
+        ]
     );
     drop_all(&mut pages);
     let reloaded = joined(&mut pages, &lines);
