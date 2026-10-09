@@ -891,3 +891,23 @@ fn ctrl_v_pastes_an_image_that_the_session_stores() {
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
+
+#[test]
+fn resume_draws_the_reply_then_its_closed_turn() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([reply("marker reply")]).unwrap();
+    setup.provider(&server);
+    let asked = setup.fiber(&["ask", "say hi"]);
+    assert_eq!(asked.status.code(), Some(0));
+    let id = setup.only_session();
+    let mut run = Run::terminal_args(&setup, &["resume", &id[..4]]);
+    run.read_until(">");
+    // The turn ended before the attach: the reply draws, then the turn's
+    // close, which folds only once `turn_completed` arrives.
+    run.read_until("marker reply");
+    run.read_until("▣ completed");
+    run.write(b"\x03\x03\r");
+    run.read_until("\x1b[?25h");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}

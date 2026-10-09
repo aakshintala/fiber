@@ -1,7 +1,11 @@
 //! The event loop (`docs/tui.md`, "History and paging"): `run` sets the
 //! terminal up, draws the first frame and starts the input threads; the loop
-//! handles one input at a time, fetches the history pages a frame needs
+//! handles one batch of ready inputs at a time, fetches the history pages a frame needs
 //! before drawing it, and hands the terminal to the editor.
+
+mod batch;
+
+use batch::batch;
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -241,27 +245,34 @@ const LOST: &str = "connection lost";
 
 impl<B: Backend> Loop<B> {
     /// Handles inputs until one quits, or every sender is gone: those a
-    /// frame held while it waited first, then the channel's. The only wait
-    /// is `recv` with no timeout.
+    /// frame held while it waited first, then the channel's. Ready hub
+    /// lines and ticks share one frame; anything else ends the batch
+    /// for its own. The only wait is `recv` with no timeout.
     fn run(&mut self, rx: &Receiver<Input>) -> i32 {
         loop {
-            let input = match self.stash.pop_front() {
+            let first = match self.stash.pop_front() {
                 Some(input) => input,
                 None => match rx.recv() {
                     Ok(input) => input,
                     Err(_) => return 0,
                 },
             };
-            self.wakeups = self.wakeups.saturating_add(1);
-            if let Some(code) = self.step(input, rx) {
+            for input in batch(first, &mut self.stash, rx) {
+                self.wakeups = self.wakeups.saturating_add(1);
+                if let Some(code) = self.handle(input, rx) {
+                    return code;
+                }
+            }
+            if let Some(code) = self.frame(rx) {
                 return code;
             }
         }
     }
 
-    /// Handles one input, loads the pages the frame needs, and draws what
-    /// changed. Returns the exit code when the terminal quits.
-    fn step(&mut self, input: Input, rx: &Receiver<Input>) -> Option<i32> {
+    /// Handles one input: the time, what it does to the app, and what it
+    /// sends. Returns the exit code when the terminal quits, before any
+    /// frame, as handling every input in `step` did.
+    fn handle(&mut self, input: Input, _rx: &Receiver<Input>) -> Option<i32> {
         self.app.set_now(
             self.clock.now(),
             contract::clock::wall_ms(self.clock.wall()),
@@ -436,6 +447,13 @@ impl<B: Backend> Loop<B> {
             self.model_reader.ask(refresh, &out.clone());
         }
         self.save_shares();
+        None
+    }
+
+    /// Loads the pages the frame needs, and draws what changed: once per
+    /// batch, after every input in it is handled. Returns the exit code
+    /// when the terminal cannot be drawn.
+    fn frame(&mut self, rx: &Receiver<Input>) -> Option<i32> {
         self.page_in(rx);
         self.apply_theme();
         // A selection's copy waiting on dropped pages runs once they load.
@@ -452,6 +470,16 @@ impl<B: Backend> Loop<B> {
         self.write_shape();
         self.write_alerts();
         None
+    }
+
+    /// Handles one input and draws the frame. Tests only: production
+    /// code draws once per batch through `run`.
+    #[cfg(test)]
+    fn step(&mut self, input: Input, rx: &Receiver<Input>) -> Option<i32> {
+        if let Some(code) = self.handle(input, rx) {
+            return Some(code);
+        }
+        self.frame(rx)
     }
 
     /// Saves the shares a drag's release queued, in order. A failed

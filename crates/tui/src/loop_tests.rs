@@ -849,3 +849,172 @@ fn queued_hub_lines_draw_one_frame() {
     assert!(screen.contains("marker three"), "{screen}");
     assert!(!screen.contains("esc to interrupt"), "{screen}");
 }
+
+/// Runs `lp` over `inputs` queued before it starts, to the end of input.
+fn run_queued(
+    lp: &mut Loop<CountingBackend>,
+    rx: mpsc::Receiver<Input>,
+    tx: Sender<Input>,
+    inputs: Vec<Input>,
+) -> i32 {
+    for input in inputs {
+        tx.send(input).unwrap_or_else(|err| panic!("send: {err}"));
+    }
+    drop(tx);
+    lp.run(&rx)
+}
+
+/// One turn's lines with `marker` as its reply, numbered from `seq`.
+fn turn_lines(marker: &str, turn: usize, seq: &mut u64) -> Vec<Input> {
+    let mut lines = Vec::new();
+    let mut push = |kind: &str, action: Option<String>, payload: Value| {
+        lines.push(Input::Hub(Line::Session(line(
+            kind,
+            Some(*seq),
+            action.as_deref(),
+            payload,
+        ))));
+        *seq += 1;
+    };
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": format!("prompt {turn}")}]}]}),
+    );
+    push(
+        "text_completed",
+        Some(format!("a_m{turn}")),
+        json!({"text": marker}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    lines
+}
+
+/// The screen a counting loop drew last.
+fn counted(lp: &Loop<CountingBackend>) -> String {
+    crate::view::text(lp.screen.backend().inner.buffer())
+}
+
+#[test]
+fn lines_a_key_and_lines_draw_three_frames() {
+    let (mut lp, flushes, tx, rx) = counting();
+    let mut seq = 0u64;
+    let mut inputs = turn_lines("marker one", 0, &mut seq);
+    inputs.push(Input::Bytes(b"a".to_vec()));
+    inputs.extend(turn_lines("marker two", 1, &mut seq));
+    // The lines share a frame each, and the key keeps its own.
+    assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+    assert_eq!(flushes.get(), 3);
+    assert_eq!(lp.app.draft(), "a");
+    let screen = counted(&lp);
+    assert!(screen.contains("marker two"), "{screen}");
+    assert!(!screen.contains("esc to interrupt"), "{screen}");
+}
+
+#[test]
+fn more_than_a_batch_of_lines_draws_two_frames() {
+    let (mut lp, flushes, tx, rx) = counting();
+    let full = super::batch::HUB_BATCH / 3;
+    let mut seq = 0u64;
+    let mut inputs = Vec::new();
+    for turn in 0..full {
+        inputs.extend(turn_lines(&format!("marker {turn}"), turn, &mut seq));
+    }
+    assert_eq!(inputs.len(), super::batch::HUB_BATCH - 1);
+    inputs.extend(turn_lines(&format!("marker {full}"), full, &mut seq));
+    inputs.truncate(super::batch::HUB_BATCH + 1);
+    assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+    assert_eq!(flushes.get(), 2);
+    let screen = counted(&lp);
+    assert!(screen.contains(&format!("marker {full}")), "{screen}");
+    assert!(!screen.contains("esc to interrupt"), "{screen}");
+}
+
+#[test]
+fn a_tick_among_queued_lines_draws_no_frame_of_its_own() {
+    let (mut lp, flushes, tx, rx) = counting();
+    let mut seq = 0u64;
+    let mut inputs = turn_lines("marker one", 0, &mut seq);
+    inputs.push(Input::Tick);
+    inputs.extend(turn_lines("marker two", 1, &mut seq));
+    assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+    assert_eq!(flushes.get(), 1);
+    let screen = counted(&lp);
+    assert!(screen.contains("marker two"), "{screen}");
+    assert!(!screen.contains("esc to interrupt"), "{screen}");
+}
+
+#[test]
+fn a_disconnect_among_lines_ends_the_batch_with_its_own_frame() {
+    let (mut lp, flushes, tx, rx) = counting();
+    let (ours, _theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let hello = contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    };
+    let mut seq = 0u64;
+    let mut inputs = vec![Input::Connected(ours, hello)];
+    inputs.extend(turn_lines("marker one", 0, &mut seq));
+    inputs.push(Input::Disconnected);
+    inputs.extend(turn_lines("marker two", 1, &mut seq));
+    assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
+    // The connect, the first turn, the disconnect and the second turn
+    // each draw their own frame.
+    assert_eq!(flushes.get(), 4);
+    assert_eq!(lp.app.notice(), Some("Connection lost."));
+    let screen = counted(&lp);
+    assert!(screen.contains("marker two"), "{screen}");
+}
+
+/// One finished `attention` line naming `name`.
+fn finished(name: &str) -> Input {
+    Input::Hub(Line::Hub(contract::HubLine {
+        kind: "attention".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({
+            "session_id": "s_aaaaaaaaaaaaaaaa",
+            "name": name,
+            "reason": "finished",
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }))
+}
+
+#[test]
+fn two_finished_lines_in_one_batch_write_both_notifications_in_order() {
+    let dir = fakes::TempDir::new("tui-attention-batch");
+    let path = dir.path().join("tty");
+    let tty = std::fs::File::create(&path).unwrap_or_else(|err| panic!("create: {err}"));
+    let (mut lp, _) = super::tests::new_loop(TestBackend::new(60, 12), Some(tty));
+    lp.app.set_osc9(true);
+    // Both lines fold into one batch, so one frame queues both alerts:
+    // neither may be lost.
+    assert_eq!(
+        super::tests::feed(&mut lp, vec![finished("one"), finished("two")]),
+        0
+    );
+    let bytes = std::fs::read(&path).unwrap_or_else(|err| panic!("read: {err}"));
+    let one = "\x1b]9;Fiber: one finished\x07";
+    let two = "\x1b]9;Fiber: two finished\x07";
+    let count = |needle: &str| {
+        bytes
+            .windows(needle.len())
+            .filter(|w| *w == needle.as_bytes())
+            .count()
+    };
+    assert_eq!(count(one), 1);
+    assert_eq!(count(two), 1);
+    let at = |needle: &str| {
+        bytes
+            .windows(needle.len())
+            .position(|w| w == needle.as_bytes())
+            .unwrap_or(usize::MAX)
+    };
+    assert!(at(one) < at(two));
+}
