@@ -385,6 +385,17 @@ fn a_disabled_tool_the_answer_lacks_is_an_off_row() {
 }
 
 #[test]
+fn two_off_names_in_one_group_are_both_shown() {
+    let fake = fake_with(vec![group_switches(
+        ToolGroup::Mcp("m".to_owned()),
+        &["gone", "missing"],
+        &[],
+    )]);
+    let tools = opened(&fake, &[], None);
+    assert_eq!(tool_names(&tools), ["gone", "missing"]);
+}
+
+#[test]
 fn a_name_in_both_lists_is_one_row() {
     let fake = fake_with(vec![group_switches(
         ToolGroup::Mcp("m".to_owned()),

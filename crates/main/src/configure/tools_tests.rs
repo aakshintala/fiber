@@ -22,7 +22,7 @@ fn memory() -> ToolGroup {
 
 /// The switches for `workspace`, by group.
 fn switches(seam: &Seam, workspace: &std::path::Path) -> Vec<tui::ToolSwitches> {
-    seam.read_switches(workspace)
+    seam.tool_switches(workspace)
         .unwrap_or_else(|e| panic!("switches: {e}"))
 }
 
@@ -85,7 +85,7 @@ fn switching_off_in_this_project_starts_from_the_inherited_list() {
         r#"{"mcp": {"servers": {"gh": {"tools": {"disabled": ["a"]}}}}}"#,
     );
     let seam = Seam::new(dirs.home());
-    seam.write_switch(&workspace, &gh(), "b", SwitchScope::Project, false)
+    seam.switch_tool(&workspace, &gh(), "b", SwitchScope::Project, false)
         .unwrap_or_else(|e| panic!("switch: {e}"));
     assert_eq!(
         read(&dirs.project_file(&workspace))["mcp"]["servers"]["gh"]["tools"]["disabled"],
@@ -240,7 +240,7 @@ fn a_name_holding_a_quote_is_left_out() {
     let workspace = dirs.workspace("one");
     write(
         &dirs.home().join("config.json"),
-        r#"{"mcp": {"servers": {"a\"b": {"tools": {"disabled": ["x"]}}}}}"#,
+        r#"{"mcp": {"servers": {"a\"b": {"tools": {"disabled": ["x"]}}}, "extensions": {"a\"b": {"tools": {"disabled": ["x"]}}}}}"#,
     );
     let seam = Seam::new(dirs.home());
     let groups: Vec<ToolGroup> = switches(&seam, &workspace)
