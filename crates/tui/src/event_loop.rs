@@ -238,6 +238,7 @@ impl<B: Backend> Loop<B> {
                                 self.app.clear_copied();
                                 self.app.attention_seen();
                             }
+                            self.app.on_wheel(&mouse);
                             let selected = self.app.on_select(&mouse, self.screen.targets());
                             let clicked =
                                 self.pointer
@@ -612,6 +613,10 @@ mod loop_tests;
 #[cfg(test)]
 #[path = "lib_mouse_tests.rs"]
 mod mouse_tests;
+
+#[cfg(test)]
+#[path = "lib_panel_tests.rs"]
+mod panel_tests;
 
 #[cfg(test)]
 #[path = "lib_attention_tests.rs"]
