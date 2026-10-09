@@ -266,6 +266,33 @@ fn reported(rig: &Rig) -> contract::inbox::JobNotice {
     panic!("the runner did not report");
 }
 
+/// Wakes the runner by one poll interval at a time, each only once it is
+/// parked on the clock with every deadline ahead of `now()`: it has finished
+/// a pass and waits for the next wake. Stops when it parks `bound` ahead of
+/// `now()`, which only the wait for the drain does: the clock has not moved
+/// since the reap, and an ordinary poll parks at most one interval ahead.
+/// One wall-clock deadline covers the whole loop, so a runner that never
+/// reaches the drain fails the test instead of hanging it.
+fn wake_until_draining(clock: &Arc<FakeClock>, bound: Duration) {
+    within("the runner waits for the drain", DEADLINE, {
+        let clock = Arc::clone(clock);
+        move || {
+            loop {
+                let parked = clock.parked();
+                let now = clock.now();
+                if parked.iter().flatten().any(|until| *until >= now + bound) {
+                    return;
+                }
+                if !parked.is_empty() && parked.iter().flatten().all(|until| *until > now) {
+                    clock.advance(Duration::from_secs(1));
+                } else {
+                    thread::yield_now();
+                }
+            }
+        }
+    });
+}
+
 /// A FIFO `shell` blocks reading until the test writes. Short-lived and
 /// stdio-null, so it holds no harness pipe even briefly.
 fn fifo(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
@@ -502,35 +529,15 @@ fn a_delayed_drain_still_feeds_the_fold() {
     // The watch never connects: only the drain can carry the line.
     let rig = rig(vec![]);
     rig.start(&shell, Duration::from_secs(30), 1024);
-    // Three wakes give the runner its reap; nothing is reported yet,
-    // because the fold waits for the drain.
-    for _ in 0..3 {
-        rig.clock.advance(Duration::from_millis(50));
-        rig.inbox
-            .recv_timeout(Duration::from_millis(20))
-            .expect_err("the fold waits for the drain");
-    }
     // The runner is waiting for the drain once it is parked at the stop
-    // bound; the clock stays still from here, so only the drain's end can
-    // wake it.
-    let at_bound = rig.clock.origin() + Duration::from_secs(30);
-    let mut parked_at_bound = false;
-    for _ in 0..150 {
-        if rig
-            .clock
-            .parked()
-            .iter()
-            .flatten()
-            .any(|until| *until >= at_bound)
-        {
-            parked_at_bound = true;
-            break;
-        }
-        rig.inbox
-            .recv_timeout(Duration::from_millis(20))
-            .expect_err("the fold waits for the drain");
-    }
-    assert!(parked_at_bound, "the runner waits for the drain");
+    // bound. Each wake is given only after the runner has parked on the
+    // clock, so the reap lands on a wake it is waiting for; the clock stays
+    // still once the bound park is seen, so only the drain's end can wake it.
+    wake_until_draining(&rig.clock, Duration::from_secs(30));
+    assert!(
+        rig.inbox.try_recv().is_err(),
+        "the fold waits for the drain"
+    );
     release_fifo(&release, b"go\n");
     let Ok(Delivery::Job(notice)) = rig.inbox.recv_timeout(DEADLINE) else {
         panic!("the drain's end did not wake the runner");
