@@ -292,7 +292,7 @@ fn an_open_note_sits_inside_the_band() {
     for line in app.lines().iter().skip(band_at).take(4) {
         assert_eq!(line.style.bg, surface());
     }
-    // Through the view the tint reaches the column's edge.
+    // Through the view the tint reaches the last text column.
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
@@ -304,7 +304,7 @@ fn an_open_note_sits_inside_the_band() {
                 .contains("keep going")
         })
         .expect("a note row on screen");
-    assert_eq!(buf[(79, row)].bg, Role::Surface.color());
+    assert_eq!(buf[(78, row)].bg, Role::Surface.color());
 }
 
 #[test]

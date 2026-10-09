@@ -25,6 +25,7 @@ fn home() -> App {
     app.set_home(Launch {
         workspace: PathBuf::from("/w"),
         project: "-w".to_owned(),
+        model: Some("test/model".to_owned()),
         version: "0.0.1".to_owned(),
         logo_glyph: "⌇".to_owned(),
         rail_share: 15.0,

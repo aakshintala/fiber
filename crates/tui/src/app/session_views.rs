@@ -24,6 +24,10 @@ pub(crate) enum SessionView {
     Context,
     /// The Changed files list.
     ChangedFiles,
+    /// The running delegates, from "N delegates running".
+    Delegates,
+    /// The running jobs, from "N jobs running".
+    Jobs,
 }
 
 /// The selected row in an open session view.
@@ -35,6 +39,10 @@ enum Open {
     Context(List),
     /// Changed files' paths.
     Files(List),
+    /// The running delegates.
+    Delegates(List),
+    /// The running jobs.
+    Jobs(List),
 }
 
 /// The session views' state, reset for each attachment.
@@ -68,6 +76,8 @@ impl App {
             SessionView::Usage => Open::Usage(List::default()),
             SessionView::Context => Open::Context(List::default()),
             SessionView::ChangedFiles => Open::Files(List::default()),
+            SessionView::Delegates => Open::Delegates(List::default()),
+            SessionView::Jobs => Open::Jobs(List::default()),
         });
         Effect::None
     }
@@ -97,6 +107,22 @@ impl App {
             return Some(Effect::None);
         }
         let (rows, height) = self.session_view_list_metrics()?;
+        if matches!(
+            self.session_views.open,
+            Some(Open::Delegates(_)) | Some(Open::Jobs(_))
+        ) {
+            // Enter resolves the selected row to its serial at key time,
+            // where no press/release race exists; opening the item's view
+            // closes the list.
+            if *key == Key::Enter {
+                return Some(self.session_view_open_selected());
+            }
+            if let Some(Open::Delegates(list) | Open::Jobs(list)) = self.session_views.open.as_mut()
+            {
+                list.key(key, rows, height);
+            }
+            return Some(Effect::None);
+        }
         if let Some(Open::Files(list)) = self.session_views.open.as_ref() {
             if self.session_views.diff.is_some() {
                 self.session_views.diff_list.key(key, rows, height);
@@ -136,6 +162,27 @@ impl App {
 
     /// Handles a click on the open view's close target or a row.
     pub(in crate::app) fn session_view_click(&mut self, spot: Spot) -> Effect {
+        if matches!(
+            self.session_views.open,
+            Some(Open::Delegates(_)) | Some(Open::Jobs(_))
+        ) {
+            // A click on the text opens the row's serial when it still
+            // runs; a click on the blank tail only selects the row.
+            match spot {
+                Spot::Close => self.close_session_view(),
+                Spot::Item(serial) => return self.open_serial(serial),
+                Spot::Row(at) => {
+                    if let Some((rows, height)) = self.session_view_list_metrics()
+                        && let Some(Open::Delegates(list) | Open::Jobs(list)) =
+                            self.session_views.open.as_mut()
+                    {
+                        list.select(at, rows, height);
+                    }
+                }
+                Spot::Cell(_, _) | Spot::Switch { .. } | Spot::Revoke(_) => {}
+            }
+            return Effect::None;
+        }
         if spot == Spot::Close {
             self.close_session_view();
             return Effect::None;
@@ -164,6 +211,53 @@ impl App {
             list.select(at, rows, height);
         }
         Effect::None
+    }
+
+    /// Opens the selected list row's item: the row resolves to its serial
+    /// at key time, and a serial whose job is gone, or no longer running,
+    /// opens nothing.
+    fn session_view_open_selected(&mut self) -> Effect {
+        let selected = match self.session_views.open.as_ref() {
+            Some(Open::Delegates(list)) | Some(Open::Jobs(list)) => list.selected(),
+            Some(Open::Usage(_)) | Some(Open::Context(_)) | Some(Open::Files(_)) | None => {
+                return Effect::None;
+            }
+        };
+        let serial = self
+            .session_view_list_serials()
+            .get(selected)
+            .copied()
+            .flatten();
+        match serial {
+            Some(serial) => self.open_serial(serial),
+            None => Effect::None,
+        }
+    }
+
+    /// The open list's rows in frame order: each row's job serial, `None`
+    /// where the item fold names none. A delegate fills two rows with one
+    /// serial; a job fills one.
+    fn session_view_list_serials(&self) -> Vec<Option<u64>> {
+        match self.session_views.open.as_ref() {
+            Some(Open::Delegates(_)) => self
+                .panel_state
+                .running_delegates()
+                .into_iter()
+                .flat_map(|(started, _)| {
+                    let serial = self.serial_of_job(&started.job_id);
+                    [serial, serial]
+                })
+                .collect(),
+            Some(Open::Jobs(_)) => self
+                .panel_state
+                .running_jobs()
+                .into_iter()
+                .map(|(id, _)| self.serial_of_job(id))
+                .collect(),
+            Some(Open::Usage(_)) | Some(Open::Context(_)) | Some(Open::Files(_)) | None => {
+                Vec::new()
+            }
+        }
     }
 
     /// The open session view's frame. Its row count does not depend on
@@ -209,6 +303,8 @@ impl App {
                     list,
                 ))
             }
+            Open::Delegates(list) => Some(crate::running_view::delegates_frame(self, *list)),
+            Open::Jobs(list) => Some(crate::running_view::jobs_frame(self, *list)),
         }
     }
 

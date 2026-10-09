@@ -288,7 +288,8 @@ fn a_pull_request_without_a_bug_label_skips_the_bug_check() {
 #[test]
 fn a_pull_request_that_selects_no_crate_skips_the_tests() {
     let plan = plan("crates", &[], "pull_request", false, true, 100);
-    assert_eq!(plan.jobs, jobs(true, false, true, false, false));
+    assert_eq!(plan.jobs, jobs(true, false, false, false, false));
+    assert_eq!(plan.shards, 0);
 }
 
 #[test]
@@ -319,13 +320,13 @@ fn a_docs_push_runs_lint_and_tests_but_no_mutants() {
 }
 
 #[test]
-fn a_code_push_runs_lint_tests_and_mutants_but_no_bug_check() {
+fn a_code_push_runs_lint_tests_and_release_but_no_mutants_or_bug_check() {
     let plan = plan("all", &strings(&["log"]), "push", true, true, 1000);
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, true, false, true),
-            shards: MAX_MUTANT_SHARDS
+            jobs: jobs(true, true, false, false, true),
+            shards: 0
         }
     );
 }
@@ -1720,13 +1721,38 @@ fn shards_grow_with_the_mutant_count_between_one_and_the_cap() {
         (30, 2),
         (31, 3),
         (240, 16),
-        (319, 22),
-        (480, 32),
-        (481, 32),
-        (100_000, 32),
+        (241, 16),
+        (319, 16),
+        (480, 16),
+        (481, 16),
+        (100_000, 16),
+        (u64::MAX, 16),
     ];
     for (count, shards) in table {
         assert_eq!(mutant_shards(count), shards, "{count} mutants");
+    }
+}
+
+#[test]
+fn shard_timeouts_grow_with_the_largest_shard_past_the_cap() {
+    // (mutants, minutes): 20 minutes per 15 of the largest shard's
+    // mutants, rounded up, at most 360.
+    let table = [
+        (0, 20),
+        (1, 20),
+        (15, 20),
+        (240, 20),
+        (241, 22),
+        (256, 22),
+        (257, 23),
+        (480, 40),
+        (4320, 360),
+        (4321, 360),
+        (100_000, 360),
+        (u64::MAX, 360),
+    ];
+    for (count, minutes) in table {
+        assert_eq!(shard_timeout_minutes(count), minutes, "{count} mutants");
     }
 }
 

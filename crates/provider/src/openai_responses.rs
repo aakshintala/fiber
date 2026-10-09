@@ -12,8 +12,8 @@ use contract::events::{
     ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
 };
 use contract::provider::{
-    CallError, CallUsage, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider,
-    Reply, ReplyAction, ToolDefinition,
+    CallError, CallUsage, Delta, Finish, HostedCall, Input, InputSize, ModelCall, ModelRequest,
+    Provider, Reply, ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, ProviderCallId};
@@ -171,14 +171,21 @@ impl ModelCall for Call {
     }
 }
 
-/// Each tool in Responses' shape, in name order. This is the tools Fiber
-/// builds.
+/// Each tool in Responses' shape, in name order: a hosted tool is the
+/// vendor's own type alone, with no name or schema (`docs/tools.md`,
+/// "Hosted by the provider"). This is the tools Fiber builds.
 fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
     let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
     sorted
         .into_iter()
         .map(|tool| {
+            if let Some(kind) = &tool.hosted {
+                return json!({"type": kind})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default();
+            }
             // debt: deferred tools are sent in full until tool search is built
             // (#368); nothing defers a tool yet.
             json!({
@@ -276,10 +283,17 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     request
         .conversation
         .iter()
-        .filter_map(|input| match input {
+        .enumerate()
+        .filter_map(|(index, input)| match input {
             Input::User { text, images } => {
-                let prepared =
-                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
+                let prepared = crate::images::prepare(
+                    text,
+                    images,
+                    &[],
+                    &request.session_dir,
+                    endpoint.text_only,
+                    crate::images::PdfForm::Native,
+                );
                 Some(json!({ "role": "user", "content": output(prepared) }))
             }
             Input::Assistant {
@@ -290,6 +304,22 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 if *model == reference
                     && let Some(item) = provider_item
                 {
+                    // A hosted pair logs the same item twice, as two
+                    // adjacent inputs, but the request carries it once
+                    // (`docs/tools.md`, "Hosted by the provider").
+                    if item.get("type").and_then(Value::as_str) == Some("web_search_call")
+                        && let Some(Input::Assistant {
+                            model: before_model,
+                            provider_item: Some(before),
+                            ..
+                        }) = index
+                            .checked_sub(1)
+                            .and_then(|at| request.conversation.get(at))
+                        && *before_model == reference
+                        && *before == *item
+                    {
+                        return None;
+                    }
                     Some(item.clone())
                 } else if text.is_empty() {
                     None
@@ -323,10 +353,17 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 action_id,
                 text,
                 images,
+                pdfs,
                 ..
             } => {
-                let prepared =
-                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
+                let prepared = crate::images::prepare(
+                    text,
+                    images,
+                    pdfs,
+                    &request.session_dir,
+                    endpoint.text_only,
+                    crate::images::PdfForm::Native,
+                );
                 Some(json!({
                     "type": "function_call_output",
                     "call_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
@@ -337,12 +374,13 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         .collect()
 }
 
-/// A `function_call_output`'s `output`: the plain text when no image is
-/// sent, otherwise an array holding one `input_text` part, when the text
-/// is non-empty, then one `input_image` part per image, each carrying a
-/// data URL (`docs/tools.md`, "read").
+/// A `function_call_output`'s `output`: the plain text when no image or PDF
+/// is sent, otherwise an array holding one `input_text` part, when the text
+/// is non-empty, then one `input_image` part per image, each carrying a data
+/// URL, then one `input_file` part per PDF carrying its bytes as a data URL
+/// (`docs/tools.md`, "read").
 fn output(prepared: crate::images::Prepared) -> Value {
-    if prepared.images.is_empty() {
+    if prepared.images.is_empty() && prepared.documents.is_empty() {
         return json!(prepared.text);
     }
     let mut parts = Vec::new();
@@ -351,6 +389,13 @@ fn output(prepared: crate::images::Prepared) -> Value {
     }
     for image in &prepared.images {
         parts.push(json!({"type": "input_image", "image_url": crate::images::data_url(image)}));
+    }
+    for document in &prepared.documents {
+        parts.push(json!({
+            "type": "input_file",
+            "filename": document.filename,
+            "file_data": format!("data:application/pdf;base64,{}", document.data),
+        }));
     }
     Value::Array(parts)
 }
@@ -546,6 +591,10 @@ impl Decoder {
                         provider_item: Some(item.clone()),
                     }));
             }
+            "web_search_call" => {
+                self.actions
+                    .push(ReplyAction::Hosted(web_search_call(item)));
+            }
             "function_call" => {
                 let raw = str_at(item, "arguments");
                 let arguments = match serde_json::from_str(raw) {
@@ -565,7 +614,7 @@ impl Decoder {
                     provider_item: None,
                 }));
             }
-            // Items Fiber does not act on, such as a hosted tool's.
+            // Items Fiber does not act on.
             _ => {}
         }
     }
@@ -640,6 +689,54 @@ impl Decoder {
             cost: None,
             input_size: InputSize::default(),
         })
+    }
+}
+
+/// A hosted search's call and result from its done item: the call names
+/// `web_search`, with the item's `action` as its arguments less any
+/// `sources`; the completion carries the result URLs, the item's
+/// `results` then its action's `sources`, one per line
+/// (`docs/tools.md`, "Hosted by the provider").
+fn web_search_call(item: &Value) -> HostedCall {
+    let arguments = match item.get("action") {
+        Some(Value::Object(action)) => {
+            let mut action = action.clone();
+            action.remove("sources");
+            Value::Object(action)
+        }
+        _ => Value::Object(Map::new()),
+    };
+    let mut urls: Vec<&str> = item
+        .get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|result| result.get("url").and_then(Value::as_str))
+        .collect();
+    urls.extend(
+        item.pointer("/action/sources")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|source| source.get("url").and_then(Value::as_str)),
+    );
+    let completed = match item.get("status").and_then(Value::as_str) {
+        Some("completed") => crate::hosted::completed(item.clone(), &urls),
+        status => crate::hosted::failed(item.clone(), status.unwrap_or("unknown")),
+    };
+    HostedCall {
+        call: ToolCallRequested {
+            name: "web_search".to_owned(),
+            arguments,
+            provider_id: item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|id| ProviderCallId(id.to_owned())),
+            repair: None,
+            ran_by: None,
+            provider_item: Some(item.clone()),
+        },
+        completed,
     }
 }
 

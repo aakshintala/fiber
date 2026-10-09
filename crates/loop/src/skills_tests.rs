@@ -584,6 +584,7 @@ fn sized(name: &str, place: &str, bytes: usize) -> Found {
     };
     assert_eq!(entry(&listed).len(), bytes);
     Found {
+        file: PathBuf::from("p"),
         listed,
         model_invocable: true,
         argument_hint: None,

@@ -280,9 +280,9 @@ fn a_good_call_returns_its_receipt_with_started_records() {
 fn text_of(part: &contract::shapes::ContentPart) -> String {
     match part {
         contract::shapes::ContentPart::Text { text } => text.clone(),
-        contract::shapes::ContentPart::Image { .. } | contract::shapes::ContentPart::Unknown => {
-            String::new()
-        }
+        contract::shapes::ContentPart::Image { .. }
+        | contract::shapes::ContentPart::Pdf(_)
+        | contract::shapes::ContentPart::Unknown => String::new(),
     }
 }
 

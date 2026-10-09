@@ -3,7 +3,7 @@
 //! question form").
 
 use contract::commands::{ReplyAnswer, SentFormAnswer};
-use contract::shapes::{Question, True};
+use contract::shapes::{Choice, Question, True};
 
 use super::{Panel, PanelKey, PanelSpot};
 use crate::format::{cut, width};
@@ -80,8 +80,8 @@ enum SubmitRow {
     Chat,
 }
 
-/// A click target on the form: a tab, or a row of the shown tab. `Tab(n)`,
-/// `n` the question count, is the Submit tab.
+/// A click target on the form or one-question rows. `Tab(n)`, `n` the
+/// question count, is the Submit tab; `Send` is the Submit row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Spot {
     Tab(usize),
@@ -281,25 +281,12 @@ impl Form {
         } = self.at
         {
             if let Some(answer) = self.answers.get_mut(field) {
-                answer.caret = if right {
-                    answer
-                        .caret
-                        .saturating_add(1)
-                        .min(answer.words.chars().count())
-                } else {
-                    answer.caret.saturating_sub(1)
-                };
+                move_caret(&answer.words, &mut answer.caret, right);
             }
             return;
         }
         if let Cursor::Submit(SubmitRow::Note) = self.at {
-            self.note_caret = if right {
-                self.note_caret
-                    .saturating_add(1)
-                    .min(self.note.chars().count())
-            } else {
-                self.note_caret.saturating_sub(1)
-            };
+            move_caret(&self.note, &mut self.note_caret, right);
             return;
         }
         let tab = self.tab();
@@ -405,9 +392,7 @@ impl Form {
         match self.at {
             Cursor::Question { field, .. } => {
                 if let Some(answer) = self.answers.get_mut(field) {
-                    let at = byte_at(&answer.words, answer.caret);
-                    answer.words.insert(at, ch);
-                    answer.caret = answer.caret.saturating_add(1);
+                    insert_at(&mut answer.words, &mut answer.caret, ch);
                 }
                 self.at = Cursor::Question {
                     field,
@@ -415,9 +400,7 @@ impl Form {
                 };
             }
             Cursor::Submit(_) => {
-                let at = byte_at(&self.note, self.note_caret);
-                self.note.insert(at, ch);
-                self.note_caret = self.note_caret.saturating_add(1);
+                insert_at(&mut self.note, &mut self.note_caret, ch);
                 self.at = Cursor::Submit(SubmitRow::Note);
             }
         }
@@ -431,18 +414,12 @@ impl Form {
                 field,
                 row: Row::Words,
             } => {
-                if let Some(answer) = self.answers.get_mut(field)
-                    && let Some(before) = answer.caret.checked_sub(1)
-                {
-                    answer.words.remove(byte_at(&answer.words, before));
-                    answer.caret = before;
+                if let Some(answer) = self.answers.get_mut(field) {
+                    delete_before(&mut answer.words, &mut answer.caret);
                 }
             }
             Cursor::Submit(SubmitRow::Note) => {
-                if let Some(before) = self.note_caret.checked_sub(1) {
-                    self.note.remove(byte_at(&self.note, before));
-                    self.note_caret = before;
-                }
+                delete_before(&mut self.note, &mut self.note_caret);
             }
             Cursor::Question {
                 row: Row::Option(_) | Row::Next | Row::Chat,
@@ -562,15 +539,11 @@ impl Form {
                 (Picks::Many(_), false) => "[ ]",
             };
             let row = Row::Option(option);
-            let mut line = format!("{} {tick} {}", mark(row), choice.label);
-            if let Some(description) = &choice.description {
-                line.push_str(" · ");
-                line.push_str(description);
-            }
+            let line = option_line(mark(row), tick, choice);
             push(panel, &line, Some(Spot::Option(option)), row == at);
         }
         let here = at == Row::Words;
-        let (line, caret) = words_row(answer, here, cols);
+        let (line, caret) = words_row(&answer.words, answer.caret, here, cols);
         if let Some(caret) = caret {
             panel.caret = Some((panel.lines.len(), caret));
         }
@@ -622,7 +595,7 @@ const TAB_GAP: &str = "  ";
 /// Pushes `text` as the panel's next line, its control characters as
 /// spaces, with `spot` over the whole line and the cursor on it when
 /// `here`.
-fn push(panel: &mut Panel, text: &str, spot: Option<Spot>, here: bool) {
+pub(super) fn push(panel: &mut Panel, text: &str, spot: Option<Spot>, here: bool) {
     let line = panel.lines.len();
     panel.lines.push(clean(text));
     if let Some(spot) = spot {
@@ -642,16 +615,15 @@ fn push(panel: &mut Panel, text: &str, spot: Option<Spot>, here: bool) {
 /// their first character, clipped at the width, unless the text cursor
 /// would reach the width, when it shows them from the first character that
 /// puts the text cursor on the last column.
-fn words_row(answer: &Field, here: bool, cols: u16) -> (String, Option<u16>) {
+pub(super) fn words_row(words: &str, caret: usize, here: bool, cols: u16) -> (String, Option<u16>) {
     let prefix = format!("{} ✎ ", if here { '›' } else { ' ' });
-    if answer.words.is_empty() {
+    if words.is_empty() {
         return (
             format!("{prefix}answer in words"),
             here.then(|| cells(&prefix)),
         );
     }
-    let words: Vec<char> = clean(&answer.words).chars().collect();
-    let caret = answer.caret;
+    let words: Vec<char> = clean(words).chars().collect();
     let before =
         |start: usize| -> String { words.get(start..caret).unwrap_or_default().iter().collect() };
     let fits = |start: usize| width(&prefix) + width(&before(start)) < usize::from(cols);
@@ -666,6 +638,16 @@ fn words_row(answer: &Field, here: bool, cols: u16) -> (String, Option<u16>) {
     (line, caret)
 }
 
+/// An option row shared by forms and one-question forms.
+pub(super) fn option_line(mark: char, tick: &str, choice: &Choice) -> String {
+    let mut line = format!("{mark} {tick} {}", choice.label);
+    if let Some(description) = &choice.description {
+        line.push_str(" · ");
+        line.push_str(description);
+    }
+    line
+}
+
 /// The byte where the character `chars` characters into `text` starts, or
 /// the end.
 fn byte_at(text: &str, chars: usize) -> usize {
@@ -674,14 +656,38 @@ fn byte_at(text: &str, chars: usize) -> usize {
         .map_or(text.len(), |(at, _)| at)
 }
 
+/// Inserts `ch` at the character cursor and moves it past the new character.
+pub(super) fn insert_at(text: &mut String, caret: &mut usize, ch: char) {
+    text.insert(byte_at(text, *caret), ch);
+    *caret = (*caret).saturating_add(1);
+}
+
+/// Deletes the character before the cursor, if any, and moves the cursor left.
+pub(super) fn delete_before(text: &mut String, caret: &mut usize) {
+    if let Some(before) = caret.checked_sub(1) {
+        let at = byte_at(text, before);
+        text.remove(at);
+        *caret = before;
+    }
+}
+
+/// Moves the character cursor one position, clamped to the text's ends.
+pub(super) fn move_caret(text: &str, caret: &mut usize, right: bool) {
+    *caret = if right {
+        (*caret).saturating_add(1).min(text.chars().count())
+    } else {
+        (*caret).saturating_sub(1)
+    };
+}
+
 /// How many display cells `text` takes, as a screen column.
-fn cells(text: &str) -> u16 {
+pub(super) fn cells(text: &str) -> u16 {
     u16::try_from(width(text)).unwrap_or(u16::MAX)
 }
 
 /// `text` with every control character as a space, so model text stays on
 /// its line and sends the terminal nothing.
-fn clean(text: &str) -> String {
+pub(super) fn clean(text: &str) -> String {
     text.chars()
         .map(|ch| if ch.is_control() { ' ' } else { ch })
         .collect()

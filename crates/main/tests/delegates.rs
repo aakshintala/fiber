@@ -208,6 +208,8 @@ struct Running {
     lines: mpsc::Receiver<Value>,
     stderr: mpsc::Receiver<String>,
     deadline: Deadline,
+    /// Every line `wait_line` has taken, so `wait` returns the whole stream.
+    taken: Vec<Value>,
 }
 
 impl Running {
@@ -272,6 +274,7 @@ impl Running {
                 lines,
                 stderr,
                 deadline: setup.deadline,
+                taken: Vec::new(),
             },
             stdin,
         )
@@ -299,6 +302,7 @@ impl Running {
             match self.lines.recv_timeout(left) {
                 Ok(line) => {
                     let stop = done(&line);
+                    self.taken.push(line.clone());
                     got.push(line);
                     if stop {
                         return got;
@@ -318,11 +322,12 @@ impl Running {
     /// deadline, and expiry kills the group and reaps it. Stands the
     /// watchdog down first: dropping it would kill the group. Every stdout
     /// line is read: the drain ends at end of file once the process is
-    /// gone, so a disconnect means the output is whole.
+    /// gone, so a disconnect means the output is whole. Returns the whole
+    /// stream, including the lines `wait_line` returned.
     fn wait(self) -> (ExitStatus, Vec<Value>, String) {
         let watchdog = self._watchdog;
         watchdog.stand_down(self.deadline.cleanup());
-        let mut out = Vec::new();
+        let mut out = self.taken;
         while let Ok(line) = self.lines.try_recv() {
             out.push(line);
         }
@@ -469,13 +474,12 @@ fn a_delegate_runs_to_its_end_and_its_finish_wakes_the_parent() {
 
     let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
     let mut ended = 0;
-    let mut lines = running.wait_line("the ending notice's turn end", |line| {
+    running.wait_line("the ending notice's turn end", |line| {
         ended += usize::from(line["kind"] == "turn_completed");
         ended == 2
     });
     child.release();
-    let (status, rest, stderr) = running.wait();
-    lines.extend(rest);
+    let (status, lines, stderr) = running.wait();
     let ask = Ask {
         code: status.code(),
         lines,
@@ -1068,14 +1072,14 @@ fn a_delegate_skips_repository_code_nobody_approved() {
     // Its run ended on its own: one turn and out, with no idle wait. The
     // exit line is decided before stdin drops.
     let mut direct_running = direct_running;
-    let direct_got = direct_running.wait_line("the direct run's exit", |line| {
+    direct_running.wait_line("the direct run's exit", |line| {
         line["kind"] == "fiber_exited"
     });
     drop(direct_stdin);
     let (direct_status, direct_lines, direct_stderr) = direct_running.wait();
     // Its run ended on its own: one turn and out, with no idle wait.
     assert_eq!(direct_status.code(), Some(0), "stderr: {direct_stderr}");
-    let direct_all: Vec<&Value> = direct_got.iter().chain(&direct_lines).collect();
+    let direct_all: Vec<&Value> = direct_lines.iter().collect();
     let skipped = direct_all
         .iter()
         .find(|line| {

@@ -391,6 +391,11 @@ fn session_accepted(session: &str, id: &str) -> Line {
 
 /// A session `command_rejected` for `id` from `session`.
 fn session_refused(session: &str, id: &str) -> Line {
+    session_refused_with(session, id, "session_not_found")
+}
+
+/// A session `command_rejected` for `id` from `session` with `code`.
+fn session_refused_with(session: &str, id: &str, code: &str) -> Line {
     Line::Session(contract::Envelope {
         kind: "command_rejected".to_owned(),
         session_id: contract::SessionId(session.to_owned()),
@@ -401,10 +406,7 @@ fn session_refused(session: &str, id: &str) -> Line {
         seq: None,
         payload: [
             ("command_id".to_owned(), Value::String(id.to_owned())),
-            (
-                "code".to_owned(),
-                Value::String("session_not_found".to_owned()),
-            ),
+            ("code".to_owned(), Value::String(code.to_owned())),
             ("message".to_owned(), Value::String("no".to_owned())),
         ]
         .into_iter()
@@ -519,13 +521,13 @@ fn a_second_status_sends_no_second_subscribe() {
 }
 
 #[test]
-fn a_refused_subscribe_is_not_sent_again_on_this_attachment() {
+fn a_subscribe_refused_with_another_code_is_not_sent_again_on_this_attachment() {
     let mut app = home();
     opened(&mut app);
     start_delegate(&mut app, "j_1", DELEGATE);
     let first = parent_status(&mut app);
     let id = subscribe_id(&first);
-    app.on_line(session_refused(DELEGATE, &id));
+    app.on_line(session_refused_with(DELEGATE, &id, "invalid_arguments"));
     let out = parent_status(&mut app);
     let second = subscribes(&out);
     assert!(second.is_empty());

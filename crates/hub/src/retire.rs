@@ -63,6 +63,14 @@ pub(crate) enum Retire {
 pub(crate) struct AckOrder {
     inner: Mutex<Inner>,
     changed: Condvar,
+    /// Tests only: a one-shot pause at `drain`'s start, before any lock:
+    /// the point where the drain waits for `route`'s write outcome.
+    #[cfg(test)]
+    pub(crate) before_drain: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: a one-shot signal at the top of the relay thread's
+    /// read loop, before `read_until`, where the thread holds no lock.
+    #[cfg(test)]
+    pub(crate) before_read: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 /// What [`AckOrder`] tracks: the unanswered commands per session in read
@@ -305,20 +313,30 @@ pub(crate) fn drain(
     session: &str,
     epoch: u64,
     kept: &Kept,
+    order: &Arc<AckOrder>,
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<Relays>>,
 ) {
-    let dropped: Vec<(String, String)> = lock(kept)
-        .iter()
-        .filter(|(_, _, sent)| *sent)
-        .map(|(id, _, _)| (session.to_owned(), id.clone()))
-        .collect();
-    lock(kept).retain(|(_, _, sent)| !sent);
-    if !dropped.is_empty() {
-        let order = lock(relays).order.clone();
-        order.drop_ids(&dropped);
+    #[cfg(test)]
+    if let Some(before) = lock(&order.before_drain).take() {
+        before();
     }
+    // Under the relays lock, which `route` holds from keeping a command as
+    // sent until its write's outcome: a command whose write failed is
+    // never dropped as sent.
+    let dropped: Vec<(String, String)> = {
+        let _held = lock(relays);
+        let mut kept = lock(kept);
+        let dropped = kept
+            .iter()
+            .filter(|(_, _, sent)| *sent)
+            .map(|(id, _, _)| (session.to_owned(), id.clone()))
+            .collect();
+        kept.retain(|(_, _, sent)| !sent);
+        dropped
+    };
+    order.drop_ids(&dropped);
     pump(session, epoch, kept, hub, writer, relays, true);
 }
 

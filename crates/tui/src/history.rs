@@ -461,6 +461,14 @@ impl App {
         self.relayout();
         let height = self.conversation_height();
         self.screen.settle(height);
+        // Lines folded into the attached screen while a transcript is
+        // swapped in settle it too, so its top never sits past the
+        // bottom when the view closes.
+        if let Some(open) = self.items.open.as_mut()
+            && let Some(stashed) = open.stashed.as_mut()
+        {
+            stashed.settle(height);
+        }
         self.settle_pending_turn();
         self.settle_find();
         if !self.history.waiting {
@@ -504,7 +512,7 @@ fn text(content: &[ContentPart]) -> String {
         .iter()
         .filter_map(|part| match part {
             ContentPart::Text { text } => Some(text.as_str()),
-            ContentPart::Image { .. } | ContentPart::Unknown => None,
+            ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown => None,
         })
         .collect::<Vec<_>>()
         .join("\n")

@@ -26,7 +26,7 @@ type SessionTools = (
 );
 
 /// `ask_user`, `delegate_spawn`, `edit`, `handoff`, `read`, `session_search`, `shell`,
-/// `web_fetch`, `write` and `jobs`, each registered by `builtin`, and
+/// `skill`, `web_fetch`, `write` and `jobs`, each registered by `builtin`, and
 /// `web_search` when `web_search` names the hosted search type of the
 /// session's model. `session_search` searches the logs under `home`, Fiber
 /// home, and counts a session as this project's when `doors::project` gives
@@ -53,6 +53,7 @@ pub(crate) fn builtin(
     locks: &Arc<tools::PathLocks>,
     web_search: Option<&str>,
     delegates: &crate::delegates::Delegates,
+    skills: Arc<dyn contract::skills::Skills>,
 ) -> Result<SessionTools, Failure> {
     let files = Arc::new(
         tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks))
@@ -82,6 +83,7 @@ pub(crate) fn builtin(
             Arc::new(doors::project),
         ))))?,
         registered(shell)?,
+        registered(tools::Skill::new(skills))?,
         registered(tools::WebFetch::new(
             artifacts.to_path_buf(),
             Arc::clone(clock),

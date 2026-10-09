@@ -331,7 +331,7 @@ impl Settings {
             let mut names: Vec<String> = BUILT_IN_THEMES.map(str::to_owned).to_vec();
             names.extend(
                 ctx.seam
-                    .themes()
+                    .themes(ctx.workspace)
                     .into_iter()
                     .filter(|name| !BUILT_IN_THEMES.contains(&name.as_str())),
             );
@@ -408,7 +408,7 @@ impl Settings {
                 ];
                 said.extend(saved.warnings);
                 self.said = said;
-                Act::Theme(ctx.seam.theme(name))
+                Act::Theme(ctx.seam.theme(ctx.workspace, name))
             }
             Err(error) => {
                 self.said = vec![error.message];
@@ -442,7 +442,7 @@ impl Settings {
         let shown = self.shown(ctx);
         match (spot, &mut self.mode) {
             (Spot::Close, _) => Act::Close,
-            (Spot::Switch { .. } | Spot::Revoke(_), _) => Act::Stay,
+            (Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_), _) => Act::Stay,
             (Spot::Row(at), Mode::Choices { names, .. }) => match names.get(at).cloned() {
                 Some(name) => self.choose(&name, ctx),
                 None => Act::Stay,

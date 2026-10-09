@@ -588,7 +588,47 @@ fn a_delegate_row_count_matches_the_card() {
         .collect();
     let status = crate::view::status_rows::delegates(&app, 100);
     assert_eq!(status.len(), 4);
-    assert_eq!(status, card);
+    assert_eq!(
+        status.into_iter().map(|(line, _)| line).collect::<Vec<_>>(),
+        card
+    );
+}
+
+#[test]
+fn the_narrow_delegate_rows_carry_their_serials_as_targets() {
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(started("j_1", "alpha"));
+    app.on_line(delegated("j_1"));
+    app.on_line(started("j_2", "beta"));
+    app.on_line(delegated("j_2"));
+    let (_, targets) = draw(&app, 100, 30);
+    let mut serials: Vec<u64> = targets
+        .iter()
+        .filter_map(|target| {
+            if let TargetId::Panel(Spot::Delegate(serial)) = target.id {
+                Some(serial)
+            } else {
+                None
+            }
+        })
+        .collect();
+    serials.sort_unstable();
+    assert_eq!(serials, vec![1, 1, 2, 2]);
+}
+
+#[test]
+fn a_zero_width_delegate_row_has_no_click_target() {
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(started("j_1", "alpha"));
+    app.on_line(delegated("j_1"));
+    let area = Rect::new(0, 0, 0, 10);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    super::draw_delegates(&app, area, &mut buf, &mut bottom, &mut targets);
+    assert!(targets.is_empty());
 }
 
 #[test]
@@ -852,4 +892,35 @@ fn the_question_caret_sits_inside_the_panel_above_the_status_row() {
     );
     assert!(rows[rows.len() - 3].contains("Chat about this"), "{rows:?}");
     assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
+}
+
+#[test]
+fn row_two_spots_cover_each_running_segment() {
+    use crate::app::panel::Spot;
+    let mut app = attached(100, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_line(started("j_1", "build"));
+    app.on_line(started("j_2", "test"));
+    app.on_line(started("j_3", "lint"));
+    app.on_line(delegated("j_2"));
+    app.on_line(delegated("j_3"));
+    // "2 delegates running · 1 job running": each segment opens its list.
+    let rows = crate::view::status_rows::status(&app, 100);
+    let row = rows.last().unwrap_or_else(|| panic!("row two"));
+    assert_eq!(row.line.to_string(), "2 delegates running · 1 job running");
+    assert_eq!(
+        row.spots,
+        [(0, 19, Spot::DelegateList), (22, 13, Spot::JobList),]
+    );
+    // A cut row keeps only the visible part: the job segment cut to
+    // nothing leaves no target, the delegate segment keeps its width.
+    let rows = crate::view::status_rows::status(&app, 22);
+    let row = rows.last().unwrap_or_else(|| panic!("row two"));
+    assert_eq!(row.spots, [(0, 19, Spot::DelegateList)]);
+    let rows = crate::view::status_rows::status(&app, 30);
+    let row = rows.last().unwrap_or_else(|| panic!("row two"));
+    assert_eq!(
+        row.spots,
+        [(0, 19, Spot::DelegateList), (22, 8, Spot::JobList),]
+    );
 }

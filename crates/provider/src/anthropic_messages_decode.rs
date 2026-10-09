@@ -4,13 +4,13 @@
 use std::collections::BTreeMap;
 use std::io::BufRead;
 
+use contract::ProviderCallId;
 use contract::events::{
-    CallStatus, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
-    ToolCallCompleted, ToolCallRequested,
+    ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted,
+    ToolCallRequested,
 };
 use contract::provider::{CallUsage, Delta, Finish, HostedCall, InputSize, Reply, ReplyAction};
-use contract::shapes::{ContentPart, Failure, Tokens};
-use contract::{ErrorCode, ProviderCallId};
+use contract::shapes::Tokens;
 use serde_json::{Map, Value, json};
 
 use crate::Error;
@@ -410,18 +410,8 @@ fn parsed_input(input: String) -> Value {
 /// line, or a `failed` completion carrying the vendor's error code.
 fn hosted_completion(block: &Value) -> ToolCallCompleted {
     let content = &block["content"];
-    let (status, text, error) = if str_at(content, "type") == "web_search_tool_result_error" {
-        let message = format!(
-            "The provider's search failed: {}.",
-            str_at(content, "error_code")
-        );
-        let error = Failure {
-            code: ErrorCode::ToolError,
-            message: message.clone(),
-            retry_after_ms: None,
-            provider: None,
-        };
-        (CallStatus::Failed, message, Some(error))
+    if str_at(content, "type") == "web_search_tool_result_error" {
+        crate::hosted::failed(block.clone(), str_at(content, "error_code"))
     } else {
         let urls: Vec<&str> = content
             .as_array()
@@ -429,20 +419,7 @@ fn hosted_completion(block: &Value) -> ToolCallCompleted {
             .flatten()
             .map(|result| str_at(result, "url"))
             .collect();
-        (CallStatus::Completed, urls.join("\n"), None)
-    };
-    ToolCallCompleted {
-        status,
-        reason: None,
-        error,
-        process: None,
-        content: vec![ContentPart::Text { text }],
-        details: None,
-        artifact: None,
-        changes: None,
-        control: None,
-        changed_by: None,
-        provider_item: Some(block.clone()),
+        crate::hosted::completed(block.clone(), &urls)
     }
 }
 

@@ -553,22 +553,35 @@ fn reserved_body_fields_match_the_documented_table() {
 }
 
 #[test]
-fn reads_web_search_is_true_only_for_the_known_anthropic_type() {
-    assert!(Protocol::AnthropicMessages.reads_web_search("web_search_20250305"));
-    assert!(!Protocol::AnthropicMessages.reads_web_search("web_search_20260209"));
-    assert!(!Protocol::AnthropicMessages.reads_web_search(""));
-    for protocol in [
+fn reads_web_search_reads_one_type_per_protocol() {
+    let protocols = [
+        Protocol::AnthropicMessages,
         Protocol::OpenaiCompletions,
         Protocol::OpenaiResponses,
         Protocol::GoogleGenerativeAi,
         Protocol::BedrockConverse,
         Protocol::Scripted,
-    ] {
-        assert!(
-            !protocol.reads_web_search("web_search_20250305"),
-            "{protocol:?}"
-        );
-        assert!(!protocol.reads_web_search("google_search"), "{protocol:?}");
+    ];
+    let kinds = [
+        "web_search_20250305",
+        "web_search",
+        "google_search",
+        "web_search_preview",
+        "",
+    ];
+    for protocol in protocols {
+        for kind in kinds {
+            let expected = matches!(
+                (protocol, kind),
+                (Protocol::AnthropicMessages, "web_search_20250305")
+                    | (Protocol::OpenaiResponses, "web_search")
+            );
+            assert_eq!(
+                protocol.reads_web_search(kind),
+                expected,
+                "{protocol:?} reads {kind:?}"
+            );
+        }
     }
 }
 

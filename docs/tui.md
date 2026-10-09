@@ -302,10 +302,20 @@ the conversation. The views are:
   ("main › ◆ review: …"). A status card gives harness, model, calls, elapsed
   time and session, with a stop target. The transcript uses the same turn
   cards as the conversation, and the input box sends steering messages to
-  that delegate.
+  that delegate. A delegate that has not bound its socket yet answers
+  `session_not_found`; while its parent lists it running, the terminal asks
+  again every 500 ms.
 - **A job running under a pseudo-terminal** has a live view of its screen. The
   input box types into it as raw keys, as `jobs write` does for the model, so
-  the person can finish an interactive step the model started.
+  the person can finish an interactive step the model started. The screen is
+  80 columns by 24 rows, drawn from the job's output since the terminal
+  attached. Carriage return, line feed, backspace, tab, cursor movement and
+  erasing in a line or the display are applied; other escape sequences are
+  dropped.
+- **The running delegates or jobs,** from "N delegates running" or "N jobs
+  running" in the narrow layout: the Delegates card's two rows for each
+  delegate, or one row for each job, in the order they started. A row opens
+  that item's view.
 - **The model picker:** models by provider with roles marked, a chip for each
   thinking level the model supports, and the size of the prompt-cache rebuild
   a switch costs. Choosing a model saves the global `model`, and choosing a
@@ -441,7 +451,10 @@ arrived after `sessions` was sent.
 - **A streaming reply renders in place,** formatted as it arrives. The
   conversation follows new output and pauses when the person scrolls up. The
   mouse wheel over the conversation scrolls it 3 rows a step, a starting
-  point, not a measurement; PageUp and PageDown scroll a screen. Either
+  point, not a measurement; PageUp and PageDown scroll a screen. The
+  conversation's last column is its scroll bar and never holds text:
+  while the conversation has more rows than it shows, a thumb (█) on a
+  track (│) shows where the rows on screen sit among all of them. Either
   pauses following when it scrolls up. When new output arrives while
   scrolled up, a small overlay centred at the bottom of the conversation reads
   "↓ New messages below" and jumps to the end on a click or End. It gives no
@@ -637,10 +650,16 @@ box, as an approval does (`docs/tools.md`, "Asking the person").
 - "Chat about this", and Esc, decline the form and end the turn, so the person
   can answer in their own words. The terminal sends `reply` with `declined`,
   then `cancel`: the call completes `declined`, and the cancel ends the turn.
+  The cancel follows only an interaction a tool call raised, one whose
+  `interaction_requested` carries `action_ids`. One raised outside a tool call,
+  such as an extension command's `host.ask`, is declined and leaves any running
+  turn alone.
 - Once answered, the answers sit in the turn's card as a "you answered" rule,
   like a steering message, one row per question, with `skipped` and the note
   shown. The call's ledger row reads "answered" or "declined", and the group
   line counts "asked 4 questions".
+
+The other interactions, `confirm`, `select`, `multi_select` and `text_input`, raised by an extension's `host.ask` and by MCP elicitation, are drawn as one-question forms: the same panel with no tab row, the question, then its rows, ending with "Chat about this". `confirm` shows two options, yes and no, and Enter on one replies `confirmed`. `select` shows the options, and Enter on one replies `labels` with that label. `multi_select` shows the options: Space toggles one, and Enter replies `labels`, possibly empty. `text_input` shows only the row to answer in words, and Enter replies `text` as typed. The last two end with a `Submit` row that does what Enter does, for the mouse. Esc, and "Chat about this", decline as on a form.
 
 ## Reading and copying
 
@@ -709,7 +728,8 @@ copies with `y`.
   that blocks for up to 2 seconds, so Fiber reads terminal input itself
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
 - **Every action has a key.** Every action also has a mouse target or a slash
-  command, except editing the draft in the input box and search. A mouse target is drawn only where one fits naturally, never as a
+  command, except editing the draft in the input box and search, and choosing
+  in the model picker for this session only. A mouse target is drawn only where one fits naturally, never as a
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
@@ -815,30 +835,34 @@ keyboard's reach.
 | Drop it | `drop_steering` | ⌥X | its mouse target |
 | Reopen a request put aside, or move to the next, the oldest first, switching to its session | `next_request` | ⌥A | `/approvals`; click the badge or a waiting card |
 | Open the model picker | `model_picker` | Ctrl+L | `/model` |
+| Choose in the model picker for this session only | `session_only` | s | |
 | Open the key map | `key_map` | F1 | `/?` or `/help` |
 
 The key map, `/?` or `/help`, is an overlay over the conversation listing every
 binding by area with its other paths. Esc closes it. Ctrl+L opens the model picker,
 so it does not redraw the screen as it does in some terminal programs.
 
-Every action acts in some of five contexts, and the terminal is in exactly one
+Every action acts in some of six contexts, and the terminal is in exactly one
 of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
-  home screen's delete question or workspace picker, the key map, the model
-  picker, an approval or question, an offer, or the Ctrl+R panel; or the `/`
+  home screen's delete question or workspace picker, the key map,
+  an approval or question, an offer, or the Ctrl+R panel; or the `/`
   or `@` completion panel while focus is not in the conversation. An overlay's
   own keys, such as an approval's ↑ and ↓, are not bindings.
+- Picker: the model picker is open. Only its own keys and the global actions
+  act.
 - Search: conversation search is open.
 - Conversation: focus is in the conversation.
 - Steering: a queued steering message is selected.
 - Input: the input box has the keyboard, home with nothing open included.
 
-A global action acts in all five. The rest act only where they are listed:
+A global action acts in all six. The rest act only where they are listed:
 
 - Global: `close_or_interrupt`, `clear_then_quit`, `rail_row_n`,
   `toggle_ledgers`, `toggle_panel`, `toggle_rail`, `jump_to_end`,
   `next_request`, `key_map`.
+- Picker: `session_only`.
 - Input, Steering and Conversation: `go_home`, `new_session`,
   `open_in_editor`, `navigate`, `search`, `select_steering`, `drop_steering`,
   `model_picker`.
@@ -909,7 +933,7 @@ release still applies.
 | `/new` | Goes home with the cursor in the input box. |
 | `/resume` | Opens home at the session list. |
 | `/model` | Opens the model picker. |
-| `/thinking <level>` | Sets the thinking level, as choosing a chip in the model picker does: saved for the model unless marked as this session only (`docs/model-routing.md`, "Thinking"). |
+| `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. With no level, opens the model picker on the model's chips: Enter saves the level, `s` applies it to this session only. |
 | `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
 | `/scoped-models` | Chooses which models the model picker shows, saved as `scoped_models`. |
 | `/context` | Opens the context breakdown. |
@@ -1055,7 +1079,8 @@ fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
 ### Themes
 
 Fiber ships a dark and a light theme. A person adds their own as files in
-Fiber home and picks one in `/settings`, which writes `tui.theme`. With no
+Fiber home, an installed extension can carry more, and either is picked in
+`/settings`, which writes `tui.theme`. With no
 theme set, the theme follows the terminal's light or dark appearance and
 switches when the terminal reports a change.
 
@@ -1068,7 +1093,7 @@ The roles, in order:
 | Role | What it colours |
 |---|---|
 | `text` | the full text colour: replies, the draft, anything with no role of its own |
-| `muted` | what the doc calls dim as a colour: READY, line numbers, rules, block quote bars, grips, the logo's counters |
+| `muted` | what the doc calls dim as a colour: READY, line numbers, rules, block quote bars, grips, the scroll bar, the logo's counters |
 | `accent` | bullets, the logo's mark, WORKING, the spinner while a turn works, a running job's stripe, the steering and prompt stripes |
 | `heading` | markdown headings |
 | `success` | a finished job's stripe when it succeeded |
@@ -1101,8 +1126,9 @@ The roles, in order:
 A stripe takes its state's colour, and the logo's five letters step through
 `heading`, `accent`, `string`, `type` and `keyword`.
 
-A theme is a file, `themes/<name>.json` in Fiber home, and `tui.theme` names it
-by `<name>`; `dark` and `light` always name the built-ins:
+A theme is a file, `themes/<name>.json` in Fiber home or in an installed
+extension (`docs/extensions.md`, "What a package holds"), and `tui.theme`
+names it by `<name>`; `dark` and `light` always name the built-ins:
 
 ```json
 {"base": "light", "roles": {"accent": "#0b7285", "alert": "#5f1e22"}}
@@ -1113,7 +1139,13 @@ keeps working when a role is added. `roles` maps role names to `#rrggbb`. The
 file is strict: any other key, an unknown role or a value that is not
 `#rrggbb` refuses the whole file. A file that is missing or refused shows one
 notice naming the theme and the reason, and the theme follows the terminal's
-appearance. Nothing writes the bad name back. Colours are given once, in 24
+appearance. Nothing writes the bad name back. Fiber home's file wins over an
+extension's, and between extensions the first by directory name in
+`extensions/` wins; `/settings` lists each name once. Only a missing file
+passes the name on: a file that is there but cannot be read or is refused is
+the theme. A damaged extension's themes are left out, as are a switched-off
+extension's (`extensions."<name>".enabled` is `false`): they are not listed,
+and a `tui.theme` naming one reads as a missing file. Colours are given once, in 24
 bits, and the 256-colour form is computed ("Look").
 
 ### Reduced motion
@@ -1212,9 +1244,9 @@ Also measured in Fiber, on the same machine:
   loaded pages 0.62 ms, and counting every page again at a new width 133 ms.
   Peak footprint was 61.9 MiB, of which 46 MiB is the jig's copy of the
   session.
-- **Jumping the way dragging the scroll bar's thumb does.** No scroll bar is
-  built yet, so the jig moves the top row to 20 rows spread across the
-  session, one frame each. The slowest frame took 1.9 ms, and 1.1 ms on the
+- **Jumping the way dragging the scroll bar's thumb does.** The scroll bar's
+  thumb does not drag, so the jig moves the top row to 20 rows spread across
+  the session, one frame each. The slowest frame took 1.9 ms, and 1.1 ms on the
   larger session.
 
 On Linux x86_64 the benchmark job (`docs/performance.md`, "Measuring", the

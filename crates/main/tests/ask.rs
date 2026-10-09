@@ -3119,6 +3119,7 @@ fn two_runs_send_byte_identical_preambles() {
             "read",
             "session_search",
             "shell",
+            "skill",
             "web_fetch",
             "write"
         ]

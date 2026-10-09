@@ -48,6 +48,7 @@ fn a_full_table_maps_field_for_field() {
             control: Some(Control {
                 handoff: Some("n".to_owned()),
                 questions: None,
+                skill: None,
             }),
             ..Output::default()
         }

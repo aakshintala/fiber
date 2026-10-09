@@ -20,12 +20,14 @@ mod drag;
 #[path = "home_view.rs"]
 mod home;
 mod input_box;
+pub(crate) mod item;
 mod marks;
 mod offer;
 pub(crate) mod panel;
 pub(crate) mod rail;
 pub(crate) mod request;
 mod results;
+pub(crate) mod scroll_bar;
 pub(crate) mod status_rows;
 mod steering_queue;
 mod working_line;
@@ -146,7 +148,7 @@ pub(crate) fn render(
     // The steering queue sits above the input box, its newest row lowest;
     // a row a `steer` sent ends in a ✕ that drops it.
     steering_queue::draw(app, area, &mut bottom, buf, &mut targets);
-    status_rows::draw_delegates(app, area, buf, &mut bottom);
+    status_rows::draw_delegates(app, area, buf, &mut bottom, &mut targets);
     banner::draw(app, area, buf, &mut bottom);
     working_line::draw(app, area, buf, &mut bottom, &mut targets);
     if let Some(rect) = app
@@ -178,6 +180,31 @@ pub(crate) fn render(
             crate::swapped::draw(app, conversation, buf, &mut targets);
             notices(app, conversation, buf, &mut targets);
         }
+        // An item view swaps into the conversation area and takes all of
+        // it: its header on the top rows, then the delegate's transcript
+        // or the item's body (`docs/tui.md`, "Swapped views").
+        None if app.item_open() => {
+            let height = usize::from(conversation.height);
+            let header_rows = item::ITEM_HEADER_ROWS.min(height);
+            let header_height = to_u16(header_rows);
+            let header = Rect::new(
+                conversation.x,
+                conversation.y,
+                conversation.width,
+                header_height,
+            );
+            item::draw_header(app, header, buf, &mut targets);
+            let body_y = conversation.y.saturating_add(header_height);
+            let body_height = conversation.height.saturating_sub(header_height);
+            let body = Rect::new(conversation.x, body_y, conversation.width, body_height);
+            if app.item_view().is_some_and(|view| view.has_transcript) {
+                conversation_rows(app, body, buf, &mut targets);
+                marks::draw(app, body, buf, &mut targets);
+            } else {
+                item::draw_body(app, body, buf);
+            }
+            notices(app, conversation, buf, &mut targets);
+        }
         None => {
             // The repository offer swaps in for the conversation.
             match app.offer_rows(conversation.width) {
@@ -195,7 +222,13 @@ pub(crate) fn render(
                         overlay_cross(buf, conversation, &mut targets);
                     }
                     None => {
-                        conversation_rows(app, conversation, buf, &mut targets);
+                        // The rows draw in the scroll bar's rows area, one
+                        // column narrower than the conversation, leaving
+                        // the last column to the bar, which draws before
+                        // the marks over it.
+                        let (rows, bar) = scroll_bar::split(conversation);
+                        conversation_rows(app, rows, buf, &mut targets);
+                        scroll_bar::draw(app, bar, buf);
                         marks::draw(app, conversation, buf, &mut targets);
                     }
                 },

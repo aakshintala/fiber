@@ -213,11 +213,11 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
         selected(&app).as_deref(),
         Some("/home  Goes home.  command")
     );
-    for _ in 0..11 {
+    for _ in 0..12 {
         app.on_key(Key::Down, now());
     }
-    // Eleven rows from `/home` through `/handoff`, including `/model`,
-    // `/context`, `/usage` and `/skills`.
+    // Twelve rows from `/home` through `/handoff`, including `/model`,
+    // `/thinking`, `/context`, `/usage` and `/skills`.
     assert_eq!(
         selected(&app).as_deref(),
         Some("/handoff [instructions]  Starts a handoff.  command")
@@ -1041,4 +1041,34 @@ fn an_unwritten_prompt_returns_its_image() {
     };
     app.write_failed(&lines);
     assert_eq!(app.draft(), "look[Image #1]");
+}
+
+#[test]
+fn close_with_a_running_job_and_delegate_sends_one_close_with_now() {
+    let mut app = attached();
+    app.on_line(session_line(
+        "job_started",
+        json!({"job_id": "j_1", "description": "build", "output_path": "/tmp/out"}),
+    ));
+    app.on_line(session_line(
+        "job_started",
+        json!({"job_id": "j_2", "description": "review", "output_path": "/tmp/out"}),
+    ));
+    app.on_line(session_line(
+        "delegate_started",
+        json!({"job_id": "j_2",
+            "delegate_session_id": "s_dddddddddddddddd",
+            "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+    ));
+    // The delegate's view is open: `/close` closes it with the parent.
+    let _ = app.open_item(&contract::JobId("j_2".to_owned()));
+    assert!(app.item_open());
+    let lines = sent(enter(&mut app, "/close"));
+    let commands: Vec<&Value> = lines.iter().map(|line| &line["command"]).collect();
+    assert_eq!(commands, [&json!("close")]);
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert_eq!(lines[0]["args"], json!({"now": true}));
+    assert_eq!(app.session(), None);
+    assert!(!app.item_open());
+    assert!(app.lines().is_empty());
 }

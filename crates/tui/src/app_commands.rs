@@ -431,6 +431,7 @@ impl App {
                 self.draft.clear();
                 self.open_model_picker(crate::model_picker::Mode::Choose)
             }
+            "thinking" => self.thinking_command(&rest),
             "panel" => {
                 self.draft.clear();
                 self.toggle_panel()
@@ -476,12 +477,17 @@ impl App {
     pub(super) fn go_home(&mut self) {
         self.draft.clear();
         self.close_find();
+        // Leaving the parent closes the item view first, swapping the
+        // screen back before anything clears it; outstanding `summary`
+        // wishes are marked detached, so their lowering waits behind a
+        // `full` still in flight without a running check.
+        self.leave_item();
         if matches!(self.phase, Phase::Pending { .. }) {
             return;
         }
         self.phase = Phase::Starting;
         self.clear_selection();
-        self.screen.clear();
+        self.attached_screen_mut().clear();
         self.panel_state.reset();
         self.session_views_reset();
         self.offer = crate::offer::Offer::default();
@@ -546,7 +552,9 @@ impl App {
     }
 
     /// A key while the key map is open: ↑ ↓ PageUp PageDown scroll it, Esc
-    /// closes it, other keys do nothing. `None` while it is closed.
+    /// closes it, other keys do nothing. `None` while it is closed, and
+    /// for Ctrl+C, ⌥R and ⌥1–9, which arm quit and switch sessions past
+    /// the key map.
     pub(super) fn keymap_key(&mut self, key: &Key) -> Option<Effect> {
         let top = self.overlays.keymap?;
         let height = self.conversation_height();
@@ -560,6 +568,9 @@ impl App {
         let last = total.saturating_sub(height);
         self.overlays.keymap = match key {
             Key::Esc => None,
+            // Quitting and rail switching keep their keys above every
+            // overlay: they reach past the key map to their handlers.
+            Key::CtrlC | Key::AltR | Key::AltDigit(_) => return None,
             Key::Up => Some(top.saturating_sub(1)),
             Key::Down => Some(top.saturating_add(1).min(last)),
             Key::PageUp => Some(top.saturating_sub(page)),
@@ -567,15 +578,12 @@ impl App {
             Key::Char(_)
             | Key::Backspace
             | Key::Enter
-            | Key::CtrlC
             | Key::End
             | Key::AltA
             | Key::AltUp
             | Key::AltDown
             | Key::AltX
             | Key::AltP
-            | Key::AltR
-            | Key::AltDigit(_)
             | Key::Tab
             | Key::BackTab
             | Key::F1
@@ -618,6 +626,14 @@ impl App {
         if let Some(effect) = self.built_in() {
             return effect;
         }
+        // In an item view Enter steers the open delegate; a `/`
+        // built-in already ran above, and anything it leaves (such as
+        // `/close`) falls through to the attached session.
+        if self.item_open()
+            && let Some(effect) = self.item_enter()
+        {
+            return effect;
+        }
         let has_image = self.draft.has_image();
         let text = self.draft.expand();
         // A command sent after the connection is lost goes nowhere, so the
@@ -641,7 +657,19 @@ impl App {
             }
             (Phase::Pending { .. }, None) => return Effect::None,
             (Phase::Starting, None) => {
-                let args = self.start_args();
+                // With no model on the chip and none chosen, Enter opens
+                // the picker and keeps the draft, sending nothing.
+                if self
+                    .home
+                    .as_ref()
+                    .is_some_and(|home| home.launch.model.is_none())
+                    && self.model_picker.start_model.is_none()
+                {
+                    return self.open_model_picker(crate::model_picker::Mode::Choose);
+                }
+                let mut args = self.start_args();
+                // A session-only choice on home rides this `start`.
+                self.with_start_model(&mut args);
                 let line = json!({"id": id, "command": "start", "args": args});
                 (Kind::Start, line)
             }

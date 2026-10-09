@@ -205,20 +205,31 @@ impl App {
             .layout()
             .map_or(screen, |layout| crate::view::chrome::body(&layout));
         let height = u16::try_from(self.conversation_height()).unwrap_or(u16::MAX);
+        // The item view's header takes the conversation's top rows: a
+        // selection starts below it.
+        let top = if self.item_open() {
+            u16::try_from(crate::view::item::ITEM_HEADER_ROWS).unwrap_or(u16::MAX)
+        } else {
+            0
+        };
+        let y = area.y.saturating_add(top).min(area.bottom());
         Rect {
-            height: height.min(area.height),
+            y,
+            height: height.min(area.bottom().saturating_sub(y)),
             ..area
         }
     }
 
     /// Whether something covers the conversation: the key map, the notice
     /// overlay, the repository offer's swapped view or the search results.
-    /// A press there starts no selection.
+    /// A press there starts no selection. An item view without a
+    /// transcript covers it too, since no conversation row draws there.
     pub(crate) fn conversation_covered(&self) -> bool {
         self.keymap_top().is_some()
             || self.notice_overlay().is_some()
             || self.offer_open()
             || self.results_open()
+            || self.item_view().is_some_and(|view| !view.has_transcript)
     }
 
     /// The cells the selection highlights in `area`, one rect per row, in

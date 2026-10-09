@@ -50,6 +50,12 @@ fn row_one(app: &App, width: usize) -> Option<StatusRow> {
     if text.is_empty() {
         return None;
     }
+    Some(cut_row(text, spots, width))
+}
+
+/// A status row cut to `width`: its line and its targets clamped to the
+/// visible columns, so a cut row keeps only the visible part.
+fn cut_row(text: String, spots: Vec<(u16, u16, Spot)>, width: usize) -> StatusRow {
     let line = Line::raw(format::cut(&text, width));
     let spots = spots
         .into_iter()
@@ -61,7 +67,7 @@ fn row_one(app: &App, width: usize) -> Option<StatusRow> {
         })
         .filter(|(_, wide, _)| *wide > 0)
         .collect();
-    Some(StatusRow { line, spots })
+    StatusRow { line, spots }
 }
 
 /// Appends `segments` to `text`, joined by ` · `, recording the spots at
@@ -167,27 +173,33 @@ fn widget_segment(app: &App, at: usize) -> Vec<(String, Option<Spot>)> {
 }
 
 /// Row 2: "N delegates running" and "N jobs running", each while its card
-/// is listed and its count is above zero. Neither opens anything yet, so
-/// the row holds no targets.
+/// is listed and its count is above zero. Each opens its running list
+/// (`docs/tui.md`, "The narrow layout").
 fn row_two(app: &App, width: usize) -> Option<StatusRow> {
     let listed = |name: &str| app.panel_cards().iter().any(|card| card == name);
     let panel = app.panel_state();
     let delegates = panel.running_delegates().len();
-    let jobs = panel.jobs().len().saturating_sub(delegates);
-    let mut segments = Vec::new();
+    let jobs = panel.running_jobs().len();
+    let mut text = String::new();
+    let mut spots = Vec::new();
     if listed("delegates") && delegates > 0 {
-        segments.push(running(delegates, "delegate"));
+        push_segments(
+            &mut text,
+            &mut spots,
+            vec![(running(delegates, "delegate"), Some(Spot::DelegateList))],
+        );
     }
     if listed("jobs") && jobs > 0 {
-        segments.push(running(jobs, "job"));
+        push_segments(
+            &mut text,
+            &mut spots,
+            vec![(running(jobs, "job"), Some(Spot::JobList))],
+        );
     }
-    if segments.is_empty() {
+    if text.is_empty() {
         return None;
     }
-    Some(StatusRow {
-        line: Line::raw(format::cut(&segments.join(" · "), width)),
-        spots: Vec::new(),
-    })
+    Some(cut_row(text, spots, width))
 }
 
 /// `n` running delegates or jobs: "1 job running", "2 delegates running".
@@ -235,11 +247,12 @@ pub(crate) fn widget(app: &App, width: u16) -> Vec<Line<'static>> {
 }
 
 /// The running delegates' rows at `width`, at most 4: the Delegates
-/// card's rows at the column's width, the first four.
-pub(crate) fn delegates(app: &App, width: u16) -> Vec<Line<'static>> {
+/// card's rows at the column's width, the first four, each with the spot
+/// a click opens (`docs/tui.md`, "The narrow layout").
+pub(crate) fn delegates(app: &App, width: u16) -> Vec<(Line<'static>, Option<Spot>)> {
     super::panel::delegates::rows(app, usize::from(width))
         .into_iter()
-        .map(|row| row.line)
+        .map(|row| (row.line, row.spot))
         .take(4)
         .collect()
 }
@@ -315,16 +328,32 @@ pub(super) fn draw_widget(
 }
 
 /// Draws the running delegates rows above the steering queue, keeping
-/// the narrow layout's fit of them.
-pub(super) fn draw_delegates(app: &App, area: Rect, buf: &mut Buffer, bottom: &mut u16) {
+/// the narrow layout's fit of them. Each row with a spot is a click
+/// target opening that delegate.
+pub(super) fn draw_delegates(
+    app: &App,
+    area: Rect,
+    buf: &mut Buffer,
+    bottom: &mut u16,
+    targets: &mut Vec<Target>,
+) {
     let keep = app.narrow_fit().map_or(0, |fit| fit.delegates);
     // A drawn state row's spinner moves on the tick.
     super::panel::delegates::ask(app, 0..keep);
-    for line in delegates(app, area.width).into_iter().take(keep).rev() {
+    for (line, spot) in delegates(app, area.width).into_iter().take(keep).rev() {
         let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) else {
             continue;
         };
         buf.set_line(area.x, y, &line, area.width);
+        if let Some(spot) = spot {
+            let wide = u16::try_from(line.width().min(usize::from(area.width))).unwrap_or(u16::MAX);
+            if wide > 0 {
+                targets.push(Target {
+                    id: TargetId::Panel(spot),
+                    rect: Rect::new(area.x, y, wide, 1),
+                });
+            }
+        }
         *bottom = y;
     }
 }

@@ -35,6 +35,7 @@ fn acting(binding: &crate::bindings::Binding) -> Vec<Context> {
         Context::Conversation,
         Context::Search,
         Context::Overlay,
+        Context::Picker,
     ]
     .into_iter()
     .filter(|context| binding.contexts.contains(*context))
@@ -196,9 +197,30 @@ fn an_empty_list_unbinds_in_every_context() {
         Context::Conversation,
         Context::Search,
         Context::Overlay,
+        Context::Picker,
     ] {
         assert_eq!(at(entries, "ctrl+o", context), super::Resolved::Nothing);
     }
+}
+
+#[test]
+fn session_only_acts_only_in_the_picker() {
+    // At its default the `s` stroke gives its own event in the picker,
+    // reaching the picker's choose key through `on_key`.
+    assert_eq!(
+        at(&[], "s", Context::Picker),
+        super::Resolved::Key(Key::Char('s'))
+    );
+    assert_eq!(
+        at(&[], "s", Context::Overlay),
+        super::Resolved::Key(Key::Char('s'))
+    );
+    let entries = &[("session_only", json!("x"))];
+    assert_eq!(
+        at(entries, "x", Context::Picker),
+        super::Resolved::Key(Key::Char('s'))
+    );
+    assert_eq!(at(entries, "s", Context::Picker), super::Resolved::Nothing);
 }
 
 #[test]
@@ -767,6 +789,10 @@ fn contexts_contain_single_contexts() {
     assert!(Contexts::INPUT.contains(Context::Input));
     assert!(!Contexts::INPUT.contains(Context::Steering));
     assert!(Contexts::ALL.contains(Context::Overlay));
+    assert!(Contexts::ALL.contains(Context::Picker));
+    assert!(Contexts::PICKER.contains(Context::Picker));
+    assert!(!Contexts::PICKER.contains(Context::Overlay));
+    assert!(!Contexts::OVERLAY.contains(Context::Picker));
 }
 
 #[test]
@@ -774,4 +800,7 @@ fn contexts_overlap_on_a_shared_context() {
     assert!(Contexts::INPUT.overlaps(Contexts::INPUT_STEERING));
     assert!(!Contexts::INPUT.overlaps(Contexts::CONVERSATION));
     assert!(Contexts::ALL.overlaps(Contexts::SEARCH));
+    assert!(Contexts::ALL.overlaps(Contexts::PICKER));
+    assert!(!Contexts::PICKER.overlaps(Contexts::INPUT));
+    assert!(!Contexts::PICKER.overlaps(Contexts::OVERLAY));
 }

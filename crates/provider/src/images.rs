@@ -6,11 +6,11 @@
 //! (`docs/model-routing.md`, "Image limits"), so a resume sends the same
 //! bytes.
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use contract::provider::{ImageRef, Input, InputSize, ModelRequest};
+use contract::provider::{ImageRef, Input, InputSize, ModelRequest, PdfRef};
 use serde_json::{Value, json};
 
 /// One stored image, base64-encoded for the wire.
@@ -21,13 +21,36 @@ pub(crate) struct Encoded {
     pub data: String,
 }
 
-/// A tool result's text and images, ready for a protocol to wrap in its own
-/// shape.
+/// A tool result's text, images and PDFs, ready for a protocol to wrap in
+/// its own shape.
 pub(crate) struct Prepared {
-    /// The text with one line appended per image that is not sent.
+    /// The text with one line appended per image or PDF that is not sent.
     pub text: String,
     /// The images that can be sent, in conversation order.
     pub images: Vec<Encoded>,
+    /// The PDFs that can be sent natively, in conversation order.
+    pub documents: Vec<Document>,
+}
+
+/// How a protocol carries a PDF: natively as a document, or as its pages
+/// rendered as images.
+pub(crate) enum PdfForm {
+    /// The protocol accepts a PDF in a tool result; each readable PDF is
+    /// sent as a document.
+    Native,
+    /// The protocol rejects a file part in a tool message; each PDF's
+    /// pages go through the image rule, and a PDF without pages adds
+    /// nothing.
+    Pages,
+}
+
+/// One stored PDF, base64-encoded for the wire.
+pub(crate) struct Document {
+    /// The stored file's base name, so a resent request carries the same
+    /// bytes.
+    pub filename: String,
+    /// The stored file's bytes as standard base64.
+    pub data: String,
 }
 
 /// The final text plus the encoded images: the plain text when no image can
@@ -38,8 +61,10 @@ pub(crate) struct Prepared {
 pub(crate) fn prepare(
     text: &str,
     images: &[ImageRef],
+    pdfs: &[PdfRef],
     session_dir: &Path,
     text_only: bool,
+    form: PdfForm,
 ) -> Prepared {
     let mut text = text.to_owned();
     let mut encoded = Vec::new();
@@ -65,9 +90,43 @@ pub(crate) fn prepare(
             ),
         }
     }
+    let mut documents = Vec::new();
+    for pdf in pdfs {
+        if text_only {
+            append_line(
+                &mut text,
+                &format!(
+                    "[PDF {} left out: this model does not take images.]",
+                    pdf.path
+                ),
+            );
+            continue;
+        }
+        match form {
+            PdfForm::Native => match encoded_pdf(pdf, session_dir) {
+                Some((filename, data)) => documents.push(Document { filename, data }),
+                None => append_line(&mut text, &format!("[PDF {} could not be read.]", pdf.path)),
+            },
+            PdfForm::Pages => {
+                for page in pdf.pages.iter().flatten() {
+                    match encoded_image(page, session_dir) {
+                        Some(data) => encoded.push(Encoded {
+                            mime_type: page.mime_type.clone(),
+                            data,
+                        }),
+                        None => append_line(
+                            &mut text,
+                            &format!("[Image {} could not be read.]", page.path),
+                        ),
+                    }
+                }
+            }
+        }
+    }
     Prepared {
         text,
         images: encoded,
+        documents,
     }
 }
 
@@ -93,7 +152,8 @@ pub(crate) fn data_url(image: &Encoded) -> String {
 pub(crate) fn input_size(body: &[u8], request: &ModelRequest, text_only: bool) -> InputSize {
     let media = !text_only
         && request.conversation.iter().any(|input| match input {
-            Input::User { images, .. } | Input::ToolResult { images, .. } => !images.is_empty(),
+            Input::User { images, .. } => !images.is_empty(),
+            Input::ToolResult { images, pdfs, .. } => !images.is_empty() || !pdfs.is_empty(),
             Input::Assistant { .. } | Input::Reasoning { .. } | Input::ToolCall { .. } => false,
         });
     InputSize {
@@ -103,10 +163,11 @@ pub(crate) fn input_size(body: &[u8], request: &ModelRequest, text_only: bool) -
 }
 
 /// A `tool_result`'s `content` as `anthropic-messages` carries it: the plain
-/// text when no image can be sent, otherwise a text block, when there is
-/// text, then one `image` block per encoded image.
+/// text when no image or document can be sent, otherwise a text block, when
+/// there is text, then one `image` block per encoded image and one
+/// `document` block per encoded PDF.
 pub(crate) fn anthropic_content(prepared: Prepared) -> Value {
-    if prepared.images.is_empty() {
+    if prepared.images.is_empty() && prepared.documents.is_empty() {
         return json!(prepared.text);
     }
     let mut blocks = Vec::new();
@@ -119,21 +180,68 @@ pub(crate) fn anthropic_content(prepared: Prepared) -> Value {
             "source": {"type": "base64", "media_type": image.mime_type, "data": image.data},
         }));
     }
+    for document in &prepared.documents {
+        blocks.push(json!({
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": document.data},
+        }));
+    }
     Value::Array(blocks)
 }
 
-/// The file's bytes as base64, or `None` when its path leaves the session
-/// directory or the file cannot be read.
-fn encoded_image(image: &ImageRef, session_dir: &Path) -> Option<String> {
-    let relative = Path::new(&image.path);
-    if !relative
+/// The file `path` names on disk, or `None` when it must not be read. A
+/// relative path stays under `session_dir`; an absolute path is read only
+/// when it names a session's stored artifacts, `<sessions>/<one>/artifacts/`
+/// plus the file, which is how a rewound child names its parent's files:
+/// the parent lives beside the child in the same `sessions/` directory.
+pub(crate) fn media_path(path: &str, session_dir: &Path) -> Option<PathBuf> {
+    let candidate = Path::new(path);
+    if !candidate.is_absolute() {
+        if !candidate
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+        {
+            return None;
+        }
+        return Some(session_dir.join(candidate));
+    }
+    if !candidate
         .components()
-        .all(|part| matches!(part, Component::Normal(_)))
+        .all(|part| matches!(part, Component::Normal(_) | Component::RootDir))
     {
         return None;
     }
-    let bytes = std::fs::read(session_dir.join(relative)).ok()?;
+    let rest = candidate.strip_prefix(session_dir.parent()?).ok()?;
+    let mut parts = rest.components();
+    if !matches!(parts.next(), Some(Component::Normal(_))) {
+        return None;
+    }
+    if !matches!(parts.next(), Some(Component::Normal(name)) if name == "artifacts") {
+        return None;
+    }
+    parts.next()?;
+    Some(candidate.to_path_buf())
+}
+
+/// The file's bytes as base64, or `None` when its path must not be read
+/// or the file cannot be read.
+fn encoded_image(image: &ImageRef, session_dir: &Path) -> Option<String> {
+    let resolved = media_path(&image.path, session_dir)?;
+    let bytes = std::fs::read(resolved).ok()?;
     Some(STANDARD.encode(bytes))
+}
+
+/// The stored PDF's base name and bytes as base64, or `None` when its path
+/// must not be read or the file cannot be read. The bytes are never
+/// transformed.
+fn encoded_pdf(pdf: &PdfRef, session_dir: &Path) -> Option<(String, String)> {
+    let resolved = media_path(&pdf.path, session_dir)?;
+    let bytes = std::fs::read(&resolved).ok()?;
+    let filename = resolved
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| pdf.path.clone());
+    Some((filename, STANDARD.encode(bytes)))
 }
 
 #[cfg(test)]

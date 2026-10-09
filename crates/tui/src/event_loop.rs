@@ -73,9 +73,15 @@ pub fn run(
     // The model lists are read off the loop: taken out before home
     // keeps the launch description.
     let models = std::mem::take(&mut launch.models);
-    let save = launch.save.take();
     app.set_configure(launch.configure.take());
+    // With no model configured the picker opens on home, before the
+    // first frame: saving the choice writes the config default. It stays
+    // shut when attaching to a session.
+    let pick_at_start = launch.model.is_none() && launch.open_at == crate::OpenAt::Home;
     app.set_home(launch);
+    if pick_at_start {
+        app.open_model_picker(crate::model_picker::Mode::Choose);
+    }
     app.set_size(width, height);
     let retry = Retry::new(&clock);
     let mut terminal = Loop {
@@ -106,7 +112,6 @@ pub fn run(
             .map(|argv| argv.into_iter().map(str::to_owned).collect()),
         title: osc::Title::default(),
         shape: osc::Shape::default(),
-        save,
         retry: Some(Arc::clone(&retry)),
         tick: crate::tick::TickThread::idle(),
     };
@@ -222,8 +227,6 @@ struct Loop<B: Backend> {
     title: osc::Title,
     /// The pointer shape last written.
     shape: osc::Shape,
-    /// Saves a dragged share to the global configuration, if any.
-    save: Option<crate::Save>,
     /// The hub thread's permit to connect again (`docs/tui.md`, "A
     /// dropped connection"); none in tests with no hub thread.
     retry: Option<Arc<Retry>>,
@@ -436,6 +439,11 @@ impl<B: Backend> Loop<B> {
             self.model_reader.ask(refresh, &out.clone());
         }
         self.save_shares();
+        // The reconciler's subscribes go out before the frame pages: an
+        // acknowledgement arriving late is reconciled on the step that
+        // brings it.
+        let due = self.app.items_due(self.clock.now());
+        self.send(&due);
         self.page_in(rx);
         self.apply_theme();
         // A selection's copy waiting on dropped pages runs once they load.
@@ -454,17 +462,11 @@ impl<B: Backend> Loop<B> {
         None
     }
 
-    /// Saves the shares a drag's release queued, in order. A failed
-    /// save is a notice, so it shows on the frame drawn next.
+    /// Saves the shares a drag's release queued, in order, through the
+    /// configuration seam.
     fn save_shares(&mut self) {
         for (key, share) in self.app.take_saves() {
-            let Some(save) = &self.save else {
-                continue;
-            };
-            if let Err(message) = save(key, share) {
-                self.app
-                    .push_notice(format!("Could not save {key}: {message}"));
-            }
+            self.app.save_share(key, share);
         }
     }
 
@@ -532,7 +534,7 @@ impl<B: Backend> Loop<B> {
     /// nothing to ask, and the pages draw blank.
     fn page_in(&mut self, rx: &Receiver<Input>) {
         while let Some(range) = self.app.needs().into_iter().next() {
-            let Some(session) = self.app.session().cloned() else {
+            let Some(session) = self.app.paging_session().cloned() else {
                 return;
             };
             if self.hub.is_none() {

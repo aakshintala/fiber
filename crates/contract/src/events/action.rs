@@ -322,6 +322,18 @@ pub struct Control {
     /// boundary (`docs/tools.md`, "What a result carries").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub questions: Option<Vec<Question>>,
+    /// A skill the call loaded (`docs/tools.md`, "Skills").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill: Option<SkillLoad>,
+}
+
+/// One skill load: its name and its `SKILL.md` path as the listing prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillLoad {
+    /// The skill's name, as the call asked for it.
+    pub name: String,
+    /// The skill's `SKILL.md` path, as the listing prints it.
+    pub path: String,
 }
 
 /// Which step of `docs/permissions.md`, "The order a call is judged in",

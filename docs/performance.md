@@ -155,7 +155,10 @@ profile for the target that ships, and read its peak RSS from GNU time.
 
 An exact or memory budget fails the pull request from its first run. Its
 author may raise the ceiling in the same pull request by editing the table
-above with the new measurement and the reason.
+above with the new measurement and the reason. A budget the base commit
+already fails, measured in the same job, does not fail the pull request: the
+comment marks the row over at the base and names the base, and the backstop
+on `main` fails on it, which makes the fix a backstop ticket.
 
 A timing budget is advisory until 20 backstop runs on `main` have measured
 it. Until then CI posts the head and base medians as a comment on the pull

@@ -1,7 +1,7 @@
 //! Owns the render state a handoff reads and the restart conversation.
 
 use contract::ActionId;
-use contract::events::{ContextNudged, Control, Event, HandoffCompleted, Note};
+use contract::events::{ContextNudged, Control, Event, HandoffCompleted, Note, SkillLoad};
 use contract::provider::Input;
 use contract::shapes::Question;
 
@@ -33,6 +33,11 @@ pub(crate) struct Carry {
     /// The artifact of each tool result in this context that has one, by
     /// call, as a path relative to the session directory.
     pub(crate) artifacts: Vec<(ActionId, String)>,
+    /// The skills this context loaded, in first-load order, one per name,
+    /// each with the path of its latest load: every completed call's
+    /// `control.skill` (`docs/tools.md`, "Skills"). A completed handoff
+    /// clears it.
+    pub(crate) skills: Vec<SkillLoad>,
 }
 
 /// One call of the last reply: the call, its result once written, and the
@@ -55,6 +60,7 @@ impl Carry {
         let mut conversation = self.input.clone();
         let texts = std::mem::take(&mut self.texts);
         let step = std::mem::take(&mut self.step);
+        self.skills.clear();
         let ids: &[ActionId] = match &done.note {
             Some(Note::Actions { note }) => note,
             Some(Note::Hook { .. }) | None => &[],
@@ -150,6 +156,12 @@ impl Carry {
             call.questions = control
                 .and_then(|control| control.questions.clone())
                 .unwrap_or_default();
+        }
+        if let Some(load) = control.and_then(|control| control.skill.clone()) {
+            match self.skills.iter_mut().find(|kept| kept.name == load.name) {
+                Some(kept) => kept.path = load.path,
+                None => self.skills.push(load),
+            }
         }
     }
 

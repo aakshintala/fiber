@@ -597,12 +597,14 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
             model: "opencode/muse-spark-1.3-contributor".into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_2".into()),
             text: "bad arguments".into(),
             is_error: false,
             images: Vec::new(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_1".into()),
             text: "18 C, clear".into(),
             is_error: false,
@@ -1106,6 +1108,7 @@ fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
                 model: "opencode/muse-spark-1.3-contributor".into(),
             },
             Input::ToolResult {
+                pdfs: Vec::new(),
                 action_id: ActionId("a_1".into()),
                 text: "boom".into(),
                 is_error,
@@ -1157,6 +1160,7 @@ fn image_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> 
             model: "opencode/muse-spark-1.3-contributor".into(),
         },
         Input::ToolResult {
+            pdfs: Vec::new(),
             action_id: ActionId("a_1".into()),
             text: text.into(),
             is_error: false,
@@ -1172,6 +1176,79 @@ fn png_ref(path: &str) -> contract::provider::ImageRef {
         width: 2,
         height: 1,
     }
+}
+
+/// A conversation whose one tool result carries a PDF.
+fn pdf_conversation(pdf: contract::provider::PdfRef) -> Vec<Input> {
+    vec![
+        Input::ToolCall {
+            action_id: ActionId("a_1".into()),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "a.pdf"}),
+                provider_id: Some(ProviderCallId("call_1".into())),
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+            model: "opencode/muse-spark-1.3-contributor".into(),
+        },
+        Input::ToolResult {
+            action_id: ActionId("a_1".into()),
+            text: "PDF: 2 pages.\n".into(),
+            is_error: false,
+            images: Vec::new(),
+            pdfs: vec![pdf],
+        },
+    ]
+}
+
+fn pdf_ref(path: &str) -> contract::provider::PdfRef {
+    contract::provider::PdfRef {
+        path: path.into(),
+        page_count: 2,
+        pages: None,
+    }
+}
+
+fn pdf_output(server: &ProviderServer) -> Value {
+    sent_body(server, 0)["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == "function_call_output")
+        .unwrap()["output"]
+        .clone()
+}
+
+#[test]
+fn a_stored_pdf_is_sent_as_an_input_file_part_after_the_text() {
+    let session = fakes::TempDir::new("fiber-responses-request-pdf");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/p_1.pdf"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: pdf_conversation(pdf_ref("artifacts/p_1.pdf")),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    assert_eq!(
+        pdf_output(&server),
+        json!([
+            {"type": "input_text", "text": "PDF: 2 pages.\n"},
+            {"type": "input_file", "filename": "p_1.pdf",
+             "file_data": "data:application/pdf;base64,YWJjZA=="},
+        ])
+    );
 }
 
 fn image_output(server: &ProviderServer) -> Value {
@@ -1610,4 +1687,440 @@ fn a_usage_limit_in_the_stream_is_quota_exceeded() {
         error_code(decoded(&failed(limited)).0).0,
         ErrorCode::RateLimited
     );
+}
+
+fn hosted_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "web_search".into(),
+        description: String::new(),
+        input_schema: json!({}),
+        deferred: false,
+        hosted: Some("web_search".into()),
+    }
+}
+
+fn search_item(id: &str) -> Value {
+    json!({"type": "web_search_call", "id": id, "status": "completed",
+        "action": {"type": "search", "query": "rust 1.90"}})
+}
+
+fn answer_item() -> Value {
+    json!({"id": "msg_1", "type": "message", "role": "assistant",
+        "content": [{"type": "output_text", "text": "Rust 1.90 is out."}]})
+}
+
+fn hosted_assistant(model: &str, item: Value) -> Input {
+    Input::Assistant {
+        model: model.into(),
+        text: String::new(),
+        provider_item: Some(item),
+    }
+}
+
+fn sent_input(conversation: Vec<Input>) -> Value {
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    let request = ModelRequest {
+        conversation,
+        ..request()
+    };
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    sent_body(&server, 0)["input"].clone()
+}
+
+const HOSTED_REFERENCE: &str = "opencode/muse-spark-1.3-contributor";
+
+#[test]
+fn a_hosted_tool_is_sent_as_its_type_alone() {
+    let tools = vec![weather_tool(), hosted_tool()];
+    let wired: Vec<Value> = Responses::new(Endpoint::default())
+        .wire_tools(&tools)
+        .into_iter()
+        .map(Value::Object)
+        .collect();
+    assert_eq!(
+        wired,
+        vec![
+            json!({"type": "function", "name": "get_weather",
+                "description": "Weather for a city.",
+                "parameters": weather_tool().input_schema, "strict": true}),
+            json!({"type": "web_search"}),
+        ]
+    );
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    let responses = Responses::new(endpoint(&server));
+    let mut sent = request();
+    sent.tools = tools;
+    run(Box::new(responses.request(&sent))).0.unwrap();
+    assert_eq!(sent_body(&server, 0)["tools"], Value::Array(wired));
+}
+
+#[test]
+fn a_hosted_item_goes_back_once_unchanged_to_the_model_that_produced_it() {
+    let ws = search_item("ws_1");
+    let msg = answer_item();
+    let input = sent_input(vec![
+        Input::User {
+            text: "Which Rust is new?".into(),
+            images: Vec::new(),
+        },
+        hosted_assistant(HOSTED_REFERENCE, ws.clone()),
+        hosted_assistant(HOSTED_REFERENCE, ws.clone()),
+        Input::Assistant {
+            model: HOSTED_REFERENCE.into(),
+            text: "Rust 1.90 is out.".into(),
+            provider_item: Some(msg.clone()),
+        },
+        Input::User {
+            text: "Thanks.".into(),
+            images: Vec::new(),
+        },
+    ]);
+    assert_eq!(
+        input,
+        json!([
+            {"role": "user", "content": "Which Rust is new?"},
+            ws,
+            msg,
+            {"role": "user", "content": "Thanks."},
+        ])
+    );
+}
+
+#[test]
+fn an_equal_hosted_item_after_another_input_goes_back_again() {
+    let ws = search_item("ws_1");
+    let input = sent_input(vec![
+        hosted_assistant(HOSTED_REFERENCE, ws.clone()),
+        Input::User {
+            text: "Again?".into(),
+            images: Vec::new(),
+        },
+        hosted_assistant(HOSTED_REFERENCE, ws.clone()),
+    ]);
+    assert_eq!(
+        input,
+        json!([
+            ws,
+            {"role": "user", "content": "Again?"},
+            ws,
+        ])
+    );
+}
+
+#[test]
+fn two_different_hosted_items_in_a_row_both_go_back() {
+    let first = search_item("ws_1");
+    let second = search_item("ws_2");
+    let input = sent_input(vec![
+        hosted_assistant(HOSTED_REFERENCE, first.clone()),
+        hosted_assistant(HOSTED_REFERENCE, second.clone()),
+    ]);
+    assert_eq!(input, json!([first, second]));
+}
+
+#[test]
+fn two_equal_message_items_in_a_row_both_go_back() {
+    let msg = answer_item();
+    let input = sent_input(vec![
+        Input::Assistant {
+            model: HOSTED_REFERENCE.into(),
+            text: "Rust 1.90 is out.".into(),
+            provider_item: Some(msg.clone()),
+        },
+        Input::Assistant {
+            model: HOSTED_REFERENCE.into(),
+            text: "Rust 1.90 is out.".into(),
+            provider_item: Some(msg.clone()),
+        },
+    ]);
+    assert_eq!(input, json!([msg, msg]));
+}
+
+#[test]
+fn a_hosted_pair_is_left_out_for_another_model() {
+    let ws = search_item("ws_1");
+    let msg = answer_item();
+    let input = sent_input(vec![
+        Input::User {
+            text: "Which Rust is new?".into(),
+            images: Vec::new(),
+        },
+        hosted_assistant("openai/gpt-6-luna", ws.clone()),
+        hosted_assistant("openai/gpt-6-luna", ws),
+        Input::Assistant {
+            model: "openai/gpt-6-luna".into(),
+            text: "Rust 1.90 is out.".into(),
+            provider_item: Some(msg),
+        },
+    ]);
+    assert_eq!(
+        input,
+        json!([
+            {"role": "user", "content": "Which Rust is new?"},
+            {"role": "assistant", "content": "Rust 1.90 is out."},
+        ])
+    );
+}
+
+fn search_done(item: Value) -> Value {
+    json!({"type": "response.output_item.done", "item": item})
+}
+
+fn search_item_with(action: Value, extra: Value) -> Value {
+    let mut item = json!({"type": "web_search_call", "id": "ws_1",
+        "status": "completed", "action": action});
+    item.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    item
+}
+
+fn cited_message_done() -> Value {
+    json!({"type": "response.output_item.done", "item": {
+        "type": "message",
+        "content": [{"type": "output_text", "text": "Rust 1.90 is out.",
+            "annotations": [{"type": "url_citation", "url": "https://a.example"}]}]
+    }})
+}
+
+#[test]
+fn a_web_search_call_decodes_as_a_hosted_call_with_its_query_and_urls() {
+    let item = search_item_with(
+        json!({"type": "search", "query": "rust 1.90",
+            "sources": [{"type": "url", "url": "https://a.example"},
+                        {"type": "api", "name": "oai-sports"},
+                        {"type": "url", "url": "https://b.example"},
+                        {"type": "url"}]}),
+        json!({}),
+    );
+    let events = vec![
+        json!({"type": "response.output_item.added",
+            "item": {"type": "web_search_call", "id": "ws_1"}}),
+        json!({"type": "response.web_search_call.in_progress", "item_id": "ws_1"}),
+        search_done(item.clone()),
+        cited_message_done(),
+        completed("completed", json!({})),
+    ];
+    let (reply, deltas) = decoded(&stream(&events));
+    let reply = reply.unwrap();
+    assert!(
+        deltas
+            .iter()
+            .all(|d| !matches!(d, Delta::ToolCallArguments(_))),
+        "a hosted call streams no arguments"
+    );
+    let [ReplyAction::Hosted(hosted), ReplyAction::Text(text)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(
+        hosted,
+        &contract::provider::HostedCall {
+            call: ToolCallRequested {
+                name: "web_search".into(),
+                arguments: json!({"type": "search", "query": "rust 1.90"}),
+                provider_id: Some(ProviderCallId("ws_1".into())),
+                repair: None,
+                ran_by: None,
+                provider_item: Some(item.clone()),
+            },
+            completed: contract::events::ToolCallCompleted {
+                status: contract::events::CallStatus::Completed,
+                reason: None,
+                error: None,
+                process: None,
+                content: vec![contract::shapes::ContentPart::Text {
+                    text: "https://a.example\nhttps://b.example".into(),
+                }],
+                details: None,
+                artifact: None,
+                changes: None,
+                control: None,
+                changed_by: None,
+                provider_item: Some(item),
+            },
+        }
+    );
+    assert_eq!(text.text, "Rust 1.90 is out.");
+    assert_eq!(reply.web_searches, None);
+}
+
+#[test]
+fn a_web_search_calls_urls_come_from_results_then_sources() {
+    let content = |item: &Value| {
+        let events = vec![search_done(item.clone()), completed("completed", json!({}))];
+        let reply = decoded(&stream(&events)).0.unwrap();
+        let [ReplyAction::Hosted(hosted)] = reply.actions.as_slice() else {
+            panic!("{:?}", reply.actions);
+        };
+        assert_eq!(
+            hosted.completed.status,
+            contract::events::CallStatus::Completed
+        );
+        match hosted.completed.content.as_slice() {
+            [contract::shapes::ContentPart::Text { text }] => text.clone(),
+            other => panic!("{other:?}"),
+        }
+    };
+    let action = json!({"type": "search", "query": "rust 1.90"});
+    let sourced = json!({"type": "search", "query": "rust 1.90",
+        "sources": [{"url": "https://a.example"}]});
+    // Results only.
+    assert_eq!(
+        content(&search_item_with(
+            action.clone(),
+            json!({"results": [{"url": "https://b.example", "title": "B"}]}),
+        )),
+        "https://b.example"
+    );
+    // Sources only.
+    assert_eq!(
+        content(&search_item_with(sourced.clone(), json!({}))),
+        "https://a.example"
+    );
+    // Both: results first.
+    assert_eq!(
+        content(&search_item_with(
+            sourced,
+            json!({"results": [{"url": "https://b.example"}]}),
+        )),
+        "https://b.example\nhttps://a.example"
+    );
+    // Neither: empty text.
+    assert_eq!(content(&search_item_with(action, json!({}))), "");
+    // A non-string url is skipped.
+    assert_eq!(
+        content(&search_item_with(
+            json!({"type": "search", "query": "x",
+                "sources": [{"url": 7}, {"url": "https://a.example"}]}),
+            json!({"results": [{"url": null}]}),
+        )),
+        "https://a.example"
+    );
+    // No action, or a non-object one: arguments are empty, results count.
+    for action in [None, Some(json!("search"))] {
+        let mut item = json!({"type": "web_search_call", "id": "ws_1",
+            "status": "completed",
+            "results": [{"url": "https://b.example"}]});
+        if let Some(action) = action {
+            item["action"] = action;
+        }
+        let reply = decoded(&stream(&[
+            search_done(item.clone()),
+            completed("completed", json!({})),
+        ]))
+        .0
+        .unwrap();
+        let [ReplyAction::Hosted(hosted)] = reply.actions.as_slice() else {
+            panic!("{:?}", reply.actions);
+        };
+        assert_eq!(hosted.call.arguments, json!({}));
+        assert_eq!(hosted.completed.provider_item, Some(item));
+        match hosted.completed.content.as_slice() {
+            [contract::shapes::ContentPart::Text { text }] => {
+                assert_eq!(text, "https://b.example")
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_web_search_call_that_did_not_complete_completes_failed_with_its_status() {
+    let content = |status: Option<&str>| {
+        let mut item = json!({"type": "web_search_call", "id": "ws_3",
+            "action": {"type": "search", "query": "x"}});
+        if let Some(status) = status {
+            item["status"] = json!(status);
+        }
+        let reply = decoded(&stream(&[
+            search_done(item.clone()),
+            completed("completed", json!({})),
+        ]))
+        .0
+        .unwrap();
+        let [ReplyAction::Hosted(hosted)] = reply.actions.as_slice() else {
+            panic!("{:?}", reply.actions);
+        };
+        assert_eq!(hosted.completed.provider_item, Some(item));
+        hosted.completed.clone()
+    };
+    let failed = content(Some("failed"));
+    assert_eq!(failed.status, contract::events::CallStatus::Failed);
+    assert_eq!(
+        failed.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: "The provider's search failed: failed.".into()
+        }]
+    );
+    let error = failed.error.as_ref().unwrap();
+    assert_eq!(error.code, ErrorCode::ToolError);
+    assert_eq!(error.message, "The provider's search failed: failed.");
+    let unknown = content(None);
+    assert_eq!(unknown.status, contract::events::CallStatus::Failed);
+    match unknown.content.as_slice() {
+        [contract::shapes::ContentPart::Text { text }] => {
+            assert_eq!(text, "The provider's search failed: unknown.")
+        }
+        other => panic!("{other:?}"),
+    }
+    let done = content(Some("completed"));
+    assert_eq!(done.status, contract::events::CallStatus::Completed);
+    assert!(done.error.is_none());
+}
+
+#[test]
+fn the_scripted_hosted_search_runs_through_the_seam_and_replays_its_item() {
+    let item = search_item_with(
+        json!({"type": "search", "query": "rust 1.90",
+            "sources": [{"url": "https://a.example"}]}),
+        json!({}),
+    );
+    let msg = answer_item();
+    let server = ProviderServer::start([
+        Response::stream(stream(&[
+            search_done(item.clone()),
+            search_done(msg.clone()),
+            completed("completed", json!({})),
+        ])),
+        Response::stream(stream(&[completed("completed", json!({}))])),
+    ])
+    .unwrap();
+    let provider: Box<dyn Provider> = Box::new(Responses::new(endpoint(&server)));
+    let (reply, _) = run(provider.call(&request()));
+    let reply = reply.unwrap();
+    assert_eq!(reply.finish, Finish::Completed);
+    let [ReplyAction::Hosted(hosted), ReplyAction::Text(part)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(hosted.call.provider_item, Some(item.clone()));
+    assert_eq!(hosted.completed.provider_item, Some(item.clone()));
+    // The next request sends the item once, then the message item, as the
+    // loop renders the pair: two adjacent lines with the item, then the text.
+    let reference = "opencode/muse-spark-1.3-contributor".to_owned();
+    let next = ModelRequest {
+        conversation: vec![
+            hosted_assistant(&reference, item.clone()),
+            hosted_assistant(&reference, item.clone()),
+            Input::Assistant {
+                model: reference,
+                text: part.text.clone(),
+                provider_item: Some(msg.clone()),
+            },
+        ],
+        ..request()
+    };
+    run(provider.call(&next)).0.unwrap();
+    assert_eq!(sent_body(&server, 1)["input"], json!([item, msg]));
 }

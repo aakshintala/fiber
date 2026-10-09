@@ -141,6 +141,9 @@ impl App {
     pub(super) fn refused(&mut self, id: &str, code: &ErrorCode, message: String) {
         if *code == ErrorCode::DuplicateCommand {
             self.pending.remove(id);
+            // A resent copy the session already holds still drops the
+            // writes its first answer waits on.
+            self.model_picker_rejected(id);
         } else {
             self.rejected(id, message);
         }

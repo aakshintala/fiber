@@ -1,0 +1,29 @@
+---
+source: crates/tui/src/app/items_tests.rs
+assertion_line: 926
+expression: "rows.join(\"\\n\")"
+---
+fix the parser
+fix the parser › ▸ run the editor                                              ✕
+⠋ running · harness — · model — · — · 11s · session — · ■ stop
+Output since this terminal attached · /tmp/out
+$ edit file.txt
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+>
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+$0.00
+1 job running

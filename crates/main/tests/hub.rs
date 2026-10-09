@@ -505,3 +505,57 @@ fn a_hub_that_never_says_hello_fails_the_connect_wait() {
     let hub = Arc::new(Mutex::new(None));
     connect_hub_within(&setup, &hub, std::time::Duration::from_millis(500));
 }
+
+#[test]
+fn read_file_answers_an_artifact_and_refuses_an_escape() {
+    let setup = Setup::new();
+    let session = setup
+        .home()
+        .join("projects")
+        .join("k")
+        .join("sessions")
+        .join("s_00000000000000f1");
+    fs::create_dir_all(session.join("artifacts")).unwrap();
+    fs::write(
+        session.join("events.jsonl"),
+        "{\"kind\":\"session_started\",\"seq\":0}\n",
+    )
+    .unwrap();
+    fs::write(session.join("artifacts").join("a.txt"), b"hello").unwrap();
+    let marker = "marker-outside-artifacts-9f2c";
+    fs::write(session.parent().unwrap().join("secret"), marker).unwrap();
+    std::os::unix::fs::symlink("../../secret", session.join("artifacts").join("out.txt")).unwrap();
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    client.send(r#"{"id":"c_r1","command":"read_file","args":{"session":"s_00000000000000f1","path":"artifacts/a.txt"}}"#);
+    let answered = recv(&client, "the read_file acknowledgement");
+    assert_eq!(answered["kind"], "command_accepted");
+    assert_eq!(
+        answered["payload"],
+        json!({"command_id": "c_r1", "result": {"data": "aGVsbG8=", "mime_type": "text/plain"}})
+    );
+    let mut lines = vec![answered];
+    for (id, path) in [
+        ("c_r2", "artifacts/../events.jsonl"),
+        ("c_r3", "artifacts/out.txt"),
+    ] {
+        client.send(&format!(
+            "{{\"id\":\"{id}\",\"command\":\"read_file\",\"args\":{{\"session\":\"s_00000000000000f1\",\"path\":\"{path}\"}}}}"
+        ));
+        let rejected = recv(&client, "the read_file rejection");
+        assert_eq!(rejected["kind"], "command_rejected");
+        assert_eq!(rejected["payload"]["command_id"], id);
+        assert_eq!(rejected["payload"]["code"], "invalid_arguments");
+        lines.push(rejected);
+    }
+    for line in &lines {
+        assert!(
+            !line.to_string().contains(marker),
+            "no escape reached the client: {line}"
+        );
+    }
+    drop(client);
+    if let Some(running) = hub.lock().unwrap().take() {
+        running.kill_and_wait();
+    }
+}

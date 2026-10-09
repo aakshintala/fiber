@@ -13,7 +13,8 @@
 //!   bare name against the whole dependency graph and can be ambiguous), and
 //!   `extension_packages` are first-party package directories with cases
 //! - `plan --mode M --packages "A B" --event E --bug true|false --mutants true|false --mutant-count N`:
-//!   which CI jobs run, as `key=value` lines
+//!   which CI jobs run, the mutant shards and each shard's time limit,
+//!   as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
 //!   if every selected job passed and every other job was skipped
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
@@ -111,15 +112,16 @@ fn run(args: &[String]) -> Result<bool, String> {
                 .collect();
             let bug = flag(rest, "--bug")? == "true";
             let mutants = flag(rest, "--mutants")? == "true";
+            let mutant_count: u64 = flag(rest, "--mutant-count")?
+                .parse()
+                .map_err(|e| format!("--mutant-count: {e}"))?;
             let plan = select::plan(
                 &flag(rest, "--mode")?,
                 &packages,
                 &flag(rest, "--event")?,
                 bug,
                 mutants,
-                flag(rest, "--mutant-count")?
-                    .parse()
-                    .map_err(|e| format!("--mutant-count: {e}"))?,
+                mutant_count,
             );
             let shards: Vec<u64> = (0..plan.shards).collect();
             println!(
@@ -132,6 +134,10 @@ fn run(args: &[String]) -> Result<bool, String> {
             );
             println!("shards={}", Value::from(shards));
             println!("shard_total={}", plan.shards);
+            println!(
+                "shard_timeout={}",
+                select::shard_timeout_minutes(mutant_count)
+            );
             Ok(true)
         }
         "verdict" => {

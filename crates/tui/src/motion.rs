@@ -173,6 +173,12 @@ impl Motion {
         self.now.map(|(_, wall)| wall)
     }
 
+    /// This frame's `Instant`, set once per input so elapsed times and
+    /// animation agree; none before the first `set_now`.
+    pub(crate) fn now_instant(&self) -> Option<Instant> {
+        self.now.map(|(now, _)| now)
+    }
+
     /// The glimmer's cells in a word `len` cells wide: a 3-cell band
     /// sweeping one cell a frame from two cells before the word, then
     /// resting (`docs/tui.md`, "The working line"). Reads the frame and

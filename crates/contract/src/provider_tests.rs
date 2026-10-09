@@ -174,6 +174,7 @@ fn a_tool_result_without_images_serialises_without_the_key_and_reads_back() {
         text: "ok".into(),
         is_error: false,
         images: Vec::new(),
+        pdfs: Vec::new(),
     };
     let value = serde_json::to_value(&plain).unwrap();
     assert!(value.get("images").is_none(), "{value}");
@@ -195,9 +196,46 @@ fn a_tool_result_with_images_round_trips() {
             width: 3,
             height: 2,
         }],
+        pdfs: Vec::new(),
     };
     let value = serde_json::to_value(&with).unwrap();
     assert_eq!(value["images"][0]["path"], "artifacts/i_1.png");
+    assert_eq!(serde_json::from_value::<Input>(value).unwrap(), with);
+}
+
+#[test]
+fn an_empty_pdfs_is_absent_from_json_and_a_pdf_ref_round_trips() {
+    let plain = Input::ToolResult {
+        action_id: ActionId("a_1".into()),
+        text: "ok".into(),
+        is_error: false,
+        images: Vec::new(),
+        pdfs: Vec::new(),
+    };
+    let value = serde_json::to_value(&plain).unwrap();
+    assert!(value.get("pdfs").is_none(), "{value}");
+    assert_eq!(serde_json::from_value::<Input>(value).unwrap(), plain);
+    // A line written before the field existed has none.
+    let old = json!({"type": "tool_result", "action_id": "a_1", "text": "ok"});
+    assert_eq!(serde_json::from_value::<Input>(old).unwrap(), plain);
+    let with = Input::ToolResult {
+        action_id: ActionId("a_1".into()),
+        text: "PDF: 2 pages.\n".into(),
+        is_error: false,
+        images: Vec::new(),
+        pdfs: vec![PdfRef {
+            path: "artifacts/p_3f2a9c0d1e4b5a67.pdf".into(),
+            page_count: 2,
+            pages: Some(vec![ImageRef {
+                path: "artifacts/i_0a1b2c3d4e5f6071.png".into(),
+                mime_type: "image/png".into(),
+                width: 1545,
+                height: 2000,
+            }]),
+        }],
+    };
+    let value = serde_json::to_value(&with).unwrap();
+    assert_eq!(value["pdfs"][0]["path"], "artifacts/p_3f2a9c0d1e4b5a67.pdf");
     assert_eq!(serde_json::from_value::<Input>(value).unwrap(), with);
 }
 
