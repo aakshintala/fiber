@@ -14,8 +14,8 @@ use fakes::clock::FakeClock;
 use fakes::{TempDir, Watchdog, group_empties, kill_pid, pids_exit};
 
 use super::{
-    Decode, Failed, NO_CLIPBOARD, Reader, apple_script_png, command, png_size, read, refused,
-    signal_after_group, start,
+    Decode, Failed, IMAGE_CAP, NO_CLIPBOARD, Reader, apple_script_png, command, drain, png_size,
+    read, read_stdout, refused, signal_after_group, signal_pid, start,
 };
 
 /// One named wall-clock deadline for every blocking wait.
@@ -869,4 +869,132 @@ fn start_posts_the_pixel_refusal_as_its_notice() {
                 .to_owned()
         )
     );
+}
+
+#[test]
+fn image_cap_is_256_mib() {
+    // IMAGE_CAP as a product: `*` -> `+` or `/` must fail here.
+    assert_eq!(IMAGE_CAP, 268_435_456);
+}
+
+#[test]
+fn signal_pid_kills_the_child() {
+    use std::os::unix::process::CommandExt as _;
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let watchdog = Watchdog::group(pid);
+    signal_pid(pid);
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || done.send(child.wait()).unwrap());
+    match finished.recv_timeout(DEADLINE) {
+        Ok(status) => assert!(
+            !status.unwrap().success(),
+            "sleep must not exit zero after SIGKILL"
+        ),
+        Err(_) => panic!("waited {DEADLINE:?} for signal_pid to kill the child"),
+    }
+    assert!(group_empties(pid, DEADLINE));
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn drain_empties_the_wake_pipe() {
+    use std::os::unix::io::AsFd as _;
+    let (read, write) = std::io::pipe().unwrap();
+    rustix::io::ioctl_fionbio(read.as_fd(), true).unwrap();
+    rustix::io::ioctl_fionbio(write.as_fd(), true).unwrap();
+    rustix::io::write(write.as_fd(), b"hello").unwrap();
+    drain(&read);
+    let mut buf = [0u8; 64];
+    match rustix::io::read(read.as_fd(), &mut buf) {
+        Err(rustix::io::Errno::AGAIN) => {}
+        other => panic!("expected EAGAIN after drain, got {other:?}"),
+    }
+}
+
+#[test]
+fn read_stdout_waits_for_data_without_eof() {
+    use std::io::Write as _;
+    use std::os::unix::io::AsFd as _;
+    use std::os::unix::process::CommandExt as _;
+    // The child blocks on stdin, so its stdout is a non-blocking pipe
+    // with no data yet: the first read would block, which must return
+    // without setting end-of-file.
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "read line; printf hello"])
+        .process_group(0)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let watchdog = Watchdog::group(pid);
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    rustix::io::ioctl_fionbio(stdout.as_fd(), true).unwrap();
+    let mut out = Vec::new();
+    let mut eof = false;
+    read_stdout(&mut stdout, &mut out, &mut eof, 1024);
+    assert!(!eof, "WouldBlock must not set eof");
+    assert!(out.is_empty(), "no bytes yet");
+    // Releasing the child proves the bytes arrived: its exit follows the
+    // write, so waiting for the exit under a wall-clock bound waits for
+    // the bytes without sleeping.
+    stdin.write_all(b"\n").unwrap();
+    drop(stdin);
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || done.send(child.wait()).unwrap());
+    match finished.recv_timeout(DEADLINE) {
+        Ok(status) => assert!(status.unwrap().success()),
+        Err(_) => panic!("waited {DEADLINE:?} for the printf child to exit"),
+    }
+    read_stdout(&mut stdout, &mut out, &mut eof, 1024);
+    assert_eq!(out, b"hello");
+    assert!(eof, "end-of-file after the child exits");
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn read_stdout_marks_a_failed_read_as_eof() {
+    // A directory fd reads as EISDIR (IsADirectory): the generic arm
+    // must end the output. With the WouldBlock guard replaced by `true`
+    // this returns without eof instead, so the assertion fails there.
+    let dir = TempDir::new("fiber-paste-read-eisdir");
+    let file = std::fs::File::open(dir.path()).unwrap();
+    let owned: std::os::unix::io::OwnedFd = file.into();
+    let mut stdout: std::process::ChildStdout = owned.into();
+    let mut out = Vec::new();
+    let mut eof = false;
+    read_stdout(&mut stdout, &mut out, &mut eof, 1024);
+    assert!(eof, "a failed read must set eof");
+}
+
+#[test]
+fn stdout_of_exactly_the_cap_with_a_live_child_is_not_too_large() {
+    let test = ChildTest::new();
+    let clock = FakeClock::new();
+    let start = clock.now();
+    let end = start + LIMIT;
+    // Exactly 16 bytes, but the group lives holding stdout open: no
+    // end-of-file and no exit, so the read parks at the deadline instead
+    // of reporting TooLarge. With `>` replaced by `>=` this answers
+    // TooLarge at once, failing the parked wait below.
+    let reader = test.reader("sleep 3600 & printf '1234567890123456'; wait", Decode::Raw);
+    let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 16);
+    let (watchdog, pgid) = watch(&test);
+    waiting(&rx, &clock, end, "the exact-cap live child");
+    clock.advance(Duration::from_millis(1));
+    assert_eq!(
+        answered(&rx, "the exact-cap live child"),
+        Err(Failed::TimedOut)
+    );
+    reaped(watchdog, pgid, "the exact-cap live child");
 }
