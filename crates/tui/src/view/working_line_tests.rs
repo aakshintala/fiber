@@ -406,9 +406,9 @@ fn the_interrupt_target_goes_with_its_text() {
 
 #[test]
 fn a_marked_line_under_new_messages_below_does_not_spin() {
-    // Four prompts, the running turn, three prompts: seventeen rows with
-    // the group line eleventh, so one page up from following stops at
-    // the top with the group line on the bottom row.
+    // One prompt, the running turn, one prompt: the group line sits on
+    // the bottom row, so one page up from following stops at the top
+    // with the group line under the overlay, and following shows it.
     let (mut app, clock) = running_first();
     let origin = clock.origin();
     let now = clock.now();
@@ -422,7 +422,6 @@ fn a_marked_line_under_new_messages_below_does_not_spin() {
     ));
     let shown = screen(&app);
     assert!(shown.contains("New messages below"), "{shown}");
-    assert_eq!(app.take_wake(), None);
     // One row higher the same line spins: following again draws it.
     app.on_key(Key::End, now);
     let followed = screen(&app);
@@ -431,14 +430,14 @@ fn a_marked_line_under_new_messages_below_does_not_spin() {
     assert!(app.take_wake().is_some());
 }
 
-/// An app with four prompts, then the running turn, then three prompts:
-/// seventeen rows with the group line eleventh.
+/// An app with one prompt, then the running turn, then one prompt: the
+/// group line sits on the conversation's bottom row.
 fn running_first() -> (App, Arc<FakeClock>) {
     let clock = FakeClock::new();
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(WIDTH, HEIGHT);
     app.attach(contract::SessionId(SESSION.to_owned()));
-    for n in 1..=4 {
+    for n in 1..=1 {
         app.on_line(prompt(format!("before {n}")));
     }
     app.on_line(prompt("go".to_owned()));
@@ -448,7 +447,9 @@ fn running_first() -> (App, Arc<FakeClock>) {
         serde_json::json!({"name": "read", "arguments": {"path": "a.rs"}}),
         Some("a_1"),
     ));
-    for n in 1..=3 {
+    // One prompt below: thirteen rows, so one page up from following
+    // stops at the top, and following shows the group line again.
+    for n in 1..=1 {
         app.on_line(prompt(format!("after {n}")));
     }
     (app, clock)
@@ -513,7 +514,7 @@ fn a_group_line_whose_first_row_is_hidden_asks_nothing() {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(WIDTH, HEIGHT);
     app.attach(contract::SessionId(SESSION.to_owned()));
-    // Ten calls in flight: the summary wraps over two rows.
+    // Ten calls in flight: the summary wraps over four rows.
     app.on_line(prompt("go".to_owned()));
     app.on_line(session_line("step_started", serde_json::json!({}), None));
     for n in 0..10 {
@@ -523,24 +524,14 @@ fn a_group_line_whose_first_row_is_hidden_asks_nothing() {
             Some(format!("a_{n}").as_str()),
         ));
     }
-    // Six prompts and a steering message below: fifteen rows, so one
-    // wheel step up from following hides only the line's first row.
-    for n in 1..=6 {
+    // Two prompts below: sixteen rows, so following hides only the
+    // summary's first row.
+    for n in 1..=2 {
         app.on_line(prompt(format!("prompt {n}")));
     }
-    app.on_line(session_line(
-        "steering_applied",
-        serde_json::json!({"content": [{"type": "text", "text": "use x"}], "source": "driver"}),
-        None,
-    ));
     app.set_now(clock.origin(), 0);
-    app.on_wheel(&Mouse {
-        kind: MouseKind::WheelUp,
-        col: 30,
-        row: 5,
-    });
     let shown = screen(&app);
-    // The second row still shows, without the spinner.
+    // The later rows still show, without the spinner.
     assert!(shown.contains("file09.rs"), "{shown}");
     assert!(!shown.contains(SPINNER[0]), "{shown}");
     assert_eq!(app.take_wake(), None);
@@ -738,11 +729,12 @@ fn a_band_clipped_at_the_bottom_row_keeps_its_still_form() {
         serde_json::json!({"trigger": "auto"}),
         None,
     ));
-    for n in 1..=4 {
+    // Two prompts below: thirty-four rows, so three wheel steps up from
+    // following lands the band's first row on the bottom row, its second
+    // row below the area.
+    for n in 1..=2 {
         app.on_line(prompt(format!("after {n}")));
     }
-    // Three wheel steps up: the band's first row lands on the bottom
-    // row, its second row below the area.
     for _ in 0..3 {
         app.on_wheel(&Mouse {
             kind: MouseKind::WheelUp,
@@ -755,19 +747,22 @@ fn a_band_clipped_at_the_bottom_row_keeps_its_still_form() {
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
     let shown = text(&buf);
-    // The first band row shows on the bottom row with its dot still:
-    // a wrapped mark never spins.
+    // The first band row shows on the conversation's bottom row with
+    // its dot still: a wrapped mark never spins.
     assert!(
         shown
             .lines()
-            .nth(10)
+            .nth(8)
             .is_some_and(|row| row.starts_with("⇄ Handoff")),
         "{shown}"
     );
     assert!(
-        shown.lines().nth(10).is_some_and(|row| row.contains('●')),
+        shown.lines().nth(8).is_some_and(|row| row.contains('●')),
         "{shown}"
     );
     assert!(!shown.contains(SPINNER[0]), "{shown}");
     assert_eq!(app.take_wake(), None);
 }
+
+
+

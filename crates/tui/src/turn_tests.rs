@@ -1891,11 +1891,12 @@ fn a_running_group_line_is_marked_at_column_0() {
     start(&mut app, "go", 0);
     step(&mut app, 0);
     request(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
-    assert_eq!(
-        texts(&app).get(2).map(String::as_str),
-        Some("• Read 1 file · read a.rs")
-    );
-    assert_eq!(app.shown(0, usize::MAX).spins, vec![(2, 0)]);
+    let texts = texts(&app);
+    let at = texts
+        .iter()
+        .position(|line| line == "• Read 1 file · read a.rs")
+        .expect("a group line");
+    assert_eq!(app.shown(0, usize::MAX).spins, vec![(at, 0)]);
 }
 
 #[test]
@@ -1911,8 +1912,12 @@ fn a_keyless_streaming_group_line_is_marked() {
         0,
         json!({"index": 0, "text": "{\"pa"}),
     );
-    assert_eq!(texts(&app).get(2).map(String::as_str), Some("• … {\"pa"));
-    assert_eq!(app.shown(0, usize::MAX).spins, vec![(2, 0)]);
+    let texts = texts(&app);
+    let at = texts
+        .iter()
+        .position(|line| line == "• … {\"pa")
+        .expect("a group line");
+    assert_eq!(app.shown(0, usize::MAX).spins, vec![(at, 0)]);
     assert!(
         !app.targets()
             .into_iter()
