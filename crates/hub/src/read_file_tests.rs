@@ -46,10 +46,6 @@ impl Temp {
         Self { dir, held }
     }
 
-    fn hub(&self) -> Arc<Hub> {
-        self.hub_with().0
-    }
-
     fn hub_with(&self) -> (Arc<Hub>, Arc<FakeStarter>) {
         let timed: Arc<dyn Clock> = fakes::clock::FakeClock::new();
         let starter = Arc::new(FakeStarter::bind_and_hold(&self.dir));
@@ -406,6 +402,22 @@ fn a_link_above_or_at_artifacts_is_invalid_arguments() {
 }
 
 #[test]
+fn a_self_looped_artifacts_is_io_failed() {
+    let temp = Temp::new();
+    let dir = temp.session("-p", 1);
+    temp.write(&dir.join("artifacts"), "a.png", b"bytes");
+    fs::remove_dir_all(dir.join("artifacts")).unwrap();
+    std::os::unix::fs::symlink("artifacts", dir.join("artifacts")).unwrap();
+    let (code, message) = refused(
+        &temp.dir,
+        json!({"session": id(1), "path": "artifacts/a.png"}),
+    );
+    assert_eq!(code, ErrorCode::IoFailed);
+    assert!(message.contains("artifacts/a.png"), "{message}");
+    assert_no_leak(&temp, &message);
+}
+
+#[test]
 fn a_missing_file_is_not_found() {
     let temp = Temp::new();
     let dir = temp.session("-p", 1);
@@ -592,7 +604,7 @@ fn read_file_over_the_wire_accepts_and_rejects() {
     let temp = Temp::new();
     let dir = temp.session("-p", 1);
     temp.write(&dir.join("artifacts"), "a.txt", b"hello");
-    let hub = temp.hub();
+    let hub = temp.hub_with().0;
     let (a, b) = UnixStream::pair().unwrap();
     let serving = Arc::clone(&hub);
     thread::spawn(move || serve_connection(a, serving));
