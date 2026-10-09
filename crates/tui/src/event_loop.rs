@@ -636,3 +636,7 @@ mod attention_tests;
 #[cfg(test)]
 #[path = "lib_look_tests.rs"]
 mod look_tests;
+
+#[cfg(test)]
+#[path = "lib_settings_tests.rs"]
+mod settings_tests;

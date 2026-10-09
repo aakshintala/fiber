@@ -24,6 +24,8 @@ pub(crate) struct Fake {
     pub(crate) refuse: Mutex<Option<String>>,
     /// The theme files `themes` lists.
     pub(crate) themes: Vec<String>,
+    /// What `global_file` answers.
+    pub(crate) global: PathBuf,
 }
 
 impl Fake {
@@ -35,6 +37,7 @@ impl Fake {
             writes: Mutex::new(Vec::new()),
             refuse: Mutex::new(None),
             themes: Vec::new(),
+            global: file(Layer::Global),
         }
     }
 
@@ -119,7 +122,7 @@ impl Configure for Fake {
     }
 
     fn global_file(&self) -> PathBuf {
-        file(Layer::Global)
+        self.global.clone()
     }
 
     fn themes(&self) -> Vec<String> {

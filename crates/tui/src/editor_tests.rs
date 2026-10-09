@@ -1,7 +1,7 @@
 //! Tests for Ctrl+G: choosing what opens, running the editor on a
 //! temporary file, and applying what it returns.
 
-use super::{NEXT, NO_EDITOR, Target, TempFile, command, run_in};
+use super::{NEXT, NO_EDITOR, Target, TempFile, command, open, run_in};
 use crate::app::{App, Effect};
 use crate::keys::{Edit, Key};
 use contract::clock::Clock;
@@ -222,6 +222,56 @@ fn an_unreadable_file_keeps_the_draft_and_says_so() {
         "{result:?}"
     );
     assert!(fake.left().is_empty());
+}
+
+impl Fake {
+    /// Runs `open` with the editor on `path`, with one deadline.
+    fn open(&self, path: &Path) -> Result<(), String> {
+        let command = self.command("", "");
+        let path = path.to_path_buf();
+        let (done, finished) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("editor-open".to_owned())
+            .spawn(move || done.send(open(&command, &path)).unwrap_or(()))
+            .unwrap_or_else(|err| panic!("spawn: {err}"));
+        finished
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the editor: {err}"))
+    }
+}
+
+#[test]
+fn open_runs_the_command_on_the_path_even_when_it_does_not_exist() {
+    let fake = Fake::new("printf 'opened' >> \"$1\"\n");
+    let path = fake.temp.path().join("config.json");
+    assert_eq!(fake.open(&path), Ok(()));
+    assert_eq!(
+        std::fs::read_to_string(&path).ok(),
+        Some("opened".to_owned())
+    );
+    // No temporary file is made beside it.
+    assert_eq!(fake.left(), ["config.json"]);
+}
+
+#[test]
+fn open_reports_a_failing_editor() {
+    let fake = Fake::new("exit 3\n");
+    let path = fake.temp.path().join("config.json");
+    assert_eq!(
+        fake.open(&path),
+        Err("The editor exited with status 3.".to_owned())
+    );
+    let fake = Fake::new("kill -INT $$\n");
+    let command = fake.command("exec ", "");
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("editor-open-signal".to_owned())
+        .spawn(move || done.send(open(&command, &path)).unwrap_or(()))
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    assert_eq!(
+        finished.recv_timeout(DEADLINE).ok(),
+        Some(Err("The editor was ended by signal 2.".to_owned()))
+    );
 }
 
 #[test]
