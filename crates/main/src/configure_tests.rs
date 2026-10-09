@@ -253,6 +253,33 @@ fn themes_and_theme_follow_each_workspaces_enabled() {
 }
 
 #[test]
+fn a_workspace_whose_config_fails_to_load_reads_home_themes_only() {
+    let dirs = Dirs::new();
+    let one = dirs.workspace("one");
+    write(&dirs.home().join("themes").join("solar.json"), "{}");
+    let pkg = dirs.home().join("extensions").join("acme");
+    write(
+        &pkg.join(".fiber.json"),
+        r#"{"name":"acme","version":"1.0.0","requested":true,"source":{"path":"/p"}}"#,
+    );
+    write(&pkg.join("themes").join("dusk.json"), "acme");
+    // The project file does not parse, so the workspace's configuration
+    // fails to load and no extension's `enabled` is known.
+    write(&dirs.project_file(&one), "not json");
+    let seam = Seam::new(dirs.home());
+    assert_eq!(seam.themes(&one), ["solar"]);
+    // An extension-only name reads as absent: Fiber home alone is read.
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "dusk") else {
+        panic!("not a file");
+    };
+    assert!(text.is_err());
+    let tui::ThemeSetting::File { text, .. } = seam.theme(&one, "solar") else {
+        panic!("not a file");
+    };
+    assert_eq!(text, Ok("{}".to_owned()));
+}
+
+#[test]
 fn theme_builds_the_setting_as_at_start() {
     let dirs = Dirs::new();
     write(&dirs.home().join("themes").join("solar.json"), "{\"x\": 1}");
