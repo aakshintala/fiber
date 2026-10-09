@@ -910,6 +910,125 @@ fn esc_on_each_one_question_kind_declines_to_the_hub() {
     assert!(lp.app.panel().is_none());
 }
 
+/// The hub accepting command `id` from `s_aaaaaaaaaaaaaaaa`.
+fn session_accepted(id: &serde_json::Value) -> Input {
+    Input::Hub(Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"command_id": id})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }))
+}
+
+/// The two-question form `r_c`, plus `extra` keys.
+fn form_with(extra: &serde_json::Value) -> serde_json::Value {
+    let mut payload = serde_json::json!({"request_id": "r_c", "kind": "form",
+        "fields": [
+            {"header": "Base", "question": "Which branch?", "options": [
+                {"label": "main"}, {"label": "dev"}]},
+            {"header": "Name", "question": "What name?"}]});
+    merge(&mut payload, extra);
+    payload
+}
+
+/// The `confirm` `r_c`, plus `extra` keys.
+fn confirm_with(extra: &serde_json::Value) -> serde_json::Value {
+    let mut payload = serde_json::json!({"request_id": "r_c", "kind": "confirm",
+        "prompt": "Continue?"});
+    merge(&mut payload, extra);
+    payload
+}
+
+/// Adds the keys of `extra` to `payload`.
+fn merge(payload: &mut serde_json::Value, extra: &serde_json::Value) {
+    if let (Some(map), Some(more)) = (payload.as_object_mut(), extra.as_object()) {
+        map.extend(more.clone());
+    }
+}
+
+/// Esc on a `confirm`, and Esc and "Chat about this" on a form, each with
+/// `extra` keys: the request and the bytes that decline it.
+fn declines(extra: &serde_json::Value) -> Vec<(serde_json::Value, Vec<u8>)> {
+    vec![
+        (confirm_with(extra), b"\x1b".to_vec()),
+        (form_with(extra), b"\x1b".to_vec()),
+        (form_with(extra), b"\x1b[B\x1b[B\x1b[B\x1b[B\r".to_vec()),
+    ]
+}
+
+/// Declining `payload` with `keys`, with a turn running or not: the
+/// declined reply, its accept, then a prompt typed after it. The command
+/// that follows the reply on the hub's socket.
+fn command_after_decline(
+    running: bool,
+    payload: serde_json::Value,
+    keys: &[u8],
+) -> serde_json::Value {
+    let (mut lp, reader) = connected_loop();
+    if running {
+        feed(
+            &mut lp,
+            vec![Input::Hub(Line::Session(contract::Envelope {
+                kind: "turn_started".to_owned(),
+                session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: None,
+                seq: None,
+                payload: serde_json::json!({"input": [{"type": "message",
+                    "source": "driver",
+                    "content": [{"type": "text", "text": "go"}]}]})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            }))],
+        );
+    }
+    feed(&mut lp, vec![one_question(payload)]);
+    feed(&mut lp, vec![Input::Bytes(keys.to_vec())]);
+    let (reader, reply) = command(reader, "the declined reply");
+    assert_eq!(reply["command"], "reply");
+    assert_eq!(
+        reply["args"],
+        serde_json::json!({"request_id": "r_c", "declined": true})
+    );
+    feed(&mut lp, vec![session_accepted(&reply["id"])]);
+    feed(&mut lp, vec![Input::Bytes(b"next\r".to_vec())]);
+    let (_, after) = command(reader, "the command after the decline");
+    after
+}
+
+#[test]
+fn a_decline_of_a_tool_calls_question_is_followed_by_a_cancel() {
+    let extra = serde_json::json!({"action_ids": ["a_1"]});
+    for running in [false, true] {
+        for (payload, keys) in declines(&extra) {
+            let after = command_after_decline(running, payload, &keys);
+            assert_eq!(after["command"], "cancel", "running {running}");
+            assert_eq!(after["session_id"], "s_aaaaaaaaaaaaaaaa");
+        }
+    }
+}
+
+#[test]
+fn a_decline_of_a_question_no_tool_call_raised_sends_no_cancel() {
+    let extra = serde_json::json!({});
+    for running in [false, true] {
+        for (payload, keys) in declines(&extra) {
+            let after = command_after_decline(running, payload, &keys);
+            assert_ne!(after["command"], "cancel", "running {running}");
+        }
+    }
+}
+
 #[test]
 fn the_screen_shows_the_cursor_at_the_draft() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);

@@ -54,6 +54,10 @@ struct Request {
     /// The `reply` sent for it; it leaves the visible queue until a
     /// rejection puts it back.
     answered_by: Option<String>,
+    /// A tool call in the session's running turn raised it
+    /// (`interaction_requested` carries `action_ids`): declining it cancels
+    /// that turn.
+    by_call: bool,
 }
 
 /// What a request asks: an approval, a question form or a one-question
@@ -457,8 +461,11 @@ impl Queue {
             Ask::Form(_) | Ask::One(_) => request.session.clone(),
             Ask::Approval(_) => return None,
         };
+        let by_call = request.by_call;
         let line = self.reply(at, id, ReplyAnswer::Declined { declined: True })?;
-        self.declines.insert(id.to_owned(), session);
+        if by_call {
+            self.declines.insert(id.to_owned(), session);
+        }
         Some(line)
     }
 
@@ -547,7 +554,7 @@ impl Queue {
                 let Ok(asked) = serde_json::from_value::<PermissionRequested>(payload) else {
                     return;
                 };
-                self.queue(session, asked.request_id.0, |calls| {
+                self.queue(session, asked.request_id.0, false, |calls| {
                     let call = action.and_then(|action| calls.remove(&(session.0.clone(), action)));
                     Ask::Approval(Approval {
                         call,
@@ -562,29 +569,30 @@ impl Queue {
                 let Ok(asked) = serde_json::from_value::<InteractionRequested>(payload) else {
                     return;
                 };
+                let by_call = asked.action_ids.is_some();
                 match asked.interaction {
                     Interaction::Form { fields } => {
-                        self.queue(session, asked.request_id.0, |_| {
+                        self.queue(session, asked.request_id.0, by_call, |_| {
                             Ask::Form(form::Form::new(fields))
                         });
                     }
                     Interaction::Confirm { prompt } => {
-                        self.queue(session, asked.request_id.0, |_| {
+                        self.queue(session, asked.request_id.0, by_call, |_| {
                             Ask::One(one_question::OneQuestion::confirm(prompt))
                         });
                     }
                     Interaction::Select { prompt, options } => {
-                        self.queue(session, asked.request_id.0, |_| {
+                        self.queue(session, asked.request_id.0, by_call, |_| {
                             Ask::One(one_question::OneQuestion::select(prompt, options))
                         });
                     }
                     Interaction::MultiSelect { prompt, options } => {
-                        self.queue(session, asked.request_id.0, |_| {
+                        self.queue(session, asked.request_id.0, by_call, |_| {
                             Ask::One(one_question::OneQuestion::multi_select(prompt, options))
                         });
                     }
                     Interaction::TextInput { prompt } => {
-                        self.queue(session, asked.request_id.0, |_| {
+                        self.queue(session, asked.request_id.0, by_call, |_| {
                             Ask::One(one_question::OneQuestion::text_input(prompt))
                         });
                     }
@@ -619,6 +627,7 @@ impl Queue {
         &mut self,
         session: &SessionId,
         request_id: String,
+        by_call: bool,
         ask: impl FnOnce(&mut HashMap<(String, String), (String, String)>) -> Ask,
     ) {
         let key = (session.0.clone(), request_id.clone());
@@ -631,6 +640,7 @@ impl Queue {
             ask: ask(&mut self.calls),
             aside: false,
             answered_by: None,
+            by_call,
         });
         self.surface(self.requests.len().saturating_sub(1));
     }
