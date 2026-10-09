@@ -559,9 +559,15 @@ fn the_credential_command_on_a_scripted_session_is_rejected() {
         &json!({"id": "c_cred", "session_id": id, "command": "credential", "args": {"label": "x"}})
             .to_string(),
     );
-    let rejected = until(&client, "the credential rejection", |line| {
+    let waited = until(&client, "the credential rejection", |line| {
         line["kind"] == "command_rejected" && line["payload"]["command_id"] == "c_cred"
     });
+    // `session_status` is an observer-thread line pinned nowhere (as
+    // `kinds` filters it): drop it, then exactly the rejection remains.
+    let rejected: Vec<Value> = waited
+        .into_iter()
+        .filter(|line| line["kind"] != "session_status")
+        .collect();
     assert_eq!(rejected.len(), 1, "{rejected:?}");
     assert_eq!(rejected[0]["payload"]["code"], "credential_missing");
     let message = rejected[0]["payload"]["message"].as_str().unwrap();
@@ -590,7 +596,6 @@ fn the_credential_command_on_a_scripted_session_is_rejected() {
         kinds.iter().map(String::as_str).collect::<Vec<_>>(),
         TEXT_TURN
     );
-    assert!(!kinds.contains(&"model_changed".to_owned()));
 }
 
 #[test]
@@ -650,5 +655,4 @@ fn a_live_scripted_resume_with_a_label_is_rejected() {
         kinds.iter().map(String::as_str).collect::<Vec<_>>(),
         TEXT_TURN
     );
-    assert!(!kinds.contains(&"model_changed".to_owned()));
 }

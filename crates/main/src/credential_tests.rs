@@ -28,7 +28,7 @@ fn scripted_provider() -> ProviderData {
 
 /// A home holding `credentials/<name>/<label>` for each of `stored`, and
 /// the configuration `config.json` text.
-fn test_config(root: &fakes::TempDir, stored: &[(&str, &str)], text: &str) -> Config {
+fn config(root: &fakes::TempDir, stored: &[(&str, &str)], text: &str) -> Config {
     let home = root.path().join("home");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&home).unwrap();
@@ -60,7 +60,7 @@ const STORED: [(&str, &str); 5] = [
 #[test]
 fn a_recorded_label_beats_the_configured_one() {
     let root = fakes::TempDir::new("fiber-credential");
-    let config = test_config(&root, &STORED, SETTINGS);
+    let config = config(&root, &STORED, SETTINGS);
     let (label, key) = session_credential(&config, &provider("acme"), Some("rec")).unwrap();
     assert_eq!((label.as_str(), key.expose()), ("rec", "acme-rec"));
     let (label, key) = session_credential(&config, &provider("acme"), None).unwrap();
@@ -70,7 +70,7 @@ fn a_recorded_label_beats_the_configured_one() {
 #[test]
 fn a_recorded_label_that_names_nothing_is_credential_missing() {
     let root = fakes::TempDir::new("fiber-credential");
-    let config = test_config(&root, &STORED, SETTINGS);
+    let config = config(&root, &STORED, SETTINGS);
     let failure = session_credential(&config, &provider("acme"), Some("gone")).unwrap_err();
     assert_eq!(failure.code, contract::ErrorCode::CredentialMissing);
 }
@@ -78,7 +78,7 @@ fn a_recorded_label_that_names_nothing_is_credential_missing() {
 #[test]
 fn the_reviewer_of_another_provider_uses_its_own_label() {
     let root = fakes::TempDir::new("fiber-credential");
-    let config = test_config(&root, &STORED, SETTINGS);
+    let config = config(&root, &STORED, SETTINGS);
     let (label, key) = session_credential(&config, &provider("other"), None).unwrap();
     assert_eq!((label.as_str(), key.expose()), ("own", "other-own"));
 }
@@ -86,7 +86,7 @@ fn the_reviewer_of_another_provider_uses_its_own_label() {
 #[test]
 fn a_switch_read_maps_a_config_error_to_its_code() {
     let root = fakes::TempDir::new("fiber-switch-credential");
-    let config = test_config(&root, &[("acme", "cfg")], SETTINGS);
+    let config = config(&root, &[("acme", "cfg")], SETTINGS);
     let read = switch_credential(&config, &provider("acme"), "cfg", &|command| {
         command.output()
     })
@@ -115,23 +115,20 @@ fn from_an_option_is_a_recorded_only_labels() {
 #[test]
 fn labels_prefer_the_asked_then_the_recorded_then_the_configured_label() {
     let root = fakes::TempDir::new("fiber-credential-labels");
-    let config = test_config(&root, &STORED, SETTINGS);
+    let cfg = config(&root, &STORED, SETTINGS);
     let acme = provider("acme");
     assert_eq!(
         Labels::new(Some("a"), Some("b"))
-            .label(&config, &acme)
+            .label(&cfg, &acme)
             .unwrap(),
         "a"
     );
     assert_eq!(
-        Labels::new(None, Some("b")).label(&config, &acme).unwrap(),
+        Labels::new(None, Some("b")).label(&cfg, &acme).unwrap(),
         "b"
     );
-    assert_eq!(
-        Labels::new(None, None).label(&config, &acme).unwrap(),
-        "cfg"
-    );
-    let plain = test_config(&root, &[], "{}");
+    assert_eq!(Labels::new(None, None).label(&cfg, &acme).unwrap(), "cfg");
+    let plain = config(&root, &[], "{}");
     assert_eq!(
         Labels::new(None, None).label(&plain, &acme).unwrap(),
         "default"
@@ -141,7 +138,7 @@ fn labels_prefer_the_asked_then_the_recorded_then_the_configured_label() {
 #[test]
 fn labels_on_a_scripted_provider_reject_an_asked_label() {
     let root = fakes::TempDir::new("fiber-credential-scripted");
-    let config = test_config(&root, &[], "{}");
+    let config = config(&root, &[], "{}");
     let scripted = scripted_provider();
     let failure = Labels::new(Some("x"), None)
         .label(&config, &scripted)
