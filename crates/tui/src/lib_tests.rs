@@ -1994,7 +1994,7 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
     watched_with_timeout(&frames, "the first frame", DEADLINE);
     // Asked after the first frame, the cached read answers: its notice
     // draws, so the catalogue it came with is held.
-    watched_with_timeout(&frames, "the cached read's notice", Duration::from_secs(2));
+    watched_with_timeout(&frames, "the cached read's notice", DEADLINE);
     assert_eq!(*seen.lock().unwrap(), [crate::Refresh::Cached]);
     pair.main
         .write_all(&[0x03, 0x03])
