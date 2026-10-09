@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use support::Deadline;
 
 /// The built-in tool order, when no MCP server declares anything.
-const TOOL_NAMES: [&str; 10] = [
+const TOOL_NAMES: [&str; 11] = [
     "ask_user",
     "delegate_spawn",
     "edit",
@@ -34,6 +34,7 @@ const TOOL_NAMES: [&str; 10] = [
     "read",
     "session_search",
     "shell",
+    "skill",
     "web_fetch",
     "write",
 ];
@@ -419,6 +420,7 @@ fn a_configured_server_declares_and_runs_its_tools() {
             "read",
             "session_search",
             "shell",
+            "skill",
             "web_fetch",
             "write"
         ],
@@ -639,6 +641,7 @@ fn disabled_hides_a_tool() {
             "read",
             "session_search",
             "shell",
+            "skill",
             "web_fetch",
             "write"
         ]
