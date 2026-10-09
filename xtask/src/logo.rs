@@ -191,25 +191,19 @@ fn rasterise(face: &ab_glyph::FontRef<'_>, scale: f32, origin_x: u32, baseline: 
             continue;
         }
         let origin = (at_zero(bounds.min.x), at_zero(bounds.min.y));
-        let mut cells: Vec<(u32, u32, f32)> = Vec::new();
-        outlined.draw(|x, y, cover| cells.push((x, y, cover)));
-        let Some(glyph_width) = cells.iter().map(|cell| cell.0 + 1).max() else {
-            continue;
-        };
-        let Some(glyph_height) = cells.iter().map(|cell| cell.1 + 1).max() else {
-            continue;
-        };
-        let mut coverage = vec![0u8; glyph_width as usize * glyph_height as usize];
-        for (x, y, cover) in cells {
-            if let Some(slot) = coverage.get_mut(y as usize * glyph_width as usize + x as usize) {
+        let width = at_zero(bounds.width()).max(1);
+        let height = at_zero(bounds.height()).max(1);
+        let mut coverage = vec![0u8; width as usize * height as usize];
+        outlined.draw(|x, y, cover| {
+            if let Some(slot) = coverage.get_mut(y as usize * width as usize + x as usize) {
                 *slot = alpha(cover);
             }
-        }
+        });
         glyphs.push(Glyph {
             x: origin.0,
             y: origin.1,
-            width: glyph_width,
-            height: glyph_height,
+            width,
+            height,
             coverage,
         });
     }
