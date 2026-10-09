@@ -368,3 +368,75 @@ fn clearing_a_reversed_range_clears_nothing() {
     assert_eq!(rows[0], "hello");
     assert!(rows[1..].iter().all(|row| row.is_empty()));
 }
+
+#[test]
+fn charset_designations_are_dropped_whole() {
+    // The final byte never draws as text.
+    for introducer in ["(", ")", "*", "+"] {
+        let sequence = format!("a\x1b{introducer}Bb");
+        let grid = fed_grid(&[sequence.as_str()]);
+        assert_eq!(text(&grid)[0], "ab", "{introducer}");
+    }
+}
+
+#[test]
+fn a_charset_split_across_deltas_completes() {
+    let grid = fed_grid(&["a\x1b", "(B", "b"]);
+    assert_eq!(text(&grid)[0], "ab");
+    let grid = fed_grid(&["a\x1b(", "B", "b"]);
+    assert_eq!(text(&grid)[0], "ab");
+}
+
+#[test]
+fn a_charset_esc_starts_the_next_sequence() {
+    // An `ESC` after the introducer is the next sequence, not the final:
+    // the clear still dispatches.
+    let grid = fed_grid(&["\x1b(\x1b[2Jbye"]);
+    assert_eq!(text(&grid)[0], "bye");
+}
+
+#[test]
+fn st_terminated_sequences_are_dropped_until_st() {
+    // DCS, SOS, PM and APC run until `ST` (`ESC \`); a `BEL` inside is
+    // content, still dropped with the sequence.
+    for introducer in ['P', 'X', '^', '_'] {
+        let sequence = format!("a\x1b{introducer}payload\x1b\\b");
+        let grid = fed_grid(&[sequence.as_str()]);
+        assert_eq!(text(&grid)[0], "ab", "{introducer}");
+    }
+    let grid = fed_grid(&["a\x1bPpay\x07load\x1b\\b"]);
+    assert_eq!(text(&grid)[0], "ab");
+}
+
+#[test]
+fn an_st_split_across_deltas_completes() {
+    let grid = fed_grid(&["a\x1bPpay", "load\x1b", "\\b"]);
+    assert_eq!(text(&grid)[0], "ab");
+    let grid = fed_grid(&["a", "\x1b", "Pq", "r\x1b\\", "b"]);
+    assert_eq!(text(&grid)[0], "ab");
+}
+
+#[test]
+fn an_st_over_long_drops_and_draws_the_tail() {
+    // 64 pending bytes stay inside the sequence, so nothing draws.
+    let grid = fed_grid(&[format!("\x1bP{}Z", "x".repeat(63)).as_str()]);
+    assert!(text(&grid)[0].is_empty());
+    // The 65th pending byte returns the parser to the ground, so the
+    // tail draws as text instead of vanishing.
+    let grid = fed_grid(&[format!("\x1bP{}Z", "x".repeat(64)).as_str()]);
+    let row = text(&grid)[0].clone();
+    assert!(row.ends_with('Z'));
+    let grid = fed_grid(&[format!("\x1bP{}Z", "x".repeat(65)).as_str()]);
+    let row = text(&grid)[0].clone();
+    assert!(row.starts_with('x'));
+    assert!(row.ends_with('Z'));
+}
+
+#[test]
+fn an_st_over_long_drops_across_deltas() {
+    let filler = "x".repeat(65);
+    let grid = fed_grid(&["\x1bP", filler.as_str(), "Z"]);
+    let row = text(&grid)[0].clone();
+    assert!(row.starts_with('x'));
+    assert!(row.ends_with('Z'));
+}

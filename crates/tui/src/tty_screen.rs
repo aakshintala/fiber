@@ -37,6 +37,10 @@ enum State {
     Csi,
     /// After `ESC ]`: dropped until `BEL` or `ESC \`.
     Osc,
+    /// After `ESC (`, `)`, `*` or `+`: one final byte, dropped.
+    Charset,
+    /// After `ESC P`, `X`, `^` or `_`: dropped until `ESC \`.
+    St,
 }
 
 /// One escape parser, holding its state across deltas.
@@ -46,10 +50,13 @@ pub(crate) struct Parser {
     state: State,
     /// The CSI's parameter bytes so far, at most [`PENDING_CAP`].
     params: Vec<u8>,
-    /// The OSC's content bytes counted so far, at most [`PENDING_CAP`].
+    /// The OSC's or `ST`-terminated sequence's content bytes counted so
+    /// far, at most [`PENDING_CAP`].
     content: usize,
     /// Whether the OSC saw an `ESC` that may close it.
     osc_esc: bool,
+    /// Whether the `ST`-terminated sequence saw an `ESC` that may close it.
+    st_esc: bool,
 }
 
 impl Parser {
@@ -60,6 +67,7 @@ impl Parser {
             params: Vec::new(),
             content: 0,
             osc_esc: false,
+            st_esc: false,
         }
     }
 
@@ -85,6 +93,17 @@ impl Parser {
                     self.state = State::Osc;
                     self.content = 0;
                     self.osc_esc = false;
+                }
+                // A charset designation takes one final byte, dropped
+                // with it so the final never draws as text.
+                '(' | ')' | '*' | '+' => {
+                    self.state = State::Charset;
+                }
+                // DCS, SOS, PM and APC run until `ESC \`, dropped.
+                'P' | 'X' | '^' | '_' => {
+                    self.state = State::St;
+                    self.content = 0;
+                    self.st_esc = false;
                 }
                 // Any other char completes a dropped two-byte sequence.
                 _ => {
@@ -133,6 +152,42 @@ impl Parser {
                 }
                 _ => {
                     self.osc_esc = false;
+                    self.content = self.content.saturating_add(ch.len_utf8());
+                    if self.content > PENDING_CAP {
+                        self.state = State::Ground;
+                        self.content = 0;
+                        self.ground(ch, sink);
+                    }
+                }
+            },
+            // One final byte after a charset introducer, dropped: an
+            // `ESC` instead starts the next sequence, so a split
+            // introducer never swallows it.
+            State::Charset => {
+                if ch == '\x1b' {
+                    self.state = State::Escape;
+                } else {
+                    self.state = State::Ground;
+                }
+            }
+            // Dropped until `ST` (`ESC \`); `BEL` is content here.
+            State::St => match ch {
+                '\x1b' => {
+                    self.st_esc = true;
+                    self.content = self.content.saturating_add(1);
+                    if self.content > PENDING_CAP {
+                        self.state = State::Ground;
+                        self.content = 0;
+                        self.st_esc = false;
+                    }
+                }
+                '\\' if self.st_esc => {
+                    self.state = State::Ground;
+                    self.content = 0;
+                    self.st_esc = false;
+                }
+                _ => {
+                    self.st_esc = false;
                     self.content = self.content.saturating_add(ch.len_utf8());
                     if self.content > PENDING_CAP {
                         self.state = State::Ground;
