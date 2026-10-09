@@ -56,7 +56,9 @@ no rail. It is centred. From the top:
    switch, and the model and thinking chips and "enter starts a session"
 4. under the box, at its width, the session list ("The session list")
 
-A key hint sits at the foot. Until the first prompt, the input box's
+A key hint sits at the foot. It names the key map action's bound key,
+leaving the key out when the action is unbound; Ctrl+C cannot be
+rebound, so its hint stays fixed. Until the first prompt, the input box's
 placeholder says "/? for shortcuts". Typing a prompt and pressing Enter asks
 the hub to start a session in the chosen workspace, and the screen switches to
 it. No session exists before Enter, so opening the terminal, glancing at home
@@ -798,7 +800,8 @@ An approval request is a panel at the bottom that replaces the input box
   (`docs/permissions.md`).
 - The asking call's tool group expands so the full call can be read.
 - Esc puts the request aside. It stays pending behind a badge, and clicking the
-  badge reopens it. Denying is always explicit.
+  badge reopens it. The badge names the `next_request` action's bound key,
+  leaving the key out when the action is unbound. Denying is always explicit.
 - Esc steps through waiting requests one at a time. With a question form
   behind an approval, a second Esc declines the form.
 - `/approvals` reopens the waiting queue at the first request. It is the key
@@ -1119,6 +1122,9 @@ search box and the draft shows without a cursor.
 The key map, `/?` or `/help`, is an overlay over the conversation listing every
 binding by area with its other paths. Esc closes it. Ctrl+L opens the model picker,
 so it does not redraw the screen as it does in some terminal programs.
+
+Hints that name a key, on home and on the approval badge, name the action's
+bound key from this table, leaving the key out when the action is unbound.
 
 Every action acts in some of six contexts, and the terminal is in exactly one
 of them when a key arrives:
