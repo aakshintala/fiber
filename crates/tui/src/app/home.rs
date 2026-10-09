@@ -12,7 +12,7 @@ use super::{App, Effect, Kind, Link, Phase, mint, session_command};
 use crate::focus::{Area, order};
 use crate::home::{
     HomeScreen, Launch, Left, Level, Sessions, Spot, State, Subs, cascade_line, delete_line,
-    dependents, from_status, line, opening, recent_rows, toggle_line,
+    dependents, from_status, line, recent_rows, toggle_line,
 };
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -20,8 +20,8 @@ use crate::mouse::{Target, TargetId};
 use crate::view::max_question_scroll;
 use contract::SessionId;
 
-#[path = "app_exit.rs"]
 mod exit;
+mod open_at;
 
 /// Home's state: the launch description, and whether a `start` went out in
 /// this run, which hides the input box's placeholder.
@@ -317,7 +317,9 @@ impl App {
         let project = home.launch.project.clone();
         let scoped = home.launch.git && !home.sessions.show_all();
         let recent = recent_line(&recent, None, scoped.then_some(project.as_str()));
-        vec![json!({"id": feed, "command": "feed"}).to_string(), recent]
+        let mut out = vec![json!({"id": feed, "command": "feed"}).to_string(), recent];
+        out.extend(self.launch_lines());
+        out
     }
 
     /// Folds one hub line into the session list, with the lines to send;
@@ -402,8 +404,10 @@ impl App {
                             if let Some(home) = self.home.as_mut() {
                                 home.sessions.recent(rows, first);
                             }
+                            self.list_answered(first, true);
                         } else {
                             self.notices.push(refusal(&hub.payload));
+                            self.list_answered(first, false);
                         }
                         return Some(Vec::new());
                     }
@@ -1203,24 +1207,7 @@ impl App {
             .home
             .as_ref()
             .and_then(|home| home.subs.expected(&session));
-        self.go_home();
-        self.attach(session.clone());
-        let levels = opening(expected);
-        let mut ack = String::new();
-        let mut lines = Vec::new();
-        for level in levels {
-            let (id, line) = subscribe_line(&session, *level);
-            if let Some(home) = self.home.as_mut() {
-                home.subs.sent(id.clone(), session.clone(), *level);
-            }
-            ack = id;
-            lines.push(line);
-        }
-        lines.push(self.ask_commands(&session));
-        if let Some(home) = self.home.as_mut() {
-            home.opening = Some(Opening { session, ack });
-        }
-        Effect::Send(lines)
+        Effect::Send(self.open_session(session, expected))
     }
 
     /// Records the acknowledgement of the in-flight subscribe `id`:
@@ -1393,5 +1380,5 @@ pub(super) fn refusal(payload: &serde_json::Map<String, Value>) -> String {
 }
 
 #[cfg(test)]
-#[path = "app_home_tests.rs"]
+#[path = "home_tests.rs"]
 mod tests;

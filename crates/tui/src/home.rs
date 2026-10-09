@@ -40,6 +40,8 @@ pub struct Launch {
     pub project: String,
     /// The launch directory is inside a git repository.
     pub git: bool,
+    /// Where the terminal opens (`docs/invocation.md`, "Commands and flags").
+    pub open_at: crate::OpenAt,
     /// `tui.hover`: with it off, mouse mode 1003 is never sent and nothing
     /// is tinted under the pointer.
     pub hover: bool,

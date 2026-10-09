@@ -282,11 +282,20 @@ fn failed(reply: Reply) -> (contract::ErrorCode, String) {
 fn a_port_that_cannot_be_bound_is_io_failed() {
     let held = bind(0).unwrap();
     let port = held.local_addr().unwrap().port();
-    let (code, message) = failed(delivered(|deliver| {
-        assert!(listen(port, deliver).is_none());
-    }));
+    let (tx, rx) = mpsc::channel();
+    let deliver: Deliver = Arc::new(move |reply| match tx.send(reply) {
+        Ok(()) | Err(_) => {}
+    });
+    let Err(reply) = listen(port, &deliver) else {
+        panic!("a taken port was bound");
+    };
+    let (code, message) = failed(reply);
     assert_eq!(code, contract::ErrorCode::IoFailed);
     assert!(message.contains(&format!("port {port}")), "{message}");
+    assert!(
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "nothing was delivered"
+    );
 }
 
 #[test]
@@ -296,7 +305,9 @@ fn a_request_whose_query_cannot_be_read_is_unreadable_reply() {
     let deliver: Deliver = Arc::new(move |reply| match tx.send(reply) {
         Ok(()) | Err(_) => {}
     });
-    let cancel = listen(port, &deliver).expect("the listener binds");
+    let Ok(cancel) = listen(port, &deliver) else {
+        panic!("the listener binds");
+    };
     let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
     std::io::Write::write_all(
         &mut stream,
@@ -324,11 +335,36 @@ fn a_lock_whose_file_cannot_be_written_is_io_failed() {
     let (code, message) = failed(delivered(|deliver| {
         // The directories check passes; the spawned wait fails writing
         // the lock file and delivers the failure.
-        let _waiting = lock(dir.path(), &pair, deliver);
+        let Ok(_waiting) = lock(dir.path(), &pair, deliver) else {
+            panic!("the wait started");
+        };
     }));
     assert_eq!(code, contract::ErrorCode::IoFailed);
     assert!(message.starts_with("host.oauth.refresh: "), "{message}");
     std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[test]
+fn a_lock_for_an_unusable_pair_returns_its_failure_without_delivering() {
+    let dir = fakes::TempDir::new("fiber-oauth-lock-reserved");
+    let pair = crate::CredentialPair {
+        credential: "acme".to_owned(),
+        label: "default.lock".to_owned(),
+    };
+    let (tx, rx) = mpsc::channel();
+    let deliver: Deliver = Arc::new(move |reply| match tx.send(reply) {
+        Ok(()) | Err(_) => {}
+    });
+    let Err(reply) = lock(dir.path(), &pair, &deliver) else {
+        panic!("a reserved label started no wait");
+    };
+    let (code, message) = failed(reply);
+    assert_eq!(code, contract::ErrorCode::IoFailed);
+    assert!(message.starts_with("host.oauth.refresh: "), "{message}");
+    assert!(
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "nothing was delivered"
+    );
 }
 
 /// Calls each `held:` method in Lua and converts the caught failure to its

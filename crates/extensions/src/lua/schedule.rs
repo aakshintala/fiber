@@ -345,7 +345,7 @@ fn settle(
         }) => (thread, target, deadline, timeout, request),
     };
     #[cfg(test)]
-    settle_hook(&target);
+    settle_hook(&target, Pause::Admission);
     // Read before the admission lock below takes it.
     let driver = hub.driver();
     // Every host call is admitted here: a stopped extension, whose callback
@@ -523,8 +523,21 @@ fn settle(
             (None, None)
         }
         Request::Callback { port } => {
+            // The listener starts under the admission lock, so no cancel
+            // or stop lands between admission and the bind; a failure is
+            // delivered after releasing it.
+            #[cfg(test)]
+            settle_hook(&target, Pause::Start);
+            let started = oauth::listen(port, &deliver);
             drop(shared);
-            (oauth::listen(port, &deliver), None)
+            let cancel = match started {
+                Ok(cancel) => Some(cancel),
+                Err(reply) => {
+                    deliver(reply);
+                    None
+                }
+            };
+            (cancel, None)
         }
         Request::Exec(request) => {
             let hub_exec = Arc::clone(hub);
@@ -613,7 +626,6 @@ fn settle(
             }
         }
         Request::Lock => {
-            drop(shared);
             // A command, hook, timer or tool holds no provider credential: calling
             // `refresh` there is an error in the calling code, raised as
             // a string.
@@ -622,34 +634,55 @@ fn settle(
                     "host.oauth.refresh: a {what} has no provider credential to refresh"
                 ))
             };
+            // Only a provider credential starts a wait, under the admission
+            // lock below, so no cancel or stop lands between admission and
+            // the start. Every other target releases the lock first and
+            // delivers its error after.
             let cancel = match &target {
                 Target::Provider {
                     credential: Some(pair),
                     ..
-                } => oauth::lock(home, pair, &deliver),
+                } => {
+                    #[cfg(test)]
+                    settle_hook(&target, Pause::Start);
+                    let started = oauth::lock(home, pair, &deliver);
+                    drop(shared);
+                    match started {
+                        Ok(cancel) => Some(cancel),
+                        Err(reply) => {
+                            deliver(reply);
+                            None
+                        }
+                    }
+                }
                 Target::Provider {
                     name,
                     function,
                     credential: None,
                 } => {
+                    drop(shared);
                     deliver(Reply::Lock(Err(crate::host::LockError::Arg(format!(
                         "host.oauth.refresh: {name}.{function} has no credential to refresh; only credential() refreshes"
                     )))));
                     None
                 }
                 Target::Command(_) => {
+                    drop(shared);
                     deliver(Reply::Lock(Err(no_credential("command"))));
                     None
                 }
                 Target::Hook { .. } => {
+                    drop(shared);
                     deliver(Reply::Lock(Err(no_credential("hook"))));
                     None
                 }
                 Target::Timer { .. } => {
+                    drop(shared);
                     deliver(Reply::Lock(Err(no_credential("timer"))));
                     None
                 }
                 Target::Tool(_) | Target::Effects(_) => {
+                    drop(shared);
                     deliver(Reply::Lock(Err(no_credential("tool"))));
                     None
                 }
@@ -681,14 +714,23 @@ fn settle(
     hub.notify();
 }
 
-/// What a test pauses `settle` with: called with the suspending target.
+/// What a test pauses `settle` with: called with the suspending target and
+/// the stage it reached.
 #[cfg(test)]
-type SettleHook = Arc<dyn Fn(&Target) + Send + Sync>;
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Pause {
+    Admission,
+    Start,
+}
 
-/// A test's pause inside `settle`, after the callback suspended and before
-/// its host work is admitted: it runs without the hub lock, so the test may
-/// abandon the VM or cancel the call there, without sleeps. The hook sees
-/// only calls for the tool it names; every other call passes through.
+/// A test's pause inside `settle`: called with the suspending target.
+#[cfg(test)]
+type SettleHook = Arc<dyn Fn(&Target, Pause) + Send + Sync>;
+
+/// A test's pause inside `settle`, at admission and before an OAuth start:
+/// it runs without the hub lock, so the test may abandon the VM or cancel
+/// the call there, without sleeps. The hook sees only calls for the tool it
+/// names; every other call passes through.
 #[cfg(test)]
 static SETTLE_HOOK: std::sync::Mutex<Option<SettleHook>> = std::sync::Mutex::new(None);
 
@@ -709,13 +751,13 @@ pub(super) fn unpause_settle() {
 }
 
 #[cfg(test)]
-fn settle_hook(target: &Target) {
+fn settle_hook(target: &Target, pause: Pause) {
     let hook = SETTLE_HOOK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
     if let Some(hook) = hook {
-        hook(target);
+        hook(target, pause);
     }
 }
 
