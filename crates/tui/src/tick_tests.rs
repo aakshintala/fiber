@@ -173,7 +173,8 @@ fn an_armed_ticker_sends_one_tick_at_its_deadline() {
         clock.await_parked_since(&mark, Some(at), DEADLINE),
         "waited {DEADLINE:?} for the ticker to park again"
     );
-    assert!(rx.try_recv().is_err());
+    // Nothing sent yet: an empty channel, not a dead thread.
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
     clock.advance(Duration::from_millis(1));
     assert!(matches!(tick(&rx), Input::Tick));
 }
@@ -221,7 +222,7 @@ fn rearming_moves_the_deadline() {
         clock.await_parked_since(&mark, Some(moved), DEADLINE),
         "waited {DEADLINE:?} for the ticker to park again"
     );
-    assert!(rx.try_recv().is_err());
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
 }
 
 #[test]
@@ -283,8 +284,11 @@ fn dropping_a_tick_thread_ends_its_thread() {
     tick.start(shared, tx);
     drop(tick);
     // The thread's return drops its only sender, closing the channel: a
-    // timeout fails the test.
-    assert!(rx.recv_timeout(DEADLINE).is_err());
+    // timeout instead would pass a thread that never ends.
+    assert!(matches!(
+        rx.recv_timeout(DEADLINE),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    ));
 }
 
 #[test]
