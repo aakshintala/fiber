@@ -7,7 +7,9 @@ mod common;
 
 use std::fs;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use common::{Setup, key};
 use config::{ConfigError, Layer, ListChange, ListEdit, edit_list};
@@ -15,6 +17,9 @@ use contract::ErrorCode;
 use serde_json::json;
 
 const MEMORY_FULL: &str = "github.com/aakshintala/fiber/extensions/memory";
+
+/// How long one writer's ten locked edits may take before the test names it.
+const WRITER_DONE: Duration = Duration::from_secs(30);
 
 fn edit<'a>(key: &'a str, name: &'a str, change: ListChange) -> ListEdit<'a> {
     ListEdit {
@@ -524,9 +529,11 @@ fn an_empty_slice_writes_nothing() {
 #[test]
 fn concurrent_edits_lose_no_name() {
     let setup = Arc::new(Setup::new());
+    let (done, finished) = mpsc::channel();
     let writers: Vec<_> = (0..8)
         .map(|w| {
             let setup = Arc::clone(&setup);
+            let done = done.clone();
             thread::spawn(move || {
                 for n in 0..10 {
                     edit_list(
@@ -543,10 +550,15 @@ fn concurrent_edits_lose_no_name() {
                     )
                     .unwrap();
                 }
+                done.send(()).unwrap();
             })
         })
         .collect();
-    for writer in writers {
+    drop(done);
+    for (w, writer) in writers.into_iter().enumerate() {
+        finished
+            .recv_timeout(WRITER_DONE)
+            .unwrap_or_else(|_| panic!("writer {w} did not finish its 10 edits in time"));
         writer.join().unwrap();
     }
     let root: serde_json::Value =

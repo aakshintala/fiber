@@ -551,28 +551,39 @@ fn fit_counts_terminal_columns() {
 
 #[test]
 fn wide_names_keep_the_switch_columns_aligned() {
-    let fake = Fake::new(Vec::new());
+    let fake = fake_with(vec![group_switches(
+        ToolGroup::Mcp("s".to_owned()),
+        &[],
+        &[],
+    )]);
     let tools = opened(
         &fake,
         &[
-            builtin("abc"),
-            builtin("\u{3042}\u{3044}\u{3046}"),
-            builtin(&"e\u{301}".repeat(5)),
+            mcp("mcp__s__abc", "s", "abc"),
+            mcp(
+                "mcp__s__\u{3042}\u{3044}\u{3046}",
+                "s",
+                "\u{3042}\u{3044}\u{3046}",
+            ),
+            mcp(
+                &format!("mcp__s__{}", "e\u{301}".repeat(5)),
+                "s",
+                &"e\u{301}".repeat(5),
+            ),
         ],
         None,
     );
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     render(&tools.frame(None), area, &mut buf, &mut Vec::new());
-    let bracket = |y: u16| {
-        (0..80)
-            .find(|x| buf[(*x, y)].symbol() == "[")
-            .unwrap_or(u16::MAX)
-    };
+    let bracket = |y: u16| (0..80).find(|x| buf[(*x, y)].symbol() == "[");
     // Tool rows are y 2, 3 and 4: the heading is y 1.
-    assert_eq!(bracket(2), bracket(3));
-    assert_eq!(bracket(3), bracket(4));
-    assert!(bracket(2) > 0);
+    let second = bracket(2).expect("row 2 renders its project switch");
+    let third = bracket(3).expect("row 3 renders its project switch");
+    let fourth = bracket(4).expect("row 4 renders its project switch");
+    assert_eq!(second, third);
+    assert_eq!(third, fourth);
+    assert!(second > 0);
 }
 
 #[test]
