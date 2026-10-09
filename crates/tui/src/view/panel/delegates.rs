@@ -9,7 +9,6 @@ use ratatui::text::{Line, Span};
 use super::Row;
 use crate::app::App;
 use crate::app::panel::Spot;
-use crate::format;
 use crate::markdown::{Role, style};
 
 /// How many delegates the card shows at once: two rows each, at most 6
@@ -74,13 +73,13 @@ pub(crate) fn rows(app: &App, text: usize) -> Vec<Row> {
             });
         }
         out.push(Row {
-            line: Line::raw(format::cut(&format!("  {description}"), text)),
+            line: Line::raw(format!("  {description}")),
             spot,
             tint: None,
             edge: false,
         });
     }
-    out
+    super::fit_rows(out, text)
 }
 
 /// Asks for the next frame for a spinning delegate whose state row draws:

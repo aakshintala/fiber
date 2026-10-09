@@ -138,9 +138,23 @@ fn pct_and_bar_floor() {
         Some(serde_json::json!({"tokens": 119, "window": 1000})),
     ));
     let drawn = texts(&app, 40);
-    assert!(drawn.iter().any(|row| row == "context  11% of 1.0k tokens"));
-    let bar = "▆▆▆▆".to_owned() + &"░".repeat(25) + "│" + &"░".repeat(7);
-    assert!(drawn.iter().any(|row| row == &bar));
+    // Two of 17 cells fill (119 of the 800 trigger), then the marker
+    // and the size right-aligned.
+    let bar = "▆▆".to_owned() + &"░".repeat(15) + "│" + &" ".repeat(16) + "119";
+    assert!(drawn.iter().any(|row| row == &bar), "{drawn:?}");
+    // The handoff row fits with three of pad, nothing cut.
+    assert!(
+        drawn
+            .iter()
+            .any(|row| row == "handoff at 800          11% of window"),
+        "{drawn:?}"
+    );
+    assert!(
+        drawn
+            .iter()
+            .any(|row| row == "then a summary, fresh context"),
+        "{drawn:?}"
+    );
 }
 
 #[test]
@@ -148,9 +162,9 @@ fn context_rows_need_a_window_and_a_status() {
     let mut app = attached(160, 40);
     app.on_line(preamble_line(Some(800)));
     assert!(
-        texts(&app, 40)
-            .iter()
-            .all(|row| !row.starts_with("context") && !row.contains('▆'))
+        texts(&app, 40).iter().all(|row| !row.contains('▆')
+            && !row.contains("handoff")
+            && !row.contains("of window"))
     );
 }
 
@@ -176,9 +190,9 @@ fn a_zero_context_window_has_no_context_rows() {
             .any(|row| row == "model  test/model · thinking high")
     );
     assert!(
-        drawn
-            .iter()
-            .all(|row| !row.starts_with("context") && !row.contains('▆'))
+        drawn.iter().all(|row| !row.contains('▆')
+            && !row.contains("handoff")
+            && !row.contains("of window"))
     );
 }
 
@@ -191,11 +205,15 @@ fn a_full_context_fills_every_cell() {
         Some(serde_json::json!({"tokens": 1000, "window": 1000})),
     ));
     let drawn = texts(&app, 40);
-    assert!(drawn.iter().any(|row| row == &"▆".repeat(37)));
+    // All 17 cells fill, no marker without a trigger, then the size.
+    let bar = "▆".repeat(17) + &" ".repeat(16) + "1.0k";
+    assert!(drawn.iter().any(|row| row == &bar), "{drawn:?}");
+    // With no trigger the share stands alone, left-aligned.
+    assert!(drawn.iter().any(|row| row == "100% of window"), "{drawn:?}");
 }
 
 #[test]
-fn the_marker_at_the_window_sits_on_the_last_cell() {
+fn the_marker_follows_the_seventeen_cells() {
     let mut app = attached(160, 40);
     app.on_line(preamble_line(Some(1000)));
     app.on_line(status_line(
@@ -203,8 +221,35 @@ fn the_marker_at_the_window_sits_on_the_last_cell() {
         Some(serde_json::json!({"tokens": 500, "window": 1000})),
     ));
     let drawn = texts(&app, 40);
-    let bar = "▆".repeat(18) + &"░".repeat(18) + "│";
-    assert!(drawn.iter().any(|row| row == &bar));
+    let bar = "▆".repeat(8) + &"░".repeat(9) + "│" + &" ".repeat(16) + "500";
+    assert!(drawn.iter().any(|row| row == &bar), "{drawn:?}");
+    // The handoff row fits with two of pad, nothing cut.
+    assert!(
+        drawn
+            .iter()
+            .any(|row| row == "handoff at 1.0k         50% of window"),
+        "{drawn:?}"
+    );
+}
+
+#[test]
+fn the_fill_clamps_at_zero_the_trigger_and_past_it() {
+    assert_eq!(super::bar_fill(0, 1000, Some(800)), 0);
+    assert_eq!(super::bar_fill(800, 1000, Some(800)), 17);
+    assert_eq!(super::bar_fill(900, 1000, Some(800)), 17);
+    assert_eq!(super::bar_fill(500, 1000, None), 8);
+    // A zero goal never divides: empty, not a panic.
+    assert_eq!(super::bar_fill(5, 0, None), 0);
+    assert_eq!(super::bar_fill(5, 1000, Some(0)), 0);
+}
+
+#[test]
+fn sides_pads_exact_fit_and_cuts_one_short() {
+    use ratatui::text::Span;
+    let fit = super::sides(vec![Span::raw("ab")], Span::raw("cd"), 5);
+    assert_eq!(fit.to_string(), "ab cd");
+    let cut = super::sides(vec![Span::raw("ab")], Span::raw("cd"), 4);
+    assert_eq!(cut.to_string(), "… cd");
 }
 
 #[test]
@@ -412,8 +457,6 @@ fn session_card_full() {
             TargetId::Panel(Spot::Context),
             TargetId::Panel(Spot::Context),
             TargetId::Panel(Spot::Context),
-            TargetId::Panel(Spot::Context),
-            TargetId::Panel(Spot::Context),
             TargetId::Panel(Spot::Usage),
             TargetId::Panel(Spot::Usage),
             TargetId::Panel(Spot::Usage),
@@ -458,12 +501,11 @@ fn every_context_card_row_opens_the_context_view() {
     let drawn = rows(&app, 40);
     let context_rows: Vec<&super::Row> = drawn
         .iter()
-        .filter(|row| {
-            let line = row.line.to_string();
-            line.starts_with("context") || line.contains('▆') || line.contains("handoff")
-        })
+        .filter(|row| row.spot == Some(Spot::Context))
         .collect();
-    assert!(context_rows.len() >= 3);
+    // The bar, the handoff row and the summary row, each opening the
+    // context breakdown.
+    assert_eq!(context_rows.len(), 3);
     assert!(
         context_rows
             .iter()
@@ -672,9 +714,8 @@ fn widget_rows_are_cut_at_the_text_width() {
     // The card's edges frame its two text rows.
     assert_eq!(drawn.len(), 4);
     assert!(drawn[1].starts_with("plan · tasks"));
-    for row in &drawn[1..3] {
-        assert!(crate::format::width(row) <= text, "{row:?}");
-    }
+    assert_eq!(crate::format::width(&drawn[2]), text);
+    assert!(drawn[2].ends_with('\u{2026}'), "{:?}", drawn[2]);
     assert_eq!(crate::format::width(&drawn[0]), text + 2);
     assert_eq!(crate::format::width(&drawn[3]), text + 2);
 }
@@ -973,4 +1014,78 @@ fn each_card_sits_on_its_surface_with_edges() {
     for x in 60..100 {
         assert_ne!(buf[(x, 5)].bg, surface, "separator at ({x}, 5)");
     }
+}
+
+/// At the panel floor and at 60, every Session card row fits the card and a
+/// row too long for it ends in `…` (`docs/tui.md`, "The panel").
+#[test]
+fn session_card_rows_are_cut_with_an_ellipsis() {
+    let mut app = attached(140, 24);
+    full_session(&mut app);
+    for width in [30u16, 60] {
+        let text = usize::from(width) - 3;
+        let rows = texts(&app, width);
+        for row in rows
+            .iter()
+            .filter(|row| !row.contains(['\u{2584}', '\u{2580}']))
+        {
+            assert!(crate::format::width(row) <= text, "{width}: {row:?}");
+        }
+        let speed = rows
+            .iter()
+            .find(|row| row.starts_with("output speed"))
+            .unwrap_or_else(|| panic!("{width}: {rows:?}"));
+        if width == 30 {
+            assert!(speed.ends_with('\u{2026}'), "{speed:?}");
+        } else {
+            assert!(speed.ends_with("tokens/s"), "{speed:?}");
+        }
+    }
+}
+
+/// `fit_rows` keeps a row at exactly `text` columns, and cuts one a column
+/// longer to `text` columns ending in `…`.
+#[test]
+fn a_row_is_cut_only_past_the_card_width() {
+    let text = "turns  12";
+    let width = crate::format::width(text);
+    let kept = super::fit_rows(vec![super::plain(text.to_owned())], width);
+    assert_eq!(kept[0].line.to_string(), text);
+    let cut = super::fit_rows(vec![super::plain(text.to_owned())], width - 1);
+    assert_eq!(cut[0].line.to_string(), "turns  \u{2026}");
+    let one = super::fit_rows(vec![super::plain(text.to_owned())], 1);
+    assert_eq!(one[0].line.to_string(), "\u{2026}");
+}
+
+#[test]
+fn a_cut_row_keeps_its_target_and_tint() {
+    let mut row = super::targeted(
+        "cost on subscription  $1.10".to_owned(),
+        crate::app::panel::Spot::Usage,
+    );
+    row.tint = Some(crate::view::Role::Surface);
+    let cut = super::fit_rows(vec![row], 20);
+    assert_eq!(cut.len(), 1);
+    assert_eq!(cut[0].spot, Some(crate::app::panel::Spot::Usage));
+    assert_eq!(cut[0].tint, Some(crate::view::Role::Surface));
+}
+
+/// A row of several spans is cut inside the span that overflows; the spans
+/// before it stay whole and the ones after it go.
+#[test]
+fn a_row_of_spans_is_cut_in_the_overflowing_span() {
+    use ratatui::text::{Line, Span};
+    let row = super::Row {
+        line: Line::from(vec![
+            Span::raw("run  "),
+            Span::raw("claude-opus"),
+            Span::raw("!"),
+        ]),
+        spot: None,
+        tint: None,
+        edge: false,
+    };
+    let cut = super::fit_rows(vec![row], 10);
+    assert_eq!(cut[0].line.to_string(), "run  clau\u{2026}");
+    assert_eq!(cut[0].line.spans.len(), 2);
 }

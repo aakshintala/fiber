@@ -104,7 +104,7 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
     let mut out = Vec::new();
     let mut span = None;
     for card in cards(app.panel_cards(), &names) {
-        let drawn = card_rows(app, &card, text);
+        let drawn = fit_rows(card_rows(app, &card, text), text);
         if drawn.is_empty() {
             continue;
         }
@@ -201,14 +201,47 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     }
 }
 
+/// `rows` with each row wider than `text` cut to fit, its last cell a
+/// `…` in the style of the span it cuts (`docs/tui.md`, "The panel"). A
+/// row keeps its target, tint and spans before the cut.
+fn fit_rows(rows: Vec<Row>, text: usize) -> Vec<Row> {
+    rows.into_iter()
+        .map(|mut row| {
+            if row.line.width() > text {
+                row.line.spans = fit_spans(std::mem::take(&mut row.line.spans), text);
+            }
+            row
+        })
+        .collect()
+}
+
+/// `spans` cut to `text` columns, ending in `…`.
+fn fit_spans(spans: Vec<Span<'static>>, text: usize) -> Vec<Span<'static>> {
+    let room = text.saturating_sub(1);
+    let mut out = Vec::new();
+    let mut used = 0;
+    for span in spans {
+        let width = format::width(&span.content);
+        if used + width <= room {
+            used += width;
+            out.push(span);
+            continue;
+        }
+        let kept = format::cut(&span.content, room - used);
+        out.push(Span::styled(format!("{kept}\u{2026}"), span.style));
+        return out;
+    }
+    out
+}
+
 /// One card's rows at `text` columns.
 fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
     match card {
         Card::Session => session_rows(app, text),
         Card::ChangedFiles => changed_files_rows(app, text),
-        Card::Jobs => jobs_rows(app, text),
+        Card::Jobs => jobs_rows(app),
         Card::Delegates => delegates::rows(app, text),
-        Card::Widget(at) => widget_rows(app, *at, text),
+        Card::Widget(at) => widget_rows(app, *at),
     }
 }
 /// The Session card's rows at `text` columns, each left out when its
@@ -218,7 +251,7 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
     let mut out = Vec::new();
     if let Some(waiting) = app.rail_waiting() {
         out.push(Row {
-            line: Line::raw(format::cut(&format!("{waiting} waiting"), text)),
+            line: Line::raw(format!("{waiting} waiting")),
             spot: Some(Spot::Waiting),
             tint: None,
             edge: false,
@@ -230,7 +263,7 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             cut_left(&status.workspace, text.saturating_sub("directory  ".len()))
         )));
     }
-    if let Some(row) = branch_row(app, text) {
+    if let Some(row) = branch_row(app) {
         out.push(row);
     }
     let model = panel
@@ -241,7 +274,7 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
         if let Some(thinking) = panel.thinking() {
             row.push_str(&format!(" · thinking {thinking}"));
         }
-        out.push(plain(format::cut(&row, text)));
+        out.push(plain(row));
     }
     let window = panel.window().filter(|window| *window > 0);
     let context = window.and_then(|window| {
@@ -252,27 +285,48 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
     });
     if let Some((window, context)) = context {
         let pct = context.tokens.saturating_mul(100) / window;
-        out.push(targeted(
-            format!("context  {pct}% of {}", format::tokens(window)),
-            Spot::Context,
-        ));
+        // The bar: 17 cells toward the handoff point, the marker, and
+        // the context size right-aligned (`docs/tui.md`, "The panel").
         out.push(Row {
-            line: context_bar(context.tokens, window, panel.trigger_at(), text),
+            line: sides(
+                bar_spans(context.tokens, window, panel.trigger_at()),
+                Span::raw(short_tokens(context.tokens)),
+                text,
+            ),
             spot: Some(Spot::Context),
             tint: None,
             edge: false,
         });
-        if let Some(trigger) = panel.trigger_at() {
-            let handoff = format!(
-                "│ handoff at {}: Fiber writes a summary and the work continues in a fresh context",
-                format::tokens(trigger)
-            );
-            out.extend(format::wrap(&handoff, text).into_iter().map(|row| Row {
-                line: Line::styled(row, style(Role::Muted)),
-                spot: Some(Spot::Context),
-                tint: None,
-                edge: false,
-            }));
+        match panel.trigger_at() {
+            Some(trigger) => {
+                out.push(Row {
+                    line: sides(
+                        vec![Span::styled(
+                            format!("handoff at {}", short_tokens(trigger)),
+                            style(Role::Muted),
+                        )],
+                        Span::styled(format!("{pct}% of window"), style(Role::Muted)),
+                        text,
+                    ),
+                    spot: Some(Spot::Context),
+                    tint: None,
+                    edge: false,
+                });
+                out.push(Row {
+                    line: Line::styled("then a summary, fresh context", style(Role::Muted)),
+                    spot: Some(Spot::Context),
+                    tint: None,
+                    edge: false,
+                });
+            }
+            None => {
+                out.push(Row {
+                    line: Line::styled(format!("{pct}% of window"), style(Role::Muted)),
+                    spot: Some(Spot::Context),
+                    tint: None,
+                    edge: false,
+                });
+            }
         }
     }
     if let Some(status) = panel.status() {
@@ -362,38 +416,61 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
     out
 }
 
-/// The context bar at `text` cells: `▆` toward the handoff point, `░`
-/// past it, and `│` at the handoff point when one is set (`docs/tui.md`,
-/// "The panel").
-fn context_bar(tokens: u64, window: u64, trigger: Option<u64>, text: usize) -> Line<'static> {
-    let cells = u64::try_from(text).unwrap_or(u64::MAX);
+/// How many of the bar's 17 cells fill toward the handoff point:
+/// `tokens` against the trigger, or the window with none, clamped to
+/// the bar.
+fn bar_fill(tokens: u64, window: u64, trigger: Option<u64>) -> usize {
+    let goal = trigger.unwrap_or(window);
     let filled = tokens
-        .saturating_mul(cells)
-        .saturating_div(window)
-        .min(cells);
-    let marker = trigger.map(|trigger| {
-        trigger
-            .saturating_mul(cells)
-            .saturating_div(window)
-            .min(cells.saturating_sub(1))
-    });
-    let mut spans = Vec::new();
-    for at in 0..text {
-        let cell = u64::try_from(at).unwrap_or(u64::MAX);
-        if marker == Some(cell) {
-            spans.push(Span::styled("│", style(Role::Text)));
-        } else if cell < filled {
-            spans.push(Span::styled("▆", style(Role::Accent)));
-        } else {
-            spans.push(Span::styled("░", style(Role::Muted)));
-        }
+        .saturating_mul(17)
+        .checked_div(goal)
+        .unwrap_or(0)
+        .min(17);
+    usize::try_from(filled).unwrap_or(17)
+}
+
+/// The context bar's cells: 17 `▆`, filled toward the handoff point,
+/// then the handoff marker when one exists (`docs/tui.md`, "The
+/// panel").
+fn bar_spans(tokens: u64, window: u64, trigger: Option<u64>) -> Vec<Span<'static>> {
+    let fill = bar_fill(tokens, window, trigger);
+    let mut spans = Vec::with_capacity(18);
+    for _ in 0..fill {
+        spans.push(Span::styled("▆", style(Role::Accent)));
     }
-    Line::from(spans)
+    for _ in fill..17 {
+        spans.push(Span::styled("░", style(Role::Muted)));
+    }
+    if trigger.is_some() {
+        spans.push(Span::styled("│", style(Role::Attention)));
+    }
+    spans
+}
+
+/// A row from `left` spans with `right` right-aligned at `text`
+/// columns: at least one space of pad between them, the left cut with
+/// `…` when the two cannot fit (`docs/tui.md`, "The panel").
+fn sides(left: Vec<Span<'static>>, right: Span<'static>, text: usize) -> Line<'static> {
+    let right_w = format::width(&right.content);
+    let room = text.saturating_sub(right_w + 1);
+    // `fit_spans` keeps a cell for the `…`, so only rows too long for
+    // the room go through it; a row that fits keeps every cell.
+    let left_w: usize = left.iter().map(|span| format::width(&span.content)).sum();
+    let mut out = if left_w <= room {
+        left
+    } else {
+        fit_spans(left, room.max(1))
+    };
+    let used: usize = out.iter().map(|span| format::width(&span.content)).sum();
+    let pad = text.saturating_sub(used + right_w).max(1);
+    out.push(Span::raw(" ".repeat(pad)));
+    out.push(right);
+    Line::from(out)
 }
 
 /// The Session card's branch row: the last query's answer, else the
 /// status's git. A click runs `git status` (`docs/tui.md`, "Git").
-fn branch_row(app: &App, text: usize) -> Option<Row> {
+fn branch_row(app: &App) -> Option<Row> {
     let panel = app.panel_state();
     let branch = match panel.branch() {
         Some(Branch::Named(name)) => name.clone(),
@@ -405,7 +482,7 @@ fn branch_row(app: &App, text: usize) -> Option<Row> {
         }
     };
     Some(Row {
-        line: Line::raw(format::cut(&format!("branch  {branch}"), text)),
+        line: Line::raw(format!("branch  {branch}")),
         spot: Some(Spot::Branch),
         tint: None,
         edge: false,
@@ -460,15 +537,15 @@ fn short_tokens(n: u64) -> String {
         .to_owned()
 }
 
-/// A widget card's rows at `text` columns: a dim title row, then each
+/// A widget card's rows : a dim title row, then each
 /// of the widget's lines.
-fn widget_rows(app: &App, at: usize, text: usize) -> Vec<Row> {
+fn widget_rows(app: &App, at: usize) -> Vec<Row> {
     let Some(widget) = app.panel_state().widgets().get(at) else {
         return Vec::new();
     };
     let mut out = vec![Row {
         line: Line::styled(
-            format::cut(&format!("{} · {}", widget.extension, widget.widget), text),
+            format!("{} · {}", widget.extension, widget.widget),
             style(Role::Muted),
         ),
         spot: None,
@@ -476,7 +553,7 @@ fn widget_rows(app: &App, at: usize, text: usize) -> Vec<Row> {
         edge: false,
     }];
     out.extend(widget.lines.iter().map(|line| Row {
-        line: Line::raw(format::cut(line, text)),
+        line: Line::raw(line.clone()),
         spot: None,
         tint: None,
         edge: false,
@@ -537,22 +614,19 @@ fn changed_files_rows(app: &App, text: usize) -> Vec<Row> {
 /// delegate is a job with a `delegate_started`, and its own card shows it
 /// (`docs/tui.md`, "The panel"). Each listed job row carries its job's
 /// serial, so a click opens that job.
-fn jobs_rows(app: &App, text: usize) -> Vec<Row> {
+fn jobs_rows(app: &App) -> Vec<Row> {
     let running = app.panel_state().running_jobs();
     if running.is_empty() {
         return Vec::new();
     }
     let mut out = vec![Row {
-        line: Line::raw(format::cut(
-            &format!(
-                "{} running",
-                format::count(
-                    u64::try_from(running.len()).unwrap_or(u64::MAX),
-                    "job",
-                    "jobs"
-                )
-            ),
-            text,
+        line: Line::raw(format!(
+            "{} running",
+            format::count(
+                u64::try_from(running.len()).unwrap_or(u64::MAX),
+                "job",
+                "jobs"
+            )
         )),
         spot: Some(Spot::Jobs),
         tint: None,
@@ -562,7 +636,7 @@ fn jobs_rows(app: &App, text: usize) -> Vec<Row> {
         out.extend(running.into_iter().map(|(id, description)| {
             let spot = app.serial_of_job(id).map(Spot::Job);
             Row {
-                line: Line::raw(format::cut(&format!("  {description}"), text)),
+                line: Line::raw(format!("  {description}")),
                 spot,
                 tint: None,
                 edge: false,
