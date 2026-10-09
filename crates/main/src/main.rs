@@ -24,6 +24,7 @@ mod late_emit;
 mod launch;
 mod lua_providers;
 mod mcp_servers;
+mod open;
 mod prompt_files;
 mod resume;
 mod rewind;
@@ -151,7 +152,9 @@ fn run() -> i32 {
         }
         // `fiber` with no arguments opens the terminal: this tty as a
         // client of the hub, starting one when none runs.
-        cli::Invocation::Run(None) => terminal(fiber),
+        cli::Invocation::Run(None) => terminal(fiber, tui::OpenAt::Home),
+        cli::Invocation::Run(Some(cli::Commands::Resume { id })) => open::resume(id, fiber),
+        cli::Invocation::Run(Some(cli::Commands::Continue)) => open::continue_latest(fiber),
         cli::Invocation::Usage {
             ask: true,
             sentence,
@@ -795,12 +798,9 @@ fn choose_reviewer(
 /// (`docs/invocation.md`, "Two doors"). Without a tty it is a usage error
 /// naming `fiber ask`. The hub it starts listens on its local socket only
 /// and is never waited on.
-fn terminal(fiber: Result<PathBuf, String>) -> i32 {
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        eprintln!(
-            "fiber: The terminal needs a tty; run `fiber ask \"<prompt>\"`. Run `fiber --help` for usage."
-        );
-        return 2;
+fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
+    if let Some(code) = open::needs_tty() {
+        return code;
     }
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(clock::System);
     let home = match config::fiber_home_from_env() {
@@ -840,7 +840,8 @@ fn terminal(fiber: Result<PathBuf, String>) -> i32 {
         doors::hub::connect(&home, &mut start, hub_clock.as_ref())
     });
     let identity = doors::project(&workspace);
-    let launch = launch::launch(workspace, &identity, &config, theme);
+    let mut launch = launch::launch(workspace, &identity, &config, theme);
+    launch.open_at = open_at;
     tui::run(tty, launch, connect, Box::new(crash::attach), clock)
 }
 
