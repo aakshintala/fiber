@@ -88,7 +88,6 @@ impl ContextFold {
                 self.largest.clear();
                 self.names.clear();
             }
-            "handoff_completed" => {}
             _ => {}
         }
     }
