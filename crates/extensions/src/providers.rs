@@ -426,6 +426,7 @@ impl Providers {
                         headers: BTreeMap::new(),
                         placeholders: BTreeMap::new(),
                         reviewer_model: None,
+                        login: None,
                     },
                 );
             }
@@ -549,6 +550,7 @@ impl Providers {
             headers: BTreeMap::new(),
             placeholders: BTreeMap::new(),
             reviewer_model: None,
+            login: None,
         })
     }
 
