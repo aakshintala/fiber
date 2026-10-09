@@ -5,7 +5,7 @@ use jiff::tz::TimeZone;
 use ratatui::layout::Alignment;
 use ratatui::style::Modifier;
 
-use super::{new_york, time_of_day};
+use super::{new_york, time_of_day, utc_minute};
 
 #[test]
 fn spring_forward_skips_the_second_hour() {
@@ -45,6 +45,21 @@ fn out_of_range_instants_have_no_time() {
     let max = u64::try_from(jiff::Timestamp::MAX.as_millisecond()).unwrap_or(u64::MAX);
     assert!(time_of_day(max, &zone).is_some());
     assert_eq!(time_of_day(max.saturating_add(1), &zone), None);
+}
+
+#[test]
+fn utc_minute_formats_ms_as_a_utc_minute() {
+    assert_eq!(utc_minute(0), Some("1970-01-01 00:00 UTC".to_owned()));
+    // 2024-02-29T23:59:59.999Z: the leap day, truncated to the minute.
+    assert_eq!(
+        utc_minute(1709251199999),
+        Some("2024-02-29 23:59 UTC".to_owned())
+    );
+    let latest = u64::try_from(jiff::Timestamp::MAX.as_millisecond()).unwrap_or(u64::MAX);
+    assert_eq!(utc_minute(latest), Some("9999-12-30 22:00 UTC".to_owned()));
+    assert_eq!(utc_minute(latest.saturating_add(1)), None);
+    assert_eq!(utc_minute(latest.saturating_add(2)), None);
+    assert_eq!(utc_minute(u64::MAX), None);
 }
 
 #[test]

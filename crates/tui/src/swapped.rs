@@ -27,6 +27,9 @@ pub(crate) enum Spot {
     Close,
     /// A row, by its index: selects it, or chooses it in a choice list.
     Row(usize),
+    /// A rule row's ✕, by its index: revokes the rule
+    /// (`docs/tui.md`, "Swapped views").
+    Revoke(usize),
 }
 
 /// A list's selection and the first row shown.

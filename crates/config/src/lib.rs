@@ -43,7 +43,7 @@ pub use home::{
     fiber_home_path_from_env,
 };
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
-pub use rules::RulesFiles;
+pub use rules::{RuleLine, RulesFiles, RulesListing, RulesScope, list_rules, remove_rule};
 pub use secret::{
     CredentialSource, credential_labels, delete_credential, delete_credential_held,
     read_credential, read_secret, store_credential, store_secret,

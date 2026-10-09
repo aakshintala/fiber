@@ -45,6 +45,7 @@ mod paste_image;
 mod results_support;
 mod retry;
 mod rows;
+mod rules_view;
 mod screen;
 mod settings_view;
 mod shell;
@@ -68,7 +69,10 @@ use crate::link::Line;
 
 pub use attention::Attention;
 
-pub use configure::{Configure, ConfigureError, Layer, Saved, SettingRow, Shown, WriteScope};
+pub use configure::{
+    Configure, ConfigureError, Layer, Revoked, RuleRow, RulesScope, RulesSection, Saved,
+    SettingRow, Shown, WriteScope,
+};
 
 pub use home::Launch;
 

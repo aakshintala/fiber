@@ -7,7 +7,13 @@ use std::sync::Mutex;
 use contract::ErrorCode;
 
 use crate::ThemeSetting;
-use crate::configure::{Configure, ConfigureError, Layer, Saved, SettingRow, Shown, WriteScope};
+use crate::configure::{
+    Configure, ConfigureError, Layer, Revoked, RulesScope, RulesSection, Saved, SettingRow, Shown,
+    WriteScope,
+};
+
+/// One revoke the view asked for: the workspace, scope, line and text.
+pub(crate) type Revoke = (PathBuf, RulesScope, usize, String);
 
 /// One write the view asked for: the workspace, layer, key and text.
 pub(crate) type Write = (PathBuf, Layer, String, String);
@@ -26,6 +32,12 @@ pub(crate) struct Fake {
     pub(crate) themes: Vec<String>,
     /// What `global_file` answers.
     pub(crate) global: PathBuf,
+    /// What `rules` answers.
+    pub(crate) rules: Mutex<Result<(RulesSection, RulesSection), ConfigureError>>,
+    /// Every revoke asked for, in order.
+    pub(crate) revokes: Mutex<Vec<Revoke>>,
+    /// What `revoke` answers.
+    pub(crate) revoked: Mutex<Result<Revoked, ConfigureError>>,
 }
 
 impl Fake {
@@ -38,6 +50,18 @@ impl Fake {
             refuse: Mutex::new(None),
             themes: Vec::new(),
             global: file(Layer::Global),
+            rules: Mutex::new(Ok((
+                RulesSection {
+                    file: PathBuf::from("/home/rules"),
+                    rows: Ok(Vec::new()),
+                },
+                RulesSection {
+                    file: PathBuf::from("/home/projects/-w/rules"),
+                    rows: Ok(Vec::new()),
+                },
+            ))),
+            revokes: Mutex::new(Vec::new()),
+            revoked: Mutex::new(Ok(Revoked::Removed)),
         }
     }
 
@@ -49,6 +73,11 @@ impl Fake {
     /// The workspaces read so far.
     pub(crate) fn reads(&self) -> Vec<PathBuf> {
         self.reads.lock().map(|r| r.clone()).unwrap_or_default()
+    }
+
+    /// The revokes asked for so far.
+    pub(crate) fn revokes(&self) -> Vec<Revoke> {
+        self.revokes.lock().map(|r| r.clone()).unwrap_or_default()
     }
 }
 
@@ -123,6 +152,42 @@ impl Configure for Fake {
 
     fn global_file(&self) -> PathBuf {
         self.global.clone()
+    }
+
+    fn rules(&self, workspace: &Path) -> Result<(RulesSection, RulesSection), ConfigureError> {
+        if let Ok(mut reads) = self.reads.lock() {
+            reads.push(workspace.to_path_buf());
+        }
+        self.rules.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |rules| rules.clone(),
+        )
+    }
+
+    fn revoke(
+        &self,
+        workspace: &Path,
+        scope: RulesScope,
+        line: usize,
+        text: &str,
+    ) -> Result<Revoked, ConfigureError> {
+        if let Ok(mut revokes) = self.revokes.lock() {
+            revokes.push((workspace.to_path_buf(), scope, line, text.to_owned()));
+        }
+        self.revoked.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |revoked| revoked.clone(),
+        )
     }
 
     fn themes(&self) -> Vec<String> {
