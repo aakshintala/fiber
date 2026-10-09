@@ -14,6 +14,7 @@ use crate::app::App;
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
+mod banner;
 pub(crate) mod chrome;
 #[path = "home_view.rs"]
 mod home;
@@ -64,12 +65,13 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 
 /// Draws `app` into `area` of `buf`, from the bottom up: the input box
 /// on the last rows with a completion panel above it, or the approval panel
-/// in their place, then the steering queue, the badge and the quit hint
-/// when shown, and the conversation in the rows left with the notices
-/// floating over its top-right corner, or the key map over them while it
-/// is open. A screen too short for them all drops the hint first, then the
-/// badge. A panel taller than the screen keeps its top, except that a
-/// question form scrolls to keep its cursor's row shown.
+/// in their place, then the steering queue, the reconnect banner, the
+/// badge and the quit hint when shown, and the conversation in the rows
+/// left with the notices floating over its top-right corner, or the key
+/// map over them while it is open. A screen too short for them all drops
+/// the hint first, then the badge. A panel taller than the screen keeps
+/// its top, except that a question form scrolls to keep its cursor's row
+/// shown.
 ///
 /// Returns the click targets drawn, in draw order. Last, the target under
 /// `pointer`, if any, gets [`HOVER_TINT`] as its background.
@@ -142,6 +144,7 @@ pub(crate) fn render(
             });
         }
     }
+    banner::draw(app, area, buf, &mut bottom);
     if let Some(rect) = app
         .badge()
         .and_then(|badge| put(buf, area, &mut bottom, &badge, Style::default()))

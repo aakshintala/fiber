@@ -55,6 +55,7 @@ mod offer;
 pub(crate) mod panel;
 mod paste;
 pub(crate) mod rail;
+mod reconnect;
 pub(crate) mod results;
 mod screen;
 mod select;
@@ -163,9 +164,11 @@ enum Link {
     Waiting,
     /// The hub spoke a `hub_hello` this terminal reads.
     Up,
-    /// The hub could not be reached, was refused, or hung up. Nothing goes
-    /// out again; reconnecting is a later ticket.
+    /// The hub could not be reached or hung up; the terminal retries with
+    /// backoff (`docs/tui.md`, "A dropped connection").
     Down,
+    /// The hub runs a schema this terminal cannot read: never retried.
+    Refused,
 }
 
 /// What clicking a line, or Enter on it, opens, keyed by an id that stays
@@ -258,6 +261,9 @@ pub(crate) struct App {
     /// What the hub's `attention` lines queued (`docs/tui.md`, "Getting
     /// the person's attention").
     attention: attention::State,
+    /// Failures since the hub was last reached (`docs/tui.md`, "A dropped
+    /// connection").
+    reconnect: reconnect::Reconnect,
 }
 
 impl App {
@@ -296,6 +302,7 @@ impl App {
             keyboard: keyboard::Keyboard::default(),
             opener: false,
             attention: attention::State::default(),
+            reconnect: reconnect::Reconnect::default(),
         }
     }
 
@@ -393,8 +400,10 @@ impl App {
         }
     }
 
-    /// Folds one line from the hub, returning command lines to send.
+    /// Folds one line from the hub, returning command lines to send. An
+    /// answer first releases the line kept for resending.
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
+        self.answered_line(&line);
         let mut lines = match self.home_line(&line) {
             Some(consumed) => consumed,
             None => match line {
@@ -403,6 +412,7 @@ impl App {
             },
         };
         lines.extend(self.home_outgoing());
+        lines.extend(self.sessions_outgoing());
         lines.extend(self.find_outgoing());
         self.reconcile_attention();
         self.settle();
@@ -415,10 +425,13 @@ impl App {
     }
 
     /// The hub could not be reached, or runs a schema this terminal cannot
-    /// read: the notice, and a held `start` fails as if rejected.
+    /// read: the notice for the first failure in a run, and a held `start`
+    /// fails as if rejected.
     pub(crate) fn connect_failed(&mut self, notice: String) {
         self.link = Link::Down;
-        self.notices.push(notice);
+        if self.notice_due() {
+            self.notices.push(notice);
+        }
         self.held.clear();
         if let Phase::Pending { command_id } = &self.phase {
             let id = command_id.clone();
@@ -427,22 +440,26 @@ impl App {
         self.settle();
     }
 
-    /// The hub connection ended. Reconnecting is a later ticket. A
-    /// connection never connected, refused for its schema version, keeps
-    /// the notice that says why.
+    /// The hub connection ended; the loop retries it. A connection never
+    /// connected, refused for its schema version, keeps the notice that
+    /// says why.
     pub(crate) fn disconnected(&mut self) {
         if self.link == Link::Up {
             self.link = Link::Down;
             self.notices.push("Connection lost.".to_owned());
         }
+        self.sessions_dropped();
         self.find_lost();
         self.abandon_copy();
         self.settle();
     }
 
     /// Writing `unsent`, command lines this app made, to the hub failed:
-    /// the connection is lost, and their commands fail as if rejected, so
-    /// a draft they carried returns to an empty draft. A close from the
+    /// the connection is lost, and the commands never written fail as if
+    /// rejected, so a draft they carried returns to an empty draft. A line
+    /// already written and kept for resending keeps its pending entry and
+    /// leaves the draft alone, so the next connection sends it again
+    /// (`docs/invocation.md`, "The command line"). A close from the
     /// quit question that was never written keeps its resume line.
     pub(crate) fn write_failed(&mut self, unsent: &[String]) {
         self.home_unsent(unsent);
@@ -452,6 +469,9 @@ impl App {
                 .ok()
                 .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
             {
+                if self.is_kept(&id) {
+                    continue;
+                }
                 self.fail(&id);
             }
         }
@@ -529,8 +549,8 @@ impl App {
     }
 
     /// The conversation's rows: the screen less the header, the input box
-    /// or the panel in its place, the steering queue, the badge and the
-    /// hint. None on a screen too short for them.
+    /// or the panel in its place, the steering queue, the banner, the badge
+    /// and the hint. None on a screen too short for them.
     pub(crate) fn conversation_height(&self) -> usize {
         let input = self.panel().map_or(self.input_height(), |panel| {
             panel
@@ -545,6 +565,7 @@ impl App {
             + input
             + self.completion_rows()
             + self.steering().len()
+            + usize::from(self.banner().is_some())
             + usize::from(self.badge().is_some())
             + usize::from(self.hint());
         usize::from(self.screen.height()).saturating_sub(below)
@@ -653,15 +674,20 @@ impl App {
         let command_id = hub_string(&hub.payload, "command_id");
         match hub.kind.as_str() {
             "hub_hello" if hub.schema_version == contract::SCHEMA_VERSION => {
+                let mut lines = std::mem::take(&mut self.held);
+                lines.extend(self.reconnected());
                 self.link = Link::Up;
-                std::mem::take(&mut self.held)
+                lines
             }
             "hub_hello" => {
+                // The hub was reached, so the refusal always says why.
+                self.hub_reached();
                 self.connect_failed(format!(
                     "The hub runs schema version {}; this terminal reads {}.",
                     hub.schema_version,
                     contract::SCHEMA_VERSION
                 ));
+                self.link = Link::Refused;
                 Vec::new()
             }
             "command_accepted" => {
@@ -765,6 +791,29 @@ impl App {
         }
         let mut send = self.reply_ack(envelope);
         if self.session() != Some(&envelope.session_id) {
+            // A resent command for another session settles its pending
+            // entry when its answer arrives, as on screen
+            // (`docs/invocation.md`, "The command line"). `reply_ack`
+            // above already settled a `reply`, including its decline's
+            // `cancel`, so a second settle here finds nothing to do.
+            match envelope.kind.as_str() {
+                "command_accepted" => {
+                    if let Some(accepted) = read!(envelope, CommandAccepted) {
+                        // No `commands_answered`: a `commands` answer from
+                        // another session is ignored, and a resent command
+                        // needs only its pending entry closed.
+                        self.pending.remove(&accepted.command_id.0);
+                    }
+                }
+                "command_rejected" => {
+                    if let Some(rejected) = read!(envelope, CommandRejected)
+                        && let Some(id) = rejected.command_id
+                    {
+                        self.refused(&id.0, &rejected.code, rejected.message);
+                    }
+                }
+                _ => {}
+            }
             return send;
         }
         // The search's fetch answers here, never in the pages: its lines
@@ -801,7 +850,7 @@ impl App {
                 if let Some(rejected) = read!(envelope, CommandRejected)
                     && let Some(id) = rejected.command_id
                 {
-                    self.rejected(&id.0, rejected.message);
+                    self.refused(&id.0, &rejected.code, rejected.message);
                 }
             }
             "reloaded" => {

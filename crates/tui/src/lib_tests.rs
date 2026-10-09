@@ -201,6 +201,7 @@ pub(super) fn new_loop<B: Backend>(
         copy_command: None,
         open_command: None,
         title: crate::osc::Title::default(),
+        retry: None,
     };
     (lp, attached)
 }
@@ -222,6 +223,15 @@ pub(super) fn hello() -> contract::HubLine {
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
     }
+}
+
+/// A connect that hands out `hub` and `hello` once, and fails after.
+pub(super) fn once(hub: UnixStream, hello: contract::HubLine) -> crate::Connect {
+    let mut held = Some((hub, hello));
+    Box::new(move || {
+        held.take()
+            .ok_or_else(|| io::Error::other("the test's one connection is used"))
+    })
 }
 
 /// Runs `work` on a thread and returns its result, failing after
@@ -558,13 +568,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     std::thread::Builder::new()
         .name("lib-run".to_owned())
         .spawn(move || {
-            let code = super::run(
-                slave,
-                launch(),
-                Box::new(move || Ok((hub, hello))),
-                Box::new(|_| {}),
-                clock,
-            );
+            let code = super::run(slave, launch(), once(hub, hello), Box::new(|_| {}), clock);
             match done.send(code) {
                 Ok(()) | Err(_) => {}
             }
@@ -1321,7 +1325,7 @@ fn spawn_run(hub: UnixStream) -> (Pair, mpsc::Receiver<i32>) {
             let code = super::run(
                 slave,
                 launch(),
-                Box::new(move || Ok((hub, hello))),
+                once(hub, hello),
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
             );
@@ -1567,6 +1571,7 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
         copy_command: None,
         open_command: None,
         title: crate::osc::Title::default(),
+        retry: None,
     };
     // No hub: a frame fetches no history, so nothing arrives here.
     let (_hub, idle) = mpsc::channel();
