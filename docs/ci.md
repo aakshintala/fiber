@@ -144,6 +144,13 @@ On Linux x86_64 alone:
   dependency tree (`cargo xtask tui-isolation`), so no other crate depends on
   a crate admitted only for the terminal
 - `shellcheck --shell=sh` on `scripts/install.sh` and its test stubs
+- actionlint over every file in `.github/workflows/`, when the diff changes
+  one. A workflow change runs the whole selection ("Selection"), so the job is
+  always selected. No `taiki-e/install-action` tool installs actionlint, so the
+  step downloads the pinned release, v1.7.12, and checks its SHA-256. It also runs
+  shellcheck on each `run:` script. Any finding fails the job. Locally it is
+  optional: `brew install actionlint`, then `actionlint` from the repository
+  root.
 - cargo-deny's licence, source and ban checks
 - the built-in tool definitions within their byte budget, with each
   definition's size printed

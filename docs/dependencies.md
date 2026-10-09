@@ -362,6 +362,7 @@ dependency.
 | cargo-nextest | tool | running tests, one process each |
 | cargo-mutants | tool | the mutation check on every pull request |
 | cargo-deny | tool | licences, advisories and crate sources |
+| actionlint | tool | linting `.github/workflows/*.yml` when a pull request changes one (`docs/ci.md`); CI downloads the pinned release |
 | cargo-about | tool | the release's third-party notices file |
 | zsh, fish | tool | the completion tests load `fiber completion`'s scripts in each shell (`docs/testing.md`, "Running tests"); bash is on every runner already, and macOS ships zsh. CI installs zsh and fish on Linux and fish on macOS |
 | dash, shellcheck | tool | the install-script test runs `install.sh` under `/bin/dash` (macOS ships it; it is Ubuntu's `/bin/sh`); `scripts/check` runs shellcheck on Linux, and GitHub's `ubuntu-24.04` image ships it |
