@@ -147,6 +147,31 @@ fn a_new_row_takes_the_smallest_free_number() {
 }
 
 #[test]
+fn a_first_card_gets_one() {
+    let app = with(&[A]);
+    assert_eq!(number(&app, A), Some(1));
+}
+
+#[test]
+fn a_fourth_card_gets_four() {
+    let app = with(&[A, B, C, D]);
+    assert_eq!(number(&app, A), Some(1));
+    assert_eq!(number(&app, B), Some(2));
+    assert_eq!(number(&app, C), Some(3));
+    assert_eq!(number(&app, D), Some(4));
+}
+
+#[test]
+fn a_new_card_takes_one_when_it_is_free() {
+    let mut app = with(&[A, B, C]);
+    app.on_line(left(A, "exited"));
+    assert_eq!(number(&app, B), Some(2));
+    assert_eq!(number(&app, C), Some(3));
+    app.on_line(live(D, json!({})));
+    assert_eq!(number(&app, D), Some(1));
+}
+
+#[test]
 fn numbers_stay_through_waiting_and_back() {
     let mut app = with(&[A, B]);
     let waiting = json!({"state": "waiting", "waiting": {"request_id": "r_1",

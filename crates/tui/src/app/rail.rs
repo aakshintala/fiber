@@ -58,9 +58,11 @@ impl RailState {
             if self.number(card.key).is_some() {
                 continue;
             }
-            let free = (1..=self.numbers.len() + 1)
-                .find(|number| !self.numbers.iter().any(|(_, held)| held == number))
-                .unwrap_or(self.numbers.len() + 1);
+            let mut held: Vec<usize> = self.numbers.iter().map(|(_, held)| *held).collect();
+            held.sort_unstable();
+            let free = held
+                .iter()
+                .fold(1, |next, held| if *held == next { next + 1 } else { next });
             self.numbers.push((card.key, free));
         }
     }
