@@ -471,6 +471,76 @@ fn main() {
         }
         black_box(shown);
     }
+    #[cfg(feature = "lopdf")]
+    {
+        // The image child: build a 20-page PDF in memory, load it,
+        // count its pages, cut pages 3 to 7, and save the cut to a `Vec`.
+        use lopdf::content::{Content, Operation};
+        use lopdf::{Document, Object, Stream, dictionary};
+        let mut doc = Document::with_version("1.5");
+        let info_id = doc.add_object(dictionary! {
+            "Title" => Object::string_literal("probe"),
+            "CreationDate" => Object::string_literal("D:19700101000000Z"),
+        });
+        let pages_id = doc.new_object_id();
+        let font_id = doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Courier",
+        });
+        let resources_id = doc.add_object(dictionary! {
+            "Font" => dictionary! {
+                "F1" => font_id,
+            },
+        });
+        let mut kids = Vec::new();
+        for n in 1..=20u32 {
+            let text = format!("page {n}");
+            let content = Content {
+                operations: vec![
+                    Operation::new("BT", vec![]),
+                    Operation::new("Tf", vec!["F1".into(), 48.into()]),
+                    Operation::new("Td", vec![100.into(), 600.into()]),
+                    Operation::new("Tj", vec![Object::string_literal(text.as_str())]),
+                    Operation::new("ET", vec![]),
+                ],
+            };
+            let content_id =
+                doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+            kids.push(Object::from(doc.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "Contents" => content_id,
+            })));
+        }
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => kids,
+                "Count" => 20,
+                "Resources" => resources_id,
+                "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+            }),
+        );
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+        doc.trailer.set("Info", info_id);
+        let mut built = Vec::new();
+        doc.save_to(&mut built).unwrap();
+        let mut loaded = Document::load_mem(&built).unwrap();
+        assert_eq!(loaded.get_pages().len(), 20);
+        let remove: Vec<u32> = (1..=20u32).filter(|p| *p < 3 || *p > 7).collect();
+        loaded.delete_pages(&remove);
+        loaded.prune_objects();
+        let mut cut = Vec::new();
+        loaded.save_to(&mut cut).unwrap();
+        assert_eq!(Document::load_mem(&cut).unwrap().get_pages().len(), 5);
+        black_box(cut);
+    }
     #[cfg(feature = "arborium")]
     {
         // The terminal highlights a reply's code blocks: one block in each

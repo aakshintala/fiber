@@ -148,6 +148,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | jiff | the terminal's local time of day under a prompt bubble and on steering (`docs/tui.md`, "Turns"), and a standing rule's `added` time in `/rules`, with daylight saving and `TZ`, which `std` lacks | 536 | 640 | 384 | 2 | 692 |
 | all of the above together | | 8,896 | 8,184 | 5,201 | 155 | 8,165 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 67,825 | 32 | 5,234 |
+| lopdf | the image child: counting a PDF's pages and cutting a page range (`docs/tools.md`, "read") | measured in this PR's probe run | measured in this PR's probe run | measured in this PR's probe run | measured in this PR's probe run | measured in this PR's probe run |
 
 Notes:
 
@@ -219,6 +220,10 @@ Notes:
 
   Fiber's converter figures are html5ever's tokenizer feeding the writer,
   with the page held in memory, measured on October 5, 2026.
+- lopdf 0.45 is built with default features off, without rayon or chrono. It is a
+  pure-Rust parser of about 45 crates in its tree. Its memory is the image child's,
+  measured in this PR's probe run; the session never runs PDF code, so the "all of the
+  above together" row does not include it.
 - The image row is `image` 0.25 with default features off and only the png,
   jpeg, gif and webp codecs, plus `fast_image_resize` 6 with its `image`
   feature, Lanczos3. It is pure Rust and passes cargo-deny. Memory is the
@@ -268,9 +273,11 @@ exceptions:
 
 - The shell tool runs `/bin/bash`, or `sh` where bash does not exist
   (`docs/tools.md`, "Shell").
-- Reading a PDF for a provider that cannot take one natively renders its
-  pages with poppler's `pdftoppm`. It is optional: without it, that one call
-  fails and names the package (`docs/tools.md`, "read").
+- Reading a PDF renders its pages with poppler's `pdftoppm`, once, as the PDF
+  enters, whatever the session's protocol, so a later model switch has them. It is
+  optional: without it, `read` still returns the PDF, the result says the pages could
+  not be rendered and names the package, and a protocol that needs the pages gets that
+  sentence in their place (`docs/tools.md`, "read").
 - Installing, updating or fetching an extension runs the system `git`, so a
   person's SSH keys and credential helpers apply (`docs/extensions.md`,
   "Names"). Without it the command fails with `usage` and says to install git
