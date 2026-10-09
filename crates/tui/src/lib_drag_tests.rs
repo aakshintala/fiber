@@ -3,10 +3,11 @@
 //! (`docs/tui.md`, "Layout").
 
 use super::Input;
-use super::tests::{feed, new_loop, open, read_until};
+use super::tests::{Pair, feed, new_loop, open};
 use crate::home::Launch;
 use crate::link::Line;
 use crate::osc;
+use crate::pty_watch::{watch, watched};
 use ratatui::backend::TestBackend;
 use std::io::Write;
 use std::path::PathBuf;
@@ -77,8 +78,10 @@ fn drag() -> Vec<Input> {
 }
 
 /// A loop at 200x40 on a pty pair, with home state and two live sessions.
-fn pty() -> (super::tests::Pair, super::Loop<TestBackend>) {
+/// The watcher reads the pty from the first frame to end of file.
+fn pty(markers: Vec<&'static [u8]>) -> (Pair, mpsc::Receiver<Vec<u8>>, super::Loop<TestBackend>) {
     let pair = open();
+    let frames = watch(&pair.main, markers);
     let tty = pair
         .slave
         .try_clone()
@@ -99,7 +102,7 @@ fn pty() -> (super::tests::Pair, super::Loop<TestBackend>) {
     lp.app.attach(contract::SessionId(A.to_owned()));
     lp.app.on_line(live(A));
     lp.app.on_line(live(B));
-    (pair, lp)
+    (pair, frames, lp)
 }
 
 /// Steps `lp` over one terminal read.
@@ -143,7 +146,7 @@ fn a_failed_save_is_a_notice() {
 
 #[test]
 fn hover_over_an_edge_writes_col_resize_once_and_leaving_writes_default() {
-    let (pair, mut lp) = pty();
+    let (pair, frames, mut lp) = pty(vec![b"ENDMARK" as &[u8]]);
     // Motion onto the rail's edge twice, then off it.
     step(&mut lp, b"\x1b[<35;30;21M");
     step(&mut lp, b"\x1b[<35;30;21M");
@@ -151,7 +154,7 @@ fn hover_over_an_edge_writes_col_resize_once_and_leaving_writes_default() {
     (&pair.slave)
         .write_all(b"ENDMARK")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let written = read_until(&pair.main, b"ENDMARK", "the mark");
+    let written = watched(&frames, "the mark");
     let expected = [
         osc::title("✓ work · fiber").as_slice(),
         osc::pointer(true),
@@ -164,7 +167,7 @@ fn hover_over_an_edge_writes_col_resize_once_and_leaving_writes_default() {
 
 #[test]
 fn with_hover_off_no_osc_22_is_written() {
-    let (pair, mut lp) = pty();
+    let (pair, frames, mut lp) = pty(vec![b"ENDMARK" as &[u8]]);
     lp.hover = false;
     for input in drag() {
         let Input::Bytes(bytes) = input else {
@@ -175,7 +178,7 @@ fn with_hover_off_no_osc_22_is_written() {
     (&pair.slave)
         .write_all(b"ENDMARK")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let written = read_until(&pair.main, b"ENDMARK", "the mark");
+    let written = watched(&frames, "the mark");
     assert!(
         !written
             .windows(osc::pointer(true).len())
@@ -186,7 +189,7 @@ fn with_hover_off_no_osc_22_is_written() {
 
 #[test]
 fn a_drag_off_the_edge_keeps_the_resize_arrow_until_release() {
-    let (pair, mut lp) = pty();
+    let (pair, frames, mut lp) = pty(vec![b"ENDMARK" as &[u8]]);
     // The press writes the title and the arrow; the drag off the edge
     // writes nothing; the release writes the default back.
     step(&mut lp, b"\x1b[<0;30;21M");
@@ -195,7 +198,7 @@ fn a_drag_off_the_edge_keeps_the_resize_arrow_until_release() {
     (&pair.slave)
         .write_all(b"ENDMARK")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let written = read_until(&pair.main, b"ENDMARK", "the mark");
+    let written = watched(&frames, "the mark");
     let expected = [
         osc::title("✓ work · fiber").as_slice(),
         osc::pointer(true),
@@ -208,9 +211,9 @@ fn a_drag_off_the_edge_keeps_the_resize_arrow_until_release() {
 
 #[test]
 fn after_the_editor_returns_the_pointer_shape_is_written_again() {
-    let (pair, mut lp) = pty();
+    let (pair, frames, mut lp) = pty(vec![b"\x1b[c" as &[u8], b"ENDMARK" as &[u8]]);
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    read_until(&pair.main, b"\x1b[c", "the setup queries");
+    watched(&frames, "the setup queries");
     // The pointer sits on the rail's edge before the editor opens.
     step(&mut lp, b"\x1b[<35;30;21M");
     // The size does not change across the hand-over.
@@ -229,7 +232,7 @@ fn after_the_editor_returns_the_pointer_shape_is_written_again() {
     (&pair.slave)
         .write_all(b"ENDMARK")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let tail = read_until(&pair.main, b"ENDMARK", "the mark");
+    let tail = watched(&frames, "the mark");
     // After the resume bytes the arrow is written again.
     let resumed: &[u8] =
         b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h";

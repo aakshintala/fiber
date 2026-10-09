@@ -116,7 +116,7 @@ types a prompt, sees the answer and cancels a turn.
 
 A test that drives a pseudo-terminal reads it on a thread from the first frame
 to end of file, and takes the markers it waits for over a channel, as `watch`
-in `crates/tui/src/lib_reconnect_tests.rs` does. A reader that stops after a
+in `crates/tui/src/pty_watch.rs` does. A reader that stops after a
 marker lets the terminal's output queue fill, so the code under test blocks
 writing a frame and the test hangs on a wait it caused itself.
 

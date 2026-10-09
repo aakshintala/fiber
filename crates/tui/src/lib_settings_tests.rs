@@ -2,7 +2,6 @@
 //! editor on the row's file, and a theme choice repaints the next frame
 //! without a restart (`docs/tui.md`, "Swapped views", "Themes").
 
-use std::io;
 use std::sync::{Arc, mpsc};
 
 use ratatui::backend::TestBackend;
@@ -50,15 +49,9 @@ fn theme_seam() -> Arc<Fake> {
 #[test]
 fn ctrl_g_opens_the_rows_file_and_reads_the_rows_again() {
     let pair = open();
+    // The watcher drains what the terminal is sent, so no write blocks.
+    let _frames = crate::pty_watch::watch(&pair.main, Vec::new());
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    let mut main = pair
-        .main
-        .try_clone()
-        .unwrap_or_else(|err| panic!("dup: {err}"));
-    std::thread::Builder::new()
-        .name("lib-settings-drain".to_owned())
-        .spawn(move || io::copy(&mut main, &mut io::sink()))
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
     let tty = pair
         .slave
         .try_clone()

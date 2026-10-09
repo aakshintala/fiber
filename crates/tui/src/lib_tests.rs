@@ -88,46 +88,6 @@ fn is_cooked(termios: &rustix::termios::Termios) -> bool {
         && termios.local_modes.contains(LocalModes::ISIG)
 }
 
-/// Reads until `marker` appears with one named deadline, returning
-/// everything up to and including it.
-pub(super) fn read_until(main: &File, marker: &[u8], what: &str) -> Vec<u8> {
-    read_until_with_timeout(main, marker, what, DEADLINE)
-}
-
-fn read_until_with_timeout(main: &File, marker: &[u8], what: &str, timeout: Duration) -> Vec<u8> {
-    let mut dup = main.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
-    let marker = marker.to_vec();
-    let (done, finished) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("lib-read-until".to_owned())
-        .spawn(move || {
-            let mut buf = Vec::new();
-            let mut byte = [0u8; 1];
-            loop {
-                use std::io::Read;
-                match dup.read(&mut byte) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {
-                        buf.push(byte[0]);
-                        if buf.len() >= marker.len()
-                            && buf.get(buf.len() - marker.len()..) == Some(marker.as_slice())
-                        {
-                            break;
-                        }
-                    }
-                }
-            }
-            match done.send(buf) {
-                Ok(()) | Err(_) => {}
-            }
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
-    match finished.recv_timeout(timeout) {
-        Ok(buf) => buf,
-        Err(_) => panic!("waited {timeout:?} for {what}"),
-    }
-}
-
 /// Every byte the backend wrote, shared with the test.
 #[derive(Clone, Default)]
 pub(super) struct Sink(Arc<Mutex<Vec<u8>>>);
@@ -583,8 +543,8 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     let raw = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&before));
     assert!(!is_cooked(&raw));
-    // "Reader blocked" means the terminal's input thread: the test writes only two 0x03 bytes, and the return wait below bounds the block. The watcher keeps draining the output, so the test's own reader adds no second block. The first
-    // press must visibly arm first: waiting for its hint proves the
+    // "Reader blocked" means the terminal's input thread: the test writes only two 0x03 bytes, and the return wait below bounds the block. The watcher keeps draining the output, so the test's own reader adds no second block.
+    // The first press must visibly arm first: waiting for its hint proves the
     // reader delivered a byte and the loop drew again.
     pair.main
         .write_all(&[0x03])
