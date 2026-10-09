@@ -307,7 +307,15 @@ the conversation. The views are:
   again every 500 ms.
 - **A job running under a pseudo-terminal** has a live view of its screen. The
   input box types into it as raw keys, as `jobs write` does for the model, so
-  the person can finish an interactive step the model started.
+  the person can finish an interactive step the model started. The screen is
+  80 columns by 24 rows, drawn from the job's output since the terminal
+  attached. Carriage return, line feed, backspace, tab, cursor movement and
+  erasing in a line or the display are applied; other escape sequences are
+  dropped.
+- **The running delegates or jobs,** from "N delegates running" or "N jobs
+  running" in the narrow layout: the Delegates card's two rows for each
+  delegate, or one row for each job, in the order they started. A row opens
+  that item's view.
 - **The model picker:** models by provider with roles marked, a chip for each
   thinking level the model supports, and the size of the prompt-cache rebuild
   a switch costs. Choosing a model saves the global `model`, and choosing a
@@ -643,10 +651,16 @@ box, as an approval does (`docs/tools.md`, "Asking the person").
 - "Chat about this", and Esc, decline the form and end the turn, so the person
   can answer in their own words. The terminal sends `reply` with `declined`,
   then `cancel`: the call completes `declined`, and the cancel ends the turn.
+  The cancel follows only an interaction a tool call raised, one whose
+  `interaction_requested` carries `action_ids`. One raised outside a tool call,
+  such as an extension command's `host.ask`, is declined and leaves any running
+  turn alone.
 - Once answered, the answers sit in the turn's card as a "you answered" rule,
   like a steering message, one row per question, with `skipped` and the note
   shown. The call's ledger row reads "answered" or "declined", and the group
   line counts "asked 4 questions".
+
+The other interactions, `confirm`, `select`, `multi_select` and `text_input`, raised by an extension's `host.ask` and by MCP elicitation, are drawn as one-question forms: the same panel with no tab row, the question, then its rows, ending with "Chat about this". `confirm` shows two options, yes and no, and Enter on one replies `confirmed`. `select` shows the options, and Enter on one replies `labels` with that label. `multi_select` shows the options: Space toggles one, and Enter replies `labels`, possibly empty. `text_input` shows only the row to answer in words, and Enter replies `text` as typed. The last two end with a `Submit` row that does what Enter does, for the mouse. Esc, and "Chat about this", decline as on a form.
 
 ## Reading and copying
 

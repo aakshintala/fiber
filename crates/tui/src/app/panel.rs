@@ -40,6 +40,14 @@ pub(crate) enum Spot {
     /// A Delegates card row, by its job's serial: a press and a release
     /// on the same serial opens that delegate, never the row's position.
     Delegate(u64),
+    /// A Jobs card row, by its job's serial: a press and a release on the
+    /// same serial opens that job, never the row's position.
+    Job(u64),
+    /// The narrow layout's "N delegates running": lists the running
+    /// delegates (`docs/tui.md`, "The narrow layout").
+    DelegateList,
+    /// The narrow layout's "N jobs running": lists the running jobs.
+    JobList,
     /// The Changed files card's totals row: opens the file list.
     ChangedFiles,
     /// The Session card's tools line: opens the tools view (`docs/tui.md`,
@@ -287,6 +295,9 @@ impl PanelState {
     }
 
     /// The jobs started in start order: their ids and descriptions.
+    /// Only tests read the whole fold; the cards read `running_jobs` and
+    /// `running_delegates`.
+    #[cfg(test)]
     pub(crate) fn jobs(&self) -> &[(JobId, String)] {
         &self.jobs
     }
@@ -308,6 +319,17 @@ impl PanelState {
                     .get(id)
                     .map(|started| (started, description.as_str()))
             })
+            .collect()
+    }
+
+    /// Running non-delegate jobs in job start order: a job with a
+    /// `delegate_started` shows on the Delegates card instead (`docs/tui.md`,
+    /// "The panel").
+    pub(crate) fn running_jobs(&self) -> Vec<(&JobId, &str)> {
+        self.jobs
+            .iter()
+            .filter(|(id, _)| !self.delegates.contains_key(id))
+            .map(|(id, description)| (id, description.as_str()))
             .collect()
     }
 
@@ -550,6 +572,9 @@ impl App {
             Spot::Tools => self.open_config_view(super::ConfigView::Tools),
             Spot::File(rank) => self.open_changed_file(rank),
             Spot::Delegate(serial) => self.open_serial(serial),
+            Spot::Job(serial) => self.open_serial(serial),
+            Spot::DelegateList => self.open_session_view(super::SessionView::Delegates),
+            Spot::JobList => self.open_session_view(super::SessionView::Jobs),
             Spot::ChangedFiles => self.open_session_view(super::SessionView::ChangedFiles),
             Spot::Widget => self.toggle_widget_row(),
         }

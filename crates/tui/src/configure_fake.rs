@@ -36,6 +36,8 @@ pub(crate) struct Fake {
     pub(crate) writes: Mutex<Vec<Write>>,
     /// The refusal the next writes get; `None` saves them.
     pub(crate) refuse: Mutex<Option<String>>,
+    /// The warnings the next saves carry; empty saves quietly.
+    pub(crate) warnings: Mutex<Vec<String>>,
     /// Every MCP server and extension's lists `tool_switches` answers.
     pub(crate) switches: Mutex<Vec<ToolSwitches>>,
     /// Every switch asked for, in order.
@@ -76,6 +78,7 @@ impl Fake {
             reads: Mutex::new(Vec::new()),
             writes: Mutex::new(Vec::new()),
             refuse: Mutex::new(None),
+            warnings: Mutex::new(Vec::new()),
             switches: Mutex::new(Vec::new()),
             switched: Mutex::new(Vec::new()),
             fail_after_write: Mutex::new(false),
@@ -216,7 +219,7 @@ impl Configure for Fake {
             }),
             None => Ok(Saved {
                 file: file(layer),
-                warnings: Vec::new(),
+                warnings: self.warnings.lock().map(|w| w.clone()).unwrap_or_default(),
             }),
         }
     }

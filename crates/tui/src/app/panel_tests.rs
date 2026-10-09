@@ -1310,3 +1310,65 @@ fn wheel_up_after_shrinkage_moves_on_the_first_wheel() {
         "  line 12"
     );
 }
+
+#[test]
+fn running_jobs_leaves_delegates_out_in_start_order() {
+    let mut app = attached();
+    app.on_line(started_line("j_1", "build"));
+    app.on_line(started_line("j_2", "test"));
+    app.on_line(session_line(
+        SESSION,
+        "delegate_started",
+        serde_json::json!({"job_id": "j_2",
+            "delegate_session_id": "s_cccccccccccccccc",
+            "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+    ));
+    app.on_line(started_line("j_3", "lint"));
+    let running = app.panel_state().running_jobs();
+    let ids: Vec<String> = running.iter().map(|(id, _)| id.0.clone()).collect();
+    assert_eq!(ids, ["j_1", "j_3"]);
+}
+
+#[test]
+fn clicking_a_job_row_opens_that_job() {
+    use crate::app::panel::Spot;
+    use crate::mouse::TargetId;
+    let mut app = attached();
+    app.on_line(started_line("j_1", "build"));
+    app.on_line(started_line("j_2", "test"));
+    let serial = app
+        .serial_of_job(&contract::JobId("j_2".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    assert_eq!(
+        app.on_click(TargetId::Panel(Spot::Job(serial))),
+        Effect::None
+    );
+    assert!(app.item_open());
+    assert_eq!(
+        app.item_view().map(|view| view.description),
+        Some("test".to_owned())
+    );
+}
+
+#[test]
+fn clicking_the_running_counts_lists_them() {
+    use crate::app::panel::Spot;
+    use crate::mouse::TargetId;
+    let mut app = attached();
+    app.on_line(started_line("j_1", "build"));
+    app.on_line(session_line(
+        SESSION,
+        "delegate_started",
+        serde_json::json!({"job_id": "j_1",
+            "delegate_session_id": "s_cccccccccccccccc",
+            "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+    ));
+    assert_eq!(
+        app.on_click(TargetId::Panel(Spot::DelegateList)),
+        Effect::None
+    );
+    assert!(app.session_view_open());
+    app.close_session_view();
+    assert_eq!(app.on_click(TargetId::Panel(Spot::JobList)), Effect::None);
+    assert!(app.session_view_open());
+}

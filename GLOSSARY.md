@@ -104,6 +104,12 @@ judged; the inner call still meets the denies and the tool hooks, and is logged
 as a call of its own.
 _Avoid_: nested call, sub-call, child call
 
+### Interaction
+
+A question Fiber puts to the person and waits on: a confirm, a select, a
+multi-select, a text input or a form. A tool call or an extension raises it,
+and the person's reply, or a decline, resolves it. An approval is not one.
+
 ### Job
 
 Work a tool call starts that outlives the call, such as a background command, a

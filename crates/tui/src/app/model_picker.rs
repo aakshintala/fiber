@@ -61,8 +61,8 @@ impl App {
             Spot::Close => self.model_picker.close(),
             Spot::Row(at) => self.model_picker.select_frame_row(at),
             Spot::Cell(row, cell) => self.model_picker.click_cell(row, cell),
-            // The picker draws no switches or rule rows.
-            Spot::Switch { .. } | Spot::Revoke(_) => {}
+            // The picker draws no switches, rule rows or item rows.
+            Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_) => {}
         }
         super::Effect::None
     }

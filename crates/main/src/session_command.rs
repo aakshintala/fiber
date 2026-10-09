@@ -272,6 +272,8 @@ pub(crate) fn run_new(
     );
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line; every server starts with the session too.
+    let skills: Arc<dyn contract::skills::Skills> =
+        Arc::new(r#loop::SkillReader::new(prompt_inputs.clone(), &workspace));
     let (tools, infos, driver, session_servers) = mcp_servers::session_tools(
         fiber,
         &home,
@@ -283,6 +285,7 @@ pub(crate) fn run_new(
         mcp.specs,
         web_search.as_deref(),
         &delegates,
+        skills,
         extensions.tools(),
     )?;
     let forget = Arc::clone(&session_servers.forget);

@@ -134,6 +134,7 @@ fn the_questions_go_to_the_driver() {
         Some(Control {
             handoff: None,
             questions: Some(asked),
+            skill: None,
         })
     );
 }

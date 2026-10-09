@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+base64.workspace = true
 contract = { path = "../contract" }
 log = { path = "../log" }
 serde.workspace = true

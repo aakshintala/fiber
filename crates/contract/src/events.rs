@@ -18,7 +18,7 @@ pub use action::{
     DecidedBy, Decision, Escalation, FileChange, FormAnswer, Grant, Interaction,
     InteractionRequested, InteractionResolved, MessageOutcome, PermissionRequested,
     PermissionResolved, Progress, RanBy, ReasoningCompleted, Repair, RepairFix, ResolvedBy,
-    ReviewerRef, RuleOffer, RuleScope, StandingRule, TextCompleted, TextDelta,
+    ReviewerRef, RuleOffer, RuleScope, SkillLoad, StandingRule, TextCompleted, TextDelta,
     ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
 };
 pub use context::{

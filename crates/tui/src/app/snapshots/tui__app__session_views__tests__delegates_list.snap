@@ -1,0 +1,29 @@
+---
+source: crates/tui/src/app/session_views_tests.rs
+assertion_line: 1177
+expression: shown
+---
+Running delegates                                                              ✕
+● fiber  test/model
+  task j_1
+● fiber  test/model
+  task j_2
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+↑↓ move · Enter open · Esc close
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+>
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

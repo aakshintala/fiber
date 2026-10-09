@@ -3,8 +3,8 @@
 //! It holds no session.
 //!
 //! [`serve`] listens on `run/hub`, answers `start`, `status`,
-//! `prompt_history`, `feed`, `dismiss`, `recent`, `sessions` and `delete`,
-//! and relays session commands to `run/<session_id>` (`docs/invocation.md`,
+//! `prompt_history`, `feed`, `dismiss`, `recent`, `sessions`, `delete` and
+//! `read_file`, and relays session commands to `run/<session_id>` (`docs/invocation.md`,
 //! "What the hub speaks"). It sends `attention` to every connection
 //! (`docs/invocation.md`, "Attention"). A hub a client started exits once no
 //! client has been connected for `hub.idle_exit_ms`
@@ -22,6 +22,7 @@ mod first;
 mod idle;
 mod listen;
 mod prompt_history;
+mod read_file;
 mod recent;
 mod rejoin;
 mod relay;

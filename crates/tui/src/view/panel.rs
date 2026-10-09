@@ -535,15 +535,10 @@ fn changed_files_rows(app: &App, text: usize) -> Vec<Row> {
 /// The Jobs card's rows at `text` columns: one line saying how many run,
 /// shown only while a job runs, then one row per job while open. A
 /// delegate is a job with a `delegate_started`, and its own card shows it
-/// (`docs/tui.md`, "The panel").
+/// (`docs/tui.md`, "The panel"). Each listed job row carries its job's
+/// serial, so a click opens that job.
 fn jobs_rows(app: &App, text: usize) -> Vec<Row> {
-    let panel = app.panel_state();
-    let running: Vec<&str> = panel
-        .jobs()
-        .iter()
-        .filter(|(id, _)| !panel.delegate_jobs().contains_key(id))
-        .map(|(_, description)| description.as_str())
-        .collect();
+    let running = app.panel_state().running_jobs();
     if running.is_empty() {
         return Vec::new();
     }
@@ -563,12 +558,16 @@ fn jobs_rows(app: &App, text: usize) -> Vec<Row> {
         tint: None,
         edge: false,
     }];
-    if panel.jobs_open() {
-        out.extend(
-            running
-                .into_iter()
-                .map(|description| plain(format::cut(&format!("  {description}"), text))),
-        )
+    if app.panel_state().jobs_open() {
+        out.extend(running.into_iter().map(|(id, description)| {
+            let spot = app.serial_of_job(id).map(Spot::Job);
+            Row {
+                line: Line::raw(format::cut(&format!("  {description}"), text)),
+                spot,
+                tint: None,
+                edge: false,
+            }
+        }));
     }
     out
 }

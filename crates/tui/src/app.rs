@@ -933,6 +933,7 @@ impl App {
         }
         send.extend(self.panel_line(envelope));
         self.items_line(envelope);
+        self.output_line(envelope);
         self.session_views_line(envelope);
         self.config_views_line(envelope);
         if envelope.kind == "turn_started"
@@ -1045,7 +1046,7 @@ pub(crate) fn text_of(parts: &[ContentPart]) -> String {
         .iter()
         .filter_map(|part| match part {
             ContentPart::Text { text } => Some(text.as_str()),
-            ContentPart::Image { .. } | ContentPart::Unknown => None,
+            ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown => None,
         })
         .collect()
 }

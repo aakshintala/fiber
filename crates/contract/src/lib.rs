@@ -30,6 +30,7 @@ mod secret;
 pub mod session_search;
 pub mod shapes;
 pub mod signing;
+pub mod skills;
 pub mod tool;
 
 pub use codes::ErrorCode;

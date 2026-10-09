@@ -63,6 +63,29 @@ fn ask(app: &mut App, fields: Value) {
     ));
 }
 
+/// Folds one interaction of `kind` over an app.
+fn ask_one(app: &mut App, kind: &str) {
+    let payload = match kind {
+        "confirm" => json!({"request_id": "r_c", "kind": kind, "prompt": "Continue?"}),
+        "select" => json!({"request_id": "r_s", "kind": kind, "prompt": "Pick one?",
+            "options": [{"label": "alpha", "description": "the first choice"},
+                {"label": "beta"}]}),
+        "multi_select" => json!({"request_id": "r_m", "kind": kind, "prompt": "Pick some?",
+            "options": [{"label": "alpha"}, {"label": "beta"}, {"label": "gamma"}]}),
+        "text_input" => json!({"request_id": "r_t", "kind": kind, "prompt": "What?"}),
+        _ => panic!("unknown one-question interaction: {kind}"),
+    };
+    app.on_line(session_line("interaction_requested", payload));
+}
+
+/// An app `width` by `height` showing one interaction of `kind`.
+fn asking_one(kind: &str, width: u16, height: u16) -> App {
+    let mut app = attached(width, height);
+    ask_one(&mut app, kind);
+    assert!(app.panel().is_some());
+    app
+}
+
 /// `Base` with two options, multi-choice when `multi`, then free-text
 /// `Name`.
 fn base_and_name(multi: bool) -> Value {
@@ -619,5 +642,111 @@ fn a_narrow_approval_has_no_stripe() {
     draw(&panel, area, area.bottom(), &mut buf, &mut targets);
     for cell in &buf.content {
         assert_ne!(cell.symbol(), "▌");
+    }
+}
+
+#[test]
+fn one_question_panels_have_no_tab_row_or_tab_target() {
+    for kind in ["confirm", "select", "multi_select", "text_input"] {
+        let app = asking_one(kind, 60, 12);
+        let (shown, targets) = screen(&app, 60, 12);
+        assert!(
+            !targets
+                .iter()
+                .any(|target| matches!(target.id, TargetId::Form(Spot::Tab(_)))),
+            "{shown}"
+        );
+        let prompt = match kind {
+            "confirm" => "Continue?",
+            "select" => "Pick one?",
+            "multi_select" => "Pick some?",
+            "text_input" => "What?",
+            _ => panic!("unknown one-question interaction: {kind}"),
+        };
+        assert_eq!(
+            lines(&app).get(1).map(String::as_str),
+            Some(prompt),
+            "{shown}"
+        );
+    }
+}
+
+#[test]
+fn one_question_screens() {
+    let confirm = asking_one("confirm", 60, 12);
+    insta::assert_snapshot!("one_question_confirm", screen(&confirm, 60, 12).0);
+
+    let select = asking_one("select", 60, 12);
+    insta::assert_snapshot!("one_question_select", screen(&select, 60, 12).0);
+
+    let mut multi = asking_one("multi_select", 60, 12);
+    press(&mut multi, &[Key::Char(' ')]);
+    insta::assert_snapshot!(
+        "one_question_multi_select_with_one_toggled",
+        screen(&multi, 60, 12).0
+    );
+
+    let mut text = asking_one("text_input", 60, 12);
+    press(&mut text, &[Key::Char('h'), Key::Char('i')]);
+    insta::assert_snapshot!("one_question_text_input_typed", screen(&text, 60, 12).0);
+}
+
+#[test]
+fn clicks_on_one_question_rows_send_or_change_the_answer() {
+    let mut confirm = asking_one("confirm", 60, 12);
+    assert_eq!(
+        sent(click(&mut confirm, Spot::Option(0))),
+        json!({"command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_c", "confirmed": true}})
+    );
+    let mut confirm = asking_one("confirm", 60, 12);
+    assert_eq!(
+        sent(click(&mut confirm, Spot::Option(1))),
+        json!({"command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_c", "confirmed": false}})
+    );
+
+    let mut select = asking_one("select", 60, 12);
+    assert_eq!(
+        sent(click(&mut select, Spot::Option(1))),
+        json!({"command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_s", "labels": ["beta"]}})
+    );
+
+    let mut multi = asking_one("multi_select", 60, 12);
+    assert_eq!(click(&mut multi, Spot::Option(1)), Effect::None);
+    assert_eq!(lines(&multi).get(3).map(String::as_str), Some("› [x] beta"));
+    assert_eq!(
+        sent(click(&mut multi, Spot::Send)),
+        json!({"command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_m", "labels": ["beta"]}})
+    );
+
+    let mut text = asking_one("text_input", 60, 12);
+    press(&mut text, &[Key::Char('h'), Key::Char('i')]);
+    assert_eq!(click(&mut text, Spot::Words), Effect::None);
+    press(&mut text, &[Key::Char('!')]);
+    assert_eq!(
+        sent(click(&mut text, Spot::Send)),
+        json!({"command": "reply", "session_id": S_A,
+            "args": {"request_id": "r_t", "text": "hi!"}})
+    );
+}
+
+#[test]
+fn clicking_chat_about_this_declines_every_one_question_kind() {
+    for (kind, request_id) in [
+        ("confirm", "r_c"),
+        ("select", "r_s"),
+        ("multi_select", "r_m"),
+        ("text_input", "r_t"),
+    ] {
+        let mut app = asking_one(kind, 60, 12);
+        assert_eq!(
+            sent(click(&mut app, Spot::Chat)),
+            json!({"command": "reply", "session_id": S_A,
+                "args": {"request_id": request_id, "declined": true}}),
+            "{kind}"
+        );
     }
 }

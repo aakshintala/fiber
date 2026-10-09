@@ -173,8 +173,14 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         match input {
             Input::User { text, images } => {
                 park(&mut out, &mut signature);
-                let prepared =
-                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
+                let prepared = crate::images::prepare(
+                    text,
+                    images,
+                    &[],
+                    &request.session_dir,
+                    endpoint.text_only,
+                    crate::images::PdfForm::Native,
+                );
                 if !prepared.text.is_empty() || prepared.images.is_empty() {
                     push(&mut out, "user", json!({"text": prepared.text}));
                 }
@@ -248,12 +254,19 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 text,
                 is_error,
                 images,
+                pdfs,
             } => {
                 park(&mut out, &mut signature);
                 let found = calls.get(action_id).copied();
                 let call = found.map(|(call, _)| call);
-                let prepared =
-                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
+                let prepared = crate::images::prepare(
+                    text,
+                    images,
+                    pdfs,
+                    &request.session_dir,
+                    endpoint.text_only,
+                    crate::images::PdfForm::Native,
+                );
                 // A result whose call another model reference made goes as
                 // plain text (`docs/model-routing.md`, "Google Generative
                 // AI wire facts"). An orphan keeps today's native rendering.
@@ -273,6 +286,13 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                             json!({"inlineData": {"mimeType": image.mime_type, "data": image.data}}),
                         );
                     }
+                    for document in &prepared.documents {
+                        push(
+                            &mut out,
+                            "user",
+                            json!({"inlineData": {"mimeType": "application/pdf", "data": document.data}}),
+                        );
+                    }
                     continue;
                 }
                 // A failed call sends the documented `error` key in place
@@ -290,12 +310,15 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                     "response": result,
                 });
                 // An image rides in `parts`, beside the `response` the
-                // model read (`docs/model-routing.md`, "Google Generative
-                // AI wire facts").
-                if !prepared.images.is_empty() {
-                    let parts: Vec<Value> = prepared.images.iter().map(|image| {
+                // model read, as does a PDF (`docs/model-routing.md`,
+                // "Google Generative AI wire facts").
+                if !prepared.images.is_empty() || !prepared.documents.is_empty() {
+                    let mut parts: Vec<Value> = prepared.images.iter().map(|image| {
                         json!({"inlineData": {"mimeType": image.mime_type, "data": image.data}})
                     }).collect();
+                    parts.extend(prepared.documents.iter().map(|document| {
+                        json!({"inlineData": {"mimeType": "application/pdf", "data": document.data}})
+                    }));
                     if let Some(map) = response.as_object_mut() {
                         map.insert("parts".into(), Value::Array(parts));
                     }

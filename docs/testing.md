@@ -268,6 +268,10 @@ program or waiting on a test.
   crate may depend on, so what it shows is that layer alone. It may use
   `fakes`, as a test-only dependency. It reads its arguments with
   `std::env::args`.
+- **A test runs the jig's built binary.** `cargo test` builds the crate's
+  examples, so a jig test starts `target/<profile>/examples/<jig>` (found
+  from `std::env::current_exe`) directly. It never runs `cargo run`, which
+  would wait on the build directory's lock inside the test's deadline.
 - **It never ships.** No release binary contains a jig, and the shipped
   `fiber` gains no switch for one. A jig that people need becomes a `fiber`
   subcommand through its area's ticket, with the tests a feature carries.
