@@ -2,11 +2,12 @@
 //! backoff between attempts, the banner that counts them, which failure
 //! says so in a notice, and what a new connection sends again.
 //!
-//! A client that lost its connection resends every command it had no
-//! answer for, with the same id (`docs/invocation.md`, "The command
-//! line"). Hub commands are not resent: the hub keeps no ids, so a resent
-//! `start` could start a second session. They settle as unanswered.
+//! Session commands written with no answer are resent with the same id
+//! (`docs/invocation.md`, "The command line"). Hub commands are not resent:
+//! the hub keeps no ids, so a resent `start` could start a second session.
+//! They settle as unanswered.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use contract::ErrorCode;
@@ -39,6 +40,13 @@ pub(crate) struct Reconnect {
     /// Session commands written and not yet answered, in the order they
     /// went out; no id appears twice.
     kept: Vec<Kept>,
+    /// `sessions` is due on the next outgoing after a reconnect.
+    sessions_due: bool,
+    /// The `sessions` command waiting for its answer, if one is out.
+    sessions: Option<String>,
+    /// Sessions with a `session_status` after `sessions` was sent: their
+    /// rows stay even when the answer omits them.
+    fresh: HashSet<SessionId>,
 }
 
 /// One session command written with no answer yet.
@@ -178,7 +186,78 @@ impl App {
             }
             lines.push(kept.line);
         }
+        self.reconnect.sessions_due = true;
         lines
+    }
+
+    /// The `sessions` snapshot due after a reconnect, once per reconnect
+    /// and after `feed`: `home_outgoing` already sent `feed` and `recent`
+    /// on this `on_line` tail, so this runs after it. Nothing on the first
+    /// connection.
+    pub(super) fn sessions_outgoing(&mut self) -> Vec<String> {
+        if !self.reconnect.sessions_due {
+            return Vec::new();
+        }
+        self.reconnect.sessions_due = false;
+        let id = super::mint();
+        self.reconnect.sessions = Some(id.clone());
+        self.reconnect.fresh.clear();
+        vec![serde_json::json!({"id": id, "command": "sessions"}).to_string()]
+    }
+
+    /// A `session_status` folded into the rows: after `sessions` was sent,
+    /// its session stays even when the answer omits it.
+    pub(super) fn note_feed(&mut self, session: &SessionId) {
+        if self.reconnect.sessions.is_some() {
+            self.reconnect.fresh.insert(session.clone());
+        }
+    }
+
+    /// The `sessions` answer with `id`: when it is the one waiting, drop
+    /// every live row its running set omits, except one with a feed line
+    /// after `sessions` was sent, and take the wait off. A stale id, from
+    /// before a later `sessions`, changes nothing. True when handled.
+    pub(super) fn sessions_accepted(&mut self, id: &str, result: &Value) -> bool {
+        if self.reconnect.sessions.as_deref() != Some(id) {
+            return false;
+        }
+        let running: HashSet<SessionId> = result
+            .get("live")
+            .and_then(Value::as_array)
+            .map(|live| {
+                live.iter()
+                    .filter_map(|entry| entry.get("session_id").and_then(Value::as_str))
+                    .map(|entry| SessionId(entry.to_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(home) = self.home.as_mut() {
+            let stale: Vec<SessionId> = home
+                .sessions
+                .live()
+                .iter()
+                .map(|row| row.id.clone())
+                .filter(|session| !running.contains(session))
+                .filter(|session| !self.reconnect.fresh.contains(session))
+                .collect();
+            for session in stale {
+                home.sessions.remove(&session);
+            }
+        }
+        self.reconnect.sessions = None;
+        self.reconnect.fresh.clear();
+        true
+    }
+
+    /// A rejected `sessions` with `id`: when it is the one waiting, take
+    /// the wait off and keep the rows. True when handled.
+    pub(super) fn sessions_rejected(&mut self, id: &str) -> bool {
+        if self.reconnect.sessions.as_deref() != Some(id) {
+            return false;
+        }
+        self.reconnect.sessions = None;
+        self.reconnect.fresh.clear();
+        true
     }
 
     /// Whether a failed connect says so in a notice: only the first of a
@@ -191,3 +270,7 @@ impl App {
 #[cfg(test)]
 #[path = "reconnect_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "reconcile_tests.rs"]
+mod reconcile_tests;

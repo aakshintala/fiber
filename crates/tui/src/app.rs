@@ -399,6 +399,7 @@ impl App {
             },
         };
         lines.extend(self.home_outgoing());
+        lines.extend(self.sessions_outgoing());
         lines.extend(self.find_outgoing());
         self.reconcile_attention();
         self.settle();

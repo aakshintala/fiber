@@ -418,7 +418,7 @@ fn reconnecting_sends_feed_and_recent_again() {
     let mut app = home();
     let before = linked(&mut app);
     let after = parsed(&reconnect(&mut app));
-    assert_eq!(names(&after), ["feed", "recent"]);
+    assert_eq!(names(&after), ["feed", "recent", "sessions"]);
     assert_ne!(after[0]["id"], before[0]["id"]);
     assert_ne!(after[1]["id"], before[1]["id"]);
 }
@@ -456,7 +456,14 @@ fn the_wire_after_hub_hello_is_subscribe_commands_kept_feed_recent() {
     let values = parsed(&lines);
     assert_eq!(
         names(&values),
-        ["subscribe", "commands", "prompt", "feed", "recent"]
+        [
+            "subscribe",
+            "commands",
+            "prompt",
+            "feed",
+            "recent",
+            "sessions"
+        ]
     );
     // The attached session's kept line needs no subscribe of its own.
     assert_eq!(lines[2], prompt);
@@ -531,7 +538,10 @@ fn an_accepted_command_is_not_resent() {
     let opening = started(&mut app, S_A);
     fold(&mut app, accepted(S_A, &prompt_id(&opening)));
     let lines = parsed(&reconnect(&mut app));
-    assert_eq!(names(&lines), ["subscribe", "commands", "feed", "recent"]);
+    assert_eq!(
+        names(&lines),
+        ["subscribe", "commands", "feed", "recent", "sessions"]
+    );
 }
 
 #[test]
@@ -544,7 +554,10 @@ fn a_rejected_command_is_not_resent() {
         refused(S_A, &prompt_id(&opening), "busy", "Busy."),
     );
     let lines = parsed(&reconnect(&mut app));
-    assert_eq!(names(&lines), ["subscribe", "commands", "feed", "recent"]);
+    assert_eq!(
+        names(&lines),
+        ["subscribe", "commands", "feed", "recent", "sessions"]
+    );
 }
 
 #[test]
@@ -556,7 +569,14 @@ fn an_answer_for_another_id_keeps_the_line() {
     let lines = parsed(&reconnect(&mut app));
     assert_eq!(
         names(&lines),
-        ["subscribe", "commands", "prompt", "feed", "recent"]
+        [
+            "subscribe",
+            "commands",
+            "prompt",
+            "feed",
+            "recent",
+            "sessions"
+        ]
     );
 }
 
@@ -591,7 +611,7 @@ fn a_hub_command_is_not_resent() {
     linked(&mut app);
     app.wrote(&json!({"id": "c_1", "command": "delete", "args": {"session": S_B}}).to_string());
     let lines = parsed(&reconnect(&mut app));
-    assert_eq!(names(&lines), ["feed", "recent"]);
+    assert_eq!(names(&lines), ["feed", "recent", "sessions"]);
 }
 
 #[test]
@@ -622,7 +642,10 @@ fn a_kept_command_for_another_session_follows_a_summary_subscribe() {
     app.wrote(&cancel("c_1", S_B));
     let lines = reconnect(&mut app);
     let values = parsed(&lines);
-    assert_eq!(names(&values), ["subscribe", "cancel", "feed", "recent"]);
+    assert_eq!(
+        names(&values),
+        ["subscribe", "cancel", "feed", "recent", "sessions"]
+    );
     assert_eq!(values[0]["session_id"], S_B);
     assert_eq!(values[0]["args"]["level"], "summary");
     assert_eq!(lines[1], cancel("c_1", S_B));
@@ -646,7 +669,8 @@ fn two_kept_commands_for_one_other_session_share_one_subscribe() {
             "cancel",
             "cancel",
             "feed",
-            "recent"
+            "recent",
+            "sessions"
         ]
     );
     assert_eq!(values[0]["session_id"], S_A);
@@ -667,7 +691,7 @@ fn a_written_close_then_home_then_reconnect_resends_it_and_its_answer_settles() 
     let lines = parsed(&reconnect(&mut app));
     assert_eq!(
         names(&lines),
-        ["subscribe", "prompt", "close", "feed", "recent"]
+        ["subscribe", "prompt", "close", "feed", "recent", "sessions"]
     );
     assert_eq!(lines[0]["session_id"], S_A);
     assert_eq!(lines[0]["args"]["level"], "summary");
@@ -719,7 +743,10 @@ fn a_stop_ask_is_resent_and_its_refusal_notes_the_row() {
     }));
     assert_eq!(names(&stop), ["subscribe", "close"]);
     let lines = parsed(&reconnect(&mut app));
-    assert_eq!(names(&lines), ["subscribe", "close", "feed", "recent"]);
+    assert_eq!(
+        names(&lines),
+        ["subscribe", "close", "feed", "recent", "sessions"]
+    );
     assert_eq!(lines[1]["id"], stop[1]["id"]);
     fold(
         &mut app,
@@ -748,7 +775,7 @@ fn a_delete_ask_settles_as_unanswered_on_reconnect() {
     let delete = parsed(&sent(&mut app, |app| app.on_key(Key::Enter, now)));
     assert_eq!(names(&delete), ["delete"]);
     let lines = parsed(&reconnect(&mut app));
-    assert_eq!(names(&lines), ["feed", "recent"]);
+    assert_eq!(names(&lines), ["feed", "recent", "sessions"]);
     assert_eq!(rows(&app), [format!("○  old work  {UNANSWERED}")]);
     assert_eq!(app.notice(), Some(UNANSWERED));
 }
@@ -760,7 +787,7 @@ fn a_pending_start_returns_to_the_draft_on_reconnect() {
     let start = parsed(&sent(&mut app, |app| enter(app, "hi")));
     assert_eq!(names(&start), ["start"]);
     let lines = parsed(&reconnect(&mut app));
-    assert_eq!(names(&lines), ["feed", "recent"]);
+    assert_eq!(names(&lines), ["feed", "recent", "sessions"]);
     assert_eq!(app.phase, Phase::Starting);
     assert_eq!(app.draft(), "hi");
     assert_eq!(app.notice(), Some(UNANSWERED));
@@ -813,7 +840,10 @@ fn an_unwritten_line_still_fails_back_to_the_draft() {
     app.write_failed(lines.get(2..).unwrap_or_default());
     assert_eq!(app.draft(), "hi");
     let again = parsed(&reconnect(&mut app));
-    assert_eq!(names(&again), ["subscribe", "commands", "feed", "recent"]);
+    assert_eq!(
+        names(&again),
+        ["subscribe", "commands", "feed", "recent", "sessions"]
+    );
 }
 
 #[test]

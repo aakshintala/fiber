@@ -399,13 +399,16 @@ keeps running, nothing is lost, and the screen redraws on resize.
 
 ### A dropped connection
 
-A session that exits while on screen stays on screen, because its
-conversation is its log. Sending a prompt resumes it through the hub, with no
-banner.
+A session that exits while on screen stays on screen until the connection is
+lost, because its conversation is its log. Sending a prompt resumes it
+through the hub, with no banner. On reconnect the terminal reopens the
+attached session; it resumes idle and takes nothing until a prompt.
 
 When the hub cannot be reached, a banner replaces the working line:
 "Connection lost · reconnecting (attempt 2)…". The terminal retries with backoff while the conversation and the
-draft stay.
+draft stay. After reconnecting, the terminal sends `sessions` once and drops
+every live row its answer does not list, unless a feed line for that row
+arrived after `sessions` was sent.
 
 ## The conversation
 
