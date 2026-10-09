@@ -240,6 +240,10 @@ pub(crate) struct App {
     chrome: chrome::Chrome,
     /// The attached session's folded panel data (`docs/tui.md`, "The panel").
     panel_state: panel::PanelState,
+    /// Each delegate's latest `session_status`, by session: what the
+    /// Delegates card draws while its `summary` subscription lives
+    /// (`docs/tui.md`, "The panel").
+    delegate_rows: HashMap<SessionId, crate::home::Row>,
     /// The session rail's numbers and wall time (`docs/tui.md`, "The rail").
     rail_state: rail::RailState,
     /// The drag selecting conversation text, and a copy waiting on dropped
@@ -285,6 +289,7 @@ impl App {
             regions: crate::focus::Regions::default(),
             chrome: chrome::Chrome::default(),
             panel_state: panel::PanelState::default(),
+            delegate_rows: HashMap::new(),
             rail_state: rail::RailState::default(),
             select: select::Selection::default(),
             find: find::Find::default(),

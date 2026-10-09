@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use contract::Envelope;
 use contract::JobId;
+use contract::SessionId;
 use contract::events::{
     CommandAccepted, CommandRejected, CommandResult, DelegateStarted, ExtensionUi, FileChange,
     JobCompleted, JobStarted, McpServerFailed, McpServerReady, ModelChanged, PreambleBuilt,
@@ -77,6 +78,10 @@ pub(crate) struct PanelState {
     branch: Option<Branch>,
     scroll: usize,
     delegate_scroll: usize,
+    /// The delegate sessions this attachment already tried to subscribe,
+    /// so a refused subscribe goes out once per attachment
+    /// (`docs/invocation.md`, `subscribe`).
+    tried: BTreeSet<SessionId>,
 }
 
 impl PanelState {
@@ -304,6 +309,13 @@ impl PanelState {
         self.delegate_scroll
     }
 
+    /// Records `session` as tried on this attachment; true the first time.
+    /// A refused subscribe is not sent again until the panel resets
+    /// (`docs/invocation.md`, `subscribe`).
+    pub(super) fn try_delegate(&mut self, session: &SessionId) -> bool {
+        self.tried.insert(session.clone())
+    }
+
     /// Clamps the Delegates card's offset to the running delegates less
     /// [`DELEGATES_SHOWN`], then moves it one delegate: down to the clamp,
     /// up saturating at 0 (`docs/tui.md`, "The panel").
@@ -376,10 +388,13 @@ impl App {
             .unwrap_or(&[])
     }
 
-    /// Folds one attached-session envelope into the panel's data.
+    /// Folds one attached-session envelope into the panel's data, with the
+    /// Delegates card's subscribes (`docs/tui.md`, "The panel").
     pub(super) fn panel_line(&mut self, envelope: &Envelope) -> Vec<String> {
         self.panel_state.fold(envelope);
-        self.panel_branch(envelope)
+        let mut send = self.panel_branch(envelope);
+        send.extend(self.delegate_line(envelope));
+        send
     }
 
     /// The branch query's answers and triggers (`docs/tui.md`, "Git"): a

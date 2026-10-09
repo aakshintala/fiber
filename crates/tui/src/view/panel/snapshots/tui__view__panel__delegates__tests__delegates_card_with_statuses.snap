@@ -1,0 +1,11 @@
+---
+source: crates/tui/src/view/panel/delegates_tests.rs
+expression: "crate::view::text(&buf)"
+---
+
+  ● WORKING  test/model
+    task 1
+  ● claude  sonnet
+    write the docs
+  ● fiber  test/model
+    task 3

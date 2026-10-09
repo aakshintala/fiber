@@ -385,3 +385,142 @@ fn delegates_card_scrolled() {
     let (buf, _) = draw_targets(&app);
     insta::assert_snapshot!("delegates_card_scrolled", crate::view::text(&buf));
 }
+
+/// A delegate's `session_status` in `state`, naming the attached session.
+fn delegate_status(app: &mut App, job: &str, state: serde_json::Value) {
+    let mut payload = serde_json::json!({
+        "name": "delegate one", "workspace": "/w", "project": "-w",
+        "since": 0,
+        "spend": {"tokens": {"input": 1, "cache_read": 0,
+            "cache_write": {}, "output": 2},
+            "cost": 0.0, "subscription_cost": 0.0},
+        "model": "status/model", "delegates": 0, "jobs": 0, "clients": 0,
+        "parent": SESSION,
+    });
+    for (key, value) in state.as_object().cloned().unwrap_or_default() {
+        payload[key] = value;
+    }
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(format!("s_{job:0>16}")),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }));
+}
+
+/// A delegate's unreadable `session_status`: a schema this terminal does
+/// not read. Its payload still names the parent, as the hub's does.
+fn unreadable_status(app: &mut App, job: &str) {
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(format!("s_{job:0>16}")),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION + 1,
+        turn_id: None,
+        action_id: Some(contract::ActionId("a_1".to_owned())),
+        seq: None,
+        payload: serde_json::json!({"parent": SESSION})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }));
+}
+
+#[test]
+fn with_a_status_the_row_shows_its_glyph_and_word() {
+    for (state, glyph, word, role) in [
+        (
+            serde_json::json!({"state": "streaming"}),
+            "●",
+            "WORKING",
+            crate::markdown::Role::Accent,
+        ),
+        (
+            serde_json::json!({"state": "tool", "tool": "read"}),
+            "●",
+            "WORKING",
+            crate::markdown::Role::Accent,
+        ),
+        (
+            serde_json::json!({"state": "retrying"}),
+            "●",
+            "RETRYING",
+            crate::markdown::Role::Warning,
+        ),
+        (
+            serde_json::json!({"state": "jobs"}),
+            "●",
+            "WORKING",
+            crate::markdown::Role::Accent,
+        ),
+        (
+            serde_json::json!({"state": "idle"}),
+            "✓",
+            "READY",
+            crate::markdown::Role::Muted,
+        ),
+    ] {
+        let mut app = attached(160, 40);
+        fold_fiber(&mut app, 1);
+        delegate_status(&mut app, "j_1", state);
+        let drawn = super::rows(&app, text_width(&app));
+        let first = drawn.first().unwrap_or_else(|| panic!("a first row"));
+        assert_eq!(
+            first.line.to_string(),
+            format!("{glyph} {word}  test/model")
+        );
+        let state_span = first
+            .line
+            .spans
+            .first()
+            .unwrap_or_else(|| panic!("a state span"));
+        assert_eq!(state_span.content, format!("{glyph} {word}"));
+        assert_eq!(state_span.style, crate::markdown::style(role));
+    }
+    let mut app = attached(160, 40);
+    fold_fiber(&mut app, 1);
+    unreadable_status(&mut app, "j_1");
+    let drawn = super::rows(&app, text_width(&app));
+    let first = drawn.first().unwrap_or_else(|| panic!("a first row"));
+    assert_eq!(first.line.to_string(), "? CANNOT ATTACH  test/model");
+    let state_span = first
+        .line
+        .spans
+        .first()
+        .unwrap_or_else(|| panic!("a state span"));
+    assert_eq!(
+        state_span.style,
+        crate::markdown::style(crate::markdown::Role::Muted)
+    );
+}
+
+#[test]
+fn the_status_row_keeps_the_started_model() {
+    let mut app = attached(160, 40);
+    fold_delegate(
+        &mut app,
+        "j_1",
+        "fiber",
+        "started/model",
+        "review the parser",
+    );
+    delegate_status(&mut app, "j_1", serde_json::json!({"state": "streaming"}));
+    let drawn = super::rows(&app, text_width(&app));
+    let first = drawn.first().unwrap_or_else(|| panic!("a first row"));
+    assert_eq!(first.line.to_string(), "● WORKING  started/model");
+}
+
+#[test]
+fn delegates_card_with_statuses() {
+    let mut app = attached(160, 40);
+    fold_fiber(&mut app, 1);
+    delegate_status(&mut app, "j_1", serde_json::json!({"state": "streaming"}));
+    fold_delegate(&mut app, "j_2", "claude", "sonnet", "write the docs");
+    fold_fiber(&mut app, 3);
+    let (buf, _) = draw_targets(&app);
+    insta::assert_snapshot!("delegates_card_with_statuses", crate::view::text(&buf));
+}

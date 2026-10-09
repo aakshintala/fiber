@@ -617,6 +617,9 @@ mod loop_tests;
 mod mouse_tests;
 
 #[cfg(test)]
+#[path = "lib_delegates_tests.rs"]
+mod delegates_tests;
+#[cfg(test)]
 #[path = "lib_panel_tests.rs"]
 mod panel_tests;
 #[cfg(test)]
