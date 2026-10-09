@@ -1802,3 +1802,50 @@ fn turn_set_open_finds_an_aside_with_no_groups() {
     assert!(!turn.set_open(&Target::Orphans(8), false));
     assert!(!turn.set_open(&Target::Group(0), false));
 }
+
+#[test]
+fn a_running_group_line_is_marked_at_column_0() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    request(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
+    assert_eq!(
+        texts(&app).get(2).map(String::as_str),
+        Some("• Read 1 file · read a.rs")
+    );
+    assert_eq!(app.shown(0, usize::MAX).spins, vec![(2, 0)]);
+}
+
+#[test]
+fn a_keyless_streaming_group_line_is_marked() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    // Arguments streaming with no requested call: the group has no key,
+    // so its line has no target, and still moves.
+    feed(
+        &mut app,
+        "tool_call_arguments_delta",
+        Some("a_m"),
+        0,
+        json!({"index": 0, "text": "{\"pa"}),
+    );
+    assert_eq!(texts(&app).get(2).map(String::as_str), Some("• … {\"pa"));
+    assert_eq!(app.shown(0, usize::MAX).spins, vec![(2, 0)]);
+    assert!(
+        !app.targets()
+            .into_iter()
+            .any(|(_, target)| matches!(target, Target::Group(_))),
+        "a keyless group has no target"
+    );
+}
+
+#[test]
+fn a_finished_group_line_is_not_marked() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    call(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
+    end(&mut app, "completed", 0);
+    assert!(texts(&app).iter().any(|line| line.starts_with("• ")));
+    assert_eq!(app.shown(0, usize::MAX).spins, Vec::new());
+}

@@ -53,6 +53,7 @@ mod keyboard;
 mod links;
 #[path = "app_mouse.rs"]
 mod mouse;
+mod moving;
 mod offer;
 pub(crate) mod panel;
 mod paste;
@@ -277,6 +278,9 @@ pub(crate) struct App {
     /// Failures since the hub was last reached (`docs/tui.md`, "A dropped
     /// connection").
     reconnect: reconnect::Reconnect,
+    /// What moves on screen, and when it next moves (`docs/tui.md`,
+    /// "The working line").
+    motion: crate::motion::Motion,
 }
 
 impl App {
@@ -319,6 +323,7 @@ impl App {
             attention: attention::State::default(),
             config_views: config_views::ConfigViews::default(),
             reconnect: reconnect::Reconnect::default(),
+            motion: crate::motion::Motion::default(),
         }
     }
 

@@ -27,6 +27,7 @@ fn push_text_keeps_its_text() {
         decoration: true,
         links: Vec::new(),
         scopes: Vec::new(),
+        spin: None,
     };
     rows.push_text(row("a"), text.clone());
     assert_eq!(rows.len(), 1);

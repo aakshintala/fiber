@@ -45,6 +45,10 @@ pub struct Launch {
     /// `tui.hover`: with it off, mouse mode 1003 is never sent and nothing
     /// is tinted under the pointer.
     pub hover: bool,
+    /// `tui.reduced_motion`: spinners, the glimmer and the pulse stay
+    /// still, while the time and the countdown keep a one-second wake
+    /// (`docs/tui.md`, "The working line").
+    pub reduced_motion: bool,
     /// Fiber's version, for the logo.
     pub version: String,
     /// `model`: the chip's model, unset on a fresh install with no key.

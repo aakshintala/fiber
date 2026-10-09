@@ -34,6 +34,7 @@ mod local_time;
 mod logical;
 mod look;
 mod markdown;
+mod motion;
 mod mouse;
 mod offer;
 mod open_at;
@@ -55,6 +56,7 @@ mod stroke;
 mod swapped;
 mod term;
 mod theme;
+mod tick;
 mod turn;
 mod turn_text;
 mod view;
@@ -133,6 +135,10 @@ pub(crate) enum Input {
         /// The image in base64, or the notice.
         result: Result<String, String>,
     },
+    /// The working line's timer passed: the frame the tick armed drew,
+    /// and the next moving frame arms it again (`docs/tui.md`, "The
+    /// working line").
+    Tick,
 }
 
 /// Restores the terminal [`run`] set up: turns mouse reporting off, leaves

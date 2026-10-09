@@ -128,6 +128,7 @@ impl App {
     /// project as the run argument did. The app keeps today's screen, so
     /// the jigs and every existing app test stay byte-identical.
     pub(crate) fn set_home(&mut self, launch: Launch) {
+        self.set_reduced_motion(launch.reduced_motion);
         self.set_project(launch.project.clone());
         self.home = Some(Home {
             launch,

@@ -185,7 +185,14 @@ pub(crate) struct Shown {
     pub(crate) first: usize,
     pub(crate) lines: Vec<(Line<'static>, usize, Option<Target>)>,
     pub(crate) turns: TurnRanges,
+    /// The spinning marks drawn, each a line's index and its cell's
+    /// column (`docs/tui.md`, "The working line").
+    pub(crate) spins: Vec<SpinMark>,
 }
+
+/// A spinning mark: a line's index in [`Shown::lines`] and its cell's
+/// column in that line.
+pub(crate) type SpinMark = (usize, u16);
 
 /// What a page draws: as shown, or with every section open for the
 /// search (`docs/tui.md`, "Search": every match is counted at once).
@@ -813,6 +820,7 @@ impl Pages {
         let mut first = None;
         let mut lines = Vec::new();
         let mut turns = Vec::new();
+        let mut spins = Vec::new();
         let mut start = 0usize;
         for (at, page) in self.index.pages().iter().enumerate() {
             if start >= end {
@@ -823,8 +831,13 @@ impl Pages {
                 first.get_or_insert(start);
                 match self.part(at) {
                     Some(part) => {
-                        let (rows, _, _, page_turns) = self.draw_data(at, part, Draw::Shown);
+                        let (rows, texts, _, page_turns) = self.draw_data(at, part, Draw::Shown);
                         let base = lines.len();
+                        for (at, text) in texts.iter().enumerate() {
+                            if let Some(col) = text.spin {
+                                spins.push((base.saturating_add(at), col));
+                            }
+                        }
                         lines.extend(rows.into_iter().map(|(line, target)| {
                             let count = crate::view::rows(line.clone(), self.width);
                             (line, count, target)
@@ -844,6 +857,7 @@ impl Pages {
             first: first.unwrap_or(start),
             lines,
             turns,
+            spins,
         }
     }
 

@@ -155,6 +155,7 @@ fn opened() -> (
         save: None,
         shape: crate::osc::Shape::default(),
         retry: None,
+        tick: crate::tick::TickThread::idle(),
     };
     let (tx, rx) = mpsc::channel();
     (lp, theirs, tx, rx)
@@ -337,6 +338,7 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             | Input::ConnectFailed(_)
             | Input::Disconnected
             | Input::FindDue(_)
+            | Input::Tick
             | Input::Files { .. }
             | Input::Image { .. } => "other".to_owned(),
             Input::Resize => "resize".to_owned(),

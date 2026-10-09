@@ -36,6 +36,10 @@ pub(crate) struct RowText {
     /// a search draw opens, and what a match names (`docs/tui.md`,
     /// "Search").
     pub(crate) scopes: Vec<Target>,
+    /// The column of the one cell that spins while its line runs, on the
+    /// working line's tick (`docs/tui.md`, "The working line"); none in
+    /// [`RowText::plain`].
+    pub(crate) spin: Option<u16>,
 }
 
 impl RowText {
@@ -47,6 +51,7 @@ impl RowText {
             decoration: false,
             links: Vec::new(),
             scopes: Vec::new(),
+            spin: None,
         }
     }
 }
