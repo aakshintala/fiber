@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/home_view_tests.rs
+assertion_line: 112
 expression: "screen(&app, 80, 24)"
 ---
 /home  Goes home.  command
@@ -9,7 +10,7 @@ expression: "screen(&app, 80, 24)"
 /panel  Shows or hides the panel.  command████  █▄▄▄▀
 /rules  Opens the standing rules.  command█▀▀▀▀ █ ▀▄
 /settings  Opens the configuration keys.  command   █ 0.0.1
-/handoff [instructions]  Starts a handoff.  command
+/skills  Opens the skills.  command
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 > /
 

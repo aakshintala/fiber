@@ -9,7 +9,8 @@ use contract::{ErrorCode, Secret};
 use crate::ThemeSetting;
 use crate::configure::{
     Configure, ConfigureError, Layer, LoginTarget, Revoked, RulesScope, RulesSection, Saved,
-    SettingRow, Shown, Stored, SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
+    SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists, ToolSwitches,
+    WriteScope,
 };
 
 /// One revoke the view asked for: the workspace, scope, line and text.
@@ -20,6 +21,10 @@ pub(crate) type Write = (PathBuf, Layer, String, String);
 
 /// One switch the view asked for: the group, tool, scope and whether on.
 pub(crate) type Switched = (ToolGroup, String, SwitchScope, bool);
+
+/// One skill switch the view asked for: the workspace, name, scope and
+/// whether on.
+pub(crate) type SkillSwitched = (PathBuf, String, SwitchScope, bool);
 
 /// A seam over rows in memory.
 pub(crate) struct Fake {
@@ -37,6 +42,10 @@ pub(crate) struct Fake {
     pub(crate) switched: Mutex<Vec<Switched>>,
     /// Whether `switch_tool` fails after applying the edit to its lists.
     pub(crate) fail_after_write: Mutex<bool>,
+    /// What `skills_disabled` answers.
+    pub(crate) skills_off: Mutex<Result<SkillsDisabled, ConfigureError>>,
+    /// Every skill switch asked for, in order.
+    pub(crate) skill_switched: Mutex<Vec<SkillSwitched>>,
     /// The theme files `themes` lists.
     pub(crate) themes: Vec<String>,
     /// What `global_file` answers.
@@ -66,6 +75,8 @@ impl Fake {
             switches: Mutex::new(Vec::new()),
             switched: Mutex::new(Vec::new()),
             fail_after_write: Mutex::new(false),
+            skills_off: Mutex::new(Ok(SkillsDisabled::default())),
+            skill_switched: Mutex::new(Vec::new()),
             themes: Vec::new(),
             global: file(Layer::Global),
             rules: Mutex::new(Ok((
@@ -299,6 +310,55 @@ impl Configure for Fake {
                 .map(|switches| switches.clone())
                 .unwrap_or_default()),
         }
+    }
+
+    fn skills_disabled(&self, workspace: &Path) -> Result<SkillsDisabled, ConfigureError> {
+        if let Ok(mut reads) = self.reads.lock() {
+            reads.push(workspace.to_path_buf());
+        }
+        self.skills_off.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |lists| lists.clone(),
+        )
+    }
+
+    fn switch_skill(
+        &self,
+        workspace: &Path,
+        name: &str,
+        scope: SwitchScope,
+        on: bool,
+    ) -> Result<(), ConfigureError> {
+        if let Ok(mut switched) = self.skill_switched.lock() {
+            switched.push((workspace.to_path_buf(), name.to_owned(), scope, on));
+        }
+        if let Ok(mut lists) = self.skills_off.lock()
+            && let Ok(off) = lists.as_mut()
+        {
+            // The seam's `skills.disabled` handling, so a view
+            // re-read sees the change (`docs/tui.md`, "Swapped views").
+            let listed = match scope {
+                SwitchScope::Project => &mut off.project,
+                SwitchScope::Everywhere => &mut off.everywhere,
+            };
+            if on {
+                listed.retain(|listed| listed != name);
+            } else if !listed.iter().any(|listed| listed == name) {
+                listed.push(name.to_owned());
+            }
+        }
+        if self.fail_after_write.lock().is_ok_and(|fail| *fail) {
+            return Err(ConfigureError {
+                code: ErrorCode::IoFailed,
+                message: "the write landed, then syncing failed".to_owned(),
+            });
+        }
+        Ok(())
     }
 
     fn switch_tool(

@@ -17,6 +17,7 @@ use crate::keys::{Edit, Key};
 use crate::login_view::Login;
 use crate::rules_view::Rules;
 use crate::settings_view::{Act, Ctx, Settings};
+use crate::skills_view::Skills;
 use crate::swapped::{Frame, List, Spot};
 use crate::tools_view::Tools;
 
@@ -30,6 +31,8 @@ pub(crate) enum ConfigView {
     Settings,
     /// `/tools`.
     Tools,
+    /// `/skills`.
+    Skills,
     /// `/rules`.
     Rules,
     /// `/login`.
@@ -43,12 +46,36 @@ enum Open {
     Settings(Settings),
     /// `/tools`.
     Tools(Tools),
+    /// `/skills`.
+    Skills(Skills),
     /// `/rules`.
     Rules(Rules),
     /// `/login`.
     Login(Login),
     /// A view with no seam to read through, by its title.
     Unavailable(&'static str),
+}
+
+impl Open {
+    /// The asking view's rejection: only for the id of the command it
+    /// sent. Every other view keeps what it shows.
+    fn rejected(&mut self, id: &str, message: &str) {
+        match self {
+            Open::Tools(tools) => tools.rejected(id, message),
+            Open::Skills(skills) => skills.rejected(id, message),
+            Open::Settings(_) | Open::Rules(_) | Open::Login(_) | Open::Unavailable(_) => {}
+        }
+    }
+}
+
+/// `/tools` waiting for the `tools` command `id` sent.
+fn build_tools(id: String, ctx: &Ctx<'_>) -> Open {
+    Open::Tools(Tools::open(id, ctx))
+}
+
+/// `/skills` waiting for the `skills` command `id` sent.
+fn build_skills(id: String, ctx: &Ctx<'_>) -> Open {
+    Open::Skills(Skills::open(id, ctx))
 }
 
 /// The configuration views' state.
@@ -80,7 +107,12 @@ impl App {
                 let workspace = self.workspace();
                 Open::Settings(Settings::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
-            (Some(seam), ConfigView::Tools) => return self.open_tools(seam),
+            (Some(seam), ConfigView::Tools) => {
+                return self.open_asking(seam, "tools", build_tools);
+            }
+            (Some(seam), ConfigView::Skills) => {
+                return self.open_asking(seam, "skills", build_skills);
+            }
             (Some(seam), ConfigView::Rules) => {
                 let workspace = self.workspace();
                 Open::Rules(Rules::open(&self.config_ctx(seam.as_ref(), &workspace)))
@@ -91,6 +123,7 @@ impl App {
             }
             (None, ConfigView::Settings) => Open::Unavailable("Settings"),
             (None, ConfigView::Tools) => Open::Unavailable("Tools"),
+            (None, ConfigView::Skills) => Open::Unavailable("Skills"),
             (None, ConfigView::Rules) => Open::Unavailable("Rules"),
             (None, ConfigView::Login) => Open::Unavailable("Log in"),
         };
@@ -98,18 +131,23 @@ impl App {
         Effect::None
     }
 
-    /// Opens `/tools` on the session on screen: sends the `tools` command
-    /// and opens the view waiting for its answer. With no session
-    /// attached the notice is pushed and nothing opens.
-    fn open_tools(&mut self, seam: Arc<dyn Configure>) -> Effect {
+    /// Opens a view on the session on screen that waits for its command's
+    /// answer: sends `command` and opens what `build` makes of its id.
+    /// With no session attached the notice is pushed and nothing opens.
+    fn open_asking(
+        &mut self,
+        seam: Arc<dyn Configure>,
+        command: &str,
+        build: fn(String, &Ctx<'_>) -> Open,
+    ) -> Effect {
         let Some((session, _)) = self.command_session() else {
             return Effect::None;
         };
         let id = super::mint();
-        let line = super::session_command(&id, "tools", &session, None).to_string();
+        let line = super::session_command(&id, command, &session, None).to_string();
         let workspace = self.workspace();
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
-        self.config_views.open = Some(Open::Tools(Tools::open(id, &ctx)));
+        self.config_views.open = Some(build(id, &ctx));
         Effect::Send(vec![line])
     }
 
@@ -120,12 +158,19 @@ impl App {
 
     /// What a call needs: the seam, the workspace, the view's rows and the
     /// last call's prompt size on the session on screen.
-    fn config_ctx<'a>(&self, seam: &'a dyn Configure, workspace: &'a std::path::Path) -> Ctx<'a> {
-        let height = if self.on_home() {
+    /// The open view's height: the attached conversation's, or the
+    /// screen's on home. The frame drawn and the list's paging use one
+    /// number.
+    fn config_view_height(&self) -> usize {
+        if self.on_home() {
             usize::from(self.screen.height())
         } else {
             self.conversation_height()
-        };
+        }
+    }
+
+    fn config_ctx<'a>(&self, seam: &'a dyn Configure, workspace: &'a std::path::Path) -> Ctx<'a> {
+        let height = self.config_view_height();
         let usage = self
             .config_views
             .usage
@@ -154,6 +199,7 @@ impl App {
                 match &mut self.config_views.open {
                     Some(Open::Settings(settings)) => settings.key(key, &ctx),
                     Some(Open::Tools(tools)) => tools.key(key, &ctx),
+                    Some(Open::Skills(skills)) => skills.key(key, &ctx),
                     Some(Open::Rules(rules)) => rules.key(key, &ctx),
                     Some(Open::Login(login)) => login.key(key, &ctx),
                     Some(Open::Unavailable(_)) | None => esc(key),
@@ -181,6 +227,10 @@ impl App {
                         tools.edit_key(edit);
                         Act::Stay
                     }
+                    Some(Open::Skills(skills)) => {
+                        skills.edit_key(edit);
+                        Act::Stay
+                    }
                     Some(Open::Rules(rules)) => rules.edit_key(edit, &ctx),
                     Some(Open::Login(login)) => {
                         login.edit_key(edit);
@@ -204,6 +254,7 @@ impl App {
                 match &mut self.config_views.open {
                     Some(Open::Settings(settings)) => settings.click(spot, &ctx),
                     Some(Open::Tools(tools)) => tools.click(spot, &ctx),
+                    Some(Open::Skills(skills)) => skills.click(spot, &ctx),
                     Some(Open::Rules(rules)) => rules.click(spot, &ctx),
                     Some(Open::Login(login)) => login.click(spot, &ctx),
                     Some(Open::Unavailable(_)) | None => Act::Stay,
@@ -241,6 +292,7 @@ impl App {
         Some(match self.config_views.open.as_ref()? {
             Open::Settings(settings) => settings.frame(usage),
             Open::Tools(tools) => tools.frame(usage),
+            Open::Skills(skills) => skills.frame(self.config_view_height()),
             Open::Rules(rules) => rules.frame(),
             Open::Login(login) => login.frame(),
             Open::Unavailable(title) => Frame {
@@ -271,17 +323,21 @@ impl App {
             match &mut self.config_views.open {
                 Some(Open::Settings(settings)) => settings.reread(&ctx),
                 Some(Open::Rules(rules)) => rules.reread(&ctx),
+                Some(Open::Skills(skills)) => skills.reread(&ctx),
                 Some(Open::Tools(_) | Open::Login(_) | Open::Unavailable(_)) | None => {}
             }
         }
     }
 
     /// Folds a `command_accepted` or `command_rejected` on the session on
-    /// screen into the open `/tools` view: only the answer to the command
-    /// it sent fills it. Every other line, and any line with another view
-    /// open, does nothing.
+    /// screen into the open asking view: only the answer to the command
+    /// it sent, of its result kind, fills it. Every other line, and any
+    /// line with another view open, does nothing.
     pub(in crate::app) fn config_views_line(&mut self, envelope: &Envelope) {
-        if !matches!(self.config_views.open, Some(Open::Tools(_))) {
+        if !matches!(
+            self.config_views.open,
+            Some(Open::Tools(_) | Open::Skills(_))
+        ) {
             return;
         }
         let Some(seam) = self.config_views.seam.clone() else {
@@ -289,33 +345,50 @@ impl App {
         };
         let workspace = self.workspace();
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
-        let Some(Open::Tools(tools)) = &mut self.config_views.open else {
-            return;
-        };
         match envelope.kind.as_str() {
             "command_accepted" => {
-                if let Some(accepted) = super::read!(envelope, CommandAccepted)
-                    && let Some(CommandResult::Tools { tools: answered }) = accepted.result
-                {
-                    tools.answered(&accepted.command_id.0, &answered, &ctx);
+                if let Some(accepted) = super::read!(envelope, CommandAccepted) {
+                    match &mut self.config_views.open {
+                        Some(Open::Tools(tools)) => {
+                            if let Some(CommandResult::Tools { tools: answered }) = accepted.result
+                            {
+                                tools.answered(&accepted.command_id.0, &answered, &ctx);
+                            }
+                        }
+                        Some(Open::Skills(skills)) => {
+                            if let Some(CommandResult::Skills { skills: answered }) =
+                                accepted.result
+                            {
+                                skills.answered(&accepted.command_id.0, &answered, &ctx);
+                            }
+                        }
+                        Some(
+                            Open::Settings(_)
+                            | Open::Rules(_)
+                            | Open::Login(_)
+                            | Open::Unavailable(_),
+                        )
+                        | None => {}
+                    }
                 }
             }
             "command_rejected" => {
                 if let Some(rejected) = super::read!(envelope, CommandRejected)
                     && let Some(id) = rejected.command_id
+                    && let Some(open) = &mut self.config_views.open
                 {
-                    tools.rejected(&id.0, &rejected.message);
+                    open.rejected(&id.0, &rejected.message);
                 }
             }
             _ => {}
         }
     }
 
-    /// A hub `command_rejected` for the `tools` command the view sent
+    /// A hub `command_rejected` for the command the asking view sent
     /// shows its message: only for its id.
     pub(in crate::app) fn config_views_refused(&mut self, id: &str, message: &str) {
-        if let Some(Open::Tools(tools)) = &mut self.config_views.open {
-            tools.rejected(id, message);
+        if let Some(open) = &mut self.config_views.open {
+            open.rejected(id, message);
         }
     }
 
@@ -353,3 +426,7 @@ mod tests;
 #[cfg(test)]
 #[path = "config_login_tests.rs"]
 mod login_tests;
+
+#[cfg(test)]
+#[path = "config_skills_tests.rs"]
+mod skills_tests;

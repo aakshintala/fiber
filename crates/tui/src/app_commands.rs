@@ -436,6 +436,7 @@ impl App {
             }
             "settings" => self.open_config_view(super::ConfigView::Settings),
             "tools" => self.open_config_view(super::ConfigView::Tools),
+            "skills" => self.open_config_view(super::ConfigView::Skills),
             "rules" => self.open_config_view(super::ConfigView::Rules),
             "login" => self.open_config_view(super::ConfigView::Login),
             // `?` and `help`.

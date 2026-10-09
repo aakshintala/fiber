@@ -25,7 +25,7 @@ pub(crate) fn on(lists: &ToolLists, tool: &str) -> bool {
 }
 
 /// `text` in exactly `columns` terminal columns: padded, or cut with `…`.
-fn fit(text: &str, columns: usize) -> String {
+pub(crate) fn fit(text: &str, columns: usize) -> String {
     if width(text) <= columns {
         let mut out = text.to_owned();
         out.push_str(&" ".repeat(columns.saturating_sub(width(text))));
@@ -38,7 +38,7 @@ fn fit(text: &str, columns: usize) -> String {
 }
 
 /// A switch's mark: on or off, with `›` when it is the selection's focus.
-fn mark(on: bool, focused: bool) -> String {
+pub(crate) fn mark(on: bool, focused: bool) -> String {
     let mark = if on { "[x]" } else { "[ ]" };
     if focused {
         format!("›{mark}")
