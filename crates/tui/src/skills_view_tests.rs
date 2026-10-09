@@ -3,7 +3,7 @@
 //! matching its command (`docs/tui.md`, "Swapped views";
 //! `docs/system-prompt.md`, "Skills").
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -96,6 +96,7 @@ fn ctx(fake: &Fake) -> Ctx<'_> {
         seam: fake,
         workspace: Path::new("/w"),
         height: 22,
+        width: 80,
         usage: None,
     }
 }
@@ -606,6 +607,191 @@ fn other_edits_do_nothing() {
     skills.key(&Key::Char(' '), &ctx(&fake));
     assert_eq!(switched(&fake).len(), 1);
     assert_eq!(switched(&fake)[0].2, SwitchScope::Project);
+}
+
+/// A seam answering `body` for every skill text.
+fn text_fake(body: &str) -> Fake {
+    let fake = fake_with(off(&[], &[]));
+    if let Ok(mut texts) = fake.texts.lock() {
+        *texts = Ok(body.to_owned());
+    }
+    fake
+}
+
+/// The view over `fake` with `infos` answered and the selected row's
+/// text open.
+fn entered(fake: &Fake, infos: &[SkillInfo]) -> Skills {
+    let mut skills = opened(fake, infos);
+    skills.key(&Key::Down, &ctx(fake));
+    skills.key(&Key::Enter, &ctx(fake));
+    skills
+}
+
+#[test]
+fn enter_shows_the_text_and_esc_returns_then_closes() {
+    let fake = text_fake("Test first.\nSecond line.");
+    let mut skills = opened(&fake, &[repository("tdd")]);
+    skills.key(&Key::Down, &ctx(&fake));
+    assert!(matches!(skills.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    let frame = skills.frame(22);
+    assert_eq!(frame.title, "Skill tdd");
+    assert!(
+        frame.rows.iter().any(|row| row[0].0 == "Test first."),
+        "{frame:?}"
+    );
+    assert!(matches!(skills.key(&Key::Esc, &ctx(&fake)), Act::Stay));
+    assert_eq!(skills.frame(22).title, "Skills");
+    assert_eq!(skills.list.selected(), 1);
+    assert!(matches!(skills.key(&Key::Esc, &ctx(&fake)), Act::Close));
+}
+
+#[test]
+fn enter_on_a_read_error_stays_on_the_rows_with_the_message() {
+    let fake = fake_with(off(&[], &[]));
+    if let Ok(mut texts) = fake.texts.lock() {
+        *texts = Err(crate::configure::ConfigureError {
+            code: contract::ErrorCode::IoFailed,
+            message: "Could not read /tdd/SKILL.md: gone.".to_owned(),
+        });
+    }
+    let mut skills = opened(&fake, &[repository("tdd")]);
+    skills.key(&Key::Down, &ctx(&fake));
+    assert!(matches!(skills.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    let frame = skills.frame(22);
+    assert_eq!(frame.title, "Skills");
+    assert_eq!(frame.rows.len(), 2);
+    assert!(
+        frame
+            .below
+            .contains(&"Could not read /tdd/SKILL.md: gone.".to_owned()),
+        "{frame:?}"
+    );
+}
+
+#[test]
+fn enter_lists_every_shadow_path_before_the_text() {
+    let fake = text_fake("The text.");
+    let skills = entered(&fake, shadowed_infos(30).as_slice());
+    let frame = skills.frame(22);
+    assert_eq!(frame.rows.len(), 32);
+    for (index, row) in frame.rows.iter().take(30).enumerate() {
+        assert_eq!(
+            row[0].0,
+            format!("shadows /home/skills/tdd-{index}/SKILL.md")
+        );
+    }
+    // No shadow path dropped: the block, a blank line, then the text.
+    assert_eq!(frame.rows[30][0].0, "");
+    assert_eq!(frame.rows[31][0].0, "The text.");
+}
+
+/// A winner shadowing `n` skills, without opening the view.
+fn shadowed_infos(n: usize) -> Vec<SkillInfo> {
+    let mut infos = vec![repository("tdd")];
+    let mut shadows = Vec::new();
+    for index in 0..n {
+        shadows.push(format!("/home/skills/tdd-{index}/SKILL.md"));
+    }
+    infos[0].shadows = shadows;
+    infos
+}
+
+#[test]
+fn the_text_wraps_to_the_width() {
+    let fake = text_fake(&"e".repeat(50));
+    let narrow = Ctx {
+        width: 20,
+        ..ctx(&fake)
+    };
+    let mut skills = opened(&fake, &[repository("tdd")]);
+    skills.key(&Key::Down, &narrow);
+    skills.key(&Key::Enter, &narrow);
+    assert_eq!(skills.frame(22).rows.len(), 3);
+}
+
+#[test]
+fn a_new_width_rewraps_on_the_next_key() {
+    let fake = text_fake(&"e".repeat(50));
+    let narrow = Ctx {
+        width: 20,
+        ..ctx(&fake)
+    };
+    let mut skills = opened(&fake, &[repository("tdd")]);
+    skills.key(&Key::Down, &narrow);
+    skills.key(&Key::Enter, &narrow);
+    assert_eq!(skills.frame(22).rows.len(), 3);
+    let wide = Ctx {
+        width: 40,
+        ..ctx(&fake)
+    };
+    skills.key(&Key::Down, &wide);
+    assert_eq!(skills.frame(22).rows.len(), 2);
+}
+
+#[test]
+fn text_scrolls_and_clamps_two_past_the_end() {
+    let body: Vec<String> = (0..10).map(|n| format!("line {n}")).collect();
+    let fake = text_fake(&body.join("\n"));
+    let mut skills = entered(&fake, &[repository("tdd")]);
+    assert_eq!(skills.frame(22).rows.len(), 10);
+    skills.click(Spot::Row(11), &ctx(&fake));
+    assert_eq!(selected_line(&skills), 9);
+    skills.key(&Key::PageDown, &ctx(&fake));
+    assert_eq!(selected_line(&skills), 9);
+    skills.key(&Key::Up, &ctx(&fake));
+    assert_eq!(selected_line(&skills), 8);
+}
+
+/// The text pane's selected line.
+fn selected_line(skills: &Skills) -> usize {
+    skills.frame(22).list.selected()
+}
+
+#[test]
+fn ctrl_g_opens_the_selected_skill_md() {
+    let fake = text_fake("Test first.");
+    let mut skills = opened(&fake, &[repository("tdd")]);
+    skills.key(&Key::Down, &ctx(&fake));
+    let file = PathBuf::from("/w/.fiber/skills/tdd/SKILL.md");
+    assert!(matches!(
+        skills.key(&Key::CtrlG, &ctx(&fake)),
+        Act::Open(path) if path == file
+    ));
+    skills.key(&Key::Enter, &ctx(&fake));
+    assert!(matches!(
+        skills.key(&Key::CtrlG, &ctx(&fake)),
+        Act::Open(path) if path == file
+    ));
+}
+
+#[test]
+fn ctrl_g_with_no_rows_opens_nothing() {
+    let fake = Fake::new(Vec::new());
+    let mut skills = opened(&fake, &[]);
+    assert!(matches!(skills.key(&Key::CtrlG, &ctx(&fake)), Act::Stay));
+}
+
+#[test]
+fn skills_text_80x24() {
+    let fake = text_fake("Test first, then write the test.\nA second paragraph.");
+    let mut win = repository("tdd");
+    win.shadows = vec!["/home/skills/tdd/SKILL.md".to_owned()];
+    let mut skills = opened(&fake, &[win]);
+    skills.key(&Key::Down, &ctx(&fake));
+    skills.key(&Key::Enter, &ctx(&fake));
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&skills.frame(24), area, &mut buf, &mut Vec::new());
+    let text: Vec<String> = (0..24)
+        .map(|y| {
+            (0..80)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect();
+    insta::assert_snapshot!("skills_text_80x24", text.join("\n"));
 }
 
 #[test]

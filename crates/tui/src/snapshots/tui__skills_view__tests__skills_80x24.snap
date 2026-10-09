@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/skills_view_tests.rs
-assertion_line: 637
+assertion_line: 823
 expression: "text.join(\"\\n\")"
 ---
 Skills                                                                         ✕
@@ -26,4 +26,4 @@ skill               this project  everywhere  visibility     source          des
 
 Mine.
 shadowed by /w/.fiber/skills/tdd/SKILL.md
-↑↓ move · ←→ choose a switch · Space switch · Esc close
+↑↓ move · ←→ choose a switch · Space switch · Enter text · Ctrl+G open the file

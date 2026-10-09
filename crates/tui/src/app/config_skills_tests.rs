@@ -269,6 +269,48 @@ fn opening_skills_closes_the_open_view() {
 }
 
 #[test]
+fn file_closed_rereads_the_lists_and_the_text() {
+    let seam = fake();
+    let mut app = connected(Some(Arc::clone(&seam)));
+    let id = open_skills(&mut app);
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": skills_answer()}),
+    ));
+    app.on_key(Key::Down, now());
+    app.on_key(Key::Enter, now());
+    assert_eq!(
+        app.config_view_screen().map(|frame| frame.title),
+        Some("Skill tdd".to_owned())
+    );
+    if let Ok(mut texts) = seam.texts.lock() {
+        *texts = Ok("Edited text.".to_owned());
+    }
+    app.config_file_closed(Ok(()));
+    let frame = app.config_view_screen().expect("the view is open");
+    assert!(
+        frame.rows.iter().any(|row| row[0].0 == "Edited text."),
+        "{frame:?}"
+    );
+    // Back on the rows, the lists the file holds show.
+    if let Ok(mut lists) = seam.skills_off.lock() {
+        *lists = Ok(crate::configure::SkillsDisabled {
+            project: vec!["tdd".to_owned()],
+            everywhere: Vec::new(),
+        });
+    }
+    app.on_key(Key::Esc, now());
+    app.config_file_closed(Ok(()));
+    let frame = app.config_view_screen().expect("the view is open");
+    assert!(
+        frame.rows.iter().any(|row| row
+            .iter()
+            .any(|(text, _)| text.contains("off"))),
+        "{frame:?}"
+    );
+}
+
+#[test]
 fn left_and_right_reach_the_skills_view_not_the_draft() {
     let seam = fake();
     let mut app = connected(Some(Arc::clone(&seam)));

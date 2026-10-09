@@ -371,6 +371,10 @@ Fiber writes configuration in these places:
   `tools.enabled` and `tools.disabled` in the project's file or the global
   file, never a repository's; a file that holds no list starts from the one
   it inherits (`docs/tui.md`, "Swapped views")
+- the terminal's `/skills` switches write a skill's name to
+  `skills.disabled` in the project's file or the global file, never a
+  repository's; each file's own list, since both apply (`docs/tui.md`,
+  "Swapped views")
 - the terminal's `/rules` deletes one line of a rules file under the file's
   lock, leaving every other line as it was (`docs/tui.md`, "Swapped views";
   "Standing rules")

@@ -156,8 +156,6 @@ impl App {
         self.config_views.open.is_some()
     }
 
-    /// What a call needs: the seam, the workspace, the view's rows and the
-    /// last call's prompt size on the session on screen.
     /// The open view's height: the attached conversation's, or the
     /// screen's on home. The frame drawn and the list's paging use one
     /// number.
@@ -169,8 +167,17 @@ impl App {
         }
     }
 
+    /// What a call needs: the seam, the workspace, the view's rows and
+    /// the last call's prompt size on the session on screen.
     fn config_ctx<'a>(&self, seam: &'a dyn Configure, workspace: &'a std::path::Path) -> Ctx<'a> {
         let height = self.config_view_height();
+        // The text panes wrap at the width they draw in: the
+        // conversation column attached, the screen on home.
+        let width = if self.on_home() {
+            usize::from(self.screen.width())
+        } else {
+            usize::from(self.column_width())
+        };
         let usage = self
             .config_views
             .usage
@@ -181,6 +188,7 @@ impl App {
             seam,
             workspace,
             height,
+            width,
             usage,
         }
     }

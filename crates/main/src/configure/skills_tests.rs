@@ -166,6 +166,84 @@ fn a_second_off_leaves_the_file_as_it_was() {
     );
 }
 
+const TEXT_LIMIT: usize = 64 * 1024;
+
+/// `size` `a` bytes as a skill file, read through the seam.
+fn skill_text(seam: &Seam, file: &std::path::Path) -> Result<String, tui::ConfigureError> {
+    seam.skill_text(file)
+}
+
+#[test]
+fn skill_text_cuts_at_64_kib() {
+    let dirs = Dirs::new();
+    let seam = Seam::new(dirs.home());
+    for (size, cut) in [
+        (TEXT_LIMIT - 1, false),
+        (TEXT_LIMIT, false),
+        (TEXT_LIMIT + 1, true),
+        (TEXT_LIMIT + 2, true),
+    ] {
+        let file = dirs.workspace("one").join(format!("skill-{size}.md"));
+        write(&file, &"a".repeat(size));
+        let text = skill_text(&seam, &file).unwrap_or_else(|e| panic!("text: {e}"));
+        if cut {
+            assert_eq!(text, format!("{}…", "a".repeat(TEXT_LIMIT)));
+        } else {
+            assert_eq!(text, "a".repeat(size));
+            assert!(!text.ends_with('…'));
+        }
+    }
+}
+
+#[test]
+fn a_character_across_the_limit_is_left_out() {
+    let dirs = Dirs::new();
+    let file = dirs.workspace("one").join("SKILL.md");
+    let mut bytes = vec![b'a'; TEXT_LIMIT - 1];
+    bytes.extend_from_slice("é".as_bytes());
+    bytes.extend_from_slice(&[b'a'; 100]);
+    std::fs::write(&file, &bytes).unwrap_or_else(|e| panic!("write: {e}"));
+    let seam = Seam::new(dirs.home());
+    let text = skill_text(&seam, &file).unwrap_or_else(|e| panic!("text: {e}"));
+    assert_eq!(text, format!("{}…", "a".repeat(TEXT_LIMIT - 1)));
+}
+
+#[test]
+fn a_missing_file_is_an_error_naming_it() {
+    let dirs = Dirs::new();
+    let file = dirs.workspace("one").join("SKILL.md");
+    let seam = Seam::new(dirs.home());
+    let error = skill_text(&seam, &file).unwrap_err();
+    assert!(
+        error.message.contains(&file.display().to_string()),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn invalid_utf8_before_the_limit_is_an_error() {
+    let dirs = Dirs::new();
+    let file = dirs.workspace("one").join("SKILL.md");
+    let mut bytes = vec![b'a'; 70_000];
+    bytes[100] = 0xFF;
+    std::fs::write(&file, &bytes).unwrap_or_else(|e| panic!("write: {e}"));
+    let seam = Seam::new(dirs.home());
+    assert!(skill_text(&seam, &file).is_err());
+}
+
+#[test]
+fn an_incomplete_character_at_the_real_end_is_an_error() {
+    let dirs = Dirs::new();
+    let seam = Seam::new(dirs.home());
+    for size in [10, TEXT_LIMIT - 1] {
+        let file = dirs.workspace("one").join(format!("skill-{size}.md"));
+        let mut bytes = vec![b'a'; size];
+        bytes.push(0xC3);
+        std::fs::write(&file, &bytes).unwrap_or_else(|e| panic!("write: {e}"));
+        assert!(skill_text(&seam, &file).is_err(), "size {size}");
+    }
+}
+
 #[test]
 fn a_file_with_no_list_starts_from_none() {
     let dirs = Dirs::new();

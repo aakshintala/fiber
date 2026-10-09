@@ -290,6 +290,10 @@ impl tui::Configure for Seam {
     ) -> Result<(), ConfigureError> {
         self.write_skill_switch(workspace, name, scope, on)
     }
+
+    fn skill_text(&self, path: &Path) -> Result<String, ConfigureError> {
+        self.read_skill_text(path)
+    }
 }
 
 #[cfg(test)]

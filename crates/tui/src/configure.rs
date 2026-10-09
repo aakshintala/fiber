@@ -312,6 +312,10 @@ pub trait Configure: Send + Sync {
         scope: SwitchScope,
         on: bool,
     ) -> Result<(), ConfigureError>;
+
+    /// The text of the `SKILL.md` at `path`: at most 64 KiB, with `…`
+    /// when cut.
+    fn skill_text(&self, path: &Path) -> Result<String, ConfigureError>;
 }
 
 #[cfg(test)]

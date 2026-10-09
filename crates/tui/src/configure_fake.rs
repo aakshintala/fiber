@@ -46,6 +46,10 @@ pub(crate) struct Fake {
     pub(crate) skills_off: Mutex<Result<SkillsDisabled, ConfigureError>>,
     /// Every skill switch asked for, in order.
     pub(crate) skill_switched: Mutex<Vec<SkillSwitched>>,
+    /// What `skill_text` answers.
+    pub(crate) texts: Mutex<Result<String, ConfigureError>>,
+    /// Every skill file `skill_text` was asked for, in order.
+    pub(crate) text_reads: Mutex<Vec<PathBuf>>,
     /// The theme files `themes` lists.
     pub(crate) themes: Vec<String>,
     /// What `global_file` answers.
@@ -77,6 +81,8 @@ impl Fake {
             fail_after_write: Mutex::new(false),
             skills_off: Mutex::new(Ok(SkillsDisabled::default())),
             skill_switched: Mutex::new(Vec::new()),
+            texts: Mutex::new(Ok(String::new())),
+            text_reads: Mutex::new(Vec::new()),
             themes: Vec::new(),
             global: file(Layer::Global),
             rules: Mutex::new(Ok((
@@ -359,6 +365,21 @@ impl Configure for Fake {
             });
         }
         Ok(())
+    }
+
+    fn skill_text(&self, path: &Path) -> Result<String, ConfigureError> {
+        if let Ok(mut reads) = self.text_reads.lock() {
+            reads.push(path.to_path_buf());
+        }
+        self.texts.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |texts| texts.clone(),
+        )
     }
 
     fn switch_tool(
