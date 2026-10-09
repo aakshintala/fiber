@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::app::Target;
 use crate::markdown::style;
-use crate::rows::{Join, Rows};
+use crate::rows::{Join, RowText, Rows};
 use crate::theme::Role;
 use crate::turn::{Group, Thought, target_id};
 
