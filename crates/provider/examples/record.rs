@@ -58,18 +58,14 @@ fn main() -> ExitCode {
     }
 }
 
-/// The trailing arguments: headers to send, and at most one `@FILE`
+/// The trailing arguments: headers to send, and at most one `@FILE` path
 /// holding the `extra_body` object.
-#[derive(Debug, PartialEq)]
-struct Extras {
-    headers: Vec<(String, String)>,
-    body_file: Option<String>,
-}
+type Parsed = (Vec<(String, String)>, Option<String>);
 
 /// The trailing arguments: headers, and at most one `@FILE` holding the
 /// `extra_body` object. Anything else is rejected before any request is
 /// sent.
-fn extras(args: &[String]) -> Result<Extras, String> {
+fn extras(args: &[String]) -> Result<Parsed, String> {
     let mut headers = Vec::new();
     let mut body_file = None;
     for arg in args {
@@ -88,7 +84,7 @@ fn extras(args: &[String]) -> Result<Extras, String> {
         };
         headers.push((name.to_owned(), value.trim().to_owned()));
     }
-    Ok(Extras { headers, body_file })
+    Ok((headers, body_file))
 }
 
 /// The `@FILE` JSON object, sent as the endpoint's `extra_body`.
@@ -109,7 +105,7 @@ fn record(
     key: &str,
     request: &str,
     out: &str,
-    extra: Extras,
+    extra: Parsed,
 ) -> Result<u64, String> {
     let key = match key.strip_prefix("env:") {
         Some(name) => std::env::var(name).map_err(|e| format!("{name}: {e}"))?,
@@ -119,7 +115,7 @@ fn record(
         serde_json::from_slice(&std::fs::read(request).map_err(|e| format!("{request}: {e}"))?)
             .map_err(|e| format!("{request}: {e}"))?;
     let extra_body = extra
-        .body_file
+        .1
         .as_deref()
         .map(extra_body)
         .transpose()?
@@ -129,7 +125,7 @@ fn record(
         model: model.into(),
         base_url: base_url.into(),
         key: Some(contract::Secret::new(key.trim().to_owned())),
-        headers: extra.headers,
+        headers: extra.0,
         extra_body,
         ..Endpoint::default()
     };
@@ -169,11 +165,11 @@ mod tests {
     fn extras_reads_headers_and_one_body_file() {
         let arg = |s: &str| s.to_owned();
         let parsed = extras(&[arg("x-a: 1")]).unwrap();
-        assert_eq!(parsed.headers, vec![("x-a".to_owned(), "1".to_owned())]);
-        assert_eq!(parsed.body_file, None);
+        assert_eq!(parsed.0, vec![("x-a".to_owned(), "1".to_owned())]);
+        assert_eq!(parsed.1, None);
         let parsed = extras(&[arg("@f.json"), arg("x-a:1")]).unwrap();
-        assert_eq!(parsed.headers, vec![("x-a".to_owned(), "1".to_owned())]);
-        assert_eq!(parsed.body_file, Some("f.json".to_owned()));
+        assert_eq!(parsed.0, vec![("x-a".to_owned(), "1".to_owned())]);
+        assert_eq!(parsed.1, Some("f.json".to_owned()));
         assert_eq!(
             extras(&[arg("@a.json"), arg("@b.json")]).unwrap_err(),
             "record: one @FILE only"

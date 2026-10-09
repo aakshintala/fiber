@@ -14,6 +14,9 @@
 #[path = "support/probes.rs"]
 mod probes;
 
+#[path = "support/large.rs"]
+mod large;
+
 #[path = "support/wire_tools.rs"]
 mod wire_tools;
 
@@ -1956,8 +1959,18 @@ fn the_recorded_openai_search_decodes_its_query_and_sources() {
         action.as_object_mut().unwrap().remove("sources");
         assert_eq!(pair.call.name, "web_search");
         assert_eq!(pair.call.arguments, action);
-        assert_eq!(pair.call.provider_item, Some((*item).clone()));
-        assert_eq!(pair.completed.provider_item, Some((*item).clone()));
+        // A done item is several kilobytes: compare without printing it
+        // whole on failure.
+        large::assert_json_eq(
+            item,
+            pair.call.provider_item.as_ref().unwrap(),
+            "the hosted call's logged item",
+        );
+        large::assert_json_eq(
+            item,
+            pair.completed.provider_item.as_ref().unwrap(),
+            "the hosted result's logged item",
+        );
         assert_eq!(
             pair.completed.status,
             contract::events::CallStatus::Completed
@@ -2241,10 +2254,13 @@ fn the_recorded_searches_run_through_the_seam_and_replay_their_items() {
             ..request()
         };
         run(provider.call(&next)).0.unwrap();
-        assert_eq!(
-            sent_body(&server, 1)["input"],
-            Value::Array(items),
-            "{name}"
+        // The replayed input holds whole done items, tens of kilobytes:
+        // compare without printing them whole on failure.
+        let input = sent_body(&server, 1)["input"].clone();
+        large::assert_json_eq(
+            &Value::Array(items),
+            &input,
+            &format!("{name}: the replayed input"),
         );
     }
 }

@@ -94,13 +94,12 @@ pub(crate) fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
                 tools.push(tool);
             }
         }
+        // `tools` holds only hosted entries here: a non-empty list means
+        // a hosted search is sent.
+        let hosted = !tools.is_empty();
         if !declarations.is_empty() {
             tools.insert(0, json!({ "functionDeclarations": declarations }));
         }
-        let hosted = tools.iter().any(|tool| {
-            tool.as_object()
-                .is_some_and(|map| !map.contains_key("functionDeclarations"))
-        });
         body.insert("tools".into(), Value::Array(tools));
         let mut config =
             json!({ "functionCallingConfig": function_calling(&request.tool_choice, strict) });

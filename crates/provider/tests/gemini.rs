@@ -13,6 +13,9 @@
 #[path = "support/probes.rs"]
 mod probes;
 
+#[path = "support/large.rs"]
+mod large;
+
 #[path = "support/wire_tools.rs"]
 mod wire_tools;
 
@@ -2453,12 +2456,19 @@ fn the_recorded_search_decodes_each_call_and_response_as_a_hosted_call() {
             .iter()
             .find(|response| response["toolResponse"]["id"] == call["toolCall"]["id"])
             .unwrap();
-        assert_eq!(pair.completed.provider_item, Some(response.clone()));
+        // The result block is tens of kilobytes: compare without printing
+        // it whole on failure.
+        large::assert_json_eq(
+            response,
+            pair.completed.provider_item.as_ref().unwrap(),
+            "the hosted completion's result block",
+        );
         assert_eq!(pair.completed.status, CallStatus::Completed);
         if n + 1 == hosted.len() {
             // The grounding's URLs go on the last completion, with the
             // grounding itself as its details.
-            let urls = grounding_urls(want.grounding.as_ref().unwrap());
+            let grounding = want.grounding.as_ref().unwrap();
+            let urls = grounding_urls(grounding);
             assert!(!urls.is_empty());
             assert_eq!(
                 pair.completed.content,
@@ -2466,7 +2476,11 @@ fn the_recorded_search_decodes_each_call_and_response_as_a_hosted_call() {
                     text: urls.join("\n")
                 }]
             );
-            assert_eq!(pair.completed.details, want.grounding);
+            large::assert_json_eq(
+                grounding,
+                pair.completed.details.as_ref().unwrap(),
+                "the last completion's grounding details",
+            );
         } else {
             // Gemini reports one grounding per reply, never saying which
             // search found which source: earlier completions stay empty.
@@ -2511,10 +2525,24 @@ fn the_recorded_search_replays_its_parts_and_never_its_grounding() {
         .filter(|part| part.get("toolCall").is_some() || part.get("toolResponse").is_some())
         .cloned()
         .collect();
-    assert_eq!(replayed, want.search);
+    // The search parts include a block of tens of kilobytes: compare
+    // without printing them whole on failure.
+    large::assert_json_eq(
+        &Value::Array(replayed),
+        &Value::Array(want.search.clone()),
+        "the replayed search parts",
+    );
     let raw = String::from_utf8(server.requests()[1].body.clone()).unwrap();
-    assert!(!raw.contains("groundingMetadata"), "{raw}");
-    assert!(!raw.contains("groundingChunks"), "{raw}");
+    assert!(
+        !raw.contains("groundingMetadata"),
+        "the replay sends no grounding: {} bytes",
+        raw.len()
+    );
+    assert!(
+        !raw.contains("groundingChunks"),
+        "the replay sends no grounding: {} bytes",
+        raw.len()
+    );
     // Another model reference leaves the search parts out.
     let foreign = ModelRequest {
         conversation: after(&reply, "openai/gpt-6-luna"),
@@ -2522,8 +2550,16 @@ fn the_recorded_search_replays_its_parts_and_never_its_grounding() {
     };
     run(provider.call(&foreign)).0.unwrap();
     let raw = String::from_utf8(server.requests()[2].body.clone()).unwrap();
-    assert!(!raw.contains("toolCall"), "{raw}");
-    assert!(!raw.contains("toolResponse"), "{raw}");
+    assert!(
+        !raw.contains("toolCall"),
+        "another model gets no search parts: {} bytes",
+        raw.len()
+    );
+    assert!(
+        !raw.contains("toolResponse"),
+        "another model gets no search parts: {} bytes",
+        raw.len()
+    );
 }
 
 /// A scripted `toolCall` part: `args` and `id` are left out when `None`.
