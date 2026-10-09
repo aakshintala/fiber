@@ -170,8 +170,8 @@ fn read_input(mut tty: File, mut woken: &PipeReader, gate: &Gate, tx: &Sender<In
 /// Connects to the hub on its own thread, after the first frame, then
 /// reads its lines. After each failed connect or ended connection it waits
 /// for the loop's permit and the delay it names, then connects again
-/// (`docs/tui.md`, "A dropped connection"). It ends when the loop quits or
-/// is gone.
+/// (`docs/tui.md`, "A dropped connection"). It ends when the loop quits,
+/// which dropping the loop does.
 pub(crate) fn spawn_hub(
     mut connect: Connect,
     tx: Sender<Input>,
@@ -184,17 +184,17 @@ pub(crate) fn spawn_hub(
                 let reader = stream.try_clone()?;
                 Ok((stream, reader, hello))
             });
-            let sent = match connected {
+            // A failed send means the loop is gone, and its drop quits the
+            // wait below.
+            match connected {
                 Ok((stream, reader, hello)) => {
-                    let sent = tx.send(Input::Connected(stream, hello));
-                    if sent.is_ok() {
+                    if tx.send(Input::Connected(stream, hello)).is_ok() {
                         link::read_lines(reader, &tx);
                     }
-                    sent
                 }
-                Err(error) => tx.send(Input::ConnectFailed(error.to_string())),
-            };
-            if sent.is_err() || !retry.wait(clock.as_ref()) {
+                Err(error) => drop(tx.send(Input::ConnectFailed(error.to_string()))),
+            }
+            if !retry.wait(clock.as_ref()) {
                 return;
             }
         }
