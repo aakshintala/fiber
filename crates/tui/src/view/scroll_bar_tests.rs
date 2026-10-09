@@ -302,3 +302,28 @@ fn text_width_is_the_rows_width() {
         );
     }
 }
+
+#[test]
+fn a_bar_below_the_top_row_draws_its_thumb_on_its_own_rows() {
+    // The thumb rows are relative to the bar's own top, wherever it sits.
+    let app = tall();
+    let bar = Rect::new(2, 3, 1, 5);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 4, 10));
+    super::draw(&app, bar, &mut buf);
+    let total = app.scroll().1;
+    let top = app.top().unwrap_or(total);
+    let covered = thumb(top, total, bar.height).expect("a thumb while taller");
+    for y in 0..10u16 {
+        let want = match y.checked_sub(bar.y) {
+            Some(at) if at < bar.height => {
+                if covered.contains(&at) {
+                    THUMB
+                } else {
+                    TRACK
+                }
+            }
+            _ => " ",
+        };
+        assert_eq!(buf[(bar.x, y)].symbol(), want, "row {y}");
+    }
+}
