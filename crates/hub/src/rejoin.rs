@@ -123,6 +123,29 @@ pub(crate) fn admit(
     true
 }
 
+/// The current subscription for a candidate whose mark has not changed and
+/// which can still be admitted exclusively. Call under the relays lock and
+/// keep that lock through `admit` so the epoch and level cannot change between
+/// this check and the admission.
+pub(crate) fn kept_for_candidate(
+    held: &Relays,
+    session: &str,
+    candidate_epoch: u64,
+) -> Option<Map<String, Value>> {
+    if held.rejoin.closed
+        || held.entries.iter().any(|entry| entry.session == session)
+        || held.rejoin.opening.contains_key(session)
+        || !held
+            .rejoin
+            .marks
+            .get(session)
+            .is_some_and(|stored| stored.epoch == candidate_epoch)
+    {
+        return None;
+    }
+    held.subscription(session)
+}
+
 /// Writes `mark` back for `session` only when its epoch is the stored one:
 /// a write-back for an older epoch changes nothing.
 pub(crate) fn store_back(held: &mut Relays, session: &str, mark: Mark) {
@@ -170,7 +193,6 @@ impl Drop for Opening {
 pub(crate) struct Candidate {
     session: String,
     mark: Mark,
-    kept: Map<String, Value>,
     writer: Arc<Mutex<UnixStream>>,
     relays: Arc<Mutex<Relays>>,
 }
@@ -178,16 +200,13 @@ pub(crate) struct Candidate {
 /// What one sweep collects on the scanner thread, with no IO: each live
 /// connection's sessions with a kept subscription, no relay, a mark, a name
 /// in `names`, not opening and not closed.
-pub(crate) fn candidates(
-    held: &Relays,
-    names: &BTreeSet<String>,
-) -> Vec<(String, Mark, Map<String, Value>)> {
+pub(crate) fn candidates(held: &Relays, names: &BTreeSet<String>) -> Vec<(String, Mark)> {
     if held.rejoin.closed {
         return Vec::new();
     }
     held.subscribed
         .iter()
-        .filter_map(|(session, kept)| {
+        .filter_map(|(session, _kept)| {
             if !names.contains(session) {
                 return None;
             }
@@ -198,7 +217,7 @@ pub(crate) fn candidates(
                 return None;
             }
             let mark = held.rejoin.marks.get(session)?.clone();
-            Some((session.clone(), mark, kept.clone()))
+            Some((session.clone(), mark))
         })
         .collect()
 }
@@ -299,10 +318,9 @@ fn sweep(hub: &Arc<Hub>, names: &BTreeSet<String>) {
         found.extend(
             candidates(&held, names)
                 .into_iter()
-                .map(|(session, mark, kept)| Candidate {
+                .map(|(session, mark)| Candidate {
                     session,
                     mark,
-                    kept,
                     writer: Arc::clone(&writer),
                     relays: Arc::clone(&relays),
                 }),
@@ -335,7 +353,6 @@ fn rejoin_pass(hub: &Arc<Hub>, candidates: Vec<Candidate>) {
         let Candidate {
             session,
             mark,
-            kept,
             writer,
             relays,
         } = candidate;
@@ -352,6 +369,7 @@ fn rejoin_pass(hub: &Arc<Hub>, candidates: Vec<Candidate>) {
         };
         let advanced = advance(mark);
         let live = advanced.live;
+        let candidate_epoch = advanced.epoch;
         {
             let mut held = lock(&relays);
             store_back(&mut held, &session, advanced);
@@ -363,19 +381,16 @@ fn rejoin_pass(hub: &Arc<Hub>, candidates: Vec<Candidate>) {
         if let Some(before_connect) = lock(&hub.rejoins.before_connect).take() {
             before_connect();
         }
+        // Fast rejection avoids connecting for a candidate already made
+        // stale while it was off-lock. `attach_rejoin` repeats this check and
+        // keeps the relays lock through replay and exclusive admission.
+        if kept_for_candidate(&lock(&relays), &session, candidate_epoch).is_none() {
+            continue;
+        }
         let Ok(stream) = UnixStream::connect(hub.home.join("run").join(&session)) else {
             continue;
         };
-        crate::relay::attach(
-            &session,
-            stream,
-            hub,
-            &writer,
-            &relays,
-            Some(kept),
-            None,
-            true,
-        );
+        crate::relay::attach_rejoin(&session, stream, hub, &writer, &relays, candidate_epoch);
     }
     #[cfg(test)]
     if let Some(passed) = lock(&hub.rejoins.pass_done).as_ref() {
@@ -453,18 +468,6 @@ fn advance(mark: Mark) -> Mark {
         live,
         epoch: mark.epoch,
     }
-}
-
-/// The kept subscription for a candidate whose stored mark is still the
-/// one it was collected with. Inert until the sweep checks epochs.
-#[allow(dead_code, reason = "inert until the sweep checks epochs")]
-pub(crate) fn kept_for_candidate(
-    held: &Relays,
-    session: &str,
-    candidate_epoch: u64,
-) -> Option<Map<String, Value>> {
-    let _ = (held, session, candidate_epoch);
-    None
 }
 
 #[cfg(test)]

@@ -459,13 +459,69 @@ pub(crate) fn attach(
     command: Option<(CommandId, Vec<u8>, Map<String, Value>)>,
     exclusive: bool,
 ) {
+    attach_inner(
+        session, stream, hub, writer, relays, replay, command, exclusive, None,
+    );
+}
+
+/// Rejoins only if the candidate's mark is still current. It takes the kept
+/// subscription under the relays lock and holds that lock through replay and
+/// admission, so a superseding subscription can neither be missed nor
+/// overwritten by the old candidate.
+pub(crate) fn attach_rejoin(
+    session: &str,
+    stream: UnixStream,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+    candidate_epoch: u64,
+) {
+    attach_inner(
+        session,
+        stream,
+        hub,
+        writer,
+        relays,
+        None,
+        None,
+        true,
+        Some(candidate_epoch),
+    );
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the session, its stream, the hub, the client, the relays, the replay, the command and its admission are one hand-off"
+)]
+fn attach_inner(
+    session: &str,
+    stream: UnixStream,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+    replay: Option<Map<String, Value>>,
+    command: Option<(CommandId, Vec<u8>, Map<String, Value>)>,
+    exclusive: bool,
+    candidate_epoch: Option<u64>,
+) {
     let mut replay = replay;
+    let admission = candidate_epoch.map(|_| lock(relays));
+    if let Some(candidate_epoch) = candidate_epoch {
+        let Some(current) = admission
+            .as_ref()
+            .and_then(|held| crate::rejoin::kept_for_candidate(held, session, candidate_epoch))
+        else {
+            return;
+        };
+        replay = Some(current);
+    }
     let replayed: Replayed = Arc::new(Mutex::new(Vec::new()));
     if let Some(line) = replay.as_mut() {
         let minted = crate::start::mint("c_");
         line.insert("id".to_owned(), Value::String(minted.clone()));
         let sent = line_bytes(line).is_some_and(|line| write_all(&stream, &line).is_ok());
         if !sent {
+            drop(admission);
             if let Some((id, _, _)) = &command {
                 crate::retire::refuse_not_found(writer, hub, relays, session, id);
             }
@@ -483,21 +539,28 @@ pub(crate) fn attach(
     if let Some((id, bytes, _)) = &command
         && write_all(&stream, bytes).is_err()
     {
+        drop(admission);
         crate::retire::refuse_not_found(writer, hub, relays, session, id);
         return;
     }
     let reader = match stream.try_clone() {
         Ok(reader) => reader,
         Err(_) => {
+            drop(admission);
             if let Some((id, _, _)) = &command {
                 crate::retire::refuse_not_found(writer, hub, relays, session, id);
             }
             return;
         }
     };
-    let order = lock(relays).order.clone();
+    let order = admission
+        .as_ref()
+        .map_or_else(|| lock(relays).order.clone(), |held| held.order.clone());
     let mark = crate::rejoin::Mark::now(&hub.home, session);
-    let mut held = lock(relays);
+    let mut held = match admission {
+        Some(held) => held,
+        None => lock(relays),
+    };
     let epoch = held.mint();
     if !crate::rejoin::admit(&mut held, session, exclusive, mark, epoch) {
         drop(held);
@@ -816,20 +879,6 @@ fn write_all(stream: &UnixStream, bytes: &[u8]) -> std::io::Result<()> {
     let mut stream = stream;
     stream.write_all(bytes)?;
     stream.flush()
-}
-
-/// Rejoins only if the candidate's mark is still current. Inert until the
-/// sweep checks epochs: the stream is dropped unwritten.
-#[allow(dead_code, reason = "inert until the sweep checks epochs")]
-pub(crate) fn attach_rejoin(
-    session: &str,
-    stream: UnixStream,
-    hub: &Arc<Hub>,
-    writer: &Arc<Mutex<UnixStream>>,
-    relays: &Arc<Mutex<Relays>>,
-    candidate_epoch: u64,
-) {
-    let _ = (session, stream, hub, writer, relays, candidate_epoch);
 }
 
 #[cfg(test)]
