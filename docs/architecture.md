@@ -102,8 +102,9 @@ defines a trait and `main` injects the implementation: `Sessions`, the socket
 client in `doors` that `tools` uses for the session tools, `Images`, the
 image child's driver in `tools` that `doors` and `mcp` use for pasted and MCP
 images, `Scan`, the session log search in `log` that `tools` uses for
-`session_search`, and `Skills`, skill discovery in `loop` that `tools` uses
-for `skill`.
+`session_search`, `SearchBackend`, the Lua search backend in `extensions`
+that `tools` uses for Fiber's own `web_search`, and `Skills`, skill
+discovery in `loop` that `tools` uses for `skill`.
 
 1. Calls point one way. If A may call B, B may never call A. B answers, or it
    emits an event and A picks it up.
