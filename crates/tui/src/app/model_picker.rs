@@ -146,7 +146,14 @@ impl App {
             Some(seam) => {
                 for (key, text) in saves(&choice) {
                     match seam.set(&workspace, Layer::Global, &key, &text) {
-                        Ok(_) => self.picker_saved(&key, &choice),
+                        Ok(_) => {
+                            // A saved model supersedes the session-only
+                            // choice the next `start` would carry.
+                            if key == "model" {
+                                self.model_picker.start_model = None;
+                            }
+                            self.picker_saved(&key, &choice)
+                        }
                         Err(error) => self.push_notice(format!("Saving {key} failed: {error}")),
                     }
                 }
@@ -217,7 +224,14 @@ impl App {
         let workspace = self.workspace();
         for (key, text) in writes {
             match seam.set(&workspace, Layer::Global, &key, &text) {
-                Ok(_) => self.picker_accepted(&key, &text),
+                Ok(_) => {
+                    // A saved model supersedes the session-only choice
+                    // the next `start` would carry.
+                    if key == "model" {
+                        self.model_picker.start_model = None;
+                    }
+                    self.picker_accepted(&key, &text)
+                }
                 Err(error) => {
                     self.push_notice(format!("Saving {key} failed: {error}"));
                 }

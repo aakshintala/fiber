@@ -1635,6 +1635,92 @@ fn the_start_model_clears_once_start_is_accepted() {
 }
 
 #[test]
+fn enter_after_s_on_home_forgets_the_session_only_choice() {
+    let mut app = home();
+    let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
+    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.on_line(hello());
+    app.on_models(Ok(three()));
+    // `s` holds `acme/m1` for the next `start`, saving nothing.
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert!(app.model_picker.start_model.is_some());
+    assert!(seam.writes().is_empty());
+    // Enter saves `acme/m2` as the default, superseding the held choice.
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.model_picker.start_model.is_none());
+    let launch = &app.home.as_ref().expect("home").launch;
+    assert_eq!(launch.model.as_deref(), Some("acme/m2"));
+    // The next `start` carries neither a model nor an override: the
+    // forgotten choice leaves no trace, and the saved default stands
+    // in the config file.
+    type_draft(&mut app, "hi");
+    let args = started(app.on_key(Key::Enter, now()));
+    assert!(args.get("model").is_none());
+    assert!(args.get("overrides").is_none());
+}
+
+#[test]
+fn s_after_enter_on_home_still_rides_the_next_start() {
+    let mut app = home();
+    let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
+    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.on_line(hello());
+    app.on_models(Ok(three()));
+    // Enter saves `acme/m2` as the default, holding nothing back.
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.model_picker.start_model.is_none());
+    // A later `s` holds `acme/m1` at `low` for the next `start`, over
+    // the saved default.
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    app.on_edit(Edit::Left);
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(seam.writes().len(), 1);
+    type_draft(&mut app, "hi");
+    let args = started(app.on_key(Key::Enter, now()));
+    assert_eq!(args["model"], json!("acme/m1"));
+    assert_eq!(
+        args["overrides"],
+        json!(["models.\"acme/m1\".thinking=low"])
+    );
+}
+
+#[test]
+fn acceptance_clears_a_pending_home_choice() {
+    let mut app = home();
+    let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
+    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.on_line(hello());
+    app.on_models(Ok(three()));
+    // A session-only choice on home rides the next `start`.
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert!(app.model_picker.start_model.is_some());
+    // Attached instead, an Enter choice saves its model once the session
+    // accepts it, superseding the pending choice.
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    let line = sent(app.on_key(Key::Enter, now()));
+    let id = line["id"].as_str().expect("an id").to_owned();
+    assert!(app.model_picker.start_model.is_some());
+    app.on_line(accepted(SESSION, &id));
+    assert!(app.model_picker.start_model.is_none());
+    assert_eq!(
+        seam.writes()
+            .iter()
+            .map(|(_, _, key, text)| (key.clone(), text.clone()))
+            .collect::<Vec<_>>(),
+        [("model".to_owned(), "acme/m2".to_owned())]
+    );
+}
+
+#[test]
 fn enter_on_home_with_no_model_opens_the_picker_and_keeps_the_draft() {
     let mut app = home();
     app.on_line(hello());
