@@ -50,6 +50,23 @@ fn print_only_scripts_read() {
 }
 
 #[test]
+fn separator_runs_read() {
+    // Each of blank, tab, `;` and newline must be skipped in a run, both
+    // before the first command and after a separator.
+    for script in [
+        "\t1p",
+        "\n\t1p",
+        ";1p",
+        "1p;\t",
+        "1p;\t2p",
+        "1p\t;\n\t2p",
+        " \t;\n1p",
+    ] {
+        assert_prints(script);
+    }
+}
+
+#[test]
 fn hostile_scripts_do_not_print_only() {
     for script in [
         "1w out",
@@ -166,6 +183,11 @@ fn flag_cases_declare_only_files() {
         vec!["-n", "0,5p", "f"],
         vec!["-n", "1p", "f", "-e", "w out"],
         vec!["-n", "1p", "f", "-i"],
+        vec!["-e", "1p", "-"],
+        vec!["-e", "1p", "-", "f"],
+        vec!["-n", "1p", "-"],
+        vec!["-n", "1p", "--x"],
+        vec!["--x", "1p"],
     ] {
         assert_eq!(files_of(&words), None, "{words:?}");
     }
@@ -173,6 +195,15 @@ fn flag_cases_declare_only_files() {
     assert_eq!(
         files_of(&["-n", "--", "1p", "-n"]),
         Some(vec!["-n".to_owned()])
+    );
+    // After `--`, a `-` or `--` word is an operand, not a flag.
+    assert_eq!(
+        files_of(&["-n", "--", "1p", "-"]),
+        Some(vec!["-".to_owned()])
+    );
+    assert_eq!(
+        files_of(&["-n", "--", "1p", "--x"]),
+        Some(vec!["--x".to_owned()])
     );
     assert_eq!(
         files_of(&["-n", "1p", "a", "b"]),

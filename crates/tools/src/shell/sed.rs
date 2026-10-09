@@ -19,14 +19,14 @@ pub(super) fn files<'a>(words: impl IntoIterator<Item = &'a str>) -> Option<Vec<
             ended = true;
             continue;
         }
-        if !ended && !first_seen && word.starts_with("--") {
+        if !ended && word.starts_with("--") {
             return None;
         }
         if !ended && !first_seen && word.starts_with('-') && word != "-" {
             cluster(word, &mut rest, &mut scripts, &mut seen_e)?;
             continue;
         }
-        if word == "-" && !ended && !first_seen {
+        if word == "-" && !ended {
             return None;
         }
         // After `--` every word is an operand, on GNU and BSD alike. Any
