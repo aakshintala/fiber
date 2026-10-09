@@ -441,6 +441,36 @@ fn models_lists_a_thousand_openrouter_models_within_the_memory_cap() {
     );
 }
 
+/// Every first-party model loads: `fiber models --json` lists each
+/// `provider/id` the six files hold, and none is dropped as
+/// `model_invalid`.
+#[test]
+fn models_lists_every_first_party_model_and_drops_none() {
+    let setup = Setup::new();
+    for package in ["anthropic", "gemini", "muse", "openai", "opencode"] {
+        support::package::copy_package(
+            package,
+            &setup.home().join("extensions").join(package),
+            "",
+            "",
+        );
+    }
+    let run = setup.fiber(&["models", "--json"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.stderr, "");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers");
+    let mut expected = Vec::new();
+    for package in ["anthropic", "gemini", "muse", "openai", "opencode"] {
+        for provider in config::read_providers(&root.join(package)).unwrap() {
+            for model in &provider.models {
+                expected.push(format!("{}/{}", provider.name, model.id));
+            }
+        }
+    }
+    expected.sort_by_key(|reference| reference.split('/').next().unwrap_or("").to_owned());
+    assert_eq!(listed_ids(&run), expected);
+}
+
 /// Waits until this test's refresh child is gone, under the test's
 /// [`Deadline`]: the detached child exits after it rewrites the cache, and
 /// a rewritten cache alone never proves it did. On expiry it kills the
