@@ -305,3 +305,58 @@ fn a_theme_choice_is_taken_once() {
     ));
     assert!(app.take_theme_choice().is_none());
 }
+
+#[test]
+fn the_quit_question_takes_keys_over_the_view() {
+    let mut app = attached(Some(fake()));
+    app.phase = super::super::Phase::Attached {
+        session: contract::SessionId(SESSION.to_owned()),
+        busy: true,
+    };
+    slash_settings(&mut app);
+    let at = now();
+    app.on_key(Key::CtrlC, at);
+    app.on_key(Key::CtrlC, at);
+    assert!(app.quit_open());
+    assert_eq!(app.on_key(Key::Enter, at), Effect::Quit);
+}
+
+#[test]
+fn a_new_session_stroke_does_not_leave_the_view() {
+    let mut app = attached(Some(fake()));
+    slash_settings(&mut app);
+    let stroke = crate::stroke::Stroke::parse("ctrl+n").unwrap_or_else(|err| panic!("{err}"));
+    app.on_press(stroke, now());
+    assert!(app.config_view_open());
+    assert!(app.session().is_some());
+}
+
+#[test]
+fn the_view_hides_the_cursor_and_keeps_the_input_box_attached() {
+    let mut app = attached(Some(fake()));
+    slash_settings(&mut app);
+    let area = Rect::new(0, 0, 80, 24);
+    assert_eq!(crate::view::cursor(&app, area), None);
+    // Attached, the view takes the conversation's place, not the screen.
+    let rows = screen(&app);
+    assert_eq!(rows.last().map(String::as_str), Some(">"), "{rows:#?}");
+    app.on_key(Key::Esc, now());
+    assert!(crate::view::cursor(&app, area).is_some());
+}
+
+#[test]
+fn the_reload_cost_is_the_session_on_screens_only() {
+    let mut app = attached(Some(fake()));
+    app.on_line(session_line(
+        "usage_recorded",
+        serde_json::json!({"generation_id": "g_1", "model": "a/b",
+            "tokens": {"input": 10, "cache_read": 0, "cache_write": {}, "output": 0},
+            "input_bytes": 1, "cost": null}),
+    ));
+    app.go_home();
+    app.open_config_view(ConfigView::Settings);
+    assert_eq!(
+        app.config_view_screen().map(|frame| frame.below),
+        Some(vec!["Applies on each session's next /reload.".to_owned()])
+    );
+}
