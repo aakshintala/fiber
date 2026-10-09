@@ -1624,6 +1624,31 @@ fn a_resume_sends_the_same_bytes() {
 }
 
 #[test]
+fn a_rewound_child_sends_its_parent_image_as_the_same_bytes() {
+    let root = fakes::TempDir::new("fiber-anthropic-rewound-image");
+    let sessions = root.path().join("sessions");
+    let parent = sessions.join("s_parent");
+    let child = sessions.join("s_child");
+    std::fs::create_dir_all(parent.join("artifacts")).unwrap();
+    std::fs::create_dir_all(&child).unwrap();
+    std::fs::write(parent.join("artifacts/i_1.png"), b"abcd").unwrap();
+    let absolute = parent.join("artifacts/i_1.png").display().to_string();
+    let parent_request = ModelRequest {
+        conversation: image_conversation(false, vec![png_ref("artifacts/i_1.png")]),
+        session_dir: parent,
+        ..request()
+    };
+    let child_request = ModelRequest {
+        conversation: image_conversation(false, vec![png_ref(&absolute)]),
+        session_dir: child,
+        ..request()
+    };
+    let parent_body = bodies_of(&parent_request, 1).pop().unwrap();
+    let child_body = bodies_of(&child_request, 1).pop().unwrap();
+    assert_eq!(parent_body, child_body);
+}
+
+#[test]
 fn a_result_without_an_image_keeps_a_string_content() {
     let request = ModelRequest {
         conversation: image_conversation(false, Vec::new()),
