@@ -31,6 +31,10 @@ use crate::login::{LoginIo, Plain, login};
 /// How long a test waits for one call or one child.
 const WAIT: Duration = Duration::from_secs(10);
 
+/// How long a test waits for the package to open the authorize URL or for
+/// its callback listener to bind: one wall-clock deadline for both waits.
+const BROWSER_WAIT: Duration = Duration::from_secs(4);
+
 /// The test account id and email.
 const ACCOUNT: &str = "acct_1";
 const EMAIL: &str = "alice@example.com";
@@ -166,14 +170,34 @@ fn free_port() -> u16 {
 }
 
 /// A browser that records the authorize URL and opens nothing: the test
-/// thread performs the redirect once the callback listens.
+/// thread performs the redirect once the callback listens. Each `open` also
+/// reports on the channel, so the wait for it is a notification under
+/// [`BROWSER_WAIT`] instead of an attempt count.
 struct RedirectBrowser {
     opened: Mutex<Vec<String>>,
+    notify: mpsc::Sender<String>,
+}
+
+impl RedirectBrowser {
+    /// A browser and the channel its `open` reports on.
+    fn notified() -> (Arc<Self>, mpsc::Receiver<String>) {
+        let (notify, opened) = mpsc::channel();
+        (
+            Arc::new(Self {
+                opened: Mutex::new(Vec::new()),
+                notify,
+            }),
+            opened,
+        )
+    }
 }
 
 impl Browser for RedirectBrowser {
     fn open(&self, url: &str) {
         self.opened.lock().unwrap().push(url.to_owned());
+        match self.notify.send(url.to_owned()) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
     }
 
     fn show(&self, _url: &str, _code: &str) {}
@@ -183,31 +207,35 @@ impl Browser for RedirectBrowser {
     }
 }
 
-fn await_opened(browser: &Arc<RedirectBrowser>) -> String {
-    for _ in 0..1_000_000 {
-        if let Some(url) = browser.opened.lock().unwrap().pop() {
-            return url;
-        }
-        thread::yield_now();
-    }
-    panic!("the package never opened the authorize URL");
+/// Waits for the package's `open` notification, without reading the clock:
+/// nothing here parks on it. The bound is the wall-clock [`BROWSER_WAIT`],
+/// so a package that never opens fails there instead of hanging.
+fn await_opened(opened: &mpsc::Receiver<String>) -> String {
+    opened.recv_timeout(BROWSER_WAIT).unwrap_or_else(|_| {
+        panic!("the package never opened the authorize URL within {BROWSER_WAIT:?}")
+    })
 }
 
+/// GETs the callback's `target` on `port`, retrying a refused connection
+/// until the listener binds. The bound is the wall-clock [`BROWSER_WAIT`],
+/// so a listener that never binds fails there instead of hanging.
 fn redirect(port: u16, target: &str) {
-    for _ in 0..50_000 {
-        match TcpStream::connect((Ipv4Addr::LOCALHOST, port)) {
-            Ok(mut stream) => {
-                stream.set_read_timeout(Some(WAIT)).unwrap();
-                write!(stream, "GET {target} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
-                let mut reply = String::new();
-                stream.read_to_string(&mut reply).unwrap();
-                assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
-                return;
+    let target = target.to_owned();
+    fakes::within("the callback to listen", BROWSER_WAIT, move || {
+        loop {
+            match TcpStream::connect((Ipv4Addr::LOCALHOST, port)) {
+                Ok(mut stream) => {
+                    stream.set_read_timeout(Some(WAIT)).unwrap();
+                    write!(stream, "GET {target} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+                    let mut reply = String::new();
+                    stream.read_to_string(&mut reply).unwrap();
+                    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+                    return;
+                }
+                Err(_) => thread::yield_now(),
             }
-            Err(_) => thread::yield_now(),
         }
-    }
-    panic!("the callback never listened on {port}");
+    });
 }
 
 fn state_of(url: &str) -> String {
@@ -254,6 +282,7 @@ fn browser_flow(
     providers: &Providers,
     label: Option<&str>,
     browser: &Arc<RedirectBrowser>,
+    opened: &mpsc::Receiver<String>,
     server: &OauthServer,
 ) -> Result<String, Failure> {
     let _ = server;
@@ -271,7 +300,7 @@ fn browser_flow(
             ))
             .unwrap();
         });
-        let url = await_opened(browser);
+        let url = await_opened(opened);
         let port = free_port_of(&url);
         redirect(
             port,
@@ -315,10 +344,8 @@ fn a_browser_login_stores_the_email_label_0600_and_names_it_globally() {
     let port = free_port();
     setup.install(&server, port);
     let providers = setup.providers();
-    let browser = Arc::new(RedirectBrowser {
-        opened: Mutex::new(Vec::new()),
-    });
-    let path = browser_flow(&setup, &providers, None, &browser, &server).unwrap();
+    let (browser, opened) = RedirectBrowser::notified();
+    let path = browser_flow(&setup, &providers, None, &browser, &opened, &server).unwrap();
     assert_eq!(path, "credentials/codex/alice@example.com");
 
     assert_eq!(
@@ -344,10 +371,8 @@ fn a_browser_login_with_as_stores_that_label_and_ignores_the_email() {
     let port = free_port();
     setup.install(&server, port);
     let providers = setup.providers();
-    let browser = Arc::new(RedirectBrowser {
-        opened: Mutex::new(Vec::new()),
-    });
-    let path = browser_flow(&setup, &providers, Some("work"), &browser, &server).unwrap();
+    let (browser, opened) = RedirectBrowser::notified();
+    let path = browser_flow(&setup, &providers, Some("work"), &browser, &opened, &server).unwrap();
     assert_eq!(path, "credentials/codex/work");
     assert_eq!(setup.stored("work").unwrap()["account_id"], json!(ACCOUNT));
     assert!(setup.stored(EMAIL).is_none());
@@ -363,9 +388,7 @@ fn an_as_label_already_stored_is_refused_before_anything_opens() {
     setup.install(&server, port);
     let providers = setup.providers();
     setup.store_for_test("work");
-    let browser = Arc::new(RedirectBrowser {
-        opened: Mutex::new(Vec::new()),
-    });
+    let (browser, _opened) = RedirectBrowser::notified();
     let error = failed(browser_login(
         &setup.home(),
         &providers,
@@ -395,10 +418,10 @@ fn an_email_label_already_stored_is_refused_after_the_flow_naming_as() {
     setup.install(&server, port);
     let providers = setup.providers();
     setup.store_for_test(EMAIL);
-    let browser = Arc::new(RedirectBrowser {
-        opened: Mutex::new(Vec::new()),
-    });
-    let error = failed(browser_flow(&setup, &providers, None, &browser, &server));
+    let (browser, opened) = RedirectBrowser::notified();
+    let error = failed(browser_flow(
+        &setup, &providers, None, &browser, &opened, &server,
+    ));
     assert_eq!(error.code, ErrorCode::Usage);
     assert!(
         error.message.contains("--as"),
@@ -421,10 +444,10 @@ fn a_browser_login_while_another_holds_the_label_lock_is_io_failed() {
         .try_lock()
         .unwrap()
         .unwrap();
-    let browser = Arc::new(RedirectBrowser {
-        opened: Mutex::new(Vec::new()),
-    });
-    let error = failed(browser_flow(&setup, &providers, None, &browser, &server));
+    let (browser, opened) = RedirectBrowser::notified();
+    let error = failed(browser_flow(
+        &setup, &providers, None, &browser, &opened, &server,
+    ));
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert!(
         error.message.contains("another login"),
@@ -443,10 +466,10 @@ fn an_email_that_is_no_label_is_a_usage_error_naming_as() {
     let port = free_port();
     setup.install(&server, port);
     let providers = setup.providers();
-    let browser = Arc::new(RedirectBrowser {
-        opened: Mutex::new(Vec::new()),
-    });
-    let error = failed(browser_flow(&setup, &providers, None, &browser, &server));
+    let (browser, opened) = RedirectBrowser::notified();
+    let error = failed(browser_flow(
+        &setup, &providers, None, &browser, &opened, &server,
+    ));
     assert_eq!(error.code, ErrorCode::Usage);
     assert!(
         error.message.contains("--as"),
@@ -465,10 +488,10 @@ fn a_failed_global_write_deletes_the_stored_file() {
     setup.install(&server, port);
     let providers = setup.providers();
     fs::write(setup.home().join("config.json"), "{\"model\": ,").unwrap();
-    let browser = Arc::new(RedirectBrowser {
-        opened: Mutex::new(Vec::new()),
-    });
-    let error = failed(browser_flow(&setup, &providers, None, &browser, &server));
+    let (browser, opened) = RedirectBrowser::notified();
+    let error = failed(browser_flow(
+        &setup, &providers, None, &browser, &opened, &server,
+    ));
     assert_eq!(error.code, ErrorCode::ConfigInvalid, "{error:?}");
     assert!(setup.stored(EMAIL).is_none());
 }

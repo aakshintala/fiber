@@ -36,6 +36,10 @@ use serde_json::{Value, json};
 /// How long a test waits for one call or one background refresh.
 const WAIT: Duration = Duration::from_secs(10);
 
+/// How long a test waits for the package to open the authorize URL or for
+/// its callback listener to bind: one wall-clock deadline for both waits.
+const BROWSER_WAIT: Duration = Duration::from_secs(4);
+
 /// The fake clock's wall at construction, in Unix seconds.
 const WALL: u64 = 1_700_000_000;
 
@@ -168,20 +172,34 @@ enum Answer {
 
 /// A browser that records the authorize URL and opens nothing: the test
 /// thread performs the redirect once the callback listens, since the
-/// listener starts only after `open` returns.
+/// listener starts only after `open` returns. Each `open` also reports on
+/// the channel, so the wait for it is a notification under [`BROWSER_WAIT`]
+/// instead of an attempt count.
 struct RedirectBrowser {
     opened: Mutex<Vec<String>>,
+    notify: mpsc::Sender<String>,
 }
 
 impl RedirectBrowser {
-    fn opened(&self) -> Vec<String> {
-        self.opened.lock().unwrap().clone()
+    /// A browser and the channel its `open` reports on.
+    fn notified() -> (Arc<Self>, mpsc::Receiver<String>) {
+        let (notify, opened) = mpsc::channel();
+        (
+            Arc::new(Self {
+                opened: Mutex::new(Vec::new()),
+                notify,
+            }),
+            opened,
+        )
     }
 }
 
 impl Browser for RedirectBrowser {
     fn open(&self, url: &str) {
         self.opened.lock().unwrap().push(url.to_owned());
+        match self.notify.send(url.to_owned()) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
     }
 
     fn show(&self, _url: &str, _code: &str) {}
@@ -191,37 +209,37 @@ impl Browser for RedirectBrowser {
     }
 }
 
-/// Waits until the package opens the authorize URL, without reading the
+/// Waits for the package's `open` notification, without reading the
 /// clock: the login parks on the fake clock, so a wait on it would never
-/// end. The bound is on attempts, so a login that never opens fails fast.
-fn await_opened(browser: &RedirectBrowser) -> String {
-    for _ in 0..1_000_000 {
-        if let Some(url) = browser.opened().pop() {
-            return url;
-        }
-        std::thread::yield_now();
-    }
-    panic!("the package never opened the authorize URL");
+/// end. The bound is the wall-clock [`BROWSER_WAIT`], so a login that
+/// never opens fails there instead of hanging.
+fn await_opened(opened: &mpsc::Receiver<String>) -> String {
+    opened.recv_timeout(BROWSER_WAIT).unwrap_or_else(|_| {
+        panic!("the package never opened the authorize URL within {BROWSER_WAIT:?}")
+    })
 }
 
 /// GETs the callback's `target` on `port`, retrying a refused connection
 /// until the listener binds. The callback serves one request; the bound is
-/// on attempts.
+/// the wall-clock [`BROWSER_WAIT`], so a listener that never binds fails
+/// there instead of hanging.
 fn redirect(port: u16, target: &str) {
-    for _ in 0..50_000 {
-        match TcpStream::connect((Ipv4Addr::LOCALHOST, port)) {
-            Ok(mut stream) => {
-                stream.set_read_timeout(Some(WAIT)).unwrap();
-                write!(stream, "GET {target} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
-                let mut reply = String::new();
-                stream.read_to_string(&mut reply).unwrap();
-                assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
-                return;
+    let target = target.to_owned();
+    fakes::within("the callback to listen", BROWSER_WAIT, move || {
+        loop {
+            match TcpStream::connect((Ipv4Addr::LOCALHOST, port)) {
+                Ok(mut stream) => {
+                    stream.set_read_timeout(Some(WAIT)).unwrap();
+                    write!(stream, "GET {target} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+                    let mut reply = String::new();
+                    stream.read_to_string(&mut reply).unwrap();
+                    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+                    return;
+                }
+                Err(_) => std::thread::yield_now(),
             }
-            Err(_) => std::thread::yield_now(),
         }
-    }
-    panic!("the callback never listened on {port}");
+    });
 }
 
 /// The authorize URL's query parameters, percent-decoded.
@@ -307,14 +325,12 @@ fn browser_login(
     let server = OauthServer::start(replies);
     let port = free_port();
     env.install(&server, port);
-    let browser = Arc::new(RedirectBrowser {
-        opened: Mutex::new(Vec::new()),
-    });
+    let (browser, opened) = RedirectBrowser::notified();
     let provider = env.logging_in(browser.clone());
     let rx = start_login(&provider, None, LoginMethod::Browser);
     // The listener starts after `open` returns, so the redirect goes out
     // from here, once the authorize URL is recorded.
-    let url = await_opened(&browser);
+    let url = await_opened(&opened);
     let query = url.split_once('?').map_or("", |(_, query)| query);
     let state = split_query(query).get("state").cloned().unwrap_or_default();
     let target = match answer {
@@ -420,12 +436,10 @@ fn a_browser_login_whose_exchange_fails_is_credential_failed() {
     let env = Env::new();
     let port = free_port();
     env.install(&server, port);
-    let browser = Arc::new(RedirectBrowser {
-        opened: Mutex::new(Vec::new()),
-    });
+    let (browser, opened) = RedirectBrowser::notified();
     let provider = env.logging_in(browser.clone());
     let rx = start_login(&provider, None, LoginMethod::Browser);
-    let url = await_opened(&browser);
+    let url = await_opened(&opened);
     let state = split_query(url.split_once('?').unwrap().1)
         .get("state")
         .cloned()
@@ -717,10 +731,9 @@ fn a_credential_due_for_refresh_is_replaced_with_its_headers() {
     assert_eq!(form["client_id"], CLIENT_ID);
 
     // Every sign is one consistent pair or the other, until the new one lands.
-    let (done, landed) = mpsc::channel();
     let polling = Arc::clone(&provider);
-    std::thread::spawn(move || {
-        for _ in 0..100_000 {
+    fakes::within("the refresh to land", WAIT, move || {
+        loop {
             let headers = sign_with(&polling);
             let token = header(&headers, "authorization");
             let account = header(&headers, "chatgpt-account-id");
@@ -732,17 +745,11 @@ fn a_credential_due_for_refresh_is_replaced_with_its_headers() {
                 "a request never pairs a token with another token's headers"
             );
             if header(&headers, "authorization") == Some(format!("Bearer {fresh}")) {
-                match done.send(()) {
-                    Ok(()) | Err(mpsc::SendError(())) => {}
-                }
                 return;
             }
             std::thread::yield_now();
         }
     });
-    landed
-        .recv_timeout(WAIT)
-        .unwrap_or_else(|_| panic!("the refresh did not land within {WAIT:?}"));
 }
 
 #[test]
@@ -784,11 +791,9 @@ fn a_browser_login_with_its_port_busy_names_device_login() {
     env.install(&server, port);
     // The codex CLI's own login holds the callback port.
     let _held = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
-    let browser = Arc::new(RedirectBrowser {
-        opened: Mutex::new(Vec::new()),
-    });
+    let (browser, opened) = RedirectBrowser::notified();
     let rx = start_login(&env.logging_in(browser.clone()), None, LoginMethod::Browser);
-    let url = await_opened(&browser);
+    let url = await_opened(&opened);
     assert!(url.contains("/oauth/authorize"), "{url}");
     let error = finish_login(&rx).unwrap_err();
     assert_eq!(error.code(), ErrorCode::CredentialFailed, "{error:?}");

@@ -5,6 +5,7 @@
 //! stays under the file-size rule (`docs/code-quality.md`, "Size").
 
 use std::cell::RefCell;
+use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::UNIX_EPOCH;
 
@@ -22,12 +23,24 @@ use crate::lua_provider::REFRESH_BEFORE;
 pub(crate) type LoginSlot = Arc<Mutex<Option<Value>>>;
 
 /// What a `host.oauth.refresh` holds.
-#[derive(Debug)]
 pub(crate) enum Holder {
     /// The stored credential's lock.
     File(CredentialLock),
     /// A login's result slot, which holds no file.
     Login(LoginSlot),
+}
+
+impl fmt::Debug for Holder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            // The lock names its file; the file's contents never print.
+            Self::File(lock) => f.debug_tuple("File").field(lock).finish(),
+            // The slot holds the login's tokens: only whether it is
+            // filled prints, never the value (`docs/code-quality.md`,
+            // "Errors").
+            Self::Login(slot) => f.debug_tuple("Login").field(&lock(slot).is_some()).finish(),
+        }
+    }
 }
 
 /// A stored credential held under its lock, as Lua sees it. `release()` and
@@ -36,6 +49,21 @@ pub(crate) enum Holder {
 pub(crate) struct Held {
     holder: RefCell<Option<Holder>>,
     clock: Arc<dyn Clock>,
+}
+
+impl fmt::Debug for Held {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The holder may carry the login's tokens, and the clock is not
+        // `Debug`: neither prints, only which kind is held.
+        let holder = match self.holder.borrow().as_ref() {
+            None => "released",
+            Some(Holder::File(_)) => "file",
+            Some(Holder::Login(_)) => "login",
+        };
+        f.debug_struct("Held")
+            .field("holder", &holder)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Held {

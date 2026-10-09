@@ -152,6 +152,28 @@ fn due_judges_a_stored_credential_by_the_clock() {
     assert!(held.due(&serde_json::json!("t")));
 }
 
+#[test]
+fn a_login_holder_never_prints_its_tokens() {
+    let clock = fakes::clock::FakeClock::new();
+    let slot: LoginSlot = Arc::new(Mutex::new(Some(serde_json::json!({
+        "token": "sk-live-secret-token",
+        "refresh_token": "rt-live-secret",
+        "expires_at": 4_102_444_800u64,
+        "account_id": "acct_1",
+    }))));
+    let holder = Holder::Login(Arc::clone(&slot));
+    let printed = format!("{holder:?}");
+    assert!(!printed.contains("sk-live-secret-token"), "{printed}");
+    assert!(!printed.contains("rt-live-secret"), "{printed}");
+    let held = Held::new(holder, clock);
+    let printed = format!("{held:?}");
+    assert!(!printed.contains("sk-live-secret-token"), "{printed}");
+    assert!(!printed.contains("rt-live-secret"), "{printed}");
+    // The slot still holds its value: the redaction is in the printing,
+    // not a wipe.
+    assert!(slot.lock().unwrap().is_some());
+}
+
 /// A connection that fails `pause` reads, as one that times out does,
 /// before each byte of `head`.
 struct Pausing {
