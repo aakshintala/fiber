@@ -156,6 +156,18 @@ pub enum Revoked {
     Stale,
 }
 
+/// One `/keys` change to save: the action's id, and its new entry.
+/// `None` removes `keys.<id>`; `Some` sets it to the names in written
+/// form, `Some(vec![])` unbinding the action
+/// (`docs/configuration.md`, "Keys").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyEdit {
+    /// The action's id.
+    pub id: String,
+    /// The new entry, or `None` to remove it.
+    pub keys: Option<Vec<String>>,
+}
+
 /// Why a read or a write failed: the failure's code and its message,
 /// which the view shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -321,6 +333,12 @@ pub trait Configure: Send + Sync {
     /// The text of the `SKILL.md` at `path`: at most 64 KiB, with `…`
     /// when cut.
     fn skill_text(&self, path: &Path) -> Result<String, ConfigureError>;
+
+    // `/keys`.
+
+    /// Saves the `/keys` screen's edits to the global `keys`, in one
+    /// write. Called only with a non-empty slice.
+    fn save_keys(&self, edits: &[KeyEdit]) -> Result<(), ConfigureError>;
 }
 
 #[cfg(test)]
