@@ -52,8 +52,8 @@ mod links;
 #[path = "app_mouse.rs"]
 mod mouse;
 mod offer;
-mod paste;
 pub(crate) mod panel;
+mod paste;
 pub(crate) mod results;
 mod screen;
 mod select;
