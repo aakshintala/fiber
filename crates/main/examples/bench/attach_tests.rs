@@ -1,8 +1,10 @@
 use serde_json::json;
 
-use crate::busy::{BYTES_PER_TOKEN, TRIGGER_TOKENS, filler};
+use crate::busy::filler;
 
-use super::{ATTACH_TAIL, ONE_MIB, Step, TEN_MIB, feed_step, size_note};
+use super::{
+    ATTACH_TAIL, PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES, feed_step, plan_turns, size_note,
+};
 
 fn status(id: &str, state: &str) -> serde_json::Value {
     json!({
@@ -55,30 +57,54 @@ fn feed_step_waits_on_another_sessions_status_and_a_busy_state() {
 }
 
 #[test]
-fn the_attach_fixtures_are_one_and_ten_mib_of_replies() {
-    assert_eq!(ONE_MIB.turns * ONE_MIB.reply_bytes, 1_048_576);
-    assert_eq!(TEN_MIB.turns * TEN_MIB.reply_bytes, 10_485_760);
-    assert_eq!(TEN_MIB.handoffs, 9);
-    for fixture in [&ONE_MIB, &TEN_MIB] {
-        assert!(
-            fixture.reply_bytes / BYTES_PER_TOKEN < TRIGGER_TOKENS,
-            "{:?}",
-            fixture.reply_bytes
-        );
-    }
+fn plan_turns_grows_whole_turns_to_the_bands_low_end() {
+    // A 200,000-byte first turn with 170,000-byte growth turns: six turns
+    // reach 1,050,000, inside the 1 MiB band, and sixty-two reach
+    // 10,570,000, inside the 10 MiB band.
+    assert_eq!(plan_turns(1_048_576, 200_000, 170_000).unwrap(), 6);
+    assert_eq!(size_note("1 MiB", 200_000 + 5 * 170_000), None);
+    assert_eq!(plan_turns(10_485_760, 200_000, 170_000).unwrap(), 62);
+    assert_eq!(size_note("10 MiB", 200_000 + 61 * 170_000), None);
+    // A shortfall smaller than one growth turn still takes a whole one.
+    assert_eq!(plan_turns(1_048_576, 1_000_000, 170_000).unwrap(), 2);
+}
+
+#[test]
+fn plan_turns_needs_one_turn_at_most_and_fails_on_empty_growth() {
+    assert_eq!(plan_turns(1_048_576, 1_048_576, 170_000).unwrap(), 1);
+    assert_eq!(plan_turns(1_048_576, 2_000_000, 170_000).unwrap(), 1);
+    assert!(plan_turns(1_048_576, 200_000, 0).is_err());
+}
+
+#[test]
+fn the_probe_fixtures_measure_one_turn_then_a_turn_with_its_handoff() {
+    assert_eq!((PROBE_A.turns, PROBE_A.handoffs), (1, 0));
+    assert_eq!((PROBE_B.turns, PROBE_B.handoffs), (2, 1));
+    assert_eq!(PROBE_A.reply_bytes, TURN_REPLY_BYTES);
+    assert_eq!(PROBE_B.reply_bytes, TURN_REPLY_BYTES);
+    // Exactly what each generation consumes, so back-to-back generations
+    // in one home serve exactly their own entries.
+    assert_eq!(PROBE_A.script_prefix().len(), 1);
+    assert_eq!(PROBE_B.script_prefix().len(), 3);
+    // A growth turn stays far below the handoff trigger, so no automatic
+    // handoff runs while the log grows. A compile-time check pins it.
 }
 
 #[test]
 fn the_attach_script_ends_with_the_tail() {
-    for fixture in [&ONE_MIB, &TEN_MIB] {
-        let script = fixture.script_with_last(ATTACH_TAIL);
-        assert_eq!(script.len(), fixture.turns + fixture.handoffs + 1);
-        let last = script.last().unwrap();
-        assert!(
-            String::from_utf8_lossy(&last.body).contains(ATTACH_TAIL),
-            "{last:?}"
-        );
-    }
+    let fixture = crate::resume::Fixture {
+        metric: "terminal_attach_ms",
+        turns: 3,
+        reply_bytes: TURN_REPLY_BYTES,
+        handoffs: 2,
+    };
+    let script = fixture.script_with_last(ATTACH_TAIL);
+    assert_eq!(script.len(), fixture.turns + fixture.handoffs + 1);
+    let last = script.last().unwrap();
+    assert!(
+        String::from_utf8_lossy(&last.body).contains(ATTACH_TAIL),
+        "{last:?}"
+    );
     for seed in 0..16 {
         assert!(!filler(4096, seed).contains(ATTACH_TAIL));
     }

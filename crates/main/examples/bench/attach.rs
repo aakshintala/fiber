@@ -1,14 +1,16 @@
 //! The attach workload (`docs/performance.md`, "Budgets"): the terminal to
 //! its first frame attaching, for a live, idle session whose log is 1 MiB
-//! and one whose log is 10 MiB. Each fixture is generated once, then the
-//! terminal attaches once untimed and `runs` times timed, from just before
-//! spawning `fiber resume <id>` to the session's last reply on screen.
+//! and one whose log is 10 MiB. Each fixture's log is grown to its band:
+//! two probe sessions measure one turn's log and each further turn's, then
+//! the fixture takes whole turns to its band. The terminal attaches once
+//! untimed and `runs` times timed, from just before spawning
+//! `fiber resume <id>` to the session's last reply on screen.
 
 use std::fs;
 
 use serde_json::{Value, json};
 
-use crate::busy::{self, READY, in_home};
+use crate::busy::{self, BYTES_PER_TOKEN, READY, TRIGGER_TOKENS, in_home};
 use crate::home::Home;
 use crate::idle::{self, Ctx, HubExit, Samples, Workload, ms};
 use crate::pty::Terminal;
@@ -25,22 +27,50 @@ pub(crate) const SAMPLED: [Workload; 1] = [Workload {
 /// the terminal holds it.
 pub(crate) const ATTACH_TAIL: &str = "quokkas";
 
-/// One turn of 1,048,576 reply bytes: a 1 MiB log, with no handoff.
-pub(crate) const ONE_MIB: Fixture = Fixture {
-    metric: "terminal_attach_ms",
-    turns: 1,
-    reply_bytes: 1_048_576,
-    handoffs: 0,
+/// The reply bytes of one probe or growth turn: small enough that one
+/// turn's log stays far below either band's one-MiB width, so rounding up
+/// to whole turns lands the log inside its band. Reply bytes never size a
+/// log: the probe's measured bytes do.
+pub(crate) const TURN_REPLY_BYTES: usize = 131_072;
+
+/// A growth turn holds a fraction of the handoff trigger's tokens, so no
+/// automatic handoff runs while the log grows.
+const _: () = {
+    assert!(TURN_REPLY_BYTES / BYTES_PER_TOKEN < TRIGGER_TOKENS);
 };
 
-/// Ten such turns, a handoff after each of the first nine: a 10 MiB log,
-/// each turn under the handoff trigger.
-pub(crate) const TEN_MIB: Fixture = Fixture {
-    metric: "terminal_attach_ms",
-    turns: 10,
-    reply_bytes: 1_048_576,
-    handoffs: 9,
+/// Plans by label: the band's low end, whose high end is one MiB more
+/// ([`size_note`]).
+const PLANS: [(&str, u64); 2] = [("1 MiB", 1_048_576), ("10 MiB", 10_485_760)];
+
+/// The probes: one turn, then two turns with a handoff, each of
+/// [`TURN_REPLY_BYTES`]. Their two log sizes split the fixed cost from the
+/// cost of each further turn with its handoff.
+pub(crate) const PROBE_A: Fixture = Fixture {
+    metric: "attach_probe",
+    turns: 1,
+    reply_bytes: TURN_REPLY_BYTES,
+    handoffs: 0,
 };
+pub(crate) const PROBE_B: Fixture = Fixture {
+    metric: "attach_probe",
+    turns: 2,
+    reply_bytes: TURN_REPLY_BYTES,
+    handoffs: 1,
+};
+
+/// The turns growing from a `first`-byte start in `extra`-byte steps need
+/// to reach `lo`: one plus the shortfall in whole turns.
+pub(crate) fn plan_turns(lo: u64, first: u64, extra: u64) -> Result<u64, String> {
+    if extra == 0 {
+        return Err("a growth turn logged no bytes".to_owned());
+    }
+    Ok(if lo <= first {
+        1
+    } else {
+        1 + (lo - first).div_ceil(extra)
+    })
+}
 
 /// A note when the `fixture` log at `log_bytes` is outside its band, and
 /// none inside it: 1 MiB in [1,048,576, 2,097,152), 10 MiB in
@@ -202,13 +232,41 @@ fn attach_fixture(
     Ok(samples)
 }
 
-/// Samples both fixtures, each in a home of its own.
+/// Measures one turn's log and each further turn's, in a home of its own:
+/// two probe sessions by the binary under test, `(first, extra)`.
+fn probe_turn_bytes(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<(u64, u64), String> {
+    let mut script = PROBE_A.script_prefix();
+    script.extend(PROBE_B.script_prefix());
+    let home = Home::scripted(ctx.home.fiber(), script)?;
+    let (mut first, mut extra) = (0, 0);
+    in_home(home, |home| {
+        let a = doors::mint("s_");
+        resume::generate(ctx, home, &PROBE_A, &a, notes)?;
+        first = read_log_bytes(home, &a)?;
+        let b = doors::mint("s_");
+        resume::generate(ctx, home, &PROBE_B, &b, notes)?;
+        extra = read_log_bytes(home, &b)?.saturating_sub(first);
+        Ok(vec![])
+    })?;
+    Ok((first, extra))
+}
+
+/// Samples both fixtures, each grown to its band in a home of its own.
 fn terminal_attach(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
+    let (first, extra) = probe_turn_bytes(ctx, notes)?;
     let mut samples = Vec::new();
-    for (label, fixture) in [("1 MiB", &ONE_MIB), ("10 MiB", &TEN_MIB)] {
+    for (label, lo) in PLANS {
+        let turns = usize::try_from(plan_turns(lo, first, extra)?)
+            .map_err(|err| format!("counting turns: {err}"))?;
+        let fixture = Fixture {
+            metric: "terminal_attach_ms",
+            turns,
+            reply_bytes: TURN_REPLY_BYTES,
+            handoffs: turns - 1,
+        };
         let home = Home::scripted(ctx.home.fiber(), fixture.script_with_last(ATTACH_TAIL))?;
         samples.extend(in_home(home, |home| {
-            attach_fixture(ctx, home, label, fixture, notes)
+            attach_fixture(ctx, home, label, &fixture, notes)
         })?);
     }
     Ok(samples)

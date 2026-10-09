@@ -67,6 +67,22 @@ impl Fixture {
     /// [`Fixture::script`], with `last` as the reply to the prompt the
     /// measured run sends.
     pub(crate) fn script_with_last(&self, last: &str) -> Vec<Response> {
+        let (mut script, context) = self.prefix();
+        script.push(text_reply(last, context));
+        script
+    }
+
+    /// Each turn's reply and a note after each handed-off turn: what a
+    /// generation consumes, with no trailing measured reply, so back-to-
+    /// back generations in one home consume exactly their own entries.
+    pub(crate) fn script_prefix(&self) -> Vec<Response> {
+        self.prefix().0
+    }
+
+    /// The replies in the order the session asks for them, and the context
+    /// they were asked over: each turn's reply, with a note after each
+    /// handed-off turn.
+    fn prefix(&self) -> (Vec<Response>, usize) {
         let mut script = Vec::new();
         let mut context = 0;
         for turn in 0..self.turns {
@@ -79,8 +95,7 @@ impl Fixture {
                 context = NOTE.len();
             }
         }
-        script.push(text_reply(last, context));
-        script
+        (script, context)
     }
 }
 
