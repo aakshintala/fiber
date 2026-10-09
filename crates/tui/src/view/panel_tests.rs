@@ -421,6 +421,20 @@ fn session_card_without_trigger() {
 }
 
 #[test]
+fn session_card_with_budget() {
+    let mut app = attached(160, 40);
+    app.on_line(budget_preamble(5.0));
+    app.on_line(status_line(
+        spend(900, 100, 50, 200, serde_json::json!(0.41), 1.10),
+        Some(serde_json::json!({"tokens": 500, "window": 1000})),
+    ));
+    insta::assert_snapshot!(
+        "session_card_with_budget",
+        super::super::text(&draw_panel(&app))
+    );
+}
+
+#[test]
 fn context_bar_marker_at_the_trigger() {
     let mut app = attached(160, 40);
     app.on_line(preamble_line(Some(800)));

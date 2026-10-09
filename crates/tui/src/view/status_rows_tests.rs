@@ -488,6 +488,15 @@ fn narrow_with_widget_open() {
 }
 
 #[test]
+fn narrow_with_budget() {
+    let mut app = attached(100, 30);
+    app.on_line(budget_preamble(5.0));
+    app.on_line(spend_status(serde_json::json!(1.25), 0.0));
+    let (screen, _) = draw(&app, 100, 30);
+    insta::assert_snapshot!("narrow_with_budget", screen);
+}
+
+#[test]
 fn narrow_short() {
     let mut app = attached(100, 10);
     app.on_line(idle(SESSION, "one"));
