@@ -319,8 +319,16 @@ the conversation. The views are:
   down by turn, by model and by delegate, each with tokens by kind, cost billed
   and cost on subscription, and the budget left when `budget.usd` is set.
 - **The context breakdown:** one bar of context by category against the
-  handoff point, with the largest tool results.
-- **Changed files:** a file list with the chosen file's hunks.
+  handoff point, with the largest tool results. The categories are the
+  system prompt, tool definitions, tool results since the handoff in force,
+  and messages, which takes the rest of the session's context total. Each
+  of the first three is estimated from its bytes at the session's own
+  tokens-per-byte rate, and the view says the sizes are approximate.
+  Until a request gives a rate, it shows the total alone.
+- **Changed files:** the files Fiber changed, with the chosen file's hunks.
+  The hunks are the workspace's current diff against `HEAD`, read when the
+  file is chosen, so they include changes Fiber did not make; the title says
+  "diff against HEAD". An untracked file shows as wholly added.
 - **Search results:** every match with its surrounding lines ("Search").
 - **The tools view,** `/tools` (`docs/tools.md`, "Seeing the tools"): every
   tool by source, full or deferred, and its approximate size. Each MCP
@@ -817,10 +825,10 @@ Every action acts in some of five contexts, and the terminal is in exactly one
 of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
-  home screen's delete question or workspace picker, the key map, an approval or
-  question, an offer, or the Ctrl+R panel; or the `/` or `@` completion
-  panel while focus is not in the conversation. An overlay's own keys, such as
-  an approval's ↑ and ↓, are not bindings.
+  home screen's delete question or workspace picker, the key map, the model
+  picker, an approval or question, an offer, or the Ctrl+R panel; or the `/`
+  or `@` completion panel while focus is not in the conversation. An overlay's
+  own keys, such as an approval's ↑ and ↓, are not bindings.
 - Search: conversation search is open.
 - Conversation: focus is in the conversation.
 - Steering: a queued steering message is selected.

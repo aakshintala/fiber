@@ -75,8 +75,6 @@ pub(crate) enum Canon {
     Edit(Edit),
     /// An action with no key of its own: `new_session` and `go_home`.
     Action,
-    /// Nothing yet: `model_picker`, until its ticket gives it a key.
-    None,
 }
 
 /// What a stroke means in a context.
@@ -419,7 +417,7 @@ impl Keyset {
                 match canonical {
                     Some(Canon::Key(key)) => Resolved::Key(key.clone()),
                     Some(Canon::Edit(edit)) => Resolved::Edit(edit.clone()),
-                    Some(Canon::Action) | Some(Canon::None) | None => Resolved::Nothing,
+                    Some(Canon::Action) | None => Resolved::Nothing,
                 }
             };
             if row.person {

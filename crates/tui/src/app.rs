@@ -51,6 +51,7 @@ mod history;
 mod home;
 mod keyboard;
 mod links;
+mod model_picker;
 #[path = "app_mouse.rs"]
 mod mouse;
 mod moving;
@@ -270,6 +271,8 @@ pub(crate) struct App {
     find: find::Find,
     /// The effective bindings (`docs/tui.md`, "Bindings").
     keyboard: keyboard::Keyboard,
+    /// The model picker: the installed models and the reads it owes.
+    model_picker: crate::model_picker::ModelPicker,
     /// Whether a link opener is on `PATH` (`docs/tui.md`, "Links").
     opener: bool,
     /// What the hub's `attention` lines queued (`docs/tui.md`, "Getting
@@ -323,6 +326,7 @@ impl App {
             select: select::Selection::default(),
             find: find::Find::default(),
             keyboard: keyboard::Keyboard::default(),
+            model_picker: crate::model_picker::ModelPicker::default(),
             opener: false,
             attention: attention::State::default(),
             config_views: config_views::ConfigViews::default(),
@@ -342,10 +346,18 @@ impl App {
         self.panel_state.attached();
     }
 
-    /// Hands one key to what is on top: the key map, the approval panel, a
-    /// completion panel, then the input box.
+    /// Hands one key to what is on top: the model picker, the key map,
+    /// the approval panel, a completion panel, then the input box.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         self.copied = false;
+        if let Some(effect) = self.model_picker_key(&key) {
+            return effect;
+        }
+        // Ctrl+L opens the picker ahead of home, except while the quit
+        // question is up, which keeps every key.
+        if key == Key::CtrlL && !self.quit_open() {
+            return self.open_model_picker(crate::model_picker::Mode::Choose);
+        }
         if let Some(effect) = self.config_view_key(&key) {
             return effect;
         }
@@ -427,6 +439,9 @@ impl App {
             Key::CtrlR => self.open_search(),
             Key::CtrlV => self.paste.press(self.draft.serial()),
             Key::CtrlF => Effect::None,
+            // Ctrl+L opens the picker ahead of `home_key`, so it never
+            // reaches here.
+            Key::CtrlL => Effect::None,
             Key::CtrlG => self.open_in_editor(),
             Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),
         }
@@ -753,6 +768,7 @@ impl App {
                 if let Some(id) = command_id {
                     let message = hub_string(&hub.payload, "message").unwrap_or_default();
                     self.config_views_refused(&id, &message);
+                    self.session_views_refused(&id, &message);
                     if !self.history_rejected(&id, &message) {
                         self.rejected(&id, message);
                     }

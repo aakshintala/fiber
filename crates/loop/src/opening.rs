@@ -3,7 +3,7 @@
 //! and the rendering of the logged fields back into the conversation.
 
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use contract::ErrorCode;
 use contract::events::{
@@ -236,29 +236,8 @@ fn render_section(section: &ExtensionSectionSent) -> String {
 /// since the epoch to civil date. A time before the epoch reads as the
 /// epoch's date.
 pub(crate) fn date_of(wall: SystemTime) -> String {
-    let days = wall
-        .duration_since(UNIX_EPOCH)
-        .map(|ago| ago.as_secs() / 86_400)
-        .unwrap_or(0);
-    let (year, month, day) = civil_from_days(days);
+    let (year, month, day) = contract::clock::utc_date(wall);
     format!("{year:04}-{month:02}-{day:02}")
-}
-
-/// Proleptic Gregorian date of `days` since 1970-01-01.
-fn civil_from_days(days: u64) -> (u64, u64, u64) {
-    let era = (days + 719_468) / 146_097;
-    let start = days + 719_468 - era * 146_097;
-    let year = (start - start / 1_460 + start / 36_524 - start / 146_096) / 365;
-    let ordinal = start - (365 * year + year / 4 - year / 100);
-    let month = (5 * ordinal + 2) / 153;
-    let day = ordinal - (153 * month + 2) / 5 + 1;
-    let month = if month < 10 { month + 3 } else { month - 9 };
-    let year = if month <= 2 {
-        year + era * 400 + 1
-    } else {
-        year + era * 400
-    };
-    (year, month, day)
 }
 
 /// The chain of directories holding instruction files, and the git state:

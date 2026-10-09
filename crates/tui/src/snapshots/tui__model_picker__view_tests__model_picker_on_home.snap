@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/model_picker_view_tests.rs
+expression: "screen(&app, 80, 24)"
+---
+Models                                                                         ✕
+↻ refresh
+acme
+m1 · deep, review   low [high]
+m2
+zeta
+z1   [low]
+z2 · chat   low [high]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+↑↓ move · ←→ level · PageUp PageDown page · Tab scope · Ctrl+R refresh · Esc clo

@@ -75,6 +75,13 @@ pub struct Launch {
     /// `tui.attention.*`: the notification, the bell and the title
     /// (`docs/tui.md`, "Getting the person's attention").
     pub attention: crate::Attention,
+    /// How the terminal reads the installed models: the cached lists at
+    /// once, refreshed in the background (`docs/model-routing.md`,
+    /// "Model discovery"). `None` in the jigs, which read nothing.
+    pub models: Option<crate::ReadModels>,
+    /// `scoped_models`: the references the model picker shows; empty
+    /// means every installed model (`docs/configuration.md`, "Keys").
+    pub scoped_models: Vec<String>,
     /// Saves a share the person dragged to the global configuration;
     /// `None` saves nothing.
     pub save: Option<crate::Save>,

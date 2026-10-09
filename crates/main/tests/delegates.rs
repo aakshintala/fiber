@@ -22,7 +22,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -1191,4 +1191,689 @@ fn a_delegate_spawn_with_an_unknown_model_fails_and_starts_nothing() {
         .collect();
     assert_eq!(entries.len(), 1);
     assert!(child.requests().is_empty());
+}
+
+// A client opens a running delegate through the hub (see #634): the tests
+// below start a real parent and a real delegate against two fake providers
+// and reach the delegate on its own hub connection. Every wait ends at the
+// test's deadline and names what it waited for; no test sleeps or reads
+// the clock.
+
+/// The steering text sent to the delegate: unique to it, so its absence
+/// elsewhere proves the parent forwarded nothing.
+const MARK: &str = "steer-marker-7f3a9c01";
+
+/// The delegate's durable kinds, in order, pinned from a real run: its
+/// first reply completes, the steered step follows, then the turn ends.
+const DELEGATE_DURABLE: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "step_started",
+    "steering_applied",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// The parent's durable kinds, in order, pinned from a real run.
+const PARENT_DURABLE: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "delegate_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "turn_started",
+    "step_started",
+    "delegate_finished",
+    "job_completed",
+];
+
+/// Starts the parent's provider on server A and the delegate's on server B,
+/// and configures the parent's model and reviewer. Server B stays held, so
+/// the delegate's turn is still open while the test steers it.
+fn pair(setup: &support::Setup) -> (ProviderServer, ProviderServer) {
+    let server_a = ProviderServer::start_with_fallback(
+        [
+            support::stream(&[spawn_call("fiber:pb/m")]),
+            text_reply("allow"),
+            support::hello(),
+        ],
+        support::hello(),
+    )
+    .unwrap();
+    let server_b = ProviderServer::start([text_reply("first"), text_reply("after-steer")]).unwrap();
+    server_b.hold();
+    providers(setup, &server_a, &server_b);
+    standing_allow(setup);
+    slow_idle(setup);
+    (server_a, server_b)
+}
+
+/// A parent and its delegate, opened through the hub: the setup both tests
+/// below share. `lines` holds every line read on the main connection, in
+/// order; each test attributes lines by their envelope `session_id`.
+struct Opened {
+    main: support::Socket,
+    parent: String,
+    delegate: String,
+    job: String,
+    server_a: ProviderServer,
+    server_b: ProviderServer,
+    lines: Vec<Value>,
+}
+
+/// Whether `line` is a session line for `id`.
+fn is_session(line: &Value, id: &str) -> bool {
+    line.get("session_id").and_then(Value::as_str) == Some(id)
+}
+
+/// Whether `line` answers command `id`.
+fn is_answer(line: &Value, id: &str) -> bool {
+    line.get("payload")
+        .and_then(|payload| payload.get("command_id"))
+        .and_then(Value::as_str)
+        == Some(id)
+}
+
+/// Every line for `id`, in order.
+fn for_session(lines: &[Value], id: &str) -> Vec<Value> {
+    lines
+        .iter()
+        .filter(|line| is_session(line, id))
+        .cloned()
+        .collect()
+}
+
+/// The kinds of the lines carrying `seq`: a line is durable exactly then.
+fn durable_kinds(lines: &[Value]) -> Vec<String> {
+    lines
+        .iter()
+        .filter(|line| line.get("seq").is_some())
+        .map(|line| line["kind"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// The acknowledgement of command `id`.
+fn answered(lines: &[Value], id: &str) -> Value {
+    lines
+        .iter()
+        .find(|line| is_answer(line, id))
+        .unwrap_or_else(|| panic!("no answer for {id} in {:?}", kinds(lines)))
+        .clone()
+}
+
+/// A client on the hub, through the already-running hub's own socket.
+fn direct_client(setup: &support::Setup) -> support::Socket {
+    let client = support::Socket::connect(setup.deadline, &setup.hub_socket());
+    let hello = support::recv(&client, "the hub_hello");
+    assert_eq!(hello["kind"], "hub_hello", "{hello}");
+    client
+}
+
+/// Starts a parent through the hub, waits for it to spawn its delegate and
+/// for its first turn to end, then subscribes to the delegate through the
+/// hub. The delegate's id comes only from the parent's `delegate_started`.
+/// Server B stays held, so the delegate's turn is still open on return.
+fn open_delegate(
+    setup: &support::Setup,
+    hub: &Arc<Mutex<Option<support::HubProc>>>,
+    server_a: ProviderServer,
+    server_b: ProviderServer,
+) -> Opened {
+    // A feed client may have started the hub already; either way the main
+    // client is a second connection with its own command ids.
+    let main = if hub.lock().unwrap().is_some() {
+        direct_client(setup)
+    } else {
+        support::connect_hub(setup, hub).0
+    };
+    let mut lines = Vec::new();
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let parent = support::start_session(&main, &workspace, "scan the tree");
+    main.send(&format!(
+        "{{\"id\":\"c_sub\",\"session_id\":\"{parent}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"full\"}}}}"
+    ));
+    let mut batch = support::until(&main, "the parent subscribe acknowledgement", |line| {
+        is_answer(line, "c_sub")
+    });
+    assert_eq!(
+        batch.last().unwrap()["kind"],
+        "command_accepted",
+        "{batch:?}"
+    );
+    lines.append(&mut batch);
+    let mut batch = support::until(&main, "the parent's delegate_started", |line| {
+        line["kind"] == "delegate_started" && is_session(line, &parent)
+    });
+    let started = batch.last().unwrap();
+    let delegate = started["payload"]["delegate_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let job = started["payload"]["job_id"].as_str().unwrap().to_owned();
+    lines.append(&mut batch);
+    // The parent's turn ends on its own, so the delegate's finish always
+    // wakes a turn of its own.
+    let mut batch = support::until(&main, "the parent's first turn_completed", |line| {
+        line["kind"] == "turn_completed" && is_session(line, &parent)
+    });
+    lines.append(&mut batch);
+    assert!(
+        server_b.await_requests(1, setup.deadline.left()),
+        "the delegate's turn called the model"
+    );
+    // A `full` subscribe folds the whole log, so a late subscriber misses
+    // nothing.
+    main.send(&format!(
+        "{{\"id\":\"c_dsub\",\"session_id\":\"{delegate}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"full\"}}}}"
+    ));
+    let mut batch = support::until(&main, "the delegate's step_started", |line| {
+        line["kind"] == "step_started" && is_session(line, &delegate)
+    });
+    let folded = for_session(&batch, &delegate);
+    let folded_started = folded
+        .iter()
+        .find(|line| line["kind"] == "session_started")
+        .unwrap_or_else(|| panic!("no session_started in {:?}", kinds(&folded)));
+    assert_eq!(
+        folded_started["payload"]["parent"],
+        json!({"session_id": parent, "delegate_id": job}),
+        "{folded_started}"
+    );
+    // The delegate's subscribe is acknowledged once the session answers;
+    // later batches carry it, and the test asserts it with the steer.
+    lines.append(&mut batch);
+    Opened {
+        main,
+        parent,
+        delegate,
+        job,
+        server_a,
+        server_b,
+        lines,
+    }
+}
+
+/// A feed subscriber, reading to the hub's stop on its own thread: the
+/// thread forwards every line after the acknowledgement as it arrives and
+/// returns the whole collection once the hub closes the connection.
+/// Connected before any session starts, so the collection covers the whole
+/// run.
+struct FeedWatch {
+    each: mpsc::Receiver<Value>,
+    handle: Option<thread::JoinHandle<Vec<Value>>>,
+}
+
+fn watch_feed(setup: &support::Setup, hub: &Arc<Mutex<Option<support::HubProc>>>) -> FeedWatch {
+    let (client, _) = support::connect_hub(setup, hub);
+    client.send(r#"{"id":"c_feed","command":"feed"}"#);
+    let ack = support::recv_reply(&client, "the feed acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    assert_eq!(ack["payload"]["command_id"], "c_feed");
+    let (each_tx, each) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let mut lines = Vec::new();
+        while let Some(line) = client.next("the feed's next line", &lines) {
+            each_tx.send(line.clone()).unwrap_or(());
+            lines.push(line);
+        }
+        lines
+    });
+    FeedWatch {
+        each,
+        handle: Some(handle),
+    }
+}
+
+impl FeedWatch {
+    /// The whole collection, once the hub's stop closed the stream. The
+    /// per-line channel is drained only as far as the test's waits need;
+    /// the thread's return carries every line.
+    fn collect(mut self) -> Vec<Value> {
+        self.handle
+            .take()
+            .unwrap()
+            .join()
+            .expect("the feed reader thread")
+    }
+}
+
+/// Drains the feed's forwarded lines until the parent's `session_status`
+/// arrives. The feed tracks a session on its rescan, every 500 ms, so a
+/// session that lives and dies between rescans never reaches it: this wait
+/// keeps the parent alive across one, and proves the positive fact the
+/// final collection asserts.
+fn wait_feed_status(watch: &FeedWatch, setup: &support::Setup, parent: &str) {
+    loop {
+        let line = watch
+            .each
+            .recv_timeout(setup.deadline.left())
+            .expect("the feed to report the parent before the deadline");
+        if line["kind"] == "session_status" && is_session(&line, parent) {
+            return;
+        }
+    }
+}
+
+/// Stops the hub in `slot` with SIGTERM, as a person stopping it would.
+fn stop_hub(hub: &Arc<Mutex<Option<support::HubProc>>>) {
+    let hub = hub.lock().unwrap().take().expect("the hub started");
+    hub.kill("TERM");
+    hub.wait();
+}
+
+#[test]
+fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
+    let setup = support::Setup::new();
+    let guard = arm(&setup);
+    let (server_a, server_b) = pair(&setup);
+    let hub = Arc::new(Mutex::new(None));
+    let feed = watch_feed(&setup, &hub);
+    let Opened {
+        main,
+        parent,
+        delegate,
+        job,
+        server_a,
+        server_b,
+        mut lines,
+    } = open_delegate(&setup, &hub, server_a, server_b);
+    // The steer goes to the delegate on its own connection, then a `tools`
+    // probe on the same connection: the session's reader hands each line
+    // to the inbox before it reads the next, so the probe's answer proves
+    // the steer is queued. Nothing is released while the reply is held.
+    main.send(&format!(
+        "{{\"id\":\"c_steer\",\"session_id\":\"{delegate}\",\"command\":\"steer\",\"args\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{MARK}\"}}]}}}}"
+    ));
+    main.send(&format!(
+        "{{\"id\":\"c_queued\",\"session_id\":\"{delegate}\",\"command\":\"tools\"}}"
+    ));
+    let mut batch = support::until(
+        &main,
+        "the tools answer proving the steer is queued",
+        |line| is_answer(line, "c_queued"),
+    );
+    assert_eq!(
+        batch.last().unwrap()["kind"],
+        "command_accepted",
+        "{batch:?}"
+    );
+    lines.append(&mut batch);
+    server_b.release_one();
+    assert!(
+        server_b.await_requests(2, setup.deadline.left()),
+        "the delegate's second model call after the steer"
+    );
+    let bodies: Vec<String> = server_b
+        .requests()
+        .iter()
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .collect();
+    assert_eq!(bodies.len(), 2, "{bodies:?}");
+    assert!(
+        !bodies[0].contains(MARK),
+        "the first call predates the steer"
+    );
+    assert!(bodies[1].contains(MARK), "the steer joined the next call");
+    server_b.release();
+    let mut batch = support::until(&main, "the delegate's fiber_exited", |line| {
+        line["kind"] == "fiber_exited" && is_session(line, &delegate)
+    });
+    lines.append(&mut batch);
+    let delegate_lines = for_session(&lines, &delegate);
+    assert_eq!(answered(&lines, "c_steer")["kind"], "command_accepted");
+    assert_eq!(answered(&lines, "c_dsub")["kind"], "command_accepted");
+    // After the first reply completes, the steered step follows: the queue
+    // holding the steer, the next step, the applied steer, the emptied
+    // queue, and the second reply's start. Other lines (the probe's own
+    // answer, statuses) travel the same stream and are not pinned here;
+    // the durable list below is the complete ordered one.
+    let first_done = delegate_lines
+        .iter()
+        .position(|line| line["kind"] == "assistant_message_completed")
+        .expect("the delegate's first completed message");
+    let steered: Vec<&Value> = delegate_lines[first_done + 1..]
+        .iter()
+        .filter(|line| {
+            matches!(
+                line["kind"].as_str(),
+                Some(
+                    "steering_queue"
+                        | "step_started"
+                        | "steering_applied"
+                        | "assistant_message_started"
+                )
+            )
+        })
+        .collect();
+    let steered_kinds: Vec<&str> = steered
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        steered_kinds,
+        [
+            "steering_queue",
+            "step_started",
+            "steering_applied",
+            "steering_queue",
+            "assistant_message_started"
+        ],
+        "{steered_kinds:?}"
+    );
+    let after = steered;
+    assert!(
+        serde_json::to_string(&after[0]["payload"]["messages"])
+            .unwrap()
+            .contains(MARK),
+        "{}",
+        after[0]
+    );
+    assert!(
+        after[3]["payload"]["messages"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        serde_json::to_string(&after[2]["payload"]["content"])
+            .unwrap()
+            .contains(MARK),
+        "{}",
+        after[2]
+    );
+    assert_eq!(after[2]["payload"]["source"], "driver");
+    assert_eq!(after[2]["payload"]["command_id"], "c_steer");
+    let exited = delegate_lines
+        .iter()
+        .find(|line| line["kind"] == "fiber_exited")
+        .expect("the delegate's exit");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    // The complete, ordered durable list, on the hub stream and in the
+    // delegate's log: a duplicated, missing or reordered event fails.
+    assert_eq!(durable_kinds(&delegate_lines), DELEGATE_DURABLE);
+    let logged = read_lines(
+        &sessions_in(&setup.home(), &setup.workspace())
+            .join(&delegate)
+            .join("events.jsonl"),
+    );
+    assert_eq!(durable_kinds(&logged), DELEGATE_DURABLE);
+    // The parent's finish for the job carries the steered final message,
+    // and its wake turn holds the job alone.
+    let mut batch = support::until(&main, "the parent's job_completed", |line| {
+        line["kind"] == "job_completed"
+            && is_session(line, &parent)
+            && line["payload"]["job_id"] == job.as_str()
+    });
+    lines.append(&mut batch);
+    let parent_lines = for_session(&lines, &parent);
+    let parent_kinds = kinds(&parent_lines);
+    let at = |kind: &str| {
+        parent_kinds
+            .iter()
+            .position(|got| got == kind)
+            .unwrap_or_else(|| panic!("no {kind} in {parent_kinds:?}"))
+    };
+    assert!(at("job_started") < at("delegate_started"));
+    assert!(at("delegate_started") < at("delegate_finished"));
+    assert!(at("delegate_finished") < at("job_completed"));
+    // The prompt's turn and the wake the delegate's finish starts: the
+    // wake turn's input holds one jobs item naming the job, and no
+    // message item.
+    let turns: Vec<&Value> = parent_lines
+        .iter()
+        .filter(|line| line["kind"] == "turn_started")
+        .collect();
+    assert_eq!(turns.len(), 2, "{parent_kinds:?}");
+    assert_eq!(
+        turns[1]["payload"]["input"],
+        json!([{"type": "jobs", "job_ids": [job]}])
+    );
+    assert!(
+        parent_lines
+            .iter()
+            .all(|line| !line["kind"].as_str().unwrap().starts_with("steering_")),
+        "the parent took no steering: {parent_kinds:?}"
+    );
+    let finished = parent_lines
+        .iter()
+        .find(|line| line["kind"] == "delegate_finished")
+        .unwrap();
+    assert_eq!(finished["payload"]["job_id"], job.as_str());
+    assert_eq!(finished["payload"]["text"], "after-steer");
+    assert_eq!(durable_kinds(&parent_lines), PARENT_DURABLE);
+    // The parent idles now: wait for the feed to report it before closing
+    // it, so the final collection holds its status.
+    wait_feed_status(&feed, &setup, &parent);
+    // The parent forwarded nothing: neither its model calls nor its log
+    // hold the marker.
+    for request in server_a.requests() {
+        assert!(
+            !String::from_utf8_lossy(&request.body).contains(MARK),
+            "the parent sent the steer to its model"
+        );
+    }
+    let parent_log = sessions_in(&setup.home(), &setup.workspace())
+        .join(&parent)
+        .join("events.jsonl");
+    let parent_text = fs::read_to_string(&parent_log).unwrap();
+    assert!(!parent_text.contains(MARK), "the parent logged the steer");
+    assert!(
+        !parent_text.contains("steering_applied"),
+        "the parent applied a steer"
+    );
+    // A steer after the delegate's exit is refused: a delegate resumes
+    // only through its parent. The hub starts no process for it.
+    main.send(&format!(
+        "{{\"id\":\"c_late\",\"session_id\":\"{delegate}\",\"command\":\"steer\",\"args\":{{\"content\":[{{\"type\":\"text\",\"text\":\"late\"}}]}}}}"
+    ));
+    let mut batch = support::until(&main, "the late steer's refusal", |line| {
+        is_answer(line, "c_late")
+    });
+    let late = batch.last().unwrap();
+    assert_eq!(late["kind"], "command_rejected", "{late}");
+    assert_eq!(late["payload"]["code"], "session_not_found");
+    assert_eq!(
+        late["payload"]["message"],
+        "A delegate resumes only through its parent."
+    );
+    lines.append(&mut batch);
+    assert!(
+        setup
+            .hub_log()
+            .lines()
+            .all(|line| !(line.contains(&delegate) && line.contains("session_resumed"))),
+        "the hub resumed the delegate"
+    );
+    // Closing the parent ends it; its sessions leave no process behind.
+    main.send(&format!(
+        "{{\"id\":\"c_pclose\",\"session_id\":\"{parent}\",\"command\":\"close\",\"args\":{{\"now\":false}}}}"
+    ));
+    let mut batch = support::until(&main, "the parent's fiber_exited", |line| {
+        line["kind"] == "fiber_exited" && is_session(line, &parent)
+    });
+    lines.append(&mut batch);
+    drop(main);
+    drop(lines);
+    guard.wait_gone();
+    // The feed held the parent's status and never the delegate: the hub
+    // knew the delegate, since the test opened it above, so the absence
+    // is proved, not vacuous.
+    stop_hub(&hub);
+    let feed_lines = feed.collect();
+    assert!(
+        feed_lines
+            .iter()
+            .all(|line| !serde_json::to_string(line).unwrap().contains(&delegate)),
+        "the feed named the delegate"
+    );
+    assert!(
+        feed_lines
+            .iter()
+            .any(|line| line["kind"] == "session_status" && is_session(line, &parent)),
+        "the feed held the parent: {:?}",
+        kinds(&feed_lines)
+    );
+}
+
+/// A fresh hub lists the parent and never the running delegate (see #634):
+/// the delegate stays reachable on its own connection while neither the
+/// `sessions` answer nor the feed names it. The `sessions` answer waits for
+/// the hub's first scan to settle: each session the scan found has sent its
+/// first status, or one rescan, 500 ms, has passed since the read, so a
+/// session started since the read can still be missing.
+#[test]
+fn a_fresh_hub_lists_the_parent_and_never_the_running_delegate() {
+    let setup = support::Setup::new();
+    let guard = arm(&setup);
+    let (server_a, server_b) = pair(&setup);
+    let hub = Arc::new(Mutex::new(None));
+    let opened = open_delegate(&setup, &hub, server_a, server_b);
+    let Opened {
+        main,
+        parent,
+        delegate,
+        job,
+        server_a: _server_a,
+        server_b,
+        lines,
+    } = opened;
+    drop(lines);
+    // The hub's stop ends no session: the parent and the delegate keep
+    // running on their own sockets.
+    stop_hub(&hub);
+    drop(main);
+    let (fresh, _) = support::connect_hub(&setup, &hub);
+    // The fresh hub knows the delegate: it opens on its own connection.
+    fresh.send(&format!(
+        "{{\"id\":\"c_dsum\",\"session_id\":\"{delegate}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"summary\"}}}}"
+    ));
+    let guard_lines = support::until(&fresh, "the delegate's session_status", |line| {
+        line["kind"] == "session_status" && is_session(line, &delegate)
+    });
+    assert_eq!(answered(&guard_lines, "c_dsum")["kind"], "command_accepted");
+    assert_eq!(
+        guard_lines.last().unwrap()["payload"]["parent"],
+        parent.as_str()
+    );
+    // The listing holds the parent and never the delegate.
+    fresh.send(r#"{"id":"c_sess","command":"sessions"}"#);
+    let listing = support::until(&fresh, "the sessions answer", |line| {
+        is_answer(line, "c_sess")
+    });
+    let answer = answered(&listing, "c_sess");
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
+    let live = answer["payload"]["result"]["live"].as_array().unwrap();
+    let live_ids: Vec<&str> = live
+        .iter()
+        .map(|row| row["session_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(live_ids, [parent.as_str()]);
+    assert!(
+        !serde_json::to_string(&answer).unwrap().contains(&delegate),
+        "the listing named the delegate: {answer}"
+    );
+    // The feed collects to the fresh hub's stop.
+    let feed = watch_feed(&setup, &hub);
+    // The old subscriptions died with the old hub: subscribing again folds
+    // the whole log, so this stream holds the parent's complete durable
+    // list.
+    fresh.send(&format!(
+        "{{\"id\":\"c_psub2\",\"session_id\":\"{parent}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"full\"}}}}"
+    ));
+    let mut parent_lines = support::until(&fresh, "the parent subscribe acknowledgement", |line| {
+        is_answer(line, "c_psub2")
+    });
+    assert_eq!(
+        parent_lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{parent_lines:?}"
+    );
+    server_b.release();
+    let mut batch = support::until(&fresh, "the parent's job_completed", |line| {
+        line["kind"] == "job_completed"
+            && is_session(line, &parent)
+            && line["payload"]["job_id"] == job.as_str()
+    });
+    parent_lines.append(&mut batch);
+    let folded = for_session(&parent_lines, &parent);
+    let folded_kinds = kinds(&folded);
+    let at = |kind: &str| {
+        folded_kinds
+            .iter()
+            .position(|got| got == kind)
+            .unwrap_or_else(|| panic!("no {kind} in {folded_kinds:?}"))
+    };
+    assert!(at("job_started") < at("delegate_started"));
+    assert!(at("delegate_started") < at("delegate_finished"));
+    assert!(at("delegate_finished") < at("job_completed"));
+    assert!(
+        folded
+            .iter()
+            .all(|line| !line["kind"].as_str().unwrap().starts_with("steering_")),
+        "the parent took no steering: {folded_kinds:?}"
+    );
+    assert_eq!(durable_kinds(&folded), PARENT_DURABLE);
+    // The parent idles now: wait for the feed to report it before closing
+    // it, so the final collection holds its status.
+    wait_feed_status(&feed, &setup, &parent);
+    drop(fresh);
+    // Closing the parent ends it; the feed's stop ends its stream.
+    let direct = support::Socket::connect(setup.deadline, &setup.session_socket(&parent));
+    support::close_session(&direct);
+    drop(direct);
+    guard.wait_gone();
+    stop_hub(&hub);
+    let feed_lines = feed.collect();
+    // The snapshot and every later line list the parent and never the
+    // delegate.
+    assert!(
+        feed_lines
+            .iter()
+            .any(|line| line["kind"] == "session_status" && is_session(line, &parent)),
+        "the feed held the parent: {:?}",
+        kinds(&feed_lines)
+    );
+    for line in &feed_lines {
+        assert!(
+            !serde_json::to_string(line).unwrap().contains(&delegate),
+            "the feed named the delegate: {line}"
+        );
+        if line["kind"] == "session_status" {
+            assert_eq!(line["session_id"], parent.as_str(), "{line}");
+        }
+        if line["kind"] == "session_left" {
+            assert_eq!(line["payload"]["session_id"], parent.as_str(), "{line}");
+        }
+    }
 }

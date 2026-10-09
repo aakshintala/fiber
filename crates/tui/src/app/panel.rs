@@ -35,6 +35,10 @@ pub(crate) enum Spot {
     /// The Session card's spend rows: opens the usage view (`docs/tui.md`,
     /// "The panel").
     Usage,
+    /// A Changed files card row, by its rank in `changed_files_view::ranked`.
+    File(usize),
+    /// The Changed files card's totals row: opens the file list.
+    ChangedFiles,
     /// The Session card's tools line: opens the tools view (`docs/tui.md`,
     /// "The panel").
     Tools,
@@ -541,6 +545,8 @@ impl App {
             Spot::Context => self.open_session_view(super::SessionView::Context),
             Spot::Usage => self.open_session_view(super::SessionView::Usage),
             Spot::Tools => self.open_config_view(super::ConfigView::Tools),
+            Spot::File(rank) => self.open_changed_file(rank),
+            Spot::ChangedFiles => self.open_session_view(super::SessionView::ChangedFiles),
             Spot::Widget => self.toggle_widget_row(),
         }
     }

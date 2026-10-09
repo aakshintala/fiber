@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime};
 use config::{Config, Sources};
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::events::Notice;
 use contract::files::PathLock;
 use contract::shapes::Failure;
 use extensions::{Providers, SessionExtensions};
@@ -137,6 +138,26 @@ fn text_lines(rows: &[Row]) -> Vec<String> {
         .collect()
 }
 
+/// The installed providers, the configuration for `home` and `workspace`,
+/// and the notices loading the providers gave: the first half of [`run`],
+/// shared with the terminal's model list, which reads the same providers
+/// (`docs/model-routing.md`, "Model discovery").
+pub fn providers_and_config(
+    home: &Path,
+    workspace: &Path,
+) -> Result<(Providers, Config, Vec<Notice>), Failure> {
+    let (providers, notices) = Providers::load(home).map_err(|e| failed(e.code(), e))?;
+    let (_, project) = project_of(home, workspace)?;
+    let config = Config::load(Sources {
+        home: home.to_path_buf(),
+        workspace: workspace.to_path_buf(),
+        project,
+        overrides: Vec::new(),
+    })
+    .map_err(|e| failed(e.code(), e))?;
+    Ok((providers, config, notices))
+}
+
 /// Lists the installed providers' models in `home`, marking the configured
 /// default, filtered by `search` and printed as text or JSON Lines.
 #[allow(
@@ -156,15 +177,7 @@ fn run(
 ) -> Result<(), Failure> {
     // debt: notices from loading are dropped, as `parts_with` drops them;
     // surfaced when #382 lands.
-    let (mut providers, _notices) = Providers::load(home).map_err(|e| failed(e.code(), e))?;
-    let (_, project) = project_of(home, workspace)?;
-    let config = Config::load(Sources {
-        home: home.to_path_buf(),
-        workspace: workspace.to_path_buf(),
-        project,
-        overrides: Vec::new(),
-    })
-    .map_err(|e| failed(e.code(), e))?;
+    let (mut providers, config, _notices) = providers_and_config(home, workspace)?;
     let extensions = load(&config);
     for (extension, provider) in extensions.lua_providers() {
         let _notices = providers.add_lua(extension, provider, &config);

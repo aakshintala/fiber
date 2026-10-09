@@ -1,0 +1,29 @@
+---
+source: crates/tui/src/model_picker_view_tests.rs
+assertion_line: 194
+expression: "screen(&app, 80, 24)"
+---
+
+Models                                                                         ✕
+↻ refresh
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+No models. Install a provider: fiber extension install <name>.
+↑↓ move · ←→ level · PageUp PageDown page · Tab scope · Ctrl+R refresh · Esc clo
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+>
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

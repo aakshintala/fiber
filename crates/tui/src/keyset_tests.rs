@@ -202,10 +202,14 @@ fn an_empty_list_unbinds_in_every_context() {
 }
 
 #[test]
-fn a_key_bound_by_an_action_without_a_canonical_event_gives_nothing() {
+fn model_picker_rebinds_to_another_key() {
     let entries = &[("model_picker", json!("ctrl+t"))];
     assert_eq!(
         at(entries, "ctrl+t", Context::Input),
+        super::Resolved::Key(Key::CtrlL)
+    );
+    assert_eq!(
+        at(entries, "ctrl+l", Context::Input),
         super::Resolved::Nothing
     );
 }
@@ -553,7 +557,7 @@ fn one_pass_with_two_clashes_gives_two_notices_in_table_order() {
     );
     assert_eq!(
         keys.resolve(&stroke("ctrl+l"), Context::Input),
-        super::Resolved::Nothing
+        super::Resolved::Key(Key::CtrlL)
     );
     assert_eq!(
         keys.resolve(&stroke("ctrl+o"), Context::Input),
@@ -601,7 +605,7 @@ fn an_entry_reverted_by_two_pairs_in_one_pass_stays_reverted() {
     );
     assert_eq!(
         keys.resolve(&stroke("ctrl+l"), Context::Input),
-        super::Resolved::Nothing
+        super::Resolved::Key(Key::CtrlL)
     );
 }
 

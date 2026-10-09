@@ -8,7 +8,7 @@ use crate::configure::{Revoked, RuleRow, RulesScope, RulesSection};
 use crate::keys::{Edit, Key};
 use crate::local_time::utc_minute;
 use crate::settings_view::{Act, Ctx};
-use crate::swapped::{Frame, List, Spot, rows_height};
+use crate::swapped::{Frame, Ink, List, Spot, rows_height};
 
 /// One row of the view: a section's heading, one of its rules, or the
 /// note in place of its rules.
@@ -127,6 +127,8 @@ impl Rules {
                 self.list.select(at, self.items.len(), shown);
                 self.revoke_selected(ctx)
             }
+            // Only the model picker draws cells with targets of their own.
+            Spot::Cell(_, _) => Act::Stay,
         }
     }
 
@@ -185,7 +187,7 @@ impl Rules {
     }
 
     /// One row's cells.
-    fn line(&self, item: Item, at: usize) -> Vec<(String, Option<Spot>)> {
+    fn line(&self, item: Item, at: usize) -> Vec<(String, Option<Spot>, Ink)> {
         match item {
             Item::Heading(scope) => {
                 let name = match scope {
@@ -196,19 +198,19 @@ impl Rules {
                     .section(scope)
                     .map(|section| section.file.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                vec![(format!("{name} rules  {file}"), None)]
+                vec![(format!("{name} rules  {file}"), None, Ink::Heading)]
             }
             Item::Rule(_, _) => {
                 let row = self.rule_row(item);
                 match row {
                     Some(row) => vec![
-                        ("✕ ".to_owned(), Some(Spot::Revoke(at))),
-                        (fields(row), None),
+                        ("✕ ".to_owned(), Some(Spot::Revoke(at)), Ink::Plain),
+                        (fields(row), None, Ink::Plain),
                     ],
-                    None => vec![("No rules.".to_owned(), None)],
+                    None => vec![("No rules.".to_owned(), None, Ink::Muted)],
                 }
             }
-            Item::Note(scope) => vec![(note(self.section(scope)), None)],
+            Item::Note(scope) => vec![(note(self.section(scope)), None, Ink::Muted)],
         }
     }
 

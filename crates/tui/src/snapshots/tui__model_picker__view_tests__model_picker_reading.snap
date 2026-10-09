@@ -1,0 +1,29 @@
+---
+source: crates/tui/src/model_picker_view_tests.rs
+assertion_line: 185
+expression: "screen(&app, 80, 24)"
+---
+
+Models                                                                         ✕
+↻ refresh
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Reading the model lists…
+↑↓ move · ←→ level · PageUp PageDown page · Tab scope · Ctrl+R refresh · Esc clo
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+>
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

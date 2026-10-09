@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/changed_files_view_tests.rs
+expression: screen(&app_with_diff())
+---
+Changed files › src/a.rs · diff against HEAD                                   ✕
+diff --git a/src/a.rs b/src/a.rs
+@@ -1 +1 @@
+-old
++new
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+↑↓ scroll · ← files · Esc close
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+>
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

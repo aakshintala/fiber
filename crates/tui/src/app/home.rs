@@ -130,6 +130,9 @@ impl App {
     pub(crate) fn set_home(&mut self, launch: Launch) {
         self.set_reduced_motion(launch.reduced_motion);
         self.set_project(launch.project.clone());
+        // The picker's scope starts from launch, then from what
+        // `/scoped-models` saves.
+        self.model_picker.scoped = launch.scoped_models.clone();
         self.home = Some(Home {
             launch,
             prompted: false,
@@ -609,6 +612,7 @@ impl App {
                 | Key::CtrlG
                 | Key::CtrlR
                 | Key::CtrlV
+                | Key::CtrlL
                 | Key::CtrlF
                 | Key::CtrlC
                 | Key::AltUp
@@ -655,6 +659,7 @@ impl App {
                 | Key::CtrlG
                 | Key::CtrlR
                 | Key::CtrlV
+                | Key::CtrlL
                 | Key::CtrlF
                 | Key::AltUp
                 | Key::AltDown
@@ -687,6 +692,7 @@ impl App {
                 | Key::CtrlG
                 | Key::CtrlR
                 | Key::CtrlV
+                | Key::CtrlL
                 | Key::CtrlF
                 | Key::AltUp
                 | Key::AltDown

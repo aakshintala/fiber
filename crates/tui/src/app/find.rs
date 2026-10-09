@@ -97,6 +97,7 @@ impl App {
             | Key::CtrlG
             | Key::CtrlR
             | Key::CtrlV
+            | Key::CtrlL
             | Key::AltA
             | Key::AltUp
             | Key::AltDown

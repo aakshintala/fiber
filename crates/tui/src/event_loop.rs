@@ -19,6 +19,7 @@ use signal_hook::consts::{SIGINT, SIGQUIT, SIGWINCH};
 use signal_hook::iterator::Signals;
 
 use crate::app::{App, Effect, mint, session_command};
+use crate::catalogue;
 use crate::home::Launch;
 use crate::keys::{Button, Event, MouseKind, Parser, Reply};
 use crate::link::{self, Line};
@@ -69,6 +70,9 @@ pub fn run(
         app.push_notice(notice);
     }
     app.set_keys(std::mem::take(&mut launch.keys));
+    // The model lists are read off the loop: taken out before home
+    // keeps the launch description.
+    let models = std::mem::take(&mut launch.models);
     let save = launch.save.take();
     app.set_configure(launch.configure.take());
     app.set_home(launch);
@@ -87,6 +91,7 @@ pub fn run(
         search: None,
         stash: VecDeque::new(),
         reader: None,
+        model_reader: catalogue::Reader::new(models),
         pointer: Pointer::default(),
         hover,
         var: Box::new(|name| std::env::var(name).ok()),
@@ -124,6 +129,10 @@ pub fn run(
     terminal.write_title();
     let (tx, rx) = mpsc::channel();
     terminal.files_out = Some(tx.clone());
+    // The cached lists are asked after the first frame, so the first
+    // frame draws at once and the picker lists them as soon as the read
+    // answers.
+    terminal.model_reader.ask(catalogue::Refresh::Cached, &tx);
     terminal.reader = terminal
         .tty
         .as_ref()
@@ -196,6 +205,8 @@ struct Loop<B: Backend> {
     stash: VecDeque<Input>,
     /// The tty's reader, paused while the editor has the terminal.
     reader: Option<Reader>,
+    /// The one model-list read at a time.
+    model_reader: catalogue::Reader,
     /// The pointer's last cell and a pending click.
     pointer: Pointer,
     /// `tui.hover`: whether the pointer's cell is recorded and tinted.
@@ -384,6 +395,14 @@ impl<B: Backend> Loop<B> {
             }
             Input::Disconnected => self.on_disconnected(),
             Input::Files { generation, result } => self.app.on_files(generation, result),
+            Input::Models(result) => {
+                self.app.on_models(result);
+                // The queued read, if one waits, starts on the loop's
+                // channel; without one there is no loop to answer.
+                if let Some(out) = self.files_out.clone() {
+                    self.model_reader.done(&out);
+                }
+            }
             Input::Image { ticket, result } => self.app.on_image(ticket, result),
             Input::FindDue(generation) => {
                 let lines = self.app.find_due(generation);
@@ -411,6 +430,10 @@ impl<B: Backend> Loop<B> {
         // A closed `@` panel drops its worker and the listing it holds.
         if !self.app.files_open() {
             self.search = None;
+        }
+        // The model-list read the picker owes, if one is owed.
+        if let (Some(refresh), Some(out)) = (self.app.take_reads(), &self.files_out) {
+            self.model_reader.ask(refresh, &out.clone());
         }
         self.save_shares();
         self.page_in(rx);
@@ -590,6 +613,7 @@ impl<B: Backend> Loop<B> {
                 | Input::Resize
                 | Input::FindDue(_)
                 | Input::Image { .. }
+                | Input::Models(_)
                 | Input::Files { .. }) => self.stash.push_back(other),
             }
         }

@@ -8,7 +8,7 @@ use contract::shapes::Usage;
 use contract::{GenerationId, JobId, SessionId, TurnId};
 
 use crate::format::money;
-use crate::swapped::{Frame, List, Spot, about};
+use crate::swapped::{Frame, Ink, List, Spot, about};
 
 /// The latest call line per generation, and its first turn.
 #[derive(Debug, Default)]
@@ -69,13 +69,13 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
     let calls: Vec<&UsageRecorded> = fold.calls.values().map(|(_, line)| line).collect();
     if calls.is_empty() {
         budget_row(&mut rows, budget, 0.0);
-        rows.push(row("No model calls yet."));
+        rows.push(row("No model calls yet.", Ink::Muted));
     } else {
         let session = log::usage(calls.iter().copied());
         append_entry(&mut rows, "session", &session);
         budget_row(&mut rows, budget, session.cost.unwrap_or(0.0));
 
-        rows.push(row("by turn"));
+        rows.push(row("by turn", Ink::Heading));
         let known_turns: BTreeSet<TurnId> = fold.turns.iter().cloned().collect();
         let mut turns: BTreeMap<TurnId, Vec<&UsageRecorded>> = BTreeMap::new();
         let mut outside = Vec::new();
@@ -98,7 +98,7 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
             append_entry(&mut rows, "outside a turn", &usage);
         }
 
-        rows.push(row("by model"));
+        rows.push(row("by model", Ink::Heading));
         let mut models: BTreeMap<&str, Vec<&UsageRecorded>> = BTreeMap::new();
         for line in &calls {
             models.entry(&line.model).or_default().push(line);
@@ -108,7 +108,7 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
             append_entry(&mut rows, model, &usage);
         }
 
-        rows.push(row("by delegate"));
+        rows.push(row("by delegate", Ink::Heading));
         let mut delegates: BTreeMap<SessionId, Vec<&UsageRecorded>> = BTreeMap::new();
         let mut this_session = Vec::new();
         for line in &calls {
@@ -143,40 +143,45 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
     }
 }
 
-fn append_entry(rows: &mut Vec<Vec<(String, Option<Spot>)>>, heading: &str, usage: &Usage) {
+fn append_entry(rows: &mut Vec<Vec<(String, Option<Spot>, Ink)>>, heading: &str, usage: &Usage) {
     let tokens = &usage.tokens;
     let cache_write = tokens
         .cache_write
         .values()
         .fold(0u64, |sum, count| sum.saturating_add(*count));
-    rows.push(row(heading));
-    rows.push(row(format!(
-        "tokens  in {} · cache read {} · cache write {} · out {}",
-        about(tokens.input),
-        about(tokens.cache_read),
-        about(cache_write),
-        about(tokens.output)
-    )));
+    rows.push(row(heading, Ink::Heading));
+    rows.push(row(
+        format!(
+            "tokens  in {} · cache read {} · cache write {} · out {}",
+            about(tokens.input),
+            about(tokens.cache_read),
+            about(cache_write),
+            about(tokens.output)
+        ),
+        Ink::Plain,
+    ));
     let billed = usage.cost.map_or_else(|| "unknown".to_owned(), money);
-    rows.push(row(format!(
-        "cost  billed {billed} · on subscription {}",
-        money(usage.subscription_cost)
-    )));
+    rows.push(row(
+        format!(
+            "cost  billed {billed} · on subscription {}",
+            money(usage.subscription_cost)
+        ),
+        Ink::Plain,
+    ));
 }
 
-fn budget_row(rows: &mut Vec<Vec<(String, Option<Spot>)>>, budget: Option<f64>, billed: f64) {
+fn budget_row(rows: &mut Vec<Vec<(String, Option<Spot>, Ink)>>, budget: Option<f64>, billed: f64) {
     if let Some(budget) = budget {
         let left = (budget - billed).max(0.0);
-        rows.push(row(format!(
-            "budget left  {} of {}",
-            money(left),
-            money(budget)
-        )));
+        rows.push(row(
+            format!("budget left  {} of {}", money(left), money(budget)),
+            Ink::Plain,
+        ));
     }
 }
 
-fn row(text: impl Into<String>) -> Vec<(String, Option<Spot>)> {
-    vec![(text.into(), None)]
+fn row(text: impl Into<String>, ink: Ink) -> Vec<(String, Option<Spot>, Ink)> {
+    vec![(text.into(), None, ink)]
 }
 
 #[cfg(test)]

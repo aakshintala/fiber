@@ -552,6 +552,38 @@ impl Providers {
         })
     }
 
+    /// Adds the cached model list of `name`, with the installed data file's
+    /// other fields: only when no provider is held under `name`, and never
+    /// for `scripted`, which no installed package may register. Whether it
+    /// inserted: `false` leaves the registry as it was.
+    pub fn add_cached(&mut self, name: &str, models: Vec<ModelData>) -> bool {
+        if name == scripted::SCRIPTED || self.by_name.contains_key(name) {
+            return false;
+        }
+        let mut data = self.data(name);
+        data.models = models;
+        self.by_name.insert(name.to_owned(), data);
+        true
+    }
+
+    /// Replaces the models held under `name` with a background refresh's
+    /// joined list, inserting with default other fields when none is held:
+    /// the refresh already wrote the cache file. Never for `scripted`,
+    /// which no installed package may register.
+    pub fn set_models(&mut self, name: &str, models: Vec<ModelData>) {
+        if name == scripted::SCRIPTED {
+            return;
+        }
+        match self.by_name.get_mut(name) {
+            Some(data) => data.models = models,
+            None => {
+                let mut data = self.data(name);
+                data.models = models;
+                self.by_name.insert(name.to_owned(), data);
+            }
+        }
+    }
+
     /// The Lua provider `name`, for its signer and token, if an extension
     /// registered one.
     pub fn lua(&self, name: &str) -> Option<&Arc<LuaProvider>> {
