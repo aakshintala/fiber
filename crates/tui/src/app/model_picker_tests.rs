@@ -1969,6 +1969,67 @@ fn choosing_another_row_there_is_an_ordinary_choice() {
 }
 
 #[test]
+fn thinking_uses_the_pending_home_choice() {
+    let mut app = home();
+    app.set_configure(Some(
+        Arc::new(crate::configure_fake::Fake::new(vec![])) as Arc<dyn crate::Configure>
+    ));
+    app.on_models(Ok(three()));
+    // `s` holds `acme/m1` for the next `start`: the chips still name no
+    // model.
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(app.home.as_ref().expect("home").launch.model, None);
+    // Bare `/thinking` opens on the pending choice's chips, not as an
+    // ordinary choose.
+    assert_eq!(run_draft(&mut app, "/thinking"), Effect::None);
+    assert!(app.model_picker_open());
+    let open = app.model_picker.open.as_ref().expect("open");
+    assert_eq!(open.mode, crate::model_picker::Mode::Thinking);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+    assert_eq!(chip(&app).as_deref(), Some("high"));
+    assert!(open.touched.first().copied().unwrap_or(false));
+}
+
+#[test]
+fn thinking_with_a_level_saves_for_the_pending_home_choice() {
+    let mut app = home();
+    let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
+    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.on_models(Ok(three()));
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    // `/thinking high` saves only the level, for the pending model.
+    assert_eq!(run_draft(&mut app, "/thinking high"), Effect::None);
+    assert_eq!(
+        seam.writes()
+            .iter()
+            .map(|(_, _, key, text)| (key.clone(), text.clone()))
+            .collect::<Vec<_>>(),
+        [("models.\"acme/m1\".thinking".to_owned(), "high".to_owned())]
+    );
+}
+
+#[test]
+fn the_picker_marks_the_pending_home_choice_current() {
+    let mut app = home();
+    app.home.as_mut().expect("home").launch.model = Some("zeta/z1".to_owned());
+    app.home.as_mut().expect("home").launch.thinking = Some("low".to_owned());
+    app.on_models(Ok(three()));
+    // `s` holds `acme/m1` for the next `start`, over the chips' `zeta/z1`.
+    open(&mut app);
+    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    // Reopening lands on the pending choice, not the chips' model.
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+    assert_eq!(chip(&app).as_deref(), Some("high"));
+}
+
+#[test]
 fn thinking_shows_the_current_row_outside_a_partial_scope() {
     let mut app = scoped_home(&["acme/m2"]);
     app.on_line(hello());

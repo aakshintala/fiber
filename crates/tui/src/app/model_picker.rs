@@ -36,25 +36,29 @@ impl App {
     }
 
     /// Opens the model picker: each open starts fresh, on the on-screen
-    /// model's row, else the first row. On home the chips name it; attached,
-    /// the panel fold does. Each open asks `Stale`. One swapped view shows
-    /// at a time, so another swapped view closes.
+    /// model's row, else the first row. On home the pending session-only
+    /// choice names it, else the chips; attached, the panel fold does.
+    /// Each open asks `Stale`. One swapped view shows at a time, so
+    /// another swapped view closes.
     pub(crate) fn open_model_picker(&mut self, mode: Mode) -> super::Effect {
         self.close_config_view();
         self.close_session_view();
         let on_screen = if self.on_home() {
-            self.home.as_ref().and_then(|home| {
-                home.launch
-                    .model
-                    .as_deref()
-                    .map(|model| (model, home.launch.thinking.as_deref()))
-            })
+            self.home_model()
         } else {
-            self.panel_state
-                .model()
-                .map(|model| (model, self.panel_state.thinking()))
+            self.panel_state.model().map(|model| {
+                (
+                    model.to_owned(),
+                    self.panel_state.thinking().map(str::to_owned),
+                )
+            })
         };
-        self.model_picker.open(mode, on_screen);
+        self.model_picker.open(
+            mode,
+            on_screen
+                .as_ref()
+                .map(|(model, level)| (model.as_str(), level.as_deref())),
+        );
         super::Effect::None
     }
 
@@ -352,15 +356,11 @@ impl App {
         }
     }
 
-    /// The model `/thinking` acts on: the session's, or the home chips'.
+    /// The model `/thinking` acts on: the session's, or the pending home
+    /// choice's, else the home chips'.
     fn thinking_model(&self) -> Option<(String, Option<String>)> {
         if self.on_home() {
-            self.home.as_ref().and_then(|home| {
-                home.launch
-                    .model
-                    .clone()
-                    .map(|model| (model, home.launch.thinking.clone()))
-            })
+            self.home_model()
         } else {
             self.panel_state.model().map(|model| {
                 (
@@ -369,6 +369,20 @@ impl App {
                 )
             })
         }
+    }
+
+    /// The model and level on home: the pending session-only choice the
+    /// next `start` carries, else the home chips.
+    fn home_model(&self) -> Option<(String, Option<String>)> {
+        if let Some(choice) = self.model_picker.start_model.as_ref() {
+            return Some((choice.reference.clone(), choice.level.clone()));
+        }
+        self.home.as_ref().and_then(|home| {
+            home.launch
+                .model
+                .clone()
+                .map(|model| (model, home.launch.thinking.clone()))
+        })
     }
 
     /// Refuses an unknown thinking word with the seven levels.
