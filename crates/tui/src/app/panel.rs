@@ -30,6 +30,9 @@ pub(crate) enum Spot {
     /// The Session card's "N waiting" while the rail is not drawn: shows
     /// the rail (`docs/tui.md`, "Shedding").
     Waiting,
+    /// The Session card's tools line: opens the tools view (`docs/tui.md`,
+    /// "The panel").
+    Tools,
 }
 
 /// What the branch query last answered.
@@ -518,6 +521,7 @@ impl App {
                 Effect::Send(vec![line])
             }
             Spot::Waiting => self.show_rail(),
+            Spot::Tools => self.open_config_view(super::ConfigView::Tools),
         }
     }
 }

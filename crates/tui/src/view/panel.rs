@@ -266,7 +266,10 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             .iter()
             .map(|server| format!("{server} down"))
             .collect();
-        out.push(plain(format!("tools  {}", servers.join(", "))));
+        out.push(Row {
+            line: Line::raw(format!("tools  {}", servers.join(", "))),
+            spot: Some(Spot::Tools),
+        });
     }
     out
 }

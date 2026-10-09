@@ -478,7 +478,17 @@ fn sent(effect: Effect) -> Vec<serde_json::Value> {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap_or_default())
             .collect(),
-        _ => Vec::new(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => Vec::new(),
     }
 }
 
@@ -592,6 +602,21 @@ fn without_a_seam_tools_says_not_available() {
         frame.below,
         vec!["Not available in this terminal.".to_owned()]
     );
+}
+
+#[test]
+fn a_click_on_the_panels_tools_line_opens_the_tools_view() {
+    let mut app = connected(Some(fake()));
+    let effect = app.on_click(crate::mouse::TargetId::Panel(
+        crate::app::panel::Spot::Tools,
+    ));
+    let lines = sent(effect);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "tools");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert!(app.config_view_open());
+    let frame = app.config_view_screen().expect("the view is open");
+    assert_eq!(frame.title, "Tools");
 }
 
 #[test]

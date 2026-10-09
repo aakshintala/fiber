@@ -320,7 +320,15 @@ fn full_session(app: &mut App) {
 fn session_card_full() {
     let mut app = attached(160, 40);
     full_session(&mut app);
-    insta::assert_snapshot!("session_card_full", super::super::text(&draw_panel(&app)));
+    let (buf, targets) = draw_targets(&app);
+    insta::assert_snapshot!("session_card_full", super::super::text(&buf));
+    let ids: Vec<crate::mouse::TargetId> = targets.iter().map(|target| target.id).collect();
+    assert_eq!(
+        ids,
+        [crate::mouse::TargetId::Panel(
+            crate::app::panel::Spot::Tools
+        )]
+    );
 }
 
 #[test]
@@ -355,9 +363,14 @@ fn context_bar_marker_at_the_trigger() {
 fn session_card_at_the_panel_floor() {
     let mut app = attached(140, 24);
     full_session(&mut app);
-    insta::assert_snapshot!(
-        "session_card_at_the_panel_floor",
-        super::super::text(&draw_panel(&app))
+    let (buf, targets) = draw_targets(&app);
+    insta::assert_snapshot!("session_card_at_the_panel_floor", super::super::text(&buf));
+    // The `tools  relay down` row draws at this height, so it is a target.
+    assert!(
+        targets.iter().any(
+            |target| target.id == crate::mouse::TargetId::Panel(crate::app::panel::Spot::Tools)
+        ),
+        "{targets:?}"
     );
 }
 
@@ -657,6 +670,29 @@ fn no_jobs_no_card() {
         serde_json::json!({"job_id": "j_1", "status": "completed"}),
     ));
     assert!(rows(&app, 40).is_empty());
+}
+
+#[test]
+fn the_tools_line_is_a_click_target() {
+    use crate::app::panel::Spot;
+    let mut app = attached(160, 40);
+    app.on_line(session_line(
+        "mcp_server_failed",
+        serde_json::json!({"server": "relay", "reason": "died",
+            "will_restart": false,
+            "error": {"code": "mcp_server_unavailable", "message": "died"}}),
+    ));
+    let (buf, targets) = draw_targets(&app);
+    let tools = targets
+        .iter()
+        .find(|target| target.id == crate::mouse::TargetId::Panel(Spot::Tools))
+        .unwrap_or_else(|| panic!("no tools target in {targets:?}"));
+    let line: String = (0..buf.area.width)
+        .map(|x| buf[(x, tools.rect.y)].symbol())
+        .collect::<String>()
+        .trim_end()
+        .to_owned();
+    assert!(line.contains("tools  relay down"), "{line}");
 }
 
 #[test]
