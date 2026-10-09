@@ -74,6 +74,7 @@ impl App {
     /// seam the view says it is not available.
     pub(crate) fn open_config_view(&mut self, view: ConfigView) -> Effect {
         self.draft.clear();
+        self.model_picker.close();
         self.close_session_view();
         self.config_views.open = None;
         let open = match (self.config_views.seam.clone(), view) {
@@ -114,7 +115,8 @@ impl App {
         Effect::Send(vec![line])
     }
 
-    /// Closes any open configuration view.
+    /// Closes any open configuration view, so another swapped view can take
+    /// its place.
     pub(in crate::app) fn close_config_view(&mut self) {
         self.config_views.open = None;
     }
@@ -237,12 +239,6 @@ impl App {
             }
             Act::Open(file) => Effect::OpenFile(file),
         }
-    }
-
-    /// Closes the open view, if one is open: one swapped view shows at
-    /// a time, so opening the model picker closes a configuration view.
-    pub(in crate::app) fn close_config_view(&mut self) {
-        self.config_views.open = None;
     }
 
     /// The open view's frame.

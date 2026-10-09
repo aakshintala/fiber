@@ -33,9 +33,10 @@ impl App {
     /// Opens the model picker: each open starts fresh, on the on-screen
     /// model's row, else the first row. On home the chips name it; attached,
     /// the panel fold does. Each open asks `Stale`. One swapped view shows
-    /// at a time, so an open configuration view closes.
+    /// at a time, so another swapped view closes.
     pub(crate) fn open_model_picker(&mut self, mode: Mode) -> super::Effect {
         self.close_config_view();
+        self.close_session_view();
         let on_screen = if self.on_home() {
             self.home.as_ref().and_then(|home| {
                 home.launch

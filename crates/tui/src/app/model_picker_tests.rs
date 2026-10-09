@@ -807,3 +807,18 @@ fn opening_the_picker_closes_a_config_view() {
     assert!(!app.config_view_open());
     assert!(app.model_picker_open());
 }
+
+#[test]
+fn opening_a_config_view_closes_the_picker() {
+    use std::sync::Arc;
+
+    let mut app = home();
+    app.set_configure(Some(
+        Arc::new(crate::configure_fake::Fake::new(vec![])) as Arc<dyn crate::Configure>
+    ));
+    app.open_model_picker(crate::model_picker::Mode::Choose);
+    assert!(app.model_picker_open());
+    app.open_config_view(super::super::ConfigView::Settings);
+    assert!(!app.model_picker_open());
+    assert!(app.config_view_open());
+}

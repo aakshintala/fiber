@@ -284,6 +284,26 @@ fn opening_usage_closes_an_open_settings_view() {
 }
 
 #[test]
+fn opening_usage_closes_the_model_picker() {
+    let mut app = attached(80, 24);
+    app.open_model_picker(crate::model_picker::Mode::Choose);
+    assert!(app.model_picker_open());
+    open_usage(&mut app);
+    assert!(!app.model_picker_open());
+    assert!(app.session_view_open());
+    assert!(screen(&app, 80, 24).0.contains("Usage"));
+}
+
+#[test]
+fn opening_the_model_picker_closes_usage() {
+    let mut app = attached(80, 24);
+    open_usage(&mut app);
+    app.open_model_picker(crate::model_picker::Mode::Choose);
+    assert!(!app.session_view_open());
+    assert!(app.model_picker_open());
+}
+
+#[test]
 fn opening_settings_closes_usage() {
     let mut app = attached(80, 24);
     with_settings_seam(&mut app);

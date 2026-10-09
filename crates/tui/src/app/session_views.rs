@@ -40,6 +40,7 @@ impl App {
             self.notices.push("No session on screen.".to_owned());
             return Effect::None;
         }
+        self.model_picker.close();
         self.close_config_view();
         self.close_keymap();
         self.session_views.open = Some(match view {

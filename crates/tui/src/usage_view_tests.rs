@@ -42,7 +42,7 @@ fn lines(fold: &UsageFold, budget: Option<f64>) -> Vec<String> {
         .iter()
         .map(|row| {
             row.iter()
-                .map(|(text, _)| text.as_str())
+                .map(|(text, _, _)| text.as_str())
                 .collect::<String>()
         })
         .collect()
