@@ -435,7 +435,13 @@ impl ModelPicker {
     /// or with no scoped row to choose.
     pub(crate) fn choice(&self, session_only: bool) -> Option<Choice> {
         let open = self.open.as_ref()?;
-        let (rows, _) = self.shown_rows(open);
+        let (rows, _) = shown_in(
+            &self.catalogue.models,
+            &self.scoped,
+            open.show_all,
+            open.mode,
+            open.target.as_ref(),
+        );
         // The selection can sit off the shown rows: choosing takes the
         // first shown row, the one the frame highlights.
         let selected = if rows.contains(&open.selected) {
@@ -452,19 +458,6 @@ impl ModelPicker {
             .and_then(|chip| entry.levels.get(chip).cloned());
         let level_chosen = open.touched.get(selected).copied().unwrap_or(false);
         Some(choice_at(entry, open, level, level_chosen, session_only))
-    }
-
-    /// The rows the open picker shows, by catalogue index, and the scope
-    /// line: the scoped rows, with a `/thinking` open adding the current
-    /// model's row in catalogue order whatever the scope.
-    fn shown_rows(&self, open: &Open) -> (Vec<usize>, Option<String>) {
-        shown_in(
-            &self.catalogue.models,
-            &self.scoped,
-            open.show_all,
-            open.mode,
-            open.target.as_ref(),
-        )
     }
 
     /// Clicks `cell` of `row`: the refresh button refreshes every list,

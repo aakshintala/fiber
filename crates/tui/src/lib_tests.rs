@@ -2105,8 +2105,7 @@ fn with_no_model_the_picker_opens_at_start() {
     // The watcher drains the terminal past its markers, so later frames
     // never fill the pty: the picker at start, its answered row, then
     // the home chips naming the chosen model.
-    let frames =
-        super::reconnect_tests::watch(&pair.main, vec![b"Models", b"qq", b"[zz/qq]"]);
+    let frames = super::reconnect_tests::watch(&pair.main, vec![b"Models", b"qq", b"[zz/qq]"]);
     let slave = pair
         .slave
         .try_clone()
@@ -2126,9 +2125,7 @@ fn with_no_model_the_picker_opens_at_start() {
                 .lock()
                 .unwrap_or_else(|err| panic!("lock: {err}"))
                 .recv_timeout(DEADLINE)
-                .unwrap_or_else(|err| {
-                    panic!("waited {DEADLINE:?} for the read release: {err}")
-                });
+                .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the read release: {err}"));
         }
         Ok(one_model())
     });
