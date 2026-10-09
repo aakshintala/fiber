@@ -189,7 +189,6 @@ jobs:
     timeout-minutes: ${{ matrix.runner == 'macos-26' && 15 || 10 }}
     env:
       BASE: ${{ needs.select.outputs.base }}
-      CACHE_ON_FAILURE: "true"
     steps:
       - *checkout-full
       - *toolchain
@@ -197,7 +196,8 @@ jobs:
         with:
           shared-key: ci
           # The cache saves once the build succeeded, even if a later step
-          # fails (CACHE_ON_FAILURE lets the save step run after a failure).
+          # fails (cache-on-failure lets the save step run after a failure).
+          cache-on-failure: true
           save-if: ${{ github.event_name == 'push' && steps.build.outcome != 'failure' }}
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
