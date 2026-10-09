@@ -1,0 +1,29 @@
+---
+source: crates/tui/src/app/session_views_tests.rs
+assertion_line: 1265
+expression: shown
+---
+Running jobs                                                                   ✕
+  task j_1
+  task j_2
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+↑↓ move · Enter open · Esc close
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+>
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

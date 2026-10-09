@@ -261,7 +261,7 @@ impl Skills {
         self.width = ctx.width;
         match spot {
             Spot::Close => Act::Close,
-            Spot::Revoke(_) | Spot::Cell(_, _) => Act::Stay,
+            Spot::Revoke(_) | Spot::Cell(_, _) | Spot::Item(_) => Act::Stay,
             Spot::Row(at) => {
                 let shown = self.shown(ctx.height);
                 if let Some(text) = &mut self.text {

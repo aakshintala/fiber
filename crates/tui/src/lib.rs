@@ -54,6 +54,7 @@ mod results_support;
 mod retry;
 mod rows;
 mod rules_view;
+mod running_view;
 mod screen;
 mod settings_view;
 mod shell;
