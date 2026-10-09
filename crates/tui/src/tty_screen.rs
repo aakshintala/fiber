@@ -230,12 +230,6 @@ impl Parser {
     }
 }
 
-impl Default for Parser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// The parser's output: text and cursor moves. Every escape sequence the
 /// parser drops never reaches one.
 trait Sink {
@@ -467,12 +461,6 @@ impl Sink for Grid {
     }
 }
 
-impl Default for Grid {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Any other job's tail: at most [`LINES_CAP`] lines of at most
 /// [`LINE_WIDTH`] characters. Carriage return moves to the start of the
 /// row so the next text overwrites it, and every escape sequence is
@@ -559,12 +547,6 @@ impl Lines {
     pub(crate) fn rows(&self, width: u16, height: u16) -> Vec<String> {
         let skip = self.lines.len().saturating_sub(usize::from(height));
         fit(self.lines.iter().skip(skip).cloned().collect(), width)
-    }
-}
-
-impl Default for Lines {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
