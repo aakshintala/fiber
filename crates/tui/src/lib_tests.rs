@@ -2067,13 +2067,14 @@ fn opening_the_picker_asks_stale_through_the_loop() {
 #[path = "lib_motion_tests.rs"]
 mod motion;
 
-/// One installed model with no levels.
+/// One installed model with no levels, named to stand out on the
+/// terminal: no other frame draws `qq`.
 fn one_model() -> crate::Catalogue {
     crate::Catalogue {
         models: vec![crate::ModelEntry {
-            reference: "p/m".to_owned(),
-            provider: "p".to_owned(),
-            id: "m".to_owned(),
+            reference: "zz/qq".to_owned(),
+            provider: "zz".to_owned(),
+            id: "qq".to_owned(),
             levels: Vec::new(),
             default_level: None,
             configured: None,
@@ -2102,8 +2103,10 @@ fn quit(pair: &mut Pair, finished: &mpsc::Receiver<i32>) {
 fn with_no_model_the_picker_opens_at_start() {
     let mut pair = open();
     // The watcher drains the terminal past its markers, so later frames
-    // never fill the pty while the test polls for the write.
-    let frames = super::reconnect_tests::watch(&pair.main, vec![b"Models"]);
+    // never fill the pty: the picker at start, its answered row, then
+    // the home chips naming the chosen model.
+    let frames =
+        super::reconnect_tests::watch(&pair.main, vec![b"Models", b"qq", b"[zz/qq]"]);
     let slave = pair
         .slave
         .try_clone()
@@ -2112,14 +2115,21 @@ fn with_no_model_the_picker_opens_at_start() {
     let (release, held) = mpsc::channel();
     let held = std::sync::Arc::new(std::sync::Mutex::new(held));
     let held_in = std::sync::Arc::clone(&held);
-    // The cached read answers one model, only once the test releases it
-    // after the first frame.
+    let released = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let released_in = std::sync::Arc::clone(&released);
+    // The first read answers one model once the test releases it after
+    // the first frame; a wider read queued behind it answers at once,
+    // so no reader outlives the test.
     let read: crate::ReadModels = std::sync::Arc::new(move |_| {
-        held_in
-            .lock()
-            .unwrap_or_else(|err| panic!("lock: {err}"))
-            .recv_timeout(DEADLINE)
-            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the read release: {err}"));
+        if !released_in.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            held_in
+                .lock()
+                .unwrap_or_else(|err| panic!("lock: {err}"))
+                .recv_timeout(DEADLINE)
+                .unwrap_or_else(|err| {
+                    panic!("waited {DEADLINE:?} for the read release: {err}")
+                });
+        }
         Ok(one_model())
     });
     let mut launch = launch();
@@ -2146,39 +2156,27 @@ fn with_no_model_the_picker_opens_at_start() {
     release
         .send(())
         .unwrap_or_else(|err| panic!("release: {err}"));
-    // The cached read answers, then Enter chooses: the write goes out
-    // through the seam. An Enter before the answer is folded keeps the
-    // picker open, sending nothing, and one after the choice left the
-    // picker with an empty draft, so resending is safe. Each pass waits
-    // out one frame's worth of quiet, two hundred passes to the named
-    // deadline.
-    let (tick, tock) = mpsc::channel::<()>();
-    for _ in 0..200 {
-        pair.main
-            .write_all(b"\r")
-            .unwrap_or_else(|err| panic!("write: {err}"));
-        pair.main
-            .flush()
-            .unwrap_or_else(|err| panic!("flush: {err}"));
-        if !seam.writes().is_empty() {
-            break;
-        }
-        if tock.recv_timeout(Duration::from_millis(50)).is_ok() {
-            break;
-        }
-    }
-    let _ = tick;
-    assert!(
-        !seam.writes().is_empty(),
-        "Enter never chose through the cached read"
-    );
+    // The cached read answers, and its frame lists the one model: only
+    // then does one Enter choose, as an Enter before the folded answer
+    // keeps the picker open, sending nothing.
+    super::reconnect_tests::watched(&frames, "the answered catalogue");
+    pair.main
+        .write_all(b"\r")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    pair.main
+        .flush()
+        .unwrap_or_else(|err| panic!("flush: {err}"));
+    // Choosing writes through the seam before the home chips name the
+    // model, so their frame proves the write went out: one named
+    // deadline for it.
+    super::reconnect_tests::watched(&frames, "the chosen home chips");
     assert_eq!(
         seam.writes(),
         vec![(
             PathBuf::from("/w"),
             crate::configure::Layer::Global,
             "model".to_owned(),
-            "p/m".to_owned()
+            "zz/qq".to_owned()
         )]
     );
     quit(&mut pair, &finished);
