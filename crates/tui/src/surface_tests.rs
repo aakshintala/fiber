@@ -129,7 +129,7 @@ fn edges_and_stripes_follow_the_theme() {
             .map(|(_, value)| value.clone())
     })
     .0;
-    assert_eq!(look.colour(Role::Surface), Color::Rgb(0x28, 0x2c, 0x34));
+    assert_eq!(look.colour(Role::Surface), Color::Rgb(0x1a, 0x1a, 0x22));
     let edge = &edge_row(1, Role::Surface, true).spans[0];
     assert_eq!(edge.style.fg, Some(Role::Surface.color()));
     let cell = stripe(true, Role::Accent, Role::Surface, false);
