@@ -62,6 +62,15 @@ The model picker (#1629), one run per case (`cargo run --release -- fixtures/idl
 - refreshing: openai-codex reads `⟳ refreshing` with a still spinner glyph, the other two `updated … ago`, and a `⟳ refresh all` button sits at the controls row's right end.
 - session-only: claude-sonnet-5-5 focused with `ⓢ this session only · nothing saved` under it and its rebuild cost on its row.
 
+The completions (#1631), one run per case (`cargo run --release -- fixtures/idle.jsonl --static --completions CASE`):
+
+- slash: the panel sits above the input box, eight rows of name, dim description and right-aligned tag, with a `1–8 of 40 · ↓ 32 more` footer.
+- slash-filtered: the input reads `/re`, only matching rows show, matched letters bold.
+- slash-hint: the `review` row focused with its orange `<path>` hint, and the `login` description cut with … keeping its `command` tag.
+- at: the input reads `@test`, two file rows (lock.rs, cancel.rs).
+- at-empty: the input reads `@zzz`, one dim `no files match` row.
+- narrow-slash, narrow-at: the same panels in a 100x40 terminal, above the input box with the narrow status rows below.
+
 Home (#1628), one `cargo run --release -- fixtures/session.jsonl --static --home <case>` per case, in Ghostty itself at 160 by 48.
 
 - empty: the logo should read as pixel letters four rows tall (⌇ in accent, the name in the accent gradient, `0.0.1` dim on the last row); under it the large input box with `/? for shortcuts`, the chip row and `enter starts a session`; under the box one dim `No sessions yet` line; the key hint at the foot.
