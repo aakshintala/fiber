@@ -288,7 +288,18 @@ global or per-project file, with one of:
 
 A command that succeeds runs once per process, and its key is kept. A command
 that fails runs again the next time the key is read, so a fixed command works
-without restarting Fiber. A command is named by its program alone in every
+without restarting Fiber. A `command` source takes an optional `timeout`, a
+duration such as `"2m"`, defaulting to `"30s"`:
+
+```json
+{ "command": ["op", "read", "op://Private/OpenRouter/key"], "timeout": "2m" }
+```
+
+A command still running at its timeout has its whole process group killed, and
+reading the key fails with `credential_missing`. The run is not kept, so the
+next read runs the command again. The timeout applies wherever a command
+source runs: session start, a switch, the reviewer lookup and a model-list
+refresh. A command is named by its program alone in every
 message, because its arguments may hold a key. A repository can never set this, because a
 command runs a program and a changed source sends the key elsewhere. A
 credential stored under the same label comes first. A key from an `env`
