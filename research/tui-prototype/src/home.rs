@@ -329,7 +329,7 @@ fn chip_row(c: &Look) -> Vec<Span<'static>> {
     // No right-aligned tail: when long chips overflow, the hint gives
     // way, never the chips.
     s.push(sp("  ", Style::new()));
-    s.push(sp("enter starts a session ", dim()));
+    s.push(sp("enter starts a session", dim()));
     s
 }
 
