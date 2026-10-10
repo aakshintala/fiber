@@ -1,8 +1,8 @@
 //! Binary-level tests of the working line, the steering queue and the
 //! input box (`docs/tui.md`, "The working line", "Steering", "The input
 //! box"): the real binary on a sized pty in truecolour, with a scripted
-//! provider whose paced reply holds the turn open while the journey
-//! queues steering messages, selects one, and fills the input box.
+//! provider whose sleep call holds the turn open on approval while the
+//! journey queues steering messages, selects one, and fills the input box.
 
 #![allow(
     clippy::unwrap_used,
@@ -15,10 +15,10 @@
 mod support;
 
 use support::Setup;
-use support::pty::{Colour, Run, Screen};
+use support::pty::{Colour, Grid, Run};
 
 /// Truecolour on a terminal that draws stripes, as look.rs passes it.
-const TRUECOLOUR: &[(&str, &str)] = &[
+const TRUECOLOUR: [(&str, &str); 3] = [
     ("TERM", "xterm-256color"),
     ("COLORTERM", "truecolor"),
     ("TERM_PROGRAM", "ghostty"),
@@ -31,6 +31,19 @@ const SURFACE: Colour = Colour::Rgb(26, 26, 34);
 
 /// The working line's spinner frames (`docs/tui.md`, "The working line").
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Escape, Alt+X and Alt+A as the kitty keyboard protocol encodes them;
+/// Alt+Up keeps its xterm form (`crates/tui/src/keys.rs`).
+const ESC: &[u8] = b"\x1b[27u";
+const ALT_UP: &[u8] = b"\x1b[1;3A";
+const ALT_X: &[u8] = b"\x1b[120;3u";
+const ALT_A: &[u8] = b"\x1b[97;3u";
+
+// Backspaces far past any draft below: extras on an empty draft are
+// no-ops.
+fn clear_draft(run: &mut Run) {
+    run.write(&vec![b"\x1b[127u".as_slice(); 200].concat());
+}
 
 /// A scripted provider holding each turn open: `fragments` paced every
 /// `every_ms`, then one short reply for a turn a queued message starts.
@@ -73,17 +86,6 @@ fn config(setup: &Setup, reduced_motion: bool) {
     );
 }
 
-/// Every screen row as text, one cell per symbol.
-fn text_rows(screen: &Screen, cols: u16, rows: u16) -> Vec<String> {
-    (0..rows)
-        .map(|y| {
-            (0..cols)
-                .map(|x| screen.cell(x, y).symbol.as_str())
-                .collect()
-        })
-        .collect()
-}
-
 /// The first row containing `needle`.
 fn find_row(rows: &[String], needle: &str) -> Option<usize> {
     rows.iter().position(|row| row.contains(needle))
@@ -112,8 +114,8 @@ fn col_of(row: &str, ch: char) -> Option<u16> {
 }
 
 /// Whether the cell is blank.
-fn is_blank(screen: &Screen, x: u16, y: u16) -> bool {
-    screen.cell(x, y).symbol.as_str() == " "
+fn is_blank(grid: &Grid, x: u16, y: u16) -> bool {
+    grid.cell(x, y).symbol.as_str() == " "
 }
 
 /// The working line's row: its word's column, its spinner's column and
@@ -125,16 +127,15 @@ struct Working {
     band: Vec<u16>,
 }
 
-/// The working line on `screen`, if its word shows with a glimmer band.
-fn working(screen: &Screen, cols: u16, rows: u16) -> Option<Working> {
-    let text = text_rows(screen, cols, rows);
-    let row = at(find_row(&text, "Working")?);
-    let word = col_of(&text[row as usize], 'W')?;
+/// The working line on `grid`, if its word shows with a glimmer band.
+fn working(grid: &Grid) -> Option<Working> {
+    let row = at(find_row(&grid.rows, "Working")?);
+    let word = col_of(&grid.rows[row as usize], 'W')?;
     let spinner_col = word.saturating_sub(2);
-    let spinner = screen.cell(spinner_col, row).symbol.clone();
+    let spinner = grid.cell(spinner_col, row).symbol.clone();
     let mut band = Vec::new();
     for x in word..word.saturating_add(7) {
-        if screen.cell(x, row).fg == ATTENTION {
+        if grid.cell(x, row).fg == ATTENTION {
             band.push(x);
         }
     }
@@ -152,27 +153,27 @@ fn working(screen: &Screen, cols: u16, rows: u16) -> Option<Working> {
 
 /// The last row holding the input box's stripe: the session box is the
 /// only striped surface left, the queue having none.
-fn input_row(screen: &Screen, cols: u16, rows: u16) -> Option<u16> {
-    let text = text_rows(screen, cols, rows);
-    (0..rows).rev().find(|y| text[*y as usize].contains('▌'))
+fn input_row(grid: &Grid) -> Option<u16> {
+    (0..grid.rows.len())
+        .rev()
+        .find(|y| grid.rows[*y].contains('▌'))
+        .map(at)
 }
 
 /// A text row holding `needle` whose box edges both show: a frame may
 /// arrive with the row but before its edges.
-fn boxed_row(screen: &Screen, cols: u16, rows: u16, needle: &str) -> Option<(u16, u16)> {
-    let text = text_rows(screen, cols, rows);
-    let y = find_row(&text, needle)?;
-    let x = col_of(&text[y], needle.chars().next()?)?;
-    box_around(&text, at(y), x)?;
+fn boxed_row(grid: &Grid, needle: &str) -> Option<(u16, u16)> {
+    let y = find_row(&grid.rows, needle)?;
+    let x = col_of(&grid.rows[y], needle.chars().next()?)?;
+    box_around(&grid.rows, at(y), x)?;
     Some((at(y), x))
 }
 
 /// The session box's row once its edges both show.
-fn session_box(screen: &Screen, cols: u16, rows: u16) -> Option<(u16, u16)> {
-    let text = text_rows(screen, cols, rows);
-    let y = input_row(screen, cols, rows)?;
-    let x = col_of(&text[y as usize], '▌')?;
-    box_around(&text, y, x)?;
+fn session_box(grid: &Grid) -> Option<(u16, u16)> {
+    let y = input_row(grid)?;
+    let x = col_of(&grid.rows[y as usize], '▌')?;
+    box_around(&grid.rows, y, x)?;
     Some((y, x))
 }
 
@@ -219,18 +220,18 @@ fn box_around(text: &[String], y: u16, x: u16) -> Option<(u16, u16, u16, u16)> {
 /// The box's fill: every text row between its edges is surface background
 /// edge to edge, and both edge runs are the surface colour over the
 /// surrounding background (`docs/tui.md`, "The input box", "Look").
-fn assert_fill(screen: &Screen, text: &[String], y: u16, x: u16, what: &str) {
-    let (top, bottom, left, right) = box_around(text, y, x).expect(what);
+fn assert_fill(grid: &Grid, y: u16, x: u16, what: &str) {
+    let (top, bottom, left, right) = box_around(&grid.rows, y, x).expect(what);
     for edge in [top, bottom] {
         for x in left..=right {
-            let cell = screen.cell(x, edge);
+            let cell = grid.cell(x, edge);
             assert_eq!(cell.fg, SURFACE, "{what} edge ({x}, {edge})");
             assert_eq!(cell.bg, Colour::Default, "{what} edge ({x}, {edge})");
         }
     }
     for row in top + 1..bottom {
         for x in left..=right {
-            let cell = screen.cell(x, row);
+            let cell = grid.cell(x, row);
             assert_eq!(cell.bg, SURFACE, "{what} fill ({x}, {row})");
         }
     }
@@ -238,19 +239,17 @@ fn assert_fill(screen: &Screen, text: &[String], y: u16, x: u16, what: &str) {
 
 /// Every content cell from `start` to `end` on row `y` is dim: the
 /// span covers the chrome alone, never the panel beside it.
-fn assert_dim_span(screen: &Screen, y: u16, start: u16, end: u16, what: &str) {
+fn assert_dim_span(grid: &Grid, y: u16, start: u16, end: u16, what: &str) {
     for x in start..end {
-        if !is_blank(screen, x, y) {
-            assert!(screen.cell(x, y).dim, "{what} cell {x}");
+        if !is_blank(grid, x, y) {
+            assert!(grid.cell(x, y).dim, "{what} cell {x}");
         }
     }
 }
 
 /// Quits an idle run with an empty draft, as look.rs does.
-fn quit(run: Run) {
-    let mut run = run;
+fn quit(mut run: Run) {
     run.write(b"\x03\x03\r");
-    run.read_until("\x1b[?25h");
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
 }
@@ -265,89 +264,73 @@ fn the_working_line_glimmers_and_the_queue_selects() {
     let setup = Setup::new();
     sleep_script(&setup, 8);
     config(&setup, false);
-    let mut run = Run::spawn(&setup, 160, 48, TRUECOLOUR);
-    run.read_until("›");
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
 
     // Home with an empty draft: the box fills edge to edge.
-    let mut screen = run.screen_until(160, 48, "home with its box", |screen| {
-        boxed_row(screen, 160, 48, "? for shortcuts").is_some()
+    let mut grid = run.wait_screen("home with its box", |grid| {
+        boxed_row(grid, "? for shortcuts").is_some()
     });
-    let mut text = text_rows(&screen, 160, 48);
-    let (home_row, home_x) =
-        boxed_row(&screen, 160, 48, "? for shortcuts").expect("the placeholder row");
-    assert_fill(&screen, &text, home_row, home_x, "home empty");
+    let (home_row, home_x) = boxed_row(&grid, "? for shortcuts").expect("the placeholder row");
+    assert_fill(&grid, home_row, home_x, "home empty");
 
     // Home with one word, then a wrapping draft: the fill follows.
     run.write(b"kq");
-    screen = run.screen_until(160, 48, "home with one word", |screen| {
-        boxed_row(screen, 160, 48, "› kq").is_some()
+    grid = run.wait_screen("home with one word", |grid| {
+        boxed_row(grid, "› kq").is_some()
     });
-    text = text_rows(&screen, 160, 48);
-    let (one_row, one_x) = boxed_row(&screen, 160, 48, "› kq").expect("one word");
-    assert_fill(&screen, &text, one_row, one_x, "home one word");
+    let (one_row, one_x) = boxed_row(&grid, "› kq").expect("one word");
+    assert_fill(&grid, one_row, one_x, "home one word");
     run.write(b"w".repeat(150).as_slice());
-    screen = run.screen_until(160, 48, "home wrapping", |screen| {
-        boxed_row(screen, 160, 48, "› kq").is_some()
-            && text_rows(screen, 160, 48)
-                .iter()
-                .filter(|row| row.contains('w'))
-                .count()
-                >= 2
+    grid = run.wait_screen("home wrapping", |grid| {
+        boxed_row(grid, "› kq").is_some()
+            && grid.rows.iter().filter(|row| row.contains('w')).count() >= 2
     });
-    text = text_rows(&screen, 160, 48);
-    let (wrap, wrap_x) = boxed_row(&screen, 160, 48, "› kq").expect("the wrapping draft");
-    assert_fill(&screen, &text, wrap, wrap_x, "home wrapping");
+    let (wrap, wrap_x) = boxed_row(&grid, "› kq").expect("the wrapping draft");
+    assert_fill(&grid, wrap, wrap_x, "home wrapping");
 
-    // The prompt starts the turn; the draft is empty again. The
-    // working line's word never arrives as one byte run under the
-    // glimmer's repaints, so the frame waits below do the waiting.
+    // The prompt starts the turn; the draft is empty again.
+    let from = run.output().len();
     run.write(b"\r");
-    screen = run.screen_until(160, 48, "the empty session box", |screen| {
-        session_box(screen, 160, 48).is_some()
-    });
-    text = text_rows(&screen, 160, 48);
-    let (empty_box, empty_x) = session_box(&screen, 160, 48).expect("the box");
-    assert_fill(&screen, &text, empty_box, empty_x, "session empty");
-    assert_eq!(screen.cell(empty_x + 2, empty_box).symbol.as_str(), "›");
-    assert_eq!(screen.cell(empty_x + 2, empty_box).fg, INFO);
+    grid = run.wait_screen("the empty session box", |grid| session_box(grid).is_some());
+    let (empty_box, empty_x) = session_box(&grid).expect("the box");
+    assert_fill(&grid, empty_box, empty_x, "session empty");
+    assert_eq!(grid.cell(empty_x + 2, empty_box).symbol.as_str(), "›");
+    assert_eq!(grid.cell(empty_x + 2, empty_box).fg, INFO);
 
     // The call asks approval: Esc puts it aside behind its badge, and
     // the input box comes back with the turn still waiting. Steers typed
     // now queue visibly while the approval waits. The queue's marks tell
     // its rows from the draft they were typed in.
-    run.screen_until(160, 48, "the approval", |screen| {
-        text_rows(screen, 160, 48)
-            .iter()
-            .any(|row| row.contains("allow once"))
+    run.wait_screen("the approval", |grid| {
+        grid.rows.iter().any(|row| row.contains("allow once"))
     });
-    run.write(b"\x1b");
-    run.screen_until(160, 48, "the box behind the badge", |screen| {
-        session_box(screen, 160, 48).is_some()
+    run.write(ESC);
+    run.wait_screen("the box behind the badge", |grid| {
+        session_box(grid).is_some()
     });
     run.write(b"first\r");
     run.write(b"second\r");
-    screen = run.screen_until(160, 48, "both queued rows", |screen| {
-        let text = text_rows(screen, 160, 48);
-        text.iter().any(|row| row.contains("↳ first"))
-            && text.iter().any(|row| row.contains("↳ second"))
+    grid = run.wait_screen("both queued rows", |grid| {
+        grid.rows.iter().any(|row| row.contains("↳ first"))
+            && grid.rows.iter().any(|row| row.contains("↳ second"))
     });
-    text = text_rows(&screen, 160, 48);
-    let heading = find_row(&text, "Steering, joins the turn").expect("the heading");
+    let heading = find_row(&grid.rows, "Steering, joins the turn").expect("the heading");
     assert_dim_span(
-        &screen,
+        &grid,
         at(heading),
         0,
         2 + width("• Steering, joins the turn at the next step"),
         "heading",
     );
     for needle in ["↳ first", "↳ second"] {
-        let y = find_row(&text, needle).expect(needle);
-        assert!(text[y].contains('✕'), "{needle}");
-        assert_dim_span(&screen, at(y), 0, 2 + width(needle) + 3, needle);
+        let y = find_row(&grid.rows, needle).expect(needle);
+        assert!(grid.rows[y].contains('✕'), "{needle}");
+        assert_dim_span(&grid, at(y), 0, 2 + width(needle) + 3, needle);
     }
-    let footer = find_row(&text, "click a row to edit").expect("the footer");
+    let footer = find_row(&grid.rows, "click a row to edit").expect("the footer");
     assert_dim_span(
-        &screen,
+        &grid,
         at(footer),
         0,
         2 + width("⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to drop"),
@@ -356,41 +339,35 @@ fn the_working_line_glimmers_and_the_queue_selects() {
 
     // Reopening the approval and answering it starts the sleep: the
     // panel goes for good with the turn still running.
-    run.write(b"\x1ba");
-    run.screen_until(160, 48, "the reopened approval", |screen| {
-        text_rows(screen, 160, 48)
-            .iter()
-            .any(|row| row.contains("allow once"))
+    run.write(ALT_A);
+    run.wait_screen("the reopened approval", |grid| {
+        grid.rows.iter().any(|row| row.contains("allow once"))
     });
     run.write(b"\r");
-    run.screen_until(160, 48, "the tool running", |screen| {
-        let text = text_rows(screen, 160, 48);
-        !text.iter().any(|row| row.contains("allow once")) && working(screen, 160, 48).is_some()
+    run.wait_screen("the tool running", |grid| {
+        !grid.rows.iter().any(|row| row.contains("allow once")) && working(grid).is_some()
     });
 
     // Frame A: the band shows on the running tool's line.
-    screen = run.screen_until(160, 48, "the glimmer band", |screen| {
-        working(screen, 160, 48).is_some()
-    });
-    let first = working(&screen, 160, 48).expect("frame A");
+    grid = run.wait_screen("the glimmer band", |grid| working(grid).is_some());
+    let first = working(&grid).expect("frame A");
     assert!(
         SPINNER.contains(&first.spinner.1.as_str()),
         "{}",
         first.spinner.1
     );
-    assert_eq!(screen.cell(first.spinner.0, first.row).fg, ATTENTION);
+    assert_eq!(grid.cell(first.spinner.0, first.row).fg, ATTENTION);
     // Frame B: the band shifted.
-    screen = run.screen_until(160, 48, "the shifted band", |screen| {
-        working(screen, 160, 48).is_some_and(|frame| frame.band != first.band)
+    grid = run.wait_screen("the shifted band", |grid| {
+        working(grid).is_some_and(|frame| frame.band != first.band)
     });
-    let text_b = text_rows(&screen, 160, 48);
-    let frame = working(&screen, 160, 48).expect("frame B");
+    let frame = working(&grid).expect("frame B");
     assert!(
         SPINNER.contains(&frame.spinner.1.as_str()),
         "{}",
         frame.spinner.1
     );
-    assert_eq!(screen.cell(frame.spinner.0, frame.row).fg, ATTENTION);
+    assert_eq!(grid.cell(frame.spinner.0, frame.row).fg, ATTENTION);
     // The band is at most three attention cells with a bold centre; the
     // rest of the word, the elapsed time and the tail stay dim.
     assert!((1..=3).contains(&frame.band.len()), "{:?}", frame.band);
@@ -399,7 +376,7 @@ fn the_working_line_glimmers_and_the_queue_selects() {
     }
     let centre = frame.band[frame.band.len() / 2];
     for x in frame.word..frame.word + 7 {
-        let cell = screen.cell(x, frame.row);
+        let cell = grid.cell(x, frame.row);
         if x == centre {
             assert_eq!(cell.fg, ATTENTION, "centre {x}");
             assert!(cell.bold, "centre {x}");
@@ -412,88 +389,78 @@ fn the_working_line_glimmers_and_the_queue_selects() {
     }
     // The line ends with the tail: past it sits whatever shares the row,
     // such as the panel, which the tail asserts leave alone.
-    let tail_end = text_b[frame.row as usize]
+    let tail_end = grid.rows[frame.row as usize]
         .find("interrupt")
-        .map(|at| text_b[frame.row as usize][..at].chars().count() + 9)
+        .map(|at| grid.rows[frame.row as usize][..at].chars().count() + 9)
         .expect("the tail");
     for x in frame.word + 7..u16::try_from(tail_end).unwrap_or(u16::MAX) {
-        assert!(screen.cell(x, frame.row).dim, "tail {x}");
+        assert!(grid.cell(x, frame.row).dim, "tail {x}");
     }
 
     // ⌥↑ selects the newest row: its mark in attention, its text default,
     // the box's stripe in attention, and the dim hint at its right end.
-    run.write(b"\x1b[1;3A");
-    run.screen_until(160, 48, "the selected row", |screen| {
-        text_rows(screen, 160, 48)
-            .iter()
-            .any(|row| row.contains("▸ second"))
+    run.write(ALT_UP);
+    run.wait_screen("the selected row", |grid| {
+        grid.rows.iter().any(|row| row.contains("▸ second"))
     });
     // The hint is right-aligned to the box's width, which settles as
     // the panel fills in: wait for it whole, not just started.
-    screen = run.screen_until(160, 48, "the full hint", |screen| {
-        text_rows(screen, 160, 48)
-            .iter()
-            .any(|row| row.contains("esc stops"))
+    grid = run.wait_screen("the full hint", |grid| {
+        grid.rows.iter().any(|row| row.contains("esc stops"))
     });
-    text = text_rows(&screen, 160, 48);
-    let selected = find_row(&text, "▸ second").expect("the selected row");
-    let mark = col_of(&text[selected], '▸').expect("the mark");
-    assert_eq!(screen.cell(mark, at(selected)).fg, ATTENTION);
-    let text_col = col_of(&text[selected], 's').expect("the text");
+    let selected = find_row(&grid.rows, "▸ second").expect("the selected row");
+    let mark = col_of(&grid.rows[selected], '▸').expect("the mark");
+    assert_eq!(grid.cell(mark, at(selected)).fg, ATTENTION);
+    let text_col = col_of(&grid.rows[selected], 's').expect("the text");
     for x in text_col..text_col + 6 {
-        assert_eq!(screen.cell(x, at(selected)).fg, Colour::Default, "text {x}");
+        assert_eq!(grid.cell(x, at(selected)).fg, Colour::Default, "text {x}");
     }
-    let box_row = input_row(&screen, 160, 48).expect("the box");
-    assert_eq!(screen.cell(0, box_row).symbol.as_str(), "▌");
-    assert_eq!(screen.cell(0, box_row).fg, ATTENTION);
-    let hint = find_row(&text, "editing a queued message").expect("the hint");
+    let box_row = input_row(&grid).expect("the box");
+    assert_eq!(grid.cell(0, box_row).symbol.as_str(), "▌");
+    assert_eq!(grid.cell(0, box_row).fg, ATTENTION);
+    let hint = find_row(&grid.rows, "editing a queued message").expect("the hint");
     assert!(
-        text[hint].trim_end().ends_with("esc stops"),
+        grid.rows[hint].trim_end().ends_with("esc stops"),
         "{}",
-        text[hint]
+        grid.rows[hint]
     );
     // The hint ends at the box's right end: only its own span is dim,
     // past the stripe, the prompt, the draft and the cursor.
     let hint_row = at(hint);
-    let hint_start = text[hint]
+    let hint_start = grid.rows[hint]
         .find("editing a queued message")
-        .map(|at| text[hint][..at].chars().count())
+        .map(|at| grid.rows[hint][..at].chars().count())
         .expect("the hint start");
-    for x in hint_start..usize::from(width(&text[hint])) {
+    for x in hint_start..usize::from(width(&grid.rows[hint])) {
         let x = u16::try_from(x).unwrap_or(u16::MAX);
-        if !is_blank(&screen, x, hint_row) {
-            assert!(screen.cell(x, hint_row).dim, "hint {x}");
+        if !is_blank(&grid, x, hint_row) {
+            assert!(grid.cell(x, hint_row).dim, "hint {x}");
         }
     }
 
     // Esc stops the edit and ⌥x drops the queue; the session box fills
     // for one word and for a wrapping draft.
-    run.write(b"\x1b");
-    run.write(b"\x1bx");
+    run.write(ESC);
+    run.write(ALT_X);
     run.write(b"kq");
-    screen = run.screen_until(160, 48, "one word in the session", |screen| {
-        session_box(screen, 160, 48)
-            .is_some_and(|(y, _)| text_rows(screen, 160, 48)[y as usize].contains("kq"))
+    grid = run.wait_screen("one word in the session", |grid| {
+        session_box(grid).is_some_and(|(y, _)| grid.rows[y as usize].contains("kq"))
     });
-    text = text_rows(&screen, 160, 48);
-    let (one_box, one_box_x) = session_box(&screen, 160, 48).expect("the box");
-    assert_fill(&screen, &text, one_box, one_box_x, "session one word");
+    let (one_box, one_box_x) = session_box(&grid).expect("the box");
+    assert_fill(&grid, one_box, one_box_x, "session one word");
     run.write(b"w".repeat(150).as_slice());
-    screen = run.screen_until(160, 48, "wrapping in the session", |screen| {
-        let text = text_rows(screen, 160, 48);
-        session_box(screen, 160, 48).is_some_and(|(y, _)| {
-            text.iter().filter(|row| row.contains('w')).count() >= 2
-                && text[y as usize].contains('w')
+    grid = run.wait_screen("wrapping in the session", |grid| {
+        session_box(grid).is_some_and(|(y, _)| {
+            grid.rows.iter().filter(|row| row.contains('w')).count() >= 2
+                && grid.rows[y as usize].contains('w')
         })
     });
-    text = text_rows(&screen, 160, 48);
-    let (wrap_box, wrap_box_x) = session_box(&screen, 160, 48).expect("the box");
-    assert_fill(&screen, &text, wrap_box, wrap_box_x, "session wrapping");
+    let (wrap_box, wrap_box_x) = session_box(&grid).expect("the box");
+    assert_fill(&grid, wrap_box, wrap_box_x, "session wrapping");
 
-    // The draft clears, the turn ends on its own, and the run quits.
-    run.write(&[0x7f].repeat(200));
-    run.read_until("completed");
-    run.read_until("finished");
+    // The draft clears and the turn ends on its own.
+    clear_draft(&mut run);
+    run.turn_finished(from);
     quit(run);
 }
 
@@ -504,35 +471,32 @@ fn the_reduced_working_line_stays_still() {
     let setup = Setup::new();
     script(&setup, 30, 400);
     config(&setup, true);
-    let mut run = Run::spawn(&setup, 160, 48, TRUECOLOUR);
-    run.read_until("›");
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    let mut from = run.output().len();
     run.write(b"go\r");
-    run.read_until("frag00");
     // Two frames pages apart: the spinner is still ● and the word plain.
+    // The paced fragments mark the frames' distance in wall time.
     for needle in ["frag08", "frag20"] {
-        run.read_until(needle);
-        let fed = Screen::new(160, 48);
-        let mut screen = fed;
-        screen.feed(&run.output());
-        let text = text_rows(&screen, 160, 48);
-        let row = find_row(&text, "Working").expect("the working line");
-        let word = col_of(&text[row], 'W').expect("the word");
+        from = run.wait_bytes(from, needle.as_bytes(), "the paced reply");
+        let grid = run.screen();
+        let row = find_row(&grid.rows, "Working").expect("the working line");
+        let word = col_of(&grid.rows[row], 'W').expect("the word");
         let spinner_col = word.saturating_sub(2);
         assert_eq!(
-            screen.cell(spinner_col, at(row)).symbol.as_str(),
+            grid.cell(spinner_col, at(row)).symbol.as_str(),
             "●",
             "{needle}"
         );
-        assert_eq!(screen.cell(spinner_col, at(row)).fg, ATTENTION, "{needle}");
+        assert_eq!(grid.cell(spinner_col, at(row)).fg, ATTENTION, "{needle}");
         for x in word..word + 7 {
-            assert!(screen.cell(x, at(row)).dim, "{needle} word {x}");
+            assert!(grid.cell(x, at(row)).dim, "{needle} word {x}");
         }
-        for x in 0..width(text[row].trim_end()) {
-            assert!(!screen.cell(x, at(row)).bold, "{needle} cell {x}");
+        for x in 0..width(grid.rows[row].trim_end()) {
+            assert!(!grid.cell(x, at(row)).bold, "{needle} cell {x}");
         }
     }
-    run.read_until("completed");
-    run.read_until("finished");
+    run.turn_finished(from);
     quit(run);
 }
 
@@ -543,61 +507,47 @@ fn the_input_box_fills_at_100x40() {
     let setup = Setup::new();
     script(&setup, 10, 400);
     config(&setup, false);
-    let mut run = Run::spawn(&setup, 100, 40, TRUECOLOUR);
-    run.read_until("›");
-    let mut screen = run.screen_until(100, 40, "home with its box", |screen| {
-        boxed_row(screen, 100, 40, "? for shortcuts").is_some()
+    let mut run = Run::spawn(&setup, 100, 40, &[], &TRUECOLOUR);
+    run.ready();
+    let mut grid = run.wait_screen("home with its box", |grid| {
+        boxed_row(grid, "? for shortcuts").is_some()
     });
-    let mut text = text_rows(&screen, 100, 40);
-    let (empty_100, empty_100_x) = boxed_row(&screen, 100, 40, "? for shortcuts").expect("empty");
-    assert_fill(&screen, &text, empty_100, empty_100_x, "home empty");
+    let (empty_100, empty_100_x) = boxed_row(&grid, "? for shortcuts").expect("empty");
+    assert_fill(&grid, empty_100, empty_100_x, "home empty");
     run.write(b"kq");
-    screen = run.screen_until(100, 40, "home with one word", |screen| {
-        boxed_row(screen, 100, 40, "› kq").is_some()
+    grid = run.wait_screen("home with one word", |grid| {
+        boxed_row(grid, "› kq").is_some()
     });
-    text = text_rows(&screen, 100, 40);
-    let (one_100, one_100_x) = boxed_row(&screen, 100, 40, "› kq").expect("one word");
-    assert_fill(&screen, &text, one_100, one_100_x, "home one word");
+    let (one_100, one_100_x) = boxed_row(&grid, "› kq").expect("one word");
+    assert_fill(&grid, one_100, one_100_x, "home one word");
     run.write(b"w".repeat(150).as_slice());
-    screen = run.screen_until(100, 40, "home wrapping", |screen| {
-        boxed_row(screen, 100, 40, "› kq").is_some()
-            && text_rows(screen, 100, 40)
-                .iter()
-                .filter(|row| row.contains('w'))
-                .count()
-                >= 2
+    grid = run.wait_screen("home wrapping", |grid| {
+        boxed_row(grid, "› kq").is_some()
+            && grid.rows.iter().filter(|row| row.contains('w')).count() >= 2
     });
-    text = text_rows(&screen, 100, 40);
-    let (wrap_100, wrap_100_x) = boxed_row(&screen, 100, 40, "› kq").expect("wrapping");
-    assert_fill(&screen, &text, wrap_100, wrap_100_x, "home wrapping");
+    let (wrap_100, wrap_100_x) = boxed_row(&grid, "› kq").expect("wrapping");
+    assert_fill(&grid, wrap_100, wrap_100_x, "home wrapping");
+    let from = run.output().len();
     run.write(b"\r");
-    screen = run.screen_until(100, 40, "the empty session box", |screen| {
-        session_box(screen, 100, 40).is_some()
-    });
-    text = text_rows(&screen, 100, 40);
-    let (empty_s, empty_s_x) = session_box(&screen, 100, 40).expect("the box");
-    assert_fill(&screen, &text, empty_s, empty_s_x, "session empty");
+    grid = run.wait_screen("the empty session box", |grid| session_box(grid).is_some());
+    let (empty_s, empty_s_x) = session_box(&grid).expect("the box");
+    assert_fill(&grid, empty_s, empty_s_x, "session empty");
     run.write(b"kq");
-    screen = run.screen_until(100, 40, "one word in the session", |screen| {
-        session_box(screen, 100, 40)
-            .is_some_and(|(y, _)| text_rows(screen, 100, 40)[y as usize].contains("kq"))
+    grid = run.wait_screen("one word in the session", |grid| {
+        session_box(grid).is_some_and(|(y, _)| grid.rows[y as usize].contains("kq"))
     });
-    text = text_rows(&screen, 100, 40);
-    let (one_s, one_s_x) = session_box(&screen, 100, 40).expect("the box");
-    assert_fill(&screen, &text, one_s, one_s_x, "session one word");
+    let (one_s, one_s_x) = session_box(&grid).expect("the box");
+    assert_fill(&grid, one_s, one_s_x, "session one word");
     run.write(b"w".repeat(150).as_slice());
-    screen = run.screen_until(100, 40, "wrapping in the session", |screen| {
-        session_box(screen, 100, 40).is_some_and(|(y, _)| {
-            let text = text_rows(screen, 100, 40);
-            text.iter().filter(|row| row.contains('w')).count() >= 2
-                && text[y as usize].contains('w')
+    grid = run.wait_screen("wrapping in the session", |grid| {
+        session_box(grid).is_some_and(|(y, _)| {
+            grid.rows.iter().filter(|row| row.contains('w')).count() >= 2
+                && grid.rows[y as usize].contains('w')
         })
     });
-    text = text_rows(&screen, 100, 40);
-    let (wrap_s, wrap_s_x) = session_box(&screen, 100, 40).expect("the box");
-    assert_fill(&screen, &text, wrap_s, wrap_s_x, "session wrapping");
-    run.write(&[0x7f].repeat(200));
-    run.read_until("completed");
-    run.read_until("finished");
+    let (wrap_s, wrap_s_x) = session_box(&grid).expect("the box");
+    assert_fill(&grid, wrap_s, wrap_s_x, "session wrapping");
+    clear_draft(&mut run);
+    run.turn_finished(from);
     quit(run);
 }
