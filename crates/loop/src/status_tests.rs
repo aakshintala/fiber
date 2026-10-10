@@ -893,27 +893,120 @@ fn a_clients_line_reads_the_count_and_leaves_since() {
     assert!(!w.fold.observe(&line));
 }
 
+/// Runs a live observer whose second `read_clients` signals it is held and
+/// waits for the release, appends one `clients` line per entry of `counts`
+/// while it is held, then folds one more durable line and stops. Returns
+/// every `session_status` payload a second watcher saw.
+fn session_statuses_with_a_held_clients_read(counts: &[u32]) -> Vec<Value> {
+    use contract::events::{Clients, Empty, Event, InputItem, TurnStarted};
+    use contract::shapes::{ContentPart, Origin, Sender};
+    use contract::{CommandId, TurnId};
+
+    let root = fakes::TempDir::new("status-clients-settled");
+    let log = Arc::new(
+        log::Log::create(
+            root.path(),
+            SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    let mut seen = log.watch();
+    let weak = Arc::downgrade(&log);
+    let (held, observer_held) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let held_read = Mutex::new(Some((held, released)));
+    let calls = Mutex::new(0u32);
+    let status = super::start(
+        &log,
+        Fold::new(
+            "-w".to_owned(),
+            "/w".to_owned(),
+            "fake/m".to_owned(),
+            None,
+            Box::new(Vec::new),
+            Box::new(|| None),
+            Box::new(move || {
+                let hold = {
+                    let mut calls = calls.lock().unwrap();
+                    *calls += 1;
+                    *calls == 2
+                };
+                if hold && let Some((held, released)) = held_read.lock().unwrap().take() {
+                    held.send(()).unwrap();
+                    // The test's own wait fails first and drops the sender, which releases this hold.
+                    released.recv().unwrap();
+                }
+                super::clients_of(&weak)
+            }),
+        ),
+    )
+    .expect("an observer");
+    let turn = Some(TurnId("t_1".into()));
+    log.append(
+        &Event::TurnStarted(TurnStarted {
+            input: vec![InputItem::Message {
+                content: vec![ContentPart::Text { text: "go".into() }],
+                sender: Sender {
+                    origin: Origin::Driver,
+                    command_id: Some(CommandId("c_1".into())),
+                },
+                changed_by: None,
+            }],
+        }),
+        turn.clone(),
+        None,
+    )
+    .unwrap();
+    observer_held
+        .recv_timeout(DEADLINE)
+        .expect("the observer is held");
+    // The attach, then the stream_closed detach, land while the read is held.
+    for count in counts {
+        log.append(&Event::Clients(Clients { count: *count }), None, None)
+            .unwrap();
+    }
+    release.send(()).unwrap();
+    // One more durable line, so the observer folds again after the release.
+    log.append(&Event::StepStarted(Empty {}), turn.clone(), None)
+        .unwrap();
+
+    status.signal();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        status.join();
+        done_tx.send(()).unwrap();
+    });
+    done_rx.recv_timeout(DEADLINE).expect("the observer ended");
+
+    let mut statuses = Vec::new();
+    while let Ok(Some(line)) = seen.try_recv() {
+        if line.kind == "session_status" {
+            statuses.push(Value::Object(line.payload));
+        }
+    }
+    statuses
+}
+
 #[test]
 fn a_settled_clients_count_emits_no_status_line() {
-    // Red on base if the fold ever reads the line's own count instead of the settled one.
-    let mut w = world();
-    w.start();
-    w.prompt("go");
-    w.live();
-    assert_eq!(w.status().clients, 0);
-    // The 0 -> 1 -> 0 change settles to 0 before the fold sees the lagging line.
-    *w.count.lock().unwrap() = 1;
-    *w.count.lock().unwrap() = 0;
-    w.ts += 1;
-    let line = envelope("clients", w.ts, None, None, &json!({"count": 1}));
-    assert!(!w.fold.observe(&line));
-    assert_eq!(w.status().clients, 0);
-    // A count still held at 1 while the fold reads does emit a line.
-    *w.count.lock().unwrap() = 1;
-    w.ts += 1;
-    let line = envelope("clients", w.ts, None, None, &json!({"count": 1}));
-    assert!(w.fold.observe(&line));
-    assert_eq!(w.status().clients, 1);
+    // Red if the fold takes the line's own count instead of the settled one.
+    let statuses = session_statuses_with_a_held_clients_read(&[1, 0]);
+    assert!(
+        statuses.iter().all(|s| s["clients"] != json!(1)),
+        "no session_status carries the unsettled count: {statuses:?}"
+    );
+    assert_eq!(statuses.last().unwrap()["clients"], json!(0));
+}
+
+#[test]
+fn a_held_clients_count_of_one_emits_a_status_line() {
+    // The companion that proves the harness above can see a 1 while it is held.
+    let statuses = session_statuses_with_a_held_clients_read(&[1]);
+    assert!(
+        statuses.iter().any(|s| s["clients"] == json!(1)),
+        "a session_status carries the held count: {statuses:?}"
+    );
 }
 
 #[test]
