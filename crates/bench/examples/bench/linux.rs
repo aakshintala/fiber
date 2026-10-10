@@ -168,10 +168,13 @@ pub(crate) fn peak_rss_kib(pid: u32) -> Result<u64, String> {
     )?)
 }
 
+/// `RssAnon` and `RssFile` in KiB, or why the status does not report them.
+pub(crate) type RssSplit = Result<(u64, u64), String>;
+
 /// `pid`'s peak RSS in KiB and its anon/file split, from one read of its
 /// status, so the peak and the split describe the same moment. A missing
 /// split is carried, never fatal: a diagnostic must not fail a run.
-pub(crate) fn rss_kib(pid: u32) -> Result<(u64, Result<(u64, u64), String>), String> {
+pub(crate) fn rss_kib(pid: u32) -> Result<(u64, RssSplit), String> {
     let status = read(&Path::new("/proc").join(pid.to_string()).join("status"))?;
     Ok((vm_hwm_kib(&status)?, rss_split_kib(&status)))
 }

@@ -206,17 +206,18 @@ pub(crate) fn settle(
     }
 }
 
+/// What `idle_window` measures: the per-thread switch deltas, the peak
+/// RSS, the anon/file split when the kernel reports it, and the thread
+/// count at the end.
+type IdleWindow = (Vec<Value>, u64, Option<(u64, u64)>, usize);
+
 /// Reads every thread's switch counters once they settle ([`settle`]),
 /// waits the idle window touching nothing, reads them again, then reads the
 /// peak RSS and its anon/file split from one status read. Returns the
 /// per-thread deltas, the peak RSS, the split when the kernel reports it
 /// (noted and `None` when it does not: a diagnostic never fails a run)
 /// and the thread count at the end.
-fn idle_window(
-    ctx: &Ctx<'_>,
-    pid: u32,
-    notes: &mut Vec<String>,
-) -> Result<(Vec<Value>, u64, Option<(u64, u64)>, usize), String> {
+fn idle_window(ctx: &Ctx<'_>, pid: u32, notes: &mut Vec<String>) -> Result<IdleWindow, String> {
     let before = settle(ctx.clock, READY, || linux::threads(pid))?;
     ctx.clock.sleep(ctx.idle);
     let after = linux::threads(pid)?;
