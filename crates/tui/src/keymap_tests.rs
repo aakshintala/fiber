@@ -419,3 +419,55 @@ fn columns_grow_by_a_single_step() {
         }
     }
 }
+
+#[test]
+fn columns_spare_step_grows_action_or_stays_unused() {
+    use super::{Columns, columns};
+    use crate::bindings::Binding;
+    let keys = Keyset::default();
+    let binding =
+        |area: &'static str, description: &'static str, shown: &'static str, id: &'static str| {
+            Binding {
+                area,
+                id,
+                description,
+                keys: shown,
+                when: "",
+                other_paths: "",
+                contexts: crate::keyset::Contexts::ALL,
+                defaults: &[],
+                events: &[],
+            }
+        };
+    // Widest (7, 6, 2): at inner 16 the room is 10, the area takes 5
+    // and the floored shares are (3, 1), one short of the rest with
+    // the action below its widest: the spare column goes to the
+    // action. Under the `action > widest.1` mutation the step never
+    // runs, giving (3, 1), so this fails mutated.
+    let medium = binding("AAAAAAA", "aaaaaa", "bb", "t_spare_action");
+    assert_eq!(
+        columns(&[&medium], &keys, 16),
+        Columns {
+            area: 5,
+            action: 4,
+            keys: 1
+        }
+    );
+    // Widest (7, 2, 2): the same room shares (2, 2), both already at
+    // their widest with one column spare: the step stays unused
+    // rather than widen past either. No input sends the spare to the
+    // keys: the action at or past its widest leaves the keys share at
+    // or past theirs whenever a column is spare (for widest.1 > 1 a
+    // kept action means rest >= total, and for widest.1 == 1 a spare
+    // means rest >= total), so the keys-takes-spare branch was dead
+    // code and is deleted rather than tested.
+    let short = binding("AAAAAAA", "aa", "bb", "t_spare_unused");
+    assert_eq!(
+        columns(&[&short], &keys, 16),
+        Columns {
+            area: 5,
+            action: 2,
+            keys: 2
+        }
+    );
+}

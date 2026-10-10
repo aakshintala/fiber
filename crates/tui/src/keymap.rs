@@ -295,18 +295,16 @@ pub(crate) fn columns(visible: &[&Binding], keys: &Keyset, inner: u16) -> Column
     let share = |wide: u16| {
         u16::try_from(u32::from(wide) * u32::from(rest) / u32::from(total)).unwrap_or(u16::MAX)
     };
-    let (mut action, mut keys) = (share(widest.1).max(1), share(widest.2).max(1));
+    let (mut action, keys) = (share(widest.1).max(1), share(widest.2).max(1));
     // The floored shares leave at most one column unused
     // (`share` floors two proportions of `rest`, so their deficit is
     // below two), so one step fills it: the action takes it while
-    // narrower than its widest text, else the keys while narrower
-    // than theirs, else it stays unused rather than widen past both.
-    if action.saturating_add(keys) < rest {
-        if action < widest.1 {
-            action = action.saturating_add(1);
-        } else if keys < widest.2 {
-            keys = keys.saturating_add(1);
-        }
+    // narrower than its widest text, else it stays unused rather than
+    // widen past either. The keys never take the step: past the early
+    // return, the action at or past its widest leaves the keys share
+    // at or past theirs whenever a column is spare.
+    if action.saturating_add(keys) < rest && action < widest.1 {
+        action = action.saturating_add(1);
     }
     Columns { area, action, keys }
 }

@@ -336,31 +336,46 @@ pub(crate) fn draw(
     stack.push(Slot::PadBottom);
     stack.push(Slot::EdgeBottom);
     let stack_height = |stack: &[Slot]| u16::try_from(stack.len()).unwrap_or(u16::MAX);
-    while stack_height(&stack) > area.height {
-        let bodies = stack
-            .iter()
-            .filter(|slot| matches!(slot, Slot::Body(_)))
-            .count();
-        let keep = usize::from(overlay.title.is_none());
-        if bodies > keep
-            && let Some(at) = stack.iter().rposition(|slot| matches!(slot, Slot::Body(_)))
-        {
-            stack.remove(at);
-        } else if stack.iter().any(|slot| matches!(slot, Slot::Footer)) {
-            stack.retain(|slot| !matches!(slot, Slot::Footer | Slot::FootGap));
-        } else if stack.iter().any(|slot| matches!(slot, Slot::TitleGap)) {
-            stack.retain(|slot| !matches!(slot, Slot::TitleGap));
-        } else if stack.iter().any(|slot| matches!(slot, Slot::PadBottom)) {
-            stack.retain(|slot| !matches!(slot, Slot::PadBottom));
-        } else if stack.iter().any(|slot| matches!(slot, Slot::PadTop)) {
-            stack.retain(|slot| !matches!(slot, Slot::PadTop));
-        } else if stack.iter().any(|slot| matches!(slot, Slot::EdgeTop)) {
-            stack.retain(|slot| !matches!(slot, Slot::EdgeTop));
-        } else if stack.iter().any(|slot| matches!(slot, Slot::EdgeBottom)) {
-            stack.retain(|slot| !matches!(slot, Slot::EdgeBottom));
-        } else {
-            break;
-        }
+    // Body rows from the bottom first, then each chrome kind once
+    // in a fixed order while the stack is too tall, so the give-way
+    // ends after a fixed number of steps by construction.
+    let keep = usize::from(overlay.title.is_none());
+    let bodies = stack
+        .iter()
+        .filter(|slot| matches!(slot, Slot::Body(_)))
+        .count();
+    let drop = bodies.saturating_sub(keep).min(usize::from(
+        stack_height(&stack).saturating_sub(area.height),
+    ));
+    if drop > 0 {
+        let keep_bodies = bodies - drop;
+        let mut seen = 0;
+        stack.retain(|slot| {
+            if matches!(slot, Slot::Body(_)) {
+                seen += 1;
+                seen <= keep_bodies
+            } else {
+                true
+            }
+        });
+    }
+    if stack_height(&stack) > area.height {
+        stack.retain(|slot| !matches!(slot, Slot::Footer | Slot::FootGap));
+    }
+    if stack_height(&stack) > area.height {
+        stack.retain(|slot| !matches!(slot, Slot::TitleGap));
+    }
+    if stack_height(&stack) > area.height {
+        stack.retain(|slot| !matches!(slot, Slot::PadBottom));
+    }
+    if stack_height(&stack) > area.height {
+        stack.retain(|slot| !matches!(slot, Slot::PadTop));
+    }
+    if stack_height(&stack) > area.height {
+        stack.retain(|slot| !matches!(slot, Slot::EdgeTop));
+    }
+    if stack_height(&stack) > area.height {
+        stack.retain(|slot| !matches!(slot, Slot::EdgeBottom));
     }
     let slab_h = stack_height(&stack);
     if slab_h == 0 {
