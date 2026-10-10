@@ -185,6 +185,7 @@ fn completion(rx: &Receiver<Input>) -> Input {
             | Input::FindDue(_)
             | Input::Image { .. }
             | Input::Models(_)
+            | Input::Login { .. }
             | Input::Tick,
         ) => panic!("the worker answered something else"),
         Err(err) => panic!("waited {DEADLINE:?} for the worker: {err}"),
@@ -215,6 +216,7 @@ fn a_click_on_an_image_line_reads_the_file_and_opens_it() {
         | Input::FindDue(_)
         | Input::Image { .. }
         | Input::Models(_)
+        | Input::Login { .. }
         | Input::Tick => panic!("the worker answered something else"),
     }
     // The copy holds the file's bytes, and the viewer ran over it.

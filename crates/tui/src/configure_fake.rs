@@ -17,16 +17,58 @@ use crate::configure::{
     ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 
-/// A browser login the recording seam never starts: its tests arrive with
-/// the seam's own in the next task.
-struct Unstarted;
+/// A browser login for the views' tests: `run` blocks until `answer` is
+/// called, within a wall deadline, and `cancel` records once per call.
+/// Neither holds a secret: the answer is a path, never a key.
+pub(crate) struct FakeLogin {
+    answer_rx: Mutex<Option<std::sync::mpsc::Receiver<Result<Stored, ConfigureError>>>>,
+    answer_tx: Mutex<std::sync::mpsc::Sender<Result<Stored, ConfigureError>>>,
+    cancels: Mutex<usize>,
+}
 
-impl BrowserLogin for Unstarted {
-    fn run(&self) -> Result<Stored, ConfigureError> {
-        unreachable!("no test starts a browser login through this seam yet");
+impl FakeLogin {
+    pub(crate) fn new() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        Self {
+            answer_rx: Mutex::new(Some(rx)),
+            answer_tx: Mutex::new(tx),
+            cancels: Mutex::new(0),
+        }
     }
 
-    fn cancel(&self) {}
+    /// Answers `run` with `result`.
+    pub(crate) fn answer(&self, result: Result<Stored, ConfigureError>) {
+        if let Ok(tx) = self.answer_tx.lock() {
+            drop(tx.send(result));
+        }
+    }
+
+    /// How many times `cancel` ran.
+    pub(crate) fn cancels(&self) -> usize {
+        self.cancels.lock().map(|cancels| *cancels).unwrap_or(0)
+    }
+}
+
+impl BrowserLogin for FakeLogin {
+    fn run(&self) -> Result<Stored, ConfigureError> {
+        // The test answers from its own thread: the wait is a receive
+        // with a deadline on the wall clock.
+        let wait = std::time::Duration::from_secs(10);
+        let rx = self
+            .answer_rx
+            .lock()
+            .ok()
+            .and_then(|mut rx| rx.take())
+            .unwrap_or_else(|| panic!("the FakeLogin's run ran twice"));
+        rx.recv_timeout(wait)
+            .unwrap_or_else(|_| panic!("the FakeLogin was never answered within {wait:?}"))
+    }
+
+    fn cancel(&self) {
+        if let Ok(mut cancels) = self.cancels.lock() {
+            *cancels += 1;
+        }
+    }
 }
 
 /// One revoke the view asked for: the workspace, scope, line and text.
@@ -84,6 +126,12 @@ pub(crate) struct Fake {
     pub(crate) stores: Mutex<Vec<(String, Option<String>, Secret)>>,
     /// What `store_key` answers.
     pub(crate) stored: Mutex<Result<Stored, ConfigureError>>,
+    /// Every provider asked to log in through the browser, in order.
+    pub(crate) login_names: Mutex<Vec<String>>,
+    /// The `LoginShow` each browser login was given, in order.
+    pub(crate) login_shown: Mutex<Vec<Arc<dyn LoginShow>>>,
+    /// The `FakeLogin` each browser login returned, in order.
+    pub(crate) logins: Mutex<Vec<Arc<FakeLogin>>>,
 }
 
 impl Fake {
@@ -122,7 +170,34 @@ impl Fake {
                 path: "credentials/acme/default".to_owned(),
                 replaced: false,
             })),
+            login_names: Mutex::new(Vec::new()),
+            login_shown: Mutex::new(Vec::new()),
+            logins: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The providers asked to log in through the browser so far, in order.
+    pub(crate) fn login_names(&self) -> Vec<String> {
+        self.login_names
+            .lock()
+            .map(|names| names.clone())
+            .unwrap_or_default()
+    }
+
+    /// The `n`th browser login's `LoginShow`.
+    pub(crate) fn login_show(&self, n: usize) -> Option<Arc<dyn LoginShow>> {
+        self.login_shown
+            .lock()
+            .ok()
+            .and_then(|shown| shown.get(n).cloned())
+    }
+
+    /// The `n`th browser login returned.
+    pub(crate) fn login(&self, n: usize) -> Option<Arc<FakeLogin>> {
+        self.logins
+            .lock()
+            .ok()
+            .and_then(|logins| logins.get(n).cloned())
     }
 
     /// The writes asked for so far.
@@ -298,8 +373,18 @@ impl Configure for Fake {
         shown: Arc<dyn LoginShow>,
         clock: Arc<dyn Clock>,
     ) -> Arc<dyn BrowserLogin> {
-        let _ = (name, shown, clock);
-        Arc::new(Unstarted)
+        let _ = clock;
+        if let Ok(mut names) = self.login_names.lock() {
+            names.push(name.to_owned());
+        }
+        if let Ok(mut all) = self.login_shown.lock() {
+            all.push(Arc::clone(&shown));
+        }
+        let login = Arc::new(FakeLogin::new());
+        if let Ok(mut logins) = self.logins.lock() {
+            logins.push(Arc::clone(&login));
+        }
+        login
     }
 
     fn store_key(

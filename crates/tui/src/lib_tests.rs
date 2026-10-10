@@ -2029,6 +2029,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
             | Input::Resize
             | Input::Files { .. }
             | Input::Models(_)
+            | Input::Login { .. }
             | Input::Image { .. }
             | Input::Viewed { .. } => panic!("a pause sent something else"),
         }

@@ -39,6 +39,7 @@ mod link;
 mod local_time;
 mod logical;
 mod login_view;
+mod login_worker;
 mod look;
 mod markdown;
 mod model_picker;
@@ -168,6 +169,14 @@ pub(crate) enum Input {
     /// A model-list read answered: the installed models, or why they
     /// could not be read. An answer for a closed loop is dropped.
     Models(Result<Catalogue, String>),
+    /// A browser login's progress or end for `ticket`: an event for a
+    /// ticket no longer waiting changes nothing and opens nothing.
+    Login {
+        /// The waiting view's ticket.
+        ticket: u64,
+        /// The login's progress or its end.
+        step: login_worker::LoginStep,
+    },
     /// The working line's timer passed: the frame the tick armed drew,
     /// and the next moving frame arms it again (`docs/tui.md`, "The
     /// working line").

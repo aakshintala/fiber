@@ -15,6 +15,7 @@ use crate::ThemeSetting;
 use crate::configure::{Configure, Layer};
 use crate::keys::{Edit, Key};
 use crate::login_view::Login;
+use crate::login_worker::{LoginStart, LoginStep, LoginWorker};
 use crate::rules_view::Rules;
 use crate::settings_view::{Act, Ctx, Settings};
 use crate::skills_view::Skills;
@@ -89,6 +90,11 @@ pub(in crate::app) struct ConfigViews {
     theme: Option<ThemeSetting>,
     /// The latest call's prompt size in tokens, and its session.
     usage: Option<(SessionId, u64)>,
+    /// The browser login tickets handed out, in order: incremented before
+    /// use, so the first ticket is 1 and every ticket is used once.
+    tickets: u64,
+    /// The browser login start the loop has not picked up yet.
+    pending_login: Option<LoginStart>,
 }
 
 impl App {
@@ -200,17 +206,23 @@ impl App {
         }
     }
 
+    /// The width the views draw in: the conversation column attached, the
+    /// screen on home. Every draw after a resize wraps at the new width.
+    fn config_view_width(&self) -> usize {
+        // The text panes wrap at the width they draw in: the
+        // conversation column attached, the screen on home.
+        if self.on_home() {
+            usize::from(self.screen.width())
+        } else {
+            usize::from(self.column_width())
+        }
+    }
+
     /// What a call needs: the seam, the workspace, the view's rows and
     /// the last call's prompt size on the session on screen.
     fn config_ctx<'a>(&self, seam: &'a dyn Configure, workspace: &'a std::path::Path) -> Ctx<'a> {
         let height = self.config_view_height();
-        // The text panes wrap at the width they draw in: the
-        // conversation column attached, the screen on home.
-        let width = if self.on_home() {
-            usize::from(self.screen.width())
-        } else {
-            usize::from(self.column_width())
-        };
+        let width = self.config_view_width();
         let usage = self
             .config_views
             .usage
@@ -324,6 +336,49 @@ impl App {
                 Effect::None
             }
             Act::Open(file) => Effect::OpenFile(file),
+            Act::Login(name) => {
+                // The ticket is handed out before use, so the first login
+                // waits on 1 and no two logins share one.
+                self.config_views.tickets = self.config_views.tickets.saturating_add(1);
+                let ticket = self.config_views.tickets;
+                if let Some(seam) = self.configure_seam() {
+                    self.config_views.pending_login = Some(LoginStart { ticket, name, seam });
+                    if let Some(Open::Login(login)) = &mut self.config_views.open {
+                        login.wait(ticket);
+                    }
+                }
+                Effect::None
+            }
+            Act::Copy(url) => {
+                // As a focused link's `y`: the copy goes through OSC 52
+                // and, on a local session, the system clipboard as well.
+                self.copied = true;
+                Effect::Copy(url)
+            }
+        }
+    }
+
+    /// The browser login start the loop has not picked up yet, once.
+    pub(crate) fn take_login_start(&mut self) -> Option<LoginStart> {
+        self.config_views.pending_login.take()
+    }
+
+    /// Keeps the started login worker in the waiting view; with no login
+    /// view open it is dropped, cancelling it at once.
+    pub(crate) fn login_started(&mut self, worker: LoginWorker) {
+        match &mut self.config_views.open {
+            Some(Open::Login(login)) => login.started(worker),
+            _ => drop(worker),
+        }
+    }
+
+    /// Folds the waiting ticket's login progress into the view: an event
+    /// for another ticket changes nothing. Returns the URL to open, only
+    /// for `Open` on the waiting ticket.
+    pub(crate) fn on_login(&mut self, ticket: u64, step: LoginStep) -> Option<String> {
+        match &mut self.config_views.open {
+            Some(Open::Login(login)) => login.step(ticket, step),
+            _ => None,
         }
     }
 
@@ -340,7 +395,7 @@ impl App {
             Open::Tools(tools) => tools.frame(usage),
             Open::Skills(skills) => skills.frame(self.config_view_height()),
             Open::Rules(rules) => rules.frame(),
-            Open::Login(login) => login.frame(),
+            Open::Login(login) => login.frame(self.config_view_width()),
             Open::Unavailable(title) => Frame {
                 title: (*title).to_owned(),
                 rows: Vec::new(),

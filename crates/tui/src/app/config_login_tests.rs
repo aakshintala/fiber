@@ -178,3 +178,160 @@ fn the_key_never_appears_in_the_apps_debug() {
     assert!(!debug.contains("SECRET"), "{debug}");
     assert!(!debug.contains("sk-"), "{debug}");
 }
+
+/// A seam with one browser provider.
+fn browser_seam() -> Arc<Fake> {
+    let fake = Fake::new(Vec::new());
+    if let Ok(mut targets) = fake.targets.lock() {
+        *targets = Ok(vec![LoginTarget {
+            name: "codex".to_owned(),
+            kind: LoginKind::Browser,
+        }]);
+    }
+    Arc::new(fake)
+}
+
+/// An app with the login view open on the browser row, selected.
+fn browser_login_app(seam: &Arc<Fake>) -> App {
+    let mut app = attached(Some(Arc::clone(seam)));
+    slash_login(&mut app);
+    assert!(app.config_view_open());
+    app.on_key(Key::Down, now());
+    app
+}
+
+/// Presses Enter on the browser row and takes the login start.
+fn start_login(app: &mut App) -> crate::login_worker::LoginStart {
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    app.take_login_start()
+        .expect("Enter on a browser row queues a login start")
+}
+
+#[test]
+fn enter_on_a_browser_row_queues_a_ticketed_start() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    let start = start_login(&mut app);
+    assert_eq!(start.ticket, 1);
+    assert_eq!(start.name, "codex");
+    assert!(app.take_login_start().is_none());
+    // Esc returns to the rows; a second start waits on ticket 2.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    app.on_key(Key::Down, now());
+    let start = start_login(&mut app);
+    assert_eq!(start.ticket, 2);
+    assert_eq!(start.name, "codex");
+}
+
+#[test]
+fn only_the_waiting_ticket_s_open_returns_its_url() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    let start = start_login(&mut app);
+    let url = "https://auth.example/authorize?state=1".to_owned();
+    assert_eq!(
+        app.on_login(
+            start.ticket,
+            crate::login_worker::LoginStep::Open(url.clone())
+        ),
+        Some(url)
+    );
+    assert_eq!(
+        app.on_login(
+            start.ticket + 1,
+            crate::login_worker::LoginStep::Open("https://auth.example/other".to_owned())
+        ),
+        None
+    );
+}
+
+#[test]
+fn y_copies_the_waiting_url_whole() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    // Before the URL arrives `y` does nothing.
+    assert_eq!(app.on_key(Key::Char('y'), now()), Effect::None);
+    let start = start_login(&mut app);
+    // `y` before the URL arrives does nothing.
+    assert_eq!(app.on_key(Key::Char('y'), now()), Effect::None);
+    let url = "https://auth.example/authorize?state=1".to_owned();
+    assert_eq!(
+        app.on_login(
+            start.ticket,
+            crate::login_worker::LoginStep::Open(url.clone())
+        ),
+        Some(url.clone())
+    );
+    assert_eq!(app.on_key(Key::Char('y'), now()), Effect::Copy(url));
+    assert!(app.copied);
+}
+
+/// Starts `start`'s worker as the loop would and keeps it in the view: the
+/// run is answered at once, so no thread waits on the test.
+fn keep_worker(
+    app: &mut App,
+    seam: &Arc<Fake>,
+    start: crate::login_worker::LoginStart,
+) -> Arc<crate::configure_fake::FakeLogin> {
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let worker = crate::login_worker::start(start, fakes::clock::FakeClock::new(), tx);
+    let login = seam.login(0).expect("one login started");
+    login.answer(Err(crate::configure::ConfigureError {
+        code: contract::ErrorCode::AuthenticationFailed,
+        message: "the login was cancelled; nothing was stored.".to_owned(),
+    }));
+    app.login_started(worker);
+    login
+}
+
+#[test]
+fn esc_over_a_waiting_login_cancels_once() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    let start = start_login(&mut app);
+    let login = keep_worker(&mut app, &seam, start);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(login.cancels(), 1);
+}
+
+#[test]
+fn closing_a_waiting_login_cancels_once() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    let start = start_login(&mut app);
+    let login = keep_worker(&mut app, &seam, start);
+    app.config_view_click(crate::swapped::Spot::Close);
+    assert_eq!(login.cancels(), 1);
+}
+
+#[test]
+fn opening_settings_over_a_waiting_login_cancels_once() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    let start = start_login(&mut app);
+    let login = keep_worker(&mut app, &seam, start);
+    app.open_config_view(super::ConfigView::Settings);
+    assert_eq!(login.cancels(), 1);
+}
+
+#[test]
+fn a_stale_done_after_close_changes_nothing_and_opens_nothing() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    let start = start_login(&mut app);
+    let ticket = start.ticket;
+    let login = keep_worker(&mut app, &seam, start);
+    app.config_view_click(crate::swapped::Spot::Close);
+    assert_eq!(login.cancels(), 1);
+    assert!(!app.config_view_open());
+    assert_eq!(
+        app.on_login(
+            ticket,
+            crate::login_worker::LoginStep::Done(Ok(crate::configure::Stored {
+                path: "credentials/codex/alice@example.com".to_owned(),
+                replaced: false,
+            }))
+        ),
+        None
+    );
+}

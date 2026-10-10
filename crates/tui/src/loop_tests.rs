@@ -348,6 +348,7 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             | Input::Tick
             | Input::Files { .. }
             | Input::Models(_)
+            | Input::Login { .. }
             | Input::Image { .. }
             | Input::Viewed { .. } => "other".to_owned(),
             Input::Resize => "resize".to_owned(),
