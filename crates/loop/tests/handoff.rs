@@ -2684,7 +2684,8 @@ fn a_skill_written_before_a_handoff_expands_after_it() {
     assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
 
     // Written after the opening, the skill is unknown to the maintained
-    // set: the prompt is sent as written.
+    // set when it is admitted: the prompt is sent as written, and the
+    // turn-start check appends its added line.
     let dir = session.workspace.join(".agents/skills/late");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
@@ -2694,7 +2695,10 @@ fn a_skill_written_before_a_handoff_expands_after_it() {
     .unwrap();
     let (outcome, second) = run(&mut session, "/late 1");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&second, &[&["turn_started"], STEP, REPLY, ENDED]);
+    assert_kinds(
+        &second,
+        &[&["skills_changed", "turn_started"], STEP, REPLY, ENDED],
+    );
     assert_eq!(
         of_kind(&second, "turn_started")[0].payload["input"][0]["content"][0]["text"],
         "/late 1"
