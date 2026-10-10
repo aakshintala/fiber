@@ -187,6 +187,8 @@ codes! {
     StaleRequest,
     /// A state value over 64 KiB.
     StateTooLarge,
+    /// The hub could not read the open session's log to serve this terminal.
+    StreamClosed,
     /// The stream ended early or carried an unmatched error.
     StreamIncomplete,
     /// A `rewind` that asked for a summary could not get one.
