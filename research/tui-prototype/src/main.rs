@@ -6,6 +6,7 @@ mod cases;
 mod completions;
 mod home;
 mod input;
+mod logo;
 mod lua;
 mod model_picker;
 mod overlays;

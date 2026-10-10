@@ -9,10 +9,10 @@
 use super::input::{Ev, Key};
 use super::{Args, Term};
 use super::{
-    BI, BLUE, CYAN, HD, ORANGE, SEL, SX_KW, SX_STR, bold, dim, fg, fit, lift, paint, row, slab, sp,
+    BI, BLUE, CYAN, ORANGE, SEL, bold, dim, fg, fit, lift, paint, row, slab, sp,
     t,
 };
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 use crate::cases::{Case, Surface};
 use std::io::{self, Write};
@@ -39,6 +39,15 @@ pub(crate) const SURFACE: Surface = Surface { flag: "--home", file: "home", titl
 const HOME_W: usize = 84;
 /// The fixture's version, as docs/tui.md's logo reads.
 const VERSION: &str = "0.0.1";
+/// The logo's top row: the four-row logo stands at rows 2..6.
+const LOGO_Y: usize = 2;
+
+/// The fewest rows that still fit the four-row logo: the logo, one blank,
+/// the input box, then one list line, the hint row and the last row.
+/// Computed from what `input_box` returns, not typed in.
+fn tall_min() -> usize {
+    LOGO_Y + 4 + 1 + input_box(&base(), HOME_W).len() + 3
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Hover {
@@ -126,40 +135,6 @@ const TYPED: &str = "~/work/fi";
 const COMPLETIONS: &[&str] = &["fiber", "fiber-worktrees"];
 
 // ============================================================ pieces
-/// A pixel letter: `#` a filled cell, `o` its shaded counter, `.` empty.
-type Glyph = (&'static [&'static str], Color);
-const LETTERS: &[Glyph] = &[
-    (&[".###", "#...", "###.", "#..."], HD),     // f: heading
-    (&["#", " ", "#", "#"], BLUE),               // i: accent
-    (&["#   ", "#   ", "####", "# o#"], SX_STR), // b: string
-    (&[" ###", "#   ", "##o#", " ###"], CYAN),   // e: type
-    (&["### ", "#  #", "#   ", "#   "], SX_KW),  // r: keyword
-];
-
-/// The logo: `⌇ fiber 0.0.1`, four rows tall in half-block pixel letters, the
-/// ⌇ in accent, the name in the accent gradient, the version dim.
-fn logo(w: usize) -> Vec<Vec<Span<'static>>> {
-    let mut out = vec![vec![]; 4];
-    for r in 0..4 {
-        let mut line = vec![sp("⌇ ", fg(BLUE))];
-        for (g, c) in LETTERS {
-            for ch in g[r].chars() {
-                match ch {
-                    '#' => line.push(sp("█", fg(*c))),
-                    'o' => line.push(sp("░", fg(*c).add_modifier(Modifier::DIM))),
-                    _ => line.push(sp(" ", Style::new())),
-                }
-            }
-            line.push(sp(" ", Style::new()));
-        }
-        line.push(sp(" ", Style::new()));
-        if r == 3 {
-            line.push(sp(VERSION, dim()));
-        }
-        out[r] = fit(&line, w);
-    }
-    out
-}
 
 /// One chip: bracketed text on the raised surface, lighter under the pointer.
 fn chip(text: &str, st: Style, hovered: bool) -> Span<'static> {
@@ -343,9 +318,16 @@ fn frame(c: &Look, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
     let mut screen: Vec<Vec<Placed>> = (0..rows).map(|_| blank()).collect();
     let w = HOME_W.min(cols.saturating_sub(4)).max(20);
     let x0 = cols.saturating_sub(w) / 2;
-    let mut y = 2;
-    for l in logo(w) {
-        put(&mut screen, y, x0, w, l, None);
+    let mut y = LOGO_Y;
+    if rows >= tall_min() {
+        for l in crate::logo::rows(VERSION, false) {
+            put(&mut screen, y, x0, w, l, None);
+            y += 1;
+        }
+    } else {
+        // Too short for four rows: the one-row logo, and everything below
+        // moves up three rows with it.
+        put(&mut screen, y, x0, w, crate::logo::one_row(VERSION), None);
         y += 1;
     }
     y += 1;
@@ -461,9 +443,66 @@ mod tests {
         assert!(crate::cases::lookup(CASES, "nope").is_none());
     }
 
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::Modifier;
+
+    /// `frame` painted with `paint` exactly as `draw` does.
+    fn buffer(c: &Look, cols: u16, rows: u16) -> Buffer {
+        let mut buf = Buffer::empty(Rect::new(0, 0, cols, rows));
+        for (y, placements) in frame(c, cols as usize, rows as usize).iter().enumerate() {
+            for p in placements {
+                paint(&mut buf, p.x, y as u16, p.w, &p.row);
+            }
+        }
+        buf
+    }
+
     #[test]
-    fn logo_is_four_rows_tall() {
-        assert_eq!(logo(HOME_W).len(), 4);
+    fn home_draws_the_pixel_logo_at_its_place() {
+        // At 160 columns `w = 84` and `x0 = 38`.
+        let c = crate::cases::lookup(CASES, "empty").unwrap();
+        let buf = buffer(&c, 160, 48);
+        assert_eq!(buf[(38, 2)].symbol(), "▀");
+        assert_eq!(buf[(38, 2)].fg, BLUE);
+        let mut text = String::new();
+        for x in 71..76 {
+            text.push_str(buf[(x, 5)].symbol());
+            assert!(
+                buf[(x, 5)].modifier.contains(Modifier::DIM),
+                "version not dim at {x}"
+            );
+        }
+        assert_eq!(text, "0.0.1");
+        assert!(
+            !buf.content.iter().any(|c| c.symbol() == "⌇"),
+            "the hand-drawn logo is still drawn"
+        );
+    }
+
+    #[test]
+    fn short_screens_get_the_one_row_logo() {
+        let tall = tall_min();
+        let empty = || crate::cases::lookup(CASES, "empty").unwrap();
+        let buf = buffer(&empty(), 160, tall as u16);
+        assert_eq!(buf[(38, 2)].symbol(), "▀");
+        assert_eq!(buf[(38, 2)].fg, BLUE);
+        let buf = buffer(&empty(), 160, tall as u16 - 1);
+        let mut got = String::new();
+        for x in 38..51 {
+            got.push_str(buf[(x, 2)].symbol());
+        }
+        assert_eq!(got, "⌇ fiber 0.0.1");
+        // The input box's top edge sits three rows higher than in the tall frame.
+        // The box edge is a full-width run of ▄; the logo's half blocks never
+        // run that long.
+        let edge = |rows: u16| {
+            let t = text(&empty(), 160, rows as usize);
+            t.split('\n')
+                .position(|l| l.chars().filter(|&c| c == '▄').count() >= 40)
+                .unwrap()
+        };
+        assert_eq!(edge(tall as u16) - edge(tall as u16 - 1), 3);
     }
 
     fn text(c: &Look, cols: usize, rows: usize) -> String {
