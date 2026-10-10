@@ -662,3 +662,206 @@ fn range_and_count_return_while_append_is_in_its_fsync() {
         .unwrap();
     assert_eq!(appended, range[2]);
 }
+
+use crate::fixtures::{line as fixture_line, session_log};
+use serde_json::json;
+
+#[test]
+fn open_fully_parses_only_the_lines_it_folds() {
+    let sessions = fakes::TempDir::new("log-unit-open-count");
+    let dir = sessions.path().join("s_1");
+    let mut bytes = Vec::new();
+    let mut folded = 0;
+    let mut last_extensions_seq = 0;
+    for seq in 0..100_000u64 {
+        let (kind, payload, action) = if seq % 10_000 == 0 {
+            folded += 1;
+            ("usage_recorded", json!({}), Some(format!("a_{seq}")))
+        } else if seq % 5_000 == 0 {
+            folded += 1;
+            ("preamble_built", json!({}), None)
+        } else if seq % 1_000 == 0 {
+            folded += 1;
+            last_extensions_seq = seq;
+            ("extensions_loaded", json!({"extensions": []}), None)
+        } else {
+            ("turn_started", json!({}), None)
+        };
+        if let Some(action) = action {
+            let line = json!({
+                "kind": kind,
+                "session_id": "s_1",
+                "ts": 1,
+                "schema_version": 1,
+                "action_id": action,
+                "seq": seq,
+                "payload": payload,
+            });
+            bytes.extend_from_slice(format!("{line}\n").as_bytes());
+        } else {
+            bytes.extend_from_slice(fixture_line(kind, "s_1", 1, seq, &payload).as_bytes());
+        }
+    }
+    session_log(&dir, &bytes);
+    let before = full_parses();
+    let log = Log::open(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert_eq!(full_parses() - before, folded);
+    assert_eq!(log.count(), 100_000);
+    let latest = log.latest("extensions_loaded").unwrap();
+    assert_eq!(latest.seq.map(|s| s.0), Some(last_extensions_seq));
+    let next = log.append(&step(), None, None).unwrap();
+    assert_eq!(next.seq.map(|s| s.0), Some(100_000));
+}
+
+#[test]
+fn open_opens_a_line_of_an_unfolded_kind_that_fails_the_envelope_schema() {
+    let sessions = fakes::TempDir::new("log-unit-open-unfolded-bad");
+    let dir = sessions.path().join("s_1");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes());
+    bytes.extend_from_slice(br#"{"kind":"turn_started","seq":1}"#.as_slice());
+    bytes.push(b'\n');
+    session_log(&dir, &bytes);
+    let log = Log::open(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert_eq!(log.count(), 2);
+    let err = log.range(1, 1).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::LogCorrupt);
+    assert!(err.to_string().contains("line 2"), "{err}");
+}
+
+#[test]
+fn open_refuses_a_folded_line_that_fails_the_envelope_schema() {
+    let sessions = fakes::TempDir::new("log-unit-open-folded-bad");
+    let dir = sessions.path().join("s_1");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes());
+    bytes.extend_from_slice(br#"{"kind":"extensions_loaded","seq":1}"#.as_slice());
+    bytes.push(b'\n');
+    session_log(&dir, &bytes);
+    let whole = std::fs::read(dir.join(crate::EVENTS)).unwrap();
+    let Err(err) = Log::open(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    ) else {
+        panic!("a folded line that fails the envelope schema is refused");
+    };
+    assert_eq!(err.code(), ErrorCode::LogCorrupt);
+    assert!(err.to_string().contains("line 2"), "{err}");
+    assert_eq!(std::fs::read(dir.join(crate::EVENTS)).unwrap(), whole);
+}
+
+#[test]
+fn open_refuses_a_line_with_no_seq_or_no_kind() {
+    for (name, second) in [
+        (
+            "no-seq",
+            r#"{"kind":"turn_started","session_id":"s","ts":1,"schema_version":1,"payload":{}}"#,
+        ),
+        (
+            "no-kind",
+            r#"{"session_id":"s","ts":1,"schema_version":1,"seq":1,"payload":{}}"#,
+        ),
+    ] {
+        let sessions = fakes::TempDir::new(&format!("log-unit-open-{name}"));
+        let dir = sessions.path().join("s_1");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes());
+        bytes.extend_from_slice(second.as_bytes());
+        bytes.push(b'\n');
+        session_log(&dir, &bytes);
+        let Err(err) = Log::open(
+            sessions.path(),
+            SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        ) else {
+            panic!("a line with no seq or no kind is refused: {name}");
+        };
+        assert_eq!(err.code(), ErrorCode::LogCorrupt, "{name}");
+        assert!(err.to_string().contains("line 2"), "{name}: {err}");
+    }
+}
+
+#[test]
+fn open_refuses_a_line_that_is_not_utf8() {
+    let sessions = fakes::TempDir::new("log-unit-open-not-utf8");
+    let dir = sessions.path().join("s_1");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes());
+    bytes.extend_from_slice(
+        b"{\"kind\":\"turn_started\",\"session_id\":\"s_1\",\"ts\":1,\"schema_version\":1,\"seq\":1,\"payload\":{\"text\":\"",
+    );
+    bytes.push(0xff);
+    bytes.extend_from_slice(b"\"}}\n");
+    session_log(&dir, &bytes);
+    let whole = std::fs::read(dir.join(crate::EVENTS)).unwrap();
+    let Err(err) = Log::open(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    ) else {
+        panic!("a line that is not UTF-8 is refused");
+    };
+    assert_eq!(err.code(), ErrorCode::LogCorrupt);
+    assert!(err.to_string().contains("line 2"), "{err}");
+    assert_eq!(std::fs::read(dir.join(crate::EVENTS)).unwrap(), whole);
+}
+
+#[test]
+fn open_refuses_a_line_whose_seq_leaves_no_next() {
+    let sessions = fakes::TempDir::new("log-unit-open-seq-max");
+    let dir = sessions.path().join("s_1");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes());
+    bytes.extend_from_slice(fixture_line("turn_started", "s", 1, u64::MAX, &json!({})).as_bytes());
+    session_log(&dir, &bytes);
+    let whole = std::fs::read(dir.join(crate::EVENTS)).unwrap();
+    let Err(err) = Log::open(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    ) else {
+        panic!("a line whose seq leaves no next seq is refused");
+    };
+    assert_eq!(err.code(), ErrorCode::LogCorrupt);
+    assert!(err.to_string().contains("line 2"), "{err}");
+    assert_eq!(std::fs::read(dir.join(crate::EVENTS)).unwrap(), whole);
+}
+
+#[test]
+fn open_reads_an_escaped_kind() {
+    let sessions = fakes::TempDir::new("log-unit-open-escaped");
+    let dir = sessions.path().join("s_1");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes());
+    let escaped = r#"{"kind":"extensions\u005floaded","session_id":"s_1","ts":1,"schema_version":1,"seq":1,"payload":{"extensions":[]}}"#;
+    bytes.extend_from_slice(escaped.as_bytes());
+    bytes.push(b'\n');
+    session_log(&dir, &bytes);
+    let raw = std::fs::read(dir.join(crate::EVENTS)).unwrap();
+    assert!(
+        !raw.windows(b"extensions_loaded".len())
+            .any(|w| w == b"extensions_loaded"),
+        "the file holds the kind escaped"
+    );
+    let before = full_parses();
+    let log = Log::open(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let latest = log.latest("extensions_loaded").unwrap();
+    assert_eq!(latest.seq.map(|s| s.0), Some(1));
+    assert_eq!(full_parses() - before, 1);
+}

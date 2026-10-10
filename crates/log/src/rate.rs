@@ -92,6 +92,15 @@ impl RateFold {
         }
     }
 
+    /// Whether [`RateFold::fold`] reads a line of this kind. `Log::open`
+    /// fully parses only these and the latest-wins kinds.
+    pub(crate) fn reads(kind: &str) -> bool {
+        matches!(
+            kind,
+            "preamble_built" | "assistant_message_started" | "usage_recorded"
+        )
+    }
+
     /// The rate folded so far.
     pub fn rate(&self) -> Rate {
         self.rate

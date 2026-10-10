@@ -296,6 +296,26 @@ fn a_failed_write_is_silent() {
 /// A line from another thread and `attach`, in both orders, each forced by
 /// a channel handshake.
 #[test]
+fn a_removed_logs_directory_is_made_again_on_the_next_line() {
+    let home = Home::new("ld-remade");
+    let diag = home.diag(Process::Hub, Level::Info);
+    diag.line(Severity::Info, None, "first", "First.");
+    fs::remove_dir_all(home.path().join("logs")).unwrap();
+    diag.line(Severity::Info, None, "second", "Second.");
+    let text = home.text("hub.log");
+    assert!(text.contains("\"code\":\"second\""), "{text}");
+    assert!(!text.contains("\"code\":\"first\""), "{text}");
+    let mode = fs::metadata(home.path().join("logs"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o700);
+}
+
+/// A line from another thread and `attach`, in both orders, each forced by
+/// a channel handshake.
+#[test]
 fn a_line_racing_attach_lands_whole_in_the_file_its_order_implies() {
     let home = Home::new("ld-race");
     let diag = Arc::new(home.diag(Process::Session, Level::Info));

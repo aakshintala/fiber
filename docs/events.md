@@ -1332,9 +1332,7 @@ Every driver command is answered with exactly one of these, echoing its id
 A session is reconstructed from the log and its
 [configuration](configuration.md), nothing else.
 
-Open memory-maps or scans the file into an offset table and folds the
-latest-wins facts as it goes. Only the window a consumer actually needs is
-parsed. The model's context, the TUI's viewport and any search are three
+Open scans the file into an offset table, reading each line's `kind` and `seq` and refusing a complete line that is not JSON. It fully parses only the latest-wins kinds and the lines the rate fold reads. Only the window a consumer actually needs is otherwise parsed. The model's context, the TUI's viewport and any search are three
 residency policies over one primitive: a range read by `seq`. A handoff
 shortening what the model sees must not shorten what a person can scroll back
 to.

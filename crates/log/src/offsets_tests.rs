@@ -249,7 +249,7 @@ fn scan_records_every_complete_line_and_stops_at_a_torn_tail() {
     // unchanged.
     let (dir, offsets, lines) = written("scan-whole", &[10; 3]);
     let session = dir.path().join("s_1");
-    let scanned = Offsets::scan(&session, u64::MAX).unwrap();
+    let scanned = Offsets::scan(&session, u64::MAX, |_| Ok(())).unwrap();
     {
         let expected = offsets.lock();
         let found = scanned.lock();
@@ -265,7 +265,7 @@ fn scan_records_every_complete_line_and_stops_at_a_torn_tail() {
     let mut bytes = std::fs::read(session.join("events.jsonl")).unwrap();
     bytes.extend_from_slice(b"{\"torn");
     std::fs::write(session.join("events.jsonl"), &bytes).unwrap();
-    let scanned = Offsets::scan(&session, u64::MAX).unwrap();
+    let scanned = Offsets::scan(&session, u64::MAX, |_| Ok(())).unwrap();
     {
         let expected = offsets.lock();
         let found = scanned.lock();
@@ -280,7 +280,7 @@ fn scan_reads_at_most_limit_lines() {
     let (dir, _, _) = written("scan-limit", &[10; 5]);
     let session = dir.path().join("s_1");
     for (limit, expected) in [(0, 0), (2, 2), (4, 4), (5, 5), (6, 5)] {
-        let scanned = Offsets::scan(&session, limit).unwrap();
+        let scanned = Offsets::scan(&session, limit, |_| Ok(())).unwrap();
         assert_eq!(scanned.count(), expected, "limit {limit}");
         assert_eq!(
             scanned.range(0, 100).unwrap().len() as u64,
@@ -295,9 +295,9 @@ fn scan_parses_nothing() {
     let (dir, _, _) = written("scan-corrupt", &[10; 3]);
     let session = dir.path().join("s_1");
     corrupt(&session, 1);
-    let scanned = Offsets::scan(&session, u64::MAX).unwrap();
+    let scanned = Offsets::scan(&session, u64::MAX, |_| Ok(())).unwrap();
     assert_eq!(scanned.count(), 3);
-    let one = Offsets::scan(&session, 1).unwrap();
+    let one = Offsets::scan(&session, 1, |_| Ok(())).unwrap();
     assert_eq!(one.count(), 1);
 }
 
@@ -305,7 +305,7 @@ fn scan_parses_nothing() {
 fn scan_of_a_missing_log_is_not_found() {
     let home = fakes::TempDir::new("log-offsets-scan-missing");
     let missing = home.path().join("s_1");
-    let error = match Offsets::scan(&missing, u64::MAX) {
+    let error = match Offsets::scan(&missing, u64::MAX, |_| Ok(())) {
         Ok(_) => panic!("a missing log is not found"),
         Err(error) => error,
     };
@@ -313,4 +313,27 @@ fn scan_of_a_missing_log_is_not_found() {
         matches!(&error, Error::NotFound(path) if *path == missing),
         "{error}"
     );
+}
+
+#[test]
+fn scan_stops_at_the_first_line_its_closure_refuses_and_names_it() {
+    let (dir, _, _) = written("scan-refuse", &[10; 5]);
+    let session = dir.path().join("s_1");
+    let mut seen = 0;
+    let error = match Offsets::scan(&session, u64::MAX, |_| {
+        seen += 1;
+        if seen == 3 {
+            Err(serde::de::Error::custom("refused"))
+        } else {
+            Ok(())
+        }
+    }) {
+        Ok(_) => panic!("a refused line ends the scan"),
+        Err(error) => error,
+    };
+    let Error::Unreadable { line, .. } = &error else {
+        panic!("a refused line is unreadable: {error}");
+    };
+    assert_eq!(*line, 3);
+    assert_eq!(seen, 3);
 }

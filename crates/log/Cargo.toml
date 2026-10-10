@@ -10,6 +10,7 @@ contract = { path = "../contract" }
 grep-matcher.workspace = true
 grep-regex.workspace = true
 grep-searcher.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
