@@ -2,7 +2,6 @@
 source: crates/tui/src/model_picker_view_tests.rs
 expression: "screen(&app, 80, 24)"
 ---
-
 Models · switching rebuilds the cache: about 201,034 tokens                    ✕
 ↻ refresh
 acme
@@ -11,6 +10,7 @@ m2
 zeta
 z1   [low]
 z2 · chat   low [high]
+
 
 
 

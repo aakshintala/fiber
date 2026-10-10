@@ -125,7 +125,10 @@ pub(crate) fn render(
         return home::render(app, &screen, area, buf, pointer);
     }
     let area = match app.chrome().layout() {
-        Some(layout) => chrome::draw(app, &layout, buf),
+        Some(layout) => {
+            chrome::draw(&layout, buf);
+            layout.column
+        }
         None => area,
     };
     let mut targets = Vec::new();
@@ -202,8 +205,10 @@ pub(crate) fn render(
             let body_height = conversation.height.saturating_sub(header_height);
             let body = Rect::new(conversation.x, body_y, conversation.width, body_height);
             if app.item_view().is_some_and(|view| view.has_transcript) {
-                conversation_rows(app, body, buf, &mut targets);
-                marks::draw(app, body, buf, &mut targets);
+                let inset =
+                    crate::layout::past_gutter(body, app.chrome().gutter());
+                conversation_rows(app, inset, buf, &mut targets);
+                marks::draw(app, inset, buf, &mut targets);
             } else {
                 item::draw_body(app, body, buf);
             }
@@ -229,11 +234,16 @@ pub(crate) fn render(
                         // The rows draw in the scroll bar's rows area, one
                         // column narrower than the conversation, leaving
                         // the last column to the bar, which draws before
-                        // the marks over it.
-                        let (rows, bar) = scroll_bar::split(conversation);
+                        // the marks over it. The rows keep one blank column
+                        // on the left while the layout applies.
+                        let inset = crate::layout::past_gutter(
+                            conversation,
+                            app.chrome().gutter(),
+                        );
+                        let (rows, bar) = scroll_bar::split(inset);
                         conversation_rows(app, rows, buf, &mut targets);
                         scroll_bar::draw(app, bar, buf);
-                        marks::draw(app, conversation, buf, &mut targets);
+                        marks::draw(app, inset, buf, &mut targets);
                     }
                 },
             }
@@ -373,10 +383,7 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     if let Some(screen) = app.home_screen() {
         return home::cursor(app, &screen, area);
     }
-    let area = app
-        .chrome()
-        .layout()
-        .map_or(area, |layout| chrome::body(&layout));
+    let area = app.chrome().layout().map_or(area, |layout| layout.column);
     if app.focused().is_some() {
         return None;
     }

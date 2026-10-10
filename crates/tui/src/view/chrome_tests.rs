@@ -1,11 +1,11 @@
-//! Snapshots of the session screen's chrome: the floor line, the header
-//! and the panel's region.
+//! Snapshots of the session screen's chrome: the floor line, the
+//! conversation's gutter and the panel's region.
 
 use super::super::{cursor, render, text};
 use crate::app::App;
 use crate::home::Launch;
-use crate::layout::Layout;
 use crate::link::Line;
+use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use std::path::PathBuf;
@@ -111,19 +111,6 @@ fn attached_100x30_narrow() {
 }
 
 #[test]
-fn header_with_a_long_name_is_cut() {
-    let mut app = app(160, 12, false);
-    let long: String = std::iter::repeat_n('p', 300).collect();
-    named(&mut app, &long);
-    let (buf, _) = draw(&app, 160, 12);
-    let header: String = (0..160)
-        .filter_map(|x| buf.cell((x, 0)).map(|cell| cell.symbol().to_owned()))
-        .collect();
-    assert_eq!(header.trim_end().chars().count(), 126);
-    insta::assert_snapshot!("header_with_a_long_name_is_cut", text(&buf));
-}
-
-#[test]
 fn floor_centres_with_division() {
     // `(area - text) / 2` centres; `% 2` would leave 0 or 1 instead.
     for (width, height, expected_x) in [(10u16, 5u16, 4u16), (9u16, 4u16, 3u16)] {
@@ -143,38 +130,120 @@ fn floor_centres_with_division() {
 }
 
 #[test]
-fn header_draws_only_when_column_has_rows() {
-    let mut app = app(80, 10, false);
+fn the_conversation_has_no_header_and_a_blank_column_each_side() {
+    use crate::theme::Role;
+    use ratatui::style::Color;
+    let mut app = app(160, 40, false);
     named(&mut app, "fix the parser");
-    let first: String = app.header().chars().take(1).collect();
-    assert!(!first.is_empty());
-    let area = Rect::new(0, 0, 30, 10);
-    let one = Layout {
-        rail: None,
-        grip: None,
-        column: Rect::new(5, 3, 20, 1),
-        panel: None,
-        narrow: false,
-    };
-    let mut buf = Buffer::empty(area);
-    super::draw(&app, &one, &mut buf);
+    app.on_line(session_line(
+        "turn_started",
+        serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "say hi"}]}]}),
+    ));
+    app.on_line(session_line(
+        "assistant_message_started",
+        serde_json::json!({}),
+    ));
+    app.on_line(session_line(
+        "assistant_message_delta",
+        serde_json::json!({"text": "hello world"}),
+    ));
+    let (buf, _) = draw(&app, 160, 40);
+    let row0: String = (0..126)
+        .filter_map(|x| buf.cell((x, 0)).map(|cell| cell.symbol().to_owned()))
+        .collect();
+    assert!(!row0.contains("fix the parser"), "row 0: {row0:?}");
+    let y = (0..40)
+        .find(|y| {
+            let row: String = (0..126)
+                .filter_map(|x| buf.cell((x, *y)).map(|cell| cell.symbol().to_owned()))
+                .collect();
+            row.contains("hello")
+        })
+        .expect("the reply row");
+    let tint = buf.cell((1, y)).map(|cell| cell.bg).unwrap_or(Color::Reset);
+    assert_ne!(tint, Color::Reset, "the reply's tint");
+    assert_eq!(buf.cell((0, y)).map(|cell| cell.bg), Some(Color::Reset));
+    assert_eq!(buf.cell((1, y)).map(|cell| cell.bg), Some(tint));
+    assert_eq!(buf.cell((124, y)).map(|cell| cell.bg), Some(tint));
+    assert_eq!(buf.cell((125, y)).map(|cell| cell.bg), Some(Color::Reset));
+    // A second live session shows the rail: the card starts one column
+    // after the rail's edge.
+    app.on_line(session_line(
+        "session_status",
+        serde_json::json!({
+            "name": "two", "workspace": "/w", "project": "-w", "state": "idle",
+            "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        }),
+    ));
+    // The status above names the attached session; a second session needs
+    // its own id. Send it directly.
+    app.on_line(crate::link::Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({
+            "name": "two", "workspace": "/w", "project": "-w", "state": "idle",
+            "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }));
+    let layout = app.chrome().layout().expect("a layout with the rail");
+    let rail = layout.rail.expect("a rail");
+    let (buf, _) = draw(&app, 160, 40);
+    let y = (0..40)
+        .find(|y| {
+            let row: String = (0..160)
+                .filter_map(|x| buf.cell((x, *y)).map(|cell| cell.symbol().to_owned()))
+                .collect();
+            row.contains("hello")
+        })
+        .expect("the reply row with the rail");
+    let tint = buf
+        .cell((rail.right().saturating_add(1), y))
+        .map(|cell| cell.bg)
+        .unwrap_or(Color::Reset);
+    assert_ne!(tint, Color::Reset);
     assert_eq!(
-        buf.cell((5, 3)).map(|cell| cell.symbol().to_owned()),
-        Some(first)
+        buf.cell((rail.right(), y)).map(|cell| cell.bg),
+        Some(Color::Reset)
     );
-    let empty = Layout {
-        rail: None,
-        grip: None,
-        column: Rect::new(5, 3, 20, 0),
-        panel: None,
-        narrow: false,
-    };
-    let mut buf = Buffer::empty(area);
-    super::draw(&app, &empty, &mut buf);
     assert_eq!(
-        buf.cell((5, 3)).map(|cell| cell.symbol().to_owned()),
-        Some(" ".to_owned())
+        buf.cell((rail.right().saturating_add(1), y))
+            .map(|cell| cell.bg),
+        Some(tint)
     );
+    // Hiding the rail leaves its grip at column 0: blank at 1, card at 2.
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(crate::keys::Key::AltR, now);
+    let (buf, _) = draw(&app, 160, 40);
+    let y = (0..40)
+        .find(|y| {
+            let row: String = (0..160)
+                .filter_map(|x| buf.cell((x, *y)).map(|cell| cell.symbol().to_owned()))
+                .collect();
+            row.contains("hello")
+        })
+        .expect("the reply row with the grip");
+    let tint = buf.cell((2, y)).map(|cell| cell.bg).unwrap_or(Color::Reset);
+    assert_ne!(tint, Color::Reset);
+    assert_eq!(buf.cell((1, y)).map(|cell| cell.bg), Some(Color::Reset));
+    assert_eq!(buf.cell((2, y)).map(|cell| cell.bg), Some(tint));
+    let _ = Role::Muted;
 }
 
 #[test]

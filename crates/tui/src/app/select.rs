@@ -195,15 +195,14 @@ impl App {
         }
     }
 
-    /// The rect the conversation draws in: the chrome's body while the
-    /// layout applies, else the whole screen, cut to the conversation's
-    /// rows from its top.
+    /// The rect the conversation draws in: the column past the gutter
+    /// while the layout applies, else the whole screen, cut to the
+    /// conversation's rows from its top. It keeps the scroll bar's
+    /// column, as now.
     pub(crate) fn conversation_area(&self) -> Rect {
         let screen = Rect::new(0, 0, self.screen.width(), self.screen.height());
-        let area = self
-            .chrome
-            .layout()
-            .map_or(screen, |layout| crate::view::chrome::body(&layout));
+        let raw = self.chrome.layout().map_or(screen, |layout| layout.column);
+        let area = crate::layout::past_gutter(raw, self.chrome.gutter());
         let height = u16::try_from(self.conversation_height()).unwrap_or(u16::MAX);
         // The item view's header takes the conversation's top rows: a
         // selection starts below it.

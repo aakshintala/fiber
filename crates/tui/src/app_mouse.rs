@@ -136,15 +136,13 @@ impl App {
     }
 
     /// Whether `at` is over the conversation's visible rows: the
-    /// conversation column's columns, from its top past the header for the
-    /// conversation's height, the same rows the draw keeps for the
-    /// conversation (`view.rs`, `render`). Without the layout the
-    /// conversation is the whole width with no header row.
+    /// conversation column's columns, from its top for the conversation's
+    /// height, the same rows the draw keeps for the conversation
+    /// (`view.rs`, `render`).
     fn over_conversation(&self, at: Position) -> bool {
         let height = self.conversation_height();
         let (left, width, top) = match self.chrome().layout() {
             Some(layout) => {
-                let header = u16::try_from(self.chrome().header_rows()).unwrap_or(u16::MAX);
                 // The item view's header takes the conversation's top
                 // rows, so the wheel over it scrolls nothing.
                 let item = if self.item_open() {
@@ -155,7 +153,7 @@ impl App {
                 (
                     layout.column.x,
                     layout.column.width,
-                    layout.column.y.saturating_add(header).saturating_add(item),
+                    layout.column.y.saturating_add(item),
                 )
             }
             None => {

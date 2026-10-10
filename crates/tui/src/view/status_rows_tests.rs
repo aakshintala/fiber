@@ -471,11 +471,11 @@ fn short_screens_shed_row_two_then_row_one() {
     assert!(!screen.contains("job running"), "{screen}");
     assert!(!screen.contains("$1.50"), "{screen}");
     assert!(screen.contains("l5"), "{screen}");
-    // Four widget rows keep row 1 alone at twelve rows, allowing for the
+    // Four widget rows keep row 1 alone at eleven rows, allowing for the
     // input box's two surface edges.
-    let mut app = setup(12);
+    let mut app = setup(11);
     app.on_line(widget("ex", "wid", &["l1", "l2", "l3", "l4"]));
-    let (screen, _) = draw(&app, 100, 12);
+    let (screen, _) = draw(&app, 100, 11);
     assert!(!screen.contains("job running"), "{screen}");
     assert!(screen.contains("$1.50"), "{screen}");
 }

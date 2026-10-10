@@ -2,10 +2,10 @@
 source: crates/tui/src/view/item_tests.rs
 expression: "rows.join(\"\\n\")"
 ---
-fix the parser
 fix the parser › ◆ task j_1                                                    ✕
 ● running · harness claude · model other/model · — · 0s · session s_ddd · ■ stop
 Output since this terminal attached · /tmp/other.out
+
 
 
 

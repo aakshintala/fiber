@@ -1,10 +1,11 @@
 //! The session screen's chrome: where the rail, the conversation column
-//! and the panel go, the header naming the session, and the person's hide
-//! of the panel (`docs/tui.md`, "Layout", "Shedding", "Naming the
-//! session"). [`Chrome`] owns that state; the app hands it the screen's
-//! size and home's counts on every settle. The layout applies only while
-//! the app has home state and is not on home; without home the
-//! conversation is the whole screen.
+//! and the panel go, and the person's hide of the panel (`docs/tui.md`,
+//! "Layout", "Shedding"). [`Chrome`] owns that state; the app hands
+//! it the screen's size and home's counts on every settle. The layout
+//! applies only while the app has home state and is not on home; without
+//! home the conversation is the whole screen. The header names the
+//! session for the item view's breadcrumb (`docs/tui.md", "Naming the
+//! session").
 
 use super::{App, Effect};
 use crate::focus::Regions;
@@ -91,10 +92,15 @@ impl Chrome {
         self.layout.map_or(screen, |layout| layout.column.width)
     }
 
-    /// The rows above the conversation: the header's one while the layout
-    /// applies.
-    pub(crate) fn header_rows(&self) -> usize {
-        usize::from(self.layout.is_some())
+    /// The gutter the conversation's rows keep on their left: one blank
+    /// column while the layout applies, else none (`docs/tui.md",
+    /// "Layout").
+    pub(crate) fn gutter(&self) -> u16 {
+        if self.layout.is_some() {
+            crate::layout::GUTTER
+        } else {
+            0
+        }
     }
 
     /// Where the panel and the rail are drawn.
@@ -159,7 +165,8 @@ impl App {
         self.home.as_ref()?.sessions.row(session)
     }
 
-    /// The header's text for the attached session.
+    /// The header's text for the attached session: the item view's
+    /// breadcrumb's parent name (`docs/tui.md`, "Swapped views").
     pub(crate) fn header(&self) -> String {
         header(
             self.attached_row().map(|row| row.name.as_str()),
@@ -200,7 +207,9 @@ impl App {
         let moved = self
             .chrome
             .lay_out(self.screen.width(), self.screen.height(), home);
-        let width = crate::view::scroll_bar::text_width(self.column_width());
+        let width = crate::view::scroll_bar::text_width(
+            self.column_width().saturating_sub(self.chrome.gutter()),
+        );
         // A new width moves every row, so a selection clears.
         if self.screen.wrap_at(width) {
             self.clear_selection();

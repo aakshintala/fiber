@@ -246,14 +246,11 @@ fn the_wheel_over_the_panel_scrolls_only_the_panel() {
 }
 
 /// The conversation's visible rows in a [`wide`] loop: the column's left
-/// and width, and the top past the header with the conversation's height,
-/// the rows the draw keeps for the conversation.
+/// and width, and the top with the conversation's height, the rows the
+/// draw keeps for the conversation.
 fn conversation_rect(lp: &super::Loop<TestBackend>) -> (u16, u16, u16, u16) {
     let layout = lp.app.chrome().layout().expect("a layout");
-    let top = layout
-        .column
-        .y
-        .saturating_add(u16::try_from(lp.app.chrome().header_rows()).unwrap_or(u16::MAX));
+    let top = layout.column.y;
     let height = u16::try_from(lp.app.conversation_height()).unwrap_or(u16::MAX);
     (layout.column.x, layout.column.width, top, height)
 }
@@ -276,16 +273,6 @@ fn the_wheel_on_the_last_conversation_row_scrolls_it() {
     let bottom = lp.app.scroll().0;
     feed(&mut lp, vec![wheel_up(left, top + height - 1)]);
     assert_eq!(lp.app.top(), Some(bottom - 3));
-}
-
-#[test]
-fn the_wheel_on_the_header_row_scrolls_nothing() {
-    let mut lp = wide();
-    let (left, _, top, _) = conversation_rect(&lp);
-    assert!(top > 0, "a header row above the conversation");
-    feed(&mut lp, vec![wheel_up(left, top - 1)]);
-    assert_eq!(lp.app.top(), None);
-    assert_eq!(lp.app.panel_state().scroll(), 0);
 }
 
 #[test]

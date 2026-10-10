@@ -2,7 +2,7 @@
 source: crates/tui/src/view/drag_tests.rs
 expression: "crate::view::text(&buf)"
 ---
-  w                  $0.00 +  one
+  w                  $0.00 +
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ 1 ✓ READY               0s                                                                                                                            directory  /w
 ▌ one                                                                                                                                                   model  test/model

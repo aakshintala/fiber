@@ -3,7 +3,7 @@
 
 use super::{
     CONVERSATION_MIN, PANEL_CEILING, PANEL_FLOOR, RAIL_CEILING, RAIL_FLOOR, Shares, Want, dragged,
-    edge_at, edge_rect, floor_line, share_for, share_of, split,
+    edge_at, edge_rect, floor_line, past_gutter, share_for, share_of, split,
 };
 use ratatui::layout::Rect;
 
@@ -265,6 +265,29 @@ fn every_region_spans_the_screens_rows() {
     }
     let grip = split(135, 30, &DEFAULT, &BOTH).grip;
     assert_eq!(grip.map(|grip| (grip.y, grip.height)), Some((0, 30)));
+}
+
+#[test]
+fn past_gutter_moves_the_left_edge_and_keeps_the_right() {
+    let area = Rect::new(3, 1, 10, 4);
+    assert_eq!(past_gutter(area, 0), Rect::new(3, 1, 10, 4));
+    assert_eq!(past_gutter(area, 1), Rect::new(4, 1, 9, 4));
+    assert_eq!(
+        past_gutter(Rect::new(3, 1, 1, 4), 1),
+        Rect::new(4, 1, 0, 4)
+    );
+    assert_eq!(
+        past_gutter(Rect::new(3, 1, 0, 4), 1),
+        Rect::new(3, 1, 0, 4)
+    );
+    for (area, gutter) in [
+        (area, 0),
+        (area, 1),
+        (Rect::new(3, 1, 1, 4), 1),
+        (Rect::new(3, 1, 0, 4), 1),
+    ] {
+        assert_eq!(past_gutter(area, gutter).right(), area.right());
+    }
 }
 
 #[test]

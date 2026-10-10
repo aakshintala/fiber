@@ -558,7 +558,7 @@ fn presses_outside_the_area_select_nothing() {
     assert_eq!(
         tried(&mut app, (layout.column.x + 1, layout.column.y)),
         None,
-        "the column's header row"
+        "the blank row above the bottom-aligned turn"
     );
     // The text itself still selects.
     let at = find(&app, "hello");
@@ -1181,6 +1181,38 @@ fn a_selection_starting_after_a_wrapped_space_copies_no_space_before_it() {
         select(&mut app, gamma, right(delta, 4)),
         Effect::Copy("gamma delta".to_owned())
     );
+}
+
+#[test]
+fn a_selection_with_the_layout_covers_the_pressed_text() {
+    let mut app = laid_out(160, 48);
+    prompt(&mut app, " ");
+    reply(&mut app, "a_m", "hello there");
+    done(&mut app);
+    let at = find(&app, "hello");
+    assert_eq!(select(&mut app, at, right(at, 4)), Effect::Copy("hello".to_owned()));
+    let area = app.conversation_area();
+    let cells = app.selection_cells(area);
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0], Rect::new(at.0, at.1, 5, 1));
+    // The highlight sits on the reply's cells: exactly the five cells
+    // holding "hello" carry the selection background.
+    let (buf, _) = draw(&app);
+    let mut selected = Vec::new();
+    for y in 0..48 {
+        for x in 0..160 {
+            let cell = buf.cell((x, y)).expect("a cell");
+            if cell.bg == crate::theme::Role::Selection.color() {
+                selected.push((x, y));
+            }
+        }
+    }
+    let _ = buf;
+    assert_eq!(selected.len(), 5, "{selected:?}");
+    for (i, (x, y)) in selected.iter().enumerate() {
+        let dx = u16::try_from(i).unwrap_or(u16::MAX);
+        assert_eq!((*x, *y), (at.0.saturating_add(dx), at.1));
+    }
 }
 
 #[test]

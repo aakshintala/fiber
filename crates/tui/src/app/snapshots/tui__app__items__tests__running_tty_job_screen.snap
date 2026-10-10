@@ -2,11 +2,11 @@
 source: crates/tui/src/app/items_tests.rs
 expression: "rows.join(\"\\n\")"
 ---
-fix the parser
 fix the parser › ▸ run the editor                                              ✕
 ⠋ running · harness — · model — · — · 11s · session — · ■ stop
 Output since this terminal attached · /tmp/out
 $ edit file.txt
+
 
 
 

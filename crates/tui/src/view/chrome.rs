@@ -1,13 +1,11 @@
-//! Drawing the session screen's chrome: the floor line, the header row
-//! at the top of the conversation column, and the rail's and the panel's
-//! regions with the grip on each draggable edge (`docs/tui.md`, "Layout",
-//! "Shedding"). The cards inside the rail and the panel draw on top.
+//! Drawing the session screen's chrome: the floor line and the rail's and
+//! the panel's regions with the grip on each draggable edge (`docs/tui.md`,
+//! "Layout", "Shedding"). The cards inside the rail and the panel draw on
+//! top.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 
-use crate::app::App;
 use crate::layout::Layout;
 use crate::markdown::{Role, style};
 
@@ -22,10 +20,12 @@ pub(super) fn floor(text: &str, area: Rect, buf: &mut Buffer) {
     buf.set_stringn(x, y, text, usize::from(area.width), Style::default());
 }
 
-/// Draws the chrome of `layout`: the regions' tints and grips and the
-/// header. Returns the rect the conversation draws in: the column below
-/// its header row.
-pub(super) fn draw(app: &App, layout: &Layout, buf: &mut Buffer) -> Rect {
+use ratatui::style::Style;
+
+/// Draws the chrome of `layout`: the regions' grips. The conversation
+/// draws in the column's full rect; its rows inset past the gutter where
+/// they draw.
+pub(super) fn draw(layout: &Layout, buf: &mut Buffer) {
     if let Some(rail) = layout.rail {
         grip(buf, rail.right().saturating_sub(1), rail);
     }
@@ -34,27 +34,6 @@ pub(super) fn draw(app: &App, layout: &Layout, buf: &mut Buffer) -> Rect {
     }
     if let Some(panel) = layout.panel {
         grip(buf, panel.x, panel);
-    }
-    let column = layout.column;
-    if column.height > 0 {
-        buf.set_stringn(
-            column.x,
-            column.y,
-            app.header(),
-            usize::from(column.width),
-            Style::default(),
-        );
-    }
-    body(layout)
-}
-
-/// The rect the conversation draws in: the column below its header row.
-pub(crate) fn body(layout: &Layout) -> Rect {
-    let column = layout.column;
-    Rect {
-        y: column.y.saturating_add(1),
-        height: column.height.saturating_sub(1),
-        ..column
     }
 }
 

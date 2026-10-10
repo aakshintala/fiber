@@ -2,7 +2,7 @@
 source: crates/tui/src/view/rail_tests.rs
 expression: text(&screen(&app))
 ---
-  fiber              $0.41 +  fix the parser
+  fiber              $0.41 +
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ 2 ✓ READY               9m                                                                                                                                    directory  /Users/you/work/fiber
 ▌ fix the parser                                                                                                                                                branch  main
