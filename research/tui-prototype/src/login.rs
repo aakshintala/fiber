@@ -8,7 +8,8 @@ use crate::cases::{Case, Surface};
 use super::input::{Ev, Key};
 use super::overlays;
 use super::{Args, Term};
-use super::{dim, fit, paint, panel, row, sp, width};
+use super::{BLUE, dim, fg, fit, left_cut, paint, panel, row, sp, width};
+use ratatui::style::Style;
 use std::io::{self, Write};
 
 pub struct Target {
@@ -32,14 +33,30 @@ pub fn targets() -> Vec<Target> {
     ]
 }
 
+/// A login to copy the URL from, long enough to cut at every width: the
+/// panel never grows past its cap for it.
+const URL: &str = "https://auth.fiber.dev/oauth/authorize?provider=anthropic&ticket=7f3a9c2e4b5d60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d&mode=ssh-fallback";
+/// The dots the hidden key draws as.
+const DOTS: &str = "••••••••";
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Kind {
+    Providers,
+    Waiting,
+    Key,
+}
+
 pub struct State {
+    pub kind: Kind,
     /// the focused row, as an index over the provider rows then the secrets
     pub focus: usize,
 }
 
 /// Every `--login` case.
 pub(crate) const CASES: &[Case<State>] = &[
-    Case { name: "providers", help: "providers and extension credentials, OAuth told from key", check: "four providers under `Providers` with `browser` or `key` tags telling OAuth from key providers, and two extension credentials under `Secrets`; a centred panel with ▄ ▀ edges and the ▌ stripe, `Log in` bold accent with a dim ✕, the focused row `›` on a full-width accent bar, and a bold-key legend foot.", build: || State { focus: 0 } },
+    Case { name: "providers", help: "providers and extension credentials, OAuth told from key", check: "four providers under `Providers` with `browser` or `key` tags telling OAuth from key providers, and two extension credentials under `Secrets`; a centred panel with ▄ ▀ edges and the ▌ stripe, `Log in` bold accent with a dim ✕, the focused row `›` on a full-width accent bar, and a bold-key legend foot.", build: || State { kind: Kind::Providers, focus: 0 } },
+    Case { name: "waiting", help: "the browser-path wait, URL to copy, waiting state", check: "the provider list stays with `Open this URL to log in to anthropic:` below it and the long URL cut from the left keeping its tail, `y` to copy, and a dim `Waiting for the browser…` line; a bold-key `y copy URL · Esc cancel` legend; same panel.", build: || State { kind: Kind::Waiting, focus: 0 } },
+    Case { name: "key", help: "key entry with the key masked", check: "the provider list stays with `Label (--as): default.` and `Key for google:` below it, the key masked as eight dots with a block cursor; a bold-key `Tab key or label · Enter store · Esc cancel` legend; same panel.", build: || State { kind: Kind::Key, focus: 3 } },
 ];
 
 /// `--login`, for `--help` and `check/login.md`.
@@ -55,14 +72,37 @@ pub fn for_case(case: &str) -> State {
     })
 }
 
-/// The foot legend: keys bold, labels muted, naming panel keys the body
-/// never lists as choices.
-fn footer() -> super::Row {
-    panel::footer_legend(&[("↑↓", "move"), ("Enter", "log in"), ("Esc", "close")])
+/// The foot legend for the case: keys bold, labels muted, naming panel
+/// keys the body never lists as choices.
+fn footer(s: &State) -> super::Row {
+    match s.kind {
+        Kind::Providers => panel::footer_legend(&[("↑↓", "move"), ("Enter", "log in"), ("Esc", "close")]),
+        Kind::Waiting => panel::footer_legend(&[("y", "copy URL"), ("Esc", "cancel")]),
+        Kind::Key => panel::footer_legend(&[("Tab", "key or label"), ("Enter", "store"), ("Esc", "cancel")]),
+    }
+}
+
+/// The rows below the list for a waiting or key case at an inner width.
+/// The list stays; the login's progress reads under it.
+fn below(kind: Kind, inner: usize) -> Vec<super::Row> {
+    match kind {
+        Kind::Providers => vec![],
+        Kind::Waiting => vec![
+            row(vec![sp("Open this URL to log in to anthropic:", Style::new())]),
+            row(vec![sp(left_cut(URL, inner), fg(BLUE))]),
+            row(vec![sp("Waiting for the browser…", dim())]),
+        ],
+        Kind::Key => vec![
+            row(vec![sp("Label (--as): default.", dim())]),
+            row(vec![sp("Key for google:", Style::new())]),
+            row(vec![sp(DOTS, Style::new()), sp("█", dim())]),
+        ],
+    }
 }
 
 /// The panel's body at an inner width: dim group headings over the
-/// provider rows and the secret rows, the focused one barred by the caller.
+/// provider rows and the secret rows, the focused one barred, then the
+/// case's rows below the list.
 fn body(s: &State, inner: usize) -> Vec<super::Row> {
     let all = targets();
     let key_w = panel::key_width(&all.iter().map(|t| t.name).collect::<Vec<_>>());
@@ -89,6 +129,11 @@ fn body(s: &State, inner: usize) -> Vec<super::Row> {
         }
         idx += 1;
     }
+    let extra = below(s.kind, inner);
+    if !extra.is_empty() {
+        out.push(row(vec![]));
+        out.extend(extra);
+    }
     out
 }
 
@@ -97,7 +142,7 @@ fn body(s: &State, inner: usize) -> Vec<super::Row> {
 /// click target keeps its coordinates.
 pub fn view(s: &State, w: usize) -> Vec<super::Row> {
     let probe = body(s, 10_000);
-    let legend = footer();
+    let legend = footer(s);
     let legend_w = width(&legend.spans);
     let natural = probe.iter().map(|r| width(&r.spans)).max().unwrap_or(0).max(legend_w);
     // The legend always fits: the preferred width stretches past the usual
@@ -108,7 +153,7 @@ pub fn view(s: &State, w: usize) -> Vec<super::Row> {
     let rows = panel::frame(
         Some(panel::title_row("Log in", Some(sp("✕", dim())))),
         body(s, inner),
-        Some(footer()),
+        Some(footer(s)),
         panel_w,
     );
     panel::centre(rows, panel_w, w)
@@ -220,7 +265,73 @@ mod tests {
     #[test]
     fn every_case_parses_and_unknown_does_not() {
         assert!(CASES.iter().all(|c| crate::cases::lookup(CASES, c.name).is_some()));
+        assert_eq!(CASES.len(), 3);
         assert!(crate::cases::lookup(CASES, "nope").is_none());
+    }
+
+    #[test]
+    fn waiting_keeps_the_list_under_a_cut_url() {
+        let t = text(&for_case("waiting"), 160, 48);
+        // The list stays: the rows and the focused bar are still there.
+        for name in ["anthropic", "Providers", "Secrets"] {
+            assert!(t.contains(name), "the list lost {name}");
+        }
+        assert!(t.contains("\u{203a} "), "the focus is gone");
+        assert!(t.contains("Open this URL to log in to anthropic:"), "missing the prompt");
+        assert!(t.contains("Waiting for the browser…"), "missing the waiting state");
+        assert!(t.contains("y copy URL · Esc cancel"), "missing the legend");
+        // The URL cuts from the left, keeping its tail, and fits its row.
+        let line = t.split('\n').find(|l| l.contains("mode=ssh-fallback")).unwrap();
+        let shown = line.trim_start_matches([' ', '\u{258c}']).trim_end();
+        assert!(shown.starts_with('…'), "the long URL is not cut: {shown:?}");
+        assert!(shown.ends_with("mode=ssh-fallback"), "the cut lost the tail: {shown:?}");
+        assert!(crate::width(&[sp(shown, Style::new())]) <= panel::inner_w(101), "the cut URL overflows its panel");
+        assert!(URL.chars().count() > shown.chars().count(), "the fixture URL fits uncut");
+    }
+
+    #[test]
+    fn the_cut_url_fits_at_both_widths() {
+        // At, just below and just above the panel's preferred width the
+        // shown URL never exceeds the inner width it is cut to.
+        for cols in [100, 101, 160] {
+            let rows = view(&for_case("waiting"), cols);
+            let w = rows
+                .iter()
+                .map(|r| crate::width(&r.spans))
+                .max()
+                .unwrap_or(0);
+            let line = rows.iter().map(plain).find(|l| l.contains("mode=ssh-fallback")).unwrap();
+            let shown = line.trim_start_matches([' ', '\u{2584}', '\u{2580}', '\u{258c}']).trim_end();
+            assert!(shown.starts_with('…'), "uncut at {cols}");
+            assert!(w <= cols, "the panel overflows at {cols}");
+        }
+    }
+
+    #[test]
+    fn key_masks_the_key_with_dots() {
+        let t = text(&for_case("key"), 160, 48);
+        // The list stays above the prompts.
+        assert!(t.contains("google"), "the list is gone");
+        assert!(t.contains("Label (--as): default."), "missing the label line");
+        assert!(t.contains("Key for google:"), "missing the key prompt");
+        assert!(t.contains(DOTS), "the key is not masked");
+        assert_eq!(DOTS.chars().count(), 8, "the mask is not eight dots");
+        assert!(t.contains("Tab key or label · Enter store · Esc cancel"), "missing the legend");
+        // The mask reads on one row with the block cursor after it.
+        let line = t.split('\n').find(|l| l.contains(DOTS)).unwrap();
+        assert!(line.trim_end().ends_with('█'), "no cursor after the mask");
+    }
+
+    #[test]
+    fn every_case_keeps_one_bar_and_its_legend() {
+        for c in ["providers", "waiting", "key"] {
+            let rows = view(&for_case(c), 100);
+            let barred = rows
+                .iter()
+                .filter(|r| r.spans.iter().any(|s| s.style.bg == Some(crate::BLUE)))
+                .count();
+            assert_eq!(barred, 1, "{c}: more than the focus is barred");
+        }
     }
 
     #[test]

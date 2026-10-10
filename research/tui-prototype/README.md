@@ -156,11 +156,20 @@ loads but the login ignores it.
 
 ```sh
 cargo run --release -- fixtures/session.jsonl --static --login providers
+cargo run --release -- fixtures/session.jsonl --static --login waiting
+cargo run --release -- fixtures/session.jsonl --static --login key
 ```
 
 - `providers`: four providers under `Providers`, OAuth rows tagged
   `browser` and key rows tagged `key`, then two extension credentials under
   `Secrets`; the first row focused.
+- `waiting`: the list stays with `Open this URL to log in to anthropic:`
+  below it, the long URL cut from the left keeping its tail, `y` to copy,
+  and a dim `Waiting for the browser…` line.
+- `key`: the list stays with `Label (--as): default.` and
+  `Key for google:` below it, the key masked as eight dots with a block
+  cursor. The key panel sits in the centred overlay with the list, not in a
+  bottom panel like the built view: the static cases share one frame.
 
 `cargo run --bin gen` rewrites the fixtures from `src/bin/gen.rs`. `fixtures/session.jsonl` ends with a turn still running, waiting on an approval from the reviewer delegate and on a question form from the main session. `fixtures/idle.jsonl` is the same session cut after its last finished turn.
 

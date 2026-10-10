@@ -4723,7 +4723,7 @@ mod tests {
                 "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, notice, close-mouse",
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",
-                "--login providers",
+                "--login providers, waiting, key",
             ]
         );
         let h = cases::help(SURFACES);
