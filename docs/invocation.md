@@ -747,7 +747,9 @@ and a repeat does nothing. A SIGTERM or SIGINT after it is a second signal.
 - Each MCP call in flight gets `notifications/cancelled` and ends `failed`
   with code `mcp_cancel_requested`, as on a cancelled turn (`docs/mcp.md`,
   "Calls"); a pending elicitation goes with its call. Then each stdio
-  server's stdin is closed and it gets SIGTERM, then SIGKILL 800 ms later.
+  server's stdin is closed. Each server runs in its own process session and
+  process group, and its process group gets SIGTERM, then SIGKILL 800 ms
+  later.
 - A credential command a `model` or `credential` switch is reading gets SIGKILL, and the
   switch is rejected `closing`.
 - No model request is made, no ending notice is given, and no hook runs.
@@ -794,7 +796,8 @@ nothing more: the loop may be stuck holding the log, so no other thread
 writes to it. The log ends as a process that died leaves it, with no
 `fiber_exited`, and a resume reads it as it reads any such log: a call left
 open has an unknown outcome and is never re-run, and a job left open
-completes `orphaned` (`docs/events.md`, "Resume").
+completes `orphaned` (`docs/events.md`, "Resume"). A child started in the
+instant before the bound fires may outlive Fiber.
 
 **What a crash leaves.** A crash, a SIGKILL, or a supervisor that gives up
 before the bound stops nothing. A command whose output goes to the pipe
