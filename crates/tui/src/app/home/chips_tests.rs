@@ -580,7 +580,10 @@ fn down_on_the_chip_row_with_no_session_does_nothing() {
         serde_json::json!({"state": "idle"}),
     ));
     drawn(&mut app);
-    assert!(app.home_screen().is_some_and(|screen| screen.toggle.is_some()));
+    assert!(
+        app.home_screen()
+            .is_some_and(|screen| screen.toggle.is_some())
+    );
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
 }
@@ -604,7 +607,10 @@ fn down_on_a_chip_skips_the_toggle_to_the_first_row() {
         serde_json::json!({"state": "idle"}),
     ));
     drawn(&mut app);
-    assert!(app.home_screen().is_some_and(|screen| screen.toggle.is_some()));
+    assert!(
+        app.home_screen()
+            .is_some_and(|screen| screen.toggle.is_some())
+    );
     // ↓ skips the toggle to the first row.
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
@@ -660,26 +666,14 @@ fn down_below_the_fold_and_up_while_scrolled_follow_the_rows() {
         assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     }
     let shown = keys(&app);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Entry(shown[8])))
-    );
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(shown[8]))));
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Entry(shown[9])))
-    );
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(shown[9]))));
     drawn(&mut app);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Entry(shown[9])))
-    );
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(shown[9]))));
     // ↑ while scrolled steps back up the rows.
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Entry(shown[8])))
-    );
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(shown[8]))));
 }
 
 #[test]
@@ -744,10 +738,7 @@ fn the_remembered_chip_survives_a_session() {
     };
     let start: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
     let result = serde_json::json!({"session_id": "s_aaaaaaaaaaaaaaaa"});
-    app.on_line(accepted(
-        start["id"].as_str().unwrap(),
-        result,
-    ));
+    app.on_line(accepted(start["id"].as_str().unwrap(), result));
     assert!(!app.on_home());
     app.leave();
     drawn(&mut app);
