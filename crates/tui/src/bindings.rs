@@ -15,6 +15,9 @@ pub(crate) struct Binding {
     pub(crate) description: &'static str,
     /// Its keys.
     pub(crate) keys: &'static str,
+    /// The condition its Key cell carries, a suffix of `keys`: shown in
+    /// parentheses after the action in the key map. Empty when none.
+    pub(crate) when: &'static str,
     /// Its other paths: a slash command, a click; empty when none.
     pub(crate) other_paths: &'static str,
     /// The contexts the action acts in.
@@ -30,6 +33,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Sessions",
         id: "send",
+        when: "",
         description: "Send a prompt, or a steering message during a turn",
         keys: "Enter",
         other_paths: "",
@@ -40,6 +44,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Sessions",
         id: "line_break",
+        when: "",
         description: "Insert a line break",
         keys: "Shift+Enter",
         other_paths: "Ctrl+J",
@@ -50,6 +55,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Sessions",
         id: "close_or_interrupt",
+        when: "",
         description: "Close what is on top; interrupt the turn when nothing is open",
         keys: "Esc",
         other_paths: "click the overlay's ✕ or outside it; click \"esc to interrupt\"",
@@ -60,6 +66,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Sessions",
         id: "clear_then_quit",
+        when: "twice within about a second on an empty box",
         description: "Clear the draft, then quit",
         keys: "Ctrl+C, twice within about a second on an empty box",
         other_paths: "/quit",
@@ -70,6 +77,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Sessions",
         id: "go_home",
+        when: "",
         description: "Go home",
         keys: "⌥0",
         other_paths: "/home",
@@ -80,6 +88,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Sessions",
         id: "new_session",
+        when: "",
         description: "Start a new session",
         keys: "Ctrl+N",
         other_paths: "/new",
@@ -90,6 +99,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Sessions",
         id: "rail_row_n",
+        when: "",
         description: "Switch to the session of rail card N",
         keys: "⌥1 to ⌥9",
         other_paths: "click the card",
@@ -112,6 +122,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Sessions",
         id: "delete_session",
+        when: "on the row",
         description: "Delete the selected exited session in the session list",
         keys: "Delete, or Backspace, on the row",
         other_paths: "click the row's ✕",
@@ -122,6 +133,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The input box",
         id: "recall_prompt",
+        when: "in an empty box",
         description: "Recall an earlier prompt from the project of the session on screen",
         keys: "↑ in an empty box",
         other_paths: "",
@@ -132,6 +144,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The input box",
         id: "search_prompts",
+        when: "",
         description: "Search those prompts",
         keys: "Ctrl+R",
         other_paths: "",
@@ -142,6 +155,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The input box",
         id: "move_word",
+        when: "",
         description: "Move by word",
         keys: "⌥← ⌥→, Ctrl+← Ctrl+→",
         other_paths: "",
@@ -159,6 +173,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The input box",
         id: "delete_word",
+        when: "",
         description: "Delete a word",
         keys: "⌥Backspace",
         other_paths: "",
@@ -169,6 +184,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The input box",
         id: "line_start_end",
+        when: "where the terminal passes them",
         description: "Start or end of the line",
         keys: "⌘← ⌘→, where the terminal passes them",
         other_paths: "",
@@ -179,6 +195,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The input box",
         id: "open_in_editor",
+        when: "",
         description: "Open the draft, or a pasted token, in $VISUAL or $EDITOR",
         keys: "Ctrl+G",
         other_paths: "click the token",
@@ -189,6 +206,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The input box",
         id: "paste_image",
+        when: "",
         description: "Paste an image",
         keys: "Ctrl+V",
         other_paths: "",
@@ -199,6 +217,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The conversation",
         id: "toggle_ledgers",
+        when: "",
         description: "Open or close the ledgers",
         keys: "Ctrl+O",
         other_paths: "click a group's line",
@@ -209,6 +228,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The conversation",
         id: "navigate",
+        when: "",
         description: "Move focus from the input box into the conversation",
         keys: "Shift+Tab",
         other_paths: "click an item",
@@ -219,6 +239,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The conversation",
         id: "focus_next_prev",
+        when: "",
         description: "Move focus to the next or previous item",
         keys: "↓ ↑, j k",
         other_paths: "click an item",
@@ -229,6 +250,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The conversation",
         id: "open_focused",
+        when: "",
         description: "Open the focused item",
         keys: "Enter",
         other_paths: "click it",
@@ -239,6 +261,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The conversation",
         id: "copy_focused",
+        when: "",
         description: "Copy the focused item",
         keys: "y",
         other_paths: "select it",
@@ -249,6 +272,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The conversation",
         id: "focus_area",
+        when: "",
         description: "Move focus to the panel, the rail, then the conversation",
         keys: "Tab",
         other_paths: "click the area",
@@ -259,6 +283,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The conversation",
         id: "toggle_panel",
+        when: "",
         description: "Show or hide the panel",
         keys: "⌥P",
         other_paths: "/panel",
@@ -269,6 +294,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The conversation",
         id: "toggle_rail",
+        when: "",
         description: "Show or hide the rail",
         keys: "⌥R",
         other_paths: "drag its edge",
@@ -279,6 +305,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The conversation",
         id: "search",
+        when: "where forwarded",
         description: "Search",
         keys: "Ctrl+F; Cmd+F where forwarded",
         other_paths: "",
@@ -289,6 +316,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The conversation",
         id: "search_results",
+        when: "with search open",
         description: "Open the search results",
         keys: "Ctrl+F with search open",
         other_paths: "click the match count",
@@ -299,6 +327,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The conversation",
         id: "search_next_prev",
+        when: "with search open",
         description: "Next or previous match",
         keys: "Enter or ↓, Shift+Enter or ↑, with search open",
         other_paths: "",
@@ -309,6 +338,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "The conversation",
         id: "jump_to_end",
+        when: "",
         description: "Jump to the end",
         keys: "End",
         other_paths: "click \"↓ New messages below\"",
@@ -319,6 +349,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Steering",
         id: "select_steering",
+        when: "",
         description: "Select a queued steering message",
         keys: "⌥↑ ⌥↓",
         other_paths: "its mouse target",
@@ -329,6 +360,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Steering",
         id: "amend_steering",
+        when: "",
         description: "Amend it",
         keys: "Enter",
         other_paths: "its mouse target",
@@ -339,6 +371,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Steering",
         id: "drop_steering",
+        when: "",
         description: "Drop it",
         keys: "⌥X",
         other_paths: "its mouse target",
@@ -349,6 +382,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Requests, models and help",
         id: "next_request",
+        when: "",
         description: "Reopen a request put aside, or move to the next, the oldest first, switching to its session",
         keys: "⌥A",
         other_paths: "/approvals; click the badge or a waiting card",
@@ -359,6 +393,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Requests, models and help",
         id: "model_picker",
+        when: "",
         description: "Open the model picker",
         keys: "Ctrl+L",
         other_paths: "/model",
@@ -369,6 +404,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Requests, models and help",
         id: "session_only",
+        when: "",
         description: "Choose in the model picker for this session only",
         keys: "Ctrl+S",
         other_paths: "",
@@ -379,6 +415,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Requests, models and help",
         id: "show_all",
+        when: "",
         description: "Show every model in the model picker, or only the scoped ones",
         keys: "Tab",
         other_paths: "click \"[show all]\"",
@@ -389,6 +426,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Requests, models and help",
         id: "refresh_lists",
+        when: "",
         description: "Refresh every model list in the model picker",
         keys: "Ctrl+R",
         other_paths: "click \"⟳ refresh all\"",
@@ -399,6 +437,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding {
         area: "Requests, models and help",
         id: "key_map",
+        when: "",
         description: "Open the key map",
         keys: "F1",
         other_paths: "/? or /help",
