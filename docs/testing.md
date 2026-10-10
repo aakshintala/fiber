@@ -415,13 +415,31 @@ past its timeout. `cargo test` is not a substitute: it runs a crate's tests as
 threads of one process, and a child process one test spawns holds the file
 locks another test holds until the child execs, so lock-release and
 extension-load tests fail there and pass under nextest. A process per test
-does not contain what the test starts: a binary-level
-test runs Fiber in its own process group, and at the end it asserts that no
-child of its own remains, including after a timeout. A watchdog the test
-starts beside Fiber kills Fiber's process group when the test process dies.
+does not contain what the test starts: every test that starts a process, at
+any level, runs it in its own process group, and reaps the group on every
+path, including failure and timeout, with SIGKILL through the guarded helper
+in `fakes` (`fakes::process_group::kill_group`, `Watchdog`), because the
+fixtures ignore SIGTERM on purpose ("Fakes"). A binary-level test's
+watchdog, started beside Fiber, kills Fiber's process group when the test
+process dies. A shell test's fixtures stop themselves (a stop file, 120 s at most) and the test signals no process.
 A filter that matches no
 tests fails: nextest exits 4 with "no tests to run", where `cargo test` prints
 "0 passed" and exits 0. Doc-tests run under `cargo test --doc`.
+
+`scripts/check` exports `FIBER_CHECK_RUN` for the run, and `scripts/leak-scan`
+fails the run when a process still carries it after the tests, listing each
+leak's PID and command. The scan only reports: reaping stays the test's job,
+above.
+No fixture clears its environment, so a fixture's leak always carries the
+nonce. On macOS `ps` withholds the environment of some processes, such as
+`sh` and `sleep`, so the nonce scan cannot name them. After it the scan
+reads the user's processes reparented to init that started after
+`scripts/check` began: one whose executable is under this worktree's
+`target/` fails the check and is named, and one whose command is `sh`,
+`bash` or `sleep` is listed in a warning that says it may belong to another
+run, without changing the exit status. Neither case sends a signal. An
+orphan that is neither is still invisible on macOS: it is caught by the
+test's own reap above, not the scan.
 
 The completion tests need bash, zsh and fish on PATH, on Linux and macOS: they never skip at runtime for a missing shell, so a machine without one fails them.
 

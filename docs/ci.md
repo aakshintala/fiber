@@ -122,6 +122,8 @@ job:
   only for one platform is linted on that platform
 - runs the selected tests under nextest, and doc-tests with
   `cargo test --doc`
+- scans for processes the tests leaked, failing with their PIDs and commands
+  (`docs/testing.md`, "Running tests")
 - reports how many tests ran
 
 The debug profile sets `panic = "abort"`, as the release profile does, so
