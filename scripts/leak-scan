@@ -164,18 +164,20 @@ if [ "$(uname -s)" = Darwin ] && [ -n "$orphan_start" ]; then
     else
       continue
     fi
-    # Only the executable (argv0, the first word) names this run's leak:
-    # a shell carrying a target/ path in its arguments may belong to
-    # another run, so it falls through to the sh/bash/sleep warning.
-    word=${cmd-}
-    word=${word%% *}
-    case $word in
+    # A binary run from this worktree's target/ names this run's leak:
+    # the prefix matches the whole command line, so a root holding a
+    # space still matches. A shell carrying a target/ path in its
+    # arguments may belong to another run, so it falls through to the
+    # sh/bash/sleep warning, which keeps the first-word basename.
+    case ${cmd-} in
     "$target_prefix"*)
       echo "leaked process $pid: $cmd" >&2
       leaks=$((leaks + 1))
       continue
       ;;
     esac
+    word=${cmd-}
+    word=${word%% *}
     case $word in '' ) continue ;; esac
     base=${word##*/}
     case $base in sh | bash | sleep)

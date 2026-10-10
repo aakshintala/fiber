@@ -27,6 +27,7 @@ leaker3=
 leaker4=
 leaker5=
 leaker6=
+leaker7=
 
 # True while ps still lists the PID. Read-only: this sends nothing.
 pid_alive() {
@@ -53,6 +54,24 @@ require_gone() {
     sleep 0.2
   done
   return 0
+}
+
+# Wait up to ~15 s for an orphan whose command line holds $1 to reach
+# ppid 1, printing its PID (empty when none arrived). Read-only: this
+# sends nothing. awk exits at the first match, so ps can die of SIGPIPE
+# under pipefail: not a failure, the match is already printed.
+await_orphan() {
+  local match=$1
+  local owner=${USER:-$(id -un)}
+  local tries=0 found=
+  while [ "$tries" -lt 30 ] && [ -z "$found" ]; do
+    found=$(env -u FIBER_CHECK_RUN ps -U "$owner" -o pid=,ppid=,lstart=,command= | awk -v t="$match" '$2 == 1 && index($0, t) { print $1; exit }' || true)
+    if [ -z "$found" ]; then
+      python3 -c 'import time; time.sleep(0.5)'
+    fi
+    tries=$((tries + 1))
+  done
+  printf '%s' "$found"
 }
 
 # Touch the stop file, reap the fixtures this shell spawned, and require
@@ -87,7 +106,7 @@ cleanup() {
     touch "$stop" 2>/dev/null || true
   fi
   local pid
-  for pid in "$leaker1" "$leaker2" "$leaker5"; do
+  for pid in "$leaker1" "$leaker2" "$leaker5" "$leaker7"; do
     if [ -n "$pid" ]; then
       if wait "$pid" 2>/dev/null; then
         :
@@ -95,7 +114,7 @@ cleanup() {
     fi
   done
   local stray=
-  for pid in "$leaker1" "$leaker2" "$leaker3" "$leaker4" "$leaker5" "$leaker6"; do
+  for pid in "$leaker1" "$leaker2" "$leaker3" "$leaker4" "$leaker5" "$leaker6" "$leaker7"; do
     if [ -n "$pid" ] && pid_alive "$pid"; then
       # 25 s covers the sleep 20 fixture when the test died before its
       # own wait for that fixture expired.
@@ -246,22 +265,12 @@ fi
 # green, and fails on a binary under target/ naming the PID.
 if [ "$(uname -s)" = Darwin ]; then
   marker="fiber-orphan-$$-$RANDOM"
-  owner=${USER:-$(id -un)}
   mkdir -p "$tmp/target"
   # An sh fixture orphaned by a double fork, as the extensions fixtures
   # were: reparented to init, ignoring SIGTERM like them, stopping when
   # the stop file exists (or after 120 s on its own).
   ( sh -c "trap '' TERM; while [ ! -e '$stop' ] && [ \"\$SECONDS\" -lt 120 ]; do sleep 0.05; done # $marker" & )
-  tries=0
-  while [ "$tries" -lt 30 ] && [ -z "$leaker3" ]; do
-    # awk exits at the first match, so ps can die of SIGPIPE under
-    # pipefail: not a failure, the match is already printed.
-    leaker3=$(env -u FIBER_CHECK_RUN ps -U "$owner" -o pid=,ppid=,lstart=,command= | awk -v m="$marker" '$2 == 1 && index($0, m) { print $1; exit }' || true)
-    if [ -z "$leaker3" ]; then
-      python3 -c 'import time; time.sleep(0.5)'
-    fi
-    tries=$((tries + 1))
-  done
+  leaker3=$(await_orphan "$marker")
   if [ -z "$leaker3" ]; then
     echo "scripts/test-leak-scan: sh orphan never reached ppid 1" >&2
     exit 1
@@ -322,14 +331,7 @@ if [ "$(uname -s)" = Darwin ]; then
   # rule at a temp dir instead of the worktree. sleep cannot poll a stop
   # file, so it runs `sleep 20` and the test lets it expire below.
   ( bash -c 'trap "" TERM; exec -a "$1/target/x" sleep 20' _ "$tmp" & )
-  tries=0
-  while [ "$tries" -lt 30 ] && [ -z "$leaker4" ]; do
-    leaker4=$(env -u FIBER_CHECK_RUN ps -U "$owner" -o pid=,ppid=,lstart=,command= | awk -v t="$tmp/target/x" '$2 == 1 && index($0, t) { print $1; exit }' || true)
-    if [ -z "$leaker4" ]; then
-      python3 -c 'import time; time.sleep(0.5)'
-    fi
-    tries=$((tries + 1))
-  done
+  leaker4=$(await_orphan "$tmp/target/x")
   if [ -z "$leaker4" ]; then
     echo "scripts/test-leak-scan: target orphan never reached ppid 1" >&2
     exit 1
@@ -363,14 +365,7 @@ if [ "$(uname -s)" = Darwin ]; then
   printf "#!/bin/sh\ntrap '' TERM\nwhile [ ! -e '%s' ] && [ \"\$SECONDS\" -lt 120 ]; do sleep 0.05; done\n" "$stop" >"$tmp/target/argscript"
   chmod +x "$tmp/target/argscript"
   ( bash "$tmp/target/argscript" & )
-  tries=0
-  while [ "$tries" -lt 30 ] && [ -z "$leaker6" ]; do
-    leaker6=$(env -u FIBER_CHECK_RUN ps -U "$owner" -o pid=,ppid=,lstart=,command= | awk -v t="$tmp/target/argscript" '$2 == 1 && index($0, t) { print $1; exit }' || true)
-    if [ -z "$leaker6" ]; then
-      python3 -c 'import time; time.sleep(0.5)'
-    fi
-    tries=$((tries + 1))
-  done
+  leaker6=$(await_orphan "$tmp/target/argscript")
   if [ -z "$leaker6" ]; then
     echo "scripts/test-leak-scan: shell arg orphan never reached ppid 1" >&2
     exit 1
@@ -401,4 +396,33 @@ if [ "$(uname -s)" = Darwin ]; then
   fi
   stop_and_require_gone "$leaker6"
   leaker6=
+  # A root holding a space still fails on a target/ binary: the rule
+  # matches the command's prefix, not its first space-delimited word.
+  # The orphan is sh run through a symlink in the spaced target/ dir,
+  # polling the stop file like the other fixtures (or after 120 s on
+  # its own).
+  spaced_root="$tmp/a b"
+  mkdir -p "$spaced_root/target"
+  ln -s /bin/sh "$spaced_root/target/x"
+  rm -f "$stop"
+  ( "$spaced_root/target/x" -c "trap '' TERM; while [ ! -e '$stop' ] && [ \"\$SECONDS\" -lt 120 ]; do sleep 0.05; done" & )
+  leaker7=$(await_orphan "$spaced_root/target/x")
+  if [ -z "$leaker7" ]; then
+    echo "scripts/test-leak-scan: spaced target orphan never reached ppid 1" >&2
+    exit 1
+  fi
+  lstart7=$(env -u FIBER_CHECK_RUN ps -o lstart= -p "$leaker7" 2>/dev/null | sed 's/^ *//;s/ *$//')
+  started7=$(date -j -f "%a %b %e %T %Y" "$lstart7" "+%s")
+  if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$spaced_root" scripts/leak-scan "$n" "$((started7 - 1))" 2>"$err"; then
+    echo "scripts/test-leak-scan: spaced target orphan $leaker7 did not fail the scan:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if ! grep -Fq "leaked process $leaker7:" "$err"; then
+    echo "scripts/test-leak-scan: scan did not name spaced target orphan $leaker7:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  stop_and_require_gone "$leaker7"
+  leaker7=
 fi
