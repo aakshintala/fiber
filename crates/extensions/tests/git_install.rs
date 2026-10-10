@@ -2278,7 +2278,7 @@ fn a_stalled_ls_remote_fails_the_plan_at_the_git_deadline() {
             );
         })
         .unwrap();
-    let err = drive(&clock, done_rx).unwrap_err();
+    let err = drive(&clock, done_rx, &watching).unwrap_err();
     assert!(
         matches!(err, Error::Git { .. }),
         "a stalled ls-remote fails as git failed: {err}"
@@ -2324,7 +2324,7 @@ fn a_stalled_clone_fails_the_plan_at_the_git_deadline() {
             );
         })
         .unwrap();
-    let err = drive(&clock, done_rx).unwrap_err();
+    let err = drive(&clock, done_rx, &watching).unwrap_err();
     assert!(
         matches!(err, Error::Git { .. }),
         "a stalled clone fails as git failed: {err}"

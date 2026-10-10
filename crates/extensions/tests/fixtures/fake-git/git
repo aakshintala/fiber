@@ -1,19 +1,43 @@
 #!/bin/sh
 # A stand-in for `git` in the bounded-wait tests: it answers `ls-remote`
 # with one tag, and stalls instead when the call carries its stall marker
-# (`ls-remote` on `stall-ls-remote/...`, `clone` on `stall-clone/...`) or
-# lists files at all. A stall is a `sh` loop that keeps its arguments in
-# its own argv, so a test can match the stalled process by the unique text
-# they carry and show it is gone after the run. Anything else is a loud
-# failure.
+# (`ls-remote` on `stall-ls-remote/...`, `clone` on `stall-clone/...`,
+# `diff` on `stall-diff/...`) or lists files at all. A stall is a `sh` loop
+# that keeps its arguments in its own argv, so a test can match the stalled
+# process by the unique text they carry and show it is gone after the run.
+# Anything else is a loud failure.
 # (`docs/testing.md`, "Testing an extension": a test never executes a file
 # it wrote in the same run, so this fixture is checked in executable.)
 
 stall() {
-    exec sh -c 'while :; do :; done' stall-git "$@"
+    # The test's marker rides in the stall's argv beside the call's own
+    # arguments, so the test matches the stalled process without reading
+    # its working directory.
+    # shellcheck disable=SC2086
+    exec sh -c 'while :; do :; done' stall-git "$@" ${FIBER_TEST_STALL_MARKER:+"$FIBER_TEST_STALL_MARKER"}
 }
 
-if [ "$1" = "ls-remote" ]; then
+# The subcommand: the first word past `git`'s own global options (`-c` and
+# `-C` each take a value, in one word or two), so `ls-files` is found
+# however the caller passes its directory.
+sub() {
+    skip=0
+    for arg in "$@"; do
+        if [ "$skip" = 1 ]; then
+            skip=0
+            continue
+        fi
+        case "$arg" in
+            -c | -C) skip=1 ;;
+            -c?* | -C?*) ;;
+            *) printf '%s' "$arg"; return ;;
+        esac
+    done
+}
+
+cmd=$(sub "$@")
+
+if [ "$cmd" = "ls-remote" ]; then
     for arg in "$@"; do
         case "$arg" in
             *stall-ls-remote*)
@@ -25,7 +49,7 @@ if [ "$1" = "ls-remote" ]; then
     exit 0
 fi
 
-if [ "$1" = "clone" ]; then
+if [ "$cmd" = "clone" ]; then
     for arg in "$@"; do
         case "$arg" in
             *stall-clone*)
@@ -35,8 +59,18 @@ if [ "$1" = "clone" ]; then
     done
 fi
 
-if [ "$1" = "ls-files" ]; then
+if [ "$cmd" = "ls-files" ]; then
     stall "$@"
+fi
+
+if [ "$cmd" = "diff" ]; then
+    for arg in "$@"; do
+        case "$arg" in
+            *stall-diff*)
+                stall "$@"
+                ;;
+        esac
+    done
 fi
 
 echo "fake-git: unexpected arguments: $*" >&2

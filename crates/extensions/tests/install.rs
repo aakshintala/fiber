@@ -196,10 +196,12 @@ fn unsettled_wrong_name_and_a_taken_directory_have_their_codes() {
 fn a_stalled_install_step_installs_nothing() {
     let setup = Setup::new();
     let mut m = manifest("acme");
-    // The step ignores SIGTERM, so the stop runs the full grace to SIGKILL
-    // however early the clock moves. A TERM before the trap still fails the
-    // same way, so the assertions hold on every timing.
-    m["install"] = json!(["sh", "-c", "trap '' TERM; while :; do :; done"]);
+    // The step ignores SIGTERM, so the stop runs the full grace to SIGKILL.
+    // Its argv carries text unique to the run, so the driver acknowledges
+    // this stall — and no other process — before the clock first moves.
+    let unique = format!("stall-install-step-{}", setup.root().display());
+    let step = format!("trap '' TERM; while :; do :; done # {unique}");
+    m["install"] = json!(["sh", "-c", step]);
     let source = setup.source("local", &m, &[provider("acme", &["m1"])]);
     let clock = fakes::clock::FakeClock::new();
     let worker_clock = std::sync::Arc::clone(&clock);
@@ -219,7 +221,7 @@ fn a_stalled_install_step_installs_nothing() {
             let _sent = done_tx.send(planned.commit());
         })
         .unwrap();
-    let err = common::drive(&clock, done_rx).unwrap_err();
+    let err = common::drive(&clock, done_rx, &unique).unwrap_err();
     assert!(
         matches!(err, Error::InstallExited { .. }),
         "a stalled step fails as its install step failed: {err}"
