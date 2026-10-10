@@ -1000,6 +1000,9 @@ fn an_open_file_panel_keeps_up_from_a_focused_chip() {
 #[test]
 fn a_session_attached_before_a_frame_keeps_the_arrows_for_the_conversation() {
     let mut app = home_with(Some("acme/m1"));
+    // With the conversation's ↑ moved off, a plain ↑ reaches the chip row
+    // only through home's own arrows.
+    keyed(&mut app, &[("focus_next_prev", serde_json::json!(["j", "k"]))]);
     app.on_line(hello());
     type_text(&mut app, "hi");
     drawn(&mut app);
@@ -1012,8 +1015,9 @@ fn a_session_attached_before_a_frame_keeps_the_arrows_for_the_conversation() {
     let result = serde_json::json!({"session_id": "s_aaaaaaaaaaaaaaaa"});
     app.on_line(accepted(start["id"].as_str().unwrap(), result));
     // No frame has drawn the session yet, so the chip focus is still
-    // there: ↑ goes to the conversation's previous stop, not the chip row.
+    // there. The arrow is unbound on the conversation, and the chip row
+    // does not take it.
     assert!(!app.on_home());
     assert_eq!(press(&mut app, "up"), Effect::None);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Model)));
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
 }
