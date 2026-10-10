@@ -34,8 +34,6 @@ use super::{
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
 
-/// Gives one key, or an error, and records that it was asked.
-
 /// Writes the install record `extensions/<dir>/.fiber.json` holds, so the
 /// directory is healthy: a directory with no record is damaged and its
 /// providers are left out (`docs/extensions.md`, "Installing").
@@ -54,6 +52,7 @@ fn write_record(dir: &std::path::Path) {
     .unwrap();
 }
 
+/// Gives one key, or an error, and records that it was asked.
 struct Fake {
     key: io::Result<&'static str>,
     asked: usize,

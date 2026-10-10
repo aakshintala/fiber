@@ -27,14 +27,6 @@ use super::{Credentials, Door, Loader, Switching, hosted_stands, prepare};
 /// credential command.
 const DEADLINE: Duration = Duration::from_secs(20);
 
-/// The fixture home, workspace and config: `fake` with `m`, `n` (low and
-/// high, defaulting low, with an addendum) and `r`; `claude` with the
-/// hosted-search model `w`; `other` with `m` and `m2` behind a `command`
-/// credential that appends a line to `marker`; `bad` with `m` behind a
-/// `command` that appends to `bad_marker` and fails; `filed` with `m`
-/// behind the `file` source `key_file`, absent at first; `bed` with a
-/// bedrock model behind the `command` source `other` uses.
-
 /// Writes the install record `extensions/<dir>/.fiber.json` holds, so the
 /// directory is healthy: a directory with no record is damaged and its
 /// providers are left out (`docs/extensions.md`, "Installing").
@@ -53,6 +45,13 @@ fn write_record(dir: &std::path::Path) {
     .unwrap();
 }
 
+/// The fixture home, workspace and config: `fake` with `m`, `n` (low and
+/// high, defaulting low, with an addendum) and `r`; `claude` with the
+/// hosted-search model `w`; `other` with `m` and `m2` behind a `command`
+/// credential that appends a line to `marker`; `bad` with `m` behind a
+/// `command` that appends to `bad_marker` and fails; `filed` with `m`
+/// behind the `file` source `key_file`, absent at first; `bed` with a
+/// bedrock model behind the `command` source `other` uses.
 struct Fixture {
     root: fakes::TempDir,
     home: PathBuf,

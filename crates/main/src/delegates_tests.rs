@@ -17,9 +17,6 @@ use serde_json::json;
 
 use super::{launcher, resolver, watcher};
 
-/// Installs a provider `fake` with a leveled model `m` and a plain model
-/// `plain`, and returns the loaded registry with an empty configuration.
-
 /// Writes the install record `extensions/<dir>/.fiber.json` holds, so the
 /// directory is healthy: a directory with no record is damaged and its
 /// providers are left out (`docs/extensions.md`, "Installing").
@@ -38,6 +35,8 @@ fn write_record(dir: &std::path::Path) {
     .unwrap();
 }
 
+/// Installs a provider `fake` with a leveled model `m` and a plain model
+/// `plain`, and returns the loaded registry with an empty configuration.
 fn rig() -> (extensions::Providers, config::Config) {
     let root = fakes::TempDir::new("fd");
     let home = root.path().join("home");
