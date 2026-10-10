@@ -79,9 +79,11 @@ fn a_git_that_cannot_start_fails_the_call() {
     let dir = fakes::TempDir::new("fiber-git-spawn");
     let missing = dir.path().join("fiber-definitely-missing-xyz");
     let clock = fakes::clock::FakeClock::new();
-    let err = Origin::new(missing.to_string_lossy().into_owned(), |repo| repo.to_owned())
-        .tags("github.com/acme/x", clock.as_ref())
-        .unwrap_err();
+    let err = Origin::new(missing.to_string_lossy().into_owned(), |repo| {
+        repo.to_owned()
+    })
+    .tags("github.com/acme/x", clock.as_ref())
+    .unwrap_err();
     assert!(
         matches!(err, crate::Error::GitMissing),
         "a missing git is GitMissing: {err}"

@@ -212,8 +212,7 @@ fn a_missing_install_step_program_is_the_spawn_error() {
         "a missing program fails as its install step failed: {err}"
     );
     assert!(
-        err.to_string()
-            .contains("`fiber-definitely-missing-xyz`:"),
+        err.to_string().contains("`fiber-definitely-missing-xyz`:"),
         "the spawn error names the program: {err}"
     );
 }
