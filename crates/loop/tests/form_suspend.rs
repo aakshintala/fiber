@@ -274,10 +274,11 @@ fn start(session: &mut Session) -> Finished {
 fn run_turn(session: &mut Session) -> Finished {
     let mut looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
+    let turn = thread::spawn(move || {
         let outcome = looped.turn();
         let _sent = done.send((looped, outcome));
     });
+    session.turn_thread = Some(turn.thread().id());
     finished
 }
 
@@ -506,10 +507,7 @@ fn waits_past_the_idle_delay(later: &'static str) {
     let tap = Tap::new(&session.log);
     let finished = start(&mut session);
     let request = request_id(&tap.wait_for("interaction_requested"));
-    assert!(
-        clock.await_parked_unbounded(DEADLINE),
-        "the step waits for the answer with no deadline"
-    );
+    support::await_step_park(&session);
     let mark = clock.advance_marked(IDLE * 2);
     assert!(
         clock.await_parked_since(&mark, None, DEADLINE),
@@ -574,10 +572,7 @@ fn the_idle_delay_counts_from_when_the_earlier_call_completes() {
     let tap = Tap::new(&session.log);
     let finished = start(&mut session);
     let request = request_id(&tap.wait_for("interaction_requested"));
-    assert!(
-        clock.await_parked_unbounded(DEADLINE),
-        "the step waits for the earlier call with no deadline"
-    );
+    support::await_step_park(&session);
     let mark = clock.advance_marked(IDLE);
     assert!(
         clock.await_parked_since(&mark, None, DEADLINE),
@@ -621,10 +616,7 @@ fn a_running_job_keeps_a_pending_form_from_going_idle() {
     let tap = Tap::new(&session.log);
     let finished = start(&mut session);
     let request = request_id(&tap.wait_for("interaction_requested"));
-    assert!(
-        clock.await_parked_unbounded(DEADLINE),
-        "with a job running the step waits with no deadline"
-    );
+    support::await_step_park(&session);
     let mark = clock.advance_marked(IDLE * 2);
     assert!(
         clock.await_parked_since(&mark, None, DEADLINE),
@@ -816,10 +808,7 @@ fn without_an_idle_delay_a_form_waits_a_day_for_its_answer() {
     let tap = Tap::new(&session.log);
     let finished = start(&mut session);
     let request = request_id(&tap.wait_for("interaction_requested"));
-    assert!(
-        clock.await_parked_unbounded(DEADLINE),
-        "the step waits with no deadline"
-    );
+    support::await_step_park(&session);
     let mark = clock.advance_marked(Duration::from_secs(24 * 60 * 60));
     assert!(
         clock.await_parked_since(&mark, None, DEADLINE),
@@ -861,10 +850,7 @@ fn an_ask_that_does_not_suspend_keeps_the_session_past_the_idle_delay() {
     let finished = start(&mut session);
     let requested = tap.wait_for("interaction_requested");
     assert!(requested.payload.get("resumes").is_none());
-    assert!(
-        clock.await_parked_unbounded(DEADLINE),
-        "the step waits for the answer with no deadline"
-    );
+    support::await_step_park(&session);
     let mark = clock.advance_marked(IDLE * 2);
     assert!(
         clock.await_parked_since(&mark, None, DEADLINE),
