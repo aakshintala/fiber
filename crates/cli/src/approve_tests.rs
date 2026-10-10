@@ -16,6 +16,7 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(5);
 const REAP_DEADLINE: Duration = Duration::from_secs(5);
 
 use super::{run, says_yes};
+use fakes::Deadline;
 
 /// A git repository declaring one hook, with Fiber home beside it.
 struct Setup {
@@ -280,12 +281,12 @@ fn approve_returns_zero_on_success_and_two_on_refusal() {
         thread::spawn(move || {
             let _sent = status_tx.send(child.wait().unwrap());
         });
-        let status = match status_rx.recv_timeout(CHILD_DEADLINE) {
+        let status = match Deadline::after(CHILD_DEADLINE).recv(&status_rx) {
             Ok(status) => status,
             Err(_) => {
                 let _killed = fakes::kill_pid(pid, "KILL").unwrap();
-                status_rx
-                    .recv_timeout(REAP_DEADLINE)
+                Deadline::after(REAP_DEADLINE)
+                    .recv(&status_rx)
                     .expect("the killed approve child is reaped");
                 panic!("waited {CHILD_DEADLINE:?} for `fiber approve` ({case}) to exit");
             }

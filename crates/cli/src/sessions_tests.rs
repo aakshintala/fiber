@@ -19,6 +19,7 @@ use contract::HubLine;
 use serde_json::{Map, Value, json};
 
 use super::{Ask, delete, delete_run, export, run};
+use fakes::Deadline;
 
 /// A `session_started` first line for session `id` in `workspace`: a full
 /// envelope, so `resolve` keeps it, in this project's workspace. `from`
@@ -217,7 +218,7 @@ fn export_exits_zero_and_writes_the_export() {
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
         fakes::kill_pid(pid, "KILL").unwrap();
         panic!("waited {CHILD_DEADLINE:?} for `fiber sessions export` to exit");
     };
@@ -291,12 +292,10 @@ impl FakeHub {
     }
 
     /// The command line the hub read, as JSON.
+    #[track_caller]
     fn sent(&self) -> Value {
-        let line = self
-            .got
-            .as_ref()
-            .unwrap()
-            .recv_timeout(HUB_DEADLINE)
+        let line = Deadline::after(HUB_DEADLINE)
+            .recv(self.got.as_ref().unwrap())
             .unwrap();
         serde_json::from_str(&line).unwrap()
     }
@@ -410,9 +409,10 @@ fn delete_exits_zero_on_success_two_on_usage_and_one_on_refusal() {
         let watchdog = fakes::Watchdog::group(group);
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || tx.send(child.wait()));
-        let Ok(status) = rx.recv_timeout(HUB_DEADLINE) else {
+        let Ok(status) = Deadline::after(HUB_DEADLINE).recv(&rx) else {
             assert!(fakes::kill_group(group, "KILL").unwrap());
-            rx.recv_timeout(REAP_DEADLINE)
+            Deadline::after(REAP_DEADLINE)
+                .recv(&rx)
                 .expect("the killed delete child must be reaped")
                 .unwrap();
             panic!("waited {HUB_DEADLINE:?} for `fiber sessions delete` ({case}) to exit");

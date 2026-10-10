@@ -24,6 +24,7 @@ use std::time::Duration;
 use contract::events::Event;
 use contract::session_search::LIMIT;
 use contract::{Envelope, ErrorCode, SessionId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
@@ -751,9 +752,10 @@ fn search_exits_zero_on_success_and_usage_on_a_bad_home() {
         let watchdog = fakes::Watchdog::group(group);
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || tx.send(child.wait()));
-        let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+        let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
             assert!(fakes::kill_group(group, "KILL").unwrap());
-            rx.recv_timeout(REAP_DEADLINE)
+            Deadline::after(REAP_DEADLINE)
+                .recv(&rx)
                 .expect("the killed search child must be reaped")
                 .unwrap();
             panic!("waited {CHILD_DEADLINE:?} for `fiber sessions search` ({case}) to exit");

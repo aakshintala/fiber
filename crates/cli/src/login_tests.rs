@@ -27,6 +27,7 @@ use extensions::Providers;
 use serde_json::{Value, json};
 
 use doors::failure;
+use fakes::Deadline;
 
 use super::{
     KeyReader, LoginIo, LoginName, LoginStored, LogoutTarget, Plain, credential_key, finish, login,
@@ -752,7 +753,7 @@ fn login_of_an_unknown_provider_is_a_usage_failure() {
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
         fakes::kill_pid(pid, "KILL").unwrap();
         panic!("waited {CHILD_DEADLINE:?} for `fiber login` of an unknown provider to exit");
     };

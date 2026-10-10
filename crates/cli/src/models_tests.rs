@@ -21,6 +21,7 @@ use contract::shapes::Failure;
 use serde_json::{Value, json};
 
 use super::{providers_and_config, refresh_named, refresh_run, run};
+use fakes::Deadline;
 
 /// `fiber models` never writes a file, so its lock runs every call straight
 /// through.
@@ -433,6 +434,7 @@ const REAP_DEADLINE: Duration = Duration::from_secs(10);
 /// nothing behind. On expiry the test kills the group, checks within
 /// [`REAP_DEADLINE`] that the child was reaped as killed, and fails
 /// naming `what`.
+#[track_caller]
 fn reap_group_leader(
     mut child: std::process::Child,
     deadline: Duration,
@@ -443,13 +445,13 @@ fn reap_group_leader(
     let watchdog = fakes::Watchdog::group(group);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()));
-    if let Ok(status) = finished.recv_timeout(deadline) {
+    if let Ok(status) = Deadline::after(deadline).recv(&finished) {
         watchdog.stand_down(REAP_DEADLINE);
         return status.unwrap();
     }
     fakes::kill_group(group, "KILL").unwrap();
-    let killed = finished
-        .recv_timeout(REAP_DEADLINE)
+    let killed = Deadline::after(REAP_DEADLINE)
+        .recv(&finished)
         .map(|status| status.map(|status| status.signal()));
     assert!(
         matches!(killed, Ok(Ok(Some(9)))),
@@ -502,7 +504,7 @@ fn models_exits_zero_and_prints_the_row() {
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
-    let Ok(output) = rx.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(output) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
         fakes::kill_pid(pid, "KILL").unwrap();
         panic!("waited {CHILD_DEADLINE:?} for `fiber models` to exit");
     };
@@ -545,7 +547,7 @@ fn models_with_a_relative_fiber_home_is_a_usage_failure() {
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
         fakes::kill_pid(pid, "KILL").unwrap();
         panic!("waited {CHILD_DEADLINE:?} for `fiber models` to exit");
     };
@@ -599,7 +601,7 @@ fn models_spawns_its_refresh_child_from_the_recorded_path() {
     let mkfifo_pid = mkfifo.id();
     let (mkfifo_tx, mkfifo_rx) = mpsc::channel();
     thread::spawn(move || mkfifo_tx.send(mkfifo.wait()));
-    let Ok(mkfifo_status) = mkfifo_rx.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(mkfifo_status) = Deadline::after(CHILD_DEADLINE).recv(&mkfifo_rx) else {
         fakes::kill_pid(mkfifo_pid, "KILL").unwrap();
         panic!("waited {CHILD_DEADLINE:?} for mkfifo to exit");
     };
@@ -632,7 +634,7 @@ fn models_spawns_its_refresh_child_from_the_recorded_path() {
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
-    let Ok(output) = rx.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(output) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
         fakes::kill_pid(pid, "KILL").unwrap();
         panic!("waited {CHILD_DEADLINE:?} for `fiber models` to exit");
     };
@@ -642,7 +644,7 @@ fn models_spawns_its_refresh_child_from_the_recorded_path() {
     // The stub writes its arguments to the FIFO and exits, detached in
     // its own process group: the read completes when the stub runs, and
     // the deadline fails the test when a mutant skips the spawn.
-    let Ok(args) = fifo_rx.recv_timeout(SPAWN_DEADLINE) else {
+    let Ok(args) = Deadline::after(SPAWN_DEADLINE).recv(&fifo_rx) else {
         panic!("the recorded stub never ran the refresh child");
     };
     assert!(
@@ -694,7 +696,7 @@ fn models_with_an_unusable_recorded_path_still_prints_from_the_cache() {
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
-    let Ok(output) = rx.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(output) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
         fakes::kill_pid(pid, "KILL").unwrap();
         panic!("waited {CHILD_DEADLINE:?} for `fiber models` to exit");
     };
@@ -928,7 +930,7 @@ fn the_refresh_child_leaves_an_unnamed_uncached_provider_alone() {
         done.send(()).unwrap();
     });
     assert!(
-        finished.recv_timeout(REFRESH_DEADLINE).is_ok(),
+        Deadline::after(REFRESH_DEADLINE).recv(&finished).is_ok(),
         "waited {REFRESH_DEADLINE:?} for the refresh child to finish"
     );
     let stale: Vec<config::ModelData> = config::read_model_cache(&home, "stale").unwrap().unwrap();
@@ -1038,7 +1040,7 @@ fn the_refresh_entry_refreshes_a_stale_list() {
         done.send(()).unwrap();
     });
     assert!(
-        finished.recv_timeout(REFRESH_DEADLINE).is_ok(),
+        Deadline::after(REFRESH_DEADLINE).recv(&finished).is_ok(),
         "waited {REFRESH_DEADLINE:?} for the refresh entry to finish"
     );
     let stale: Vec<config::ModelData> = config::read_model_cache(&setup.home(), "stale")
@@ -1192,7 +1194,7 @@ fn a_repository_settings_file_cannot_supply_the_host() {
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
-    let Ok(output) = rx.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(output) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
         fakes::kill_pid(pid, "KILL").unwrap();
         panic!("waited {CHILD_DEADLINE:?} for `fiber models` to exit");
     };

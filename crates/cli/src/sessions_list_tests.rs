@@ -22,6 +22,7 @@ use contract::{ErrorCode, HubLine};
 use serde_json::{Map, Value, json};
 
 use super::{list, run};
+use fakes::Deadline;
 
 /// One named deadline per wait on the fake hub.
 const HUB_DEADLINE: Duration = Duration::from_secs(10);
@@ -65,12 +66,10 @@ impl FakeHub {
     }
 
     /// The command line the hub read, as JSON.
+    #[track_caller]
     fn sent(&self) -> Value {
-        let line = self
-            .got
-            .as_ref()
-            .unwrap()
-            .recv_timeout(HUB_DEADLINE)
+        let line = Deadline::after(HUB_DEADLINE)
+            .recv(self.got.as_ref().unwrap())
             .unwrap();
         serde_json::from_str(&line).unwrap()
     }
@@ -136,6 +135,7 @@ fn project_at(path: &str, in_repository: bool) -> doors::Project {
 
 /// Runs the list against `answers` in `project`: the outcome, what it
 /// printed, and the command the hub read.
+#[track_caller]
 fn listing(
     project: &doors::Project,
     all: bool,
@@ -153,10 +153,11 @@ fn listing(
         let sent = hub.sent();
         tx.send((ran, text, sent)).unwrap_or(());
     });
-    rx.recv_timeout(HUB_DEADLINE).unwrap()
+    Deadline::after(HUB_DEADLINE).recv(&rx).unwrap()
 }
 
 /// The JSON Lines `fiber sessions --json` prints for `result`.
+#[track_caller]
 fn json_rows(result: Value) -> Vec<Value> {
     let (ran, out, _) = listing(&project_at("/w", false), false, true, &[accepted(result)]);
     ran.unwrap();
@@ -483,9 +484,10 @@ fn list_exits_zero_on_success_and_fail_code_on_hub_failure() {
         let watchdog = fakes::Watchdog::group(group);
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || tx.send(child.wait()));
-        let Ok(status) = rx.recv_timeout(HUB_DEADLINE) else {
+        let Ok(status) = Deadline::after(HUB_DEADLINE).recv(&rx) else {
             assert!(fakes::kill_group(group, "KILL").unwrap());
-            rx.recv_timeout(REAP_DEADLINE)
+            Deadline::after(REAP_DEADLINE)
+                .recv(&rx)
                 .expect("the killed list child must be reaped")
                 .unwrap();
             panic!("waited {HUB_DEADLINE:?} for `fiber sessions` ({case}) to exit");

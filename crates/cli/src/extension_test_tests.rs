@@ -21,6 +21,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
+use fakes::Deadline;
 use fakes::{Watchdog, group_empties, matching_exits};
 use rustix::process::Signal;
 use serde_json::json;
@@ -341,7 +342,7 @@ fn child_exit_codes_map_to_ok_and_fail_with_stdout_reasons() {
     let options = setup.options(fakes::clock::FakeClock::new(), script_prefix(&script));
     let receive = run_in_thread(setup.package.clone(), PathBuf::from("/bin/sh"), options);
 
-    let (code, out, err) = receive.recv_timeout(TEST_WAIT).unwrap();
+    let (code, out, err) = Deadline::after(TEST_WAIT).recv(&receive).unwrap();
     assert_eq!(code, 1);
     assert_eq!(
         out,
@@ -358,8 +359,12 @@ fn all_passing_cases_exit_zero() {
     fs::write(&script, "printf 'ok pass\\n'; exit 0\n").unwrap();
     let options = setup.options(fakes::clock::FakeClock::new(), script_prefix(&script));
 
-    let (code, out, err) = run_in_thread(setup.package.clone(), PathBuf::from("/bin/sh"), options)
-        .recv_timeout(TEST_WAIT)
+    let (code, out, err) = Deadline::after(TEST_WAIT)
+        .recv(&run_in_thread(
+            setup.package.clone(),
+            PathBuf::from("/bin/sh"),
+            options,
+        ))
         .unwrap();
 
     assert_eq!(code, 0);
@@ -381,8 +386,12 @@ fn zero_exit_requires_one_ok_verdict_and_no_reason_lines() {
     .unwrap();
     let options = setup.options(fakes::clock::FakeClock::new(), script_prefix(&script));
 
-    let (code, out, err) = run_in_thread(setup.package.clone(), PathBuf::from("/bin/sh"), options)
-        .recv_timeout(TEST_WAIT)
+    let (code, out, err) = Deadline::after(TEST_WAIT)
+        .recv(&run_in_thread(
+            setup.package.clone(),
+            PathBuf::from("/bin/sh"),
+            options,
+        ))
         .unwrap();
 
     assert_eq!(code, 1);
@@ -449,13 +458,14 @@ fn public_entry_exit_codes() {
     watchdog.stand_down(TEST_WAIT);
 }
 
+#[track_caller]
 fn public_entry(path: PathBuf, fiber: Result<PathBuf, String>) -> i32 {
     let (send, receive) = mpsc::channel();
     thread::spawn(move || {
         let _sent = send.send(extension_test(Some(&path), fiber));
     });
-    receive
-        .recv_timeout(TEST_WAIT)
+    Deadline::after(TEST_WAIT)
+        .recv(&receive)
         .expect("public extension test entry did not return")
 }
 
@@ -484,24 +494,26 @@ fn group_alive_distinguishes_a_reaped_group_from_a_live_group() {
     watchdog.stand_down(TEST_WAIT);
 }
 
+#[track_caller]
 fn wait_child(mut child: std::process::Child) -> ExitStatus {
     let (send, receive) = mpsc::channel();
     thread::spawn(move || {
         let _sent = send.send(child.wait());
     });
-    receive
-        .recv_timeout(TEST_WAIT)
+    Deadline::after(TEST_WAIT)
+        .recv(&receive)
         .expect("child did not exit before the test deadline")
         .unwrap()
 }
 
+#[track_caller]
 fn pid_exits_or_is_zombie(pid: u32, deadline: Duration) -> bool {
     let (exited, result) = mpsc::channel();
     let (stop, stopped) = mpsc::channel::<()>();
     thread::spawn(move || {
         while fakes::kill_pid(pid, "0").unwrap() && !pid_is_zombie(pid) {
             if !matches!(
-                stopped.recv_timeout(PID_EXIT_POLL),
+                Deadline::after(PID_EXIT_POLL).recv(&stopped),
                 Err(mpsc::RecvTimeoutError::Timeout)
             ) {
                 return;
@@ -511,7 +523,7 @@ fn pid_exits_or_is_zombie(pid: u32, deadline: Duration) -> bool {
             Ok(()) | Err(_) => {}
         }
     });
-    let finished = result.recv_timeout(deadline).is_ok();
+    let finished = Deadline::after(deadline).recv(&result).is_ok();
     drop(stop);
     finished
 }
@@ -598,13 +610,13 @@ fn prepare_wait_clears_an_earlier_wake_and_a_later_wake_releases_the_wait() {
             .unwrap();
         finished.send((timeout.timed_out(), *guard)).unwrap();
     });
-    started
-        .recv_timeout(TEST_WAIT)
+    Deadline::after(TEST_WAIT)
+        .recv(&started)
         .expect("waiter holds the signal lock before waiting");
     signal.wake();
     assert_eq!(
-        result
-            .recv_timeout(TEST_WAIT)
+        Deadline::after(TEST_WAIT)
+            .recv(&result)
             .expect("wake releases the bounded wait"),
         (false, true)
     );
@@ -733,7 +745,7 @@ PERL
     );
     clock.advance(Duration::from_secs(4));
 
-    let (code, out, err) = receive.recv_timeout(TEST_WAIT).unwrap();
+    let (code, out, err) = Deadline::after(TEST_WAIT).recv(&receive).unwrap();
     assert_eq!(code, 1);
     assert!(
         out.contains("FAIL descendant\n  did not finish within"),
@@ -827,12 +839,12 @@ fn an_unreaped_child_gets_sigkill_even_when_the_group_probe_is_empty() {
             .and_then(|mut writer| writeln!(writer, "release"));
         let _sent = released.send(result);
     });
-    released_rx
-        .recv_timeout(TEST_WAIT)
+    Deadline::after(TEST_WAIT)
+        .recv(&released_rx)
         .expect("child opened its release fifo")
         .unwrap();
 
-    let (code, out, err) = receive.recv_timeout(TEST_WAIT).unwrap();
+    let (code, out, err) = Deadline::after(TEST_WAIT).recv(&receive).unwrap();
     assert_eq!(code, 1);
     assert!(out.contains("did not finish within"), "{out}");
     assert!(err.is_empty());
@@ -879,7 +891,7 @@ fn a_child_that_ignores_term_is_killed_as_a_group_at_the_injected_deadline() {
     );
     clock.advance(Duration::from_secs(4));
 
-    let (code, out, err) = receive.recv_timeout(TEST_WAIT).unwrap();
+    let (code, out, err) = Deadline::after(TEST_WAIT).recv(&receive).unwrap();
     assert_eq!(code, 1);
     assert!(out.contains("FAIL hang\n  did not finish within"), "{out}");
     assert!(err.is_empty());
@@ -1033,7 +1045,7 @@ PERL
     );
     clock.advance(Duration::from_secs(4));
 
-    let (code, out, err) = receive.recv_timeout(TEST_WAIT).unwrap();
+    let (code, out, err) = Deadline::after(TEST_WAIT).recv(&receive).unwrap();
     assert_eq!(code, 1);
     assert!(
         out.contains("FAIL signals\n  did not finish within"),
