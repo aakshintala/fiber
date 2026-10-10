@@ -141,8 +141,7 @@ fn a_non_object_entry_is_dropped() {
     let tools: Vec<ListedTool> = entries(vec![json!({"name": "echo"}), json!(7), json!(null)]);
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].name, "echo");
-    let prompts: Vec<ListedPrompt> =
-        entries(vec![json!({"name": "greet"}), json!("nope")]);
+    let prompts: Vec<ListedPrompt> = entries(vec![json!({"name": "greet"}), json!("nope")]);
     assert_eq!(prompts.len(), 1);
     assert_eq!(prompts[0].name, "greet");
 }
@@ -164,10 +163,7 @@ fn unknown_fields_survive_a_round_trip() {
             .expect("round trips");
     assert_eq!(again, read);
     let read = prompt(json!({"name": "greet", "extra": "kept"}));
-    assert_eq!(
-        read.rest.get("extra"),
-        Some(&Value::from("kept"))
-    );
+    assert_eq!(read.rest.get("extra"), Some(&Value::from("kept")));
     let again: ListedPrompt =
         serde_json::from_value(serde_json::to_value(&read).expect("serializes"))
             .expect("round trips");

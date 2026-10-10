@@ -23,8 +23,6 @@ fn names(started: &super::Started) -> Vec<String> {
         .collect()
 }
 
-
-
 #[test]
 fn tools_of_two_servers_declare_in_one_sorted_order() {
     let first = Setup::new();
@@ -599,10 +597,7 @@ fn a_lazy_prompt_run_starts_the_server_and_sends_its_arguments() {
     setup.stop(first.servers);
     std::fs::remove_file(setup.dir.path().join("pid.txt")).expect("pid.txt");
     let second = setup.start(vec![setup.spec("fx")]);
-    assert!(
-        !setup.spawned(),
-        "declaring from the cache spawns nothing",
-    );
+    assert!(!setup.spawned(), "declaring from the cache spawns nothing",);
     let out = setup.get(
         &second.prompts,
         "fx",

@@ -109,7 +109,12 @@ fn text_part(text: Option<&str>) -> Content {
 #[test]
 #[allow(clippy::type_complexity, reason = "one table pins every answer shape")]
 fn answer_reads_text_in_order_and_drops_the_rest() {
-    let rows: &[(&str, CallResult, Vec<ContentPart>, Option<(ErrorCode, &str)>)] = &[
+    let rows: &[(
+        &str,
+        CallResult,
+        Vec<ContentPart>,
+        Option<(ErrorCode, &str)>,
+    )] = &[
         (
             "two texts",
             CallResult {
@@ -246,15 +251,7 @@ fn each_outcome_maps_to_its_code_sentence_and_servers() {
         Option<&str>,
         usize,
     )> = vec![
-        (
-            "ok",
-            &base,
-            Ok(ok),
-            vec![],
-            None,
-            None,
-            0,
-        ),
+        ("ok", &base, Ok(ok), vec![], None, None, 0),
         (
             "timeout",
             &timeout_call,
@@ -270,7 +267,9 @@ fn each_outcome_maps_to_its_code_sentence_and_servers() {
             Err(Fault::Cancelled),
             vec![],
             Some(ErrorCode::McpCancelRequested),
-            Some("The call to `echo` on the MCP server `fx` was cancelled; the server may still act on it."),
+            Some(
+                "The call to `echo` on the MCP server `fx` was cancelled; the server may still act on it.",
+            ),
             0,
         ),
         (

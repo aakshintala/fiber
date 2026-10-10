@@ -15,17 +15,17 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
-use contract::tool::Cancel;
 use contract::events::{McpServerFailed, McpServerReady, ServerFailure};
 use contract::shapes::Failure;
+use contract::tool::Cancel;
 use contract::tool::ServerRecord;
 
 use crate::cache::{self, Cached};
-use crate::server::{CallError, Server};
 use crate::rpc::Named;
-use serde_json::Value;
+use crate::server::{CallError, Server};
 use crate::server_json::ListedTool;
 use crate::start::{ServerSpec, not_started};
+use serde_json::Value;
 
 /// One server's place in the session: what [`Slot::run`] starts, calls,
 /// restarts or refuses, and what [`Slot::stop`] stops.
@@ -83,7 +83,10 @@ pub(crate) struct RunFailed {
 }
 
 /// Why a call through [`Slot::call`] failed.
-#[allow(clippy::result_large_err, reason = "the death record travels with the call that observed it")]
+#[allow(
+    clippy::result_large_err,
+    reason = "the death record travels with the call that observed it"
+)]
 pub(crate) enum Fault {
     /// Nothing answered before the call's deadline.
     Timeout,
@@ -320,7 +323,10 @@ impl Slot {
     /// Calls `method` on `server`, mapping the wire outcome to one step.
     /// `server` is the one [`Slot::run`] or [`Slot::serve`] returned. The
     /// call is never replayed.
-    #[allow(clippy::result_large_err, reason = "the death record travels with the call that observed it")]
+    #[allow(
+        clippy::result_large_err,
+        reason = "the death record travels with the call that observed it"
+    )]
     pub(crate) fn call(
         &self,
         server: &Arc<Server>,

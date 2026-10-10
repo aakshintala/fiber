@@ -6,7 +6,6 @@ use serde_json::{Value, json};
 
 use crate::test_support::Setup;
 
-
 #[test]
 fn runnable_names_hold_no_whitespace() {
     use crate::server_json::ListedPrompt;
@@ -24,8 +23,8 @@ fn runnable_names_hold_no_whitespace() {
 
 #[test]
 fn the_hint_marks_required_arguments() {
-    use crate::server_json::Argument;
     use super::hint;
+    use crate::server_json::Argument;
     assert_eq!(hint(&[]), None);
     assert_eq!(
         hint(&[
@@ -46,8 +45,8 @@ fn the_hint_marks_required_arguments() {
 
 #[test]
 fn fill_gives_one_word_per_argument_with_the_rest_to_the_last() {
-    use crate::server_json::Argument;
     use super::fill;
+    use crate::server_json::Argument;
     let args = || {
         vec![
             Argument {
@@ -184,7 +183,6 @@ fn embedded_resource_text_and_blob_guard_are_distinct() {
     );
 }
 
-
 fn greet_entry() -> Value {
     json!({
         "name": "greet",
@@ -216,16 +214,21 @@ fn prompts_with(entry: crate::prompt::PromptSource) -> crate::prompt::Prompts {
 }
 
 #[test]
-#[allow(clippy::type_complexity, reason = "one table pins every prompt outcome")]
+#[allow(
+    clippy::type_complexity,
+    reason = "one table pins every prompt outcome"
+)]
 fn each_outcome_maps_to_its_sentence() {
+    use crate::slot::Fault;
     use contract::ErrorCode;
     use contract::shapes::ContentPart;
     use contract::tool::ServerRecord;
-    use crate::slot::Fault;
     let timeout = std::time::Duration::from_secs(60);
     let entry = entry_with("fx", greet_prompt(), std::sync::Weak::new(), timeout);
-    let ok: Value = json!({"messages": [{"role": "user", "content": {"type": "text", "text": "Hi."}}]});
-    let ok_appended: Value = json!({"messages": [{"role": "user", "content": {"type": "text", "text": "Body."}}]});
+    let ok: Value =
+        json!({"messages": [{"role": "user", "content": {"type": "text", "text": "Hi."}}]});
+    let ok_appended: Value =
+        json!({"messages": [{"role": "user", "content": {"type": "text", "text": "Body."}}]});
     let no_text: Value = json!({"messages": []});
     let refused = Fault::Refused("Unknown prompt.".to_owned());
     let died = Fault::Died(contract::events::McpServerFailed {
@@ -237,25 +240,87 @@ fn each_outcome_maps_to_its_sentence() {
             "The MCP server `fx` exited; Fiber restarts it on the next call.".to_owned(),
         ),
     });
-    let rows: Vec<(&str, Option<String>, Result<Value, Fault>, Option<ErrorCode>, &str, usize)> = vec![
+    let rows: Vec<(
+        &str,
+        Option<String>,
+        Result<Value, Fault>,
+        Option<ErrorCode>,
+        &str,
+        usize,
+    )> = vec![
         ("ok", None, Ok(ok), None, "", 0),
-        ("ok with appended", Some("extra".to_owned()), Ok(ok_appended), None, "", 0),
-        ("ok with no text", None, Ok(no_text), Some(ErrorCode::McpPromptFailed), "returned no text, which Fiber cannot send as a message.", 0),
-        ("timeout", None, Err(Fault::Timeout), Some(ErrorCode::McpPromptFailed), "did not answer", 0),
-        ("cancelled", None, Err(Fault::Cancelled), Some(ErrorCode::McpPromptFailed), "was cancelled", 0),
-        ("refused", None, Err(refused), Some(ErrorCode::McpPromptFailed), "refused", 0),
-        ("died", None, Err(died), Some(ErrorCode::McpPromptFailed), "was not run", 1),
-        ("gone", None, Err(Fault::Gone), Some(ErrorCode::McpPromptFailed), "was not run", 0),
+        (
+            "ok with appended",
+            Some("extra".to_owned()),
+            Ok(ok_appended),
+            None,
+            "",
+            0,
+        ),
+        (
+            "ok with no text",
+            None,
+            Ok(no_text),
+            Some(ErrorCode::McpPromptFailed),
+            "returned no text, which Fiber cannot send as a message.",
+            0,
+        ),
+        (
+            "timeout",
+            None,
+            Err(Fault::Timeout),
+            Some(ErrorCode::McpPromptFailed),
+            "did not answer",
+            0,
+        ),
+        (
+            "cancelled",
+            None,
+            Err(Fault::Cancelled),
+            Some(ErrorCode::McpPromptFailed),
+            "was cancelled",
+            0,
+        ),
+        (
+            "refused",
+            None,
+            Err(refused),
+            Some(ErrorCode::McpPromptFailed),
+            "refused",
+            0,
+        ),
+        (
+            "died",
+            None,
+            Err(died),
+            Some(ErrorCode::McpPromptFailed),
+            "was not run",
+            1,
+        ),
+        (
+            "gone",
+            None,
+            Err(Fault::Gone),
+            Some(ErrorCode::McpPromptFailed),
+            "was not run",
+            0,
+        ),
     ];
     for (name, appended, called, code, fragment, records) in rows {
         let out = super::output(&entry, appended.clone(), called, vec![]);
         match code {
             None => {
                 assert!(out.error.is_none(), "row: {name}");
-                let expected = if appended.is_some() { "Body.\n\nextra" } else { "Hi." };
+                let expected = if appended.is_some() {
+                    "Body.\n\nextra"
+                } else {
+                    "Hi."
+                };
                 assert_eq!(
                     out.content,
-                    vec![ContentPart::Text { text: expected.to_owned() }],
+                    vec![ContentPart::Text {
+                        text: expected.to_owned()
+                    }],
                     "row: {name}"
                 );
             }
@@ -282,12 +347,21 @@ fn each_outcome_maps_to_its_sentence() {
 #[test]
 fn a_dead_link_is_not_run() {
     use contract::ErrorCode;
-    let entry = entry_with("fx", greet_prompt(), std::sync::Weak::new(), std::time::Duration::from_secs(30));
+    let entry = entry_with(
+        "fx",
+        greet_prompt(),
+        std::sync::Weak::new(),
+        std::time::Duration::from_secs(30),
+    );
     let prompts = prompts_with(entry);
     let out = prompts.get("fx", "greet", "Ada", &fakes::CancelToken::new());
     let failure = out.error.expect("failed");
     assert_eq!(failure.code, ErrorCode::McpPromptFailed);
-    assert!(failure.message.contains("was not run"), "{}", failure.message);
+    assert!(
+        failure.message.contains("was not run"),
+        "{}",
+        failure.message
+    );
 }
 
 #[test]
@@ -306,7 +380,12 @@ fn a_dead_slot_is_not_run_without_spawning() {
         crate::cache::Cached::default(),
     );
     slot.stop();
-    let entry = entry_with("fx", greet_prompt(), std::sync::Arc::downgrade(&slot), std::time::Duration::from_secs(30));
+    let entry = entry_with(
+        "fx",
+        greet_prompt(),
+        std::sync::Arc::downgrade(&slot),
+        std::time::Duration::from_secs(30),
+    );
     let prompts = prompts_with(entry);
     let out = prompts.get("fx", "greet", "Ada", &fakes::CancelToken::new());
     let failure = out.error.expect("failed");
@@ -317,18 +396,31 @@ fn a_dead_slot_is_not_run_without_spawning() {
 #[test]
 fn a_prompt_no_server_lists_is_not_run() {
     use contract::ErrorCode;
-    let entry = entry_with("fx", greet_prompt(), std::sync::Weak::new(), std::time::Duration::from_secs(30));
+    let entry = entry_with(
+        "fx",
+        greet_prompt(),
+        std::sync::Weak::new(),
+        std::time::Duration::from_secs(30),
+    );
     let prompts = prompts_with(entry);
     let out = prompts.get("fx", "missing", "", &fakes::CancelToken::new());
     let failure = out.error.expect("failed");
     assert_eq!(failure.code, ErrorCode::McpPromptFailed);
-    assert_eq!(failure.message, "The MCP server `fx` has no prompt `/missing`.");
+    assert_eq!(
+        failure.message,
+        "The MCP server `fx` has no prompt `/missing`."
+    );
 }
 
 #[test]
 fn a_missing_required_argument_is_invalid() {
     use contract::ErrorCode;
-    let entry = entry_with("fx", greet_prompt(), std::sync::Weak::new(), std::time::Duration::from_secs(30));
+    let entry = entry_with(
+        "fx",
+        greet_prompt(),
+        std::sync::Weak::new(),
+        std::time::Duration::from_secs(30),
+    );
     let prompts = prompts_with(entry);
     let out = prompts.get("fx", "greet", "", &fakes::CancelToken::new());
     let failure = out.error.expect("failed");
@@ -357,12 +449,21 @@ fn a_failed_start_is_not_run_with_its_record() {
             prompts: vec![greet_prompt()],
         },
     );
-    let entry = entry_with("fx", greet_prompt(), std::sync::Arc::downgrade(&slot), std::time::Duration::from_secs(30));
+    let entry = entry_with(
+        "fx",
+        greet_prompt(),
+        std::sync::Arc::downgrade(&slot),
+        std::time::Duration::from_secs(30),
+    );
     let prompts = prompts_with(entry);
     let out = prompts.get("fx", "greet", "Ada", &fakes::CancelToken::new());
     let failure = out.error.expect("failed");
     assert_eq!(failure.code, ErrorCode::McpPromptFailed);
-    assert!(failure.message.contains("was not run"), "{}", failure.message);
+    assert!(
+        failure.message.contains("was not run"),
+        "{}",
+        failure.message
+    );
     assert_eq!(out.servers.len(), 1);
     assert!(!setup.spawned(), "a failed spawn never leaves a child");
 }

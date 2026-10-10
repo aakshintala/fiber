@@ -129,10 +129,7 @@ impl Setup {
     }
 
     /// Starts the fixture directly, with a deadline naming the wait.
-    pub(crate) fn start_server(
-        &self,
-        timeout: Duration,
-    ) -> Result<OpenServer, StartError> {
+    pub(crate) fn start_server(&self, timeout: Duration) -> Result<OpenServer, StartError> {
         let script = fakes::mcp_fixture().display().to_string();
         let workspace = self.workspace();
         let arg = workspace.display().to_string();
@@ -277,16 +274,13 @@ impl Setup {
     pub(crate) fn await_requests(&self, method: &str, count: usize) {
         let path = self.dir.path().join("requests.log");
         let method = method.to_owned();
-        await_until(
-            &format!("{count} `{method}` lines"),
-            move || {
-                std::fs::read_to_string(&path)
-                    .unwrap_or_default()
-                    .matches(method.as_str())
-                    .count()
-                    >= count
-            },
-        );
+        await_until(&format!("{count} `{method}` lines"), move || {
+            std::fs::read_to_string(&path)
+                .unwrap_or_default()
+                .matches(method.as_str())
+                .count()
+                >= count
+        });
     }
 
     /// Waits until `kill -0` fails for `pid`: the child was reaped.
@@ -300,17 +294,16 @@ impl Setup {
 /// Waits until `probe` holds, polling inside one `within`: the crate's one
 /// poll loop. `probe` runs on the watcher's thread; the deadline names the
 /// wait and the failure names what was waited for.
-pub(crate) fn await_until(
-    what: &str,
-    mut probe: impl FnMut() -> bool + Send + 'static,
-) {
-    fakes::within(what, WITHIN, move || loop {
-        if probe() {
-            return;
-        }
-        let (_held, probe) = std::sync::mpsc::channel::<()>();
-        match probe.recv_timeout(POLL) {
-            Ok(()) | Err(_) => {}
+pub(crate) fn await_until(what: &str, mut probe: impl FnMut() -> bool + Send + 'static) {
+    fakes::within(what, WITHIN, move || {
+        loop {
+            if probe() {
+                return;
+            }
+            let (_held, probe) = std::sync::mpsc::channel::<()>();
+            match probe.recv_timeout(POLL) {
+                Ok(()) | Err(_) => {}
+            }
         }
     });
 }

@@ -278,10 +278,7 @@ impl Server {
             Ok(Cached { tools, prompts })
         };
         match handshake(&server) {
-            Ok(listed) => Ok(OpenServer {
-                server,
-                listed,
-            }),
+            Ok(listed) => Ok(OpenServer { server, listed }),
             Err(error) => {
                 if stopping.is_cancelled() {
                     // The documented stop, then the failure the door never writes.
@@ -343,7 +340,7 @@ impl Server {
         params: &P,
         deadline: Instant,
         cancel: &dyn Cancel,
-) -> Result<Value, CallError> {
+    ) -> Result<Value, CallError> {
         let inner = &self.inner;
         let id = inner.shared.next_id();
         inner.shared.insert(id);

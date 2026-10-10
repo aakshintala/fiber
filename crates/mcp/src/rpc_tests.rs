@@ -29,7 +29,10 @@ fn a_request_and_a_notification_round_trip_through_decode() {
         }),
     );
     assert_eq!(
-        decode_line(&encode_notification("notifications/cancelled", &json!({"requestId": 3}))),
+        decode_line(&encode_notification(
+            "notifications/cancelled",
+            &json!({"requestId": 3})
+        )),
         Incoming::Ignored,
     );
 }

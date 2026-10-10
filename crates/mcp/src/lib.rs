@@ -16,10 +16,10 @@ mod server;
 mod server_json;
 mod slot;
 mod start;
-mod tool;
-mod wait;
 #[cfg(test)]
 mod test_support;
+mod tool;
+mod wait;
 
 pub use effects::Hints;
 pub use prompt::Prompts;

@@ -122,8 +122,7 @@ impl Tool for McpTool {
                     arguments,
                     name: &self.call.tool,
                 };
-                let called =
-                    slot.call(&server, TOOLS_CALL, &params, self.call.timeout, cancel);
+                let called = slot.call(&server, TOOLS_CALL, &params, self.call.timeout, cancel);
                 // The call is never replayed: the next call restarts
                 // the server, if a restart is left.
                 output(&self.call, called, servers)

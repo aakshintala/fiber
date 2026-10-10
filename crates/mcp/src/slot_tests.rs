@@ -17,7 +17,6 @@ use crate::start::{DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, St
 use crate::test_support::{Setup, WITHIN, await_until};
 
 impl Setup {
-
     /// Writes the cache for `spec` holding `tools` and no prompts, as a
     /// first start would.
     fn write_cache(&self, spec: &ServerSpec, tools: &[ListedTool]) {
@@ -789,7 +788,10 @@ fn a_changed_prompt_list_rewrites_the_cache() {
     assert!(output.error.is_none());
     assert_eq!(
         setup.cached_prompts(),
-        vec![serde_json::from_value(json!({"name": "greet", "description": "Greets."})).expect("prompt")]
+        vec![
+            serde_json::from_value(json!({"name": "greet", "description": "Greets."}))
+                .expect("prompt")
+        ]
     );
     assert_eq!(setup.cached_names(), ["echo"]);
     setup.stop(started.servers);
@@ -826,9 +828,7 @@ fn a_call_ended_by_the_stop_records_no_death() {
         slot.stop();
         stopped_tx.send(()).expect("collected");
     });
-    let output = result
-        .recv_timeout(WITHIN)
-        .expect("the call ends");
+    let output = result.recv_timeout(WITHIN).expect("the call ends");
     stopped.recv_timeout(WITHIN).expect("the stop ends");
     let error = output.error.expect("failed");
     assert_eq!(error.code, ErrorCode::McpServerUnavailable);

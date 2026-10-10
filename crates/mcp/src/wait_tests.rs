@@ -46,7 +46,8 @@ fn deadline_is_now_plus_timeout_and_saturates() {
     let now = clock.now();
     assert_eq!(
         super::deadline(clock.as_ref(), std::time::Duration::from_secs(5)),
-        now.checked_add(std::time::Duration::from_secs(5)).expect("deadline"),
+        now.checked_add(std::time::Duration::from_secs(5))
+            .expect("deadline"),
     );
     assert_eq!(
         super::deadline(clock.as_ref(), std::time::Duration::MAX),

@@ -4,8 +4,8 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{ChildStdin, ChildStdout};
-use std::sync::{Weak, mpsc};
 use std::sync::mpsc::SyncSender;
+use std::sync::{Weak, mpsc};
 
 use crate::rpc::{Incoming, decode_line, encode_error, encode_result};
 use crate::wait::Shared;
@@ -43,7 +43,11 @@ pub(crate) fn queue(writer: &SyncSender<Vec<u8>>, line: Vec<u8>, shared: &Shared
 /// `ping` answered `{}`, any other server method answered `-32601`. A line
 /// that is not a JSON object is ignored. Past [`MAX_LINE`] bytes on one
 /// line, or EOF, the server counts as gone.
-pub(crate) fn read_stdout(stdout: ChildStdout, shared: &Shared, writer: &Weak<SyncSender<Vec<u8>>>) {
+pub(crate) fn read_stdout(
+    stdout: ChildStdout,
+    shared: &Shared,
+    writer: &Weak<SyncSender<Vec<u8>>>,
+) {
     let mut reader = BufReader::new(stdout);
     loop {
         match read_line(&mut reader) {

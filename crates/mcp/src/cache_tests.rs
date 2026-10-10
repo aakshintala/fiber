@@ -16,22 +16,26 @@ fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
 }
 
 fn tools() -> Vec<ListedTool> {
-    vec![serde_json::from_value(json!({
-        "name": "echo",
-        "description": "Echoes.",
-        "inputSchema": {"type": "object"},
-        "annotations": {"readOnlyHint": true},
-    }))
-    .expect("typed tools")]
+    vec![
+        serde_json::from_value(json!({
+            "name": "echo",
+            "description": "Echoes.",
+            "inputSchema": {"type": "object"},
+            "annotations": {"readOnlyHint": true},
+        }))
+        .expect("typed tools"),
+    ]
 }
 
 fn prompts() -> Vec<ListedPrompt> {
-    vec![serde_json::from_value(json!({
-        "name": "greet",
-        "description": "Greets someone.",
-        "arguments": [{"name": "who", "required": true}, {"name": "tone"}],
-    }))
-    .expect("typed prompts")]
+    vec![
+        serde_json::from_value(json!({
+            "name": "greet",
+            "description": "Greets someone.",
+            "arguments": [{"name": "who", "required": true}, {"name": "tone"}],
+        }))
+        .expect("typed prompts"),
+    ]
 }
 
 fn cached() -> super::Cached {

@@ -84,8 +84,13 @@ fn a_call_round_trips() {
     // timeouts"): the call runs on a thread and its result is received
     // with a deadline naming the wait.
     let (answer, opened) = fakes::within("the call to `echo`", WITHIN, move || {
-        let answer =
-            call_tool(&opened.server, "echo", json!({"text": "hi"}), Duration::from_secs(30), &fakes::CancelToken::new());
+        let answer = call_tool(
+            &opened.server,
+            "echo",
+            json!({"text": "hi"}),
+            Duration::from_secs(30),
+            &fakes::CancelToken::new(),
+        );
         (answer, opened)
     });
     assert_eq!(
@@ -120,7 +125,12 @@ fn two_concurrent_calls_resolve_by_id_out_of_order() {
         let server = std::sync::Arc::clone(&server);
         let done = done.clone();
         thread::spawn(move || {
-            let answer = call_tool(&server, "slow", json!({}), Duration::from_secs(30), &fakes::CancelToken::new(),
+            let answer = call_tool(
+                &server,
+                "slow",
+                json!({}),
+                Duration::from_secs(30),
+                &fakes::CancelToken::new(),
             );
             done.send(("slow".to_owned(), answer)).expect("collected");
         });
@@ -144,7 +154,12 @@ fn two_concurrent_calls_resolve_by_id_out_of_order() {
         let server = std::sync::Arc::clone(&server);
         let done = done.clone();
         thread::spawn(move || {
-            let answer = call_tool(&server, "fast", json!({}), Duration::from_secs(30), &fakes::CancelToken::new(),
+            let answer = call_tool(
+                &server,
+                "fast",
+                json!({}),
+                Duration::from_secs(30),
+                &fakes::CancelToken::new(),
             );
             done.send(("fast".to_owned(), answer)).expect("collected");
         });
@@ -195,7 +210,13 @@ fn a_hang_tool_times_out_only_after_the_clock_advances() {
     let deadline = setup.fake.now().checked_add(timeout).expect("deadline");
     let (done, result) = mpsc::channel();
     thread::spawn(move || {
-        let answer = call_tool(&opened.server, "hang", json!({}), timeout, &fakes::CancelToken::new());
+        let answer = call_tool(
+            &opened.server,
+            "hang",
+            json!({}),
+            timeout,
+            &fakes::CancelToken::new(),
+        );
         done.send(answer).expect("collected");
     });
     assert!(
@@ -267,7 +288,12 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
     // answered, so the answer to a later call proves it is logged.
     let after = std::sync::Arc::clone(&server);
     let answer = fakes::within("a call after the cancel", WITHIN, move || {
-        call_tool(&after, "echo", json!({}), Duration::from_secs(30), &fakes::CancelToken::new(),
+        call_tool(
+            &after,
+            "echo",
+            json!({}),
+            Duration::from_secs(30),
+            &fakes::CancelToken::new(),
         )
     });
     assert_eq!(answer.expect("echo answers"), json!({"content": []}));
@@ -388,7 +414,12 @@ fn a_server_killed_mid_call_is_gone() {
     await_gone(&shared);
     // Gone is set, so the call answers without parking on the clock.
     let answer = fakes::within("a call to a gone server", WITHIN, move || {
-        call_tool(&opened.server, "hang", json!({}), Duration::from_secs(1), &fakes::CancelToken::new(),
+        call_tool(
+            &opened.server,
+            "hang",
+            json!({}),
+            Duration::from_secs(1),
+            &fakes::CancelToken::new(),
         )
     });
     assert_eq!(answer, Err(CallError::Gone));
@@ -398,13 +429,18 @@ fn a_server_killed_mid_call_is_gone() {
 fn garbage_on_stdout_is_ignored() {
     let setup = Setup::with_tools(&echo_tools());
     setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
-    setup.write( "noise", "not json at all\n[1, 2, 3]\n");
+    setup.write("noise", "not json at all\n[1, 2, 3]\n");
     let opened = setup.start_expect(Duration::from_secs(5));
     let (answer, opened) = fakes::within(
         "the call to `echo` past garbage on stdout",
         WITHIN,
         move || {
-            let answer = call_tool(&opened.server, "echo", json!({"text": "hi"}), Duration::from_secs(30), &fakes::CancelToken::new(),
+            let answer = call_tool(
+                &opened.server,
+                "echo",
+                json!({"text": "hi"}),
+                Duration::from_secs(30),
+                &fakes::CancelToken::new(),
             );
             (answer, opened)
         },
@@ -432,7 +468,12 @@ fn closing_stdin_lets_the_server_exit_on_eof() {
     await_gone(&shared);
     // Gone is set, so the call answers without parking on the clock.
     let answer = fakes::within("a call to a gone server", WITHIN, move || {
-        call_tool(&opened.server, "hang", json!({}), Duration::from_secs(1), &fakes::CancelToken::new(),
+        call_tool(
+            &opened.server,
+            "hang",
+            json!({}),
+            Duration::from_secs(1),
+            &fakes::CancelToken::new(),
         )
     });
     assert_eq!(answer, Err(CallError::Gone));
@@ -463,14 +504,19 @@ fn dropping_the_server_reaps_the_child() {
 fn server_requests_are_answered_ping_ok_and_unknown_32601() {
     let setup = Setup::with_tools(&json!([{"name": "echo"}]));
     setup.result("echo", r#"{"content":[]}"#);
-    setup.write( "ping-on-start", "");
+    setup.write("ping-on-start", "");
     let opened = setup.start_expect(Duration::from_secs(5));
     // The fixture prints `ping` and `bogus` before it reads anything. The
     // reader answers each one through the shared writer channel before it
     // reads the `initialize` reply, and `start` returns only after that
     // reply. So once `start` returns, the answers are already logged.
     let (answer, opened) = fakes::within("a call after the server's requests", WITHIN, move || {
-        let answer = call_tool(&opened.server, "echo", json!({}), Duration::from_secs(30), &fakes::CancelToken::new(),
+        let answer = call_tool(
+            &opened.server,
+            "echo",
+            json!({}),
+            Duration::from_secs(30),
+            &fakes::CancelToken::new(),
         );
         (answer, opened)
     });
@@ -512,7 +558,6 @@ fn stop_leaves_no_running_child() {
         "pid {pid} is still there after the stop"
     );
 }
-
 
 fn greet_prompts() -> serde_json::Value {
     serde_json::json!([{

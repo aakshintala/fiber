@@ -236,7 +236,10 @@ pub(crate) type Declaration = (String, Arc<dyn Tool>, ToolInfo);
 
 pub(crate) enum Opened {
     Up(Arc<Slot>, Vec<Declaration>, Vec<PromptSource>),
-    Down { failure: McpServerFailed, required: bool },
+    Down {
+        failure: McpServerFailed,
+        required: bool,
+    },
 }
 
 pub(crate) fn open(
@@ -355,7 +358,11 @@ pub(crate) fn declare(
         if !kept(spec, &tool.name) {
             continue;
         }
-        let hints = spec.hints.get(&tool.name).cloned().unwrap_or_else(|| tool.hints());
+        let hints = spec
+            .hints
+            .get(&tool.name)
+            .cloned()
+            .unwrap_or_else(|| tool.hints());
         let made = McpTool::declare(
             &spec.name,
             &tool.name,

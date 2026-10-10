@@ -174,9 +174,7 @@ impl<'de> Deserialize<'de> for CallResult {
         let content = match object.get("content") {
             Some(Value::Array(listed)) => listed
                 .iter()
-                .map(|part| {
-                    serde_json::from_value(part.clone()).unwrap_or(Content::Unreadable)
-                })
+                .map(|part| serde_json::from_value(part.clone()).unwrap_or(Content::Unreadable))
                 .collect(),
             Some(_) | None => Vec::new(),
         };
@@ -220,9 +218,7 @@ impl<'de> Deserialize<'de> for Message {
             None => Vec::new(),
             Some(Value::Array(listed)) => listed
                 .iter()
-                .map(|part| {
-                    serde_json::from_value(part.clone()).unwrap_or(Content::Unreadable)
-                })
+                .map(|part| serde_json::from_value(part.clone()).unwrap_or(Content::Unreadable))
                 .collect(),
             Some(single) => {
                 vec![serde_json::from_value(single.clone()).unwrap_or(Content::Unreadable)]
