@@ -13,7 +13,8 @@ pub fn open() -> std::io::Result<(std::fs::File, PathBuf)> {
     let map = |what: &'static str| {
         move |errno: rustix::io::Errno| std::io::Error::other(format!("{what}: {errno}"))
     };
-    let main = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).map_err(map("opening a pty"))?;
+    let main =
+        openpt(OpenptFlags::RDWR.union(OpenptFlags::NOCTTY)).map_err(map("opening a pty"))?;
     // Not inherited: a hub the terminal starts would hold the master open.
     rustix::io::fcntl_setfd(&main, rustix::io::FdFlags::CLOEXEC)
         .map_err(map("marking the pty close-on-exec"))?;
