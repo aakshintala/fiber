@@ -1,27 +1,28 @@
 ---
 source: crates/tui/src/home_view_tests.rs
+assertion_line: 439
 expression: "screen(&app, 80, 24)"
 ---
-/repo1
-/repo2
-/repo3
-/repo4               ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
-/repo5               ▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀
-/repo6               ▀▄ █       █   ████  █▀▀▀▀ █ ▀▄
-/repo7               ▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █ 0.0.1
-/repo8
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-› █? for shortcuts
 
 
-[w]  [no model]  [thinking: default]  enter starts a session
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+                     ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+                    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+                      Workspaces
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    /repo1                              ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+› █? for shortcuts      /repo2
+                        /repo3
+                        /repo4
+[w]  [no model]  [th    /repo5
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    /repo6                              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+●  fix the parser       /repo7                                                 ✕
+●  fix the parser     › /repo8                                                 ✕
 ●  fix the parser                                                              ✕
+●  fix the parser     ↑↓ move · enter open · esc closes                        ✕
 ●  fix the parser                                                              ✕
-●  fix the parser                                                              ✕
-●  fix the parser                                                              ✕
-●  fix the parser                                                              ✕
-●  fix the parser                                                              ✕
+●  fix the parser   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                   ✕
 ●  fix the parser                                                              ✕
 ●  fix the parser                                                              ✕
 ●  fix the parser                                                              ✕

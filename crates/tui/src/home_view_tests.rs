@@ -421,18 +421,17 @@ fn the_picker_keeps_its_selection_drawn() {
     app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
     let now = fakes::clock::FakeClock::new().now();
     // Ten entries, fewer rows above the box: every selection draws,
-    // scrolling the list around it.
+    // scrolling the list around it. A picker row shares its row with
+    // the frame's pad and gutter, so the entry reads past them.
     for selected in 0..10usize {
         let entry = app
             .home_screen()
             .and_then(|screen| screen.picker)
             .and_then(|(list, at)| (at == selected).then(|| list[selected].clone()))
             .unwrap_or_else(|| panic!("selection {selected}"));
-        // A picker row can share its row with the logo it draws over,
-        // so the entry heads its line.
         let drawn = screen(&app, 80, 24);
         assert!(
-            drawn.lines().any(|row| row.starts_with(&entry)),
+            drawn.lines().any(|row| row.contains(&entry)),
             "selection {selected} ({entry}) draws"
         );
         app.on_key(Key::Down, now);
@@ -1151,9 +1150,7 @@ fn a_row_at_width_one_has_no_entry_target() {
 }
 
 #[test]
-fn only_the_selected_picker_row_is_reversed() {
-    use ratatui::style::Modifier;
-
+fn only_the_selected_picker_row_sits_on_the_bar() {
     let mut app = home(80, 24);
     app.on_line(hello());
     app.on_line(status_in("s_aaaaaaaaaaaaaaaa", "first", "/alpha"));
@@ -1169,15 +1166,22 @@ fn only_the_selected_picker_row_is_reversed() {
         let mut buf = Buffer::empty(area);
         render(app, area, &mut buf, None);
         let drawn = screen(app, 80, 24);
+        // The picker draws above the session list, so the first row
+        // holding the entry is its picker row.
         let y = drawn
             .lines()
-            .position(|line| line.starts_with(entry))
+            .position(|line| line.contains(entry))
             .and_then(|row| u16::try_from(row).ok())
             .unwrap_or_else(|| panic!("{entry} draws"));
-        buf[(0, y)].modifier.contains(Modifier::REVERSED)
+        let text: String = (0..80).map(|x| buf[(x, y)].symbol().to_owned()).collect();
+        // Cell columns, not byte indices: the focused row's gutter
+        // holds a three-byte `›` in one cell.
+        let at = text.find(entry).unwrap_or_else(|| panic!("{entry} draws"));
+        let x = u16::try_from(text[..at].chars().count()).unwrap_or(u16::MAX);
+        buf[(x, y)].bg == crate::theme::Role::Accent.color()
     };
-    // The launch directory starts selected; moving down reverses the
-    // next row instead.
+    // The launch directory starts selected; moving down bars the next
+    // row instead.
     assert!(row(&app, "/w"));
     assert!(!row(&app, "/alpha"));
     let now = fakes::clock::FakeClock::new().now();
@@ -1188,9 +1192,7 @@ fn only_the_selected_picker_row_is_reversed() {
 }
 
 #[test]
-fn only_the_selected_completion_is_reversed() {
-    use ratatui::style::Modifier;
-
+fn only_the_selected_completion_sits_on_the_bar() {
     let mut app = home(80, 24);
     type_draft(&mut app, "/");
     let completions = app.completions().unwrap_or_else(|| panic!("completions"));
@@ -1200,17 +1202,25 @@ fn only_the_selected_completion_is_reversed() {
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
     let drawn = screen(&app, 80, 24);
-    let at = |line: &str| {
+    // The first two matches are home and new: the bar covers the
+    // first, the second keeps the surface tint.
+    let at = |piece: &str| {
         drawn
             .lines()
-            .position(|row| row == line)
+            .position(|row| row.contains(piece))
             .and_then(|row| u16::try_from(row).ok())
-            .unwrap_or_else(|| panic!("{line} draws"))
+            .unwrap_or_else(|| panic!("{piece} draws"))
     };
-    let first = at(&completions.lines[0]);
-    let second = at(&completions.lines[1]);
-    assert!(buf[(0, first)].modifier.contains(Modifier::REVERSED));
-    assert!(!buf[(0, second)].modifier.contains(Modifier::REVERSED));
+    let accent = crate::theme::Role::Accent.color();
+    let surface = crate::theme::Role::Surface.color();
+    let cell = |y: u16, piece: &str| {
+        let text: String = (0..80).map(|x| buf[(x, y)].symbol().to_owned()).collect();
+        let at = text.find(piece).unwrap_or_else(|| panic!("{piece} draws"));
+        let x = u16::try_from(text[..at].chars().count()).unwrap_or(u16::MAX);
+        buf[(x, y)].bg
+    };
+    assert_eq!(cell(at("Goes home."), "home"), accent, "{drawn}");
+    assert_eq!(cell(at("Goes home with"), "new"), surface, "{drawn}");
 }
 
 #[test]
@@ -1373,4 +1383,158 @@ fn home_chips_outside_git() {
     // Outside git the switch is not shown: no placeholder takes its
     // place.
     insta::assert_snapshot!("home_chips_outside_git", screen(&home(80, 24), 80, 24));
+}
+
+/// Renders `app` on a `width` by `height` screen, returning its buffer.
+fn buffer(app: &App, width: u16, height: u16) -> Buffer {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    render(app, area, &mut buf, None);
+    buf
+}
+
+/// The row's text, trailing spaces kept.
+fn row_text(buf: &Buffer, y: u16, width: u16) -> String {
+    (0..width)
+        .map(|x| buf[(x, y)].symbol().to_owned())
+        .collect()
+}
+
+/// An app on home at `width` by `height` with the workspace picker open
+/// over two recent workspaces.
+fn picking(width: u16, height: u16) -> App {
+    let mut app = home(width, height);
+    app.on_line(hello());
+    app.on_line(status_in("s_0000000000000000", "fix the parser", "/repo0"));
+    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    assert!(
+        app.home_screen()
+            .is_some_and(|screen| screen.picker.is_some())
+    );
+    app
+}
+
+#[test]
+fn home_picker_overlay_160x48() {
+    insta::assert_snapshot!(
+        "home_picker_overlay_160x48",
+        screen(&picking(160, 48), 160, 48)
+    );
+}
+
+/// The workspace picker overlay: the title, the first row barred, the
+/// legend footer, centred across and down home.
+#[test]
+fn the_picker_draws_centred_with_a_bar_and_a_legend() {
+    let app = picking(80, 24);
+    let buf = buffer(&app, 80, 24);
+    let shown = screen(&app, 80, 24);
+    // Cell columns, not byte indices: home's rows may hold a
+    // three-byte `›` in one cell before the slab.
+    let col = |text: &str, piece: &str| {
+        let at = text.find(piece).unwrap_or_else(|| panic!("{piece} draws"));
+        u16::try_from(text[..at].chars().count()).unwrap_or(u16::MAX)
+    };
+    // The title reads bold in `accent`.
+    let title = u16::try_from(
+        shown
+            .lines()
+            .position(|row| row.contains("Workspaces"))
+            .expect("the title"),
+    )
+    .unwrap_or(u16::MAX);
+    let text = row_text(&buf, title, 80);
+    let x = col(&text, "Workspaces");
+    assert_eq!(
+        buf[(x, title)].style().fg,
+        Some(crate::theme::Role::Accent.color())
+    );
+    assert!(
+        buf[(x, title)]
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
+    // Centred across: the ▄ edge's run sits even from both sides, and
+    // the title opens past its two blank columns.
+    let edge = row_text(&buf, title.saturating_sub(2), 80);
+    assert!(edge.contains('▄'));
+    let from = edge.find('▄').expect("the edge");
+    let run = edge[from..].chars().take_while(|ch| *ch == '▄').count();
+    assert!(from > 0 && from == 80 - (from + run), "{edge:?}");
+    assert_eq!(usize::from(x), from + 2, "the title opens past the pad");
+    // Centred down: the ▄ edge floats below the top and the ▀ edge
+    // above the foot.
+    assert!(title.saturating_sub(2) > 0);
+    let foot = u16::try_from(
+        shown
+            .lines()
+            .position(|row| row.contains("esc closes"))
+            .expect("the legend"),
+    )
+    .unwrap_or(u16::MAX);
+    assert!(foot.saturating_add(2) < 23);
+    assert!(row_text(&buf, foot.saturating_add(2), 80).contains('▀'));
+    // The first row sits on the bar in `accent` with black text; the
+    // second keeps the surface tint.
+    let accent = crate::theme::Role::Accent.color();
+    let surface = crate::theme::Role::Surface.color();
+    let first = title.saturating_add(2);
+    assert!(row_text(&buf, first, 80).contains("/w"), "{shown}");
+    assert_eq!(buf[(40, first)].bg, accent, "{shown}");
+    assert_eq!(
+        buf[(40, first)].style().fg,
+        Some(crate::look::BAR_TEXT),
+        "{shown}"
+    );
+    let second = first.saturating_add(1);
+    assert!(row_text(&buf, second, 80).contains("/repo0"), "{shown}");
+    assert_eq!(buf[(40, second)].bg, surface, "{shown}");
+    // The legend reads keys bold and labels dim.
+    let legend = row_text(&buf, foot, 80);
+    let x = col(&legend, "↑↓");
+    assert!(
+        buf[(x, foot)]
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD),
+        "{legend:?}"
+    );
+    let x = col(&legend, "move");
+    assert!(
+        buf[(x, foot)]
+            .modifier
+            .contains(ratatui::style::Modifier::DIM),
+        "{legend:?}"
+    );
+}
+
+/// Clicking a picker row chooses its workspace and closes the picker.
+#[test]
+fn clicking_a_picker_row_chooses_its_workspace() {
+    let mut app = picking(80, 24);
+    // The rows keep their pick targets over the entries shown.
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(&app, area, &mut buf);
+    let mut picks: Vec<(usize, Rect)> = targets
+        .iter()
+        .filter_map(|target| match target.id {
+            crate::mouse::TargetId::Home(Spot::Pick(at)) => Some((at, target.rect)),
+            _ => None,
+        })
+        .collect();
+    picks.sort_by_key(|(at, _)| *at);
+    assert_eq!(picks.len(), 2);
+    for (at, rect) in &picks {
+        let row: String = (rect.x..rect.right())
+            .map(|x| buf[(x, rect.y)].symbol().to_owned())
+            .collect();
+        let want = ["/w", "/repo0"][*at];
+        assert!(row.contains(want), "row {at} shows {want}: {row:?}");
+    }
+    app.on_click(crate::mouse::TargetId::Home(Spot::Pick(1)));
+    assert!(
+        app.home_screen()
+            .is_some_and(|screen| screen.picker.is_none())
+    );
+    assert_eq!(app.workspace(), PathBuf::from("/repo0"));
 }

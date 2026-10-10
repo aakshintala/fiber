@@ -5,9 +5,11 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
+use ratatui::text::Span;
 
-use super::{FOCUS_STYLE, HOVER_TINT};
+use super::{FOCUS_STYLE, HOVER_TINT, completions};
 use crate::app::App;
+use crate::completion_rows::Rows;
 use crate::format::{cut, width, wrap};
 use crate::home::{HomeScreen, Spot};
 use crate::markdown::{Role, style};
@@ -18,9 +20,6 @@ mod logo;
 
 /// The home input box's tint.
 const BOX_TINT: Style = Style::new().bg(Role::Surface.color());
-
-/// The workspace picker's tint.
-const PICKER_TINT: Style = Style::new().bg(Role::SurfaceRaised.color());
 
 /// The input box's placeholder, after `› `, while the draft is empty and
 /// no `start` went out in this run.
@@ -429,46 +428,41 @@ pub(super) fn render(
         }
         row_y = row_y.saturating_add(1);
     }
-    // The workspace picker draws above the box, upward from its top
-    // edge, over the logo rows, scrolling around its selection so the
-    // selected entry always draws. The selected row is reversed.
+    // The workspace picker is an overlay centred over home: the title,
+    // one row per recent workspace with the selection barred, and what
+    // the mouse does (`docs/tui.md`, "Home", "Look", "Overlays"). It
+    // keeps the window it had above the box, scrolled around the
+    // selection so the selected entry always draws.
     if let Some((items, selected)) = &screen.picker {
         let visible = usize::from(placed.box_top.saturating_sub(area.y)).min(items.len());
         let start = selected
             .saturating_sub(visible.saturating_sub(1))
             .min(items.len().saturating_sub(visible));
-        let mut bottom = placed.box_top;
-        for (at, item) in items.iter().enumerate().skip(start).take(visible).rev() {
-            let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) else {
-                break;
-            };
-            bottom = row;
-            let item_style = if selected == &at {
-                Style::new().add_modifier(Modifier::REVERSED)
-            } else {
-                PICKER_TINT
-            };
-            put(buf, area, placed.x, row, item, placed.width, item_style);
-            targets.push(Target {
-                id: TargetId::Home(Spot::Pick(at)),
-                rect: Rect::new(placed.x, row, placed.width, 1),
-            });
-        }
+        let end = start.saturating_add(visible).min(items.len());
+        draw_picker(
+            &items[start..end],
+            start,
+            *selected,
+            area,
+            buf,
+            &mut targets,
+        );
     }
-    if let Some(completions) = app.completions() {
-        let mut bottom = placed.box_top;
-        for (at, line) in completions.lines.iter().enumerate().rev() {
-            let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) else {
-                break;
-            };
-            bottom = row;
-            let line_style = if completions.selected == Some(at) {
-                Style::new().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::default()
-            };
-            put(buf, area, placed.x, row, line, placed.width, line_style);
-        }
+    // The completion panel above the box, in the shared frame centred
+    // across the box's width (`docs/tui.md`, "Look", "Overlays").
+    if let Some(panel) = app.completions()
+        && matches!(
+            panel.rows,
+            Rows::Slash(_) | Rows::Files(_) | Rows::Message(_)
+        )
+    {
+        let rect = Rect::new(
+            placed.x,
+            area.y,
+            placed.width,
+            placed.box_top.saturating_sub(area.y),
+        );
+        completions::draw(&panel, rect, placed.box_top, buf, &mut targets);
     }
     token_targets(app, area, &placed, &mut targets);
     // The foot hint sits on the last row, centred, cut to the width.
@@ -519,6 +513,57 @@ pub(super) fn render(
         }
     }
     targets
+}
+
+/// Draws the workspace picker over `area`: `window` with the selection
+/// barred, in the overlay frame centred across and down home. A long
+/// path is cut on the right; rows keep their pick targets.
+fn draw_picker(
+    window: &[String],
+    start: usize,
+    selected: usize,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) {
+    // The content wraps at the preferred width first: rows are built
+    // once at what fits, and the frame shrinks to what they need.
+    let room = usize::from(55u16.saturating_sub(4)).min(usize::from(area.width.saturating_sub(4)));
+    let text = room.saturating_sub(2);
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let body = window
+        .iter()
+        .enumerate()
+        .map(|(n, item)| {
+            let at = start.saturating_add(n);
+            let focused = at == selected;
+            super::overlay::Row {
+                spans: vec![
+                    Span::styled(
+                        if focused { "› " } else { "  " }.to_owned(),
+                        if focused { bold } else { dim },
+                    ),
+                    Span::raw(cut(item, text)),
+                ],
+                right: Vec::new(),
+                targets: vec![(0, u16::MAX, TargetId::Home(Spot::Pick(at)))],
+                barred: focused,
+            }
+        })
+        .collect();
+    let framed = super::overlay::Overlay {
+        title: Some(("Workspaces".to_owned(), None)),
+        close: None,
+        body,
+        footer: Some(super::overlay::legend(&[
+            ("↑↓", "move"),
+            ("enter", "open"),
+            ("esc", "closes"),
+        ])),
+        prefer: 55,
+    };
+    super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
 }
 
 /// A target over each paste token's label the home box shows.
