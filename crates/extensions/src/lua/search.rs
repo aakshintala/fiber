@@ -144,8 +144,7 @@ pub(super) fn results(value: &LuaValue) -> Result<Value, String> {
         }
     }
     let mut out = Vec::with_capacity(n);
-    for (at, item) in ordered.into_iter().enumerate() {
-        let position = at + 1;
+    for (position, item) in (1..).zip(ordered) {
         let Some(LuaValue::Table(entry)) = item else {
             return Err(format!("result {position} is not a table"));
         };

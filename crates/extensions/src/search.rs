@@ -98,9 +98,8 @@ fn read_results(
     };
     items
         .into_iter()
-        .enumerate()
-        .map(|(at, item)| {
-            let position = at + 1;
+        .zip(1..)
+        .map(|(item, position)| {
             serde_json::from_value::<SearchResult>(item)
                 .map_err(|error| wrong(format!("result {position} is not a valid result: {error}")))
         })
