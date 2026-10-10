@@ -21,9 +21,7 @@ struct Fake {
 
 impl Fake {
     fn read(&self) -> Result<Catalogue, String> {
-        self.release
-            .recv()
-            .expect("the test releases the read");
+        self.release.recv().expect("the test releases the read");
         Ok(Catalogue::default())
     }
 }

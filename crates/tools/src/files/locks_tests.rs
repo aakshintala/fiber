@@ -51,9 +51,7 @@ fn two_paths_do_not_block_each_other() {
     let holder = thread::spawn(move || {
         let guard = first.lock(std::path::Path::new("/ws/a.txt"));
         entered.send(()).unwrap();
-        release_rx
-            .recv()
-            .expect("the test releases the first path");
+        release_rx.recv().expect("the test releases the first path");
         drop(guard);
     });
     assert!(
@@ -153,9 +151,7 @@ fn a_dyn_hold_blocks_a_second_hold_on_the_same_path() {
         let lock: &dyn PathLock = &*first;
         lock.hold(&first_path, &mut || {
             entered.send(()).unwrap();
-            release_rx
-                .recv()
-                .expect("the test releases the first hold");
+            release_rx.recv().expect("the test releases the first hold");
         });
     });
     assert!(
@@ -198,9 +194,7 @@ fn a_dyn_hold_does_not_block_a_different_path() {
         let lock: &dyn PathLock = &*first;
         lock.hold(std::path::Path::new("/ws/dyn-a.txt"), &mut || {
             entered.send(()).unwrap();
-            release_rx
-                .recv()
-                .expect("the test releases the first hold");
+            release_rx.recv().expect("the test releases the first hold");
         });
     });
     assert!(

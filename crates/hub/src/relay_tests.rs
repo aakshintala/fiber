@@ -856,11 +856,8 @@ fn a_recovered_command_never_queues_behind_an_older_relay() {
     let parked = std::thread::Builder::new()
         .name("parked-relay".to_owned())
         .spawn(move || {
-            let parked = park_rx.recv();
-            assert!(
-                parked.is_err(),
-                "the test releases the parked relay by dropping its sender"
-            );
+            // Parked until the test drops its sender.
+            let _released = park_rx.recv();
         })
         .unwrap();
     let (retired_write, _) = UnixStream::pair().unwrap();

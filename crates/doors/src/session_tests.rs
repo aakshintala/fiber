@@ -1699,9 +1699,7 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
     *super::lock(&gate.probe) = Some(Arc::new(move |point| match point {
         Probe::FirstShellWaitDone => {
             if let Ok(()) = first_tx.send(()) {}
-            lock(&resume_rx)
-                .recv()
-                .expect("the test resumes close");
+            lock(&resume_rx).recv().expect("the test resumes close");
         }
         Probe::ShellsWaiting => if let Ok(()) = waiting_tx.send(()) {},
         Probe::SubscribeSeeded | Probe::SubscribeAcknowledged => {}

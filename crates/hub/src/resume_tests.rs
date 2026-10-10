@@ -1654,9 +1654,7 @@ fn an_acknowledgement_is_forwarded_before_the_next_queued_command_passes_on() {
     let (go_tx, go_rx) = mpsc::channel();
     *crate::connection::lock(&hub.before_accepted) = Some(Box::new(move |line, _| {
         assert!(crate::relay::acknowledges(line, "c_2"), "{line:?}");
-        go_rx
-            .recv()
-            .expect("the test releases the forward");
+        go_rx.recv().expect("the test releases the forward");
     }));
     let logging = Arc::clone(&log);
     *crate::connection::lock(&hub.on_pass_on) = Some(Box::new(move |passed| {

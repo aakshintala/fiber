@@ -526,9 +526,7 @@ fn a_locked_write_waits_while_the_same_key_is_held() {
     let holder = thread::spawn(move || {
         locks.hold(&key, &mut || {
             entered.send(()).unwrap();
-            release_rx
-                .recv()
-                .expect("the test releases the held key");
+            release_rx.recv().expect("the test releases the held key");
         });
     });
     assert!(

@@ -71,9 +71,7 @@ fn a_writer_never_exposes_a_file_wider_than_0600() {
         scope.spawn(|| {
             crate::write::before_rename(move || {
                 paused_tx.send(()).unwrap();
-                release
-                    .recv()
-                    .expect("the test released the writer");
+                release.recv().expect("the test released the writer");
             });
             lock.write(&json!({ "token": "t" })).unwrap();
         });
