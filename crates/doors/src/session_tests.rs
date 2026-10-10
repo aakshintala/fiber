@@ -38,10 +38,10 @@ use super::{Gate, Session};
 
 const DEADLINE: Duration = Duration::from_secs(5);
 
-/// How long a test waits for `close` to return once the grace has passed:
-/// shorter than [`DEADLINE`], the blocked test writer's own wait, so that
-/// wait ending cannot make `close` return.
-const CLOSE_AFTER_GRACE: Duration = Duration::from_secs(2);
+/// How long a held writer stays blocked in `write`: far past the test's own
+/// waits, so when close never releases it the test's deadline names the hang
+/// instead of the writer giving up and letting close return early.
+const WRITE_HOLD: Duration = Duration::from_secs(30);
 
 struct Control {
     hold_reader: AtomicBool,
@@ -478,7 +478,7 @@ impl Write for HeldWrite {
         let (state, waited) = self
             .held
             .cv
-            .wait_timeout_while(state, DEADLINE, |state| matches!(state.hold, Hold::Wait))
+            .wait_timeout_while(state, WRITE_HOLD, |state| matches!(state.hold, Hold::Wait))
             .unwrap_or_else(PoisonError::into_inner);
         if waited.timed_out() && matches!(state.hold, Hold::Wait) {
             return Err(io::Error::new(
@@ -517,7 +517,9 @@ fn lines_of(text: &str) -> Vec<Value> {
 
 fn attach_held(gate: &Arc<super::Gate>, held: &Arc<Held>, watcher: log::Watcher) {
     let (stop_tx, stop_rx) = mpsc::channel();
-    let reader = thread::spawn(move || match stop_rx.recv_timeout(DEADLINE) {
+    // The reader holds until shutdown sends or drops the sender, so only
+    // close ends it.
+    let reader = thread::spawn(move || match stop_rx.recv() {
         Ok(()) | Err(_) => {}
     });
     let fail = Arc::clone(held);
@@ -691,7 +693,7 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
     );
     clock.advance(Duration::from_millis(1));
     done_rx
-        .recv_timeout(CLOSE_AFTER_GRACE)
+        .recv_timeout(DEADLINE)
         .expect("close returns once the grace has passed");
 }
 
