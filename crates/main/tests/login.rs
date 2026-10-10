@@ -492,6 +492,23 @@ fn providers_sharing_a_credential_log_in_and_out_through_either() {
 }
 
 #[test]
+fn logout_prints_a_configuration_notice_and_keeps_its_status() {
+    let setup = Setup::new();
+    setup.provider("acme", None, None);
+    let login = setup.fiber(&["login", "acme"], &format!("{KEY}\n"));
+    assert_eq!(login.code, Some(0), "{}", login.stderr);
+    let file = setup.home().join("config.json");
+    fs::write(&file, r#"{"no_such_key": 1}"#).unwrap();
+    let logout = setup.fiber(&["logout", "acme"], "");
+    assert_eq!(logout.code, Some(0), "{}", logout.stderr);
+    let lines: Vec<&str> = logout.stderr.lines().collect();
+    assert_eq!(lines.len(), 2, "{}", logout.stderr);
+    assert!(lines[0].contains("no_such_key"), "{}", logout.stderr);
+    assert!(lines[0].contains("config.json"), "{}", logout.stderr);
+    assert_eq!(lines[1], "fiber: removed credentials/acme/default");
+}
+
+#[test]
 fn a_key_from_the_environment_is_named_and_the_exit_is_non_zero() {
     let setup = Setup::new();
     setup.provider("acme", None, Some(json!({"env": "ACME_API_KEY"})));
