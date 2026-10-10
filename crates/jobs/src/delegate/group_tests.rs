@@ -15,6 +15,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use fakes::Deadline;
 use fakes::{Watchdog, group_empties, kill_group, within};
 
 use super::{
@@ -72,13 +73,14 @@ fn a_spawned_group_is_listed() {
 /// Reaps `child` on its own thread, at most `DEADLINE` of wall clock:
 /// the caller cannot block on it, or a child that ignores the signal
 /// would hang the test instead of failing it.
+#[track_caller]
 fn reap(mut child: std::process::Child, signal: &str) -> std::process::ExitStatus {
     let (done, waited) = mpsc::channel();
     thread::spawn(move || {
         let _sent = done.send(child.wait());
     });
-    waited
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&waited)
         .unwrap_or_else(|_| panic!("{signal} did not end the child within {DEADLINE:?}"))
         .unwrap_or_else(|source| panic!("waiting the child failed: {source}"))
 }
@@ -238,17 +240,22 @@ fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
     });
     exited(pid);
     assert!(
-        waited.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&waited)
+            .is_err(),
         "the reap did not run under the held lock"
     );
     drop(held);
-    waited.recv_timeout(DEADLINE).expect("the reap ran");
+    Deadline::after(DEADLINE)
+        .recv(&waited)
+        .expect("the reap ran");
     assert!(!listed(pid), "the empty group retired under the lock");
     watchdog.stand_down(DEADLINE);
 }
 
 /// Whether `pid` has exited without being reaped: `waitid` with `NOWAIT`
 /// sees the exit and leaves the zombie.
+#[track_caller]
 fn exited(pid: u32) {
     use rustix::process::{Pid, WaitId, WaitIdOptions};
     within("the leader exits", DEADLINE, move || {

@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
@@ -107,6 +108,7 @@ fn start(feed: &Arc<Feed>, clock: &FakeClock) {
 }
 
 /// Stops `feed` under [`DEADLINE`]: a stop that hangs fails the test.
+#[track_caller]
 fn stop_within(feed: &Arc<Feed>) {
     let (tx, rx) = mpsc::channel();
     let stopping = Arc::clone(feed);
@@ -114,7 +116,7 @@ fn stop_within(feed: &Arc<Feed>) {
         stopping.stop();
         tx.send(()).unwrap_or(());
     });
-    assert!(rx.recv_timeout(DEADLINE).is_ok(), "stop returns");
+    assert!(Deadline::after(DEADLINE).recv(&rx).is_ok(), "stop returns");
 }
 
 /// A feed subscriber's far end: lines read under [`DEADLINE`].
@@ -159,6 +161,7 @@ impl Sub {
 }
 
 /// Waits under [`DEADLINE`] until `done` holds, naming `what` on expiry.
+#[track_caller]
 fn await_true(what: &str, done: impl Fn() -> bool + Send + 'static) {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -167,11 +170,15 @@ fn await_true(what: &str, done: impl Fn() -> bool + Send + 'static) {
         }
         tx.send(()).unwrap_or(());
     });
-    assert!(rx.recv_timeout(DEADLINE).is_ok(), "waited for {what}");
+    assert!(
+        Deadline::after(DEADLINE).recv(&rx).is_ok(),
+        "waited for {what}"
+    );
 }
 
 /// Drops attention listener `id` on a thread and receives its return
 /// under [`DEADLINE`]: joining its writer blocks.
+#[track_caller]
 fn unlisten_within(feed: &Arc<Feed>, id: u64) {
     let (done_tx, done_rx) = mpsc::channel();
     let ending = Arc::clone(feed);
@@ -179,7 +186,10 @@ fn unlisten_within(feed: &Arc<Feed>, id: u64) {
         ending.attention.unlisten(id);
         done_tx.send(()).unwrap_or(());
     });
-    assert!(done_rx.recv_timeout(DEADLINE).is_ok(), "unlisten returns");
+    assert!(
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
+        "unlisten returns"
+    );
 }
 
 fn entry_of(feed: &Feed, id: &str) -> Option<&'static str> {
@@ -230,8 +240,8 @@ fn the_summary_subscribe_is_the_documented_line() {
     });
     feed.follow(id(1));
     feed.follow(id(1));
-    let texts = rx
-        .recv_timeout(Duration::from_secs(5))
+    let texts = Deadline::after(Duration::from_secs(5))
+        .recv(&rx)
         .expect("the hub to send two subscribes");
     assert_eq!(texts.len(), 2);
     let mut got = Vec::new();
@@ -506,7 +516,7 @@ fn a_dead_or_slow_subscriber_does_not_stop_a_live_one() {
         done_tx.send(()).unwrap_or(());
     });
     assert!(
-        done_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "unsubscribe returns"
     );
     assert_eq!(lock(&feed.state).subscribers.len(), before - 1);
@@ -529,7 +539,7 @@ fn each_subscriber_gets_its_own_id_and_unsubscribe_ends_only_that_one() {
         done_tx.send(()).unwrap_or(());
     });
     assert!(
-        done_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "unsubscribe returns"
     );
     let left: Vec<u64> = lock(&feed.state)
@@ -736,7 +746,7 @@ fn stop_waits_for_a_writer_still_draining_its_backlog() {
         stopping.stop();
         tx.send(Arc::strong_count(&watched)).unwrap_or(());
     });
-    let left = rx.recv_timeout(DEADLINE).expect("stop returns");
+    let left = Deadline::after(DEADLINE).recv(&rx).expect("stop returns");
     // The test's handle, `watched`, and none from the writer thread.
     assert_eq!(left, 2, "stop returned before its writer thread ended");
     assert_eq!(drained.join().unwrap(), total);
@@ -762,7 +772,7 @@ fn stop_ends_every_thread_and_records_no_crash() {
         drop(stopping);
         tx.send(()).unwrap_or(());
     });
-    assert!(rx.recv_timeout(DEADLINE).is_ok(), "stop returns");
+    assert!(Deadline::after(DEADLINE).recv(&rx).is_ok(), "stop returns");
     // Joined, not just told to end: the scanner and the summary thread
     // each held the feed, and the writer thread held `kept`.
     assert_eq!(Arc::strong_count(&feed), 1);
@@ -1549,7 +1559,7 @@ fn a_second_hub_lists_a_session_the_first_hub_already_followed() {
             tx.send(()).unwrap_or(());
         });
         assert!(
-            rx.recv_timeout(WAIT).is_ok(),
+            Deadline::after(WAIT).recv(&rx).is_ok(),
             "the second hub lists the session"
         );
     }

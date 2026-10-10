@@ -16,6 +16,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::super::{Entry, Feed, RUN_SCAN, lock};
@@ -85,6 +86,7 @@ fn await_listing_parked(clock: &FakeClock, until: Instant) {
     );
 }
 
+#[track_caller]
 fn stop_within(feed: &Arc<Feed>) {
     let (tx, rx) = mpsc::channel();
     let stopping = Arc::clone(feed);
@@ -92,7 +94,7 @@ fn stop_within(feed: &Arc<Feed>) {
         stopping.stop();
         tx.send(()).unwrap_or(());
     });
-    assert!(rx.recv_timeout(DEADLINE).is_ok(), "stop returns");
+    assert!(Deadline::after(DEADLINE).recv(&rx).is_ok(), "stop returns");
 }
 
 fn pause_settle_wait(feed: &Feed) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
@@ -105,9 +107,10 @@ fn pause_settle_wait(feed: &Feed) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
     (arrived_rx, release_tx)
 }
 
+#[track_caller]
 fn await_pause(arrived: &mpsc::Receiver<()>) {
     assert!(
-        arrived.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(arrived).is_ok(),
         "the listing reaches its wait"
     );
 }
@@ -120,9 +123,10 @@ fn watch_wake(feed: &Feed) -> mpsc::Receiver<()> {
     rx
 }
 
+#[track_caller]
 fn await_wake(attempt: &mpsc::Receiver<()>, what: &str) {
     assert!(
-        attempt.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(attempt).is_ok(),
         "{what} wakes the feed"
     );
 }
@@ -149,7 +153,7 @@ fn a_listing_waits_for_the_status_of_each_session_the_first_scan_followed() {
     await_listing_parked(&clock, until);
     assert!(rx.try_recv().is_err(), "parked, so not answered");
     say_idle(&session, &id(1));
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), [id(1)]);
+    assert_eq!(Deadline::after(DEADLINE).recv(&rx).unwrap(), [id(1)]);
     stop_within(&feed);
 }
 
@@ -160,7 +164,10 @@ fn a_session_that_ends_before_its_status_settles_the_listing() {
     let rx = listing(&feed);
     await_listing_parked(&clock, until);
     session.close();
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&rx).unwrap(),
+        Vec::<String>::new()
+    );
     stop_within(&feed);
 }
 
@@ -177,7 +184,10 @@ fn a_silent_session_holds_the_listing_for_one_rescan_at_most() {
     );
     assert!(rx.try_recv().is_err(), "not answered before the bound");
     clock.advance(Duration::from_millis(1));
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&rx).unwrap(),
+        Vec::<String>::new()
+    );
     stop_within(&feed);
 }
 
@@ -192,7 +202,10 @@ fn stopping_the_feed_releases_a_listing_before_any_scan() {
     );
     assert!(rx.try_recv().is_err(), "no scan yet, so not answered");
     stop_within(&feed);
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&rx).unwrap(),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -211,8 +224,14 @@ fn a_stop_between_the_first_scan_check_and_wait_releases_a_listing() {
     });
     await_wake(&attempt, "stop");
     release.send(()).unwrap();
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
-    assert!(done_rx.recv_timeout(DEADLINE).is_ok(), "stop returns");
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&rx).unwrap(),
+        Vec::<String>::new()
+    );
+    assert!(
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
+        "stop returns"
+    );
 }
 
 #[test]
@@ -226,7 +245,10 @@ fn a_scan_finish_between_the_first_scan_check_and_wait_releases_a_listing() {
     feed.start();
     await_wake(&attempt, "the first scan");
     release.send(()).unwrap();
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&rx).unwrap(),
+        Vec::<String>::new()
+    );
     stop_within(&feed);
 }
 
@@ -245,7 +267,7 @@ fn a_status_between_the_post_scan_check_and_wait_releases_a_listing() {
     });
     await_wake(&attempt, "the status");
     release.send(()).unwrap();
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), [id(1)]);
+    assert_eq!(Deadline::after(DEADLINE).recv(&rx).unwrap(), [id(1)]);
     stop_within(&feed);
 }
 
@@ -260,7 +282,10 @@ fn a_listing_made_before_the_first_scan_is_answered_by_it() {
     );
     assert!(rx.try_recv().is_err(), "no scan yet, so not answered");
     feed.start();
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&rx).unwrap(),
+        Vec::<String>::new()
+    );
     stop_within(&feed);
 }
 
@@ -280,7 +305,10 @@ fn a_deadline_passing_before_the_first_scan_does_not_release_the_listing() {
     );
     assert!(rx.try_recv().is_err(), "a deadline is not a scan");
     feed.start();
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&rx).unwrap(),
+        Vec::<String>::new()
+    );
     stop_within(&feed);
 }
 
@@ -294,7 +322,10 @@ fn a_session_found_after_the_first_scan_is_not_awaited() {
     assert!(session.await_subscribed(1, DEADLINE));
     assert!(clock.await_parked(next_scan(&clock), DEADLINE));
     let rx = listing(&feed);
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&rx).unwrap(),
+        Vec::<String>::new()
+    );
     stop_within(&feed);
 }
 
@@ -320,7 +351,7 @@ fn live_is_every_running_session_in_id_order_and_no_left_one() {
     let first = FakeSession::bind(&temp.dir, &id(2));
     say_idle(&first, &id(2));
     start(&feed, &clock);
-    assert!(listing(&feed).recv_timeout(DEADLINE).is_ok());
+    assert!(Deadline::after(DEADLINE).recv(&listing(&feed)).is_ok());
     assert!(matches!(
         lock(&feed.state).entries.get(&crashed),
         Some(Entry::Left(_, Left::Crashed))

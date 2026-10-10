@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -179,7 +180,7 @@ fn a_line_written_between_registration_and_the_read_arrives_once() {
     .unwrap();
     log.append(&started(), None, None).unwrap();
     log.append(&step(), None, None).unwrap();
-    let armed = log.arm(true);
+    let armed = log.arm(true, |_, _| {});
     let between = log.append(&step(), None, None).unwrap();
     let ephemeral = log.append(&delta(), None, None).unwrap();
     let watcher = log.finish(armed);
@@ -610,4 +611,54 @@ fn watch_all_seeded_prunes_a_dropped_watcher_and_keeps_a_live_one() {
         .expect("the reseeded watcher receives a later line")
         .expect("open");
     assert_eq!(got.seq, line.seq);
+}
+
+#[test]
+fn range_and_count_return_while_append_is_in_its_fsync() {
+    let sessions = fakes::TempDir::new("log-unit-fsync-race");
+    let log = Arc::new(
+        Log::create(
+            sessions.path(),
+            SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    log.append(&step(), None, None).unwrap();
+    log.append(&step(), None, None).unwrap();
+    let (in_fsync_tx, in_fsync_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (done_tx, done_rx) = mpsc::channel();
+    let appender_log = Arc::clone(&log);
+    thread::spawn(move || {
+        before_sync(move || {
+            in_fsync_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        let appended = appender_log.append(&Event::AssistantMessageStarted(Empty {}), None, None);
+        done_tx.send(appended).unwrap();
+    });
+    let wait = Deadline::after(DEADLINE);
+    wait.recv(&in_fsync_rx)
+        .expect("the appender reaches its fsync");
+    let reader_log = Arc::clone(&log);
+    let (read_tx, read_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let count = reader_log.count();
+        let range = reader_log.range(0, 10);
+        read_tx.send((count, range)).unwrap();
+    });
+    let (count, range) = wait
+        .recv(&read_rx)
+        .expect("count and range return during the fsync");
+    assert_eq!(count, 3);
+    let range = range.unwrap();
+    assert_eq!(range.len(), 3);
+    assert_eq!(range[2].kind, "assistant_message_started");
+    release_tx.send(()).unwrap();
+    let appended = wait
+        .recv(&done_rx)
+        .expect("the appender finishes after release")
+        .unwrap();
+    assert_eq!(appended, range[2]);
 }

@@ -14,6 +14,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
 use super::*;
+use fakes::Deadline;
 
 struct Temp {
     dir: PathBuf,
@@ -211,8 +212,8 @@ const STILL: std::time::Duration = std::time::Duration::from_millis(200);
 #[test]
 fn lock_wait_on_a_free_run_returns_the_lock_at_once() {
     let temp = Temp::new();
-    let held = lock_wait_in(&temp.dir)
-        .recv_timeout(WITHIN)
+    let held = Deadline::after(WITHIN)
+        .recv(&lock_wait_in(&temp.dir))
         .expect("a free lock is taken before the deadline")
         .unwrap();
     assert!(lock(&temp.dir).unwrap().is_none(), "lock_wait holds run/");
@@ -226,12 +227,12 @@ fn lock_wait_blocks_while_another_holds_the_lock_and_takes_it_on_release() {
     let first = lock(&temp.dir).unwrap().expect("the first lock is won");
     let waiting = lock_wait_in(&temp.dir);
     assert!(
-        waiting.recv_timeout(STILL).is_err(),
+        Deadline::after(STILL).recv(&waiting).is_err(),
         "lock_wait returned while another held the lock"
     );
     drop(first);
-    let held = waiting
-        .recv_timeout(WITHIN)
+    let held = Deadline::after(WITHIN)
+        .recv(&waiting)
         .expect("lock_wait takes the lock once it is released")
         .unwrap();
     assert!(lock(&temp.dir).unwrap().is_none(), "lock_wait holds run/");

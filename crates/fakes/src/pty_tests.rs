@@ -1,15 +1,17 @@
-//! Tests for [`read_to_eof`](super::read_to_eof): every chunk in order to
-//! end of file, reading on past a gone consumer, retrying `Interrupted`,
-//! and ending on any other error.
+//! Tests for [`open`](super::open) and [`read_to_eof`](super::read_to_eof):
+//! the pair passes bytes from slave to master, every chunk in order to end
+//! of file, reading on past a gone consumer, retrying `Interrupted`, and
+//! ending on any other error.
 
 use std::collections::VecDeque;
-use std::io::{ErrorKind, Read};
+use std::io::{ErrorKind, Read, Write};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use super::read_to_eof;
+use super::{open, read_to_eof};
 use crate::deadline::Deadline;
+use crate::within::{MUST_SUCCEED_WITHIN, within};
 
 /// How long a wait that must succeed may take. Every wait below ends as
 /// soon as its signal arrives; the deadline only reports a missed one.
@@ -74,6 +76,35 @@ fn disconnected<T: std::fmt::Debug>(result: Result<T, mpsc::RecvTimeoutError>, w
         Err(mpsc::RecvTimeoutError::Disconnected) => {}
         other => panic!("expected the reader thread to end at {what}, got {other:?}"),
     }
+}
+
+#[test]
+fn open_passes_bytes_from_slave_to_master() {
+    let (master, slave) = within("opening a pty pair", MUST_SUCCEED_WITHIN, || {
+        open().expect("opening a pty pair")
+    });
+    let slave = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&slave)
+        .expect("opening the pty slave");
+    within(
+        "reading what the slave wrote",
+        MUST_SUCCEED_WITHIN,
+        move || {
+            let (mut master, mut slave) = (master, slave);
+            slave.write_all(b"hi").expect("writing to the pty slave");
+            let mut byte = [0u8; 1];
+            let mut got = Vec::new();
+            while got.len() < 2 {
+                match master.read(&mut byte) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => got.extend_from_slice(&byte[..n]),
+                }
+            }
+            assert_eq!(got, b"hi");
+        },
+    );
 }
 
 #[test]

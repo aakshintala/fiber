@@ -26,6 +26,7 @@ use super::*;
 use crate::connection::{Hub, serve_connection};
 use crate::diag::Diag;
 use crate::fake::FakeStarter;
+use fakes::Deadline;
 
 /// One named deadline per receive: the hub answers before it.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -487,7 +488,7 @@ fn a_directory_fifo_or_socket_is_invalid_arguments() {
         ))
         .unwrap();
     });
-    match answered.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&answered) {
         Ok(got) => {
             let (code, _) = got.unwrap_err();
             assert_eq!(code, ErrorCode::InvalidArguments);

@@ -234,7 +234,9 @@ The 5-second deadline:
 - A cold `npx -y` start or a slow OAuth exchange can miss it. That server's
   configuration raises it.
 
-A stdio server starts in the session's workspace.
+A stdio server starts in the session's workspace, in its own process session
+and process group, so a terminal's Ctrl+C never reaches it and a shutdown
+signals everything it started (`docs/invocation.md`, "Shutdown").
 
 Each server pipe takes one parked thread, as `docs/architecture.md` ("The
 threads") already budgets.
