@@ -10,6 +10,7 @@ mod lua;
 mod model_picker;
 mod overlays;
 mod paged;
+mod panel;
 
 use crossterm::{execute, terminal};
 use input::{Ev, Key, Mouse};
@@ -3740,28 +3741,18 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     buf.set_string(x0 + pw - 1, y, "▌", fg(SEL));
                     hits.insert(0, (y, x0, x0 + pw, Act::End));
                 }
-                // search floats over the conversation's top-right corner, as an editor's find box does
-                if let Some(s) = search.filter(|_| vrows.is_none() && view_h >= 3) {
+                // search floats over the conversation's top-right corner, as an editor's find box does.
+                // The box reuses the padded panel frame, so text never touches its edges.
+                if let Some(s) = search.filter(|_| vrows.is_none() && view_h >= 5) {
                     let bw = SBOX_W.min(cw.saturating_sub(2));
                     let x0 = rail_w + 1 + (cw - bw) as u16;
-                    for x in x0..x0 + bw as u16 {
-                        for (y, ch) in [(0, "▄"), (1, " "), (2, "▀")] {
-                            let under = buf[(x, y)].bg;
-                            let c = &mut buf[(x, y)];
-                            c.reset();
-                            c.set_symbol(ch);
-                            if y == 1 {
-                                c.set_bg(BI);
-                            } else {
-                                c.set_fg(BI).set_bg(under);
-                            }
-                        }
+                    for (y, r) in panel::frame(None, vec![row(search_box(s))], None, bw).into_iter().enumerate() {
+                        paint(buf, x0, y as u16, bw as u16, &r);
                     }
-                    buf.set_line(x0, 1, &Line::from(tint(fit(&search_box(s), bw), BI)), bw as u16);
                 }
                 // the copy's confirmation: the top-right corner, below the search box when it is open
                 if let Some(m) = copied.filter(|_| vrows.is_none()) {
-                    let y = if search.is_some() && view_h >= 3 { 3 } else { 0 };
+                    let y = if search.is_some() && view_h >= 5 { 5 } else { 0 };
                     let s = vec![sp(format!(" {m} "), fg(CYAN))];
                     let mw = width(&s).min(cw);
                     if y < view_h && mw > 0 {
@@ -3810,16 +3801,18 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 // the left edge while the rail is hidden. On hover or while dragging the
                 // whole column tints and the grip goes bright in the accent colour.
                 // Hidden, the dead margin column beside the handle is cleared too.
+                // The rail-edge grip stops where the bottom stack starts: the input box,
+                // approvals and completion panels paint their own first cell there.
                 let rail_hid = ui.rail != 2 && rail_w == 1;
                 let rail_hx = if rail_hid { 0 } else { rail_w };
                 let rail_gap_hot = ptr.is_some_and(|(x, _)| x == rail_hx) && ui.rail != 2 && rail_w > 0;
                 let panel_gap_hot = ptr.is_some_and(|(x, _)| x == rail_w + conv_w) && panel_w > 0;
-                for (gx, active, clear_next) in [(rail_hx, ui.resize == Some(0) || rail_gap_hot, rail_hid), (rail_w + conv_w, ui.resize == Some(1) || panel_gap_hot, false)] {
+                for (gx, active, clear_next, y_end) in [(rail_hx, ui.resize == Some(0) || rail_gap_hot, rail_hid, view_h.min(rows as usize) as u16), (rail_w + conv_w, ui.resize == Some(1) || panel_gap_hot, false, rows)] {
                     if gx >= cols || (gx == rail_w && (rail_w == 0 || ui.rail == 2)) || (gx == rail_w + conv_w && panel_w == 0) {
                         continue;
                     }
                     let mid = rows / 2;
-                    for y in 0..rows {
+                    for y in 0..y_end {
                         let grip_row = y >= mid.saturating_sub(1) && y <= mid + 1;
                         let (sym, st) = match (grip_row, active) {
                             (true, true) => ("⋮", fg(BLUE).add_modifier(Modifier::BOLD)),
@@ -4330,7 +4323,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     let over_panel = x >= rail_w + conv_w && rail_w + conv_w < cols && panel_cache.is_some();
                     let over_rail = rail_w > 0 && ui.rail != 2 && x < rail_w;
                     let in_conv = !over_panel && (y as usize) < view_h;
-                    let in_sbox = ui.search.is_some() && y < 3 && (x as usize) + SBOX_W + 2 > (rail_w + conv_w) as usize;
+                    let in_sbox = ui.search.is_some() && y < 5 && (x as usize) + SBOX_W + 2 > (rail_w + conv_w) as usize;
                     // the resize handles: the rail's right edge and the panel's left edge,
                     // the one-column gaps beside them; hidden, the rail's 1-column handle
                     // at the screen's left edge
@@ -4634,7 +4627,7 @@ mod tests {
             all,
             [
                 "--home empty, sessions, hover-workspace, hover-worktree, hover-model, hover-thinking, worktree-on, worktree-off, picker-recent, picker-typed",
-                "--overlay keymap, keymap-narrow, quit, delete, history, notice, close-mouse",
+                "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, notice, close-mouse",
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",
             ]
