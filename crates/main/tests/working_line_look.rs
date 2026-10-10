@@ -47,20 +47,6 @@ fn clear_draft(run: &mut Run) {
     run.write(&vec![b"\x1b[127u".as_slice(); 200].concat());
 }
 
-/// A scripted provider holding the turn open with fragments paced every
-/// `every_ms`: only the reduced-motion test uses it, where the pacing
-/// drives the animation and each assertion waits on a fragment's bytes.
-fn script(setup: &Setup, fragments: usize, every_ms: u64) {
-    let text: Vec<String> = (0..fragments).map(|n| format!("frag{n:02} ")).collect();
-    support::write_json(
-        &setup.workspace().join("s.json"),
-        &serde_json::json!({"steps": [
-            {"text": text, "every_ms": every_ms},
-            {"text": ["done."]},
-        ]}),
-    );
-}
-
 /// A scripted provider whose turn calls `shell` with `command`, then says
 /// done: the call asks approval, and answering it runs the command.
 /// Steers sent while the approval waits queue visibly; answering it runs
@@ -79,7 +65,10 @@ fn shell_script(setup: &Setup, command: &str) {
 /// A shell command that returns once `hold` is gone. The test creates the
 /// file before the turn starts and removes it when it has read what it
 /// needs, so the tool runs exactly as long as the test says. The loop
-/// stops itself at 120 s (`docs/testing.md`, "Running tests").
+/// stops itself at 120 s (`docs/testing.md`, "Running tests"). Fiber moves
+/// a shell call to the background after 30 s (`docs/tools.md`, "Moving to
+/// the background"), so the hold lasts at most that long: a stall past it
+/// fails a named wait, never a false pass.
 fn hold_command(hold: &Path) -> String {
     format!(
         "i=0; while [ -e '{}' ] && [ $i -lt 2400 ]; do sleep 0.05; i=$((i+1)); done",
@@ -542,33 +531,40 @@ fn the_empty_session_box_fills_while_the_turn_streams() {
 #[test]
 fn the_reduced_working_line_stays_still() {
     let setup = Setup::new();
-    script(&setup, 30, 400);
+    let hold = held_tool(&setup);
     config(&setup, true);
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
-    let mut from = run.output().len();
+    let from = run.output().len();
     run.write(b"go\r");
-    // Two frames pages apart: the spinner is still ● and the word plain.
-    // The paced fragments mark the frames' distance in wall time.
-    for needle in ["frag08", "frag20"] {
-        from = run.wait_bytes(from, needle.as_bytes(), "the paced reply");
-        let grid = run.screen();
+    run_held_tool(&mut run);
+    // Two frames: the tool holds the turn until the test releases it, and
+    // a typed letter makes the second frame.
+    for (typed, frame) in ["first", "second"].into_iter().enumerate() {
+        let grid = run.wait_screen("the working line", |grid| {
+            find_row(&grid.rows, "Working").is_some()
+                && session_box(grid)
+                    .is_some_and(|(y, _)| grid.rows[y as usize].matches('x').count() == typed)
+        });
         let row = find_row(&grid.rows, "Working").expect("the working line");
         let word = col_of(&grid.rows[row], 'W').expect("the word");
         let spinner_col = word.saturating_sub(2);
         assert_eq!(
             grid.cell(spinner_col, at(row)).symbol.as_str(),
             "●",
-            "{needle}"
+            "{frame}"
         );
-        assert_eq!(grid.cell(spinner_col, at(row)).fg, ATTENTION, "{needle}");
+        assert_eq!(grid.cell(spinner_col, at(row)).fg, ATTENTION, "{frame}");
         for x in word..word + 7 {
-            assert!(grid.cell(x, at(row)).dim, "{needle} word {x}");
+            assert!(grid.cell(x, at(row)).dim, "{frame} word {x}");
         }
         for x in 0..width(grid.rows[row].trim_end()) {
-            assert!(!grid.cell(x, at(row)).bold, "{needle} cell {x}");
+            assert!(!grid.cell(x, at(row)).bold, "{frame} cell {x}");
         }
+        run.write(b"x");
     }
+    clear_draft(&mut run);
+    std::fs::remove_file(&hold).expect("the hold marker");
     run.turn_finished(from);
     quit(run);
 }
