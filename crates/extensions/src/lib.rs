@@ -28,6 +28,8 @@ mod release;
 mod repository;
 mod resolve;
 mod search;
+#[cfg(test)]
+mod stall;
 
 use std::io;
 use std::path::PathBuf;

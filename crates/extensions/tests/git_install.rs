@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use contract::clock::Clock;
 
-use common::{Setup, manifest, provider, write};
+use common::{Setup, drive, manifest, provider, write};
 use contract::ErrorCode;
 use extensions::{Error, Installed, Origin, Provenance, Request, SHORT_NAMES, list, plan, removal};
 use serde_json::{Value, json};
@@ -319,12 +319,13 @@ fn a_dependency_gets_the_lowest_version_meeting_every_minimum() {
             .requested
     );
     // A second dependent raises the minimum, and the dependency moves up.
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Install(b.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let moved: Vec<_> = p.items().filter(|i| i.name == dep).collect();
@@ -350,12 +351,13 @@ fn a_dependency_asked_for_by_name_stays_requested_when_it_moves_up() {
     for tag in ["v1.0.0", "v1.5.0"] {
         repos.tag(dep, "", tag, &manifest(dep), &[]);
     }
+    let clock = fakes::clock::FakeClock::new();
     let first = plan(
         &setup.home(),
         &Request::Install(dep.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     );
     first.unwrap().commit().unwrap();
     repos.tag(dep, "", "v1.6.0", &manifest(dep), &[]);
@@ -496,12 +498,13 @@ fn the_fetch_leaves_nothing_in_the_temporary_directory_or_home() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Install(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     assert_eq!(p.items().count(), 1);
@@ -551,12 +554,13 @@ fn an_update_moves_to_the_newest_tag_and_shows_what_changed() {
     install(&setup, &repos, LIB).unwrap();
     let first = repos.commit(LIB, "v1.0.0");
     repos.tag(LIB, "", "v1.1.0", &manifest(LIB), &[("b.lua", "return 2")]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Update(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let item = p.items().next().unwrap();
@@ -591,12 +595,13 @@ fn an_update_re_resolves_the_dependencies_and_an_uninstalled_name_is_refused() {
         repos.tag(dep, "", tag, &manifest(dep), &[]);
     }
     repos.tag(LIB, "", "v1.0.0", &named(LIB, &[(dep, "1.0")]), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let err = plan(
         &setup.home(),
         &Request::Update(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     );
     assert!(matches!(err, Err(Error::NotInstalled { .. })));
     install(&setup, &repos, LIB).unwrap();
@@ -697,12 +702,13 @@ fn a_local_install_lists_its_manifest_version_and_no_commit() {
 fn missing_git_fails_with_the_usage_code_and_says_to_install_it() {
     let setup = Setup::new();
     let origin = Origin::new("fiber-no-such-git-program", |repo| repo.to_owned());
+    let clock = fakes::clock::FakeClock::new();
     let err = plan(
         &setup.home(),
         &Request::Install(LIB.into()),
         FIBER,
         &origin,
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     );
     let Err(err) = err else { panic!("planned") };
     assert!(matches!(err, Error::GitMissing));
@@ -850,12 +856,13 @@ fn a_plan_that_is_dropped_releases_the_lock_and_removes_what_it_fetched() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let first = plan(
         &setup.home(),
         &Request::Install(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let staged = first.items().next().unwrap().staged().to_path_buf();
@@ -1320,12 +1327,13 @@ fn installing_another_extension_with_a_damaged_one_present_succeeds_and_names_it
     )
     .unwrap();
     let fresh = setup.source("fresh", &manifest("example.com/acme/fresh"), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Path(fresh),
         FIBER,
         &Origin::github(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     assert_eq!(
@@ -1572,12 +1580,13 @@ fn an_install_step_runs_at_the_final_path_after_the_plan_and_again_on_update() {
         marker.display()
     );
     let source = setup.source("local", &with_step("acme", &["sh", "-c", &step]), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Path(source),
         FIBER,
         &Origin::github(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     assert!(!marker.exists(), "the step must wait for the approval");
@@ -1969,12 +1978,13 @@ fn a_raised_memory_cap_appears_in_carries_only_for_lua_extensions() {
             m["process"] = json!({ "program": "node", "args": [] });
         }
         let source = setup.source("local", &m, &[]);
+        let clock = fakes::clock::FakeClock::new();
         let p = plan(
             &setup.home(),
             &Request::Path(source),
             FIBER,
             &Origin::github(),
-            &*fakes::clock::FakeClock::new(),
+            &*clock,
         )
         .unwrap();
         let carries = p.items().next().unwrap().carries();
@@ -1999,12 +2009,13 @@ fn what_a_package_carries_is_listed_from_its_files_and_manifest() {
     write(&source.join("skills/plan/SKILL.md"), "s");
     write(&source.join("themes/dark.json"), "{}");
     write(&source.join("tui/init.lua"), "");
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Path(source),
         FIBER,
         &Origin::github(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let carries = p.items().next().unwrap().carries();
@@ -2047,12 +2058,13 @@ fn an_items_source_is_its_path_or_its_name() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Install(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     assert_eq!(p.items().next().unwrap().source(), LIB);
@@ -2063,7 +2075,7 @@ fn an_items_source_is_its_path_or_its_name() {
         &Request::Path(source.clone()),
         FIBER,
         &Origin::github(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let shown = fs::canonicalize(&source).unwrap().display().to_string();
@@ -2214,4 +2226,124 @@ fn a_data_directory_that_cannot_be_removed_fails_naming_it() {
         inner.exists(),
         "the directory that could not be removed stays"
     );
+}
+
+/// The checked-in stand-in for `git`: it answers `ls-remote` with one tag
+/// and stalls on its markers (`docs/testing.md`, "Testing an extension").
+fn fake_git() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-git/git")
+}
+
+/// Kills the stalled processes matching `unique` by pid alone, then
+/// requires that none are left: the run kills what it stopped, so leftovers
+/// fail the test without leaking. By pid, never by group: a stalled `git`
+/// shares this test's process group.
+fn no_stall_left(unique: &str) {
+    let leftovers = fakes::matching(unique).unwrap();
+    for pid in &leftovers {
+        drop(fakes::kill_pid(*pid, "KILL"));
+    }
+    assert!(
+        leftovers.is_empty(),
+        "the stalled git is gone: {leftovers:?}"
+    );
+}
+
+/// A `ls-remote` that never answers fails the plan at the git deadline.
+#[test]
+fn a_stalled_ls_remote_fails_the_plan_at_the_git_deadline() {
+    let setup = Setup::new();
+    let unique = format!("stall-ls-remote-{}", setup.root().display());
+    let watching = unique.clone();
+    // The guard matches this stall alone by its argv: a panic anywhere
+    // below still kills it, by pid and never the test's own group.
+    let watchdog = fakes::Watchdog::matching(&watching);
+    let git = fake_git().to_string_lossy().into_owned();
+    let clock = fakes::clock::FakeClock::new();
+    let worker_clock = std::sync::Arc::clone(&clock);
+    let home = setup.home();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("stalled ls-remote".into())
+        .spawn(move || {
+            // Built here: `Origin` holds a closure, so it never crosses a
+            // thread.
+            let origin = Origin::new(git, move |repo| format!("{unique}/{repo}"));
+            let _sent = done_tx.send(
+                plan(
+                    &home,
+                    &Request::Install("github.com/acme/stalled".into()),
+                    FIBER,
+                    &origin,
+                    &*worker_clock,
+                )
+                .map(|_| ()),
+            );
+        })
+        .unwrap();
+    let err = drive(&clock, done_rx, &watching).unwrap_err();
+    assert!(
+        matches!(err, Error::Git { .. }),
+        "a stalled ls-remote fails as git failed: {err}"
+    );
+    assert!(
+        err.to_string().contains("did not finish within"),
+        "the failure names the deadline: {err}"
+    );
+    assert!(
+        err.to_string().contains("so it was stopped"),
+        "the failure names the stop: {err}"
+    );
+    no_stall_left(&watching);
+    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
+}
+
+/// A `clone` that never finishes fails the plan at the git deadline: the
+/// canned `ls-remote` answer resolves the tag, and only the clone stalls.
+#[test]
+fn a_stalled_clone_fails_the_plan_at_the_git_deadline() {
+    let setup = Setup::new();
+    let unique = format!("stall-clone-{}", setup.root().display());
+    let watching = unique.clone();
+    // The guard matches this stall alone by its argv: a panic anywhere
+    // below still kills it, by pid and never the test's own group.
+    let watchdog = fakes::Watchdog::matching(&watching);
+    let git = fake_git().to_string_lossy().into_owned();
+    let clock = fakes::clock::FakeClock::new();
+    let worker_clock = std::sync::Arc::clone(&clock);
+    let home = setup.home();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("stalled clone".into())
+        .spawn(move || {
+            // Built here: `Origin` holds a closure, so it never crosses a
+            // thread.
+            let origin = Origin::new(git, move |repo| format!("{unique}/{repo}"));
+            let _sent = done_tx.send(
+                plan(
+                    &home,
+                    &Request::Install("github.com/acme/stalled".into()),
+                    FIBER,
+                    &origin,
+                    &*worker_clock,
+                )
+                .map(|_| ()),
+            );
+        })
+        .unwrap();
+    let err = drive(&clock, done_rx, &watching).unwrap_err();
+    assert!(
+        matches!(err, Error::Git { .. }),
+        "a stalled clone fails as git failed: {err}"
+    );
+    assert!(
+        err.to_string().contains("did not finish within"),
+        "the failure names the deadline: {err}"
+    );
+    assert!(
+        err.to_string().contains("so it was stopped"),
+        "the failure names the stop: {err}"
+    );
+    no_stall_left(&watching);
+    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
 }

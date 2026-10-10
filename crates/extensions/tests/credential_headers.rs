@@ -1134,3 +1134,58 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
         }
     }
 }
+
+/// While one `token()` waits on a held fetch, the cached token and the
+/// signer's credentials stay readable: no `credential()` call runs while
+/// the token lock is held.
+#[test]
+fn a_held_fetch_never_holds_the_token_lock() {
+    let setup = Setup::new();
+    let clock = FakeClock::new();
+    let tokens = ProviderServer::start([Response::status(
+        200,
+        json!({"token": "tok-value", "expires_at": WALL + 200}).to_string(),
+    )])
+    .unwrap();
+    tokens.hold();
+    let token_url = tokens.url();
+    let provider = script_provider(
+        &setup,
+        Arc::clone(&clock),
+        Some(&format!(
+            "(function()\n\
+             local reply = host.http({{ url = \"{token_url}/token\", method = \"POST\" }})\n\
+             local got = json.decode(reply.body)\n\
+             return {{ token = got.token, expires_at = got.expires_at }}\n\
+             end)()"
+        )),
+        None,
+    );
+    let pair = pair(provider.name());
+    let fetching = Arc::clone(&provider);
+    let worker_pair = pair.clone();
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent = done_tx.send(fetching.token(&worker_pair));
+    });
+    assert!(
+        tokens.await_requests(1, WAIT),
+        "the first fetch reaches the server"
+    );
+    // The fetch is held, yet the cache reads return at once.
+    within({
+        let provider = Arc::clone(&provider);
+        move || provider.cached_token(&pair)
+    });
+    let signer = signer_of(&provider);
+    within({
+        let signer = Arc::clone(&signer);
+        move || signer.credentials()
+    });
+    tokens.release();
+    let token = done_rx
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("the held fetch did not return within {WAIT:?}"))
+        .unwrap();
+    assert_eq!(token.expose(), "tok-value");
+}

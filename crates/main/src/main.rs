@@ -248,7 +248,9 @@ fn run() -> i32 {
             cli::ExtensionCommands::List => ::cli::extension_list(clock.as_ref()),
             cli::ExtensionCommands::Test { path } => ::cli::extension_test(path.as_deref(), fiber),
         },
-        cli::Invocation::Run(Some(cli::Commands::Approve(args))) => ::cli::approve(args.yes),
+        cli::Invocation::Run(Some(cli::Commands::Approve(args))) => {
+            ::cli::approve(args.yes, Arc::clone(&clock))
+        }
         cli::Invocation::Run(Some(cli::Commands::Config(cmd))) => match cmd {
             cli::ConfigCommands::Get { key } => ::cli::config_get(&key),
             cli::ConfigCommands::Set {

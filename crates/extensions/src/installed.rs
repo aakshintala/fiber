@@ -364,27 +364,3 @@ fn existing_data(layers: &[PathBuf], dir: &str) -> Result<Vec<PathBuf>, Error> {
 #[cfg(test)]
 #[path = "installed_tests.rs"]
 mod installed_tests;
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "a failure is the test's")]
-mod tests {
-    use std::fs;
-
-    use super::read;
-
-    #[test]
-    fn a_missing_extensions_directory_lists_nothing() {
-        let home = fakes::TempDir::new("fiber-read-missing");
-        let listing = read(home.path()).unwrap();
-        assert!(listing.installed.is_empty());
-        assert!(listing.damaged.is_empty());
-    }
-
-    #[test]
-    fn an_extensions_path_that_is_not_a_directory_is_an_error() {
-        let home = fakes::TempDir::new("fiber-read-file");
-        fs::write(home.path().join("extensions"), "nope").unwrap();
-        let err = read(home.path()).unwrap_err();
-        assert!(err.to_string().contains("extensions"), "{err}");
-    }
-}

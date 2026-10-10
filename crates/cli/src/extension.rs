@@ -237,18 +237,18 @@ fn report_install(
     }
 }
 
-fn plan_request(
+fn plan_request<'c>(
     home: &Path,
     request: Request,
     fiber_version: &str,
     origin: &Origin,
-    clock: &dyn Clock,
-) -> Result<extensions::Plan, Failure> {
+    clock: &'c dyn Clock,
+) -> Result<extensions::Plan<'c>, Failure> {
     extensions::plan(home, &request, fiber_version, origin, clock).map_err(|e| failed(e.code(), e))
 }
 
 fn commit_plan(
-    plan: extensions::Plan,
+    plan: extensions::Plan<'_>,
     terminal: bool,
     input: &mut dyn BufRead,
     err: &mut dyn Write,

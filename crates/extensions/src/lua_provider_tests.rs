@@ -278,3 +278,231 @@ fn list_models_with_a_non_list_return_is_bad_return() {
     };
     assert_eq!(callback, "p.models");
 }
+
+/// A provider `p` whose `credential()` reads its token over HTTP from
+/// `url`, failing the fetch on any status but 200, so the test holds and
+/// counts the fetches through the server.
+fn http_token_provider(root: &fakes::TempDir, url: &str) -> Arc<LuaProvider> {
+    let home = root.path().join("home");
+    let dir = root.path().join("ext");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("init.lua"),
+        format!(
+            "fiber.provider(\"p\", {{ credential = {{ timeout = 60000, run = function()\n\
+             local reply = host.http({{ url = \"{url}\", method = \"POST\" }})\n\
+             if reply.status ~= 200 then error(\"denied\") end\n\
+             local got = json.decode(reply.body)\n\
+             return {{ token = got.token, expires_at = got.expires_at }}\n\
+             end }} }})"
+        ),
+    )
+    .unwrap();
+    let extension = Arc::new(LuaExtension::new("ext", dir, home, FakeClock::new()));
+    LuaProvider::new(extension, "p")
+}
+
+fn token_pair() -> CredentialPair {
+    CredentialPair {
+        credential: "p".to_owned(),
+        label: "default".to_owned(),
+    }
+}
+
+/// A token response with this value, expiring far in the future.
+fn token_response(value: &str) -> fakes::Response {
+    fakes::Response::status(
+        200,
+        json!({"token": value, "expires_at": 4102444800_u64}).to_string(),
+    )
+}
+
+/// A second `token()` while one fetch runs waits for it: after the release
+/// both callers hold the same token, and `credential()` ran once.
+#[test]
+fn a_second_token_waits_for_the_fetch_in_flight() {
+    let root = fakes::TempDir::new("fiber-credential-wait");
+    let tokens = fakes::ProviderServer::start([token_response("tok-1")]).unwrap();
+    tokens.hold();
+    let provider = http_token_provider(&root, &format!("{}/token", tokens.url()));
+    let pair = token_pair();
+    let (wait_tx, wait_rx) = mpsc::channel();
+    *provider.waiting.lock().unwrap() = Some(wait_tx);
+    let (first_tx, first_rx) = mpsc::channel();
+    let first_provider = Arc::clone(&provider);
+    let first_pair = pair.clone();
+    std::thread::spawn(move || {
+        let _sent = first_tx.send(first_provider.token(&first_pair));
+    });
+    assert!(
+        tokens.await_requests(1, WAIT),
+        "the first fetch reaches the server"
+    );
+    let (second_tx, second_rx) = mpsc::channel();
+    let second_provider = Arc::clone(&provider);
+    let second_pair = pair.clone();
+    std::thread::spawn(move || {
+        let _sent = second_tx.send(second_provider.token(&second_pair));
+    });
+    // The second caller reached its wait before the first fetch lands.
+    wait_rx
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("the second caller waits within {WAIT:?}"));
+    tokens.release();
+    let first = first_rx
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("the first token returns within {WAIT:?}"))
+        .unwrap();
+    let second = second_rx
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("the second token returns within {WAIT:?}"))
+        .unwrap();
+    assert_eq!(first.expose(), "tok-1");
+    assert_eq!(second.expose(), "tok-1");
+    assert_eq!(
+        tokens.requests().len(),
+        1,
+        "one waiting caller runs no second fetch"
+    );
+}
+
+/// A second `token()` whose fetch fails fetches for itself: after the
+/// release the waiter holds its own fetch's token.
+#[test]
+fn a_waiter_woken_by_a_failure_fetches_for_itself() {
+    let root = fakes::TempDir::new("fiber-credential-retry");
+    let tokens =
+        fakes::ProviderServer::start([fakes::Response::status(500, "{}"), token_response("tok-2")])
+            .unwrap();
+    tokens.hold();
+    let provider = http_token_provider(&root, &format!("{}/token", tokens.url()));
+    let pair = token_pair();
+    let (wait_tx, wait_rx) = mpsc::channel();
+    *provider.waiting.lock().unwrap() = Some(wait_tx);
+    let (first_tx, first_rx) = mpsc::channel();
+    let first_provider = Arc::clone(&provider);
+    let first_pair = pair.clone();
+    std::thread::spawn(move || {
+        let _sent = first_tx.send(first_provider.token(&first_pair));
+    });
+    assert!(
+        tokens.await_requests(1, WAIT),
+        "the first fetch reaches the server"
+    );
+    let (second_tx, second_rx) = mpsc::channel();
+    let second_provider = Arc::clone(&provider);
+    let second_pair = pair.clone();
+    std::thread::spawn(move || {
+        let _sent = second_tx.send(second_provider.token(&second_pair));
+    });
+    // The second caller reached its wait before the first fetch lands.
+    wait_rx
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("the second caller waits within {WAIT:?}"));
+    tokens.release();
+    assert!(
+        first_rx
+            .recv_timeout(WAIT)
+            .unwrap_or_else(|_| panic!("the first token returns within {WAIT:?}"))
+            .is_err(),
+        "the held fetch fails"
+    );
+    let second = second_rx
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("the second token returns within {WAIT:?}"))
+        .unwrap();
+    assert_eq!(second.expose(), "tok-2");
+    assert_eq!(
+        tokens.requests().len(),
+        2,
+        "the woken waiter runs its own fetch"
+    );
+}
+
+/// A woken waiter fetches for itself at once, even while another fetch it
+/// never waited on is still held: its request reaches the server while the
+/// third caller's is still unanswered.
+#[test]
+fn a_woken_waiter_never_waits_on_a_later_fetch() {
+    let root = fakes::TempDir::new("fiber-credential-once");
+    let tokens = fakes::ProviderServer::start([
+        fakes::Response::status(500, "{}"),
+        token_response("tok-3"),
+        token_response("tok-2"),
+    ])
+    .unwrap();
+    tokens.hold();
+    let provider = http_token_provider(&root, &format!("{}/token", tokens.url()));
+    let pair = token_pair();
+    let (wait_tx, wait_rx) = mpsc::channel();
+    *provider.waiting.lock().unwrap() = Some(wait_tx);
+    let (arrived_tx, arrived_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    *provider.woke.lock().unwrap() = Some(crate::lua_provider::WokeHook::for_tests(
+        arrived_tx, release_rx,
+    ));
+    // Caller 1 fetches and is held.
+    let (first_tx, first_rx) = mpsc::channel();
+    let first_provider = Arc::clone(&provider);
+    let first_pair = pair.clone();
+    std::thread::spawn(move || {
+        let _sent = first_tx.send(first_provider.token(&first_pair));
+    });
+    assert!(
+        tokens.await_requests(1, WAIT),
+        "the first fetch reaches the server"
+    );
+    // Caller 2 waits on it.
+    let (second_tx, second_rx) = mpsc::channel();
+    let second_provider = Arc::clone(&provider);
+    let second_pair = pair.clone();
+    std::thread::spawn(move || {
+        let _sent = second_tx.send(second_provider.token(&second_pair));
+    });
+    wait_rx
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("the second caller waits within {WAIT:?}"));
+    // The first fetch fails; caller 2 wakes and is held before it looks.
+    tokens.release_one();
+    arrived_rx
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("the woken caller parks within {WAIT:?}"));
+    // Caller 3 starts its own fetch while caller 2 is held.
+    let (third_tx, third_rx) = mpsc::channel();
+    let third_provider = Arc::clone(&provider);
+    let third_pair = pair.clone();
+    std::thread::spawn(move || {
+        let _sent = third_tx.send(third_provider.token(&third_pair));
+    });
+    assert!(
+        tokens.await_requests(2, WAIT),
+        "the third caller fetches without waiting on the held waiter"
+    );
+    // Caller 2 fetches for itself while caller 3's fetch is still held: no
+    // release went out since, so the third request is still unanswered.
+    release_tx.send(()).unwrap();
+    assert!(
+        tokens.await_requests(3, WAIT),
+        "the woken waiter fetches without waiting on the third caller"
+    );
+    tokens.release();
+    assert!(
+        first_rx
+            .recv_timeout(WAIT)
+            .unwrap_or_else(|_| panic!("the first token returns within {WAIT:?}"))
+            .is_err(),
+        "the held fetch fails"
+    );
+    let second = second_rx
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("the second token returns within {WAIT:?}"))
+        .unwrap();
+    let third = third_rx
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("the third token returns within {WAIT:?}"))
+        .unwrap();
+    assert_eq!(second.expose(), "tok-2");
+    assert_eq!(third.expose(), "tok-3");
+    assert_eq!(tokens.requests().len(), 3);
+}
