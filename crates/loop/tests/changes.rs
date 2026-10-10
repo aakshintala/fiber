@@ -1142,6 +1142,7 @@ struct Resumed {
     rules: Arc<support::FakeRules>,
     provider: Arc<ScriptedProvider>,
     history_len: usize,
+    reader: Option<r#loop::DisabledReader>,
 }
 
 impl Resumed {
@@ -1164,7 +1165,14 @@ impl Resumed {
             rules: Arc::new(support::FakeRules::empty()),
             provider: Arc::new(ScriptedProvider::new(script)),
             history_len: 0,
+            reader: None,
         }
+    }
+
+    /// With `reader` as the prompt's `skills.disabled` re-read.
+    fn reading(mut self, reader: r#loop::DisabledReader) -> Self {
+        self.reader = Some(reader);
+        self
     }
 
     fn start(&self, inbox: mpsc::Receiver<Delivery>) -> Loop {
@@ -1222,13 +1230,15 @@ impl Resumed {
     fn prompt(&self) -> r#loop::PromptInputs {
         let owned: Arc<fakes::clock::FakeClock> = Arc::clone(&self.clock);
         let clock: Arc<dyn contract::clock::Clock> = owned;
-        r#loop::PromptInputs::new(
+        let mut prompt = r#loop::PromptInputs::new(
             self.root.path().to_path_buf(),
             "/bin/sh".into(),
             self.dir.join("events.jsonl").display().to_string(),
             clock,
             fakes::CONTEXT_WINDOW,
-        )
+        );
+        prompt.skills_disabled_now = self.reader.clone();
+        prompt
     }
 
     fn model() -> Model {
@@ -1301,4 +1311,236 @@ fn a_resume_detects_an_outside_change_with_a_diff() {
         "{:?}",
         requests[1].conversation
     );
+}
+
+/// Writes the `late` skill into `workspace`'s `.agents/skills/`.
+fn late_skill(workspace: &PathBuf) {
+    let dir = workspace.join(".agents/skills/late");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: late\ndescription: Runs late.\n---\nRuns late.\n",
+    )
+    .unwrap();
+}
+
+fn turn_input(lines: &[Envelope]) -> String {
+    lines
+        .iter()
+        .find(|line| line.kind == "turn_started")
+        .unwrap()
+        .payload["input"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn a_skill_added_between_turns_is_announced_before_turn_started() {
+    let mut session = Session::new(vec![Scripted::text("One."), Scripted::text("Two.")], None);
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    assert_eq!(kinds(&session.lines()), first_text_turn());
+    late_skill(&session.workspace);
+    session.inbox.send(delivery("again")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    // The check's line, directly before the turn's own input.
+    let mut announced = vec!["skills_changed"];
+    announced.extend(later_text_turn());
+    assert_eq!(kinds(&lines), announced);
+    let changed = lines
+        .iter()
+        .find(|line| line.kind == "skills_changed")
+        .unwrap();
+    assert_eq!(changed.payload["added"][0]["name"], "late");
+    assert_eq!(
+        changed.payload["added"][0]["description"],
+        "Runs late."
+    );
+    // The log holds one opening message: the turn did not rebuild it.
+    let log = log::read(&session.dir).unwrap();
+    assert_eq!(
+        log.iter()
+            .filter(|line| line.kind == "opening_message")
+            .count(),
+        1
+    );
+    // The second request starts where the first did, byte for byte, with
+    // the added line after the first turn's messages.
+    let requests = session.requests();
+    assert_eq!(requests.len(), 2);
+    let first: Vec<String> = requests[0]
+        .conversation
+        .iter()
+        .map(|input| serde_json::to_string(input).unwrap())
+        .collect();
+    let prefix: Vec<String> = requests[1].conversation[..first.len()]
+        .iter()
+        .map(|input| serde_json::to_string(input).unwrap())
+        .collect();
+    assert_eq!(prefix, first);
+    // After the first turn's reply: the opening, its input, its answer,
+    // then the added line.
+    let at = requests[1]
+        .conversation
+        .iter()
+        .position(|input| {
+            matches!(input, Input::User { text, .. } if text.contains("skill late can now be loaded"))
+        })
+        .unwrap();
+    assert_eq!(at, requests[0].conversation.len() + 1);
+}
+
+#[test]
+fn switching_a_skill_off_and_on_is_removed_then_added() {
+    let disabled = Arc::new(Mutex::new(Vec::new()));
+    let reader: r#loop::DisabledReader = Arc::new({
+        let disabled = Arc::clone(&disabled);
+        move || Ok(disabled.lock().unwrap().clone())
+    });
+    let mut session = Resumed::new(vec![
+        Scripted::text("One."),
+        Scripted::text("Two."),
+        Scripted::text("Three."),
+        Scripted::text("Four."),
+    ])
+    .reading(reader);
+    late_skill(&session.workspace);
+    let (tx1, rx1) = mpsc::channel();
+    let looped = session.start(rx1);
+    session.drive(looped, &tx1, "hi");
+    let (tx2, rx2) = mpsc::channel();
+    let looped = session.resume(rx2);
+    session.drive(looped, &tx2, "again");
+    // Switched off: one removed line at the next turn start.
+    *disabled.lock().unwrap() = vec!["late".into()];
+    let (tx3, rx3) = mpsc::channel();
+    let looped = session.resume(rx3);
+    session.drive(looped, &tx3, "third");
+    // Switched back on: one added line.
+    *disabled.lock().unwrap() = Vec::new();
+    let (tx4, rx4) = mpsc::channel();
+    let looped = session.resume(rx4);
+    session.drive(looped, &tx4, "fourth");
+    let lines = session.lines();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.kind == "opening_message")
+            .count(),
+        1
+    );
+    // Every preamble build is the harness's own: a start, then resumes.
+    // The check builds none.
+    for line in lines.iter().filter(|line| line.kind == "preamble_built") {
+        assert!(
+            line.payload["reason"] == "start" || line.payload["reason"] == "resume",
+            "{}",
+            line.payload["reason"]
+        );
+    }
+    let changed: Vec<&Envelope> = lines
+        .iter()
+        .filter(|line| line.kind == "skills_changed")
+        .collect();
+    assert_eq!(changed.len(), 2);
+    assert!(changed[0].payload["added"].as_array().unwrap().is_empty());
+    assert_eq!(changed[0].payload["removed"], json!(["late"]));
+    assert_eq!(changed[1].payload["added"][0]["name"], "late");
+    assert!(
+        changed[1].payload["removed"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    // Each request carries its turn's line.
+    let requests = session.provider.requests();
+    assert_eq!(requests.len(), 4);
+    assert!(
+        requests[2].conversation.iter().any(
+            |input| matches!(input, Input::User { text, ..} if text.contains("skill late was removed"))
+        ),
+        "{:?}",
+        requests[2].conversation
+    );
+    assert!(
+        requests[3].conversation.iter().any(
+            |input| matches!(input, Input::User { text, ..} if text.contains("skill late can now be loaded"))
+        ),
+        "{:?}",
+        requests[3].conversation
+    );
+}
+
+#[test]
+fn a_resumed_turn_replays_the_live_conversation_and_checks_silently() {
+    let mut session = Resumed::new(vec![
+        Scripted::text("One."),
+        Scripted::text("Two."),
+        Scripted::text("Three."),
+    ]);
+    let (tx1, rx1) = mpsc::channel();
+    let looped = session.start(rx1);
+    session.drive(looped, &tx1, "hi");
+    late_skill(&session.workspace);
+    let (tx2, rx2) = mpsc::channel();
+    let looped = session.resume(rx2);
+    session.drive(looped, &tx2, "again");
+    let live = session.provider.requests();
+    assert_eq!(live.len(), 2);
+    // Away, then back: the resumed turn's request starts with the live
+    // request's conversation, and its check writes no `skills_changed`.
+    let (tx3, rx3) = mpsc::channel();
+    let looped = session.resume(rx3);
+    session.drive(looped, &tx3, "third");
+    let lines = session.new_lines();
+    assert!(
+        !lines.iter().any(|line| line.kind == "skills_changed"),
+        "{:?}",
+        kinds(&lines)
+    );
+    let requests = session.provider.requests();
+    assert_eq!(requests.len(), 3);
+    let live: Vec<String> = live[1]
+        .conversation
+        .iter()
+        .map(|input| serde_json::to_string(input).unwrap())
+        .collect();
+    let prefix: Vec<String> = requests[2].conversation[..live.len()]
+        .iter()
+        .map(|input| serde_json::to_string(input).unwrap())
+        .collect();
+    assert_eq!(prefix, live);
+}
+
+#[test]
+fn a_prompt_naming_a_skill_added_this_turn_is_sent_as_written_then_expands() {
+    let mut session = Session::new(
+        vec![
+            Scripted::text("One."),
+            Scripted::text("Two."),
+            Scripted::text("Three."),
+        ],
+        None,
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    assert_eq!(kinds(&session.lines()), first_text_turn());
+    // Admitted before the turn's check, `/late` is sent as written; the
+    // check then appends the skill's added line.
+    late_skill(&session.workspace);
+    session.inbox.send(delivery("/late 1")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let mut announced = vec!["skills_changed"];
+    announced.extend(later_text_turn());
+    assert_eq!(kinds(&lines), announced);
+    assert_eq!(turn_input(&lines), "/late 1");
+    // The next turn's `/late` expands from the maintained set.
+    session.inbox.send(delivery("/late 1")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    assert_eq!(kinds(&lines), later_text_turn());
+    assert_eq!(turn_input(&lines), "Runs late.\n\n1");
 }
