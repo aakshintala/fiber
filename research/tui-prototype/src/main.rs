@@ -104,6 +104,8 @@ enum Act {
     Back,
     /// the model picker's row for one model, by its flat index: focuses it
     Pick(usize),
+    /// the checklist's mark for one model, by its flat index: flips it
+    Toggle(usize),
     /// one thinking chip of one model: focuses that chip
     PickChip(usize, usize),
     /// the picker's show-all toggle
@@ -6681,7 +6683,11 @@ fn run(
             let Some(act) = click else { continue };
             changed = true;
             match act {
-                Act::Pick(_) | Act::PickChip(_, _) | Act::PickAll | Act::PickRefresh => {
+                Act::Pick(_)
+                | Act::PickChip(_, _)
+                | Act::PickAll
+                | Act::PickRefresh
+                | Act::Toggle(_) => {
                     model_picker::click(&mut ui, act);
                 }
                 Act::Group(p, bi) if pager.is_some() => pager.as_mut().unwrap().toggle(p, bi, &v),

@@ -602,6 +602,56 @@ fn model_row(f: usize, m: &Model, focused: bool, scoped_mark: bool, hits: &[usiz
     }
 }
 
+/// A checklist row: the picker's row with a mark between the gutter and
+/// the id, and no `· scoped`. The mark owns cells 2..5 as a click target;
+/// the row itself still focuses on a click elsewhere.
+fn check_row(f: usize, m: &Model, focused: bool, marked: bool, hits: &[usize]) -> Row {
+    let mut spans = vec![sp(
+        if focused { "› " } else { "  " },
+        if focused { bold() } else { Style::new() },
+    )];
+    // The mark reads bold on the focus and plain off it; `[ ]` reads dim.
+    let mut mark = if focused { bold() } else { Style::new() };
+    if !marked {
+        mark = mark.add_modifier(Modifier::DIM);
+    }
+    spans.push(sp(if marked { "[x]" } else { "[ ]" }, mark));
+    // The id reads as one word even underlined per matched char: matched
+    // chars carry underline plus bold over the row's own colour.
+    for (i, ch) in m.id.chars().enumerate() {
+        let mut st = if focused {
+            bold().patch(fg(BLUE))
+        } else {
+            fg(BLUE)
+        };
+        if hits.contains(&i) {
+            st = st.patch(bold()).add_modifier(Modifier::UNDERLINED);
+        }
+        spans.push(sp(ch.to_string(), st));
+    }
+    spans.push(sp(" ", Style::new()));
+    for r in &m.roles {
+        spans.push(sp(format!("[{r}] "), dim()));
+    }
+    if m.current {
+        spans.push(sp("● current ", bold().patch(fg(BLUE))));
+    }
+    spans.extend([sp("\t", Style::new()), sp(m.rebuild, dim())]);
+    // The focused model reads bold throughout, like every focused choice.
+    let rest = 3 + m.id.chars().count();
+    if focused {
+        for s in spans.iter_mut().skip(rest) {
+            s.style = s.style.patch(bold());
+        }
+    }
+    Row {
+        spans,
+        act: Some(Act::Pick(f)),
+        hot: vec![(2, 5, Act::Toggle(f))],
+        ..Default::default()
+    }
+}
+
 fn chips_row(s: &State, f: usize, m: &Model, focused: bool) -> Row {
     let mut parts: Vec<(ratatui::text::Span<'static>, Option<Act>)> =
         vec![(sp("    ", Style::new()), None)];
@@ -651,7 +701,21 @@ fn search_row(query: &str) -> Row {
 }
 
 /// The controls: the scope chip, the show-all toggle, and the refresh button.
+/// The checklist instead counts its marks, with no toggle and no refresh button.
 fn controls(s: &State, w: usize) -> Row {
+    if s.checklist {
+        let scope = if !s.query.is_empty() {
+            format!(
+                " {} of {} models · {} marked ",
+                visible(s).len(),
+                count(),
+                s.marked.len()
+            )
+        } else {
+            format!(" {} of {} marked ", s.marked.len(), count())
+        };
+        return row(vec![sp(scope, dim())]);
+    }
     let scope = if !s.query.is_empty() {
         format!(" {} of {} models ", visible(s).len(), count())
     } else if s.scoped.is_empty() {
@@ -680,8 +744,16 @@ fn controls(s: &State, w: usize) -> Row {
 }
 
 /// The foot legend: keys bold, labels muted, naming panel keys the body
-/// never lists as choices.
-fn footer() -> Row {
+/// never lists as choices. The checklist toggles and saves instead.
+fn footer(s: &State) -> Row {
+    if s.checklist {
+        return panel::footer_legend(&[
+            ("↑↓", "move"),
+            ("enter", "toggle"),
+            ("ctrl+s", "save"),
+            ("esc", "close"),
+        ]);
+    }
     panel::footer_legend(&[
         ("↑↓", "move"),
         ("←→", "levels"),
@@ -727,20 +799,30 @@ fn body(s: &State, inner: usize) -> Vec<Row> {
             let focused = vis[pos] == f;
             let scoped_mark = s.show_all && s.scoped.contains(&f);
             let hits = id_hits(&s.query, m.id);
+            // The checklist marks instead of scoping: its rows carry a mark,
+            // its thinking row stays dim with no click targets, and it never
+            // takes the session-only note.
+            let mk = || {
+                if s.checklist {
+                    check_row(f, m, focused, s.marked.contains(&f), &hits)
+                } else {
+                    model_row(f, m, focused, scoped_mark, &hits)
+                }
+            };
             if focused {
-                out.extend(panel::bar(vec![model_row(
-                    f,
-                    m,
-                    focused,
-                    scoped_mark,
-                    &hits,
-                )]));
+                out.extend(panel::bar(vec![mk()]));
             } else {
-                out.push(model_row(f, m, focused, scoped_mark, &hits));
+                out.push(mk());
             }
-            out.push(chips_row(s, f, m, focused));
-            if s.session_only == Some(f) {
-                out.push(note_row());
+            if s.checklist {
+                let mut chips = chips_row(s, f, m, false);
+                chips.hot.clear();
+                out.push(chips);
+            } else {
+                out.push(chips_row(s, f, m, focused));
+                if s.session_only == Some(f) {
+                    out.push(note_row());
+                }
             }
         }
     }
@@ -754,7 +836,7 @@ pub fn view(s: &State, w: usize) -> Vec<Row> {
     let probe = body(s, 10_000);
     // The search and controls rows pad to their width, so neither sizes the panel.
     // The legend sizes unfitted now, straight from its row.
-    let legend_w = width(&footer().spans);
+    let legend_w = width(&footer(s).spans);
     let natural = probe
         .iter()
         .skip(2)
@@ -767,7 +849,7 @@ pub fn view(s: &State, w: usize) -> Vec<Row> {
     let prefer = w.saturating_sub(4).min(96).max(legend_w);
     let panel_w = panel::fit_width(natural, prefer, w);
     let inner = panel::inner_w(panel_w);
-    let rows = panel::frame(None, body(s, inner), Some(footer()), panel_w);
+    let rows = panel::frame(None, body(s, inner), Some(footer(s)), panel_w);
     panel::centre(rows, panel_w, w)
 }
 
@@ -1537,5 +1619,144 @@ mod tests {
             "the other providers lost their age"
         );
         assert!(t.contains("⟳ refresh all"), "missing the refresh button");
+    }
+
+    #[test]
+    fn the_checklist_marks_five_rows_before_their_ids() {
+        let rows = view(&for_case("checklist"), 100);
+        let t = text(&rows);
+        assert_eq!(t.matches("[x]").count(), 5, "want five marked rows");
+        assert_eq!(t.matches("[ ]").count(), 7, "want seven unmarked rows");
+        // Each mark sits between the gutter and the id.
+        let line = t
+            .split('\n')
+            .find(|l| l.contains("claude-opus-5-5"))
+            .unwrap();
+        assert!(line.find("[x]").unwrap() < line.find("claude-opus-5-5").unwrap());
+        let line = t
+            .split('\n')
+            .find(|l| l.contains("claude-haiku-5-5"))
+            .unwrap();
+        assert!(line.find("[ ]").unwrap() < line.find("claude-haiku-5-5").unwrap());
+        // The checklist keeps the picker's roles, current mark and costs.
+        for bit in ["[main]", "● current", "~84k tokens · $0.31"] {
+            assert!(t.contains(bit), "missing {bit}");
+        }
+        assert!(!t.contains("· scoped"), "the checklist scopes nothing");
+        assert_eq!(picks(&rows), 12);
+    }
+
+    #[test]
+    fn the_checklist_counts_marks_not_models() {
+        let t = text(&view(&for_case("checklist"), 100));
+        assert!(t.contains(" 5 of 12 marked "), "missing the mark count");
+        assert!(!t.contains("[show all]"), "the checklist has no toggle");
+        assert!(!t.contains("refresh all"), "the checklist has no refresh");
+        let t = text(&view(&for_case("checklist-filtered"), 100));
+        assert!(
+            t.contains(" 4 of 12 models · 5 marked "),
+            "missing the filtered count"
+        );
+    }
+
+    #[test]
+    fn the_checklist_footer_names_toggle_and_save() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::style::Modifier;
+        let rows = view(&for_case("checklist"), 100);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, rows.len() as u16));
+        for (y, r) in rows.iter().enumerate() {
+            crate::paint(&mut buf, 0, y as u16, 100, r);
+        }
+        let lines: Vec<String> = rows.iter().map(plain).collect();
+        let y = lines
+            .iter()
+            .position(|l| l.contains("ctrl+s save"))
+            .unwrap() as u16;
+        let foot = lines[y as usize].trim().to_string();
+        assert_eq!(
+            &foot[foot.find("↑↓").unwrap()..],
+            "↑↓ move · enter toggle · ctrl+s save · esc close"
+        );
+        let start = lines[y as usize][..lines[y as usize].find("enter").unwrap()]
+            .chars()
+            .count();
+        for i in 0..5 {
+            assert!(
+                buf[(start as u16 + i as u16, y)]
+                    .modifier
+                    .contains(Modifier::BOLD),
+                "key not bold"
+            );
+        }
+    }
+
+    #[test]
+    fn the_checklist_empty_case_draws_no_sections() {
+        let rows = view(&for_case("checklist-empty"), 100);
+        let t = text(&rows);
+        assert!(t.contains("No models match"), "missing the empty line");
+        assert!(
+            t.contains(" 0 of 12 models · 5 marked "),
+            "missing the empty count"
+        );
+        for id in ["anthropic", "openai-codex", "google", "thinking"] {
+            assert!(!t.contains(id), "empty list still draws {id}");
+        }
+        assert_eq!(picks(&rows), 0);
+    }
+
+    #[test]
+    fn only_the_focused_mark_reads_bold_in_the_buffer() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::style::Modifier;
+        let rows = view(&for_case("checklist"), 100);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, rows.len() as u16));
+        for (y, r) in rows.iter().enumerate() {
+            crate::paint(&mut buf, 0, y as u16, 100, r);
+        }
+        let lines: Vec<String> = rows.iter().map(plain).collect();
+        // The focus is flat index 0: its `[x]` reads bold.
+        let y = lines
+            .iter()
+            .position(|l| l.contains("claude-opus-5-5"))
+            .unwrap() as u16;
+        let start = lines[y as usize][..lines[y as usize].find("[x]").unwrap()]
+            .chars()
+            .count();
+        for i in 0..3 {
+            assert!(
+                buf[(start as u16 + i as u16, y)]
+                    .modifier
+                    .contains(Modifier::BOLD),
+                "focused mark not bold"
+            );
+        }
+        // claude-sonnet-5-5 is marked but off the focus: its `[x]` stays plain.
+        let y2 = lines
+            .iter()
+            .position(|l| l.contains("claude-sonnet-5-5"))
+            .unwrap() as u16;
+        let start2 = lines[y2 as usize][..lines[y2 as usize].find("[x]").unwrap()]
+            .chars()
+            .count();
+        assert!(
+            !(0..3).any(|i| buf[(start2 as u16 + i as u16, y2)]
+                .modifier
+                .contains(Modifier::BOLD)),
+            "unfocused mark went bold"
+        );
+    }
+
+    #[test]
+    fn the_checklist_mark_owns_cells_two_to_five() {
+        let b = body(&for_case("checklist"), 90);
+        let r = b
+            .iter()
+            .find(|r| matches!(r.act, Some(Act::Pick(0))))
+            .unwrap();
+        assert_eq!(r.hot, vec![(2, 5, Act::Toggle(0))]);
     }
 }
