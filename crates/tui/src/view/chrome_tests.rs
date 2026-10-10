@@ -247,12 +247,34 @@ fn the_conversation_has_no_header_and_a_blank_column_each_side() {
 }
 
 #[test]
+fn an_idle_grip_is_dim_and_an_active_one_bold_in_the_accent() {
+    use ratatui::style::Modifier;
+    let region = Rect::new(10, 5, 20, 10);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 30, 20));
+    super::grip(&mut buf, 10, region, false);
+    for y in 9..=11 {
+        let cell = buf.cell((10, y)).expect("a grip cell");
+        assert_eq!(cell.symbol(), "⋮");
+        assert_eq!(cell.fg, crate::theme::Role::Muted.color());
+        assert!(!cell.modifier.contains(Modifier::BOLD));
+    }
+    let mut buf = Buffer::empty(Rect::new(0, 0, 30, 20));
+    super::grip(&mut buf, 10, region, true);
+    for y in 9..=11 {
+        let cell = buf.cell((10, y)).expect("a grip cell");
+        assert_eq!(cell.symbol(), "⋮");
+        assert_eq!(cell.fg, crate::theme::Role::Accent.color());
+        assert!(cell.modifier.contains(Modifier::BOLD));
+    }
+}
+
+#[test]
 fn grip_needs_both_bounds() {
     // A one-row region: the mid window reaches past it on both sides.
     // `||` would draw outside while `&&` clips.
     let region = Rect::new(10, 5, 20, 1);
     let mut buf = Buffer::empty(Rect::new(0, 0, 30, 10));
-    super::grip(&mut buf, 10, region);
+    super::grip(&mut buf, 10, region, false);
     let symbol = |y: u16, buf: &Buffer| buf.cell((10, y)).map(|cell| cell.symbol().to_owned());
     assert_eq!(symbol(5, &buf), Some("⋮".to_owned()));
     assert_eq!(symbol(4, &buf), Some(" ".to_owned()));
@@ -265,7 +287,7 @@ fn grip_excludes_the_bottom_edge() {
     // while `<=` would draw.
     let region = Rect::new(10, 5, 20, 2);
     let mut buf = Buffer::empty(Rect::new(0, 0, 30, 10));
-    super::grip(&mut buf, 10, region);
+    super::grip(&mut buf, 10, region, false);
     let symbol = |y: u16, buf: &Buffer| buf.cell((10, y)).map(|cell| cell.symbol().to_owned());
     assert_eq!(symbol(5, &buf), Some("⋮".to_owned()));
     assert_eq!(symbol(6, &buf), Some("⋮".to_owned()));

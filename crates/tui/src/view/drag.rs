@@ -3,11 +3,16 @@
 //! (`docs/tui.md`, "Layout").
 
 use ratatui::buffer::Buffer;
+use ratatui::style::Style;
 
-use super::HOVER_TINT;
+use super::chrome;
 use crate::app::App;
 use crate::layout::{Edge, edge_rect};
 use crate::markdown::{Role, style};
+
+/// An active edge's tint: the `rule` background only, so the grip's `⋮`
+/// stays.
+const ACTIVE_TINT: Style = Style::new().bg(Role::Rule.color());
 
 /// Tints the edge under `pointer` and the edge being dragged, and draws
 /// the pill naming the live share and columns while a drag runs. The tint
@@ -22,7 +27,8 @@ pub(super) fn draw(app: &App, buf: &mut Buffer, pointer: Option<(u16, u16)>) {
             continue;
         };
         if pointer.is_some_and(|(col, _)| col == rect.x) || dragged == Some(edge) {
-            buf.set_style(rect, HOVER_TINT);
+            buf.set_style(rect, ACTIVE_TINT);
+            chrome::grip(buf, rect.x, rect, true);
         }
     }
     let Some((edge, share)) = app.dragging() else {

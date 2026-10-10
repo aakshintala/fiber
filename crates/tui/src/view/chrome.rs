@@ -38,10 +38,10 @@ pub(super) fn draw(layout: &Layout, buf: &mut Buffer) {
                 bottom: false,
             },
         );
-        grip(buf, rail.right().saturating_sub(1), rail);
+        grip(buf, rail.right().saturating_sub(1), rail, false);
     }
     if let Some(at) = layout.grip {
-        grip(buf, at.x, at);
+        grip(buf, at.x, at, false);
     }
     if let Some(panel) = layout.panel {
         crate::surface::draw_slab(
@@ -54,16 +54,25 @@ pub(super) fn draw(layout: &Layout, buf: &mut Buffer) {
                 bottom: false,
             },
         );
-        grip(buf, panel.x, panel);
+        grip(buf, panel.x, panel, false);
     }
 }
 
-/// `⋮` dim in column `x` on the three rows at `region`'s mid-height.
-fn grip(buf: &mut Buffer, x: u16, region: Rect) {
+/// `⋮` on the three rows at `region`'s mid-height in column `x`: dim
+/// while idle, bold in the accent colour while active (`docs/tui.md`,
+/// "Layout").
+pub(super) fn grip(buf: &mut Buffer, x: u16, region: Rect, active: bool) {
+    let ink = if active {
+        Style::new()
+            .fg(Role::Accent.color())
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    } else {
+        style(Role::Muted)
+    };
     let mid = region.y.saturating_add(region.height / 2);
     for y in mid.saturating_sub(1)..=mid.saturating_add(1) {
         if y >= region.y && y < region.bottom() {
-            buf.set_string(x, y, GRIP, style(Role::Muted));
+            buf.set_string(x, y, GRIP, ink);
         }
     }
 }
