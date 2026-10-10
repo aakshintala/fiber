@@ -898,6 +898,44 @@ fn left_and_right_on_a_chip_ignore_a_person_binding() {
 }
 
 #[test]
+fn arrows_with_the_picker_open_leave_the_chip_alone() {
+    let mut app = home_with(Some("acme/m1"));
+    drawn(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.home.as_ref().is_some_and(|home| home.picker.is_some()));
+    drawn(&mut app);
+    // ← → behind the picker move nothing: the chip stays focused.
+    assert_eq!(press(&mut app, "right"), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
+    assert_eq!(press(&mut app, "left"), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
+    assert_eq!(app.on_edit(Edit::Right), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
+    // ↓ reaches the picker, not the list: the chip stays focused.
+    assert_eq!(press(&mut app, "down"), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
+    assert!(app.home.as_ref().is_some_and(|home| home.picker.is_some()));
+    // Esc closes the picker with the chip still focused.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.home.as_ref().is_some_and(|home| home.picker.is_none()));
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
+}
+
+#[test]
+fn paste_with_the_picker_open_keeps_focus_and_draft() {
+    let mut app = home_with(Some("acme/m1"));
+    drawn(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    drawn(&mut app);
+    assert_eq!(app.on_edit(Edit::Paste("XY".to_owned())), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
+    assert!(app.input().expand().is_empty());
+    assert!(app.home.as_ref().is_some_and(|home| home.picker.is_some()));
+}
+
+#[test]
 fn right_then_typing_then_down_returns_to_the_moved_chip() {
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);

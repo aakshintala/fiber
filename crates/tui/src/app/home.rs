@@ -964,7 +964,9 @@ impl App {
 
     /// Delete on a focused row, ahead of the focus early return in
     /// `on_edit`: the delete question when it exited, swallowed
-    /// otherwise. A focused chip takes its edits first: ← → move
+    /// otherwise. The workspace picker owns every edit while open, so
+    /// nothing reaches the chip row or the draft behind it. A focused
+    /// chip takes its edits first: ← → move
     /// between chips, every other edit returns to the entry bar. With
     /// the box focused the draft keeps the key.
     pub(super) fn home_edit(&mut self, edit: &Edit) -> Option<Effect> {
@@ -972,6 +974,9 @@ impl App {
             return None;
         }
         if self.home.as_ref().is_some_and(|home| home.prompt.is_some()) {
+            return Some(Effect::None);
+        }
+        if self.home.as_ref().is_some_and(|home| home.picker.is_some()) {
             return Some(Effect::None);
         }
         // A focused chip takes its edits ahead of the row's Delete:
