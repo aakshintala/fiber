@@ -347,10 +347,10 @@ fn sweep(hub: &Arc<Hub>, names: &BTreeSet<String>) {
 /// advances its mark and stores it back for its epoch only. For a live one
 /// whose socket accepts: `relay::attach` with the kept replay, exclusive.
 /// A guard clears busy at the end (panic included). In tests it runs the
-/// pause hook before each connect and signals pass-done at the end.
+/// pause hook before each connect; the guard signals pass-done once busy is clear.
 fn rejoin_pass(hub: &Arc<Hub>, candidates: Vec<Candidate>) {
     let _guard = BusyGuard {
-        inner: &hub.rejoins.inner,
+        connections: &hub.rejoins,
     };
     for candidate in candidates {
         let Candidate {
@@ -395,20 +395,22 @@ fn rejoin_pass(hub: &Arc<Hub>, candidates: Vec<Candidate>) {
         };
         crate::relay::attach_rejoin(&session, stream, hub, &writer, &relays, candidate_epoch);
     }
-    #[cfg(test)]
-    if let Some(passed) = lock(&hub.rejoins.pass_done).as_ref() {
-        passed.send(()).unwrap_or(());
-    }
 }
 
-/// Clears the rejoin busy flag when the worker ends, a panic included.
+/// Clears the rejoin busy flag when the worker ends, a panic included. In
+/// tests it then signals pass-done: a notice that arrived while busy was
+/// still set would let the next scan be skipped.
 struct BusyGuard<'a> {
-    inner: &'a Mutex<Inner>,
+    connections: &'a Connections,
 }
 
 impl Drop for BusyGuard<'_> {
     fn drop(&mut self) {
-        lock(self.inner).busy = false;
+        lock(&self.connections.inner).busy = false;
+        #[cfg(test)]
+        if let Some(passed) = lock(&self.connections.pass_done).as_ref() {
+            passed.send(()).unwrap_or(());
+        }
     }
 }
 

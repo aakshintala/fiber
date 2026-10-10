@@ -2312,3 +2312,66 @@ fn a_long_consumed_prefix_still_rejoins_from_the_offset() {
     let status = client.next_status("the later run's status");
     assert_eq!(status["payload"]["state"], "streaming");
 }
+
+#[test]
+fn a_scan_during_a_pass_queues_none_and_the_notice_follows_busy_clearing() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let (hub, clock) = temp.hub(FakeStarter::hang(&temp.dir));
+    wire(&hub);
+    start(&hub.feed, &clock);
+    let sid = id(15);
+    temp.write_log(&sid, &workspace, None, &[]);
+    let fake = Fake::bind(&temp.dir, &sid);
+    let mut client = Client::connect(&hub);
+    assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
+    client.send(&json!({
+        "id": "c_sub", "session_id": sid, "command": "subscribe", "args": {"level": "summary"},
+    }));
+    assert_eq!(
+        client.next("the subscribe acknowledgement")["kind"],
+        "command_accepted"
+    );
+    temp.append(&sid, &fiber_exited(&sid));
+    fake.stop_listening();
+    fake.unlink();
+    fake.shutdown_write();
+    fake.await_closed();
+    temp.append(&sid, &fiber_started(&sid));
+    fs::write(temp.dir.join("run").join(&sid), b"stale").unwrap();
+    // Hold the worker mid-pass; a scan that fires now is skipped.
+    let (paused_tx, paused) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    *lock(&hub.rejoins.before_connect) = Some(Box::new(move || {
+        paused_tx.send(()).unwrap_or(());
+        release.recv().unwrap_or(());
+    }));
+    let done = arm_pass(&hub);
+    clock.advance(RUN_SCAN);
+    await_scanner(&clock);
+    assert!(
+        paused.recv_timeout(DEADLINE).is_ok(),
+        "the worker paused mid-pass"
+    );
+    clock.advance(RUN_SCAN);
+    await_scanner(&clock);
+    assert!(
+        done.try_recv().is_err(),
+        "the skipped scan queued no pass and sent no notice"
+    );
+    // The registry lock stands in for "busy not yet cleared": the guard
+    // clears busy under it, so the notice must wait for it.
+    let registry = lock(&hub.rejoins.inner);
+    drop(release_tx);
+    assert!(
+        done.recv_timeout(Duration::from_millis(200)).is_err(),
+        "no notice while busy is still set"
+    );
+    drop(registry);
+    await_pass(&done, "the held pass");
+    // The notice is the signal that the next scan queues a pass.
+    let done = arm_pass(&hub);
+    clock.advance(RUN_SCAN);
+    await_scanner(&clock);
+    await_pass(&done, "the scan after the notice");
+}
