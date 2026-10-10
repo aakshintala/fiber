@@ -298,10 +298,18 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
     drop(file);
     assert_eq!(fs::read(&events).unwrap(), whole);
     // Enter opens the focused list row through the normal open path:
-    // the hub gets a new `subscribe` for the session.
+    // the hub gets a new `subscribe` for the session. Home's list shows
+    // the name too, and the notices float over home as over the
+    // conversation, so the name alone is already satisfied on home and
+    // the release below could run before the reopened `subscribe`
+    // reaches the session (#1903). The earlier Ctrl+C cleared a
+    // non-empty draft, which disarms the quit hint, so every home frame
+    // carries the foot's hint and no conversation frame does: the name
+    // without it proves the replayed conversation drew, which the hub
+    // only replays over the accepted `subscribe`.
     run.write(b"\r");
     let reopened = run.wait_screen("the reopened conversation", |screen| {
-        shows(screen, "zebraflight")
+        shows(screen, "zebraflight") && !shows(screen, "chips and sessions")
     });
     assert_eq!(
         occurrences(&reopened, "stream_closed"),
