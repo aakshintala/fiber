@@ -513,3 +513,52 @@ fn an_unreadable_line_reports_its_own_one_based_number() {
     };
     assert_eq!(line, 3);
 }
+
+#[test]
+fn a_read_from_n_parses_no_line_below_n() {
+    // Only the window from `from` is parsed: a corrupt line below `from`
+    // fails nothing, while a corrupt line at `from` names its own number.
+    use std::os::unix::fs::FileExt;
+    let home = fakes::TempDir::new("log-history-from-n");
+    let sessions = home.path().join("sessions");
+    let id = "s_aaaaaaaaaaaaaaaa";
+    write_log(
+        &sessions,
+        id,
+        &[
+            started(id, 0, None),
+            plain(id, 1, "turn_started"),
+            plain(id, 2, "turn_started"),
+            plain(id, 3, "turn_completed"),
+            plain(id, 4, "turn_completed"),
+        ],
+    );
+    let dir = sessions.join(id);
+    let path = dir.join(EVENTS);
+    let bytes = fs::read(&path).unwrap();
+    let mut start = 0;
+    for line in bytes.split_inclusive(|b| *b == b'\n').take(1) {
+        start += line.len();
+    }
+    let len = bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .write_all_at(&vec![b'x'; len], start as u64)
+        .unwrap();
+    let segments = history_to(&dir, Seq(4)).unwrap();
+    let held: Vec<u64> = segments[0]
+        .lines(2)
+        .unwrap()
+        .into_iter()
+        .map(|line| line.seq.unwrap().0)
+        .collect();
+    assert_eq!(held, [2, 3, 4]);
+    let line = match segments[0].lines(1) {
+        Ok(_) => panic!("a corrupt line at from is unreadable"),
+        Err(Error::Unreadable { line, .. }) => line,
+        Err(other) => panic!("expected Unreadable, got {other}"),
+    };
+    assert_eq!(line, 2);
+}
