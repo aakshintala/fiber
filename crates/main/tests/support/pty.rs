@@ -567,7 +567,8 @@ pub(crate) struct Run {
     /// attached run, which waits on no hub.
     hub_home: PathBuf,
     watchdog: Option<Watchdog>,
-    sessions: Option<Watchdog>,
+    /// The sessions watchdog and the workspace path it matches.
+    sessions: Option<(Watchdog, String)>,
     shared: Arc<Mutex<Shared>>,
     writer: Writer,
     reader: Option<Reader>,
@@ -633,7 +634,7 @@ impl Run {
             hub_socket: setup.home().join("run").join("hub"),
             hub_home: setup.home().to_path_buf(),
             watchdog: Some(watchdog),
-            sessions: Some(sessions),
+            sessions: Some((sessions, setup.workspace().to_string_lossy().into_owned())),
             shared,
             writer,
             reader: Some(reader),
@@ -855,6 +856,20 @@ impl Run {
             &self.hub_home,
             "the hub process to exit",
         );
+        // The hub exiting leaves its sessions running. Kill them, as the
+        // sessions watchdog would, and stand it down only once no process
+        // holds the workspace path. On a miss it stays armed.
+        if let Some((sessions, workspace)) = self.sessions.take() {
+            if let Err(err) = fakes::kill_matching(&workspace) {
+                panic!("killing the sessions in the workspace: {err}");
+            }
+            if let Err(err) = fakes::try_matching_exits(&workspace, self.deadline.left()) {
+                panic!(
+                    "waited until the deadline for every process holding the workspace path to exit: {err}"
+                );
+            }
+            sessions.stand_down(self.deadline.cleanup());
+        }
         Exited {
             status: output.status,
             terminal: self.shared.lock().unwrap().output(),
