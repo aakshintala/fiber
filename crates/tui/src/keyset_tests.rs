@@ -205,22 +205,69 @@ fn an_empty_list_unbinds_in_every_context() {
 
 #[test]
 fn session_only_acts_only_in_the_picker() {
-    // At its default the `s` stroke gives its own event in the picker,
-    // reaching the picker's choose key through `on_key`.
+    // At its default Ctrl+S resolves to the action in the picker, and
+    // to nothing where the picker is not open.
+    assert_eq!(
+        at(&[], "ctrl+s", Context::Picker),
+        super::Resolved::Action("session_only")
+    );
+    for context in [Context::Input, Context::Overlay, Context::Conversation] {
+        assert_eq!(
+            at(&[], "ctrl+s", context),
+            super::Resolved::Nothing,
+            "{context:?}"
+        );
+    }
+    // `s` is an ordinary key in the picker, reaching the filter.
     assert_eq!(
         at(&[], "s", Context::Picker),
-        super::Resolved::Key(Key::Char('s'))
-    );
-    assert_eq!(
-        at(&[], "s", Context::Overlay),
         super::Resolved::Key(Key::Char('s'))
     );
     let entries = &[("session_only", json!("x"))];
     assert_eq!(
         at(entries, "x", Context::Picker),
-        super::Resolved::Key(Key::Char('s'))
+        super::Resolved::Action("session_only")
     );
-    assert_eq!(at(entries, "s", Context::Picker), super::Resolved::Nothing);
+    assert_eq!(at(entries, "ctrl+s", Context::Picker), super::Resolved::Nothing);
+}
+
+#[test]
+fn picker_tab_and_refresh_resolve_to_their_keys() {
+    assert_eq!(
+        at(&[], "tab", Context::Picker),
+        super::Resolved::Key(Key::Tab)
+    );
+    assert_eq!(
+        at(&[], "ctrl+r", Context::Picker),
+        super::Resolved::Key(Key::CtrlR)
+    );
+    // Ctrl+R in the input box still searches the prompts.
+    assert_eq!(
+        at(&[], "ctrl+r", Context::Input),
+        super::Resolved::Key(Key::CtrlR)
+    );
+}
+
+#[test]
+fn show_all_rebinds_to_another_key() {
+    let entries = &[("show_all", json!("ctrl+t"))];
+    assert_eq!(
+        at(entries, "ctrl+t", Context::Picker),
+        super::Resolved::Key(Key::Tab)
+    );
+    assert_eq!(
+        at(entries, "tab", Context::Picker),
+        super::Resolved::Nothing
+    );
+}
+
+#[test]
+fn refresh_lists_rebinds_to_another_key() {
+    let entries = &[("refresh_lists", json!("ctrl+t"))];
+    assert_eq!(
+        at(entries, "ctrl+t", Context::Picker),
+        super::Resolved::Key(Key::CtrlR)
+    );
 }
 
 #[test]

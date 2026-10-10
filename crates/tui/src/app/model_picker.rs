@@ -64,7 +64,7 @@ impl App {
 
     /// A click on the open picker's `spot`: the ✕ closes it, the buttons
     /// act as their keys, a row selects, and a name or chip cell chooses.
-    /// A click always saves: `s` is the only path to a session-only
+    /// A click always saves: Ctrl+S is the only path to a session-only
     /// choice.
     pub(crate) fn model_picker_click(&mut self, spot: Spot) -> super::Effect {
         match spot {
@@ -292,7 +292,7 @@ impl App {
     }
 
     /// Opens the picker on the current model's level chips, its row
-    /// touched: Enter saves the level, `s` applies it to this session
+    /// touched: Enter saves the level, Ctrl+S applies it to this session
     /// only. With no current model, or no catalogue entry for it, the
     /// picker opens as an ordinary choose.
     fn open_thinking(&mut self) -> super::Effect {
@@ -458,7 +458,7 @@ impl App {
     /// A key for the open picker; `None` while it is closed, for Ctrl+C,
     /// for the global actions' keys, and while the quit question is up,
     /// so quitting and every global action keep their keys. Enter chooses
-    /// and saves, `s` chooses for this session only. Every other key but
+    /// and saves, Ctrl+S chooses for this session only. Every other key but
     /// the picker's own does nothing, and no key cycles.
     pub(in crate::app) fn model_picker_key(&mut self, key: &Key) -> Option<super::Effect> {
         if !self.model_picker_open() || self.quit_open() {
@@ -523,15 +523,6 @@ impl App {
                     None => super::Effect::None,
                 })
             }
-            Key::Char('s') => {
-                // `s` is the only path to a session-only choice: with no
-                // scoped row it stays open, sending nothing. The
-                // checklist never chooses, so it stays open there too.
-                Some(match self.model_picker.choice(true) {
-                    Some(choice) => self.choose(choice),
-                    None => super::Effect::None,
-                })
-            }
             Key::Char(' ') => {
                 // Space marks in the checklist; everywhere else it does
                 // nothing. Only the checklist keeps marks.
@@ -550,6 +541,25 @@ impl App {
             | Key::AltDown
             | Key::AltX => Some(super::Effect::None),
         }
+    }
+
+    /// Chooses in the open picker for this session only, through the
+    /// `session_only` action: Ctrl+S chooses at once, sending one `model`
+    /// command and saving nothing. Nothing while the picker is closed,
+    /// while the quit question is up, or while the key map is open above
+    /// the picker, so nothing reaches the picker underneath. With no row
+    /// to choose the picker stays open, sending nothing.
+    pub(in crate::app) fn model_picker_session_only(&mut self) -> super::Effect {
+        if !self.model_picker_open() || self.quit_open() || self.keymap_top().is_some() {
+            return super::Effect::None;
+        }
+        let effect = match self.model_picker.choice(true) {
+            Some(choice) => self.choose(choice),
+            None => super::Effect::None,
+        };
+        self.edited();
+        self.settle();
+        effect
     }
 
     /// An edit for the open picker: the arrows move the selected row's

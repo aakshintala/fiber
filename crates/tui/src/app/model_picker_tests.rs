@@ -95,6 +95,11 @@ fn now() -> Instant {
     fakes::clock::FakeClock::new().now()
 }
 
+/// Presses Ctrl+S through the bindings, the `session_only` action's key.
+fn ctrl_s(app: &mut App) -> Effect {
+    app.on_press(Stroke::parse("ctrl+s").unwrap(), now())
+}
+
 /// An app on home at 80x24, scoped to `scoped`.
 fn scoped_home(scoped: &[&str]) -> App {
     let mut app = App::new(PathBuf::from("/w"));
@@ -1388,7 +1393,7 @@ fn a_home_choice_with_nothing_to_save_needs_no_configure_seam() {
 fn s_chooses_for_this_session_only_and_writes_nothing() {
     let (mut app, seam) = choosing_app();
     open(&mut app);
-    let line = sent(app.on_key(Key::Char('s'), now()));
+    let line = sent(ctrl_s(&mut app));
     assert_eq!(line["command"], json!("model"));
     assert_eq!(
         line["args"],
@@ -1407,7 +1412,7 @@ fn s_on_a_touched_row_sends_the_level() {
     let (mut app, _) = choosing_app();
     open(&mut app);
     app.on_edit(Edit::Left);
-    let line = sent(app.on_key(Key::Char('s'), now()));
+    let line = sent(ctrl_s(&mut app));
     assert_eq!(line["args"], json!({"model": "acme/m1", "thinking": "low"}));
 }
 
@@ -1418,7 +1423,7 @@ fn s_does_nothing_on_the_empty_scoped_view() {
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.on_models(Ok(three()));
     open(&mut app);
-    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(app.model_picker_open());
 }
 
@@ -1465,7 +1470,7 @@ fn choosing_with_a_hidden_selection_takes_the_highlighted_row() {
     assert_eq!(frame.list.selected(), 2);
     // `s` takes the highlighted row for this session only, leaving
     // nothing to save.
-    let line = sent(app.on_key(Key::Char('s'), now()));
+    let line = sent(ctrl_s(&mut app));
     assert_eq!(line["args"], json!({"model": "acme/m2"}));
     assert!(app.model_picker.awaiting.is_empty());
 }
@@ -1587,6 +1592,48 @@ fn edits_reach_nothing_under_the_key_map() {
     assert!(app.model_picker_open());
 }
 
+#[test]
+fn ctrl_s_sends_one_model_command_and_waits_on_nothing() {
+    let (mut app, _) = choosing_app();
+    open(&mut app);
+    let line = sent(ctrl_s(&mut app));
+    assert_eq!(line["command"], json!("model"));
+    assert!(!app.model_picker_open());
+    assert!(app.model_picker.awaiting.is_empty());
+}
+
+#[test]
+fn ctrl_s_under_the_key_map_sends_nothing_and_stays_open() {
+    let (mut app, _) = choosing_app();
+    open(&mut app);
+    assert_eq!(app.on_key(Key::F1, now()), Effect::None);
+    assert!(app.keymap_top().is_some());
+    assert_eq!(ctrl_s(&mut app), Effect::None);
+    assert!(app.model_picker_open());
+}
+
+#[test]
+fn ctrl_s_with_the_quit_question_up_sends_nothing() {
+    let mut app = quitting();
+    assert_eq!(ctrl_s(&mut app), Effect::None);
+    assert!(app.model_picker_open());
+    assert!(app.quit_open());
+}
+
+#[test]
+fn ctrl_s_on_home_holds_the_choice_and_saves_nothing() {
+    let mut app = home();
+    let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
+    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.on_line(hello());
+    app.on_models(Ok(three()));
+    open(&mut app);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
+    assert!(!app.model_picker_open());
+    assert!(app.model_picker.start_model.is_some());
+    assert!(seam.writes().is_empty());
+}
+
 /// Types `text` into the draft.
 fn type_draft(app: &mut App, text: &str) {
     for ch in text.chars() {
@@ -1618,7 +1665,7 @@ fn s_on_home_rides_the_next_start() {
     app.on_models(Ok(three()));
     open(&mut app);
     app.on_edit(Edit::Left);
-    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(!app.model_picker_open());
     // Nothing is written: the choice rides the next `start`.
     assert!(seam.writes().is_empty());
@@ -1664,7 +1711,7 @@ fn a_suffix_named_model_is_not_chosen_by_mistake() {
     app.on_line(hello());
     app.on_models(Ok(catalogue));
     open(&mut app);
-    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     type_draft(&mut app, "hi");
     let args = started(app.on_key(Key::Enter, now()));
     assert_eq!(args["model"], json!("p/m"));
@@ -1678,7 +1725,7 @@ fn a_model_without_levels_rides_start_with_no_override() {
     app.on_models(Ok(three()));
     open(&mut app);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     type_draft(&mut app, "hi");
     let args = started(app.on_key(Key::Enter, now()));
     assert_eq!(args["model"], json!("acme/m2"));
@@ -1691,7 +1738,7 @@ fn the_start_model_clears_once_start_is_accepted() {
     app.on_line(hello());
     app.on_models(Ok(three()));
     open(&mut app);
-    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(app.model_picker.start_model.is_some());
     type_draft(&mut app, "hi");
     let Effect::Send(lines) = app.on_key(Key::Enter, now()) else {
@@ -1732,7 +1779,7 @@ fn enter_after_s_on_home_forgets_the_session_only_choice() {
     app.on_models(Ok(three()));
     // `s` holds `acme/m1` for the next `start`, saving nothing.
     open(&mut app);
-    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(app.model_picker.start_model.is_some());
     assert!(seam.writes().is_empty());
     // Enter saves `acme/m2` as the default, superseding the held choice.
@@ -1760,7 +1807,7 @@ fn enter_on_home_supersedes_a_pending_choice_for_the_same_model() {
     app.on_models(Ok(three()));
 
     open(&mut app);
-    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     open(&mut app);
     app.on_edit(Edit::Left);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
@@ -1798,7 +1845,7 @@ fn s_after_enter_on_home_still_rides_the_next_start() {
     open(&mut app);
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
     app.on_edit(Edit::Left);
-    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert_eq!(seam.writes().len(), 1);
     type_draft(&mut app, "hi");
     let args = started(app.on_key(Key::Enter, now()));
@@ -1818,7 +1865,7 @@ fn acceptance_clears_a_pending_home_choice() {
     app.on_models(Ok(three()));
     // A session-only choice on home rides the next `start`.
     open(&mut app);
-    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(app.model_picker.start_model.is_some());
     // Attached instead, an Enter choice saves its model once the session
     // accepts it, superseding the pending choice.
@@ -2016,7 +2063,7 @@ fn enter_there_writes_only_the_level() {
 fn s_there_writes_nothing() {
     let (mut app, seam) = thinking_app("acme/m1", Some("high"));
     assert_eq!(run_draft(&mut app, "/thinking"), Effect::None);
-    let line = sent(app.on_key(Key::Char('s'), now()));
+    let line = sent(ctrl_s(&mut app));
     let id = line["id"].as_str().expect("an id").to_owned();
     app.on_line(accepted(SESSION, &id));
     assert!(seam.writes().is_empty());
@@ -2049,7 +2096,7 @@ fn thinking_uses_the_pending_home_choice() {
     // `s` holds `acme/m1` for the next `start`: the chips still name no
     // model.
     open(&mut app);
-    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert_eq!(app.home.as_ref().expect("home").launch.model, None);
     // Bare `/thinking` opens on the pending choice's chips, not as an
     // ordinary choose.
@@ -2069,7 +2116,7 @@ fn thinking_with_a_level_saves_for_the_pending_home_choice() {
     app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
     app.on_models(Ok(three()));
     open(&mut app);
-    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     // `/thinking high` saves only the level, for the pending model.
     assert_eq!(run_draft(&mut app, "/thinking high"), Effect::None);
     assert_eq!(
@@ -2090,7 +2137,7 @@ fn thinking_low_updates_a_pending_home_choice_and_the_next_start() {
     app.on_models(Ok(three()));
     open(&mut app);
     // `s` holds `acme/m1` at high for this start only.
-    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert_eq!(
         app.model_picker
             .start_model
@@ -2183,7 +2230,7 @@ fn the_picker_marks_the_pending_home_choice_current() {
     assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
-    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     // Reopening lands on the pending choice, not the chips' model.
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
@@ -2470,7 +2517,7 @@ fn tab_chips_and_s_do_nothing_in_the_checklist() {
     );
     // `s` never chooses from the checklist: it stays open, sending and
     // writing nothing.
-    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(app.model_picker_open());
     assert!(seam.writes().is_empty());
     assert!(app.model_picker.awaiting.is_empty());

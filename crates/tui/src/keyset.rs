@@ -79,7 +79,8 @@ pub(crate) enum Canon {
     Key(Key),
     /// A key that edits the draft.
     Edit(Edit),
-    /// An action with no key of its own: `new_session` and `go_home`.
+    /// An action with no key of its own: `new_session`, `go_home` and
+    /// `session_only`.
     Action,
 }
 

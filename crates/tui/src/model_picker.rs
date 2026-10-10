@@ -36,8 +36,8 @@ pub(crate) struct Choice {
     pub(crate) reference: String,
     /// The chosen level, `None` for a model with no levels.
     pub(crate) level: Option<String>,
-    /// Whether the level was picked out: a chip click, or Enter or `s`
-    /// on a touched row. Only then is the level saved.
+    /// Whether the level was picked out: a chip click, or Enter or
+    /// Ctrl+S on a touched row. Only then is the level saved.
     pub(crate) level_chosen: bool,
     /// Whether the global `model` is saved: false only for a level
     /// picked for the current model.
@@ -257,7 +257,7 @@ impl ModelPicker {
     /// Opens the picker fresh: the selection on the on-screen model, else
     /// the first row; each row's chip at its preselected level, untouched;
     /// "show all" off. A `/thinking` open touches the current model's
-    /// row, so Enter or `s` on it carries the chip's level. Each open asks
+    /// row, so Enter or Ctrl+S on it carries the chip's level. Each open asks
     /// `Stale`, keeping a wider `Every`.
     pub(crate) fn open(&mut self, mode: Mode, on_screen: Option<(&str, Option<&str>)>) {
         let target = on_screen.map(|(model, level)| (model.to_owned(), level.map(str::to_owned)));
@@ -534,7 +534,7 @@ impl ModelPicker {
     /// Clicks `cell` of `row`: the refresh button refreshes every list,
     /// the scope line toggles it, a roles cell selects its row, a name
     /// cell chooses its row at its chip, and a chip chooses its row at
-    /// that level. Choosing from a click always saves: `s` is the only
+    /// that level. Choosing from a click always saves: Ctrl+S is the only
     /// path to a session-only choice.
     pub(crate) fn click_cell(&mut self, row: usize, cell: usize) -> Option<Choice> {
         let (layout, _) = self.layout()?;

@@ -93,7 +93,13 @@ fn choose_session_model(app: &mut App) {
         }],
         notices: Vec::new(),
     }));
-    assert_eq!(app.on_key(Key::Char('s'), now), crate::app::Effect::None);
+    assert_eq!(
+        app.on_press(
+            crate::stroke::Stroke::parse("ctrl+s").unwrap(),
+            now
+        ),
+        crate::app::Effect::None
+    );
     assert!(!app.model_picker_open());
 }
 
