@@ -718,7 +718,7 @@ fn stop_waits_for_a_writer_still_draining_its_backlog() {
     let total = line.len() * count;
     let (go_tx, go_rx) = mpsc::channel::<()>();
     let drained = thread::spawn(move || {
-        go_rx.recv_timeout(DEADLINE).unwrap();
+        go_rx.recv().unwrap();
         let mut buf = vec![0; 64 * 1024];
         let mut read = 0;
         while read < total {

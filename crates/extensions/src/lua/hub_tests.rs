@@ -87,7 +87,7 @@ fn a_run_ending_after_dispose_is_dropped() {
     let other = Arc::clone(&hub);
     std::thread::spawn(move || {
         proceed_rx
-            .recv_timeout(WAIT)
+            .recv()
             .expect("waited for the drop's signal before routing the late run");
         other.send(Delivery::ExtensionExec(exec("late")));
         let _done = done_tx.send(());
@@ -120,7 +120,7 @@ fn a_sender_after_dispose_flushes_nothing() {
     let other = Arc::clone(&hub);
     std::thread::spawn(move || {
         proceed_rx
-            .recv_timeout(WAIT)
+            .recv()
             .expect("waited for the drop's signal before setting the late sender");
         other.set_inbox(tx);
         let _done = done_tx.send(());

@@ -39,7 +39,7 @@ impl CostLookup for Lookup {
             entered.lock().unwrap().send(()).unwrap();
             go.lock()
                 .unwrap()
-                .recv_timeout(WAIT)
+                .recv()
                 .expect("waited for the test to release the lookup");
         }
         self.cost

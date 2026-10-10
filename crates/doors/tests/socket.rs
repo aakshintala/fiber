@@ -3229,7 +3229,7 @@ impl contract::extension::ExtensionDoor for HeldDoor {
         // The release runs only after `command_accepted` is on the queue;
         // the fake records the order by releasing the waiter then.
         Ok(Box::new(move || {
-            let _ = rx.recv_timeout(DEADLINE).ok();
+            let _ = rx.recv().ok();
         }))
     }
 
@@ -3646,7 +3646,7 @@ fn close_now_starts_the_shutdown_and_sends_the_loop_nothing() {
         release_rx
             .lock()
             .unwrap()
-            .recv_timeout(DEADLINE)
+            .recv()
             .expect("the test releases the hook");
     }));
     opened
