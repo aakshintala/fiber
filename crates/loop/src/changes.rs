@@ -21,14 +21,14 @@ use crate::prompt::PromptInputs;
 
 /// A file's size and modification time when last read.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Stat {
+pub(crate) struct Stat {
     size: u64,
     mtime: Option<SystemTime>,
 }
 
 /// `path`'s size and modification time now. `None` when they cannot be
 /// read: the read below says whether the file is gone or unreadable.
-fn stat_of(path: &str) -> Option<Stat> {
+pub(crate) fn stat_of(path: &str) -> Option<Stat> {
     let meta = std::fs::metadata(path).ok()?;
     Some(Stat {
         size: meta.len(),

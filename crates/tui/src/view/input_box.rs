@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
-use super::{SURFACE_TINT, put, to_u16};
+use super::{put, to_u16};
 use crate::app::App;
 use crate::mouse::{Target, TargetId};
 use crate::surface;
@@ -23,24 +23,37 @@ pub(super) fn draw(
     targets: &mut Vec<Target>,
 ) {
     let (rows, top, _, _) = rows(app, area.width);
-    let edges = surface::edged(rows.len(), usize::from(area.height)) > rows.len();
-    if edges {
-        edge(buf, area, bottom, false);
+    let fits = surface::edged(rows.len(), usize::from(area.height)) > rows.len();
+    let mut bottom_edge = false;
+    if fits && let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) {
+        *bottom = y;
+        bottom_edge = true;
     }
     let below = *bottom;
+    let text = text_area(area);
     for row in rows.iter().rev() {
-        put(buf, area, bottom, row, Style::default());
+        put_row(buf, area, text, bottom, row);
     }
-    // The tint covers the rows drawn, if any: an empty rect paints
-    // nothing.
-    buf.set_style(
-        Rect::new(area.x, *bottom, area.width, below.saturating_sub(*bottom)),
-        SURFACE_TINT,
+    let slab = Rect::new(area.x, *bottom, area.width, below.saturating_sub(*bottom));
+    let mut top_edge = false;
+    if fits && let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) {
+        *bottom = y;
+        top_edge = true;
+    }
+    surface::draw_slab(
+        buf,
+        slab,
+        Role::Surface,
+        Some(surface::Stripe {
+            colour: Role::Accent,
+            right: false,
+        }),
+        surface::Edges {
+            top: top_edge,
+            bottom: bottom_edge,
+        },
     );
     token_targets(app, area, below, (top, rows.len()), targets);
-    if edges {
-        edge(buf, area, bottom, true);
-    }
     if let Some(completions) = app.completions() {
         for (at, line) in completions.lines.iter().enumerate().rev() {
             let style = if completions.selected == Some(at) {
@@ -53,25 +66,35 @@ pub(super) fn draw(
     }
 }
 
-/// One edge row above (`top`) or below the box, moving `bottom` past it
-/// where it fits.
-fn edge(buf: &mut Buffer, area: Rect, bottom: &mut u16, top: bool) {
+/// The columns the draft's rows take: past the stripe and gap where the
+/// box has them (`docs/tui.md`, "Look", "The input box").
+fn text_area(area: Rect) -> Rect {
+    let width = surface::inset(area.width);
+    Rect::new(
+        area.x.saturating_add(area.width.saturating_sub(width)),
+        area.y,
+        width,
+        area.height,
+    )
+}
+
+/// Puts one draft row on the row above `bottom` at the text columns,
+/// moving `bottom` up to it; nothing once `bottom` reaches the top of
+/// `area`.
+fn put_row(buf: &mut Buffer, area: Rect, text: Rect, bottom: &mut u16, row: &str) {
     let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) else {
         return;
     };
-    buf.set_line(
-        area.x,
-        y,
-        &surface::edge_row(usize::from(area.width), Role::Surface, top),
-        area.width,
-    );
+    buf.set_stringn(text.x, y, row, usize::from(text.width), Style::default());
     *bottom = y;
 }
 
 /// The input box's shown rows, the draft row they start at, and the
-/// cursor's row in them and column: at most [`App::input_height`] rows,
-/// scrolled so the cursor's row shows.
+/// cursor's row in them and column: the draft wrapped past the stripe
+/// and gap, at most [`App::input_height`] rows, scrolled so the cursor's
+/// row shows.
 pub(super) fn rows(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
+    let width = surface::inset(width);
     let draft = app.input();
     let (row, col) = draft.cursor(width);
     let height = app.input_height();
@@ -87,13 +110,14 @@ pub(super) fn rows(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
 
 /// The cursor's rows above the column's bottom and its column: the shown
 /// rows below the cursor's with the bottom edge below them, so the cursor
-/// sits in the same column as without edges (`docs/tui.md`, "Look").
+/// sits in the same column as without edges, past the stripe and gap
+/// (`docs/tui.md`, "Look").
 pub(super) fn cursor_row(app: &App, width: u16, room: usize) -> (u16, u16) {
     let (rows, _, row, col) = rows(app, width);
     let edges = usize::from(surface::edged(rows.len(), room) > rows.len());
     (
         to_u16(rows.len().saturating_sub(row).saturating_add(edges)),
-        col,
+        col.saturating_add(width.saturating_sub(surface::inset(width))),
     )
 }
 
@@ -107,7 +131,8 @@ fn token_targets(
     (top, shown): (usize, usize),
     targets: &mut Vec<Target>,
 ) {
-    for span in app.input().token_spans(area.width) {
+    let text = text_area(area);
+    for span in app.input().token_spans(text.width) {
         let Some(up) = span
             .row
             .checked_sub(top)
@@ -119,11 +144,11 @@ fn token_targets(
         let Some(y) = below.checked_sub(to_u16(up)).filter(|y| *y >= area.y) else {
             continue;
         };
-        let end = span.end.min(area.width);
+        let end = span.end.min(text.width);
         if span.start < end {
             targets.push(Target {
                 id: TargetId::Token(span.number),
-                rect: Rect::new(area.x.saturating_add(span.start), y, end - span.start, 1),
+                rect: Rect::new(text.x.saturating_add(span.start), y, end - span.start, 1),
             });
         }
     }

@@ -33,6 +33,7 @@ fn recorded(
         subscription: None,
         extension: None,
         origin_session_id: origin.map(|id| SessionId(id.to_owned())),
+        reviewer: None,
     }
 }
 

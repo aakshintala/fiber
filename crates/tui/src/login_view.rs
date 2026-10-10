@@ -9,8 +9,10 @@ use std::fmt;
 use contract::Secret;
 
 use crate::configure::{LoginKind, LoginTarget};
+use crate::format;
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
+use crate::login_worker::{LoginStep, LoginTicket, LoginWorker};
 use crate::settings_view::{Act, Ctx};
 use crate::swapped::{Frame, Ink, List, Spot, rows_height};
 
@@ -108,6 +110,35 @@ enum Mode {
     Rows,
     /// The key or value panel over the selected target.
     Panel(Panel),
+    /// A browser login running: its ticket, the provider, what it showed
+    /// and the worker, owned here so every way out cancels it.
+    Waiting(Waiting),
+}
+
+/// What a waiting browser login shows below the rows: starting, the
+/// URL to open, or the device code to enter at its URL
+/// (`docs/code-quality.md`, "Types").
+#[derive(Debug)]
+enum Progress {
+    /// Nothing arrived yet.
+    Starting,
+    /// The URL to open.
+    Url(String),
+    /// The device code to enter at `url`; opens nothing.
+    DeviceCode { url: String, code: String },
+}
+
+/// A browser login in flight.
+#[derive(Debug)]
+struct Waiting {
+    /// The login's ticket: only its events land.
+    ticket: LoginTicket,
+    /// The provider logging in.
+    name: String,
+    /// What the login showed so far.
+    progress: Progress,
+    /// The running login, once started.
+    worker: Option<LoginWorker>,
 }
 
 /// The `/login` view's state.
@@ -138,7 +169,7 @@ impl Login {
             mode: Mode::Rows,
             said,
         };
-        let shown = rows_height(&login.frame(), ctx.height);
+        let shown = rows_height(&login.frame(ctx.width), ctx.height);
         login
             .list
             .select(login.list.selected(), login.items.len(), shown);
@@ -155,6 +186,8 @@ impl Login {
         if matches!(self.mode, Mode::Panel(_)) {
             self.panel_key(key, ctx);
             Act::Stay
+        } else if matches!(self.mode, Mode::Waiting(_)) {
+            self.waiting_key(key)
         } else {
             self.rows_key(key, ctx)
         }
@@ -167,11 +200,11 @@ impl Login {
         }
         if *key == Key::Enter {
             if let Some(Item::Target(at)) = self.selected() {
-                self.open_target(at);
+                return self.open_target(at);
             }
             return Act::Stay;
         }
-        let shown = rows_height(&self.frame(), ctx.height);
+        let shown = rows_height(&self.frame(ctx.width), ctx.height);
         if self.list.key(key, self.items.len(), shown) {
             self.said.clear();
         }
@@ -179,14 +212,15 @@ impl Login {
     }
 
     /// Opens the selected row: a key or secret row opens the panel, a
-    /// browser row only says to log in from a shell and writes nothing.
-    fn open_target(&mut self, at: usize) {
+    /// browser row starts the browser login through the same steps as
+    /// `fiber login`.
+    fn open_target(&mut self, at: usize) -> Act {
         let Some((name, kind)) = self
             .targets
             .get(at)
             .map(|target| (target.name.clone(), target.kind))
         else {
-            return;
+            return Act::Stay;
         };
         match kind {
             LoginKind::Key | LoginKind::Secret => {
@@ -197,12 +231,90 @@ impl Login {
                     label: Draft::default(),
                     focus: Focus::Key,
                 });
+                Act::Stay
             }
-            LoginKind::Browser => {
-                // debt: a browser row opens no field and stores nothing; it
-                // only says to log in from a shell. #1420 replaces this
-                // with the browser login.
-                self.said = vec![format!("Log in to {name} from a shell: fiber login {name}")];
+            LoginKind::Browser => Act::Login(name),
+        }
+    }
+
+    /// A key while a browser login waits: Esc returns to the rows storing
+    /// nothing, `y` copies the shown URL, and anything else waits on.
+    fn waiting_key(&mut self, key: &Key) -> Act {
+        if *key == Key::Esc {
+            self.mode = Mode::Rows;
+            self.said.clear();
+            return Act::Stay;
+        }
+        if *key == Key::Char('y')
+            && let Mode::Waiting(waiting) = &self.mode
+            && let Progress::Url(url) | Progress::DeviceCode { url, .. } = &waiting.progress
+        {
+            return Act::Copy(url.clone());
+        }
+        Act::Stay
+    }
+
+    /// Waits on the browser login `ticket`: the rows stay, and the view
+    /// shows the login's progress below them until it ends.
+    pub(crate) fn wait(&mut self, ticket: LoginTicket) {
+        let name = self
+            .selected()
+            .and_then(|item| match item {
+                Item::Target(at) => self.targets.get(at).map(|target| target.name.clone()),
+                Item::Heading(_) | Item::Note => None,
+            })
+            .unwrap_or_default();
+        self.said.clear();
+        self.mode = Mode::Waiting(Waiting {
+            ticket,
+            name,
+            progress: Progress::Starting,
+            worker: None,
+        });
+    }
+
+    /// Keeps the started worker when waiting on its ticket; a worker for
+    /// another ticket is dropped, cancelling it at once.
+    pub(crate) fn started(&mut self, worker: LoginWorker) {
+        match &mut self.mode {
+            Mode::Waiting(waiting) if waiting.ticket == worker.ticket() => {
+                waiting.worker = Some(worker);
+            }
+            Mode::Rows | Mode::Panel(_) | Mode::Waiting(_) => drop(worker),
+        }
+    }
+
+    /// Folds the waiting ticket's progress into the view: an event for
+    /// another ticket changes nothing and opens nothing. `Open` returns
+    /// the URL to open; the end returns to the rows saying what the login
+    /// stored, or why it failed.
+    pub(crate) fn step(&mut self, ticket: LoginTicket, step: LoginStep) -> Option<String> {
+        let Mode::Waiting(waiting) = &mut self.mode else {
+            return None;
+        };
+        if waiting.ticket != ticket {
+            return None;
+        }
+        match step {
+            LoginStep::Open(url) => {
+                waiting.progress = Progress::Url(url.clone());
+                Some(url)
+            }
+            LoginStep::Code { url, code } => {
+                waiting.progress = Progress::DeviceCode { url, code };
+                None
+            }
+            LoginStep::Done(result) => {
+                match result {
+                    Ok(stored) => {
+                        self.said = vec![format!("Stored {}.", stored.path)];
+                    }
+                    Err(error) => {
+                        self.said = vec![error.message];
+                    }
+                }
+                self.mode = Mode::Rows;
+                None
             }
         }
     }
@@ -259,7 +371,7 @@ impl Login {
     fn submit(&mut self, ctx: &Ctx<'_>) {
         let (index, label, secret) = match &mut self.mode {
             Mode::Panel(panel) => (panel.target, panel.label.expand(), panel.key.take()),
-            Mode::Rows => return,
+            Mode::Rows | Mode::Waiting(_) => return,
         };
         let Some(target) = self.targets.get(index) else {
             return;
@@ -329,16 +441,16 @@ impl Login {
     }
 
     /// A click: the ✕ closes, a row over the rows selects it, and a row
-    /// while the panel is open keeps the panel.
+    /// while the panel is open or a login waits keeps its mode.
     pub(crate) fn click(&mut self, spot: Spot, ctx: &Ctx<'_>) -> Act {
         match spot {
             Spot::Close => Act::Close,
             Spot::Switch { .. } | Spot::Revoke(_) | Spot::Cell(_, _) | Spot::Item(_) => Act::Stay,
             Spot::Row(at) => {
-                if matches!(self.mode, Mode::Panel(_)) {
+                if matches!(self.mode, Mode::Panel(_) | Mode::Waiting(_)) {
                     return Act::Stay;
                 }
-                let shown = rows_height(&self.frame(), ctx.height);
+                let shown = rows_height(&self.frame(ctx.width), ctx.height);
                 self.list.select(at, self.items.len(), shown);
                 self.said.clear();
                 Act::Stay
@@ -346,8 +458,13 @@ impl Login {
         }
     }
 
-    /// The frame to draw.
-    pub(crate) fn frame(&self) -> Frame {
+    /// The frame to draw at `width` columns: the full URL is always
+    /// copyable with `y`, and on screen it is wrapped by display width so
+    /// no row is wider than the view.
+    pub(crate) fn frame(&self, width: usize) -> Frame {
+        if let Mode::Waiting(waiting) = &self.mode {
+            return self.waiting_frame(waiting, width);
+        }
         let mut below = self.said.clone();
         let mut field = None;
         let mut footer = "↑↓ move · Enter log in · Esc close".to_owned();
@@ -406,6 +523,49 @@ impl Login {
             list: self.list,
             below,
             field,
+            footer,
+        }
+    }
+
+    /// The waiting frame: the rows stay, and below them the login's
+    /// progress: starting, the URL to open, or the code to enter at it.
+    fn waiting_frame(&self, waiting: &Waiting, width: usize) -> Frame {
+        let name = waiting.name.as_str();
+        let (below, footer) = match &waiting.progress {
+            Progress::Starting => (
+                vec![format!("Starting the login to {name}…")],
+                "Esc cancel".to_owned(),
+            ),
+            Progress::Url(url) => {
+                let mut below = vec![format!("Open this URL to log in to {name}:")];
+                below.extend(format::wrap(url, width));
+                (below, "y copy URL · Esc cancel".to_owned())
+            }
+            Progress::DeviceCode { url, code } => {
+                let mut below = vec![format!(
+                    "Enter the code {code} at this URL to log in to {name}:"
+                )];
+                below.extend(format::wrap(url, width));
+                (below, "y copy URL · Esc cancel".to_owned())
+            }
+        };
+        Frame {
+            title: "Log in".to_owned(),
+            rows: self
+                .items
+                .iter()
+                .map(|item| {
+                    let ink = match item {
+                        Item::Heading(_) => Ink::Heading,
+                        Item::Target(_) => Ink::Plain,
+                        Item::Note => Ink::Muted,
+                    };
+                    vec![(self.line(*item), None, ink)]
+                })
+                .collect(),
+            list: self.list,
+            below,
+            field: None,
             footer,
         }
     }

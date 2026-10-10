@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view/scroll_bar_tests.rs
-assertion_line: 191
 expression: "crate::view::text(&buf)"
 ---
                                                 ▄▄▄▄▄▄▄▄▄▄▄█
@@ -13,5 +12,5 @@ expression: "crate::view::text(&buf)"
                                                 ▄▄▄▄▄▄▄▄▄▄▄│
                                                  prompt 2 ▐│
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
->
+▌ >
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

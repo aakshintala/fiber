@@ -184,3 +184,11 @@ Commands run after this point that may have changed files:
 ## rewind-unchanged
 
 No file was written and no command was run after this point.
+
+## skill-added
+
+Fiber: skill {name} can now be loaded: {description}
+
+## skill-removed
+
+Fiber: skill {name} was removed and can no longer be loaded.

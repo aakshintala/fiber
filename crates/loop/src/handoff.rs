@@ -387,7 +387,12 @@ impl Loop {
             notices,
             found,
         } = collected;
-        self.skills.opened(found, inputs.skills_disabled.clone());
+        self.skills.opened(
+            found,
+            inputs.skills_disabled.clone(),
+            &message.skills,
+            &notices,
+        );
         self.changes = crate::changes::State::initial(&message, &self.workspace, &self.prompt);
         for event in std::iter::once(Event::OpeningMessage(message))
             .chain(notices.into_iter().map(Event::Notice))

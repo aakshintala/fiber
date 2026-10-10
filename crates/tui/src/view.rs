@@ -46,10 +46,6 @@ pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Role::Approval.color());
 /// The approval panel's tint when the reviewer escalated.
 pub(crate) const ALERT_TINT: Style = Style::new().bg(Role::Alert.color());
 
-/// The input box's tint: its rows sit on the surface colour
-/// (`docs/tui.md`, "Look").
-pub(crate) const SURFACE_TINT: Style = Style::new().bg(Role::Surface.color());
-
 /// A notice's tint.
 const NOTICE_TINT: Style = Style::new().bg(Role::Surface.color());
 

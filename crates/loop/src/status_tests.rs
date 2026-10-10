@@ -1168,6 +1168,7 @@ fn a_lagging_observer_folds_every_written_line_before_it_stops() {
         subscription: None,
         extension: None,
         origin_session_id: None,
+        reviewer: None,
         input_bytes: 1,
         input_media: None,
     }));

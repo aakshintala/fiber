@@ -4,7 +4,7 @@
 //! `argument-hint` are kept; every other key is skipped by its indentation.
 
 /// What a skill's header gives.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Header {
     /// The skill's name, trimmed.
     pub(crate) name: String,
@@ -18,7 +18,7 @@ pub(crate) struct Header {
 }
 
 /// Why a skill is left out.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Invalid {
     /// No opening or closing `---`, a malformed line, a repeated key, an
     /// unclosed quote or a `name` or `description` that is a map or list.

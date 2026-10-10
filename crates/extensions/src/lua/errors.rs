@@ -30,6 +30,7 @@ pub(super) fn not_registered(name: &str, target: &Target) -> Error {
         Target::Provider { .. }
         | Target::Hook { .. }
         | Target::Timer { .. }
+        | Target::Search(_)
         | Target::Tool(_)
         | Target::Effects(_) => Error::UnknownCallback {
             extension: name.to_owned(),

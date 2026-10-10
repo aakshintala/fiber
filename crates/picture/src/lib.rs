@@ -4,8 +4,11 @@
 //! `<artifacts_dir>/<stem>.<ext>`. It prints one JSON line naming the file and
 //! exits 0. An image it refuses or cannot decode gets the decoder's message on
 //! standard error and exit 1; a usage error exits 2 and a write failure 3.
+//! `fiber image pdf <input> <artifacts_dir> <stem> <what>` counts a PDF's
+//! pages and cuts a page range (`docs/tools.md`, "read").
 
 mod fit;
+mod pdf;
 
 use std::ffi::OsString;
 use std::fs::OpenOptions;
@@ -28,6 +31,17 @@ pub fn main(args: Vec<OsString>) -> i32 {
 }
 
 fn run(args: &[OsString], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
+    if args.first().is_some_and(|first| first == "pdf") {
+        if args.len() != 5 {
+            writeln!(
+                stderr,
+                "usage: fiber image pdf <input> <artifacts_dir> <stem> <what>"
+            )
+            .unwrap_or(());
+            return USAGE;
+        }
+        return pdf::run(args, stdout, stderr);
+    }
     let [input, directory, stem] = args else {
         writeln!(stderr, "usage: fiber image <input> <artifacts_dir> <stem>").unwrap_or(());
         return USAGE;
@@ -71,7 +85,7 @@ fn run(args: &[OsString], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32
 }
 
 /// A stem is one path component the parent minted: no separator, no dot.
-fn valid_stem(stem: &str) -> bool {
+pub(crate) fn valid_stem(stem: &str) -> bool {
     !stem.is_empty()
         && stem
             .chars()
@@ -80,7 +94,7 @@ fn valid_stem(stem: &str) -> bool {
 
 /// Writes `bytes` to a file that must not exist yet, so a name is never
 /// reused for different bytes.
-fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
     file.write_all(bytes)?;
     file.flush()

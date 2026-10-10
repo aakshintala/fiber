@@ -39,8 +39,8 @@ pub use extension_test::extension_test;
 pub use hub_service::{hub_install, hub_restart, hub_uninstall};
 pub use hub_status::hub_status;
 pub use login::{
-    LoginName, LoginStored, LogoutTarget, browser_login, login_store, login_targets, run_login,
-    run_logout,
+    LoginCancel, LoginName, LoginStored, LogoutTarget, browser_login, login_store, login_targets,
+    providers_in, run_login, run_logout,
 };
 pub use models::{models, providers_and_config, refresh_model_lists};
 pub use prune::{PruneArgs, prune};

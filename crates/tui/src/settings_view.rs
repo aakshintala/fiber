@@ -135,6 +135,10 @@ pub(crate) enum Act {
     Theme(ThemeSetting),
     /// Open this file in the editor.
     Open(PathBuf),
+    /// Start the browser login for this provider.
+    Login(String),
+    /// Copy this URL through OSC 52 and the system clipboard.
+    Copy(String),
 }
 
 /// What a view's call needs from the app: the seam, the workspace the

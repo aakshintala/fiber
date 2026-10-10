@@ -132,7 +132,7 @@ const BINDINGS: &[Binding] = &[
         when: "",
     },
     Binding { area: "Model", action: "Open the model picker", key: "Ctrl+L", other: "/model", when: "" },
-    Binding { area: "Model", action: "Choose in the model picker for this session only", key: "s", other: "", when: "" },
+    Binding { area: "Model", action: "Choose in the model picker for this session only", key: "Ctrl+S", other: "", when: "" },
     Binding { area: "Model", action: "Open the key map", key: "F1", other: "/? or /help", when: "" },
 ];
 

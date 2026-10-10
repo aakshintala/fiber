@@ -1,10 +1,13 @@
-//! The hosted `web_search` declaration (`docs/tools.md`, "web_search" and
-//! "Hosted by the provider"): the vendor's own search, which the provider
-//! runs before Fiber sees the call.
+//! The `web_search` declarations (`docs/tools.md`, "web_search"): the
+//! hosted one, which the provider runs before Fiber sees the call, and
+//! Fiber's own, which runs an installed search backend.
+
+use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
+use contract::search::{Domains, SearchBackend, SearchResult};
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
@@ -66,6 +69,170 @@ impl Tool for HostedSearch {
     fn guidelines(&self) -> Option<String> {
         crate::guidelines::of("web_search")
     }
+}
+
+/// Fiber's own `web_search` over an installed search backend
+/// (`docs/tools.md`, "Fiber's own, over a backend"): the model calls it
+/// as an ordinary function tool, and Fiber runs the backend, writing its
+/// results under the 16 KiB default cap.
+pub struct BackendSearch {
+    backend: Arc<dyn SearchBackend>,
+}
+
+impl BackendSearch {
+    /// `web_search` over `backend`.
+    pub fn new(backend: Arc<dyn SearchBackend>) -> Self {
+        Self { backend }
+    }
+}
+
+impl Tool for BackendSearch {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "web_search".to_owned(),
+            description: "Searches the web over the installed search backend. \
+                 Takes the query and, optionally, either `allowed_domains` or \
+                 `blocked_domains`, never both. Each result gives its title, URL and snippet."
+                .to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "What to search for."
+                    },
+                    "allowed_domains": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Search only these domains."
+                    },
+                    "blocked_domains": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Search every domain but these."
+                    }
+                },
+                "required": ["query"]
+            }),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Ok(Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Network],
+                reversible: true,
+                paths: None,
+            },
+            subject: Some(String::new()),
+            prefix: None,
+            always_reviewed: false,
+        })
+    }
+
+    /// Runs the backend on the query and the domain filter. Both domain
+    /// filters present fails `invalid_arguments` before the backend is
+    /// called. A backend past its timeout fails `timeout`; any other
+    /// backend failure fails `tool_error` with its message. A call `cancel`
+    /// stopped returns no content and no error, so the loop completes it
+    /// `cancelled` (`docs/tools.md`, "Cancellation").
+    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
+        let Some(Value::String(query)) = arguments.get("query") else {
+            return failed(
+                ErrorCode::InvalidArguments,
+                "`query` must be a non-empty string.".to_owned(),
+            );
+        };
+        if query.is_empty() {
+            return failed(
+                ErrorCode::InvalidArguments,
+                "`query` must be a non-empty string.".to_owned(),
+            );
+        }
+        let has_allowed = arguments.contains_key("allowed_domains");
+        let has_blocked = arguments.contains_key("blocked_domains");
+        if has_allowed && has_blocked {
+            return failed(
+                ErrorCode::InvalidArguments,
+                "Pass either `allowed_domains` or `blocked_domains`, never both.".to_owned(),
+            );
+        }
+        let domains = if has_allowed {
+            let Some(list) = arguments.get("allowed_domains") else {
+                return failed(
+                    ErrorCode::InvalidArguments,
+                    "`allowed_domains` must be a list of strings.".to_owned(),
+                );
+            };
+            match strings(list) {
+                Ok(domains) => Domains::Allowed(domains),
+                Err(why) => return failed(ErrorCode::InvalidArguments, why),
+            }
+        } else if has_blocked {
+            let Some(list) = arguments.get("blocked_domains") else {
+                return failed(
+                    ErrorCode::InvalidArguments,
+                    "`blocked_domains` must be a list of strings.".to_owned(),
+                );
+            };
+            match strings(list) {
+                Ok(domains) => Domains::Blocked(domains),
+                Err(why) => return failed(ErrorCode::InvalidArguments, why),
+            }
+        } else {
+            Domains::Any
+        };
+        match self.backend.search(query, &domains, cancel) {
+            Ok(None) => Output::default(),
+            Ok(Some(results)) => crate::files::text_output(render(&results)),
+            Err(failure) => failed(failure.code, failure.message),
+        }
+    }
+
+    fn guidelines(&self) -> Option<String> {
+        crate::guidelines::of("web_search")
+    }
+}
+
+/// A domain filter as written: a list of strings.
+fn strings(list: &Value) -> Result<Vec<String>, String> {
+    let Some(items) = list.as_array() else {
+        return Err("the domain filter must be a list of strings.".to_owned());
+    };
+    items
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "the domain filter must be a list of strings.".to_owned())
+        })
+        .collect()
+}
+
+/// The backend's results in order, each as its title, URL and snippet on
+/// three lines, with a blank line between results. An empty list is a
+/// success with nothing to show.
+fn render(results: &[SearchResult]) -> String {
+    if results.is_empty() {
+        return "No results.".to_owned();
+    }
+    results
+        .iter()
+        .enumerate()
+        .map(|(at, result)| {
+            format!(
+                "{}. {}\n{}\n{}",
+                at + 1,
+                result.title,
+                result.url,
+                result.snippet
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 #[cfg(test)]

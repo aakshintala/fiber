@@ -448,6 +448,7 @@ fn registered_with(web_search: Option<&str>) -> (Vec<(String, Option<String>)>, 
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
+    let web_search = super::web_search(web_search, None).unwrap();
     let (tools, infos, _driver, _forget, _images) = super::builtin(
         root.path().join("fiber-stub"),
         &root.path().join("home"),
@@ -513,7 +514,7 @@ fn hosted_is_what_builtin_registers_for_web_search() {
         &clock,
         &jobs,
         &Arc::new(tools::PathLocks::new()),
-        Some("web_search_20250305"),
+        super::web_search(Some("web_search_20250305"), None).unwrap(),
         &delegates(),
         skills(),
     )
@@ -620,7 +621,7 @@ fn every_builtin_schema_keeps_to_the_documented_subset() {
         &clock,
         &jobs,
         &Arc::new(tools::PathLocks::new()),
-        Some("web_search_20250305"),
+        super::web_search(Some("web_search_20250305"), None).unwrap(),
         &delegates(),
         skills(),
     )
@@ -654,4 +655,95 @@ fn built_in_tools_is_every_name_builtin_registers() {
     without.push("web_search".to_owned());
     without.sort();
     assert_eq!(without, listed);
+}
+
+/// A search backend answering nothing, for choosing what `builtin`
+/// declares.
+struct StubBackend;
+
+impl contract::search::SearchBackend for StubBackend {
+    fn search(
+        &self,
+        _query: &str,
+        _domains: &contract::search::Domains,
+        _cancel: &dyn contract::tool::Cancel,
+    ) -> Result<Option<Vec<contract::search::SearchResult>>, contract::shapes::Failure> {
+        Ok(Some(Vec::new()))
+    }
+}
+
+fn stub_backend() -> Arc<dyn contract::search::SearchBackend> {
+    Arc::new(StubBackend)
+}
+
+#[test]
+fn a_hosted_search_wins_over_an_installed_backend() {
+    let backend = stub_backend();
+    let (tool, _) = super::web_search(Some("web_search_20250305"), Some(&backend))
+        .unwrap()
+        .expect("a search is declared");
+    assert_eq!(
+        tool.definition().hosted.as_deref(),
+        Some("web_search_20250305")
+    );
+}
+
+#[test]
+fn no_hosted_search_with_a_backend_declares_fibers_own_tool() {
+    let backend = stub_backend();
+    let (tool, info) = super::web_search(None, Some(&backend))
+        .unwrap()
+        .expect("a search is declared");
+    let definition = tool.definition();
+    assert_eq!(definition.name, "web_search");
+    assert_eq!(definition.hosted, None);
+    assert_eq!(
+        definition.input_schema.get("required"),
+        Some(&serde_json::json!(["query"]))
+    );
+    assert_eq!(info.name, "web_search");
+    assert!(
+        matches!(info.source, contract::events::ToolSource::Builtin),
+        "{:?}",
+        info.source
+    );
+}
+
+#[test]
+fn no_hosted_search_and_no_backend_declares_nothing() {
+    assert!(super::web_search(None, None).unwrap().is_none());
+}
+
+#[test]
+fn builtin_registers_the_web_search_it_is_given() {
+    let root = fakes::TempDir::new("fiber-backend-search");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let backend = stub_backend();
+    let given = super::web_search(None, Some(&backend)).unwrap();
+    let (tools, infos, _driver, _forget, _images) = super::builtin(
+        root.path().join("fiber-stub"),
+        &root.path().join("home"),
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        &Arc::new(tools::PathLocks::new()),
+        given,
+        &delegates(),
+        skills(),
+    )
+    .unwrap();
+    let registered = tools
+        .iter()
+        .map(|(by, tool)| (by.clone(), tool.definition()))
+        .find(|(_, definition)| definition.name == "web_search")
+        .expect("web_search is registered");
+    assert_eq!(registered.0, "builtin");
+    assert_eq!(registered.1.hosted, None);
+    assert!(infos.iter().any(|info| info.name == "web_search"));
 }

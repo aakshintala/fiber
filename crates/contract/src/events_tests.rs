@@ -581,6 +581,12 @@ fn samples() -> Vec<(&'static str, Value)> {
             "origin_session_id": "s0"}),
         ),
         (
+            "usage_recorded",
+            json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
+            "input_bytes": 48213, "cost": 0.25,
+            "reviewer": {"purpose": "stage_1", "action_id": "a_1"}}),
+        ),
+        (
             "quota_noticed",
             json!({"provider": "p", "credential": "work", "window": "5h", "percent_used": 80.5,
             "resets_at": 17, "notice_at": 80.0}),
@@ -1052,6 +1058,75 @@ fn a_usage_without_input_bytes_does_not_read() {
     let mut with = without;
     with["input_bytes"] = json!(1);
     assert!(read("usage_recorded", with).unwrap().is_some());
+}
+
+#[test]
+fn a_reviewer_use_round_trips_and_is_absent_otherwise() {
+    let tokens = json!({"input": 1, "cache_read": 0, "cache_write": {}, "output": 1});
+    let base = || {
+        json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
+        "input_bytes": 1, "cost": null})
+    };
+    let recorded = |payload: Value| match read("usage_recorded", payload).unwrap() {
+        Some(Event::UsageRecorded(recorded)) => recorded,
+        other => panic!("{other:?}"),
+    };
+    // A stage call names the call it reviewed.
+    let mut staged = base();
+    staged["reviewer"] = json!({"purpose": "stage_1", "action_id": "a_1"});
+    let line = recorded(staged.clone());
+    assert_eq!(
+        line.reviewer,
+        Some(ReviewerUse::Stage1 {
+            action_id: crate::ActionId("a_1".into()),
+        })
+    );
+    assert_eq!(
+        Value::Object(Event::UsageRecorded(line).payload().unwrap()),
+        staged
+    );
+    // A handoff selection names no call.
+    let mut handoff = base();
+    handoff["reviewer"] = json!({"purpose": "handoff"});
+    let line = recorded(handoff.clone());
+    assert_eq!(line.reviewer, Some(ReviewerUse::Handoff));
+    assert_eq!(
+        Value::Object(Event::UsageRecorded(line).payload().unwrap()),
+        handoff
+    );
+    // Any other call carries none, and writes no key.
+    let line = recorded(base());
+    assert_eq!(line.reviewer, None);
+    let written = Value::Object(Event::UsageRecorded(line).payload().unwrap());
+    assert!(written.get("reviewer").is_none(), "{written}");
+}
+
+#[test]
+fn a_reviewer_use_names_its_call_on_a_stage_and_none_on_a_handoff() {
+    let tokens = json!({"input": 1, "cache_read": 0, "cache_write": {}, "output": 1});
+    let base = || {
+        json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
+        "input_bytes": 1, "cost": null})
+    };
+    // A stage without the call it reviewed does not read: the action id
+    // is part of the variant, not an optional side field.
+    let mut staged = base();
+    staged["reviewer"] = json!({"purpose": "stage_1"});
+    assert!(read("usage_recorded", staged).is_err());
+    // A handoff selection reviews no call, so an action id on one is not
+    // a field of the variant: serde's default ignores it, and the line
+    // reads as a plain handoff and writes back without the key.
+    let mut handoff = base();
+    handoff["reviewer"] = json!({"purpose": "handoff", "action_id": "a_1"});
+    let event = read("usage_recorded", handoff).unwrap().unwrap();
+    let Event::UsageRecorded(line) = &event else {
+        panic!("{event:?}");
+    };
+    assert_eq!(line.reviewer, Some(ReviewerUse::Handoff));
+    assert_eq!(
+        Value::Object(event.payload().unwrap())["reviewer"],
+        json!({"purpose": "handoff"})
+    );
 }
 
 #[test]

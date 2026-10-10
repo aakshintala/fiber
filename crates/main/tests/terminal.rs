@@ -1248,6 +1248,8 @@ fn resume_draws_the_reply_then_its_closed_turn() {
     run.read_until("▣ completed");
     run.write(b"\x03\x03\r");
     run.read_until("\x1b[?25h");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
 }
 
 /// The final screen rebuilt from the pty's bytes: one cell per column

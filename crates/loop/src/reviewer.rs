@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use contract::events::{
     AskStep, CacheLifetime, DecidedBy, Decision, Escalation, Event, Notice, PermissionResolved,
-    ReviewerRef, RuleOffer, ToolCallCompleted, ToolCallRequested,
+    ReviewerRef, ReviewerUse, RuleOffer, ToolCallCompleted, ToolCallRequested,
 };
 use contract::provider::{CallError, Cost, Input, ModelRequest, Provider, Reply};
 use contract::shapes::Failure;
@@ -247,6 +247,7 @@ impl Loop {
             &endpoint,
             &prompt.shared,
             &prompt.first,
+            |id| ReviewerUse::Stage1 { action_id: id },
             Some(request::FIRST_STAGE_OUTPUT_TOKENS),
             read_first,
         )? {
@@ -256,6 +257,7 @@ impl Loop {
                 &endpoint,
                 &prompt.shared,
                 &prompt.second,
+                |id| ReviewerUse::Stage2 { action_id: id },
                 None,
                 read_second,
             )? {
@@ -289,15 +291,21 @@ impl Loop {
 
     /// Asks one stage, and once more when its verdict does not read.
     /// `parse` reads a verdict, or says what was wrong.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the call under review, the endpoint, the prompts, how the stage marks its usage, the cap, and the verdict reader are one ask"
+    )]
     fn ask_stage<T>(
         &mut self,
         under: &UnderReview<'_>,
         endpoint: &ReviewEndpoint,
         shared: &str,
         stage: &str,
+        make_reviewer: fn(ActionId) -> ReviewerUse,
         max_output_tokens: Option<u64>,
         parse: fn(&str) -> Result<T, String>,
     ) -> Result<StageReply<T>, Error> {
+        let reviewer = make_reviewer(under.id.clone());
         let mut note = None;
         let mut why = String::new();
         let mut last = String::new();
@@ -310,6 +318,7 @@ impl Loop {
             match self.send_review(
                 under.turn,
                 endpoint,
+                reviewer.clone(),
                 shared,
                 conversation,
                 previous,
@@ -512,13 +521,19 @@ impl Loop {
         (conversation, previous)
     }
 
-    /// Sends one reviewer request and records its usage. A call that ended
-    /// without a reply writes what it saw, and a reviewer reply is not
-    /// streamed to watchers.
+    /// Sends one reviewer request and records its usage, marked with what
+    /// the reviewer was doing, so the spend ties to the call under review.
+    /// A call that ended without a reply writes what it saw, and a reviewer
+    /// reply is not streamed to watchers.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the turn, the endpoint, what the reviewer was doing, and the request are one send"
+    )]
     fn send_review(
         &mut self,
         turn: &TurnId,
         endpoint: &ReviewEndpoint,
+        reviewer: ReviewerUse,
         shared: &str,
         conversation: Vec<Input>,
         previous_end: Option<usize>,
@@ -543,13 +558,14 @@ impl Loop {
             Ok(reply) => (reply.usage(), reply.cost),
             Err(error) => (error.usage().clone(), None),
         };
-        let recorded = crate::usage::recorded(
+        let mut recorded = crate::usage::recorded(
             usage,
             inline,
             &endpoint.reference,
             endpoint.cost.as_ref(),
             endpoint.subscription,
         );
+        recorded.line.reviewer = Some(reviewer);
         let lookup = endpoint.provider.cost_lookup();
         self.write_usage(recorded, lookup, Some(turn), None)?;
         Ok(reply)

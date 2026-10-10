@@ -16,6 +16,7 @@ use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
 use contract::inbox::Delivery;
 use serde_json::{Map, Value};
 
+use contract::search::SearchBackend;
 use contract::tool::Tool;
 
 use crate::commands::{CommandSource, SessionCommands};
@@ -67,6 +68,9 @@ pub struct SessionExtensions {
     commands: SessionCommands,
     /// The tools the session declares, each beside its extension's name.
     tools: Vec<(String, Arc<dyn Tool>)>,
+    /// The search backend Fiber's own `web_search` runs, chosen at load
+    /// from what is installed and `web_search.backend`.
+    search_backend: Option<Arc<dyn SearchBackend>>,
 }
 
 /// One hook in a chain.
@@ -136,6 +140,7 @@ impl SessionExtensions {
             declared: Option<DeclaredHooks>,
             commands: Vec<(String, String)>,
             tools: Vec<LuaTool>,
+            backends: Vec<String>,
         }
         let mut started: Vec<Started> = Vec::new();
         for item in installed {
@@ -187,6 +192,7 @@ impl SessionExtensions {
                 declared: None,
                 commands: Vec::new(),
                 tools: Vec::new(),
+                backends: Vec::new(),
             };
             if entry.dir.join(ENTRY).is_file() {
                 let extension = match start::start_vm(
@@ -210,14 +216,20 @@ impl SessionExtensions {
                         continue;
                     }
                 };
-                let registered = extension
-                    .hooks()
-                    .and_then(|declared| Ok((declared, extension.commands()?, extension.tools()?)));
+                let registered = extension.hooks().and_then(|declared| {
+                    Ok((
+                        declared,
+                        extension.commands()?,
+                        extension.tools()?,
+                        extension.search_backends()?,
+                    ))
+                });
                 match registered {
-                    Ok((declared, commands, tools)) => {
+                    Ok((declared, commands, tools, backends)) => {
                         entry.declared = Some(declared);
                         entry.commands = commands;
                         entry.tools = tools;
+                        entry.backends = backends;
                     }
                     Err(e) => {
                         session.failed(&entry.name, &e);
@@ -257,6 +269,21 @@ impl SessionExtensions {
             })
             .collect();
         session.commands = SessionCommands::build(&real_sources, config);
+        let mut backend_choices: Vec<(String, String, Arc<LuaExtension>)> = Vec::new();
+        for s in &started {
+            if let Some(lua) = &s.extension {
+                for backend in &s.backends {
+                    backend_choices.push((s.name.clone(), backend.clone(), Arc::clone(lua)));
+                }
+            }
+        }
+        let setting = config
+            .get("web_search.backend", None)
+            .and_then(|(value, _)| value.as_str().map(str::to_owned));
+        let (search_backend, mut search_notices) =
+            crate::search::choose(backend_choices, setting.as_deref());
+        session.notices.append(&mut search_notices);
+        session.search_backend = search_backend;
         for s in started {
             if let (Some(lua), Some(declared)) = (&s.extension, s.declared) {
                 let runs_hooks = declared.by_point.values().any(|hooks| !hooks.is_empty());
@@ -280,9 +307,9 @@ impl SessionExtensions {
                         session.tools.push((s.name.clone(), Arc::new(tool)));
                     }
                 }
-                // An extension with a hook, a command or a tool is used by
-                // the session and stays.
-                if runs_hooks || !s.commands.is_empty() || has_tools {
+                // An extension with a hook, a command, a tool or a search
+                // backend is used by the session and stays.
+                if runs_hooks || !s.commands.is_empty() || has_tools || !s.backends.is_empty() {
                     session.lua.push(Arc::clone(lua));
                 }
             }
@@ -393,8 +420,9 @@ impl SessionExtensions {
 
     /// What loading raised: an entry script that failed, a hook, command or
     /// tool that did not register, the tool and command `replaces` checks,
-    /// command renames and conflicts, and tool clashes. Each is recorded
-    /// once, when names settle at load.
+    /// command renames and conflicts, tool clashes, and the search-backend
+    /// choice (`web_search_unavailable` or a duplicated backend name). Each
+    /// is recorded once, when names settle at load.
     pub fn notices(&self) -> Vec<Notice> {
         self.notices.clone()
     }
@@ -410,6 +438,12 @@ impl SessionExtensions {
     /// list in `replaces`, is not here.
     pub fn tools(&self) -> Vec<(String, Arc<dyn Tool>)> {
         self.tools.clone()
+    }
+
+    /// The search backend Fiber's own `web_search` runs, chosen at load.
+    /// The same `Arc` for the whole session.
+    pub fn search_backend(&self) -> Option<Arc<dyn SearchBackend>> {
+        self.search_backend.clone()
     }
 
     /// Hands the ephemeral emitter to every extension's `host.status`,

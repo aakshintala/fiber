@@ -7,7 +7,7 @@ use std::process::Command;
 use fakes::TempDir;
 
 use super::{
-    InspectError, Inspected, MAX_SYMLINKS, ResolveError, inspect, read_regular, resolve,
+    InspectError, Inspected, MAX_SYMLINKS, ResolveError, inspect, pdf_magic, read_regular, resolve,
     unsupported_message,
 };
 
@@ -137,6 +137,7 @@ fn a_regular_file_is_text() {
         Inspected::Text { text } => assert_eq!(text, "hi\n"),
         Inspected::Unsupported { kind, .. } => panic!("expected text, got {kind}"),
         Inspected::Image { kind, .. } => panic!("expected text, got {kind}"),
+        Inspected::Pdf { .. } | Inspected::PdfOverCap { .. } => panic!("expected text, got a PDF"),
     }
 }
 
@@ -159,7 +160,12 @@ fn a_directory_is_unsupported() {
             assert!(message.contains(&path.display().to_string()), "{message}");
             assert!(message.contains(&size.to_string()), "{message}");
         }
-        Inspected::Text { .. } | Inspected::Image { .. } => panic!("expected a directory"),
+        Inspected::Text { .. }
+        | Inspected::Image { .. }
+        | Inspected::Pdf { .. }
+        | Inspected::PdfOverCap { .. } => {
+            panic!("expected a directory")
+        }
     }
 }
 
@@ -171,7 +177,12 @@ fn a_fifo_is_unsupported_without_opening_it() {
     assert!(status.success(), "mkfifo failed");
     match inspect(&path).unwrap() {
         Inspected::Unsupported { kind, .. } => assert!(kind.contains("fifo"), "{kind}"),
-        Inspected::Text { .. } | Inspected::Image { .. } => panic!("opening a fifo would block"),
+        Inspected::Text { .. }
+        | Inspected::Image { .. }
+        | Inspected::Pdf { .. }
+        | Inspected::PdfOverCap { .. } => {
+            panic!("opening a fifo would block")
+        }
     }
 }
 
@@ -182,7 +193,12 @@ fn a_socket_is_unsupported() {
     let listener = UnixListener::bind(&path).unwrap();
     match inspect(&path).unwrap() {
         Inspected::Unsupported { kind, .. } => assert!(kind.contains("socket"), "{kind}"),
-        Inspected::Text { .. } | Inspected::Image { .. } => panic!("expected a socket"),
+        Inspected::Text { .. }
+        | Inspected::Image { .. }
+        | Inspected::Pdf { .. }
+        | Inspected::PdfOverCap { .. } => {
+            panic!("expected a socket")
+        }
     }
     drop(listener);
 }
@@ -192,7 +208,12 @@ fn a_device_is_unsupported() {
     let path = Path::new("/dev/null");
     match inspect(path).unwrap() {
         Inspected::Unsupported { kind, .. } => assert!(kind.contains("device"), "{kind}"),
-        Inspected::Text { .. } | Inspected::Image { .. } => panic!("expected a device"),
+        Inspected::Text { .. }
+        | Inspected::Image { .. }
+        | Inspected::Pdf { .. }
+        | Inspected::PdfOverCap { .. } => {
+            panic!("expected a device")
+        }
     }
 }
 
@@ -214,13 +235,15 @@ fn recognised_magic_nul_and_invalid_utf8_are_typed() {
                 assert!(kind.contains(expect), "{name}: {kind}");
                 assert_eq!(size, u64::try_from(bytes.len()).unwrap(), "{name}");
             }
-            Inspected::Text { .. } | Inspected::Unsupported { .. } => {
+            Inspected::Text { .. }
+            | Inspected::Unsupported { .. }
+            | Inspected::Pdf { .. }
+            | Inspected::PdfOverCap { .. } => {
                 panic!("{name} was not an image")
             }
         }
     }
     let others: &[(&str, &[u8], &str)] = &[
-        ("a.pdf", b"%PDF-1.4", "PDF"),
         ("a.bin", b"hello\0world", "binary data"),
         ("a.dat", b"\xff\xfe", "not UTF-8 text"),
         ("a.riff", b"RIFF\x00\x00\x00\x00WAVErest", "binary data"),
@@ -229,16 +252,31 @@ fn recognised_magic_nul_and_invalid_utf8_are_typed() {
         let path = dir.path().join(name);
         fs::write(&path, bytes).unwrap();
         match inspect(&path).unwrap() {
-            Inspected::Unsupported { kind, size, hint } => {
+            Inspected::Unsupported { kind, size, .. } => {
                 assert!(kind.contains(expect), "{name}: {kind}");
                 assert_eq!(size, u64::try_from(bytes.len()).unwrap(), "{name}");
-                if kind.contains("PDF") {
-                    assert_eq!(hint, "PDFs are not read yet.", "{name}");
-                }
             }
-            Inspected::Text { .. } | Inspected::Image { .. } => {
+            Inspected::Text { .. }
+            | Inspected::Image { .. }
+            | Inspected::Pdf { .. }
+            | Inspected::PdfOverCap { .. } => {
                 panic!("{name} was read as text or an image")
             }
+        }
+    }
+    let pdf = dir.path().join("a.pdf");
+    let pdf_bytes = b"%PDF-1.4";
+    fs::write(&pdf, pdf_bytes).unwrap();
+    match inspect(&pdf).unwrap() {
+        Inspected::Pdf { size, hash } => {
+            assert_eq!(size, u64::try_from(pdf_bytes.len()).unwrap());
+            assert_eq!(hash, super::hash_bytes(pdf_bytes));
+        }
+        Inspected::Text { .. }
+        | Inspected::Image { .. }
+        | Inspected::Unsupported { .. }
+        | Inspected::PdfOverCap { .. } => {
+            panic!("a.pdf was not a PDF")
         }
     }
 }
@@ -359,6 +397,7 @@ fn riff_without_webp_and_webp_without_riff_are_text() {
             Inspected::Text { text } => assert_eq!(text.as_bytes(), *bytes),
             Inspected::Unsupported { kind, .. } => panic!("{name} was {kind}"),
             Inspected::Image { kind, .. } => panic!("{name} was {kind}"),
+            Inspected::Pdf { .. } | Inspected::PdfOverCap { .. } => panic!("{name} was a PDF"),
         }
     }
 }
@@ -424,4 +463,61 @@ fn with_locks_shares_one_lock_set_with_outside_holders() {
     holder.join().unwrap();
     handle.join().unwrap();
     assert!(locks.is_clear());
+}
+
+#[test]
+fn pdf_magic_reads_only_the_first_four_bytes() {
+    let dir = TempDir::new("fiber-pdf-magic");
+    let short = dir.path().join("short");
+    fs::write(&short, b"abc").unwrap();
+    assert!(!pdf_magic(&short).unwrap());
+    let text = dir.path().join("text");
+    fs::write(&text, b"abcdefgh").unwrap();
+    assert!(!pdf_magic(&text).unwrap());
+    let pdf = dir.path().join("magic");
+    fs::write(&pdf, b"%PDF-1.4 rest").unwrap();
+    assert!(pdf_magic(&pdf).unwrap());
+}
+
+#[test]
+fn pdf_magic_treats_a_vanished_file_as_not_a_pdf_and_reports_other_errors() {
+    let dir = TempDir::new("fiber-pdf-magic-errors");
+    assert!(!pdf_magic(&dir.path().join("gone.pdf")).unwrap());
+    // Opening a directory succeeds on Unix and reading it fails with a kind
+    // that is neither NotFound nor UnexpectedEof.
+    let error = pdf_magic(dir.path()).unwrap_err();
+    assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+    assert_ne!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+    // A path with a NUL byte makes `open` itself fail, with a kind that is
+    // not NotFound.
+    use std::os::unix::ffi::OsStrExt as _;
+    let nul = std::path::Path::new(std::ffi::OsStr::from_bytes(b"a\0b.pdf"));
+    assert_eq!(
+        pdf_magic(nul).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+}
+
+#[test]
+fn a_pdf_over_the_cap_is_classified_from_its_metadata() {
+    let dir = TempDir::new("fiber-class-pdf-cap");
+    let path = dir.path().join("big.pdf");
+    fs::write(&path, b"%PDF-1.4 sparse").unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(crate::pdf::PDF_MAX_BYTES + 1)
+        .unwrap();
+    match inspect(&path).unwrap() {
+        Inspected::PdfOverCap { size } => {
+            assert_eq!(size, crate::pdf::PDF_MAX_BYTES + 1);
+        }
+        Inspected::Text { .. }
+        | Inspected::Image { .. }
+        | Inspected::Pdf { .. }
+        | Inspected::Unsupported { .. } => {
+            panic!("a PDF over the cap was loaded")
+        }
+    }
 }

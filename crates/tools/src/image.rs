@@ -28,13 +28,35 @@ const MESSAGE_CAP: usize = 2048;
 pub struct ImageChild {
     fiber: PathBuf,
     artifacts: PathBuf,
+    /// The program that renders a PDF's pages (`docs/tools.md`, "read"):
+    /// `pdftoppm` on `PATH` unless [`crate::Files::with_renderer`] said otherwise.
+    pub(crate) renderer: PathBuf,
 }
 
 impl ImageChild {
     /// Runs `fiber image` with `fiber`, the running binary, writing into
     /// `artifacts`, the session's `artifacts/` directory.
     pub fn new(fiber: PathBuf, artifacts: PathBuf) -> Self {
-        Self { fiber, artifacts }
+        Self {
+            fiber,
+            artifacts,
+            renderer: PathBuf::from("pdftoppm"),
+        }
+    }
+
+    /// The running binary `read` runs again as the child.
+    pub(crate) fn fiber(&self) -> &Path {
+        &self.fiber
+    }
+
+    /// The session's `artifacts/` directory the child writes into.
+    pub(crate) fn artifacts(&self) -> &Path {
+        &self.artifacts
+    }
+
+    /// The program that renders a PDF's pages.
+    pub(crate) fn renderer(&self) -> &Path {
+        &self.renderer
     }
 }
 
@@ -43,7 +65,7 @@ impl Images for ImageChild {
         if cancel.is_cancelled() {
             return Err(ImageError::Cancelled);
         }
-        let stem = fresh_stem();
+        let stem = fresh_stem("i");
         let spawned = Command::new(&self.fiber)
             .arg("image")
             .arg("/dev/stdin")
@@ -182,7 +204,7 @@ pub(crate) fn read(child: Option<&ImageChild>, path: &Path, cancel: &dyn Cancel)
     };
     // A new name for every read: an older log line's path never points at
     // new bytes.
-    let stem = fresh_stem();
+    let stem = fresh_stem("i");
     let Some(output) = run_child(child, path, &stem, cancel) else {
         return text_output("Cancelled and stopped.\n".to_owned());
     };
@@ -217,9 +239,9 @@ pub(crate) fn read(child: Option<&ImageChild>, path: &Path, cancel: &dyn Cancel)
 }
 
 /// A fresh stem per call: an older log line's path never points at new
-/// bytes.
-fn fresh_stem() -> String {
-    format!("i_{:016x}", RandomState::new().hash_one(()))
+/// bytes. `prefix` is `i` for an image and `p` for a PDF.
+pub(crate) fn fresh_stem(prefix: &str) -> String {
+    format!("{prefix}_{:016x}", RandomState::new().hash_one(()))
 }
 
 /// Whether `file` is the name asked for: `<stem>.<ext>`, where `<ext>` is
@@ -259,11 +281,24 @@ fn run_child(
     stem: &str,
     cancel: &dyn Cancel,
 ) -> Option<std::io::Result<Collected>> {
-    let spawned = Command::new(&child.fiber)
+    let mut command = Command::new(&child.fiber);
+    command
         .arg("image")
         .arg(path)
         .arg(&child.artifacts)
-        .arg(stem)
+        .arg(stem);
+    run_to_end(&mut command, cancel)
+}
+
+/// Runs `command` to its end: the image child, the PDF child and `pdftoppm`
+/// share this cancel-and-wait loop (`docs/tools.md`, "read"). `None` when
+/// the call was cancelled: the process is then killed and reaped, and its
+/// output is dropped.
+pub(crate) fn run_to_end(
+    command: &mut Command,
+    cancel: &dyn Cancel,
+) -> Option<std::io::Result<Collected>> {
+    let spawned = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -314,7 +349,7 @@ fn run_child(
 
 /// The first [`MESSAGE_CAP`] bytes of `stderr`, cut at a character boundary,
 /// without the trailing newline.
-fn capped(stderr: &[u8]) -> String {
+pub(crate) fn capped(stderr: &[u8]) -> String {
     let text = String::from_utf8_lossy(stderr);
     let text = text.trim_end();
     text.get(..text.floor_char_boundary(MESSAGE_CAP))

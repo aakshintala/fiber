@@ -324,8 +324,8 @@ fn a_long_draft_shows_its_end() {
     let shown = screen(&app);
     let rows: Vec<&str> = shown.lines().collect();
     assert_eq!(rows.get(9).map(|row| row.chars().count()), Some(60));
-    assert!(rows.get(9).is_some_and(|row| row.starts_with("> a")));
-    assert_eq!(rows.get(10).copied(), Some("  aaaaaaaaaaaaend"));
+    assert!(rows.get(9).is_some_and(|row| row.starts_with("▌ > a")));
+    assert_eq!(rows.get(10).copied(), Some("▌   aaaaaaaaaaaaaaend"));
 }
 
 #[test]
@@ -345,7 +345,7 @@ fn draw_folds_an_events_file() {
     assert_eq!(
         shown,
         format!(
-            "{}█\n{}\n>\n{}\n",
+            "{}█\n{}\n▌ >\n{}\n",
             "▀".repeat(19),
             "▄".repeat(20),
             "▀".repeat(20)
@@ -378,15 +378,15 @@ fn a_short_screen_keeps_the_input_line_last() {
     // The input line wins the last row with its edges where they fit,
     // then the hint; a screen too short for them all drops the hint
     // first, and the notice with the conversation.
-    assert_eq!(sized(&mut app, 20, 1), ">\n");
-    assert_eq!(sized(&mut app, 20, 2), "Press Ctrl+C again t\n>\n");
+    assert_eq!(sized(&mut app, 20, 1), "▌ >\n");
+    assert_eq!(sized(&mut app, 20, 2), "Press Ctrl+C again t\n▌ >\n");
     assert_eq!(
         sized(&mut app, 20, 3),
-        "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n>\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ >\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
     );
     assert_eq!(
         sized(&mut app, 20, 4),
-        "Press Ctrl+C again t\n▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n>\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        "Press Ctrl+C again t\n▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ >\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
     );
 }
 
@@ -400,10 +400,10 @@ fn the_overlay_never_covers_the_input_line() {
     app.on_key(Key::PageUp, now);
     app.on_line(delta("s_aaaaaaaaaaaaaaaa", "a_1", "streamed"));
     assert!(app.has_new());
-    assert_eq!(sized(&mut app, 30, 1), ">\n");
+    assert_eq!(sized(&mut app, 30, 1), "▌ >\n");
     assert_eq!(
         sized(&mut app, 30, 2),
-        "    ↓ New messages below     █\n>\n"
+        "    ↓ New messages below     █\n▌ >\n"
     );
 }
 
@@ -620,16 +620,16 @@ fn a_short_screen_drops_the_badge_after_the_hint() {
     app.connect_failed("lost".to_owned());
     app.on_key(Key::CtrlC, now);
     let badge = "! 1 waiting · /approvals or ⌥A";
-    assert_eq!(sized(&mut app, 40, 1), ">\n");
-    assert_eq!(sized(&mut app, 40, 2), format!("{badge}\n>\n"));
+    assert_eq!(sized(&mut app, 40, 1), "▌ >\n");
+    assert_eq!(sized(&mut app, 40, 2), format!("{badge}\n▌ >\n"));
     // The input box's edges take the rows the hint and the badge lose.
     assert_eq!(
         sized(&mut app, 40, 3),
-        format!("{}\n>\n{}\n", "▄".repeat(40), "▀".repeat(40))
+        format!("{}\n▌ >\n{}\n", "▄".repeat(40), "▀".repeat(40))
     );
     assert_eq!(
         sized(&mut app, 40, 4),
-        format!("{badge}\n{}\n>\n{}\n", "▄".repeat(40), "▀".repeat(40))
+        format!("{badge}\n{}\n▌ >\n{}\n", "▄".repeat(40), "▀".repeat(40))
     );
 }
 
@@ -667,7 +667,7 @@ fn a_draft_of_three_lines() {
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
     type_draft(&mut app, "first\nsecond\nthird");
     insta::assert_snapshot!("draft_of_three_lines", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(7, 10)));
+    assert_eq!(cursor_at(&app), Some(Position::new(9, 10)));
 }
 
 #[test]
@@ -676,14 +676,14 @@ fn a_draft_taller_than_a_third_scrolls_with_the_cursor() {
     type_draft(&mut app, "l1\nl2\nl3\nl4\nl5\nl6");
     // 12 rows: the box shows 4, the last four while the cursor is there.
     insta::assert_snapshot!("draft_taller_than_the_cap", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(4, 10)));
+    assert_eq!(cursor_at(&app), Some(Position::new(6, 10)));
     let now = fakes::clock::FakeClock::new().now();
     for _ in 0..5 {
         app.on_key(Key::Up, now);
     }
     // On the first line, the box shows the first four.
     insta::assert_snapshot!("draft_scrolled_to_its_top", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(4, 7)));
+    assert_eq!(cursor_at(&app), Some(Position::new(6, 7)));
 }
 
 #[test]
@@ -693,7 +693,7 @@ fn a_paste_token_in_the_draft() {
     let pasted: Vec<String> = (1..=312).map(|n| format!("line {n}")).collect();
     app.on_edit(Edit::Paste(pasted.join("\n")));
     insta::assert_snapshot!("draft_with_a_paste_token", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(34, 10)));
+    assert_eq!(cursor_at(&app), Some(Position::new(36, 10)));
 }
 
 #[test]
@@ -705,20 +705,20 @@ fn a_draft_wider_than_the_screen_wraps() {
     let rows: Vec<&str> = shown.lines().collect();
     assert_eq!(
         rows.get(9).copied(),
-        Some(format!("> {}", "w".repeat(58)).as_str())
+        Some(format!("▌ > {}", "w".repeat(56)).as_str())
     );
     assert_eq!(
         rows.get(10).copied(),
-        Some(format!("  {}", "w".repeat(12)).as_str())
+        Some(format!("▌   {}", "w".repeat(14)).as_str())
     );
-    assert_eq!(cursor_at(&app), Some(Position::new(14, 10)));
+    assert_eq!(cursor_at(&app), Some(Position::new(18, 10)));
 }
 
 #[test]
 fn the_cursor_hides_while_the_panel_is_open() {
     let mut app = empty();
     attach(&mut app, "s_aaaaaaaaaaaaaaaa");
-    assert_eq!(cursor_at(&app), Some(Position::new(2, 10)));
+    assert_eq!(cursor_at(&app), Some(Position::new(4, 10)));
     app.on_line(session_line(
         "s_aaaaaaaaaaaaaaaa",
         "permission_requested",
@@ -1582,7 +1582,7 @@ fn a_paste_token_is_a_target_over_its_label_on_every_row() {
     let mut app = with_token();
     let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     let rects = token_rects(&targets);
-    assert_eq!(rects, vec![Rect::new(6, 10, 28, 1)]);
+    assert_eq!(rects, vec![Rect::new(8, 10, 28, 1)]);
     assert_eq!(cells(&buf, &rects), LABEL);
     // Wrapped, one target per row the label takes.
     let (buf, targets) = pointed(&mut app, 20, HEIGHT, None);
@@ -1605,7 +1605,7 @@ fn a_paste_token_scrolled_out_of_the_box_is_no_target() {
     // Scrolled to its top, the token is on the box's first row.
     let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     let rects = token_rects(&targets);
-    assert_eq!(rects, vec![Rect::new(6, 7, 28, 1)]);
+    assert_eq!(rects, vec![Rect::new(8, 7, 28, 1)]);
     assert_eq!(cells(&buf, &rects), LABEL);
 }
 
@@ -1774,7 +1774,7 @@ fn copied_needs_a_conversation_row_to_show_on() {
     click(&mut app, 30, 10, 27, 4);
     assert!(app.copied());
     app.set_size(30, 1);
-    assert_eq!(text(&buffer(&app, 30, 1)), ">\n");
+    assert_eq!(text(&buffer(&app, 30, 1)), "▌ >\n");
 }
 
 #[test]
@@ -1964,7 +1964,7 @@ fn input_with_an_image_token() {
         app.on_edit(Edit::Left);
     }
     insta::assert_snapshot!("input_with_an_image_token", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(17, 10)));
+    assert_eq!(cursor_at(&app), Some(Position::new(19, 10)));
 }
 
 /// An app on home with no session, as `/settings` finds it.

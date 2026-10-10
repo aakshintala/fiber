@@ -1109,3 +1109,133 @@ fn the_selection_is_not_asked_past_the_spending_budget() {
     assert_eq!(kept[0].payload["failed"], true);
     assert!(notice(&lines, "reviewer_selection_failed").is_some());
 }
+
+/// The handoff selection's usage names its purpose and no call: it
+/// reviewed no tool call, so `action_id` is absent.
+#[test]
+fn the_handoff_selection_marks_its_usage_with_no_call() {
+    let tool = shell();
+    let mut session = Session::with_tools(script(), None, vec![tool as Arc<dyn Tool>]);
+    let _reviewer = session.reviewer(vec![
+        Scripted::text("allow"),
+        Scripted::text("1"),
+        Scripted::text("allow"),
+    ]);
+    let lines = run_flow(&mut session);
+    // The whole flow in order: reviewed call, text, handoff with its
+    // selection, reviewed call (`docs/testing.md`, "Event streams").
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "usage_recorded",
+            "reviewer_kept",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let kept = kept_lines(&lines);
+    assert_eq!(kept.len(), 1);
+    let turn = kept[0].turn_id.clone();
+    // The selection runs in the handoff's turn, beside the note request:
+    // only the reviewer's model picks it out.
+    let selection: Vec<_> = lines
+        .iter()
+        .filter(|line| {
+            line.kind == "usage_recorded"
+                && line.turn_id == turn
+                && line.payload["model"] == REVIEWER_MODEL
+        })
+        .collect();
+    assert_eq!(selection.len(), 1);
+    assert_eq!(selection[0].action_id, None);
+    assert_eq!(
+        selection[0].payload["reviewer"],
+        json!({"purpose": "handoff"})
+    );
+    // Every reviewer stage names the call it reviewed, and no other line
+    // carries a reviewer.
+    let calls: Vec<String> = lines
+        .iter()
+        .filter(|line| line.kind == "permission_resolved")
+        .filter_map(|line| line.action_id.as_ref().map(|id| id.0.clone()))
+        .collect();
+    assert_eq!(calls.len(), 2);
+    let mut stages = 0;
+    for line in lines.iter().filter(|line| line.kind == "usage_recorded") {
+        if line.payload["model"] == REVIEWER_MODEL {
+            if line.turn_id == turn {
+                continue;
+            }
+            stages += 1;
+            assert_eq!(line.action_id, None);
+            assert_eq!(line.payload["reviewer"]["purpose"], "stage_1");
+            let named = line.payload["reviewer"]["action_id"].as_str().unwrap();
+            assert!(calls.contains(&named.to_owned()), "{named}");
+        } else {
+            assert!(line.payload.get("reviewer").is_none());
+        }
+    }
+    assert_eq!(stages, 2);
+}

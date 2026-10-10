@@ -47,6 +47,7 @@ ephemeral event where it is display-only.
 | Module | Job |
 |---|---|
 | `contract` | The vocabulary every other module speaks: what an event looks like, what a command looks like, and what a tool, a provider and a hook must each be able to do. It contains no behaviour beyond checking that a value fits the vocabulary, and pure conversions of its own values, such as a wall time to milliseconds or to a UTC date. |
+| `support` | Small shared mechanisms with no domain knowledge: the process clock, the process-group guard and the poison-ignoring `lock`. |
 | `log` | Owns the session directory. The only thing that opens `events.jsonl`, holds the lock, mints `seq` and decides fsync order. Also hands events to whoever is watching, and writes the diagnostic files in `logs/`. |
 | `loop` | Runs turns and steps (`docs/loop.md`). The only thing that decides what happens next. |
 | `provider` | Talks to model APIs: wire formats, credentials, streaming. Reached only through the provider seam. |
@@ -60,7 +61,7 @@ ephemeral event where it is display-only.
 | `config` | Reads the configuration files in [Fiber home](state.md) and the repository's `.fiber/` ([Configuration](configuration.md)). Answers questions; never asks any. |
 | `hub` | Lists, starts and resumes sessions and relays every client connection to a session's socket, over its local socket and, when installed with a port, a websocket on `127.0.0.1` that authenticates each device by token (`docs/invocation.md`, "The hub"). Holds no session and no push credential; does no TLS. |
 | `doors` | `fiber ask` (argv or stdin in, JSON lines out), and the internal session command that it, the hub and a parent run. Which doors exist and what a driver may send is `docs/invocation.md`; this page only fixes that none has a privilege the TUI lacks. |
-| `picture` | The image child (`docs/invocation.md`, "Processes"): decodes, refuses, fits and re-encodes one image under the limits in `docs/model-routing.md`, "Image limits". Only `main` depends on it, so no session process runs image code. |
+| `picture` | The image child (`docs/invocation.md`, "Processes"): decodes, refuses, fits and re-encodes one image under the limits in `docs/model-routing.md`, "Image limits", and counts a PDF's pages and cuts a page range. Only `main` depends on it, so no session process runs image code. |
 | `cli` | Every command that does not run a session: `login`, `logout`, `approve`, `sessions`, `sessions export`, `sessions delete`, `sessions prune`, `sessions search`, `models`, `extension install/update/remove/list/test`, `config get/set`, `hub install`, `hub uninstall` and `hub status` today, and later `upgrade` and `hub pair` as they are built. `main` dispatches to it. |
 | `main` | The composition root. Parses argv, builds everything once, picks a door. No feature logic. |
 
@@ -76,6 +77,8 @@ extension talks to `contract`, not to `loop`.
 
 ## The call rules
 
+`support` depends on nothing in the workspace, and every crate may depend on
+it; the rules below leave it out because it holds no domain knowledge.
 `contract` depends on nothing and everything but `picture` depends on it.
 `picture` depends on nothing in the workspace. `log` and
 `config` depend only on `contract`. `provider`, `tools`, `mcp`, `jobs` and
@@ -84,7 +87,8 @@ extension talks to `contract`, not to `loop`.
 while it runs. `loop`
 depends on `contract`, `log` and the three seams, and never on `tui`, `doors`
 or `main`. `tui`, `hub` and `doors` depend on `contract` and on `log`'s reading
-side, and never on `loop`, `provider`, `tools`, `mcp`, `jobs` or
+side, the functions `log` exports for reading (taking the lock, deleting a
+log and opening a file by path stay in `log`), and never on `loop`, `provider`, `tools`, `mcp`, `jobs` or
 `extensions`. `cli` depends on `contract`, `log`, `config`, `doors` and
 `extensions`, and never on `loop`. `worktree` depends only on `contract`, and
 `jobs`, `doors` and `cli` may depend on it. `net` depends only on `contract`
@@ -102,8 +106,9 @@ defines a trait and `main` injects the implementation: `Sessions`, the socket
 client in `doors` that `tools` uses for the session tools, `Images`, the
 image child's driver in `tools` that `doors` and `mcp` use for pasted and MCP
 images, `Scan`, the session log search in `log` that `tools` uses for
-`session_search`, and `Skills`, skill discovery in `loop` that `tools` uses
-for `skill`.
+`session_search`, `SearchBackend`, the Lua search backend in `extensions`
+that `tools` uses for Fiber's own `web_search`, and `Skills`, skill
+discovery in `loop` that `tools` uses for `skill`.
 
 1. Calls point one way. If A may call B, B may never call A. B answers, or it
    emits an event and A picks it up.
@@ -115,7 +120,9 @@ for `skill`.
    built-in tools inside `src/core/` production code, plus a core enum listing
    every built-in by name
    ([Core reasons about tool kinds, not builtin names](https://github.com/aakshintala/fiber-zig/issues/138)).
-5. Only `config` reads configuration files ([Configuration](configuration.md)).
+5. Only `config` reads configuration files ([Configuration](configuration.md)),
+   `SYSTEM.md` and `APPEND_SYSTEM.md` included, and only `config` knows the
+   layout of Fiber home.
    `main` distributes what it returns at startup. What an extension reads
    while it runs, such as a secret through `host.secret`, a manifest or the
    cached model list, `extensions` asks `config` for itself.
@@ -133,6 +140,12 @@ the measurements are on
 This is why `contract` depends on nothing: a cycle between crates is a
 build failure, so the module holding the shared types has to sit at the
 bottom.
+
+Manifests enforce the call rules and rule 1. Rules 3, 4 and 5 name what code
+inside an allowed crate may do, which a manifest cannot see, so `cargo xtask`
+checks them by grep in `scripts/check`: an open of `events.jsonl` or a
+`sessions/` path outside `log`, a Fiber-home path outside `config`, and a
+built-in tool's name in `loop`. Rules 2 and 6 are checked in review.
 
 ## The three seams
 

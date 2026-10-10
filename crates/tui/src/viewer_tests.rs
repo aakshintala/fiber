@@ -42,6 +42,7 @@ fn opened(argv: &[String], dir: &std::path::Path, view: View) -> Result<(), Stri
             | Input::FindDue(_)
             | Input::Image { .. }
             | Input::Models(_)
+            | Input::Login { .. }
             | Input::Tick,
         ) => panic!("the worker answered something else"),
         Err(err) => panic!("waited {DEADLINE:?} for the worker: {err}"),

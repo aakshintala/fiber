@@ -10,13 +10,15 @@ use config::{Protocol, ProviderData};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::provider::{Provider, ToolDefinition};
+use contract::search::{Domains, SearchBackend, SearchResult};
 use contract::shapes::Failure;
+use contract::tool::Tool;
 use serde_json::{Map, Value, json};
 
 /// The largest per-protocol total the built-in definitions may take, in
 /// bytes. It started at the largest total at the commit that added the
 /// check, with no headroom.
-const BUDGET: usize = 9_327;
+const BUDGET: usize = 10_174;
 
 /// The Anthropic hosted tool type the budget measures
 /// (`config::Protocol::reads_web_search`); `openai-responses` reads
@@ -107,7 +109,7 @@ fn builtin_definitions() -> Vec<ToolDefinition> {
         &clock,
         &jobs,
         &Arc::new(tools::PathLocks::new()),
-        Some(HOSTED_SEARCH),
+        super::web_search(Some(HOSTED_SEARCH), None).unwrap(),
         &delegates(),
         skills(),
     )
@@ -115,6 +117,36 @@ fn builtin_definitions() -> Vec<ToolDefinition> {
     let definitions: Vec<ToolDefinition> =
         tools.iter().map(|(_, tool)| tool.definition()).collect();
     assert!(!definitions.is_empty(), "builtin registered no tool");
+    definitions
+}
+
+/// A search backend answering nothing, for measuring Fiber's own
+/// `web_search` in place of the hosted one.
+struct StubBackend;
+
+impl SearchBackend for StubBackend {
+    fn search(
+        &self,
+        _query: &str,
+        _domains: &Domains,
+        _cancel: &dyn contract::tool::Cancel,
+    ) -> Result<Option<Vec<SearchResult>>, Failure> {
+        Ok(Some(Vec::new()))
+    }
+}
+
+/// Every definition `builtin` registers with Fiber's own `web_search` over
+/// a backend in place of the hosted one: the backend tool counts on every
+/// protocol, as an ordinary function tool does.
+fn backend_definitions() -> Vec<ToolDefinition> {
+    let mut definitions = builtin_definitions();
+    let backend: Arc<dyn SearchBackend> = Arc::new(StubBackend);
+    let own = tools::BackendSearch::new(backend).definition();
+    let hosted = definitions
+        .iter_mut()
+        .find(|definition| definition.hosted.is_some())
+        .expect("builtin registered the hosted search");
+    *hosted = own;
     definitions
 }
 
@@ -277,6 +309,16 @@ fn report(measured: &Measured, budget: usize) -> String {
     lines.join("\n")
 }
 
+/// The largest total over both definition sets when each is within
+/// `budget`; otherwise the first set past it, with its sizes.
+fn check_both(hosted: &Measured, backend: &Measured, budget: usize) -> Result<usize, String> {
+    match (check(hosted, budget), check(backend, budget)) {
+        (Ok(hosted), Ok(backend)) => Ok(hosted.max(backend)),
+        (Err(error), _) => Err(error),
+        (_, Err(error)) => Err(error),
+    }
+}
+
 /// The largest total when it is within `budget`; otherwise what to do,
 /// followed by every size.
 fn check(measured: &Measured, budget: usize) -> Result<usize, String> {
@@ -341,12 +383,18 @@ fn bytes_of(measured: &Measured, protocol: Protocol, tool: &str) -> usize {
 
 #[test]
 fn the_check_passes_at_the_budget_and_fails_one_byte_over() {
-    let measured = measure(&builtin_definitions());
-    let largest = largest(&measured.sizes).unwrap();
-    let (protocol, total) = (largest.protocol, largest.total);
+    let hosted = measure(&builtin_definitions());
+    let backend = measure(&backend_definitions());
+    let hosted_largest = largest(&hosted.sizes).unwrap();
+    let backend_largest = largest(&backend.sizes).unwrap();
+    let (measured, protocol, total) = if hosted_largest.total >= backend_largest.total {
+        (&hosted, hosted_largest.protocol, hosted_largest.total)
+    } else {
+        (&backend, backend_largest.protocol, backend_largest.total)
+    };
 
-    assert_eq!(check(&measured, total), Ok(total));
-    let error = check(&measured, total - 1).unwrap_err();
+    assert_eq!(check(measured, total), Ok(total));
+    let error = check(measured, total - 1).unwrap_err();
     assert!(error.contains(protocol), "{error}");
     assert!(error.contains(&format!("take {total} bytes")), "{error}");
     assert!(
@@ -354,6 +402,8 @@ fn the_check_passes_at_the_budget_and_fails_one_byte_over() {
         "{error}"
     );
     assert!(error.contains("`BUDGET`"), "{error}");
+    assert_eq!(check_both(&hosted, &backend, total), Ok(total));
+    assert!(check_both(&hosted, &backend, total - 1).is_err());
 }
 
 #[test]
@@ -403,12 +453,17 @@ fn a_definition_pushed_over_the_budget_fails_the_check() {
 
 #[test]
 fn every_spoken_protocol_measures_every_builtin() {
-    let definitions = builtin_definitions();
+    assert_every_builtin(&builtin_definitions());
+    assert_every_builtin(&backend_definitions());
+}
+
+/// Every spoken protocol measures every definition of one set.
+fn assert_every_builtin(definitions: &[ToolDefinition]) {
     let (expected_spoken, expected_not_spoken): (Vec<Protocol>, Vec<Protocol>) = PROTOCOLS
         .into_iter()
         .partition(|protocol| provider(*protocol).unwrap().is_some());
 
-    let measured = measure(&definitions);
+    let measured = measure(definitions);
 
     let spoken: Vec<&str> = measured.sizes.iter().map(|sizes| sizes.protocol).collect();
     let names = |protocols: Vec<Protocol>| -> Vec<&str> {
@@ -459,6 +514,19 @@ fn the_hosted_search_counts_only_where_a_protocol_reads_it() {
         assert_eq!(
             counted,
             protocol.reads_web_search(HOSTED_SEARCH),
+            "{}",
+            sizes.protocol
+        );
+    }
+}
+
+#[test]
+fn the_backend_search_counts_on_every_spoken_protocol() {
+    let measured = measure(&backend_definitions());
+    assert!(!measured.sizes.is_empty());
+    for sizes in &measured.sizes {
+        assert!(
+            sizes.tools.iter().any(|(name, _)| name == "web_search"),
             "{}",
             sizes.protocol
         );
@@ -522,10 +590,12 @@ fn measure_sends_the_whole_set_through_wire_tools() {
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn the_built_in_definitions_fit_their_budget() {
-    let measured = measure(&builtin_definitions());
+    let hosted = measure(&builtin_definitions());
+    let backend = measure(&backend_definitions());
 
-    eprintln!("{}", report(&measured, BUDGET));
-    if let Err(error) = check(&measured, BUDGET) {
+    eprintln!("{}", report(&hosted, BUDGET));
+    eprintln!("{}", report(&backend, BUDGET));
+    if let Err(error) = check_both(&hosted, &backend, BUDGET) {
         panic!("{error}");
     }
 }

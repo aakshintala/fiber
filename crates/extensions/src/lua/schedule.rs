@@ -697,6 +697,11 @@ fn settle(
                     deliver(Reply::Lock(Err(no_credential("tool"))));
                     None
                 }
+                Target::Search(_) => {
+                    drop(shared);
+                    deliver(Reply::Lock(Err(no_credential("search backend"))));
+                    None
+                }
             };
             (cancel, None)
         }
