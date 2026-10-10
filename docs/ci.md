@@ -145,6 +145,12 @@ On Linux x86_64 alone:
 - no crate but `tui` and `main` has `ratatui` or `crossterm` in its normal
   dependency tree (`cargo xtask tui-isolation`), so no other crate depends on
   a crate admitted only for the terminal
+- `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` in
+  `research/tui-prototype`, when the diff touches it. The prototype is not a
+  workspace member, so the checks above never reach it; it has its own
+  `clippy.toml`, which drops the clock bans because the prototype reads the
+  wall clock. A diff that touches only `research/` selects the docs job
+  alone, so the `lint` job runs these when the diff also touches code
 - `shellcheck --shell=sh` on `scripts/install.sh` and its test stubs
 - actionlint over every file in `.github/workflows/`, when the diff changes
   one. A workflow change runs the whole selection ("Selection"), so the job is
