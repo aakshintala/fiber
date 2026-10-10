@@ -95,6 +95,23 @@ fn a_status_adds_a_row_and_a_second_updates_it_in_place() {
 }
 
 #[test]
+fn a_status_that_began_before_the_held_one_changes_nothing() {
+    let mut sessions = Sessions::default();
+    let id = "s_aaaaaaaaaaaaaaaa";
+    let state_at = |state: &str, since: u64| json!({"state": state, "since": since});
+    sessions.status(from_status(&envelope(id, state_at("idle", 9))));
+    // Just below the held `since`: a late copy, ignored.
+    sessions.status(from_status(&envelope(id, state_at("streaming", 8))));
+    assert_eq!(shown(&sessions), ["✓  fix the parser"]);
+    // At the held `since`: the same status again, folded.
+    sessions.status(from_status(&envelope(id, state_at("streaming", 9))));
+    assert_eq!(shown(&sessions), ["●  fix the parser"]);
+    // Above it: newer, folded.
+    sessions.status(from_status(&envelope(id, state_at("idle", 10))));
+    assert_eq!(shown(&sessions), ["✓  fix the parser"]);
+}
+
+#[test]
 fn a_new_status_goes_after_the_rows_already_there() {
     let mut sessions = Sessions::default();
     for session in ["s_aaaaaaaaaaaaaaaa", "s_bbbbbbbbbbbbbbbb"] {
