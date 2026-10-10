@@ -130,7 +130,7 @@ fn a_search_finds_a_message_an_input_and_an_artifact_of_its_own_project() {
         PathBuf::from(format!("{}/projects/{key}/", home.path().display()))
     );
     // The project key makes every slash a dash, and sessions live under
-    // it in Fiber home: the deleted `writing` tests' expectations.
+    // it in Fiber home.
     assert_eq!(
         project_key(Path::new("/Users/alice/work/fiber/.git")),
         "-Users-alice-work-fiber-.git"

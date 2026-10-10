@@ -373,7 +373,7 @@ fn a_weak_emit_emits_while_the_log_lives_and_never_keeps_it() {
     let weak = Arc::downgrade(&log);
     let rx = relay(log.watch());
     emit.emit(&delta("e"));
-    let line = next(&rx, &Deadline::after(DEADLINE)).unwrap();
+    let line = next(&rx, &Deadline::after(Duration::from_secs(5))).unwrap();
     assert_eq!(line.kind, "assistant_message_delta");
     drop(log);
     assert!(
