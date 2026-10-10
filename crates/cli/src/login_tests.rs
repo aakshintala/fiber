@@ -266,8 +266,7 @@ fn login_with_notices_still_logs_in_when_the_config_does_not_load() {
     setup.install("acme", None, None);
     // The project's file is invalid JSON, so the notices load fails, while
     // the global file the login writes stays fine.
-    let (_, project) =
-        crate::project_of(&setup.home(), &std::env::current_dir().unwrap()).unwrap();
+    let (_, project) = crate::project_of(&setup.home(), &std::env::current_dir().unwrap()).unwrap();
     let file = setup
         .home()
         .join("projects")

@@ -518,7 +518,8 @@ pub(crate) fn login_with_notices(
             workspace,
             project,
             overrides: Vec::new(),
-        }) {
+        })
+    {
         notices.extend(config.notices().iter().cloned());
     }
     notices.extend(loading);
