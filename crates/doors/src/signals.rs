@@ -21,7 +21,7 @@
 //! nothing, so a later SIGTERM or SIGINT is a second signal.
 
 use std::io::{self, Read};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -325,52 +325,20 @@ fn spawn_bound(run: Box<dyn FnOnce() + Send>) -> io::Result<()> {
         .map(|_| ())
 }
 
-/// Woken on every clock move.
-#[derive(Default)]
-struct Tick {
-    held: Mutex<()>,
-    moved: Condvar,
-}
-
-impl Wake for Tick {
-    fn wake(&self) {
-        // Taken before the notify, so a waiter that has read the clock and
-        // not yet parked cannot miss it.
-        let _held = lock(&self.held);
-        self.moved.notify_all();
-    }
-}
-
 /// Blocks until `until` on `clock`.
 fn sleep_until(clock: &dyn Clock, until: Instant) {
-    let tick = Arc::new(Tick::default());
+    let tick = Arc::new(support::clock::Parker::new());
     let wake: Arc<dyn Wake> = tick.clone();
     clock.subscribe(Arc::downgrade(&wake));
     loop {
-        // Taken before the clock is read and held into the wait, so a move
-        // that lands in between blocks on it instead of waking nobody.
-        let guard = lock(&tick.held);
+        // `generation` is read before the clock: any bump after that read
+        // makes the park return at once, so a move that lands in between
+        // cannot be missed.
+        let seen = tick.generation();
         if clock.now() >= until {
             return;
         }
-        let mut slot = Some(guard);
-        clock.wait_until(Some(until), &mut |bound| {
-            let Some(guard) = slot.take() else {
-                return;
-            };
-            let _woken = match bound {
-                Some(bound) => {
-                    tick.moved
-                        .wait_timeout(guard, bound)
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .0
-                }
-                None => tick
-                    .moved
-                    .wait(guard)
-                    .unwrap_or_else(PoisonError::into_inner),
-            };
-        });
+        tick.park(clock, Some(until), seen);
     }
 }
 

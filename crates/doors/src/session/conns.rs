@@ -31,26 +31,16 @@ impl Gate {
         let until = self.clock.now() + GRACE;
         let mut conns = lock(&self.conns);
         while conns.writers_open > 0 && grace_remains(self.clock.now(), until) {
-            let writers = &self.writers;
-            let mut slot = Some(conns);
-            self.clock.wait_until(Some(until), &mut |bound| {
-                let Some(guard) = slot.take() else {
-                    return;
-                };
-                slot = Some(match bound {
-                    Some(limit) => {
-                        writers
-                            .wait_timeout(guard, limit)
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .0
-                    }
-                    None => writers.wait(guard).unwrap_or_else(PoisonError::into_inner),
-                });
-            });
-            conns = match slot {
-                Some(guard) => guard,
-                None => lock(&self.conns),
-            };
+            // The guard is held into the condvar wait; `None` relocks.
+            conns = support::clock::park(
+                self.clock.as_ref(),
+                Some(until),
+                None,
+                &self.writers,
+                conns,
+                |_| false,
+            )
+            .unwrap_or_else(|| lock(&self.conns));
         }
     }
 
