@@ -1001,3 +1001,42 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
     let holder = holder.expect("the script wrote its holder's pid");
     assert!(fakes::pids_exit(&[holder], DEADLINE), "the holder is gone");
 }
+
+/// A run without its own group is stopped by a signal to its pid: the
+/// program dies of SIGTERM itself, so no grace elapses.
+#[test]
+fn a_pid_mode_term_stop_reports_sigterm() {
+    let (_dir, cwd) = dir("fiber-exec-pid-term");
+    let clock = FakeClock::new();
+    let ready = ready_in(&cwd);
+    let script = format!(
+        "echo $$ > '{}'\nwhile :; do :; done\n",
+        ready.path().display()
+    );
+    let deadline = clock.now() + Duration::from_millis(500);
+    let (_cancel, done) = spawn(
+        sh_pid(&script, cwd, CAP),
+        Arc::clone(&clock),
+        Some(deadline),
+    );
+    let pid = ready.wait(DEADLINE)[0];
+    assert!(
+        clock.await_parked(clock.now() + GROUP_POLL, DEADLINE),
+        "waited {DEADLINE:?} for the pid-mode run to park while running"
+    );
+    // Past the deadline the run stops, although nothing dropped its cancel.
+    clock.advance(Duration::from_millis(1000));
+    let outcome = done.recv_timeout(DEADLINE);
+    if outcome.is_err() {
+        kill_pid_now(pid);
+    }
+    let ran = outcome
+        .expect("waited {DEADLINE:?} for the stopped pid-mode run")
+        .expect("the stopped pid-mode run returns");
+    assert_eq!(ran.signal.as_deref(), Some("SIGTERM"));
+    assert!(ran.timed_out, "the deadline stopped the pid-mode run");
+    assert!(
+        !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
+        "the stopped program is gone"
+    );
+}

@@ -174,9 +174,17 @@ fn a_stalled_install_step_is_stopped_at_its_deadline() {
         "a stalled step fails as its install step failed: {err}"
     );
     assert!(
+        err.to_string().contains("did not finish within"),
+        "the failure names the deadline: {err}"
+    );
+    assert!(
         err.to_string()
             .contains(&format!("{} s", INSTALL_STEP_DEADLINE.as_secs())),
         "the failure names the deadline's seconds: {err}"
+    );
+    assert!(
+        err.to_string().contains("so it was stopped"),
+        "the failure names the stop: {err}"
     );
     assert!(
         !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
