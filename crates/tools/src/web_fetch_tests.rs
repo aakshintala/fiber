@@ -113,6 +113,7 @@ impl Rig {
         Call { rx, cancel }
     }
 
+    #[track_caller]
     fn fetch(&self, url: &str) -> Output {
         self.start(url).wait()
     }

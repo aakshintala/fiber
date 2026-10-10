@@ -1293,6 +1293,7 @@ fn a_closed_pipe_with_a_zero_count_stays_quiet_despite_skipped_directories() {
 }
 
 /// Whether the runner's grep speaks GNU: only then do outputs compare.
+#[track_caller]
 fn gnu_grep() -> bool {
     use std::os::unix::process::CommandExt;
     let child = std::process::Command::new("grep")
@@ -1315,6 +1316,7 @@ fn gnu_grep() -> bool {
 /// built-in visits files in sorted order where the system's order is
 /// unspecified. Only where the runner's grep is GNU; elsewhere the pinned
 /// literals above carry it.
+#[track_caller]
 fn matches_like_grep(
     files: &BTreeMap<&str, &[u8]>,
     args: &[&str],

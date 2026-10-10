@@ -62,6 +62,7 @@ fn args(command: &str) -> Map<String, Value> {
     map
 }
 
+#[track_caller]
 fn run(dir: &Path, command: &str) -> contract::tool::Output {
     let shell = Arc::new(Shell::new(dir.to_path_buf(), FakeClock::new()));
     run_on(&shell, args(command), &Arc::new(Recorder::default()))
