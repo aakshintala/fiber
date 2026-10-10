@@ -6,17 +6,24 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use config::Manifest;
+use contract::clock::Clock;
 use ureq::Agent;
 use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::Error;
+use crate::host::exec;
 
 /// The largest binary Fiber downloads.
 // debt: a fixed 256 MiB cap; raise it when a real binary needs more.
 const MAX_BINARY: u64 = 268_435_456;
+
+/// How long an install step may run before it is stopped
+/// (`docs/extensions.md`, "Installing").
+pub(crate) const INSTALL_STEP_DEADLINE: Duration = Duration::from_secs(1800);
 
 /// This platform's key in a manifest's `binaries`, such as `darwin-arm64`.
 pub fn platform() -> String {
@@ -34,8 +41,9 @@ pub fn platform() -> String {
 
 /// Downloads this platform's binary into `dir/bin/` and checks its SHA-256,
 /// then runs the install step in `dir`. Another platform's binary is never
-/// fetched.
-pub(crate) fn prepare(dir: &Path, manifest: &Manifest) -> Result<(), Error> {
+/// fetched. The step runs in Fiber's process group, so its terminal prompts
+/// still work, and is stopped at [`INSTALL_STEP_DEADLINE`] on `clock`.
+pub(crate) fn prepare(dir: &Path, manifest: &Manifest, clock: &dyn Clock) -> Result<(), Error> {
     if let Some(binary) = manifest.binaries.get(&platform()) {
         let bytes = download(&manifest.name, &binary.url)?;
         let got = hex(ring::digest::digest(&ring::digest::SHA256, &bytes).as_ref());
@@ -71,27 +79,68 @@ pub(crate) fn prepare(dir: &Path, manifest: &Manifest) -> Result<(), Error> {
     if let Some(step) = &manifest.install
         && let Some((program, args)) = step.split_first()
     {
-        let out = Command::new(program)
-            .args(args)
-            .current_dir(dir)
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| Error::InstallStep {
-                name: manifest.name.clone(),
-                why: format!("`{program}`: {e}"),
-            })?;
-        if !out.status.success() {
-            return Err(Error::InstallExited {
-                name: manifest.name.clone(),
-                why: format!(
-                    "`{}` failed: {}",
-                    step.join(" "),
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ),
-            });
-        }
+        run_step(dir, &manifest.name, step, program, args, clock)?;
     }
     Ok(())
+}
+
+/// Runs the manifest's install `step` in `dir`, stopped at
+/// [`INSTALL_STEP_DEADLINE`] on `clock`.
+fn run_step(
+    dir: &Path,
+    name: &str,
+    step: &[String],
+    program: &str,
+    args: &[String],
+    clock: &dyn Clock,
+) -> Result<(), Error> {
+    let failed = |why: String| Error::InstallStep {
+        name: name.into(),
+        why,
+    };
+    let req = exec::ExecRequest {
+        program: program.into(),
+        args: args.to_vec(),
+        cwd: dir.to_path_buf(),
+        // The step's output is not capped today.
+        cap: usize::MAX,
+        // In Fiber's process group, so terminal prompts still work and
+        // Ctrl-C at the terminal still reaches the step as it does today.
+        own_group: false,
+        #[cfg(test)]
+        stdout_read: None,
+    };
+    let deadline = clock
+        .now()
+        .checked_add(INSTALL_STEP_DEADLINE)
+        .unwrap_or(clock.now());
+    // Never cancelled except by the step's own end: the sender drops when
+    // this returns.
+    let (_cancel, cancel) = mpsc::channel::<()>();
+    match exec::run(&req, clock, Some(deadline), cancel) {
+        Err(failed_run) => match failed_run.source {
+            Some(source) => Err(failed(format!("`{program}`: {source}"))),
+            // After the spawn: a reader thread that could not start.
+            None => Err(failed(failed_run.message)),
+        },
+        Ok(ran) if ran.timed_out => Err(Error::InstallExited {
+            name: name.into(),
+            why: format!(
+                "`{}` did not finish within {} s, so it was stopped",
+                step.join(" "),
+                INSTALL_STEP_DEADLINE.as_secs()
+            ),
+        }),
+        Ok(ran) if ran.exit_code != Some(0) => Err(Error::InstallExited {
+            name: name.into(),
+            why: format!(
+                "`{}` failed: {}",
+                step.join(" "),
+                String::from_utf8_lossy(&ran.stderr).trim()
+            ),
+        }),
+        Ok(_) => Ok(()),
+    }
 }
 
 /// The file name a URL ends in, without its query.
@@ -128,102 +177,5 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{binary_name, download, hex, platform};
-
-    #[test]
-    fn a_url_names_its_file_without_the_query() {
-        assert_eq!(binary_name("https://x/y/tool-1.0?sig=1"), Some("tool-1.0"));
-        for bad in ["https://x/y/", "https://x/..", "https://x/y/.?a"] {
-            assert_eq!(binary_name(bad), None, "{bad}");
-        }
-    }
-
-    #[test]
-    fn a_digest_is_lowercase_hex() {
-        assert_eq!(hex(&[0, 15, 255]), "000fff");
-    }
-
-    #[test]
-    fn the_platform_key_is_os_and_arch() {
-        let key = platform();
-        assert!(key.contains('-'), "{key}");
-        assert!(!key.contains("macos") && !key.contains("aarch64"), "{key}");
-    }
-
-    /// Present in a re-executed child, absent in the parent.
-    const PROXY_CHILD: &str = "FIBER_TEST_PREPARE_PROXY_CHILD";
-
-    /// The download URL, passed to the child on its environment.
-    const PROXY_CHILD_URL: &str = "FIBER_TEST_PREPARE_URL";
-
-    /// How long the parent waits for the proxy to record a CONNECT.
-    const CONNECT_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
-
-    /// Downloads the scripted bytes in a child whose environment holds
-    /// `extra`, on top of the proxy URL and the marker. The child re-runs
-    /// this same test, which downloads and fails the child when the bytes do
-    /// not arrive. `None` in the child, after its assertions.
-    fn download_in_child(
-        test: &str,
-        extra: &[(&str, &str)],
-    ) -> Option<(fakes::ProviderServer, fakes::ConnectProxy)> {
-        if std::env::var_os(PROXY_CHILD).is_some() {
-            let url = std::env::var(PROXY_CHILD_URL).unwrap();
-            let bytes = download("probe", &url).unwrap();
-            assert_eq!(bytes, b"{}");
-            return None;
-        }
-        let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
-        let proxy = fakes::ConnectProxy::start().unwrap();
-        let proxy_url = proxy.url();
-        let download_url = format!("{}/tool", server.url());
-        let mut env = vec![
-            (PROXY_CHILD, "1"),
-            ("HTTPS_PROXY", proxy_url.as_str()),
-            (PROXY_CHILD_URL, download_url.as_str()),
-        ];
-        env.extend(extra.iter().copied());
-        let output = fakes::rerun(test, &env);
-        assert!(
-            output.status.success(),
-            "the proxy-env child downloaded:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        Some((server, proxy))
-    }
-
-    #[test]
-    fn download_tunnels_through_the_proxy_environment() {
-        let Some((server, proxy)) = download_in_child(
-            "prepare::tests::download_tunnels_through_the_proxy_environment",
-            &[],
-        ) else {
-            return;
-        };
-        let port = server.url().rsplit(':').next().unwrap().to_owned();
-        let target = format!("127.0.0.1:{port}");
-        assert!(
-            proxy.await_connects(1, CONNECT_WITHIN),
-            "the proxy recorded CONNECT {target}"
-        );
-        assert_eq!(proxy.connects(), [target]);
-        assert_eq!(server.requests().len(), 1);
-    }
-
-    #[test]
-    fn download_bypasses_the_proxy_for_no_proxy_hosts() {
-        let Some((server, proxy)) = download_in_child(
-            "prepare::tests::download_bypasses_the_proxy_for_no_proxy_hosts",
-            &[("NO_PROXY", "127.0.0.1")],
-        ) else {
-            return;
-        };
-        assert!(
-            proxy.connects().is_empty(),
-            "nothing went through the proxy"
-        );
-        assert_eq!(server.requests().len(), 1);
-    }
-}
+#[path = "prepare_tests.rs"]
+mod tests;

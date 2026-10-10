@@ -283,7 +283,12 @@ fn resumed_session(
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
     let workspace = std::path::PathBuf::from(&folded.workspace);
-    let offer = Arc::new(extensions::SessionOffer::new(&home, &project, &workspace));
+    let offer = Arc::new(extensions::SessionOffer::new(
+        &home,
+        &project,
+        &workspace,
+        Arc::clone(&clock),
+    ));
     let permissions = crate::ask_permissions(
         &home,
         &project,

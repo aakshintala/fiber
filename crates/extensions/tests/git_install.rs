@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use contract::clock::Clock;
 
-use common::{Setup, manifest, provider, write};
+use common::{Setup, drive, manifest, provider, write};
 use contract::ErrorCode;
 use extensions::{Error, Installed, Origin, Provenance, Request, SHORT_NAMES, list, plan, removal};
 use serde_json::{Value, json};
@@ -122,7 +122,7 @@ fn named(name: &str, depends: &[(&str, &str)]) -> Value {
     m
 }
 
-fn install(setup: &Setup, repos: &Repos, name: &str) -> Result<Vec<String>, Error> {
+fn install_named(setup: &Setup, repos: &Repos, name: &str) -> Result<Vec<String>, Error> {
     plan(
         &setup.home(),
         &Request::Install(name.into()),
@@ -162,7 +162,7 @@ fn an_install_fetches_the_newest_tag_and_records_its_commit() {
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[("old.txt", "x")]);
     repos.tag(LIB, "", "v1.1.0", &manifest(LIB), &[]);
-    assert_eq!(install(&setup, &repos, LIB).unwrap(), [LIB]);
+    assert_eq!(install_named(&setup, &repos, LIB).unwrap(), [LIB]);
     let installed = list(&setup.home(), &*fakes::clock::FakeClock::new())
         .unwrap()
         .installed;
@@ -188,7 +188,7 @@ fn an_extension_in_a_directory_of_a_repository_installs_from_there() {
         &manifest(name),
         &[],
     );
-    install(&setup, &repos, name).unwrap();
+    install_named(&setup, &repos, name).unwrap();
     assert!(
         setup
             .home()
@@ -204,7 +204,7 @@ fn a_git_marker_names_a_repository_inside_subgroups() {
     let repo = "gitlab.com/group/subgroup/repo.git";
     let name = "gitlab.com/group/subgroup/repo.git/ext";
     repos.tag(repo, "ext", "v1.0.0", &manifest(name), &[]);
-    install(&setup, &repos, name).unwrap();
+    install_named(&setup, &repos, name).unwrap();
     let dir = setup
         .home()
         .join("extensions/gitlab.com-group-subgroup-repo.git-ext");
@@ -231,7 +231,7 @@ fn a_short_name_installs_the_first_party_extension() {
         &manifest(name),
         &[],
     );
-    assert_eq!(install(&setup, &repos, "muse").unwrap(), [name]);
+    assert_eq!(install_named(&setup, &repos, "muse").unwrap(), [name]);
     assert_eq!(extensions::full_name("muse"), name);
     assert_eq!(dirs(&setup), ["muse"]);
 }
@@ -250,8 +250,8 @@ fn memory_lives_under_its_short_name_and_a_third_party_under_its_slug() {
         &[],
     );
     repos.tag(lint, "", "v1.0.0", &manifest(lint), &[]);
-    assert_eq!(install(&setup, &repos, "memory").unwrap(), [memory]);
-    assert_eq!(install(&setup, &repos, lint).unwrap(), [lint]);
+    assert_eq!(install_named(&setup, &repos, "memory").unwrap(), [memory]);
+    assert_eq!(install_named(&setup, &repos, lint).unwrap(), [lint]);
     assert_eq!(dirs(&setup), ["github.com-acme-lint", "memory"]);
     let home = setup.home();
     let mine = [
@@ -292,7 +292,11 @@ fn every_short_name_asks_for_its_directory_of_the_fiber_repository() {
             &manifest(&name),
             &[],
         );
-        assert_eq!(install(&setup, &repos, short).unwrap(), [name], "{short}");
+        assert_eq!(
+            install_named(&setup, &repos, short).unwrap(),
+            [name],
+            "{short}"
+        );
     }
 }
 
@@ -307,7 +311,7 @@ fn a_dependency_gets_the_lowest_version_meeting_every_minimum() {
     let (a, b) = ("example.com/acme/openrouter", "example.com/acme/databricks");
     repos.tag(a, "", "v1.0.0", &named(a, &[(dep, "v1.2.0")]), &[]);
     repos.tag(b, "", "v1.0.0", &named(b, &[(dep, "1.4")]), &[]);
-    install(&setup, &repos, a).unwrap();
+    install_named(&setup, &repos, a).unwrap();
     assert_eq!(versions(&setup)[dep], "v1.2.0");
     assert!(
         !list(&setup.home(), &*fakes::clock::FakeClock::new())
@@ -319,12 +323,13 @@ fn a_dependency_gets_the_lowest_version_meeting_every_minimum() {
             .requested
     );
     // A second dependent raises the minimum, and the dependency moves up.
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Install(b.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let moved: Vec<_> = p.items().filter(|i| i.name == dep).collect();
@@ -350,18 +355,19 @@ fn a_dependency_asked_for_by_name_stays_requested_when_it_moves_up() {
     for tag in ["v1.0.0", "v1.5.0"] {
         repos.tag(dep, "", tag, &manifest(dep), &[]);
     }
+    let clock = fakes::clock::FakeClock::new();
     let first = plan(
         &setup.home(),
         &Request::Install(dep.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     );
     first.unwrap().commit().unwrap();
     repos.tag(dep, "", "v1.6.0", &manifest(dep), &[]);
     let top = "example.com/acme/top";
     repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.6")]), &[]);
-    install(&setup, &repos, top).unwrap();
+    install_named(&setup, &repos, top).unwrap();
     let listed = list(&setup.home(), &*fakes::clock::FakeClock::new())
         .unwrap()
         .installed;
@@ -406,7 +412,7 @@ fn two_dependents_in_one_plan_settle_on_the_higher_minimum() {
         &named(top, &[(a, "1.0"), (b, "1.0")]),
         &[],
     );
-    install(&setup, &repos, top).unwrap();
+    install_named(&setup, &repos, top).unwrap();
     let got = versions(&setup);
     assert_eq!(got[dep], "v1.4.0");
     assert_eq!(got.len(), 4);
@@ -420,11 +426,11 @@ fn an_installed_dependency_that_meets_the_minimum_is_not_changed() {
     for tag in ["v1.2.0", "v1.4.0"] {
         repos.tag(dep, "", tag, &manifest(dep), &[]);
     }
-    install(&setup, &repos, dep).unwrap();
+    install_named(&setup, &repos, dep).unwrap();
     assert_eq!(versions(&setup)[dep], "v1.4.0");
     let top = "example.com/acme/top";
     repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.2")]), &[]);
-    install(&setup, &repos, top).unwrap();
+    install_named(&setup, &repos, top).unwrap();
     assert_eq!(versions(&setup)[dep], "v1.4.0");
     assert!(
         list(&setup.home(), &*fakes::clock::FakeClock::new())
@@ -448,9 +454,9 @@ fn two_majors_of_one_dependency_stop_the_install_naming_both() {
     let (a, b) = ("example.com/acme/a", "example.com/acme/b");
     repos.tag(a, "", "v1.0.0", &named(a, &[(dep, "1.2")]), &[]);
     repos.tag(b, "", "v1.0.0", &named(b, &[(dep, "2.0")]), &[]);
-    install(&setup, &repos, a).unwrap();
+    install_named(&setup, &repos, a).unwrap();
     let before = dirs(&setup);
-    let err = install(&setup, &repos, b).unwrap_err();
+    let err = install_named(&setup, &repos, b).unwrap_err();
     let text = err.to_string();
     for part in [a, dep, "1.2"] {
         assert!(text.contains(part), "{text}");
@@ -470,7 +476,7 @@ fn a_failed_install_installs_nothing() {
     let top = "example.com/acme/top";
     // No tag of `dep` is 3.0 or later.
     repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "3.0")]), &[]);
-    let err = install(&setup, &repos, top).unwrap_err();
+    let err = install_named(&setup, &repos, top).unwrap_err();
     assert!(matches!(err, Error::NoVersion { .. }), "{err}");
     assert_eq!(err.code(), ErrorCode::VersionConflict);
     assert!(dirs(&setup).is_empty());
@@ -480,14 +486,14 @@ fn a_failed_install_installs_nothing() {
     newer["fiber"] = json!("9.0.0");
     repos.tag(dep, "", "v1.1.0", &newer, &[]);
     repos.tag(top, "", "v1.1.0", &named(top, &[(dep, "1.1")]), &[]);
-    let err = install(&setup, &repos, top).unwrap_err();
+    let err = install_named(&setup, &repos, top).unwrap_err();
     assert!(matches!(err, Error::NeedsNewerFiber { .. }), "{err}");
     assert!(dirs(&setup).is_empty());
 
     // A dependency that is not in any repository.
     let ghost = "example.com/acme/ghost";
     repos.tag(top, "", "v1.2.0", &named(top, &[(ghost, "1.0")]), &[]);
-    install(&setup, &repos, top).unwrap_err();
+    install_named(&setup, &repos, top).unwrap_err();
     assert!(dirs(&setup).is_empty());
 }
 
@@ -496,12 +502,13 @@ fn the_fetch_leaves_nothing_in_the_temporary_directory_or_home() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Install(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     assert_eq!(p.items().count(), 1);
@@ -514,7 +521,7 @@ fn a_manifest_that_names_another_extension_is_refused() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "v1.0.0", &manifest("example.com/acme/other"), &[]);
-    let err = install(&setup, &repos, LIB).unwrap_err();
+    let err = install_named(&setup, &repos, LIB).unwrap_err();
     assert!(matches!(err, Error::WrongName { .. }), "{err}");
     assert_eq!(err.code(), ErrorCode::ExtensionNotFound);
     assert!(dirs(&setup).is_empty());
@@ -548,15 +555,16 @@ fn an_update_moves_to_the_newest_tag_and_shows_what_changed() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[("a.lua", "return 1")]);
-    install(&setup, &repos, LIB).unwrap();
+    install_named(&setup, &repos, LIB).unwrap();
     let first = repos.commit(LIB, "v1.0.0");
     repos.tag(LIB, "", "v1.1.0", &manifest(LIB), &[("b.lua", "return 2")]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Update(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let item = p.items().next().unwrap();
@@ -591,15 +599,16 @@ fn an_update_re_resolves_the_dependencies_and_an_uninstalled_name_is_refused() {
         repos.tag(dep, "", tag, &manifest(dep), &[]);
     }
     repos.tag(LIB, "", "v1.0.0", &named(LIB, &[(dep, "1.0")]), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let err = plan(
         &setup.home(),
         &Request::Update(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     );
     assert!(matches!(err, Err(Error::NotInstalled { .. })));
-    install(&setup, &repos, LIB).unwrap();
+    install_named(&setup, &repos, LIB).unwrap();
     assert_eq!(versions(&setup)[dep], "v1.0.0");
     repos.tag(LIB, "", "v1.1.0", &named(LIB, &[(dep, "1.5")]), &[]);
     plan(
@@ -631,8 +640,8 @@ fn a_remove_deletes_the_extension_and_the_dependencies_nothing_else_uses() {
         &[],
     );
     repos.tag(b, "", "v1.0.0", &named(b, &[(shared, "1.0")]), &[]);
-    install(&setup, &repos, a).unwrap();
-    install(&setup, &repos, b).unwrap();
+    install_named(&setup, &repos, a).unwrap();
+    install_named(&setup, &repos, b).unwrap();
     assert_eq!(uninstall(&setup.home(), a).unwrap(), [a, own]);
     assert_eq!(
         versions(&setup).keys().cloned().collect::<Vec<_>>(),
@@ -654,7 +663,7 @@ fn a_remove_takes_the_record_with_the_directory() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[]);
-    install(&setup, &repos, LIB).unwrap();
+    install_named(&setup, &repos, LIB).unwrap();
     assert!(
         setup
             .home()
@@ -677,7 +686,7 @@ fn a_remove_by_short_name_finds_the_first_party_extension() {
         &manifest(name),
         &[],
     );
-    install(&setup, &repos, "muse").unwrap();
+    install_named(&setup, &repos, "muse").unwrap();
     assert_eq!(uninstall(&setup.home(), "muse").unwrap(), [name]);
 }
 
@@ -697,12 +706,13 @@ fn a_local_install_lists_its_manifest_version_and_no_commit() {
 fn missing_git_fails_with_the_usage_code_and_says_to_install_it() {
     let setup = Setup::new();
     let origin = Origin::new("fiber-no-such-git-program", |repo| repo.to_owned());
+    let clock = fakes::clock::FakeClock::new();
     let err = plan(
         &setup.home(),
         &Request::Install(LIB.into()),
         FIBER,
         &origin,
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     );
     let Err(err) = err else { panic!("planned") };
     assert!(matches!(err, Error::GitMissing));
@@ -715,7 +725,7 @@ fn missing_git_fails_with_the_usage_code_and_says_to_install_it() {
 fn a_missing_repository_is_extension_not_found() {
     let setup = Setup::new();
     let repos = Repos::new(&setup);
-    let err = install(&setup, &repos, LIB).unwrap_err();
+    let err = install_named(&setup, &repos, LIB).unwrap_err();
     assert_eq!(err.code(), ErrorCode::ExtensionNotFound);
     let text = err.to_string();
     assert!(
@@ -850,19 +860,20 @@ fn a_plan_that_is_dropped_releases_the_lock_and_removes_what_it_fetched() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let first = plan(
         &setup.home(),
         &Request::Install(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let staged = first.items().next().unwrap().staged().to_path_buf();
     assert!(staged.is_dir());
     drop(first);
     assert!(!staged.exists());
-    install(&setup, &repos, LIB).unwrap();
+    install_named(&setup, &repos, LIB).unwrap();
 }
 
 #[test]
@@ -899,7 +910,7 @@ fn a_long_chain_of_dependencies_installs() {
         let deps: Vec<(&str, &str)> = deps.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
         repos.tag(&name(n), "", "v1.0.0", &named(&name(n), &deps), &[]);
     }
-    assert_eq!(install(&setup, &repos, &name(0)).unwrap().len(), 14);
+    assert_eq!(install_named(&setup, &repos, &name(0)).unwrap().len(), 14);
     assert_eq!(versions(&setup).len(), 14);
 }
 
@@ -910,7 +921,7 @@ fn a_dependency_cycle_ends() {
     let (a, b) = ("example.com/acme/a", "example.com/acme/b");
     repos.tag(a, "", "v1.0.0", &named(a, &[(b, "1.0")]), &[]);
     repos.tag(b, "", "v1.0.0", &named(b, &[(a, "1.0")]), &[]);
-    assert_eq!(install(&setup, &repos, a).unwrap(), [a, b]);
+    assert_eq!(install_named(&setup, &repos, a).unwrap(), [a, b]);
 }
 
 /// Verify counterexample: `r→z1,zz1`, `z1→d1`, `zz1→z1.5,d2`, `z1.5→d2`.
@@ -935,7 +946,7 @@ fn a_stale_manifest_conflict_is_not_final_until_the_fixpoint() {
         &[],
     );
     repos.tag(&r, "", "v1.0.0", &named(&r, &[(&z, "1"), (&zz, "1")]), &[]);
-    install(&setup, &repos, &r).unwrap();
+    install_named(&setup, &repos, &r).unwrap();
     let got = versions(&setup);
     assert_eq!(got[&z], "v1.5.0", "{got:?}");
     assert_eq!(got[&zz], "v1.0.0", "{got:?}");
@@ -956,7 +967,7 @@ fn a_fetch_failure_of_an_unreachable_dependency_is_not_final() {
     repos.tag(&z, "", "v1.5.0", &manifest(&z), &[]);
     repos.tag(&zz, "", "v1.0.0", &named(&zz, &[(&z, "1.5")]), &[]);
     repos.tag(&r, "", "v1.0.0", &named(&r, &[(&z, "1"), (&zz, "1")]), &[]);
-    install(&setup, &repos, &r).unwrap();
+    install_named(&setup, &repos, &r).unwrap();
     let got = versions(&setup);
     assert_eq!(got[&z], "v1.5.0", "{got:?}");
     assert_eq!(got[&zz], "v1.0.0", "{got:?}");
@@ -976,7 +987,7 @@ fn a_dependency_fetched_from_a_replaced_manifest_is_not_installed() {
     repos.tag(&z, "", "v1.5.0", &manifest(&z), &[]);
     repos.tag(&zz, "", "v1.0.0", &named(&zz, &[(&z, "1.5")]), &[]);
     repos.tag(&r, "", "v1.0.0", &named(&r, &[(&z, "1"), (&zz, "1")]), &[]);
-    install(&setup, &repos, &r).unwrap();
+    install_named(&setup, &repos, &r).unwrap();
     let got = versions(&setup);
     assert_eq!(got[&z], "v1.5.0", "{got:?}");
     assert!(!got.contains_key(&a), "{got:?}");
@@ -1009,7 +1020,7 @@ fn a_replaced_manifest_neither_conflicts_nor_leaves_its_dependencies_in_the_plan
         &named(&r, &[(&a, "1.0"), (&b, "1.0")]),
         &[],
     );
-    install(&setup, &repos, &r).unwrap();
+    install_named(&setup, &repos, &r).unwrap();
     let got = versions(&setup);
     assert_eq!(got[&a], "v1.5.0");
     assert_eq!(got[&d], "v2.0.0");
@@ -1023,7 +1034,7 @@ fn updating_a_dependency_an_installed_dependent_pins_to_an_older_major_stops() {
     let (dep, user) = ("example.com/acme/dep", "example.com/acme/user");
     repos.tag(dep, "", "v1.2.0", &manifest(dep), &[]);
     repos.tag(user, "", "v1.0.0", &named(user, &[(dep, "1.2")]), &[]);
-    install(&setup, &repos, user).unwrap();
+    install_named(&setup, &repos, user).unwrap();
     repos.tag(dep, "", "v2.0.0", &manifest(dep), &[]);
     let Err(err) = plan(
         &setup.home(),
@@ -1049,7 +1060,7 @@ fn an_update_by_name_is_kept_when_a_later_install_allows_an_older_version() {
     }
     let (a, b) = ("example.com/acme/a", "example.com/acme/b");
     repos.tag(a, "", "v1.0.0", &named(a, &[(dep, "1.0")]), &[]);
-    install(&setup, &repos, a).unwrap();
+    install_named(&setup, &repos, a).unwrap();
     assert_eq!(versions(&setup)[dep], "v1.0.0");
     plan(
         &setup.home(),
@@ -1063,7 +1074,7 @@ fn an_update_by_name_is_kept_when_a_later_install_allows_an_older_version() {
     .unwrap();
     assert_eq!(versions(&setup)[dep], "v1.5.0");
     repos.tag(b, "", "v1.0.0", &named(b, &[(dep, "1.0")]), &[]);
-    install(&setup, &repos, b).unwrap();
+    install_named(&setup, &repos, b).unwrap();
     assert_eq!(versions(&setup)[dep], "v1.5.0");
 }
 
@@ -1075,11 +1086,11 @@ fn a_requested_major_stops_an_install_that_needs_another() {
     for tag in ["v1.0.0", "v2.0.0"] {
         repos.tag(dep, "", tag, &manifest(dep), &[]);
     }
-    install(&setup, &repos, dep).unwrap();
+    install_named(&setup, &repos, dep).unwrap();
     assert_eq!(versions(&setup)[dep], "v2.0.0");
     let user = "example.com/acme/user";
     repos.tag(user, "", "v1.0.0", &named(user, &[(dep, "1.0")]), &[]);
-    let err = install(&setup, &repos, user).unwrap_err();
+    let err = install_named(&setup, &repos, user).unwrap_err();
     assert!(matches!(err, Error::MajorConflict { .. }), "{err}");
     assert_eq!(err.code(), ErrorCode::VersionConflict);
     let text = err.to_string();
@@ -1097,7 +1108,7 @@ fn an_update_replaces_the_minimum_from_the_version_it_moves_off() {
     let mut repos = Repos::new(&setup);
     let dep = "example.com/acme/dep";
     repos.tag(dep, "", "v1.0.0", &manifest(dep), &[]);
-    install(&setup, &repos, dep).unwrap();
+    install_named(&setup, &repos, dep).unwrap();
     repos.tag(dep, "", "v2.0.0", &manifest(dep), &[]);
     plan(
         &setup.home(),
@@ -1118,7 +1129,7 @@ fn a_repository_with_no_version_tag_is_refused() {
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "", &manifest(LIB), &[]);
     repos.tag(LIB, "", "latest", &manifest(LIB), &[]);
-    let err = install(&setup, &repos, LIB).unwrap_err();
+    let err = install_named(&setup, &repos, LIB).unwrap_err();
     assert!(matches!(err, Error::NoTag { .. }), "{err}");
     assert_eq!(err.code(), ErrorCode::ExtensionNotFound);
     assert!(dirs(&setup).is_empty());
@@ -1320,12 +1331,13 @@ fn installing_another_extension_with_a_damaged_one_present_succeeds_and_names_it
     )
     .unwrap();
     let fresh = setup.source("fresh", &manifest("example.com/acme/fresh"), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Path(fresh),
         FIBER,
         &Origin::github(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     assert_eq!(
@@ -1485,8 +1497,8 @@ fn removing_a_damaged_extension_also_removes_its_orphaned_dependency() {
     repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.0")]), &[]);
     let keeper = "example.com/acme/keeper";
     repos.tag(keeper, "", "v1.0.0", &manifest(keeper), &[]);
-    install(&setup, &repos, top).unwrap();
-    install(&setup, &repos, keeper).unwrap();
+    install_named(&setup, &repos, top).unwrap();
+    install_named(&setup, &repos, keeper).unwrap();
     // Damaging the parent orphans its dependency: nothing healthy
     // needs it now.
     fs::remove_file(
@@ -1572,12 +1584,13 @@ fn an_install_step_runs_at_the_final_path_after_the_plan_and_again_on_update() {
         marker.display()
     );
     let source = setup.source("local", &with_step("acme", &["sh", "-c", &step]), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Path(source),
         FIBER,
         &Origin::github(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     assert!(!marker.exists(), "the step must wait for the approval");
@@ -1620,7 +1633,7 @@ fn an_install_step_sees_its_final_path_on_install_and_on_update() {
         &stepped("one"),
         &[("payload.txt", "one")],
     );
-    install(&setup, &repos, name).unwrap();
+    install_named(&setup, &repos, name).unwrap();
     let dir = setup.home().join("extensions/example.com-acme-x");
     let canonical = fs::canonicalize(&dir).unwrap();
     assert_eq!(
@@ -1673,7 +1686,7 @@ fn a_failing_step_on_update_keeps_the_previous_version_working() {
     let mut repos = Repos::new(&setup);
     let name = "example.com/acme/x";
     repos.tag(name, "", "v1.0.0", &manifest(name), &[("v1.txt", "v1")]);
-    install(&setup, &repos, name).unwrap();
+    install_named(&setup, &repos, name).unwrap();
     let first = repos.commit(name, "v1.0.0");
     let mut bad = with_step(name, &["sh", "-c", "echo broken >&2; exit 3"]);
     bad["version"] = json!("v1.1.0");
@@ -1744,7 +1757,7 @@ fn a_failing_step_in_one_item_puts_the_other_items_back() {
         &named(top, &[(dep, "1.0")]),
         &[("v.txt", "top-one")],
     );
-    install(&setup, &repos, top).unwrap();
+    install_named(&setup, &repos, top).unwrap();
     // A new top needs a new dep, but the top's own step fails: both stay.
     let mut dep_two = manifest(dep);
     dep_two["version"] = json!("v2.0.0");
@@ -1969,12 +1982,13 @@ fn a_raised_memory_cap_appears_in_carries_only_for_lua_extensions() {
             m["process"] = json!({ "program": "node", "args": [] });
         }
         let source = setup.source("local", &m, &[]);
+        let clock = fakes::clock::FakeClock::new();
         let p = plan(
             &setup.home(),
             &Request::Path(source),
             FIBER,
             &Origin::github(),
-            &*fakes::clock::FakeClock::new(),
+            &*clock,
         )
         .unwrap();
         let carries = p.items().next().unwrap().carries();
@@ -1999,12 +2013,13 @@ fn what_a_package_carries_is_listed_from_its_files_and_manifest() {
     write(&source.join("skills/plan/SKILL.md"), "s");
     write(&source.join("themes/dark.json"), "{}");
     write(&source.join("tui/init.lua"), "");
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Path(source),
         FIBER,
         &Origin::github(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let carries = p.items().next().unwrap().carries();
@@ -2047,12 +2062,13 @@ fn an_items_source_is_its_path_or_its_name() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Install(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     assert_eq!(p.items().next().unwrap().source(), LIB);
@@ -2063,7 +2079,7 @@ fn an_items_source_is_its_path_or_its_name() {
         &Request::Path(source.clone()),
         FIBER,
         &Origin::github(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let shown = fs::canonicalize(&source).unwrap().display().to_string();
@@ -2214,4 +2230,124 @@ fn a_data_directory_that_cannot_be_removed_fails_naming_it() {
         inner.exists(),
         "the directory that could not be removed stays"
     );
+}
+
+/// The checked-in stand-in for `git`: it answers `ls-remote` with one tag
+/// and stalls on its markers (`docs/testing.md`, "Testing an extension").
+fn fake_git() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-git/git")
+}
+
+/// Kills the stalled processes matching `unique` by pid alone, then
+/// requires that none are left: the run kills what it stopped, so leftovers
+/// fail the test without leaking. By pid, never by group: a stalled `git`
+/// shares this test's process group.
+fn no_stall_left(unique: &str) {
+    let leftovers = fakes::matching(unique).unwrap();
+    for pid in &leftovers {
+        drop(fakes::kill_pid(*pid, "KILL"));
+    }
+    assert!(
+        leftovers.is_empty(),
+        "the stalled git is gone: {leftovers:?}"
+    );
+}
+
+/// A `ls-remote` that never answers fails the plan at the git deadline.
+#[test]
+fn a_stalled_ls_remote_fails_the_plan_at_the_git_deadline() {
+    let setup = Setup::new();
+    let unique = format!("stall-ls-remote-{}", setup.root().display());
+    let watching = unique.clone();
+    // The guard matches this stall alone by its argv: a panic anywhere
+    // below still kills it, by pid and never the test's own group.
+    let watchdog = fakes::Watchdog::matching(&watching);
+    let git = fake_git().to_string_lossy().into_owned();
+    let clock = fakes::clock::FakeClock::new();
+    let worker_clock = std::sync::Arc::clone(&clock);
+    let home = setup.home();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("stalled ls-remote".into())
+        .spawn(move || {
+            // Built here: `Origin` holds a closure, so it never crosses a
+            // thread.
+            let origin = Origin::new(git, move |repo| format!("{unique}/{repo}"));
+            let _sent = done_tx.send(
+                plan(
+                    &home,
+                    &Request::Install("github.com/acme/stalled".into()),
+                    FIBER,
+                    &origin,
+                    &*worker_clock,
+                )
+                .map(|_| ()),
+            );
+        })
+        .unwrap();
+    let err = drive(&clock, done_rx, &watching).unwrap_err();
+    assert!(
+        matches!(err, Error::Git { .. }),
+        "a stalled ls-remote fails as git failed: {err}"
+    );
+    assert!(
+        err.to_string().contains("did not finish within"),
+        "the failure names the deadline: {err}"
+    );
+    assert!(
+        err.to_string().contains("so it was stopped"),
+        "the failure names the stop: {err}"
+    );
+    no_stall_left(&watching);
+    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
+}
+
+/// A `clone` that never finishes fails the plan at the git deadline: the
+/// canned `ls-remote` answer resolves the tag, and only the clone stalls.
+#[test]
+fn a_stalled_clone_fails_the_plan_at_the_git_deadline() {
+    let setup = Setup::new();
+    let unique = format!("stall-clone-{}", setup.root().display());
+    let watching = unique.clone();
+    // The guard matches this stall alone by its argv: a panic anywhere
+    // below still kills it, by pid and never the test's own group.
+    let watchdog = fakes::Watchdog::matching(&watching);
+    let git = fake_git().to_string_lossy().into_owned();
+    let clock = fakes::clock::FakeClock::new();
+    let worker_clock = std::sync::Arc::clone(&clock);
+    let home = setup.home();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("stalled clone".into())
+        .spawn(move || {
+            // Built here: `Origin` holds a closure, so it never crosses a
+            // thread.
+            let origin = Origin::new(git, move |repo| format!("{unique}/{repo}"));
+            let _sent = done_tx.send(
+                plan(
+                    &home,
+                    &Request::Install("github.com/acme/stalled".into()),
+                    FIBER,
+                    &origin,
+                    &*worker_clock,
+                )
+                .map(|_| ()),
+            );
+        })
+        .unwrap();
+    let err = drive(&clock, done_rx, &watching).unwrap_err();
+    assert!(
+        matches!(err, Error::Git { .. }),
+        "a stalled clone fails as git failed: {err}"
+    );
+    assert!(
+        err.to_string().contains("did not finish within"),
+        "the failure names the deadline: {err}"
+    );
+    assert!(
+        err.to_string().contains("so it was stopped"),
+        "the failure names the stop: {err}"
+    );
+    no_stall_left(&watching);
+    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
 }

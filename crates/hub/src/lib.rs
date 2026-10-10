@@ -11,6 +11,7 @@
 //! (`docs/configuration.md`); an installed hub never exits for being idle.
 
 mod attention;
+mod closed;
 mod connection;
 mod delete;
 mod diag;

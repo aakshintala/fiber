@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use common::{Setup, write};
+use common::{Setup, pair, write};
 use config::{CredentialFile, Secret, store_secret};
 use contract::ErrorCode;
 use contract::signing::SignRequest;
@@ -73,13 +73,6 @@ fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     std::thread::spawn(move || tx.send(f()));
     rx.recv_timeout(WAIT)
         .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
-}
-
-fn pair(credential: &str, label: &str) -> CredentialPair {
-    CredentialPair {
-        credential: credential.to_owned(),
-        label: label.to_owned(),
-    }
 }
 
 /// The fixture extension, registering `echo`, `oauth` and `timed`, in a

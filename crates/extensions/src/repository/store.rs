@@ -6,12 +6,15 @@
 //! copy, which the next approval removes and builds again. A finished copy
 //! with no approval is what `fiber sessions prune` collects.
 
+use std::fmt;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use config::ProjectKey;
+use contract::clock::Clock;
 use contract::events::OfferedKind;
 use serde_json::Value;
 
@@ -32,10 +35,20 @@ pub enum Decision {
 }
 
 /// The approvals and copies in one Fiber home, for one project.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Store {
     home: PathBuf,
     project: ProjectKey,
+    clock: Arc<dyn Clock>,
+}
+
+impl fmt::Debug for Store {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Store")
+            .field("home", &self.home)
+            .field("project", &self.project)
+            .finish_non_exhaustive()
+    }
 }
 
 /// An earlier approved version of an item.
@@ -49,11 +62,13 @@ pub(crate) struct Previous {
 }
 
 impl Store {
-    /// The store in `home` for `project`.
-    pub fn new(home: &Path, project: &ProjectKey) -> Self {
+    /// The store in `home` for `project`. The clock bounds an extension's
+    /// install step when its copy is built.
+    pub fn new(home: &Path, project: &ProjectKey, clock: Arc<dyn Clock>) -> Self {
         Self {
             home: home.to_path_buf(),
             project: project.clone(),
+            clock,
         }
     }
 
@@ -179,7 +194,7 @@ impl Store {
         }
         if item.kind == OfferedKind::Extension {
             let manifest = config::read_manifest(copy)?;
-            prepare(copy, &manifest)?;
+            prepare(copy, &manifest, self.clock.as_ref())?;
         }
         File::create(&ready).map_err(io_error(&ready))?;
         unfinished.done();

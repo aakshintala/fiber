@@ -5,8 +5,10 @@
 //! an unchanged file is not read.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use config::ProjectKey;
+use contract::clock::Clock;
 use contract::events::{OfferDecision, OfferedItem};
 use contract::repository::{Decided, RepositoryCode, Unapproved};
 use contract::shapes::Failure;
@@ -20,20 +22,33 @@ use crate::Error;
 
 /// The code one session's repository declares, with the approvals in Fiber
 /// home for its project.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SessionOffer {
     home: PathBuf,
     store: Store,
     workspace: PathBuf,
+    clock: Arc<dyn Clock>,
+}
+
+impl std::fmt::Debug for SessionOffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionOffer")
+            .field("home", &self.home)
+            .field("store", &self.store)
+            .field("workspace", &self.workspace)
+            .finish_non_exhaustive()
+    }
 }
 
 impl SessionOffer {
     /// The repository at `workspace`, with approvals in `home` for `project`.
-    pub fn new(home: &Path, project: &ProjectKey, workspace: &Path) -> Self {
+    /// The clock bounds an extension's install step when its copy is built.
+    pub fn new(home: &Path, project: &ProjectKey, workspace: &Path, clock: Arc<dyn Clock>) -> Self {
         Self {
             home: home.to_path_buf(),
-            store: Store::new(home, project),
+            store: Store::new(home, project, Arc::clone(&clock)),
             workspace: workspace.to_path_buf(),
+            clock,
         }
     }
 }
@@ -56,7 +71,8 @@ fn failed(e: &Error, message: String) -> Failure {
 
 impl RepositoryCode for SessionOffer {
     fn unapproved(&self) -> Result<Vec<Unapproved>, Failure> {
-        let items = declared_items(&self.workspace).map_err(|e| failure(&e))?;
+        let items =
+            declared_items(&self.workspace, self.clock.as_ref()).map_err(|e| failure(&e))?;
         // A repository that ships nothing touches nothing in Fiber home.
         if items.is_empty() {
             return Ok(Vec::new());
@@ -80,7 +96,8 @@ impl RepositoryCode for SessionOffer {
             OfferDecision::Never => (Store::never, "record never for"),
             OfferDecision::Skip => return Ok(Decided::Obsolete),
         };
-        let items = declared_items(&self.workspace).map_err(|e| failure(&e))?;
+        let items =
+            declared_items(&self.workspace, self.clock.as_ref()).map_err(|e| failure(&e))?;
         let Some(current) = items
             .into_iter()
             .find(|i| i.kind == item.kind && i.name == item.name)

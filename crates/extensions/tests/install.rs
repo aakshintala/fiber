@@ -11,7 +11,7 @@ use std::path::Path;
 
 use common::{Setup, install, manifest, provider, write};
 use contract::ErrorCode;
-use extensions::Error;
+use extensions::{Error, Origin, Request, plan};
 use serde_json::json;
 
 fn installed_dirs(home: &Path) -> Vec<String> {
@@ -188,4 +188,61 @@ fn unsettled_wrong_name_and_a_taken_directory_have_their_codes() {
         .code(),
         ErrorCode::Usage
     );
+}
+
+/// An install step that never finishes installs nothing: the commit that
+/// runs it rolls every swapped copy back.
+#[test]
+fn a_stalled_install_step_installs_nothing() {
+    let setup = Setup::new();
+    let mut m = manifest("acme");
+    // The step ignores SIGTERM, so the stop runs the full grace to SIGKILL.
+    // Its argv carries text unique to the run, so the driver acknowledges
+    // this stall — and no other process — before the clock first moves.
+    let unique = format!("stall-install-step-{}", setup.root().display());
+    let watching = unique.clone();
+    // The guard matches this stall alone by its argv: a panic anywhere
+    // below still kills it, by pid and never the test's own group.
+    let watchdog = fakes::Watchdog::matching(&watching);
+    let step = format!("trap '' TERM; while :; do :; done # {unique}");
+    m["install"] = json!(["sh", "-c", step]);
+    let source = setup.source("local", &m, &[provider("acme", &["m1"])]);
+    let clock = fakes::clock::FakeClock::new();
+    let worker_clock = std::sync::Arc::clone(&clock);
+    let home = setup.home();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("stalled commit".into())
+        .spawn(move || {
+            let planned = plan(
+                &home,
+                &Request::Path(source),
+                "0.1.0",
+                &Origin::github(),
+                &*worker_clock,
+            )
+            .unwrap();
+            let _sent = done_tx.send(planned.commit());
+        })
+        .unwrap();
+    let err = common::drive(&clock, done_rx, &unique).unwrap_err();
+    assert!(
+        matches!(err, Error::InstallExited { .. }),
+        "a stalled step fails as its install step failed: {err}"
+    );
+    assert!(
+        installed_dirs(&setup.home()).is_empty(),
+        "a failed step installs nothing"
+    );
+    // The run kills what it stopped: leftovers fail the test, by pid and
+    // never the test's own group.
+    let leftovers = fakes::matching(&watching).unwrap();
+    for pid in &leftovers {
+        drop(fakes::kill_pid(*pid, "KILL"));
+    }
+    assert!(
+        leftovers.is_empty(),
+        "the stalled install step is gone: {leftovers:?}"
+    );
+    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
 }

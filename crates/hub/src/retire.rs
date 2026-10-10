@@ -5,8 +5,10 @@
 //! it failed. A command routed to a retiring relay whose thread is alive is
 //! not written; it is appended to that relay's queue as unsent. The relay's
 //! thread passes its leading unsent commands on, one at a time and in
-//! order: after a `closing` answer it re-routed, after it has forwarded an
-//! acknowledgement to the client, and at its end. The relay leaves the map
+//! order: an exiting relay passes them on after a `closing` answer it
+//! re-routed and after it has forwarded an acknowledgement to the client,
+//! so the replacement never answers a command first; a dead relay passes
+//! its queue on only at its end. The relay leaves the map
 //! only once its queue is empty, checked and removed under one lock hold
 //! that every enqueue also takes, so no command is lost between the two.
 //!
@@ -289,9 +291,10 @@ pub(crate) enum PassOn {
     Dropped(usize),
 }
 
-/// Passes a retiring relay's queued commands on, oldest first, each to the
-/// oldest relay newer than it. Releases the relays lock before each route,
-/// so commands read meanwhile queue behind. Never drops the entry: the
+/// Passes an exiting relay's queued commands on, oldest first, each to the
+/// oldest relay newer than it. A dead relay's queue passes on only at its
+/// end, from `drain`, after the end is classified. Releases the relays lock
+/// before each route, so commands read meanwhile queue behind. Never drops the entry: the
 /// thread may still read answers, and the end hands over last.
 pub(crate) fn pass_on(
     session: &str,
@@ -380,13 +383,17 @@ pub(crate) fn hand_over(
     true
 }
 
-/// Whether the relay still has its entry and is retiring: its thread
-/// passes its queue on once the acknowledgement ahead of it is forwarded.
-pub(crate) fn is_retiring(relays: &Arc<Mutex<Relays>>, session: &str, epoch: u64) -> bool {
-    lock(relays)
-        .entries
-        .iter()
-        .any(|entry| entry.session == session && entry.epoch == epoch && entry.retiring.is_some())
+/// Whether the relay still has its entry and is retiring as `Exited`:
+/// an exiting relay's thread passes its queue on once the acknowledgement
+/// ahead of it is forwarded. A dead relay passes its queue on only at its
+/// end, after the end is classified, so nothing answers before the
+/// relay's last line.
+pub(crate) fn is_exiting(relays: &Arc<Mutex<Relays>>, session: &str, epoch: u64) -> bool {
+    lock(relays).entries.iter().any(|entry| {
+        entry.session == session
+            && entry.epoch == epoch
+            && matches!(entry.retiring, Some(Retire::Exited))
+    })
 }
 
 /// Routes a dead relay's unsent commands, in the order they were read,

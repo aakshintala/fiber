@@ -45,6 +45,8 @@ pub struct FakeClock {
     origin: Instant,
     state: Mutex<State>,
     parked_cv: Condvar,
+    #[cfg(test)]
+    await_any_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
 
 impl FakeClock {
@@ -68,6 +70,8 @@ impl FakeClock {
                 wakers: Vec::new(),
             }),
             parked_cv: Condvar::new(),
+            #[cfg(test)]
+            await_any_pause: Mutex::new(None),
         })
     }
 
@@ -153,6 +157,34 @@ impl FakeClock {
         parked_since(&guard, mark, until)
     }
 
+    #[cfg(test)]
+    fn pause_next_await_any_predicate(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (checked_tx, checked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        *self
+            .await_any_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((checked_tx, release_rx));
+        (checked_rx, release_tx)
+    }
+
+    #[cfg(test)]
+    fn await_any_predicate_checked(&self) {
+        let pause = self
+            .await_any_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some((checked, release)) = pause {
+            let _sent = checked.send(());
+            release
+                .recv_timeout(Duration::from_secs(5))
+                .expect("waited for the test to release the await_any predicate");
+        }
+    }
+
     /// Waits, at most `within` of real time, until a thread is parked in
     /// [`Clock::wait_until`] with this `until`, and returns a [`Mark`] of the
     /// threads parked at `until`, taken under the lock that saw the park.
@@ -174,6 +206,40 @@ impl FakeClock {
                     .collect(),
             )
         })
+    }
+
+    /// Waits, at most `within` of real time, until a thread in `mark` is
+    /// parked again, in a later park, with any deadline.
+    pub fn await_any_parked_since(&self, mark: &Mark, within: Duration) -> bool {
+        let state = lock(&self.state);
+        let (guard, _) = self
+            .parked_cv
+            .wait_timeout_while(state, within, |state| {
+                let waiting = !parked_after(state, mark);
+                #[cfg(test)]
+                self.await_any_predicate_checked();
+                waiting
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        parked_after(&guard, mark)
+    }
+
+    /// Waits, at most `within` of real time, until `thread` is parked in
+    /// [`Clock::wait_until`] with this `until`. True once it is; false at
+    /// the deadline. The bound is the condvar's timeout, so this reads no
+    /// process clock.
+    pub fn await_thread_parked(
+        &self,
+        thread: ThreadId,
+        until: Option<Instant>,
+        within: Duration,
+    ) -> bool {
+        let state = lock(&self.state);
+        let (guard, _) = self
+            .parked_cv
+            .wait_timeout_while(state, within, |state| !parked_thread(state, thread, until))
+            .unwrap_or_else(PoisonError::into_inner);
+        parked_thread(&guard, thread, until)
     }
 
     /// [`FakeClock::await_parked`] for a park with no deadline.
@@ -278,6 +344,21 @@ fn parked_since(state: &State, mark: &Mark, until: Option<Instant>) -> bool {
                 .iter()
                 .any(|(thread, id0)| *thread == parked.thread && parked.id > *id0)
     })
+}
+
+fn parked_after(state: &State, mark: &Mark) -> bool {
+    state.parked.iter().any(|parked| {
+        mark.0
+            .iter()
+            .any(|(thread, id0)| *thread == parked.thread && parked.id > *id0)
+    })
+}
+
+fn parked_thread(state: &State, thread: ThreadId, until: Option<Instant>) -> bool {
+    state
+        .parked
+        .iter()
+        .any(|parked| parked.thread == thread && parked.until == until)
 }
 
 fn parked_unbounded(state: &State) -> bool {

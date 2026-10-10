@@ -6,22 +6,12 @@ mod common;
 
 use std::collections::HashMap;
 
-use common::{Setup, install, manifest, write};
-use config::{Config, ProjectKey, Sources, write_model_cache};
+use common::{Setup, config, install, lua_named, manifest, write};
+use config::write_model_cache;
 use contract::ErrorCode;
 use contract::events::Notice;
 use extensions::Providers;
 use serde_json::{Value, json};
-
-fn config(setup: &Setup, overrides: &[&str]) -> Config {
-    Config::load(Sources {
-        home: setup.home(),
-        workspace: setup.workspace(),
-        project: ProjectKey::new("p").unwrap(),
-        overrides: overrides.iter().map(|s| (*s).to_owned()).collect(),
-    })
-    .unwrap()
-}
 
 fn provider_with(name: &str, models: Value, placeholders: Value) -> Value {
     let mut map = serde_json::Map::new();
@@ -455,31 +445,6 @@ fn the_cache_keeps_the_template() {
     assert_eq!(cached[0].base_url, "https://{workspace}/v1");
 }
 
-fn lua_named(
-    setup: &Setup,
-    dir: &str,
-    provider: &str,
-    models_run: &str,
-) -> std::sync::Arc<extensions::LuaProvider> {
-    let ext = setup.home().join(dir);
-    write(
-        &ext.join("init.lua"),
-        &format!(
-            "fiber.provider(\"{provider}\", {{ \
-             credential = {{ timeout = 1000, run = function() \
-             return {{ token = \"test-token\", expires_at = 1893456000 }} end }}, \
-             models = {{ timeout = 1000, run = function() return {models_run} end }} }})\n"
-        ),
-    );
-    let extension = std::sync::Arc::new(extensions::LuaExtension::new(
-        "acme-ext",
-        ext,
-        setup.home(),
-        fakes::clock::FakeClock::new(),
-    ));
-    extensions::LuaProvider::new(extension, provider)
-}
-
 #[test]
 fn lua_models_are_filled_and_the_cache_keeps_the_template() {
     let setup = Setup::new();
@@ -582,9 +547,10 @@ fn fill_with(
     (providers, notices)
 }
 
-/// `value` as the `workspace` setting leaves the model out with the
-/// setting-source "not a host" notice, and resolving names it the same way.
-fn assert_not_a_host(value: &str) {
+/// `value` of class `class` as the `workspace` setting leaves the model out
+/// with the setting-source "not a host" notice, and resolving names it the
+/// same way.
+fn assert_not_a_host(value: &str, class: &str) {
     let setup = Setup::new();
     install_template(&setup);
     write(
@@ -597,19 +563,32 @@ fn assert_not_a_host(value: &str) {
     let notices = providers
         .fill_placeholders(&cfg, &|name| env.get(name).cloned())
         .unwrap();
-    assert_eq!(notices.len(), 1, "{value:?}");
+    assert_eq!(notices.len(), 1, "{class}: {value:?}");
     let notice = notices.first().unwrap();
-    assert_eq!(notice.code, ErrorCode::ModelUnconfigured);
-    assert_eq!(notice.extension.as_deref(), Some("acme"));
+    assert_eq!(
+        notice.code,
+        ErrorCode::ModelUnconfigured,
+        "{class}: {value:?}"
+    );
+    assert_eq!(
+        notice.extension.as_deref(),
+        Some("acme"),
+        "{class}: {value:?}"
+    );
     assert_eq!(
         notice.message,
         "The model `acme/m` needs the setting `workspace` for its base URL, \
-         whose value is not a host."
+         whose value is not a host.",
+        "{class}: {value:?}"
     );
-    assert!(!notice.message.contains(value), "{value:?}");
+    assert!(!notice.message.contains(value), "{class}: {value:?}");
     let err = providers.resolve("acme/m").unwrap_err();
-    assert_eq!(err.code(), ErrorCode::ModelUnconfigured);
-    assert_eq!(err.to_string(), notice.message);
+    assert_eq!(
+        err.code(),
+        ErrorCode::ModelUnconfigured,
+        "{class}: {value:?}"
+    );
+    assert_eq!(err.to_string(), notice.message, "{class}: {value:?}");
 }
 
 #[test]
@@ -639,54 +618,27 @@ fn an_https_host_with_a_trailing_slash_fills_the_url() {
 }
 
 #[test]
-fn a_value_with_a_path_is_not_a_host() {
-    for value in [
-        "adb-1.example/x",
-        "https://adb-1.example/v1/",
-        "adb-1.example//",
-    ] {
-        assert_not_a_host(value);
-    }
-}
-
-#[test]
-fn a_value_with_an_at_sign_is_not_a_host() {
-    for value in ["user@adb-1.example", "https://user:pw@adb-1.example"] {
-        assert_not_a_host(value);
-    }
-}
-
-#[test]
-fn a_value_with_a_question_mark_is_not_a_host() {
-    assert_not_a_host("adb-1.example?x=1");
-}
-
-#[test]
-fn a_value_with_a_hash_is_not_a_host() {
-    assert_not_a_host("adb-1.example#x");
-}
-
-#[test]
-fn a_value_with_whitespace_is_not_a_host() {
-    for value in [
-        "adb-1.example ",
-        " adb-1.example",
-        "adb-1\t.example",
-        "adb-1.example\n",
-    ] {
-        assert_not_a_host(value);
-    }
-}
-
-#[test]
-fn a_value_with_another_scheme_is_not_a_host() {
-    for value in [
-        "http://adb-1.example",
-        "HTTPS://adb-1.example",
-        "ftp://adb-1.example",
-        "https://https://adb-1.example",
-    ] {
-        assert_not_a_host(value);
+fn a_value_whose_shape_is_not_a_host_is_not_a_host() {
+    // Each row: a value and the class it belongs to, named on failure.
+    let cases: &[(&str, &str)] = &[
+        ("adb-1.example/x", "path"),
+        ("https://adb-1.example/v1/", "path"),
+        ("adb-1.example//", "path"),
+        ("user@adb-1.example", "at sign"),
+        ("https://user:pw@adb-1.example", "at sign"),
+        ("adb-1.example?x=1", "question mark"),
+        ("adb-1.example#x", "hash"),
+        ("adb-1.example ", "whitespace"),
+        (" adb-1.example", "whitespace"),
+        ("adb-1\t.example", "whitespace"),
+        ("adb-1.example\n", "whitespace"),
+        ("http://adb-1.example", "scheme"),
+        ("HTTPS://adb-1.example", "scheme"),
+        ("ftp://adb-1.example", "scheme"),
+        ("https://https://adb-1.example", "scheme"),
+    ];
+    for (value, class) in cases {
+        assert_not_a_host(value, class);
     }
 }
 

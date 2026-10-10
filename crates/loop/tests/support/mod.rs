@@ -808,6 +808,7 @@ pub(crate) struct Session {
     pub(crate) inbox: Sender<Delivery>,
     lines: Option<Watcher>,
     pub(crate) looped: Option<Loop>,
+    pub(crate) turn_thread: Option<std::thread::ThreadId>,
     /// Cancels the session's running turn, as a driver does.
     pub(crate) cancel: Arc<TurnCancel>,
     /// The inbox sender the loop's inbox wake reaches, once
@@ -1256,6 +1257,7 @@ impl Session {
             lines,
             looped: Some(looped),
             cancel,
+            turn_thread: None,
             woken: None,
             _home: home,
         }
@@ -1497,10 +1499,11 @@ impl Session {
     pub(crate) fn turn(&mut self) -> Option<TurnOutcome> {
         let mut looped = self.looped.take().unwrap();
         let (done, finished) = mpsc::channel();
-        thread::spawn(move || {
+        let turn = thread::spawn(move || {
             let outcome = looped.turn().unwrap();
             done.send((looped, outcome)).unwrap();
         });
+        self.turn_thread = Some(turn.thread().id());
         let (looped, outcome) = finished
             .recv_timeout(DEADLINE)
             .expect("the turn ended in time");
@@ -1537,6 +1540,20 @@ impl Session {
             .filter(|line| line.kind != "session_status")
             .collect()
     }
+}
+
+/// Waits until the session's turn thread parks with no deadline, failing
+/// the test at [`DEADLINE`] naming what is parked and which thread ran
+/// the turn.
+pub(crate) fn await_step_park(session: &Session) {
+    let id = session
+        .turn_thread
+        .expect("a turn is running on its own thread");
+    assert!(
+        session.clock.await_thread_parked(id, None, DEADLINE),
+        "the step thread {id:?} parked with no deadline: {:?}",
+        session.clock.parked(),
+    );
 }
 
 /// The loop's inbox wake in a test: a weak sender, so it never keeps the

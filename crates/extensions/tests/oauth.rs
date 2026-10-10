@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use common::{Setup, write};
+use common::{Setup, free_port, write};
 use config::{CredentialFile, Secret, store_secret};
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -61,6 +61,12 @@ end
 
 fiber.command("callback", { timeout = 60000, run = function(text)
   return json.encode(host.oauth.callback({ port = tonumber(text) }))
+end })
+
+fiber.command("callback_code", { timeout = 60000, run = function(text)
+  local ok, err = pcall(host.oauth.callback, { port = tonumber(text) })
+  if ok then return "ok" end
+  return err.code
 end })
 
 fiber.command("callback_opts", { timeout = 60000, run = function(text)
@@ -394,15 +400,6 @@ fn lua_message(error: &Error) -> String {
     message.clone()
 }
 
-/// A port nothing listens on.
-fn free_port() -> u16 {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 /// Sends `request` to `port` and reads the reply to its end, under one
 /// [`WAIT`].
 fn get(port: u16, request: &str) -> String {
@@ -526,8 +523,17 @@ fn pkce_returns_a_verifier_and_its_challenge() {
     let verifier = pair["verifier"].as_str().unwrap();
     let challenge = pair["challenge"].as_str().unwrap();
     assert_eq!(verifier.len(), 43);
+    assert!(
+        verifier
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+        "{verifier}"
+    );
     let digest = ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes());
     assert_eq!(challenge, URL_SAFE_NO_PAD.encode(digest));
+    // A second call draws a fresh verifier.
+    let again: Value = serde_json::from_str(&run(&ext, "pkce", "").unwrap()).unwrap();
+    assert_ne!(again["verifier"].as_str().unwrap(), verifier);
 }
 
 // ------------------------------------------------------------------ callback
@@ -654,6 +660,10 @@ fn callback_on_a_taken_port_is_an_error_naming_it() {
     let port = held.local_addr().unwrap().port();
     let message = lua_message(&run(&ext, "callback", &port.to_string()).unwrap_err());
     assert!(message.contains(&format!("port {port}")), "{message}");
+    assert_eq!(
+        run(&ext, "callback_code", &port.to_string()).unwrap(),
+        "io_failed"
+    );
 }
 
 #[test]

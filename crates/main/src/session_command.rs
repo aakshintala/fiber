@@ -302,7 +302,12 @@ pub(crate) fn run_new(
         credential_files,
         &clock,
     );
-    let offer = Arc::new(extensions::SessionOffer::new(&home, &project, &workspace));
+    let offer = Arc::new(extensions::SessionOffer::new(
+        &home,
+        &project,
+        &workspace,
+        Arc::clone(&clock),
+    ));
     let log = match Log::create(&sessions, id, Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),
         Err(e) => {

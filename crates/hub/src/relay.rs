@@ -25,7 +25,9 @@
 //! the order they were read (`crate::retire`).
 //!
 //! A session that resumes is subscribed again at the level the connection
-//! last held, with no client command (`crate::rejoin`).
+//! last held, with no client command (`crate::rejoin`). A running session
+//! that closes the connection gets `stream_closed` and loses the kept
+//! level first (`crate::closed`).
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -99,6 +101,11 @@ pub(crate) struct Relays {
     /// blocking on the gate.
     #[cfg(test)]
     pub(crate) at_gate: Option<Box<dyn FnOnce() + Send>>,
+    /// Tests only: a one-shot pause in `closed::on_end` after the decision
+    /// and before the drop, taken under the relays lock and called with no
+    /// lock held.
+    #[cfg(test)]
+    pub(crate) at_close: Option<Box<dyn FnOnce() + Send>>,
     /// Per session, the last `subscribe` it accepted, without its
     /// `session_id`: what a reconnect sends again.
     pub(crate) subscribed: Vec<(String, Map<String, Value>)>,
@@ -693,6 +700,44 @@ struct RelayThread {
     order: Arc<AckOrder>,
 }
 
+/// Tests only: runs a relay thread as `attach` would, without an entry:
+/// the caller pushes the entry it reads. Each argument is one the relay
+/// owns, as in `attach`.
+#[cfg(test)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "tests build the relay thread's parts the way attach does"
+)]
+pub(crate) fn spawn_for_test(
+    session: String,
+    epoch: u64,
+    reader: UnixStream,
+    hub: Arc<Hub>,
+    writer: Arc<Mutex<UnixStream>>,
+    relays: Arc<Mutex<Relays>>,
+    kept: Kept,
+) -> thread::JoinHandle<()> {
+    let order = lock(&relays).order.clone();
+    thread::Builder::new()
+        .name("hub-relay-test".to_owned())
+        .spawn(move || {
+            relay(
+                RelayThread {
+                    epoch,
+                    replayed: Replayed::default(),
+                    kept,
+                    order,
+                },
+                &session,
+                reader,
+                &hub,
+                &writer,
+                &relays,
+            );
+        })
+        .unwrap()
+}
+
 fn not_found(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, session: &str) {
     let refused = crate::resume::not_found(&SessionId(session.to_owned()));
     reject(writer, hub, Some(id), &refused.code, &refused.message);
@@ -705,9 +750,10 @@ fn not_found(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, session
 /// relay and routes the command again, passing its queue on after. An
 /// accepted `subscribe` becomes the connection's kept subscription before
 /// its acknowledgement is forwarded, so a client that has read it and
-/// triggers a reconnect gets that level replayed. The session closing
-/// its socket drops the map entry once its queue is empty; the next
-/// command for it reconnects.
+/// triggers a reconnect gets that level replayed. A running session that
+/// closed the connection gets `stream_closed` and loses the kept level
+/// first (`crate::closed`); any other close drops the map entry once the
+/// queue is empty, and the next command for it reconnects.
 fn relay(
     owned: RelayThread,
     session: &str,
@@ -810,15 +856,18 @@ fn relay(
                 if crate::retire::forward(&buf, writer, relays, hub, &order, epoch).is_err() {
                     break;
                 }
-                // A retiring relay passes its queue on once the
+                // An exiting relay passes its queue on once the
                 // acknowledgement ahead of it reached the client, so the
-                // replacement never answers a command first.
-                if crate::retire::is_retiring(relays, session, epoch) {
+                // replacement never answers a command first. A dead relay
+                // passes its queue on only at its end, after the end is
+                // classified, so nothing answers before `stream_closed`.
+                if crate::retire::is_exiting(relays, session, epoch) {
                     crate::retire::pass_on(session, epoch, &kept, hub, writer, relays);
                 }
             }
         }
     }
+    crate::closed::on_end(session, ended && !exiting, hub, writer, relays);
     crate::retire::drain(session, epoch, &kept, &order, hub, writer, relays);
     if ended {
         crate::rewind::follow(hub, writer, relays, session);
