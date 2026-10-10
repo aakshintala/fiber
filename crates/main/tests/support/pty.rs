@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 
 use fakes::Watchdog;
 use rustix::event::{PollFd, PollFlags, Timespec};
@@ -119,7 +120,19 @@ impl Reader {
                 break;
             }
         }
+        // One message for `ended` and one for `stop`: a test proves
+        // the thread ended on its own before stopping it.
         done.send(()).unwrap_or(());
+        done.send(()).unwrap_or(());
+    }
+
+    /// Waits up to `within` for the reader thread to end on its own,
+    /// without sending any stop signal: true when it already finished.
+    /// A prompt thread ends in milliseconds; the bound is wall-clock so
+    /// a broken deadline or end-of-file path fails loudly instead of
+    /// hanging the suite.
+    pub(crate) fn ended(&self, within: Duration) -> bool {
+        self.done.recv_timeout(within).is_ok()
     }
 
     /// Wakes the reader and waits for its thread, within
@@ -135,15 +148,15 @@ impl Reader {
 
 /// A pseudo-terminal: the main side the reader drains, and the terminal
 /// side the child is born on, sized before the spawn.
-struct Terminal {
-    main: OwnedFd,
-    terminal: fs::File,
+pub(crate) struct Terminal {
+    pub(crate) main: OwnedFd,
+    pub(crate) terminal: fs::File,
 }
 
 /// Opens a `cols` by `rows` pty. The main side stays open while the run
 /// uses the terminal side, and is never inherited: a hub `fiber` starts
 /// would hold the master open.
-fn open(cols: u16, rows: u16) -> Terminal {
+pub(crate) fn open(cols: u16, rows: u16) -> Terminal {
     let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY).unwrap();
     rustix::io::fcntl_setfd(&main, rustix::io::FdFlags::CLOEXEC).unwrap();
     pty::grantpt(&main).unwrap();

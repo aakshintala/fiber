@@ -13,11 +13,8 @@
 
 mod support;
 
-use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
-use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use fakes::clock::FakeClock;
@@ -122,29 +119,8 @@ fn a_wide_char_misplaces_only_its_own_cell() {
 /// A pty pair with no child: the master the reader drains, and the
 /// terminal side the test holds open and writes to.
 fn pair() -> (fs::File, fs::File) {
-    let main =
-        rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
-            .unwrap();
-    rustix::pty::grantpt(&main).unwrap();
-    rustix::pty::unlockpt(&main).unwrap();
-    let name = rustix::pty::ptsname(&main, Vec::new()).unwrap();
-    let path = PathBuf::from(OsStr::from_bytes(name.as_bytes()));
-    let terminal = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .unwrap();
-    rustix::termios::tcsetwinsize(
-        &terminal,
-        rustix::termios::Winsize {
-            ws_col: 80,
-            ws_row: 24,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        },
-    )
-    .unwrap();
-    (fs::File::from(main), terminal)
+    let terminal = support::pty::open(80, 24);
+    (fs::File::from(terminal.main), terminal.terminal)
 }
 
 /// Whether `haystack` holds `needle` as bytes.
@@ -164,6 +140,8 @@ fn a_reader_stops_while_the_terminal_side_stays_open() {
     terminal.write_all(b"ab").unwrap();
     wakes.recv_timeout(deadline.left()).unwrap();
     assert!(contains(&output.lock().unwrap(), b"ab"));
+    // Still draining: only the stop signal ends it.
+    assert!(!reader.ended(Duration::ZERO));
     assert!(reader.stop());
 }
 
@@ -176,7 +154,8 @@ fn a_reader_past_its_deadline_ends() {
     let (main, terminal) = pair();
     let (reader, _, _) = Reader::start(main, deadline);
     // The terminal side stays open and nothing is ever written: only the
-    // poll timeout ends the thread.
+    // poll timeout ends the thread, before any stop signal.
+    assert!(reader.ended(Duration::from_secs(10)));
     assert!(reader.stop());
     drop(terminal);
 }
@@ -187,6 +166,8 @@ fn a_reader_ends_at_end_of_file() {
     let (main, terminal) = pair();
     let (reader, _, _) = Reader::start(main, deadline);
     drop(terminal);
+    // End of file ends the thread, before any stop signal.
+    assert!(reader.ended(Duration::from_secs(10)));
     assert!(reader.stop());
 }
 
