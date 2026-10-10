@@ -155,9 +155,11 @@ fn setup_within(deadline: Deadline) -> support::Setup {
 }
 
 /// Whether the grid shows a working line with its elapsed count:
-/// "Working" plus a digit right after its space. The count needs
-/// `turn_started`, which opens the turn, so an Esc sent after it is never
-/// dropped as not-busy; the bare line draws before that and proves nothing.
+/// "Working" plus a digit right after its space. The working line draws
+/// only once `turn_started` has opened the turn, so an Esc sent after it
+/// is never dropped as not-busy, provided the count belongs to this turn:
+/// a grid caught between two reads of one frame can still hold the
+/// finished turn's line beside its `completed` close.
 fn working_elapsed(contents: &str) -> bool {
     contents.match_indices("Working ").any(|(at, _)| {
         contents[at + "Working ".len()..]
@@ -262,10 +264,14 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
     // whichever order the paint and the finished title arrive in.
     run.wait_screen("the first delta", |grid| grid.contents.contains("Hel"));
     run.turn_finished(from);
+    // The finished turn's working line is cleared a moment after its
+    // close is drawn; the next wait must not match that old count.
+    run.wait_screen("the first turn's working line cleared", |grid| {
+        !grid.contents.contains("esc to interrupt")
+    });
     // The second prompt starts a stalled turn; Esc interrupts it. The
     // elapsed count proves `turn_started` folded, which opens the turn:
-    // Esc goes out as `cancel` only while the turn is busy, so an Esc on
-    // the bare working line is dropped and strands the stalled turn.
+    // Esc goes out as `cancel` only while the turn is busy.
     // The earlier kitty-push wait ensures the harness finished its reply
     // before this key is written to the pty master.
     run.write(b"again\r");
