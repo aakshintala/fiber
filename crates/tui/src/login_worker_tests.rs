@@ -54,11 +54,13 @@ fn start_posts_the_end_with_the_login_s_result() {
     );
     assert_eq!(worker.ticket(), LoginTicket(3));
     assert_eq!(seam.login_names(), ["codex"]);
-    let login = seam.login(0).expect("one login started");
-    login.answer(Ok(Stored {
-        path: "credentials/codex/alice@example.com".to_owned(),
-        replaced: false,
-    }));
+    seam.answer(
+        0,
+        Ok(Stored {
+            path: "credentials/codex/alice@example.com".to_owned(),
+            replaced: false,
+        }),
+    );
     let (ticket, step) = next(&rx);
     assert_eq!(ticket, LoginTicket(3));
     match step {
@@ -104,10 +106,13 @@ fn the_posting_show_sends_open_and_code_with_the_ticket() {
     );
     // The run still waits: answering ends it, and dropping cancels once.
     let login = seam.login(0).expect("one login started");
-    login.answer(Err(ConfigureError {
-        code: ErrorCode::AuthenticationFailed,
-        message: "the login was cancelled; nothing was stored.".to_owned(),
-    }));
+    seam.answer(
+        0,
+        Err(ConfigureError {
+            code: ErrorCode::AuthenticationFailed,
+            message: "the login was cancelled; nothing was stored.".to_owned(),
+        }),
+    );
     let (_, step) = next(&rx);
     assert!(matches!(step, LoginStep::Done(Err(_))), "{step:?}");
     drop(worker);
@@ -116,7 +121,8 @@ fn the_posting_show_sends_open_and_code_with_the_ticket() {
 
 #[test]
 fn the_worker_debug_names_its_ticket_and_nothing_else() {
-    let login: Arc<dyn BrowserLogin> = Arc::new(crate::configure_fake::FakeLogin::new());
+    let (fake_login, _answer) = crate::configure_fake::FakeLogin::new();
+    let login: Arc<dyn BrowserLogin> = Arc::new(fake_login);
     let worker = LoginWorker::new(LoginTicket(3), login);
     assert_eq!(format!("{worker:?}"), "LoginWorker(3)");
 }

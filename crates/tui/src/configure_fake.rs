@@ -17,28 +17,29 @@ use crate::configure::{
     ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 
-/// A browser login for the views' tests: `run` blocks until `answer` is
-/// called, within a wall deadline, and `cancel` records once per call.
-/// Neither holds a secret: the answer is a path, never a key.
+/// A browser login for the views' tests: `run` blocks until the answer
+/// sender answers, and `cancel` records once per call. The sender lives
+/// outside this object: `new` hands it to the test, so a test ending
+/// drops it and disconnects a blocked `run` even while a worker thread
+/// still holds this login.
 pub(crate) struct FakeLogin {
     answer_rx: Mutex<Option<std::sync::mpsc::Receiver<Result<Stored, ConfigureError>>>>,
-    answer_tx: std::sync::mpsc::Sender<Result<Stored, ConfigureError>>,
     cancels: Mutex<usize>,
 }
 
 impl FakeLogin {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new() -> (
+        Self,
+        std::sync::mpsc::Sender<Result<Stored, ConfigureError>>,
+    ) {
         let (tx, rx) = std::sync::mpsc::channel();
-        Self {
-            answer_rx: Mutex::new(Some(rx)),
-            answer_tx: tx,
-            cancels: Mutex::new(0),
-        }
-    }
-
-    /// Answers `run` with `result`.
-    pub(crate) fn answer(&self, result: Result<Stored, ConfigureError>) {
-        drop(self.answer_tx.send(result));
+        (
+            Self {
+                answer_rx: Mutex::new(Some(rx)),
+                cancels: Mutex::new(0),
+            },
+            tx,
+        )
     }
 
     /// How many times `cancel` ran.
@@ -129,6 +130,9 @@ pub(crate) struct Fake {
     pub(crate) login_shown: Mutex<Vec<Arc<dyn LoginShow>>>,
     /// The `FakeLogin` each browser login returned, in order.
     pub(crate) logins: Mutex<Vec<Arc<FakeLogin>>>,
+    /// The answer sender each browser login waits on, in order: owned by
+    /// the seam (which the test owns), never by the login the worker holds.
+    answers: Mutex<Vec<std::sync::mpsc::Sender<Result<Stored, ConfigureError>>>>,
 }
 
 impl Fake {
@@ -170,6 +174,7 @@ impl Fake {
             login_names: Mutex::new(Vec::new()),
             login_shown: Mutex::new(Vec::new()),
             logins: Mutex::new(Vec::new()),
+            answers: Mutex::new(Vec::new()),
         }
     }
 
@@ -187,6 +192,13 @@ impl Fake {
             .lock()
             .ok()
             .and_then(|shown| shown.get(n).cloned())
+    }
+
+    /// Answers the `n`th browser login's run with `result`.
+    pub(crate) fn answer(&self, n: usize, result: Result<Stored, ConfigureError>) {
+        let answers = self.answers.lock().expect("answers");
+        let tx = answers.get(n).expect("one login started");
+        drop(tx.send(result));
     }
 
     /// The `n`th browser login returned.
@@ -377,9 +389,13 @@ impl Configure for Fake {
         if let Ok(mut all) = self.login_shown.lock() {
             all.push(Arc::clone(&shown));
         }
-        let login = Arc::new(FakeLogin::new());
+        let (login, answer) = FakeLogin::new();
+        let login = Arc::new(login);
         if let Ok(mut logins) = self.logins.lock() {
             logins.push(Arc::clone(&login));
+        }
+        if let Ok(mut answers) = self.answers.lock() {
+            answers.push(answer);
         }
         login
     }
