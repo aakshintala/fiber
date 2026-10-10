@@ -780,7 +780,7 @@ struct Placed {
 
 /// What a click lands on: home-local targets; the model picker's rows
 /// reuse its own `Act`.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Target {
     Workspace,
     Worktree,
@@ -1218,6 +1218,16 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
         return Step::Stay;
     }
     let before = c.ui.input.clone();
+    let plain = !m.ctrl && !m.alt && !m.sup;
+    // A focused chip's Enter always acts as a click: before the
+    // draft-based `/model` dispatch below, which would otherwise consume
+    // Enter on a `/model` draft, clear it and open the wrong picker. The
+    // workspace and model pickers returned above, and the completion panel
+    // is checked here, so this only runs with none of them open.
+    if c.chip.is_some() && c.ui.completions.is_none() && k == Key::Enter && plain {
+        open_chip(c, chip_target(c.chip.unwrap()));
+        return Step::Stay;
+    }
     if crate::model_picker::on_key(&mut c.ui, k, m) {
         end_key(c, &before);
         return Step::Stay;
@@ -1231,14 +1241,12 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
         return Step::Stay;
     }
     // Enter that just completed `/mo` to `/model ` opens the picker.
+    // (Unreachable with a chip focused: `had` means the panel was open.)
     if had && k == Key::Enter && crate::model_picker::on_key(&mut c.ui, k, m) {
         end_key(c, &before);
         return Step::Stay;
     }
-    let plain = !m.ctrl && !m.alt && !m.sup;
-    // The chip row takes keys only when no completion panel is open: it
-    // keeps its own keys, as today. (The workspace and model pickers
-    // returned above, keeping theirs.)
+    // With the completion panel open, arrows keep the panel's keys.
     let overlay = c.ui.completions.is_some();
     let step = match k {
         Key::Esc => Step::Quit,
@@ -2587,6 +2595,26 @@ mod tests {
     }
 
     #[test]
+    fn chip_enter_wins_over_the_model_slash_command() {
+        // Type `/model`, dismiss the panel, focus the workspace chip: Enter
+        // opens the workspace picker as a click does. Before the fix, the
+        // draft-based `/model` dispatch consumed Enter first, cleared the
+        // draft and opened the model picker.
+        let mut c = live_look();
+        type_str(&mut c, "/model");
+        assert!(c.ui.completions.is_some());
+        press(&mut c, Key::Esc);
+        assert!(c.ui.completions.is_none());
+        press(&mut c, Key::Down);
+        assert_eq!(c.chip, Some(0));
+        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
+        assert_eq!(c.picker, Some(Picker::Recent));
+        assert!(c.ui.picker.is_none());
+        assert_eq!(c.ui.input, "/model");
+        assert_eq!(c.chip, Some(0));
+    }
+
+    #[test]
     fn focused_chip_reuses_the_hover_tint() {
         let mut focused = base();
         focused.chip = Some(2);
@@ -2595,11 +2623,6 @@ mod tests {
         hovered.hover = Some(Hover::Model);
         let f = chips(&focused);
         let h = chips(&hovered);
-        assert_eq!(f.len(), h.len());
-        for (a, b) in f.iter().zip(h.iter()) {
-            assert!(a.0 == b.0);
-            assert_eq!((&a.1, a.3), (&b.1, b.3));
-            assert!(a.2 == b.2);
-        }
+        assert_eq!(f, h);
     }
 }
