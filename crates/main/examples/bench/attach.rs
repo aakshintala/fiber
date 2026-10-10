@@ -6,8 +6,11 @@
 //! untimed and `runs` times timed, from just before spawning
 //! `fiber resume <id>` to the session's last reply on screen.
 
+use std::ffi::OsStr;
 use std::fs;
-use std::sync::Arc;
+use std::path::Path;
+use std::process::Command;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -16,7 +19,7 @@ use crate::home::Home;
 use crate::idle::{self, Ctx, HubExit, Samples, Workload, ms};
 use crate::pty::Terminal;
 use crate::resume::{self, Fixture};
-use crate::run::{Client, Proc, Session};
+use crate::run::{self, Client, Proc, Session};
 
 pub(crate) const SAMPLED: [Workload; 1] = [Workload {
     name: "terminal attach",
@@ -159,11 +162,109 @@ fn read_log_bytes(home: &Home, id: &str) -> Result<u64, String> {
         .map_err(|err| format!("reading {}: {err}", path.display()))
 }
 
-/// The session's `events.jsonl` text, read just after its attach: the log
-/// the in-process stages replay.
-fn read_log_text(home: &Home, id: &str) -> Result<String, String> {
-    let path = log_path(home, id);
-    fs::read_to_string(&path).map_err(|err| format!("reading {}: {err}", path.display()))
+/// How long one open-mode jig run may take: the release-built jig
+/// replays a 10 MiB log and draws its frames.
+pub(crate) const OPEN_JIG: Duration = Duration::from_secs(120);
+
+/// What one open-mode jig run printed: parsing each line, folding it,
+/// and the frames drawn.
+#[derive(Debug, PartialEq)]
+pub(crate) struct OpenFigures {
+    pub(crate) parse_ms: f64,
+    pub(crate) fold_ms: f64,
+    pub(crate) frames: usize,
+    pub(crate) frame_ms: f64,
+}
+
+/// The jig at `jig` reopening `log` at `width` by `height`, drawing a
+/// frame after every `frame_every` lines. The environment holds `PATH`
+/// alone, as the paging workload's jig command does.
+pub(crate) fn open_command(
+    jig: &Path,
+    log: &Path,
+    width: u16,
+    height: u16,
+    frame_every: &str,
+    path: Option<&OsStr>,
+) -> Command {
+    let mut command = Command::new(jig);
+    command
+        .arg("open")
+        .arg(log)
+        .arg(width.to_string())
+        .arg(height.to_string())
+        .arg(frame_every)
+        .env_clear()
+        .env("PATH", path.unwrap_or_default());
+    command
+}
+
+/// The milliseconds `key` holds: finite and not negative.
+fn open_ms(line: &Value, key: &str) -> Result<f64, String> {
+    match line.get(key).and_then(Value::as_f64) {
+        Some(value) if value.is_finite() && value >= 0.0 => Ok(value),
+        _ => Err(format!(
+            "the paging jig's open line has no {key:?} time: {line}"
+        )),
+    }
+}
+
+/// The jig's one JSON line, into what it measured.
+pub(crate) fn parse_open_line(line: &str) -> Result<OpenFigures, String> {
+    let parsed: Value = serde_json::from_str(line)
+        .map_err(|err| format!("the paging jig's open line is not JSON ({err}): {line:?}"))?;
+    let frames = parsed
+        .get("frames")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("the paging jig's open line has no \"frames\" count: {parsed}"));
+    Ok(OpenFigures {
+        parse_ms: open_ms(&parsed, "parse_ms")?,
+        fold_ms: open_ms(&parsed, "fold_ms")?,
+        frames: usize::try_from(frames?)
+            .map_err(|_| format!("the paging jig's open line has no \"frames\" count: {parsed}"))?,
+        frame_ms: open_ms(&parsed, "frame_ms")?,
+    })
+}
+
+/// One open-mode run over `log`, drawing a frame after every
+/// `frame_every` lines. The jig prints one JSON line; anything else,
+/// or a jig that failed, is an error carrying its stderr.
+fn open_run(ctx: &Ctx<'_>, log: &Path, frame_every: &str) -> Result<OpenFigures, String> {
+    let jig = ctx.paging.ok_or("the attach workload needs --paging")?;
+    let mut command = open_command(
+        jig,
+        log,
+        OPEN_WIDTH,
+        OPEN_HEIGHT,
+        frame_every,
+        ctx.path.as_deref(),
+    );
+    let finished = run::run_to_end(
+        &mut command,
+        ctx.clock,
+        OPEN_JIG,
+        "the paging jig's open run",
+    )?;
+    if !finished.status.success() {
+        return Err(format!(
+            "the paging jig's open run exited {}; stderr: {}",
+            finished.status,
+            finished.stderr.trim()
+        ));
+    }
+    let lines: Vec<&str> = finished
+        .stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let [line] = lines.as_slice() else {
+        return Err(format!(
+            "the paging jig's open run printed {} lines, not one; stderr: {}",
+            lines.len(),
+            finished.stderr.trim()
+        ));
+    };
+    parse_open_line(line)
 }
 
 /// One attach, untimed: warming whatever the timed ones share. The wait's
@@ -207,38 +308,74 @@ fn sample(
         json!({"fixture": label, "log_bytes": log_bytes, "ms": took}),
     )];
     let hub_ms = hub_replay(ctx, home, id)?;
-    let text = read_log_text(home, id)?;
-    // The bench measures real time on the harness's own clock, as the
-    // live stages do through `ctx.clock`.
-    let clock: Arc<dyn contract::clock::Clock> = Arc::new(crate::run::System);
-    let one = tui::measure_open(
-        &text,
-        OPEN_WIDTH,
-        OPEN_HEIGHT,
-        usize::MAX,
-        Arc::clone(&clock),
-    )?;
+    if ctx.paging.is_none() {
+        // Without the release-built jig the log's stages stay unmeasured;
+        // the terminal and hub rows still stand on their own.
+        notes.push(
+            "the paging jig was not given; parse, fold and frames stages are missing".to_owned(),
+        );
+        samples.extend(attach_stage_rows(
+            label,
+            log_bytes,
+            terminal_ms,
+            hub_ms,
+            None,
+        ));
+        return Ok(samples);
+    }
+    let log = log_path(home, id);
+    // usize::MAX draws the single final frame, as the jig's `end` does.
+    let one = open_run(ctx, &log, &usize::MAX.to_string())?;
     // 4,096 is the loop's HUB_BATCH (`crates/tui/src/event_loop/batch.rs`),
     // the lines each frame folds while the log streams in.
-    let batched = tui::measure_open(&text, OPEN_WIDTH, OPEN_HEIGHT, 4096, Arc::clone(&clock))?;
-    let dense = tui::measure_open(&text, OPEN_WIDTH, OPEN_HEIGHT, 64, Arc::clone(&clock))?;
-    let ms_of = |took: std::time::Duration| took.as_secs_f64() * 1000.0;
-    // Parsing and folding cost the same at any frame count, so the
-    // single-frame run's hold for every frame stage.
-    samples.extend(stage_rows(
+    let batched = open_run(ctx, &log, "4096")?;
+    let dense = open_run(ctx, &log, "64")?;
+    samples.extend(attach_stage_rows(
         label,
         log_bytes,
         terminal_ms,
         hub_ms,
-        ms_of(one.parse),
-        ms_of(one.fold),
-        &[
-            ("frames_1", one.frames, ms_of(one.frame_time)),
-            ("frames_4096", batched.frames, ms_of(batched.frame_time)),
-            ("frames_64", dense.frames, ms_of(dense.frame_time)),
-        ],
+        Some((&one, &batched, &dense)),
     ));
     Ok(samples)
+}
+
+/// The attach's stage rows: the terminal and hub rows always, and the
+/// jig's parse, fold and frame rows when its three runs measured them.
+/// Parsing and folding cost the same at any frame count, so the
+/// single-frame run's hold for every frame stage.
+pub(crate) fn attach_stage_rows(
+    label: &str,
+    log_bytes: u64,
+    terminal_ms: f64,
+    hub_ms: f64,
+    opens: Option<(&OpenFigures, &OpenFigures, &OpenFigures)>,
+) -> Samples {
+    let Some((one, batched, dense)) = opens else {
+        return vec![
+            (
+                "attach_stage_ms",
+                json!({"fixture": label, "log_bytes": log_bytes, "stage": "terminal", "ms": terminal_ms}),
+            ),
+            (
+                "attach_stage_ms",
+                json!({"fixture": label, "log_bytes": log_bytes, "stage": "hub_replay", "ms": hub_ms}),
+            ),
+        ];
+    };
+    stage_rows(
+        label,
+        log_bytes,
+        terminal_ms,
+        hub_ms,
+        one.parse_ms,
+        one.fold_ms,
+        &[
+            ("frames_1", one.frames, one.frame_ms),
+            ("frames_4096", batched.frames, batched.frame_ms),
+            ("frames_64", dense.frames, dense.frame_ms),
+        ],
+    )
 }
 
 /// One `attach_stage_ms` sample per stage: the terminal's spawn-to-tail
