@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
 use std::panic::{self, AssertUnwindSafe};
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -393,6 +393,50 @@ fn matching_refuses_an_empty_match() {
 fn pattern_escapes_every_regex_metacharacter() {
     assert_eq!(pattern("/tmp/a-b_c"), "/tmp/a-b_c");
     assert_eq!(pattern(r".[]()*+?{}|^$\"), r"\.\[\]\(\)\*\+\?\{\}\|\^\$\\");
+}
+
+#[test]
+fn listings_do_not_list_the_listing_pgrep() {
+    // No metacharacters: the pattern's spelling equals the text, the way
+    // a workspace path does.
+    let text = format!("pg1837-{}-w", std::process::id());
+    // A holder carrying the pattern in its argv the way a listing pgrep
+    // does; its blocking read is the pause point, so it stays listed
+    // until released.
+    let mut holder = Command::new("sh")
+        .args(["-c", "read -r l", "pgrep", "-f", "--", &pattern(&text)])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let holder_guard = KillOnDrop(holder.id());
+    let holder_pid = holder.id();
+    let mut hidden = holder.stdin.take().unwrap();
+    // A real match.
+    let mut marked_shell = marked(&text);
+    let marked_guard = KillOnDrop(marked_shell.id());
+    let marked_pid = marked_shell.id();
+    let out = marked_shell.stdout.take().unwrap();
+    Piped::new(out).forked("the marked shell to fork");
+    // The listing names the match, never the holder.
+    let found = matching(&text).unwrap();
+    assert!(found.contains(&marked_pid), "{found:?}");
+    assert!(
+        !found.contains(&holder_pid),
+        "a listing pgrep must not list itself: {found:?}"
+    );
+    // A sweep kills the match and spares the holder.
+    kill_matching(&text).unwrap();
+    assert!(alive(holder_pid), "the sweep killed the listing holder");
+    // Release and reap both.
+    hidden.write_all(b"\n").unwrap();
+    drop(hidden);
+    reaped(holder, "the holder to exit once its stdin got a line");
+    drop(holder_guard);
+    drop(marked_guard);
+    reaped(marked_shell, "the swept marked shell");
 }
 
 #[test]
