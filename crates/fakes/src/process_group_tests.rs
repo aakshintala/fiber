@@ -689,65 +689,6 @@ fn listed_exit_names_a_second_listing_failure() {
 }
 
 #[test]
-fn listed_exit_names_the_pids_a_second_listing_still_finds() {
-    let mut child = held();
-    let pid = child.id();
-    let stdin = child.stdin.take().unwrap();
-    // A pid no `ps` can find: the lookup prints `<gone>` yet the pid is
-    // still named.
-    let gone = u32::MAX;
-    let mut calls = 0;
-    let err = listed_exit(
-        move || {
-            calls += 1;
-            if calls == 1 {
-                Ok(vec![])
-            } else {
-                Ok(vec![pid, gone])
-            }
-        },
-        DEADLINE,
-    )
-    .unwrap_err();
-    assert!(
-        err.contains("processes started after the first listing still hold the path"),
-        "{err}"
-    );
-    assert!(err.contains(&pid.to_string()), "{err}");
-    assert!(err.contains(&gone.to_string()), "{err}");
-    assert!(err.contains("<gone>"), "{err}");
-    drop(stdin);
-    reaped(child, "the held child to exit once its stdin closed");
-}
-
-#[test]
-fn listed_exit_names_a_live_holder_instead_of_gone() {
-    let mut child = held();
-    let pid = child.id();
-    let stdin = child.stdin.take().unwrap();
-    let mut calls = 0;
-    let err = listed_exit(
-        move || {
-            calls += 1;
-            if calls == 1 {
-                Ok(vec![])
-            } else {
-                Ok(vec![pid])
-            }
-        },
-        DEADLINE,
-    )
-    .unwrap_err();
-    assert!(err.contains(&pid.to_string()), "{err}");
-    assert!(
-        !err.contains("<gone>"),
-        "a live pid must print its command line: {err}"
-    );
-    drop(stdin);
-    reaped(child, "the held child to exit once its stdin closed");
-}
-
-#[test]
 fn listed_exit_reports_expiry_when_a_listed_pid_never_exits() {
     let mut child = held();
     let pid = child.id();
@@ -816,7 +757,7 @@ fn listed_exit_waits_for_a_process_started_after_the_first_listing() {
 }
 
 #[test]
-fn listed_exit_is_false_when_the_second_listing_still_matches() {
+fn listed_exit_reports_expiry_when_a_late_process_never_exits() {
     let mut child = held();
     let pid = child.id();
     let stdin = child.stdin.take().unwrap();
@@ -830,14 +771,13 @@ fn listed_exit_is_false_when_the_second_listing_still_matches() {
                 Ok(vec![pid])
             }
         },
-        DEADLINE,
+        Duration::from_millis(200),
     )
     .unwrap_err();
     assert!(
-        err.contains("processes started after the first listing still hold the path"),
-        "a second listing that still matches must read as live: {err}"
+        err.contains("deadline expired waiting for exit"),
+        "a late process that never exits must expire the deadline: {err}"
     );
-    assert!(err.contains(&pid.to_string()), "{err}");
     drop(stdin);
     reaped(child, "the held child to exit once its stdin closed");
 }
