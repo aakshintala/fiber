@@ -357,6 +357,45 @@ fn a_missing_advance_fails_on_the_short_advance_wait() {
 }
 
 #[test]
+fn an_advance_never_reached_is_dumped_after_the_until_event_and_exit() {
+    let (_root, log) = session_log(&[turn_completed(), fiber_exited()]);
+    let case = case_run(
+        vec![
+            json!({"kind": "turn_completed"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        vec![ClockAdvance {
+            after: Some(Selector {
+                kind: "never_written".to_owned(),
+                nth: 1,
+            }),
+            advance_ms: 200,
+        }],
+        Some(Selector {
+            kind: "turn_completed".to_owned(),
+            nth: 1,
+        }),
+    );
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: false,
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert_eq!(failures[0], "clock advance[1] was not reached");
+    assert!(failures[1].starts_with("diagnostics:"), "{failures:?}");
+    assert!(failures[1].contains("next_advance=1"), "{failures:?}");
+}
+
+#[test]
 fn an_expired_until_wait_dumps_parked_deadlines_events_and_next_advance() {
     let (_root, log) = session_log(&[]);
     let case = case_run(
