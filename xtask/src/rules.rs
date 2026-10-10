@@ -193,7 +193,6 @@ const SIGNAL_ALLOWLIST: &[&str] = &[
     "crates/fakes/src/process_group.rs",
     "crates/cli/src/extension_test.rs",
     "crates/main/src/switch/read.rs",
-    "crates/mcp/src/registry.rs",
     "crates/tui/src/paste_image.rs",
     "crates/support/src/group.rs",
 ];

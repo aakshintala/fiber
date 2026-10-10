@@ -83,7 +83,6 @@ fn signal_sites_ignores_each_pattern_inside_the_allowlist() {
         for (krate, rel) in [
             ("fakes", "src/process_group.rs"),
             ("cli", "src/extension_test.rs"),
-            ("mcp", "src/registry.rs"),
             ("tui", "src/paste_image.rs"),
             ("support", "src/group.rs"),
         ] {

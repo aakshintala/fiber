@@ -45,15 +45,28 @@ const TOOL_NAMES: [&str; 11] = [
 struct Setup {
     root: fakes::TempDir,
     deadline: Deadline,
+    /// Kills every process whose command line names the test's root,
+    /// and their groups, when the setup drops: every fixture server runs
+    /// with its directory under the root as its argument, so a hang or a
+    /// failing exit still kills the server and its grandchild.
+    #[allow(dead_code, reason = "held only for its drop")]
+    guard: Watchdog,
 }
 
 impl Setup {
     fn new() -> Self {
         let deadline = Deadline::start();
         let root = fakes::TempDir::new("fa");
+        // Armed before any start or run: the root is known here, while
+        // no server pid is.
+        let guard = Watchdog::matching(&root.path().display().to_string());
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { deadline, root }
+        Self {
+            deadline,
+            root,
+            guard,
+        }
     }
 
     fn home(&self) -> PathBuf {
@@ -121,6 +134,9 @@ impl Setup {
     /// test's [`Deadline`], and asserts that nothing it started is left in the
     /// group, after a timeout too (`docs/testing.md`, "Running tests").
     /// A watchdog beside it kills that group if this process dies first.
+    /// The fixture server runs detached from Fiber's group; the setup's
+    /// guard kills it and its grandchild with the setup when the test
+    /// ends, after the asserts below.
     fn run(&self, args: &[&str]) -> Run {
         let home = self.home();
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
@@ -156,7 +172,7 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run::from(output)
+        Run::new(output)
     }
 }
 
@@ -204,8 +220,8 @@ fn is_status(line: &str) -> bool {
     line.contains(r#""kind":"session_status""#)
 }
 
-impl From<Output> for Run {
-    fn from(output: Output) -> Self {
+impl Run {
+    fn new(output: Output) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
         let lines = stdout
             .lines()
@@ -502,6 +518,34 @@ fn the_server_runs_in_the_workspace_and_stops_with_the_session() {
     assert!(
         fakes::pids_exit(&[pid], setup.deadline.left()),
         "waited until the deadline for pid {pid} to exit after `fiber`"
+    );
+}
+
+#[test]
+fn a_servers_grandchild_is_gone_after_fiber_exits() {
+    let setup = Setup::new();
+    let dir = setup.fixture(&json!([echo_tool()]), &[]);
+    // The server starts a child that ignores SIGTERM and holds stdout
+    // open: only a signal to the server's process group takes it with
+    // the session.
+    fs::write(dir.join("grandchild"), "").unwrap();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+
+    let run = setup.run(&["ask", "hi"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // The setup's guard kills the server and its grandchild with the
+    // setup when the test ends, after the assert below.
+    let grandchild: u32 = fs::read_to_string(dir.join("grandchild.txt"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        fakes::pids_exit(&[grandchild], setup.deadline.left()),
+        "waited until the deadline for grandchild {grandchild} to exit after `fiber`"
     );
 }
 

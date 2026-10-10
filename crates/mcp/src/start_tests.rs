@@ -209,9 +209,15 @@ fn a_failing_command_leaves_the_other_servers_tools_declared() {
 #[test]
 fn a_server_that_misses_its_deadline_is_left_out() {
     let setup = Setup::new();
+    // Silent: `sleep` answers nothing, so only the deadline ends the
+    // start. Armed before the start: the marker survives `exec` as
+    // argv[0], so a failure below still kills the detached group.
+    let marker = setup.dir.path().display().to_string();
+    let watchdog = fakes::Watchdog::matching(&marker);
+    let quoted = marker.replace('\'', "'\\''");
     let mut spec = setup.spec("slow");
-    spec.command = "/bin/sleep".to_owned();
-    spec.args = vec!["30".to_owned()];
+    spec.command = "/bin/bash".to_owned();
+    spec.args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
     let deadline = setup
         .fake
         .now()
@@ -242,6 +248,7 @@ fn a_server_that_misses_its_deadline_is_left_out() {
             ErrorCode::McpServerUnavailable
         );
         started.servers.stop();
+        watchdog.stand_down(WITHIN);
     });
 }
 
@@ -260,17 +267,20 @@ fn servers_stop_at_once() {
     // Each server ignores SIGTERM and outlives the end of its input, so
     // each stop waits out the grace: both are parked on the clock together.
     let setups = [Setup::new(), Setup::new()];
-    let script = "trap '' TERM\n\"$1\" \"$2\"\nwhile :; do sleep 0.05; done\n";
     let specs = setups
         .iter()
         .enumerate()
         .map(|(index, setup)| {
             setup.tools(&json!([{"name": format!("tool{index}")}]));
+            // The wrapper loops past the end of its input, ignoring
+            // SIGTERM: the fixture directory rides along as its argument,
+            // so each setup's guard covers it.
+            let script = "trap '' TERM\n\"$1\" \"$2\"\nwhile :; do sleep 0.05; done\n".to_owned();
             ServerSpec {
                 command: "/bin/bash".to_owned(),
                 args: vec![
                     "-c".to_owned(),
-                    script.to_owned(),
+                    script,
                     "lingering".to_owned(),
                     fakes::mcp_fixture().display().to_string(),
                     setup.dir.path().display().to_string(),
@@ -419,9 +429,15 @@ fn a_required_server_that_fails_to_start_yields_required_failed() {
 #[test]
 fn a_required_server_that_misses_its_deadline_yields_required_failed() {
     let setup = Setup::new();
+    // Silent: `sleep` answers nothing, so only the deadline ends the
+    // start. Armed before the start: the marker survives `exec` as
+    // argv[0], so a failure below still kills the detached group.
+    let marker = setup.dir.path().display().to_string();
+    let watchdog = fakes::Watchdog::matching(&marker);
+    let quoted = marker.replace('\'', "'\\''");
     let mut spec = setup.spec("slow");
-    spec.command = "/bin/sleep".to_owned();
-    spec.args = vec!["30".to_owned()];
+    spec.command = "/bin/bash".to_owned();
+    spec.args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
     spec.required = true;
     let deadline = setup
         .fake
@@ -457,6 +473,7 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
          Raise `startup_timeout_ms` under `mcp.servers.slow` if it needs longer.",
     );
     setup.stop(started.servers);
+    watchdog.stand_down(WITHIN);
 }
 
 #[test]

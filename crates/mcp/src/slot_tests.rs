@@ -266,9 +266,15 @@ fn a_cached_server_whose_command_fails_dies_on_the_first_call() {
 #[test]
 fn a_lazy_start_that_misses_its_deadline_fails_with_deadline() {
     let setup = Setup::new();
+    // Silent: `sleep` answers nothing, so only the deadline ends the
+    // lazy start. Armed before the start: the marker survives `exec` as
+    // argv[0], so a failure below still kills the detached group.
+    let marker = setup.dir.path().display().to_string();
+    let watchdog = fakes::Watchdog::matching(&marker);
+    let quoted = marker.replace('\'', "'\\''");
     let mut spec = setup.spec("slow");
-    spec.command = "/bin/sleep".to_owned();
-    spec.args = vec!["30".to_owned()];
+    spec.command = "/bin/bash".to_owned();
+    spec.args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
     setup.write_cache(&spec, &Setup::listed("echo"));
     let started = setup.start(vec![spec]);
     let tool = setup.tool(&started, "mcp__slow__echo");
@@ -308,6 +314,7 @@ fn a_lazy_start_that_misses_its_deadline_fails_with_deadline() {
     assert_eq!(record.reason, ServerFailure::Deadline);
     assert!(record.will_restart, "a failed first start is its one death");
     setup.stop(started.servers);
+    watchdog.stand_down(WITHIN);
 }
 
 #[test]

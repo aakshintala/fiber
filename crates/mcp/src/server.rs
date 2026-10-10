@@ -3,8 +3,9 @@
 //! grace on the clock, then kills and reaps (`docs/mcp.md`, "Starting
 //! servers"); a signal during startup stops every start through
 //! [`crate::registry::stop_every_start`]. Time comes only from the injected
-//! [`contract::clock::Clock`]; no process group is ever signalled: only a
-//! server's own process, by pid.
+//! [`contract::clock::Clock`]; each server runs in its own process session
+//! and process group, signalled as a group, so a stop reaches what the
+//! server started.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -20,18 +21,15 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::cache::Cached;
-use crate::registry::{LIVE, Stopping, before_lock, before_signal, lock, signal};
+use crate::registry::{Stopping, before_lock, before_signal, lock};
 use crate::rpc::{Named, Outcome, encode_notification, encode_request};
 use crate::server_json::{ListedPrompt, ListedTool, entries};
 use crate::wait::{CancelBridge, NoCancel, Shared, deadline, park};
+use support::group::Listing;
 
 /// The protocol version Fiber speaks (`docs/mcp.md` has no number; the
 /// current draft does).
 const PROTOCOL_VERSION: &str = "2025-06-18";
-
-/// The grace between closing stdin and killing the child: the shell's
-/// `GRACE` (`crates/tools/src/shell/command.rs`).
-const GRACE: Duration = Duration::from_millis(800);
 
 /// How many request lines wait for the writer thread. Picked, not
 /// measured: no doc sets a number. A full queue means the server is
@@ -133,9 +131,9 @@ struct Inner {
     /// closing here really closes: a strong clone in the reader would keep
     /// the channel open and EOF would never arrive during the grace.
     writer: Mutex<Option<std::sync::Arc<mpsc::SyncSender<Vec<u8>>>>>,
-    /// The child, until [`Server::stop`] or [`Drop`] takes, kills and reaps
-    /// it exactly once.
-    child: Mutex<Option<Child>>,
+    /// The child and its process-group registration, until [`Server::stop`]
+    /// or [`Drop`] takes, kills and reaps it exactly once.
+    child: Mutex<Option<(Child, Listing)>>,
     clock: Arc<dyn Clock>,
 }
 
@@ -177,10 +175,13 @@ impl Server {
         for (key, value) in env {
             cmd.env(key, value);
         }
-        let mut child = cmd.spawn().map_err(|error| {
+        // Its own session and process group, listed with the spawn: a
+        // kill in the window between the two still reaches it, through
+        // the listing the spawn makes under the shared list's lock.
+        support::group::detach(&mut cmd, false);
+        let (mut child, listing) = support::group::spawn(&mut cmd).map_err(|error| {
             StartError::StartFailed(format!("The server could not be started: {error}."))
         })?;
-        lock(&LIVE).push(child.id());
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let shared = Arc::new(Shared::default());
@@ -201,7 +202,7 @@ impl Server {
             inner: Inner {
                 shared,
                 writer: Mutex::new(Some(writer)),
-                child: Mutex::new(Some(child)),
+                child: Mutex::new(Some((child, listing))),
                 clock: Arc::clone(clock),
             },
         };
@@ -312,9 +313,9 @@ impl Server {
         lock(&self.inner.shared.inner).gone
     }
 
-    /// Stops the server: closes stdin, sends SIGTERM to its process, waits
-    /// on the clock until its output ends or the grace passes, then kills
-    /// and reaps the child (`docs/invocation.md`, "Shutdown"). Idempotent:
+    /// Stops the server: closes stdin, sends SIGTERM to its process group,
+    /// waits on the clock until its output ends or the grace passes, then
+    /// kills and reaps the child (`docs/invocation.md`, "Shutdown"). Idempotent:
     /// the child is taken, killed and reaped exactly once, and [`Drop`]
     /// repeats only what is left. `&self` because tools share the
     /// connection while [`Servers`] owns the shutdown.
@@ -322,11 +323,13 @@ impl Server {
         let inner = &self.inner;
         inner.close_stdin();
         // Under the child's lock: a reap takes the child under it, so
-        // the pid is unreaped while `kill` runs.
+        // the group id is unreaped while the SIGTERM runs.
         let child = lock(&inner.child);
-        if let Some(child) = child.as_ref() {
+        if let Some((child, _)) = child.as_ref() {
             before_signal();
-            signal(&[child.id()], Signal::TERM);
+            match support::group::signal(child.id(), Signal::TERM) {
+                Ok(()) | Err(_) => {}
+            }
         }
         drop(child);
         inner.wait_gone();
@@ -397,19 +400,21 @@ impl Server {
 
     /// Kills and reaps the child exactly once; later calls find none.
     fn reap(&self) {
-        let child = {
+        let taken = {
             before_lock("child");
             lock(&self.inner.child).take()
         };
-        if let Some(mut child) = child {
-            // An exited child refuses the kill; the reap below still runs.
-            match child.kill() {
+        if let Some((mut child, listing)) = taken {
+            // The leader is taken but unreaped, so the group id cannot
+            // have been reused: the SIGKILL reaches this server's group.
+            match support::group::signal(child.id(), Signal::KILL) {
                 Ok(()) | Err(_) => {}
             }
-            // Unlisted before the reap frees the pid for reuse.
-            let pid = child.id();
             before_lock("live");
-            lock(&LIVE).retain(|listed| *listed != pid);
+            // Unlisted under the shared list's lock, before the wait
+            // frees the pid: a group the shutdown kill signals always
+            // has an unreaped leader.
+            support::group::live().unlist(listing);
             match child.wait() {
                 Ok(_) | Err(_) => {}
             }
@@ -430,10 +435,10 @@ impl Inner {
         lock(&self.writer).take();
     }
 
-    /// Waits until the server's output ends or [`GRACE`] passes on the
-    /// clock.
+    /// Waits until the server's output ends or [`support::group::GRACE`]
+    /// passes on the clock.
     fn wait_gone(&self) {
-        let until = deadline(self.clock.as_ref(), GRACE);
+        let until = deadline(self.clock.as_ref(), support::group::GRACE);
         loop {
             let (gone, seq) = {
                 let state = lock(&self.shared.inner);

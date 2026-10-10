@@ -21,29 +21,40 @@ use crate::start::{DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Se
 ///
 /// The largest round value that keeps every test's serial deadlines within
 /// half of nextest's 120 s kill: the worst test,
-/// `kill_every_server_holds_its_pids_unreaped_while_it_signals`, makes six
-/// (start, signal reached, `await_lock`, `await_gone`, killed and reaped:
-/// 6 x 10 s = 60 s). A passing run never waits on it; it only
-/// bounds a hang.
+/// `a_reap_unlists_under_the_shared_list_lock_before_it_waits`, makes three
+/// (start, the lock wait, and the stop: 3 x 10 s = 30 s). A passing run
+/// never waits on it; it only bounds a hang.
 pub(crate) const WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 /// One real-time poll of a file or a child's exit.
 const POLL: Duration = Duration::from_millis(50);
 
-/// One fixture directory and the fake clock every test drives.
+/// One fixture directory and the fake clock every test drives. The setup
+/// arms a watchdog matching the fixture directory before any test starts
+/// a server: every fixture server runs with the directory as its
+/// argument, so a failure or a timeout still kills the detached groups
+/// when the setup drops.
 pub(crate) struct Setup {
     /// The fixture directory: `tools.json`, `prompts.json`, results.
     pub dir: TempDir,
     /// The fake clock the server waits on.
     pub fake: Arc<FakeClock>,
+    /// Kills every process whose command line names the fixture
+    /// directory, and their groups, when the setup drops.
+    #[allow(dead_code, reason = "held only for its drop")]
+    guard: fakes::Watchdog,
 }
 
 impl Setup {
-    /// A fresh directory and clock.
+    /// A fresh directory and clock, with the guard armed before any
+    /// start: the directory is known here, while no server pid is.
     pub(crate) fn new() -> Self {
+        let dir = TempDir::new("fiber-mcp-support");
+        let guard = fakes::Watchdog::matching(&dir.path().display().to_string());
         Self {
-            dir: TempDir::new("fiber-mcp-support"),
+            dir,
             fake: FakeClock::new(),
+            guard,
         }
     }
 
@@ -229,6 +240,16 @@ impl Setup {
     pub(crate) fn pid(&self) -> u32 {
         std::fs::read_to_string(self.dir.path().join("pid.txt"))
             .expect("pid.txt")
+            .trim()
+            .parse()
+            .expect("a pid")
+    }
+
+    /// The fixture's grandchild pid, when the `grandchild` switch is set:
+    /// `<dir>/grandchild.txt` holds it on one line.
+    pub(crate) fn grandchild(&self) -> u32 {
+        std::fs::read_to_string(self.dir.path().join("grandchild.txt"))
+            .expect("grandchild.txt")
             .trim()
             .parse()
             .expect("a pid")
