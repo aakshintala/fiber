@@ -1523,6 +1523,19 @@ fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
         grid.contents.contains("completed")
     });
     run.wait_screen("the spend row", |grid| grid.contents.contains("cache hits"));
+    // The card draws top-down and its bottom edge lands last: wait for
+    // the edge at the panel columns before snapshotting, never a torn
+    // frame. A conversation border also ends in `▀`, so the check pins
+    // the edge to the panel: one blank column, then the edge.
+    run.wait_screen("the card drawn whole", |grid| {
+        let n = usize::from(panel);
+        grid.rows.iter().any(|row| {
+            let cells: Vec<char> = row.chars().collect();
+            cells.len() == 160
+                && cells[160 - n] == ' '
+                && cells[160 - n + 1..].iter().all(|&cell| cell == '▀')
+        })
+    });
     // The card below is the conversation screen before quitting: the
     // primary screen after it holds the resume lines, not the card.
     let card = Screen::from_rows(run.screen_rows(), 160);
@@ -1596,18 +1609,15 @@ fn journey_prompt_answer_approval_resize_quit() {
     // floor beside the 84-column conversation minimum), so the grid
     // follows to the new size with the conversation still on it.
     run.resize(116, 30);
-    // The card's handoff row ends mid-card only when cut: retained
-    // bytes truncated to 116 columns lose its tail, so the whole phrase
-    // plus the cursor parked on the input row only co-occur after a
-    // redraw at the new size.
-    // The card's `turns` row ends mid-card only when cut: retained
-    // bytes truncated to 116 columns lose its tail, so the whole row
-    // plus the cursor parked on the slab's input row only co-occur
-    // after a redraw at the new size. (The slab tints its padding, so
-    // rows carry trailing blanks: `contains`, never `ends_with`.)
+    // The card's handoff phrase is whole only when redrawn: retained
+    // bytes truncated to 116 columns lose its tail. It reads settled
+    // turn-1 usage, unlike the card's turn count, which stays stale
+    // when `turn_started` lines are missed under load. The parked cursor
+    // proves the frame drew to its end; tinted padding means `contains`,
+    // never `ends_with`.
     run.wait_screen("the redrawn grid at the new size", |grid| {
         grid.rows.len() == 30
-            && grid.rows.iter().any(|row| row.contains("turns  2"))
+            && grid.rows.iter().any(|row| row.contains("0% of window"))
             && grid.cursor == (28, 4)
     });
     // Quit: the terminal is restored, with one resume line per live
