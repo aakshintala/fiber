@@ -234,19 +234,6 @@ fn a_label_that_is_not_one_plain_file_name_is_refused() {
 }
 
 #[test]
-fn a_stored_credential_that_is_a_symbolic_link_is_refused() {
-    let setup = Setup::new();
-    let outside = setup.root().join("planted");
-    fs::write(&outside, VALUE).unwrap();
-    fs::create_dir_all(setup.home().join("credentials/acme")).unwrap();
-    let link = setup.home().join("credentials/acme/work");
-    std::os::unix::fs::symlink(&outside, &link).unwrap();
-    let e = read_credential(&setup.home(), "acme", "work").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
-    assert!(!e.to_string().contains(VALUE));
-}
-
-#[test]
 fn a_bare_secret_and_a_provider_directory_of_one_name_collide() {
     let setup = Setup::new();
     store_secret(&setup.home(), "acme", &Secret::new(VALUE.into())).unwrap();

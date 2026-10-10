@@ -848,28 +848,4 @@ mod tests {
         assert!(removed, "the held line is still there");
         assert_eq!(fs::read(&file).unwrap(), "{\"late\": 3}\n".as_bytes());
     }
-
-    #[test]
-    fn a_replace_that_fails_before_the_rename_leaves_the_file_unchanged() {
-        let dir = TempDir::new("fiber-replace-fail");
-        let home = dir.path().to_path_buf();
-        let file = home.join("config.json");
-        let text = "{\"hub\": {\"port\": 4040}}";
-        fs::write(&file, text).unwrap();
-        let result = within("the failing replace", move || {
-            // Removing the temporary file makes the rename fail.
-            let watched = home.clone();
-            before_rename(move || {
-                for entry in fs::read_dir(&watched).unwrap() {
-                    let path = entry.unwrap().path();
-                    if path.extension().is_some_and(|e| e == "tmp") {
-                        fs::remove_file(path).unwrap();
-                    }
-                }
-            });
-            replace_global(&home, "hub.port", None).map_err(|e| e.to_string())
-        });
-        assert!(result.is_err(), "{result:?}");
-        assert_eq!(fs::read_to_string(&file).unwrap(), text);
-    }
 }

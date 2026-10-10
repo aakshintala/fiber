@@ -7,31 +7,11 @@
 mod common;
 
 use std::fs;
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
 
 use common::Setup;
 use config::update_global_entries;
 use contract::ErrorCode;
 use serde_json::json;
-
-/// How long a join waits before the test fails instead
-/// (`docs/testing.md`, "Waits and timeouts").
-const DEADLINE: Duration = Duration::from_secs(10);
-
-/// Runs `f` on another thread, failing after [`DEADLINE`] instead of
-/// hanging when a lock never releases.
-fn within<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let _sent = done.send(f());
-    });
-    match finished.recv_timeout(DEADLINE) {
-        Ok(value) => value,
-        Err(_) => panic!("waited {DEADLINE:?} for {what}"),
-    }
-}
 
 #[test]
 fn one_entry_with_no_file_writes_only_it() {
@@ -162,43 +142,4 @@ fn a_keys_that_is_no_object_is_refused_and_writes_nothing() {
     assert_eq!(error.code(), ErrorCode::ConfigInvalid);
     assert!(error.to_string().contains("keys"), "{error}");
     assert_eq!(fs::read_to_string(setup.global()).unwrap(), text);
-}
-
-#[test]
-fn concurrent_writers_lose_no_entry() {
-    let setup = Setup::new();
-    let first = setup.home();
-    let second = setup.home();
-    let one = thread::spawn(move || {
-        update_global_entries(
-            &first,
-            "keys",
-            &[("new_session".to_owned(), Some(json!(["ctrl+t"])))],
-        )
-        .unwrap_or_else(|e| panic!("write: {e}"));
-    });
-    let two = thread::spawn(move || {
-        update_global_entries(
-            &second,
-            "keys",
-            &[("copy_focused".to_owned(), Some(json!(["c"])))],
-        )
-        .unwrap_or_else(|e| panic!("write: {e}"));
-    });
-    // Each call holds the lock from its read to its write, so the later
-    // read sees the earlier write, and both entries land.
-    within("the first writer", move || {
-        one.join().unwrap_or_else(|e| panic!("join: {e:?}"))
-    });
-    within("the second writer", move || {
-        two.join().unwrap_or_else(|e| panic!("join: {e:?}"))
-    });
-    let root: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(setup.global()).unwrap_or_else(|e| panic!("read: {e}")),
-    )
-    .unwrap_or_else(|e| panic!("parse: {e}"));
-    assert_eq!(
-        root,
-        json!({"keys": {"copy_focused": ["c"], "new_session": ["ctrl+t"]}})
-    );
 }

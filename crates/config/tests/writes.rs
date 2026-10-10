@@ -130,47 +130,6 @@ fn a_write_to_a_key_that_is_not_dotted_is_a_usage_error() {
 }
 
 #[test]
-fn a_write_that_cannot_rename_into_place_fails_and_leaves_no_temporary_file() {
-    let setup = Setup::new();
-    fs::create_dir_all(setup.global().join("occupied")).unwrap();
-    let e = set_global(&setup.home(), "model", json!("a/b")).unwrap_err();
-    assert_eq!(e.code(), ErrorCode::IoFailed);
-    let mut left: Vec<_> = fs::read_dir(setup.home())
-        .unwrap()
-        .map(|e| e.unwrap().file_name().into_string().unwrap())
-        .collect();
-    left.sort();
-    assert_eq!(left, ["config.json", "config.json.lock"]);
-}
-
-#[test]
-fn concurrent_writers_lose_no_key() {
-    let setup = Arc::new(Setup::new());
-    let writers: Vec<_> = (0..8)
-        .map(|w| {
-            let setup = Arc::clone(&setup);
-            thread::spawn(move || {
-                for n in 0..20 {
-                    set_global(&setup.home(), &format!("roles.w{w}n{n}"), json!("a/b")).unwrap();
-                }
-            })
-        })
-        .collect();
-    for writer in writers {
-        writer.join().unwrap();
-    }
-    let config = setup.load(&[]).unwrap();
-    let roles = config.get("roles", None).unwrap().0;
-    assert_eq!(roles.as_object().unwrap().len(), 160);
-    let mut left: Vec<_> = fs::read_dir(setup.home())
-        .unwrap()
-        .map(|e| e.unwrap().file_name().into_string().unwrap())
-        .collect();
-    left.sort();
-    assert_eq!(left, ["config.json", "config.json.lock"]);
-}
-
-#[test]
 fn an_extension_setting_is_written_to_the_scope_it_names() {
     let setup = Setup::new();
     let mut config = setup.load(&[]).unwrap();

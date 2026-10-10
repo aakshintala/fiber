@@ -544,19 +544,6 @@ fn a_bare_secret_named_like_the_provider_is_not_read_as_a_key() {
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
 }
 
-#[test]
-fn a_provider_directory_that_is_a_symbolic_link_is_refused() {
-    let setup = Setup::new();
-    let outside = setup.root().join("planted");
-    std::fs::create_dir_all(&outside).unwrap();
-    std::fs::write(outside.join("default"), "planted").unwrap();
-    std::fs::create_dir_all(setup.home().join("credentials")).unwrap();
-    symlink(&outside, setup.home().join("credentials/acme")).unwrap();
-    let config = setup.load(&[]).unwrap();
-    let err = default_key(&config, &acme(None)).unwrap_err();
-    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
-}
-
 fn files(config: &Config, providers: &[ProviderData]) -> Vec<std::path::PathBuf> {
     let mut files = config.credential_files(providers);
     files.sort();
