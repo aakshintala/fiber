@@ -24,6 +24,7 @@ cargo run --release -- fixtures/session.jsonl
 | `--rail A\|B\|C` | the session rail design at start: list, cards, or tabs; the default is B; F2 cycles; see "The rail (#692)" |
 | `--rail-share P` | the rail's width at start, as a percent of the window; the default is 15, clamped to [22, 48] columns |
 | `--panel-share P` | the panel's width at start, as a percent of the window; the default is 21 (34 columns at 160), clamped to [30, 60] columns |
+| `--panel-stripe none\|both\|left` | the panel chrome: no stripe, a stripe on both sides, or today's left stripe; the default is `left`; see "Panel stripe (#1765)" |
 | `--picker CASE` | starts with the model picker open; see "Model picker (#1629)" |
 | `--login CASE` | draws one login case over a dimmed conversation; see "Login (#1736)" |
 | `--stats FILE` | writes the measurement below to FILE on exit |
@@ -202,6 +203,25 @@ cargo run --release -- fixtures/session.jsonl --static --login failed
 `./capture-login.sh` captures every case in tmux, plain text and SGR, for
 the ticket's PR body: `waiting-narrow` and `key-narrow` are the same cases
 at 100 by 40, the rest at 160 by 48.
+
+## Panel stripe (#1765)
+
+`--panel-stripe none|both|left` changes the chrome on every panel's
+content rows: `left` is today's output (a ▌ stripe with two blank columns
+on the left, two blank columns on the right); `none` drops the stripe for
+symmetric padding (two blank columns on each side); `both` keeps the left
+stripe and closes each row with a ▐ stripe in the same accent colour.
+Blank rows stay blank in every mode. To compare the modes on the model
+picker and on `/login` key entry:
+
+```sh
+cargo run --release -- fixtures/session.jsonl --static --picker list --panel-stripe left
+cargo run --release -- fixtures/session.jsonl --static --picker list --panel-stripe none
+cargo run --release -- fixtures/session.jsonl --static --picker list --panel-stripe both
+cargo run --release -- fixtures/session.jsonl --static --login key --panel-stripe left
+cargo run --release -- fixtures/session.jsonl --static --login key --panel-stripe none
+cargo run --release -- fixtures/session.jsonl --static --login key --panel-stripe both
+```
 
 `cargo run --bin gen` rewrites the fixtures from `src/bin/gen.rs`. `fixtures/session.jsonl` ends with a turn still running, waiting on an approval from the reviewer delegate and on a question form from the main session. `fixtures/idle.jsonl` is the same session cut after its last finished turn.
 
