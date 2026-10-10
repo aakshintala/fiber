@@ -30,7 +30,7 @@ impl Gate {
     pub(super) fn wait_writers(&self) {
         let until = self.clock.now() + GRACE;
         let mut conns = lock(&self.conns);
-        while conns.writers_open > 0 && grace_remains(self.clock.now(), until) {
+        while should_wait(conns.writers_open, self.clock.now(), until) {
             // The guard is held into the condvar wait; `None` relocks.
             conns = support::clock::park(
                 self.clock.as_ref(),
@@ -162,6 +162,19 @@ impl Gate {
 
     pub(crate) fn stopped(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
+    }
+}
+
+/// True while `close` must keep waiting for writers: one is still open
+/// and the grace has not been reached. A `match` on the count, not a
+/// comparison, so no operator here widens into a wait that parks forever:
+/// the `0` arm returns at once without reading the clock, and the open arm
+/// defers to [`grace_remains`]. The boundary table in `session_tests` pins
+/// every corner.
+pub(super) fn should_wait(writers_open: u32, now: Instant, until: Instant) -> bool {
+    match writers_open {
+        0 => false,
+        _ => grace_remains(now, until),
     }
 }
 
