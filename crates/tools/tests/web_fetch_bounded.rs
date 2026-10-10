@@ -14,6 +14,7 @@
 use std::hint::black_box;
 use std::time::Duration;
 
+use contract::ErrorCode;
 use contract::tool::Tool;
 use fakes::alloc::{Bytes, Counting, bytes_during};
 use fakes::clock::FakeClock;
@@ -27,6 +28,14 @@ static ALLOC: Counting = Counting;
 /// The size of each hostile page: under the 10 MiB download cap.
 const PAGE: usize = 8 << 20;
 
+/// The size of each page that fills the download cap: the cap minus 1 KiB.
+const CAP_PAGE: usize = (10 << 20) - 1024;
+
+/// The working peak a page-sized token may hold beside the output: the
+/// measured peaks below, rounded up to a whole MiB. It stays under the
+/// 24 MiB the busy session's budget leaves for the fetch.
+const HELD_WHOLE: usize = 17 << 20;
+
 /// The converter's own working memory apart from the hidden-element state.
 const WORKING: usize = 256 << 10;
 
@@ -35,6 +44,67 @@ const SLACK: usize = 64 << 10;
 
 /// How long a fetch may take.
 const FETCH: Duration = Duration::from_secs(60);
+
+/// How long a fetch that must time out may take on the wall clock.
+const TIMEOUT_WITHIN: Duration = Duration::from_secs(5);
+
+/// How long the timeout test waits for the watcher's deadline wait.
+const STOP_SIGNAL: Duration = Duration::from_secs(10);
+
+/// A tag with a million distinct short attribute names, under the 10 MiB
+/// download cap: html5ever checks each new attribute against every
+/// earlier one, so converting the whole tag takes time quadratic in its
+/// attribute count. Once the request's 60-second window passes on the
+/// fake clock, the watcher stops the hop, the stop reaches the converter
+/// between 64 KiB pieces, and the fetch fails with `timeout`, leaving
+/// no artifact behind. The clock advances only after the watcher is
+/// seen waiting for its deadline.
+#[test]
+fn a_quadratic_tag_times_out_and_leaves_no_artifact() {
+    let mut page = String::from("<a");
+    for n in 0..1_000_000u32 {
+        page.push_str(&format!(" a{n}"));
+    }
+    page.push_str(">t</a>");
+    assert!(page.len() < 10 << 20, "the page is under the cap");
+    let server = ProviderServer::start([Response {
+        status: 200,
+        headers: vec![("content-type".to_owned(), "text/html; charset=utf-8".to_owned())],
+        body: page.into_bytes(),
+        drop_connection: false,
+        stall: false,
+    }])
+    .expect("the page server starts");
+    let url = format!("{}/page", server.url());
+    let dir = TempDir::new("fiber-web-fetch-bounded");
+    let artifacts = dir.path().join("artifacts");
+    let clock = FakeClock::new();
+    let tool = WebFetch::new(artifacts.clone(), clock.clone()).with_proxy(None);
+    let mut arguments = Map::new();
+    arguments.insert("url".to_owned(), Value::String(url));
+    let origin = clock.origin();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let output = tool.run(&arguments, &CancelToken::new(), &Recorder::default());
+        // The test may have stopped waiting.
+        let _sent = done.send(output);
+    });
+    assert!(
+        clock.await_parked(origin + Duration::from_secs(60), STOP_SIGNAL),
+        "the watcher waits for the request deadline"
+    );
+    clock.advance(Duration::from_secs(60));
+    let output = finished
+        .recv_timeout(TIMEOUT_WITHIN)
+        .expect("the fetch finished within its deadline");
+    assert_eq!(
+        output.error.as_ref().map(|error| error.code.clone()),
+        Some(ErrorCode::Timeout),
+        "the quadratic tag times out"
+    );
+    let left = std::fs::read_dir(&artifacts).map(|entries| entries.count());
+    assert_eq!(left.unwrap_or(0), 0, "no artifact is kept");
+}
 
 /// One fetch of a page, measured.
 struct Fetched {
@@ -137,6 +207,37 @@ fn assert_markdown_eq(expected: &str, actual: &str, what: &str) {
         expected.len(),
         actual.len(),
         offset.unwrap_or(expected.len().min(actual.len()))
+    );
+}
+
+#[test]
+fn a_page_long_comment_holds_it_whole_within_the_measured_peak() {
+    let overhead = "<!--".len() + "-->".len() + "<p>x</p>".len();
+    let body = "c".repeat(CAP_PAGE - overhead);
+    let html = format!("<!--{body}--><p>x</p>");
+    assert_eq!(html.len(), CAP_PAGE);
+    let fetched = fetch("text/html; charset=utf-8", html.into_bytes());
+    assert_markdown_eq("x\n", markdown(&fetched), "the text past the comment");
+    assert!(
+        working(&fetched) <= HELD_WHOLE,
+        "working {}",
+        working(&fetched)
+    );
+}
+
+#[test]
+fn a_page_long_attribute_value_holds_it_whole_within_the_measured_peak() {
+    let overhead = "<a href=\"".len() + "\">t</a>".len();
+    let value = "v".repeat(CAP_PAGE - overhead);
+    let html = format!("<a href=\"{value}\">t</a>");
+    assert_eq!(html.len(), CAP_PAGE);
+    let fetched = fetch("text/html; charset=utf-8", html.into_bytes());
+    let expected = format!("[t]({value})\n");
+    assert_markdown_eq(&expected, markdown(&fetched), "the link with its href");
+    assert!(
+        working(&fetched) <= HELD_WHOLE,
+        "working {}",
+        working(&fetched)
     );
 }
 

@@ -10,8 +10,10 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use fakes::TempDir;
+use fakes::within;
 
 use super::{Artifact, Html, Sink, Wrap, copy};
 
@@ -270,6 +272,49 @@ fn a_stop_takes_no_further_piece() {
         "the second piece is not saved"
     );
     assert_eq!(sink.html.unwrap().finish(), "one\n", "nor converted");
+}
+
+/// How long the quadratic-tag stop test may take on the wall clock.
+const STOP_WITHIN: Duration = Duration::from_secs(5);
+
+/// A tag with a million distinct short attribute names, under the 10 MiB
+/// download cap: html5ever checks each new attribute against every
+/// earlier one, so converting the whole tag takes time quadratic in its
+/// attribute count. The stop lands between 64 KiB pieces: a `stopped`
+/// that turns true after the first piece takes no piece after it, and
+/// the tag still open converts nothing.
+#[test]
+fn a_stop_after_the_first_piece_takes_no_further_piece_of_a_quadratic_tag() {
+    within(
+        "the stopped copy",
+        STOP_WITHIN,
+        move || {
+            let mut page = String::from("<a");
+            for n in 0..1_000_000u32 {
+                page.push_str(&format!(" a{n}"));
+            }
+            page.push_str(">t</a>");
+            assert!(page.len() < 10 << 20, "the page is under the cap");
+            let dir = TempDir::new("fiber-download");
+            let mut body = io::Cursor::new(page.into_bytes());
+            let checks = Cell::new(0);
+            let stopped = || {
+                checks.set(checks.get() + 1);
+                checks.get() > 1
+            };
+            let mut sink = html_sink(dir.path(), None, &stopped);
+            let error = copy(&mut body, 10 << 20, &mut sink).unwrap_err();
+            assert_eq!(error.to_string(), "the fetch was stopped");
+            // One check per piece: the first piece taken, the second
+            // refused, so the converter's work on the page stops there.
+            assert_eq!(checks.get(), 2, "the checks the sink saw");
+            assert_eq!(
+                sink.html.unwrap().finish(),
+                "",
+                "a tag still open converts nothing"
+            );
+        },
+    );
 }
 
 #[test]
