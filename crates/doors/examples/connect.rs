@@ -51,46 +51,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// The process clock behind `contract::clock::Clock`.
-struct SystemClock;
-
-impl contract::clock::Clock for SystemClock {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::now"
-    )]
-    fn now(&self) -> std::time::Instant {
-        std::time::Instant::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::wall"
-    )]
-    fn wall(&self) -> std::time::SystemTime {
-        std::time::SystemTime::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::sleep"
-    )]
-    fn sleep(&self, d: std::time::Duration) {
-        thread::sleep(d);
-    }
-
-    fn wait_until(
-        &self,
-        until: Option<std::time::Instant>,
-        wait: &mut dyn FnMut(Option<std::time::Duration>),
-    ) {
-        let bound = until.map(|until| until.saturating_duration_since(self.now()));
-        wait(bound);
-    }
-
-    fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
-}
-
 /// Home from `FIBER_HOME`, else `$HOME/.fiber`.
 fn fiber_home() -> io::Result<PathBuf> {
     if let Some(home) = std::env::var_os("FIBER_HOME") {
@@ -111,7 +71,13 @@ fn fiber_home() -> io::Result<PathBuf> {
 
 fn hub_main(binary: &str) -> io::Result<()> {
     let home = fiber_home()?;
-    hub_session(&home, binary, &SystemClock, io::stdin(), &mut io::stdout())
+    hub_session(
+        &home,
+        binary,
+        &fakes::clock::SystemClock,
+        io::stdin(),
+        &mut io::stdout(),
+    )
 }
 
 /// Connects to the hub in `home`, starting `<binary> hub serve` when none
