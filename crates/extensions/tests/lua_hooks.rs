@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use common::{Setup, install, manifest, write};
+use common::{Setup, go_module, install_lua, write};
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -16,7 +16,7 @@ use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
 use contract::inbox::Delivery;
 use extensions::{LuaExtension, SessionExtensions};
 use fakes::clock::FakeClock;
-use serde_json::Map;
+use serde_json::{Map, json};
 
 /// The session's per-path lock, offered to `host.fs`: this test never
 /// takes it, so it runs every call straight through.
@@ -53,39 +53,6 @@ fn spinning(on_failure: &str, timeout: u64, short: &str) -> String {
              return {{ content = call.content .. \"|{short}\" }}\n\
            end }})\n"
     )
-}
-
-/// Installs `fiber.test/<short>` with the entry script `init`, and returns
-/// its installed directory.
-#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
-fn installed(setup: &Setup, short: &str, init: &str) -> PathBuf {
-    let name = format!("fiber.test/{short}");
-    let src = setup.source(short, &manifest(&name), &[]);
-    write(&src.join("init.lua"), init);
-    install(&setup.home(), &src, "0.1.0").unwrap();
-    setup
-        .home()
-        .join("extensions")
-        .join(config::dir_name(&name))
-}
-
-/// `require("go_spin")` in `dir` signals that the hook has started: the
-/// loader opens the fifo for read, the writer here reports it and closes the
-/// fifo, and the module reads empty.
-#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
-fn go_module(dir: &Path) -> mpsc::Receiver<()> {
-    let path = dir.join("go_spin.lua");
-    let made = std::process::Command::new("mkfifo").arg(&path).status();
-    assert!(made.unwrap().success(), "mkfifo {path:?}");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-        match tx.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-        drop(held);
-    });
-    rx
 }
 
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
@@ -168,14 +135,15 @@ fn content(answer: &AfterToolAnswer) -> Option<&str> {
 #[allow(clippy::expect_used, reason = "a failure is the test's")]
 fn a_non_blocking_hook_past_its_timeout_is_dropped_and_the_next_extension_still_runs() {
     let setup = Setup::new();
-    let dir = installed(&setup, "a", &spinning("non-blocking", 50, "a"));
-    installed(
+    let dir = install_lua(&setup, "a", &json!({}), &spinning("non-blocking", 50, "a"));
+    install_lua(
         &setup,
         "b",
+        &json!({}),
         "fiber.hook(\"after_tool\", { timeout = 1000, on_failure = \"blocking\",\n\
            run = function(call) return { content = call.content .. \"|b\" } end })\n",
     );
-    let went = go_module(&dir);
+    let went = go_module(&dir, "spin");
     let clock = FakeClock::new();
     let session = load(&setup, &[], clock.clone());
     let answer = timed_out(&session, &clock, &went, Duration::from_millis(50));
@@ -201,8 +169,8 @@ fn a_non_blocking_hook_past_its_timeout_is_dropped_and_the_next_extension_still_
 #[allow(clippy::expect_used, reason = "a failure is the test's")]
 fn a_blocking_hook_past_its_timeout_withholds_the_output() {
     let setup = Setup::new();
-    let dir = installed(&setup, "a", &spinning("blocking", 50, "a"));
-    let went = go_module(&dir);
+    let dir = install_lua(&setup, "a", &json!({}), &spinning("blocking", 50, "a"));
+    let went = go_module(&dir, "spin");
     let clock = FakeClock::new();
     let session = load(&setup, &[], clock.clone());
     let answer = timed_out(&session, &clock, &went, Duration::from_millis(50));
@@ -219,8 +187,8 @@ fn a_blocking_hook_past_its_timeout_withholds_the_output() {
 #[allow(clippy::expect_used, reason = "a failure is the test's")]
 fn hook_timeout_ms_is_the_timeout_the_hook_is_stopped_at() {
     let setup = Setup::new();
-    let dir = installed(&setup, "a", &spinning("blocking", 60_000, "a"));
-    let went = go_module(&dir);
+    let dir = install_lua(&setup, "a", &json!({}), &spinning("blocking", 60_000, "a"));
+    let went = go_module(&dir, "spin");
     let clock = FakeClock::new();
     let session = load(
         &setup,
@@ -449,9 +417,10 @@ end })
 #[test]
 fn a_session_hooks_run_reaches_the_inbox_deliver_to_gave() {
     let setup = Setup::new();
-    installed(
+    install_lua(
         &setup,
         "deliv",
+        &json!({}),
         "fiber.hook(\"after_tool\", { timeout = 5000, on_failure = \"blocking\",\n\
            run = function(call) host.exec(\"sh\", {\"-c\", \"true\"}) end })\n",
     );
@@ -1075,7 +1044,7 @@ fn a_timer_fires_while_a_hook_waits_on_host_exec() {
            end }})\n",
         dir.display(),
     );
-    installed(&setup, "acc", &init);
+    install_lua(&setup, "acc", &json!({}), &init);
     let clock = FakeClock::new();
     let session = load(&setup, &[], clock.clone());
     let started = read_fifo(timer_fifo(&dir, "started.fifo"));
@@ -1176,7 +1145,7 @@ fn kill_every_group_stops_a_hook_parked_on_a_long_exec() {
            end }})\n",
         dir.display(),
     );
-    installed(&setup, "acc", &init);
+    install_lua(&setup, "acc", &json!({}), &init);
     let clock = FakeClock::new();
     let session = load(&setup, &[], clock);
     let started = read_fifo(timer_fifo(&dir, "started.fifo"));

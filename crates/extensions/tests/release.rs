@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use common::{Setup, manifest};
 use contract::clock::Clock;
-use extensions::{Error, Origin, Provenance, Release, Request, install_release, list, plan};
+use extensions::{Error, Origin, Provenance, Release, Request, list, plan};
 use fakes::ustar::{archive, gzip, header, sha256 as sha};
 use serde_json::{Value, json};
 
@@ -161,9 +161,13 @@ fn release(server: &fakes::ProviderServer) -> Release {
     }
 }
 
-fn install(home: &Path, files: &Files) -> (Result<Vec<String>, Error>, fakes::ProviderServer) {
+fn install_release(
+    home: &Path,
+    files: &Files,
+) -> (Result<Vec<String>, Error>, fakes::ProviderServer) {
     let server = files.serve();
-    let result = install_release(home, &release(&server), &*fakes::clock::FakeClock::new());
+    let result =
+        extensions::install_release(home, &release(&server), &*fakes::clock::FakeClock::new());
     (result, server)
 }
 
@@ -202,7 +206,7 @@ fn snapshot(dir: &Path) -> Option<BTreeMap<PathBuf, String>> {
 /// The installed release, plus an unrelated extension and old docs.
 fn populated(setup: &Setup) -> PathBuf {
     let home = setup.home();
-    install(&home, &Files::good()).0.unwrap();
+    install_release(&home, &Files::good()).0.unwrap();
     common::write(&home.join("docs/stale.md"), "old");
     let other = home.join("extensions/github.com-acme-x");
     common::write(&other.join("extension.json"), "{}");
@@ -216,13 +220,13 @@ fn refused(files: &Files, check: impl Fn(&Error) -> bool) -> Vec<String> {
     let setup = Setup::new();
     let home = populated(&setup);
     let before = snapshot(&home);
-    let (result, _server) = install(&home, files);
+    let (result, _server) = install_release(&home, files);
     let err = result.unwrap_err();
     assert!(check(&err), "{err:?}");
     assert_eq!(snapshot(&home), before, "{err}");
 
     let absent = setup.root().join("absent/home");
-    let (result, server) = install(&absent, files);
+    let (result, server) = install_release(&absent, files);
     let err = result.unwrap_err();
     assert!(check(&err), "{err:?}");
     assert!(!setup.root().join("absent").exists(), "{err}");
@@ -240,7 +244,7 @@ fn bad_archive(archive: &'static str, why: &'static str) -> impl Fn(&Error) -> b
 fn a_release_installs_its_docs_and_extensions() {
     let setup = Setup::new();
     let home = setup.home();
-    let (result, _server) = install(&home, &Files::good());
+    let (result, _server) = install_release(&home, &Files::good());
     let names = result.unwrap();
     assert_eq!(
         names,
@@ -310,9 +314,9 @@ fn a_release_installs_its_docs_and_extensions() {
 fn a_second_run_reinstalls_a_removed_extension() {
     let setup = Setup::new();
     let home = setup.home();
-    install(&home, &Files::good()).0.unwrap();
+    install_release(&home, &Files::good()).0.unwrap();
     fs::remove_dir_all(home.join("extensions/anthropic")).unwrap();
-    install(&home, &Files::good()).0.unwrap();
+    install_release(&home, &Files::good()).0.unwrap();
     assert!(home.join("extensions/anthropic/.fiber.json").exists());
 }
 
@@ -321,7 +325,7 @@ fn existing_docs_and_installs_are_replaced_and_others_kept() {
     let setup = Setup::new();
     let home = populated(&setup);
     common::write(&home.join("extensions/memory/stale.md"), "old");
-    install(&home, &Files::good()).0.unwrap();
+    install_release(&home, &Files::good()).0.unwrap();
     assert!(!home.join("docs/stale.md").exists());
     assert!(home.join("docs/README.md").exists());
     assert!(!home.join("extensions/memory/stale.md").exists());
@@ -579,7 +583,7 @@ fn a_held_lock_is_busy_and_adds_nothing() {
     let before = snapshot(&setup.home());
     let started = clock.now();
     let server = Files::good().serve();
-    let err = install_release(&setup.home(), &release(&server), &*clock).unwrap_err();
+    let err = extensions::install_release(&setup.home(), &release(&server), &*clock).unwrap_err();
     assert!(matches!(err, Error::Busy), "{err:?}");
     assert_eq!(
         clock.now().saturating_duration_since(started),

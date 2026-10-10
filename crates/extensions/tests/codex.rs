@@ -19,10 +19,9 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use common::{Setup, copy_package};
+use common::{Setup, copy_package, free_port, header, sign_with};
 use config::CredentialFile;
 use contract::ErrorCode;
-use contract::signing::SignRequest;
 use extensions::{
     Browser, CredentialPair, Error, LoggedIn, LoginMethod, LuaExtension, LuaProvider,
     login_provider,
@@ -146,15 +145,6 @@ fn start_login(
 fn finish_login(rx: &mpsc::Receiver<Result<LoggedIn, Error>>) -> Result<LoggedIn, Error> {
     rx.recv_timeout(WAIT)
         .unwrap_or_else(|_| panic!("the login did not return within {WAIT:?}"))
-}
-
-/// A port nothing listens on, for the package's callback listener.
-fn free_port() -> u16 {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
 }
 
 /// How the injected browser answers thearct callback.
@@ -638,27 +628,6 @@ fn a_device_login_without_a_device_auth_id_fails_before_any_poll() {
 
 // ------------------------------------------------------------------ session
 
-/// Signs one request with `provider`'s session for the default label.
-fn sign_with(provider: &Arc<LuaProvider>) -> Vec<(String, String)> {
-    let signer = provider.signer(Env::pair()).unwrap().unwrap();
-    let url = "https://chatgpt.com/backend-api/codex/responses".to_owned();
-    signer
-        .sign(&SignRequest {
-            method: "POST",
-            url: &url,
-            headers: &[],
-            body: b"{}",
-        })
-        .unwrap()
-}
-
-fn header(headers: &[(String, String)], name: &str) -> Option<String> {
-    headers
-        .iter()
-        .find(|(n, _)| n == name)
-        .map(|(_, v)| v.clone())
-}
-
 #[test]
 fn a_stored_credential_signs_with_its_account_id_and_sends_no_request() {
     let env = Env::new();
@@ -676,7 +645,8 @@ fn a_stored_credential_signs_with_its_account_id_and_sends_no_request() {
     assert_eq!(token.expose(), access);
     assert_eq!(server.request_count(), 0);
 
-    let headers = sign_with(&provider);
+    let signer = provider.signer(Env::pair()).unwrap().unwrap();
+    let headers = sign_with(&signer, &[]).unwrap();
     assert_eq!(
         headers[0],
         ("authorization".to_owned(), format!("Bearer {access}"))
@@ -732,9 +702,10 @@ fn a_credential_due_for_refresh_is_replaced_with_its_headers() {
 
     // Every sign is one consistent pair or the other, until the new one lands.
     let polling = Arc::clone(&provider);
+    let signing = polling.signer(Env::pair()).unwrap().unwrap();
     fakes::within("the refresh to land", WAIT, move || {
         loop {
-            let headers = sign_with(&polling);
+            let headers = sign_with(&signing, &[]).unwrap();
             let token = header(&headers, "authorization");
             let account = header(&headers, "chatgpt-account-id");
             assert!(

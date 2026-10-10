@@ -6,22 +6,12 @@ mod common;
 
 use std::collections::HashMap;
 
-use common::{Setup, install, manifest, write};
-use config::{Config, ProjectKey, Sources, write_model_cache};
+use common::{Setup, config, install, lua_named, manifest, write};
+use config::write_model_cache;
 use contract::ErrorCode;
 use contract::events::Notice;
 use extensions::Providers;
 use serde_json::{Value, json};
-
-fn config(setup: &Setup, overrides: &[&str]) -> Config {
-    Config::load(Sources {
-        home: setup.home(),
-        workspace: setup.workspace(),
-        project: ProjectKey::new("p").unwrap(),
-        overrides: overrides.iter().map(|s| (*s).to_owned()).collect(),
-    })
-    .unwrap()
-}
 
 fn provider_with(name: &str, models: Value, placeholders: Value) -> Value {
     let mut map = serde_json::Map::new();
@@ -453,31 +443,6 @@ fn the_cache_keeps_the_template() {
         .unwrap()
         .unwrap();
     assert_eq!(cached[0].base_url, "https://{workspace}/v1");
-}
-
-fn lua_named(
-    setup: &Setup,
-    dir: &str,
-    provider: &str,
-    models_run: &str,
-) -> std::sync::Arc<extensions::LuaProvider> {
-    let ext = setup.home().join(dir);
-    write(
-        &ext.join("init.lua"),
-        &format!(
-            "fiber.provider(\"{provider}\", {{ \
-             credential = {{ timeout = 1000, run = function() \
-             return {{ token = \"test-token\", expires_at = 1893456000 }} end }}, \
-             models = {{ timeout = 1000, run = function() return {models_run} end }} }})\n"
-        ),
-    );
-    let extension = std::sync::Arc::new(extensions::LuaExtension::new(
-        "acme-ext",
-        ext,
-        setup.home(),
-        fakes::clock::FakeClock::new(),
-    ));
-    extensions::LuaProvider::new(extension, provider)
 }
 
 #[test]

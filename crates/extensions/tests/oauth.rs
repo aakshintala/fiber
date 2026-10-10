@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use common::{Setup, write};
+use common::{Setup, free_port, write};
 use config::{CredentialFile, Secret, store_secret};
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -398,15 +398,6 @@ fn lua_message(error: &Error) -> String {
         panic!("not a Lua error: {error}");
     };
     message.clone()
-}
-
-/// A port nothing listens on.
-fn free_port() -> u16 {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
 }
 
 /// Sends `request` to `port` and reads the reply to its end, under one

@@ -9,10 +9,15 @@
 )]
 
 use std::fs;
+use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use extensions::{Error, Origin, Request, plan};
+use config::{Config, ProjectKey, Sources};
+use contract::signing::{SignRequest, Signer};
+use extensions::{CredentialPair, Error, LuaExtension, LuaProvider, Origin, Request, plan};
+use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 /// How far each round drives the fake clock: a day past any install or git
@@ -218,6 +223,164 @@ pub(crate) fn install(home: &Path, source: &Path, fiber: &str) -> Result<String,
     )?
     .commit()?;
     Ok(names.into_iter().next().unwrap())
+}
+
+/// Installs `fiber.test/<short>` with `fields` merged into its manifest and
+/// the entry script `init`, and returns its installed directory.
+pub(crate) fn install_lua(setup: &Setup, short: &str, fields: &Value, init: &str) -> PathBuf {
+    let name = format!("fiber.test/{short}");
+    let mut listed = manifest(&name);
+    if let Value::Object(extra) = fields
+        && let Value::Object(into) = &mut listed
+    {
+        for (key, value) in extra {
+            into.insert(key.clone(), value.clone());
+        }
+    }
+    let source = setup.source(short, &listed, &[]);
+    write(&source.join("init.lua"), init);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    setup
+        .home()
+        .join("extensions")
+        .join(config::dir_name(&name))
+}
+
+/// A config over the test home and workspace, with these overrides.
+pub(crate) fn config(setup: &Setup, overrides: &[&str]) -> Config {
+    Config::load(Sources {
+        home: setup.home(),
+        workspace: setup.workspace(),
+        project: ProjectKey::new("p").unwrap(),
+        overrides: overrides.iter().map(|s| (*s).to_owned()).collect(),
+    })
+    .unwrap()
+}
+
+/// A Lua provider whose `models()` is `models_run`, with a `credential`
+/// function: what most `add_lua` tests use, so the credential gate lets
+/// `models()` run.
+pub(crate) fn lua_named(
+    setup: &Setup,
+    dir: &str,
+    provider: &str,
+    models_run: &str,
+) -> Arc<LuaProvider> {
+    let ext = setup.home().join(dir);
+    write(
+        &ext.join("init.lua"),
+        &format!(
+            "fiber.provider(\"{provider}\", {{ \
+             credential = {{ timeout = 1000, run = function() \
+             return {{ token = \"test-token\", expires_at = 1893456000 }} end }}, \
+             models = {{ timeout = 1000, run = function() return {models_run} end }} }})\n"
+        ),
+    );
+    let extension = Arc::new(LuaExtension::new(
+        "acme-ext",
+        ext,
+        setup.home(),
+        FakeClock::new(),
+    ));
+    LuaProvider::new(extension, provider)
+}
+
+/// A test-local provider `p` on `clock`: `credential` and `sign` run
+/// `credential_run` and `sign_run`, each absent when its option is `None`.
+pub(crate) fn script_provider(
+    setup: &Setup,
+    clock: Arc<FakeClock>,
+    credential_run: Option<&str>,
+    sign_run: Option<&str>,
+) -> Arc<LuaProvider> {
+    let mut spec = Vec::new();
+    if let Some(run) = credential_run {
+        spec.push(format!(
+            "credential = {{ timeout = 60000, run = function() return {run} end }}"
+        ));
+    }
+    if let Some(run) = sign_run {
+        spec.push(format!(
+            "sign = {{ timeout = 60000, run = function(request) return {run} end }}"
+        ));
+    }
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        &format!("fiber.provider(\"p\", {{ {} }})\n", spec.join(", ")),
+    );
+    let extension = Arc::new(LuaExtension::new("ext", dir, setup.home(), clock));
+    LuaProvider::new(extension, "p")
+}
+
+/// The pair `credential`/`label`.
+pub(crate) fn pair(credential: &str, label: &str) -> CredentialPair {
+    CredentialPair {
+        credential: credential.to_owned(),
+        label: label.to_owned(),
+    }
+}
+
+/// A port nothing listens on.
+pub(crate) fn free_port() -> u16 {
+    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// The value of `name` in `headers`, case-sensitively.
+pub(crate) fn header(headers: &[(String, String)], name: &str) -> Option<String> {
+    headers
+        .iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, v)| v.clone())
+}
+
+/// How long a sign waits before it fails the test instead of hanging it.
+const SIGN_WITHIN: Duration = Duration::from_secs(5);
+
+/// Signs one request with `headers` already on it, on its own thread under
+/// [`SIGN_WITHIN`], so a call that never returns fails the test instead of
+/// hanging it.
+pub(crate) fn sign_with(
+    signer: &Arc<dyn Signer>,
+    headers: &[(String, String)],
+) -> Result<Vec<(String, String)>, contract::signing::Error> {
+    let url = "http://127.0.0.1:1/v1/responses".to_owned();
+    let body = br#"{"model":"m"}"#.to_vec();
+    let signer = Arc::clone(signer);
+    let owned: Vec<(String, String)> = headers.to_vec();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        tx.send(signer.sign(&SignRequest {
+            method: "POST",
+            url: &url,
+            headers: &owned,
+            body: &body,
+        }))
+    });
+    rx.recv_timeout(SIGN_WITHIN)
+        .unwrap_or_else(|_| panic!("the sign did not return within {SIGN_WITHIN:?}"))
+}
+
+/// `require("go_<name>")` in `dir` signals that the callback has started:
+/// the loader opens the fifo for read, the writer here reports it and
+/// closes the fifo, and the module reads empty.
+pub(crate) fn go_module(dir: &Path, name: &str) -> mpsc::Receiver<()> {
+    let path = dir.join(format!("go_{name}.lua"));
+    let made = std::process::Command::new("mkfifo").arg(&path).status();
+    assert!(made.unwrap().success(), "mkfifo {path:?}");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        match tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+        drop(held);
+    });
+    rx
 }
 
 /// Copies the first-party package `name` from `providers/` to `dest`,

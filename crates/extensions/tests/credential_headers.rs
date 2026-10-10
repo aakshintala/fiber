@@ -20,10 +20,10 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use common::{Setup, write};
+use common::{Setup, header, pair, script_provider, sign_with, write};
 use contract::ErrorCode;
 use contract::signing::{SignRequest, Signer};
-use extensions::{CredentialPair, LuaExtension, LuaProvider, REFRESH_BEFORE};
+use extensions::{LuaExtension, LuaProvider, REFRESH_BEFORE};
 use fakes::clock::FakeClock;
 use fakes::{ProviderServer, Response};
 use serde_json::json;
@@ -46,42 +46,6 @@ fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
         .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
 }
 
-/// The default-label pair for `provider`.
-fn pair(provider: &str) -> CredentialPair {
-    CredentialPair {
-        credential: provider.to_owned(),
-        label: "default".to_owned(),
-    }
-}
-
-/// A test-local provider `p` on `clock`: `credential` and `sign` run
-/// `credential_run` and `sign_run`, each absent when its option is `None`.
-fn script_provider(
-    setup: &Setup,
-    clock: Arc<FakeClock>,
-    credential_run: Option<&str>,
-    sign_run: Option<&str>,
-) -> Arc<LuaProvider> {
-    let mut spec = Vec::new();
-    if let Some(run) = credential_run {
-        spec.push(format!(
-            "credential = {{ timeout = 60000, run = function() return {run} end }}"
-        ));
-    }
-    if let Some(run) = sign_run {
-        spec.push(format!(
-            "sign = {{ timeout = 60000, run = function(request) return {run} end }}"
-        ));
-    }
-    let dir = setup.home().join("ext");
-    write(
-        &dir.join("init.lua"),
-        &format!("fiber.provider(\"p\", {{ {} }})\n", spec.join(", ")),
-    );
-    let extension = Arc::new(LuaExtension::new("ext", dir, setup.home(), clock));
-    LuaProvider::new(extension, "p")
-}
-
 fn provider_on(setup: &Setup, credential_run: &str, sign_run: &str) -> Arc<LuaProvider> {
     script_provider(
         setup,
@@ -91,29 +55,15 @@ fn provider_on(setup: &Setup, credential_run: &str, sign_run: &str) -> Arc<LuaPr
     )
 }
 
-/// Signs one request with `headers` already on it.
-fn sign_with(
-    signer: &Arc<dyn Signer>,
-    headers: &[(String, String)],
-) -> Result<Vec<(String, String)>, contract::signing::Error> {
-    let url = "http://127.0.0.1:1/v1/responses".to_owned();
-    let body = br#"{"model":"m"}"#.to_vec();
-    let signer = Arc::clone(signer);
-    let owned: Vec<(String, String)> = headers.to_vec();
-    within(move || {
-        signer.sign(&SignRequest {
-            method: "POST",
-            url: &url,
-            headers: &owned,
-            body: &body,
-        })
-    })
-}
-
 fn signer_of(provider: &Arc<LuaProvider>) -> Arc<dyn Signer> {
     within({
         let provider = Arc::clone(provider);
-        move || provider.signer(pair(provider.name())).unwrap().unwrap()
+        move || {
+            provider
+                .signer(pair(provider.name(), "default"))
+                .unwrap()
+                .unwrap()
+        }
     })
 }
 
@@ -124,14 +74,6 @@ type ClashCase<'a> = (&'a str, &'a [(&'a str, &'a str)], bool);
 /// A row of the shape table: what `credential()` returns, and the headers
 /// the sign sends besides `authorization`, or `None` when it must fail.
 type ShapeCase<'a> = (&'a str, Option<&'a [(&'a str, &'a str)]>);
-
-/// The value of `name` in `headers`, case-sensitively.
-fn header(headers: &[(String, String)], name: &str) -> Option<String> {
-    headers
-        .iter()
-        .find(|(n, _)| n == name)
-        .map(|(_, v)| v.clone())
-}
 
 #[test]
 fn headers_ride_every_signed_request_after_authorization() {
@@ -495,7 +437,7 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
     // A token fetched and replaced before any sign leaves no trace.
     let unused = within({
         let provider = Arc::clone(&provider);
-        move || provider.token(&pair(provider.name()))
+        move || provider.token(&pair(provider.name(), "default"))
     })
     .unwrap();
     assert_eq!(unused.expose(), "tok-unused");
@@ -852,7 +794,7 @@ fn a_sign_error_is_redacted_after_a_credential_refresh() {
     let polling = Arc::clone(&provider);
     std::thread::spawn(move || {
         for _ in 0..100_000 {
-            match polling.token(&pair(polling.name())) {
+            match polling.token(&pair(polling.name(), "default")) {
                 Ok(secret) if secret.expose() == "tok-B-value" => {
                     match refreshed.send(()) {
                         Ok(()) | Err(mpsc::SendError(())) => {}
@@ -1062,7 +1004,7 @@ fn a_held_fetch_never_holds_the_token_lock() {
         )),
         None,
     );
-    let pair = pair(provider.name());
+    let pair = pair(provider.name(), "default");
     let fetching = Arc::clone(&provider);
     let worker_pair = pair.clone();
     let (done_tx, done_rx) = mpsc::channel();

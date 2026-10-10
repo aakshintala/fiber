@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use common::{Setup, install, manifest, provider, write};
+use common::{Setup, install_lua, provider, write};
 use config::{Config, ProjectKey, Secret, Sources, store_secret};
 use contract::events::CallStatus;
 use contract::hook::{AfterToolCall, AfterToolOutcome, Hooks};
@@ -42,24 +42,15 @@ const WAIT: Duration = Duration::from_secs(5);
 /// lists.
 const UNDECLARED: &str = "host.secret: `other.key` is not in the manifest's `secrets`";
 
-/// Installs `fiber.test/acme`, declaring `acme.api_key`, whose `after_tool`
-/// hook runs `body` on the call and returns its text as the new content.
-fn installed(setup: &Setup, body: &str) {
-    let mut manifest = manifest("fiber.test/acme");
-    if let Some(fields) = manifest.as_object_mut() {
-        fields.insert("secrets".into(), json!(["acme.api_key"]));
-    }
-    let src = setup.source("acme", &manifest, &[]);
-    write(
-        &src.join("init.lua"),
-        &format!(
-            "fiber.hook(\"after_tool\", {{ timeout = 5000, on_failure = \"blocking\",\n\
-               run = function(call)\n\
-               {body}\n\
-             end }})\n"
-        ),
-    );
-    install(&setup.home(), &src, "0.1.0").unwrap();
+/// The `after_tool` hook under test: `body` runs on the call and its text
+/// becomes the new content.
+fn hook(body: &str) -> String {
+    format!(
+        "fiber.hook(\"after_tool\", {{ timeout = 5000, on_failure = \"blocking\",\n\
+           run = function(call)\n\
+           {body}\n\
+         end }})\n"
+    )
 }
 
 fn load(setup: &Setup) -> Arc<SessionExtensions> {
@@ -116,9 +107,11 @@ fn secret(setup: &Setup, name: &str, value: &str) {
 #[test]
 fn a_declared_secret_reads_its_stored_value_and_nil_once_it_is_gone() {
     let setup = Setup::new();
-    installed(
+    install_lua(
         &setup,
-        "return { content = tostring(host.secret(\"acme.api_key\")) }",
+        "acme",
+        &json!({"secrets": ["acme.api_key"]}),
+        &hook("return { content = tostring(host.secret(\"acme.api_key\")) }"),
     );
     secret(&setup, "acme.api_key", "sk-acme-1");
     let session = load(&setup);
@@ -130,10 +123,14 @@ fn a_declared_secret_reads_its_stored_value_and_nil_once_it_is_gone() {
 #[test]
 fn an_undeclared_secret_is_a_lua_error_even_when_it_is_stored() {
     let setup = Setup::new();
-    installed(
+    install_lua(
         &setup,
-        "local ok, err = pcall(host.secret, \"other.key\")\n\
-         return { content = tostring(ok) .. \"|\" .. type(err) .. \"|\" .. tostring(err) }",
+        "acme",
+        &json!({"secrets": ["acme.api_key"]}),
+        &hook(
+            "local ok, err = pcall(host.secret, \"other.key\")\n\
+             return { content = tostring(ok) .. \"|\" .. type(err) .. \"|\" .. tostring(err) }",
+        ),
     );
     secret(&setup, "acme.api_key", "sk-acme-1");
     secret(&setup, "other.key", "sk-other-1");
