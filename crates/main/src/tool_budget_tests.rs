@@ -302,10 +302,9 @@ fn check(measured: &Measured, budget: usize) -> Result<usize, String> {
 fn the_check_passes_at_the_budget_and_fails_one_byte_over() {
     let hosted = measure(&builtin_definitions());
     let backend = measure(&backend_definitions());
-    // The expected largest, folded out of `the_largest_protocol_decides`:
-    // the largest total over both measurements and the protocol that
-    // holds it, without calling `largest`, so a `largest` that picked
-    // the smallest total fails below.
+    // The expected largest: the largest total over both measurements and
+    // the protocol that holds it, computed without calling `largest`, so a
+    // `largest` that picked the smallest total fails below.
     let (measured, largest) = [&hosted, &backend]
         .into_iter()
         .flat_map(|measured| measured.sizes.iter().map(move |sizes| (measured, sizes)))

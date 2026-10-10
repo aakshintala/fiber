@@ -388,6 +388,18 @@ fn parses_argv_into_its_invocation() {
             }))),
         ),
         (
+            &["fiber", "sessions", "search", "--json", "--all", "x"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: Some(SessionsCommands::Search {
+                    all: true,
+                    json: true,
+                    text: "x".to_owned(),
+                }),
+                all: false,
+                json: false,
+            }))),
+        ),
+        (
             &["fiber", "sessions", "search", "--", "-n"],
             Invocation::Run(Some(Commands::Sessions(SessionsArgs {
                 command: Some(SessionsCommands::Search {
