@@ -499,6 +499,7 @@ impl App {
     pub(super) fn go_home(&mut self) {
         self.draft.clear();
         self.close_find();
+        self.leave_session(self.session().cloned());
         // Leaving the parent closes the item view first, swapping the
         // screen back before anything clears it; outstanding `summary`
         // wishes are marked detached, so their lowering waits behind a
@@ -693,8 +694,8 @@ impl App {
                 command_id: id.clone(),
             };
         }
-        let draft = std::mem::take(&mut self.draft);
-        self.pending.insert(id, (kind, draft));
+        self.pending
+            .insert(id, (kind, std::mem::take(&mut self.draft)));
         let line = line.to_string();
         if self.link == Link::Up {
             Effect::Send(vec![line])
@@ -711,8 +712,7 @@ impl App {
     /// the prompt. A rejection returns the draft to an empty box.
     pub(super) fn first_prompt(&mut self, session: &SessionId, draft: Draft) -> String {
         let id = mint();
-        let args = content_arg(&draft);
-        let line = session_command(&id, "prompt", session, Some(args)).to_string();
+        let line = session_command(&id, "prompt", session, Some(content_arg(&draft))).to_string();
         self.pending.insert(id, (Kind::Prompt, draft));
         line
     }

@@ -2,8 +2,8 @@
 //! chips, and the movement clamps. The app's keys are tested beside them.
 
 use super::{
-    Choice, Mode, ModelPicker, command_args, preselect, saves, scoped_save, shown_in, start_args,
-    visible,
+    Choice, Fresh, Mode, ModelPicker, PickerCtx, PickerView, age, command_args, preselect,
+    rebuild_cost, saves, scoped_save, shown_in, start_args, visible,
 };
 use crate::catalogue::{Catalogue, ModelEntry};
 use crate::keys::Key;
@@ -44,12 +44,29 @@ fn catalogue() -> Vec<ModelEntry> {
     ]
 }
 
+/// The draw context: no prompt size, the wall time `wall_ms`, and the
+/// on-screen model `current`.
+fn ctx(usage: Option<u64>, wall_ms: u64, current: Option<&str>) -> PickerCtx<'_> {
+    PickerCtx {
+        usage,
+        wall_ms,
+        spinner: "⠋",
+        current,
+    }
+}
+
+/// `picker`'s view with no prompt size, at wall time 0, and no current
+/// model.
+fn view_of(picker: &ModelPicker) -> PickerView {
+    picker
+        .view(&ctx(None, 0, None))
+        .expect("the picker is open")
+}
+
 #[test]
 fn rows_group_by_provider_in_catalogue_order() {
     let models = catalogue();
-    let (rows, line) = visible(&models, &[], false);
-    assert_eq!(rows, [0, 1, 2, 3, 4]);
-    assert_eq!(line, None);
+    assert_eq!(visible(&models, &[], false), [0, 1, 2, 3, 4]);
 }
 
 #[test]
@@ -60,44 +77,29 @@ fn scoped_shows_only_listed_models_until_show_all() {
         "zeta/z3".to_owned(),
         "gone/x".to_owned(),
     ];
-    let (rows, line) = visible(&models, &scoped, false);
-    assert_eq!(rows, [0, 4]);
-    assert_eq!(
-        line.as_deref(),
-        Some("scoped_models: 2 of 5 · Tab shows all")
-    );
-    let (rows, line) = visible(&models, &scoped, true);
-    assert_eq!(rows, [0, 1, 2, 3, 4]);
-    assert_eq!(line.as_deref(), Some("all 5 · Tab shows scoped_models"));
+    assert_eq!(visible(&models, &scoped, false), [0, 4]);
+    assert_eq!(visible(&models, &scoped, true), [0, 1, 2, 3, 4]);
 }
 
 #[test]
 fn an_empty_scoped_list_shows_every_model() {
     let models = catalogue();
-    let (rows, line) = visible(&models, &[], true);
-    assert_eq!(rows, [0, 1, 2, 3, 4]);
-    assert_eq!(line, None);
+    assert_eq!(visible(&models, &[], true), [0, 1, 2, 3, 4]);
 }
 
 #[test]
 fn a_scoped_list_with_nothing_installed_lists_no_rows_until_show_all() {
     let models = catalogue();
     let scoped = ["gone/x".to_owned()];
-    let (rows, line) = visible(&models, &scoped, false);
-    assert!(rows.is_empty());
-    assert_eq!(
-        line.as_deref(),
-        Some("None of scoped_models is installed. Tab shows all 5.")
-    );
-    let (rows, _) = visible(&models, &scoped, true);
-    assert_eq!(rows, [0, 1, 2, 3, 4]);
+    assert!(visible(&models, &scoped, false).is_empty());
+    assert_eq!(visible(&models, &scoped, true), [0, 1, 2, 3, 4]);
 }
 
 #[test]
 fn thinking_inserts_the_current_model_in_catalogue_order_without_duplicates() {
     let models = catalogue();
     let scoped = ["acme/m1".to_owned(), "zeta/z2".to_owned()];
-    let (rows, _) = shown_in(
+    let rows = shown_in(
         &models,
         &scoped,
         false,
@@ -108,7 +110,7 @@ fn thinking_inserts_the_current_model_in_catalogue_order_without_duplicates() {
     assert_eq!(rows, [0, 2, 3]);
 
     let scoped = ["acme/m1".to_owned(), "acme/m2".to_owned()];
-    let (rows, _) = shown_in(
+    let rows = shown_in(
         &models,
         &scoped,
         false,
@@ -123,7 +125,7 @@ fn thinking_inserts_the_current_model_in_catalogue_order_without_duplicates() {
         "zeta/z1".to_owned(),
         "zeta/z2".to_owned(),
     ];
-    let (rows, _) = shown_in(
+    let rows = shown_in(
         &models,
         &scoped,
         false,
@@ -441,32 +443,27 @@ fn the_status_says_reading_until_the_first_answer() {
     let mut picker = open_over(Vec::new());
     // Opening asks `Stale`, so a read is owed.
     assert_eq!(
-        picker.frame(24, None).map(|frame| frame.below),
-        Some(vec!["Reading the model lists…".to_owned()])
+        view_of(&picker).status,
+        ["Reading the model lists…".to_owned()]
     );
     // Taken but unanswered, a read is out: still reading.
     assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
     assert_eq!(
-        picker.frame(24, None).map(|frame| frame.below),
-        Some(vec!["Reading the model lists…".to_owned()])
+        view_of(&picker).status,
+        ["Reading the model lists…".to_owned()]
     );
     // A running refresh beside a catalogue shows on its own line.
     picker.store(Ok(Catalogue {
         models: catalogue(),
         notices: Vec::new(),
+        lists: Vec::new(),
     }));
     assert_eq!(picker.take_read(), None);
     picker.refresh();
     assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
-    assert_eq!(
-        picker.frame(24, None).map(|frame| frame.below),
-        Some(vec!["refreshing…".to_owned()])
-    );
+    assert_eq!(view_of(&picker).status, ["refreshing…".to_owned()]);
     picker.store(Err("gone".to_owned()));
-    assert_eq!(
-        picker.frame(24, None).map(|frame| frame.below),
-        Some(Vec::new())
-    );
+    assert!(view_of(&picker).status.is_empty());
 }
 
 #[test]
@@ -475,17 +472,14 @@ fn a_read_error_with_no_catalogue_shows_the_error() {
     assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
     picker.store(Err("the lists could not be read".to_owned()));
     assert_eq!(
-        picker.frame(24, None).map(|frame| frame.below),
-        Some(vec!["the lists could not be read".to_owned()])
+        view_of(&picker).status,
+        ["the lists could not be read".to_owned()]
     );
     // With a catalogue kept, the error shows as a notice instead: the
-    // app pushes it, so the frame says nothing.
+    // app pushes it, so the view says nothing.
     let mut picker = open_over(catalogue());
     picker.store(Err("the lists could not be read".to_owned()));
-    assert_eq!(
-        picker.frame(24, None).map(|frame| frame.below),
-        Some(Vec::new())
-    );
+    assert!(view_of(&picker).status.is_empty());
 }
 
 #[test]
@@ -494,23 +488,8 @@ fn an_answered_empty_catalogue_names_the_install() {
     assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
     picker.store(Ok(Catalogue::default()));
     assert_eq!(
-        picker.frame(24, None).map(|frame| frame.below),
-        Some(vec![
-            "No models. Install a provider: fiber extension install <name>.".to_owned()
-        ])
-    );
-}
-
-#[test]
-fn the_header_names_the_rebuild_size_only_with_a_usage() {
-    let picker = open_over(catalogue());
-    assert_eq!(
-        picker.frame(24, Some(180_412)).map(|frame| frame.title),
-        Some("Models · switching rebuilds the cache: about 180,412 tokens".to_owned())
-    );
-    assert_eq!(
-        picker.frame(24, None).map(|frame| frame.title),
-        Some("Models".to_owned())
+        view_of(&picker).status,
+        ["No models. Install a provider: fiber extension install <name>.".to_owned()]
     );
 }
 
@@ -522,12 +501,13 @@ fn frame_row_clicks_select_without_choosing() {
         catalogue: Catalogue {
             models,
             notices: Vec::new(),
+            lists: Vec::new(),
         },
         scoped: vec!["acme/m1".to_owned(), "zeta/z3".to_owned()],
         ..ModelPicker::default()
     };
     picker.open(Mode::Choose, None);
-    // Frame rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
+    // Layout rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
     // 3 `acme/m1` with its roles cell, 4 the `zeta` heading, 5 `zeta/z3`.
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     // A heading selects nothing.
@@ -550,35 +530,41 @@ fn frame_row_clicks_select_without_choosing() {
 }
 
 #[test]
-fn the_first_chip_target_follows_the_roles_cell() {
+fn the_first_chip_click_follows_the_roles_cell() {
     let mut model = entry("acme/m1", &["low", "high"], None, None);
     model.roles.push("review".to_owned());
     let mut picker = ModelPicker {
         catalogue: Catalogue {
             models: vec![model],
             notices: Vec::new(),
+            lists: Vec::new(),
         },
         ..ModelPicker::default()
     };
     picker.open(Mode::Choose, None);
-
-    let frame = picker.frame(24, None).unwrap();
-    assert_eq!(frame.rows[3][2].1, Some(crate::swapped::Spot::Cell(3, 2)));
+    // The roles take cell 1, so the first chip is cell 2: choosing it
+    // carries `low`, picked out.
+    let choice = picker.click_cell(3, 2).expect("the first chip chooses");
+    assert_eq!(choice.reference, "acme/m1");
+    assert_eq!(choice.level.as_deref(), Some("low"));
+    assert!(choice.level_chosen);
 }
 
 #[test]
-fn each_chip_target_advances_one_cell() {
+fn each_chip_click_advances_one_cell() {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
             models: vec![entry("acme/m1", &["low", "high"], None, None)],
             notices: Vec::new(),
+            lists: Vec::new(),
         },
         ..ModelPicker::default()
     };
     picker.open(Mode::Choose, None);
-
-    let frame = picker.frame(24, None).unwrap();
-    assert_eq!(frame.rows[3][2].1, Some(crate::swapped::Spot::Cell(3, 2)));
+    // With no roles the chips start at cell 1: cell 2 is `high`.
+    let choice = picker.click_cell(3, 2).expect("the second chip chooses");
+    assert_eq!(choice.level.as_deref(), Some("high"));
+    assert!(choice.level_chosen);
 }
 
 /// A choice of `reference` at `level`, picked out or not.
@@ -720,12 +706,13 @@ fn clicks_choose_at_the_row_and_chip() {
         catalogue: Catalogue {
             models,
             notices: Vec::new(),
+            lists: Vec::new(),
         },
         scoped: vec!["acme/m1".to_owned(), "zeta/z3".to_owned()],
         ..ModelPicker::default()
     };
     picker.open(Mode::Choose, None);
-    // Frame rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
+    // Layout rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
     // 3 `acme/m1` with its roles cell, 4 the `zeta` heading, 5 `zeta/z3`.
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     // A heading chooses nothing.
@@ -769,12 +756,13 @@ fn clicks_choose_at_the_row_and_chip() {
 }
 
 #[test]
-fn scope_opens_over_every_model_with_no_scope_line() {
+fn scope_opens_over_every_model_whatever_the_scope() {
     let models = catalogue();
     for scoped in [Vec::new(), vec!["acme/m1".to_owned(), "gone/x".to_owned()]] {
-        let (rows, line) = shown_in(&models, &scoped, false, Mode::Scope, None, "");
-        assert_eq!(rows, [0, 1, 2, 3, 4]);
-        assert_eq!(line, None);
+        assert_eq!(
+            shown_in(&models, &scoped, false, Mode::Scope, None, ""),
+            [0, 1, 2, 3, 4]
+        );
     }
 }
 
@@ -843,9 +831,10 @@ fn scope_clicks_toggle_the_mark_cell_and_select_on_any_other() {
     picker.catalogue = Catalogue {
         models: catalogue(),
         notices: Vec::new(),
+        lists: Vec::new(),
     };
     picker.open(Mode::Scope, None);
-    // Frame rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1`.
+    // Layout rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1`.
     assert_eq!(picker.click_cell(2, 0), None);
     assert_eq!(
         picker.open.as_ref().map(|open| open.marks.clone()),
@@ -1045,11 +1034,11 @@ fn a_read_through_an_empty_catalogue_marks_from_the_list_again() {
 #[test]
 fn typing_narrows_the_shown_rows_in_catalogue_order() {
     let models = catalogue();
-    let (rows, _) = shown_in(&models, &[], false, Mode::Choose, None, "z1 z2");
+    let rows = shown_in(&models, &[], false, Mode::Choose, None, "z1 z2");
     assert!(rows.is_empty());
-    let (rows, _) = shown_in(&models, &[], false, Mode::Choose, None, "zeta");
+    let rows = shown_in(&models, &[], false, Mode::Choose, None, "zeta");
     assert_eq!(rows, [2, 3, 4]);
-    let (rows, _) = shown_in(&models, &[], false, Mode::Choose, None, "m1");
+    let rows = shown_in(&models, &[], false, Mode::Choose, None, "m1");
     assert_eq!(rows, [0]);
 }
 
@@ -1080,7 +1069,7 @@ fn typing_with_no_match_keeps_the_hidden_selection() {
     picker.push_query('q');
     picker.push_query('q');
     picker.push_query('q');
-    let (rows, _) = shown_in(
+    let rows = shown_in(
         &picker.catalogue.models,
         &picker.scoped,
         false,
@@ -1129,7 +1118,7 @@ fn backspace_drops_the_last_letter_and_widens_the_filter() {
     let mut picker = open_over(catalogue());
     picker.push_query('m');
     picker.push_query('2');
-    let (narrow, _) = shown_in(
+    let narrow = shown_in(
         &picker.catalogue.models,
         &picker.scoped,
         false,
@@ -1141,7 +1130,7 @@ fn backspace_drops_the_last_letter_and_widens_the_filter() {
     picker.pop_query();
     assert_eq!(picker.query(), "m");
     // `acme/m1` shows again; the selection stays on `acme/m2`.
-    let (wide, _) = shown_in(
+    let wide = shown_in(
         &picker.catalogue.models,
         &picker.scoped,
         false,
@@ -1208,9 +1197,9 @@ fn a_replacement_with_a_query_keeps_the_selection_on_the_shown_rows() {
 fn thinking_drops_its_target_row_on_a_non_matching_query() {
     let models = catalogue();
     let target = Some(("acme/m1".to_owned(), None));
-    let (rows, _) = shown_in(&models, &[], false, Mode::Thinking, target.as_ref(), "");
+    let rows = shown_in(&models, &[], false, Mode::Thinking, target.as_ref(), "");
     assert!(rows.contains(&0));
-    let (rows, _) = shown_in(&models, &[], false, Mode::Thinking, target.as_ref(), "zeta");
+    let rows = shown_in(&models, &[], false, Mode::Thinking, target.as_ref(), "zeta");
     assert!(!rows.contains(&0));
     assert_eq!(rows, [2, 3, 4]);
 }
@@ -1218,7 +1207,264 @@ fn thinking_drops_its_target_row_on_a_non_matching_query() {
 #[test]
 fn the_checklist_ignores_the_query() {
     let models = catalogue();
-    let (rows, line) = shown_in(&models, &[], false, Mode::Scope, None, "zzz");
-    assert_eq!(rows, [0, 1, 2, 3, 4]);
-    assert_eq!(line, None);
+    assert_eq!(
+        shown_in(&models, &[], false, Mode::Scope, None, "zzz"),
+        [0, 1, 2, 3, 4]
+    );
+}
+
+/// An open picker over `catalogue()` with `lists`, for the view tests.
+fn open_listed(lists: Vec<crate::catalogue::ListAge>) -> ModelPicker {
+    let mut picker = ModelPicker {
+        catalogue: Catalogue {
+            models: catalogue(),
+            notices: Vec::new(),
+            lists,
+        },
+        ..ModelPicker::default()
+    };
+    picker.open(Mode::Choose, None);
+    picker
+}
+
+#[test]
+fn the_view_lists_every_provider_with_its_models() {
+    let picker = open_over(catalogue());
+    let view = view_of(&picker);
+    assert_eq!(view.filter, "");
+    assert_eq!(view.count, "5 models");
+    assert_eq!(view.toggle, None);
+    assert_eq!(view.buttons_at, 1);
+    assert!(!view.no_match);
+    assert!(view.status.is_empty());
+    let providers: Vec<&str> = view
+        .sections
+        .iter()
+        .map(|section| section.provider.as_str())
+        .collect();
+    assert_eq!(providers, ["acme", "zeta"]);
+    // No list times read: every section is unknown.
+    assert!(
+        view.sections
+            .iter()
+            .all(|section| matches!(section.state, Fresh::Unknown))
+    );
+    let ids: Vec<&str> = view
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter().map(|model| model.id.as_str()))
+        .collect();
+    assert_eq!(ids, ["m1", "m2", "z1", "z2", "z3"]);
+    // The selection opens on the first row, whose layout index is 3:
+    // the filter is 0, the buttons 1, the heading 2.
+    assert_eq!(view.focused, Some(3));
+    assert_eq!(view.sections[0].models[0].at, 3);
+}
+
+#[test]
+fn the_view_marks_chips_saved_levels_and_the_current_model() {
+    let mut picker = open_over(catalogue());
+    picker.open(Mode::Choose, Some(("acme/m2", Some("high"))));
+    let laid = picker
+        .view(&ctx(Some(84_000), 0, Some("acme/m2")))
+        .expect("open");
+    let m2 = &laid.sections[0].models[1];
+    // `acme/m2` configures `high` (index 1) and the open preselects it.
+    assert_eq!(m2.saved, Some(1));
+    assert_eq!(m2.chip, Some(1));
+    assert!(m2.current);
+    // The current model shows "—", whatever its price.
+    assert_eq!(m2.cost.as_deref(), Some("—"));
+    // `acme/m1` configures nothing but declares `high` (index 1).
+    let m1 = &laid.sections[0].models[0];
+    assert_eq!(m1.saved, None);
+    assert_eq!(m1.chip, Some(1));
+    assert!(!m1.current);
+    // No price names no rebuild money: the size alone.
+    assert_eq!(m1.cost.as_deref(), Some("~84k tokens"));
+    // With no prompt size the cost column stays out everywhere.
+    let plain = view_of(&picker);
+    assert!(
+        plain
+            .sections
+            .iter()
+            .flat_map(|section| section.models.iter())
+            .all(|model| model.cost.is_none())
+    );
+}
+
+#[test]
+fn the_view_counts_the_scope_and_marks_its_models_when_shown_all() {
+    let mut picker = open_over(catalogue());
+    picker.scoped = vec!["acme/m1".to_owned(), "zeta/z3".to_owned()];
+    picker.open(Mode::Choose, None);
+    let scoped = view_of(&picker);
+    assert_eq!(scoped.count, "scoped · 2 of 5");
+    assert_eq!(scoped.toggle.as_deref(), Some("[show all]"));
+    assert!(
+        scoped
+            .sections
+            .iter()
+            .flat_map(|section| section.models.iter())
+            .all(|model| !model.scoped)
+    );
+    picker.toggle_show_all();
+    let all = view_of(&picker);
+    assert_eq!(all.count, "5 models");
+    assert_eq!(all.toggle.as_deref(), Some("[show scoped]"));
+    let scoped_ids: Vec<&str> = all
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter())
+        .filter(|model| model.scoped)
+        .map(|model| model.id.as_str())
+        .collect();
+    assert_eq!(scoped_ids, ["m1", "z3"]);
+}
+
+#[test]
+fn the_checklist_view_marks_rows_and_keeps_its_footer() {
+    let mut picker = open_over(catalogue());
+    picker.open(Mode::Scope, None);
+    let view = view_of(&picker);
+    // Every installed model shows, with no filter, count or toggle.
+    assert_eq!(view.count, "5 models");
+    assert_eq!(view.toggle, None);
+    assert_eq!(view.buttons_at, 0);
+    assert_eq!(
+        view.footer,
+        [("Space", "mark"), ("Enter", "save"), ("Esc", "back")]
+    );
+    let marks: Vec<bool> = view
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter())
+        .map(|model| model.mark.unwrap_or(false))
+        .collect();
+    assert_eq!(marks, [false; 5]);
+    picker.toggle_mark();
+    let view = view_of(&picker);
+    assert!(
+        view.sections[0].models[0].mark.unwrap_or(false),
+        "the first row marks"
+    );
+}
+
+#[test]
+fn the_view_shows_stale_lists_refreshing() {
+    let mut picker = open_listed(vec![
+        crate::catalogue::ListAge {
+            provider: "acme".to_owned(),
+            updated_ms: Some(1_000),
+            stale: true,
+        },
+        crate::catalogue::ListAge {
+            provider: "zeta".to_owned(),
+            updated_ms: Some(1_000),
+            stale: false,
+        },
+    ]);
+    picker.take_read();
+    let view = picker.view(&ctx(None, 61_000, None)).expect("open");
+    assert!(matches!(view.sections[0].state, Fresh::Refreshing));
+    // A fresh list still shows its age: 60 seconds is "1m".
+    assert!(matches!(view.sections[1].state, Fresh::Updated(ref age) if age == "1m"));
+    // `Every` refreshes every list, whatever the cache holds.
+    picker.refreshing = Some(crate::catalogue::Refresh::Every);
+    let view = view_of(&picker);
+    assert!(
+        view.sections
+            .iter()
+            .all(|section| matches!(section.state, Fresh::Refreshing))
+    );
+}
+
+#[test]
+fn the_view_marks_the_session_only_choice() {
+    use contract::SessionId;
+    let mut picker = open_over(catalogue());
+    let session = SessionId("s_1".to_owned());
+    picker.session_only = Some((session, "zeta/z1".to_owned()));
+    let view = view_of(&picker);
+    let only: Vec<&str> = view
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter())
+        .filter(|model| model.session_only)
+        .map(|model| model.id.as_str())
+        .collect();
+    assert_eq!(only, ["z1"]);
+}
+
+#[test]
+fn the_view_filters_ids_and_marks_the_hits() {
+    let mut picker = open_over(catalogue());
+    picker.push_query('m');
+    picker.push_query('2');
+    let view = view_of(&picker);
+    assert_eq!(view.filter, "m2");
+    assert_eq!(view.count, "1 of 5 models");
+    assert!(!view.no_match);
+    let ids: Vec<&str> = view
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter().map(|model| model.id.as_str()))
+        .collect();
+    assert_eq!(ids, ["m2"]);
+    assert_eq!(view.sections[0].models[0].hits, [true, true]);
+}
+
+#[test]
+fn the_view_with_no_match_holds_one_line_and_no_focus() {
+    let mut picker = open_over(catalogue());
+    picker.push_query('z');
+    picker.push_query('z');
+    picker.push_query('z');
+    let view = view_of(&picker);
+    assert!(view.no_match);
+    assert!(view.sections.is_empty());
+    assert_eq!(view.focused, None);
+    assert_eq!(view.count, "0 of 5 models");
+}
+
+#[test]
+fn rebuild_cost_rounds_sizes_and_picks_tiers() {
+    // Under 1000 tokens the size stays whole; at 1000 it kilos.
+    assert_eq!(rebuild_cost(999, None), "~999 tokens");
+    assert_eq!(rebuild_cost(1000, None), "~1k tokens");
+    // Half up: 1499 rounds down, 1500 rounds up.
+    assert_eq!(rebuild_cost(1499, None), "~1k tokens");
+    assert_eq!(rebuild_cost(1500, None), "~2k tokens");
+    let price = crate::catalogue::Price {
+        micros_per_mtok: 2_000_000,
+        tiers: vec![(100_000, 3_000_000)],
+    };
+    // At and below the tier's edge the base price holds; above it the
+    // tier's does. 80k tokens at $3.75 is $0.30.
+    assert_eq!(
+        rebuild_cost(
+            80_000,
+            Some(&crate::catalogue::Price {
+                micros_per_mtok: 3_750_000,
+                tiers: Vec::new(),
+            })
+        ),
+        "~80k tokens · $0.30"
+    );
+    assert!(rebuild_cost(99_999, Some(&price)).ends_with("· $0.20"));
+    assert!(rebuild_cost(100_000, Some(&price)).ends_with("· $0.20"));
+    assert!(rebuild_cost(100_001, Some(&price)).ends_with("· $0.30"));
+}
+
+#[test]
+fn age_says_seconds_minutes_hours_then_days() {
+    assert_eq!(age(0), "0s");
+    assert_eq!(age(999), "0s");
+    assert_eq!(age(59_000), "59s");
+    assert_eq!(age(60_000), "1m");
+    assert_eq!(age(59 * 60_000), "59m");
+    assert_eq!(age(60 * 60_000), "1h");
+    assert_eq!(age(23 * 60 * 60_000), "23h");
+    assert_eq!(age(24 * 60 * 60_000), "1d");
+    assert_eq!(age(9 * 24 * 60 * 60_000), "9d");
 }

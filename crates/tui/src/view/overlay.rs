@@ -67,11 +67,7 @@ pub(crate) enum Place {
         bottom: u16,
     },
     /// Under a view's top row: the slab's ▄ edge on `top`. The model
-    /// picker takes it (a later lane).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the model picker takes it in a later lane")
-    )]
+    /// picker takes it.
     Under {
         /// The first row below the header.
         top: u16,

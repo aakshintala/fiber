@@ -25,6 +25,7 @@ mod input_box;
 pub(crate) mod item;
 mod key_map;
 mod marks;
+pub(crate) mod model_picker;
 mod offer;
 mod overlay;
 pub(crate) mod panel;
