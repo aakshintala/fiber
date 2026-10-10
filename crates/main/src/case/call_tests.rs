@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{CallOutcome, compare_result, provider_extension};
+use super::{CallOutcome, compare_credential, compare_result, provider_extension};
 
 #[test]
 fn cost_and_models_dispatch_and_anything_else_names_both() {
@@ -139,6 +139,32 @@ fn returns_and_error_use_the_case_json_subset_matcher() {
     )
     .join("\n");
     assert!(mismatch.contains("error.code"), "{mismatch}");
+}
+
+#[test]
+fn exact_credential_expectations_compare_the_whole_nested_value() {
+    let expected = json!({"token": "t", "metadata": {"account_id": "a"}});
+    assert!(compare_credential(&expected, &expected, true).is_ok());
+    let wrong_value = json!({"token": "wrong", "metadata": {"account_id": "a"}});
+    assert!(compare_credential(&expected, &wrong_value, true).is_err());
+    assert!(compare_credential(&expected, &wrong_value, false).is_err());
+
+    let extra = json!({"token": "t", "metadata": {"account_id": "a"}, "email": "a@example.test"});
+    assert!(compare_credential(&expected, &extra, true).is_err());
+    assert!(compare_credential(&expected, &extra, false).is_ok());
+
+    let missing = json!({"metadata": {"account_id": "a"}});
+    assert!(compare_credential(&expected, &missing, true).is_err());
+    assert!(compare_credential(&expected, &missing, false).is_err());
+
+    let nested_extra =
+        json!({"token": "t", "metadata": {"account_id": "a", "email": "a@example.test"}});
+    assert!(compare_credential(&expected, &nested_extra, true).is_err());
+
+    let null_field = json!({"token": "t", "email": null});
+    let missing_null = json!({"token": "t"});
+    assert!(compare_credential(&null_field, &missing_null, true).is_err());
+    assert!(compare_credential(&null_field, &missing_null, false).is_ok());
 }
 
 #[test]

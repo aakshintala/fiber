@@ -44,6 +44,8 @@ pub(crate) struct CallCase {
     pub(crate) credentials: Map<String, Value>,
     /// Stored credentials to check after the last call.
     pub(crate) expect_credentials: Map<String, Value>,
+    /// Whether credential expectations compare whole stored values.
+    pub(crate) exact_credentials: bool,
     /// Whether a person is attached to the case.
     pub(crate) attended: bool,
     /// Advances while a call is parked on its clock deadline.
@@ -134,6 +136,11 @@ impl Case {
             .map(|value| parse_selector(value, "until"))
             .transpose()?;
         let expect = parse_expect(map.get("expect"))?;
+        let exact_credentials = match map.get("exact_credentials") {
+            None => false,
+            Some(Value::Bool(value)) => *value,
+            Some(_) => return Err("exact_credentials: expected a boolean".to_owned()),
+        };
         let call = map.get("call").map(parse_call).transpose()?;
         let returns = map.get("returns").cloned();
         let error = map.get("error").cloned();
@@ -179,16 +186,22 @@ impl Case {
                 host,
                 credentials,
                 expect_credentials,
+                exact_credentials,
                 attended,
                 clock,
             }))
         } else {
-            if ["credentials", "expect_credentials", "attended"]
-                .iter()
-                .any(|key| map.contains_key(*key))
+            if [
+                "credentials",
+                "expect_credentials",
+                "exact_credentials",
+                "attended",
+            ]
+            .iter()
+            .any(|key| map.contains_key(*key))
             {
                 return Err(
-                    "credentials, expect_credentials and attended are only valid in a call case"
+                    "credentials, expect_credentials, exact_credentials and attended are only valid in a call case"
                         .to_owned(),
                 );
             }
@@ -268,6 +281,7 @@ const CASE_FIELDS: &[&str] = &[
     "calls",
     "credentials",
     "expect_credentials",
+    "exact_credentials",
     "attended",
 ];
 
