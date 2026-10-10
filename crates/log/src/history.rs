@@ -101,7 +101,7 @@ impl Segment {
         if from > end {
             return Ok(Vec::new());
         }
-        let offsets = crate::offsets::Offsets::scan(&self.dir, end.saturating_add(1))?;
+        let offsets = crate::offsets::Offsets::scan(&self.dir, end.saturating_add(1), |_| Ok(()))?;
         // The log ends before `to`: nothing past its last line is in
         // this session's history.
         if let Some(to) = &self.to

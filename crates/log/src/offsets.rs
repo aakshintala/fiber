@@ -65,22 +65,38 @@ impl Offsets {
 
     /// The table of the log in `dir`: where each of its first `limit`
     /// complete lines starts, and the end of the last of them. It parses
-    /// nothing, a torn tail is not a line, and a missing log is
-    /// [`Error::NotFound`].
-    pub(crate) fn scan(dir: &Path, limit: u64) -> Result<Offsets, Error> {
+    /// nothing itself, a torn tail is not a line, and a missing log is
+    /// [`Error::NotFound`]. `each` runs on every complete line's bytes in
+    /// order, before the next line is read; its first refusal ends the
+    /// scan with that line named.
+    pub(crate) fn scan(
+        dir: &Path,
+        limit: u64,
+        mut each: impl FnMut(&[u8]) -> Result<(), serde_json::Error>,
+    ) -> Result<Offsets, Error> {
         let mut lines = crate::read::lines(dir)?;
         let path = dir.join(crate::EVENTS);
         let mut starts = Vec::new();
         while u64::try_from(starts.len()).unwrap_or(u64::MAX) < limit {
             let start = lines.offset();
-            match lines.next_raw() {
+            let refused = match lines.next_raw() {
                 None => break,
                 Some(Err(error)) => return Err(error),
-                Some(Ok(_)) => starts.push(start),
+                Some(Ok(bytes)) => each(bytes),
+            };
+            if let Err(source) = refused {
+                return Err(lines.unreadable(source));
             }
+            starts.push(start);
         }
         let end = lines.offset();
         Ok(Offsets::new(path, starts, end))
+    }
+
+    /// The byte just past the last complete line: where a torn tail
+    /// starts, and the length to truncate a torn tail to.
+    pub(crate) fn end(&self) -> u64 {
+        self.lock().end
     }
 
     fn lock(&self) -> MutexGuard<'_, Table> {
