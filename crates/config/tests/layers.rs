@@ -485,12 +485,12 @@ fn an_object_value_merges_key_by_key_but_a_credential_entry_replaces_whole() {
     let setup = Setup::new();
     setup.write(
         &setup.global(),
-        r#"{"mcp": {"servers": {"x": {"env": {"A": "1"}}}},
+        r#"{"mcp": {"servers": {"x": {"env": {"A": "1"}}, "y": {"env": {"K": "v"}}}},
             "providers": {"p": {"credentials": {"work": {"file": "/k"}}}}}"#,
     );
     setup.write(
         &setup.project(),
-        r#"{"mcp": {"servers": {"x": {"env": {"B": "2"}}}},
+        r#"{"mcp": {"servers": {"x": {"env": {"B": "2"}}, "y": {"env": {}}}},
             "providers": {"p": {"credentials": {"work": {"env": "KEY"}}}}}"#,
     );
     let config = setup.load(&[]).unwrap();
@@ -500,6 +500,8 @@ fn an_object_value_merges_key_by_key_but_a_credential_entry_replaces_whole() {
         merged["mcp"]["servers"]["x"]["env"],
         json!({"A": "1", "B": "2"})
     );
+    // An emptied object keeps the layers below it.
+    assert_eq!(merged["mcp"]["servers"]["y"]["env"], json!({"K": "v"}));
     assert_eq!(
         merged["providers"]["p"]["credentials"]["work"],
         json!({"env": "KEY"})
