@@ -86,7 +86,7 @@ impl Clock for TestClock {
 
     fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
         let _ = until;
-        let _ = self.entered.send("entered");
+        let _sent = self.entered.send("entered");
         wait(self.bound);
     }
 
@@ -103,7 +103,7 @@ fn a_done_predicate_returns_at_once_with_the_guard() {
     // on the condvar with no bound and never answer.
     thread::spawn(move || {
         let guard = park(&clock, None, None, &cv, lock(&mutex), |_| true);
-        let _ = result_tx.send(guard.map(|guard| *guard));
+        let _sent = result_tx.send(guard.map(|guard| *guard));
     });
     assert_eq!(
         Deadline::after(Duration::from_secs(2)).recv(&entered),
@@ -127,7 +127,7 @@ fn a_park_that_is_not_done_blocks_until_a_notify() {
         let guard = park(&clock, None, None, &cv_t, lock(&mutex_t), |state| {
             *state == 1
         });
-        let _ = result_tx.send(guard.map(|guard| *guard));
+        let _sent = result_tx.send(guard.map(|guard| *guard));
     });
     assert_eq!(
         Deadline::after(Duration::from_secs(2)).recv(&entered),
@@ -227,7 +227,7 @@ fn a_bump_between_generation_and_park_returns_at_once() {
     let (result_tx, result_rx) = mpsc::channel();
     thread::spawn(move || {
         parker.park(&clock, None, seen);
-        let _ = result_tx.send(());
+        let _sent = result_tx.send(());
     });
     assert_eq!(
         Deadline::after(Duration::from_secs(2)).recv(&entered),
@@ -250,7 +250,7 @@ fn a_parked_thread_returns_after_a_bump() {
     let parked = Arc::clone(&parker);
     thread::spawn(move || {
         parked.park(&clock, None, seen);
-        let _ = result_tx.send(());
+        let _sent = result_tx.send(());
     });
     assert_eq!(
         Deadline::after(Duration::from_secs(2)).recv(&entered),
