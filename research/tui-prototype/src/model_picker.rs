@@ -16,6 +16,21 @@ pub fn set_still(v: bool) {
     STILL.store(v, Relaxed);
 }
 
+thread_local! {
+    /// The marks the last Ctrl+S saved; `None` until one is, when the checklist
+    /// opens on `SCOPED`.
+    static SAVED: std::cell::RefCell<Option<Vec<usize>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The checklist as `/scoped-models` opens it: marked from the last save.
+pub fn open_checklist() -> State {
+    let mut s = for_case("checklist");
+    if let Some(v) = SAVED.with_borrow(Clone::clone) {
+        s.marked = v;
+    }
+    s
+}
+
 pub struct Provider {
     pub name: &'static str,
     pub updated: &'static str,
@@ -528,6 +543,7 @@ impl State {
     /// Saves the marks as the scope.
     pub fn save(&mut self) {
         self.scoped = self.marked.clone();
+        SAVED.set(Some(self.marked.clone()));
     }
     pub fn toggle_show_all(&mut self) {
         if self.scoped.is_empty() {
@@ -605,6 +621,7 @@ fn model_row(f: usize, m: &Model, focused: bool, scoped_mark: bool, hits: &[usiz
 /// A checklist row: the picker's row with a mark between the gutter and
 /// the id, and no `· scoped`. The mark owns cells 2..5 as a click target;
 /// the row itself still focuses on a click elsewhere.
+// debt: repeats model_row's id, roles and cost spans so the picker's row stays untouched; merge into one builder with an optional mark when #1790 builds the real checklist.
 fn check_row(f: usize, m: &Model, focused: bool, marked: bool, hits: &[usize]) -> Row {
     let mut spans = vec![sp(
         if focused { "› " } else { "  " },
@@ -873,7 +890,7 @@ pub fn on_key(ui: &mut Ui, k: Key, m: Mods) -> bool {
         if k == Key::Enter && ui.qsel.is_none() && ui.input.trim() == "/scoped-models" {
             ui.input.clear();
             ui.ctx_view = false;
-            ui.picker = Some(for_case("checklist"));
+            ui.picker = Some(open_checklist());
             ui.vscroll = 0;
             return true;
         }
@@ -1261,6 +1278,15 @@ mod tests {
         let p = ui.picker.as_ref().unwrap();
         assert_eq!(p.query, "");
         assert_eq!(p.marked, vec![1, 3, 8, 9]);
+    }
+
+    #[test]
+    fn a_saved_scope_marks_the_next_checklist() {
+        assert_eq!(open_checklist().marked, SCOPED.to_vec());
+        let mut s = open_checklist();
+        s.toggle();
+        s.save();
+        assert_eq!(open_checklist().marked, vec![1, 3, 8, 9]);
     }
 
     #[test]

@@ -6511,14 +6511,6 @@ fn run(
                                 ui.picker = Some(model_picker::for_case("list"));
                                 ui.vscroll = 0;
                             }
-                            Key::Enter
-                                if ui.qsel.is_none() && ui.input.trim() == "/scoped-models" =>
-                            {
-                                ui.input.clear();
-                                ui.ctx_view = false;
-                                ui.picker = Some(model_picker::for_case("checklist"));
-                                ui.vscroll = 0;
-                            }
                             Key::Enter => enter(f, &mut ui, &mut cmds, ts),
                             Key::Backspace => {
                                 ui.input.pop();
