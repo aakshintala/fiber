@@ -2,7 +2,11 @@
 # Reports this check run's leaked processes (docs/testing.md, "Running
 # tests"). It only reports: it sends no signal.
 #
-# Usage: scripts/leak-scan NONCE
+# Usage: scripts/leak-scan NONCE [CHECK_START]
+#
+# CHECK_START is the epoch seconds when scripts/check began, or
+# FIBER_CHECK_START when no second argument is given. Without either the
+# macOS orphan scan below is skipped.
 #
 # Every descendant of scripts/check inherits FIBER_CHECK_RUN, so a process
 # whose environment still holds FIBER_CHECK_RUN=NONCE started under this run
@@ -16,6 +20,8 @@ if [ -z "$nonce" ]; then
   echo "scripts/leak-scan: refusing an empty NONCE: it matches every process" >&2
   exit 2
 fi
+
+orphan_start=${2-${FIBER_CHECK_START-}}
 
 # How long a normally exiting process gets before the scan lists.
 sleep "${LEAK_SCAN_GRACE:-2}"
@@ -136,6 +142,53 @@ else
       leaks=$((leaks + 1))
     fi
   done
+fi
+
+case $orphan_start in '' | *[!0-9]*) orphan_start= ;; esac
+if [ "$(uname -s)" = Darwin ] && [ -n "$orphan_start" ]; then
+  scan_root=${LEAK_SCAN_ROOT:-$(git rev-parse --show-toplevel)}
+  target_prefix="$scan_root/target/"
+  # Owned by the user, reparented to init, started after the check
+  # began: on macOS ps withholds the environment of sh and sleep, so the
+  # nonce scan above cannot see them. A path under this worktree's target/
+  # is this run's leak and fails the scan; sh, bash or sleep may belong to
+  # another run, so they warn only. Anything else is ignored. The single
+  # -gt holds all three boundaries: at the start is ignored, a second
+  # before is ignored, a second after is listed.
+  orphans=$(env -u FIBER_CHECK_RUN ps -U "${USER:-$(id -un)}" -o pid=,ppid=,lstart=,command=)
+  while IFS= read -r line; do
+    IFS=' ' read -r pid ppid dow mon day ctime cyear cmd <<<"$line"
+    case $pid in '' | *[!0-9]*) continue ;; esac
+    case $ppid in 1) ;; *) continue ;; esac
+    case $excluded in *" $pid "*) continue ;; esac
+    if [ -z "${dow-}" ] || [ -z "${mon-}" ] || [ -z "${day-}" ] || [ -z "${ctime-}" ] || [ -z "${cyear-}" ]; then
+      continue
+    fi
+    lstart="$dow $mon $day $ctime $cyear"
+    if ! started=$(env -u FIBER_CHECK_RUN date -j -f "%a %b %e %T %Y" "$lstart" "+%s" 2>/dev/null); then
+      continue
+    fi
+    case $started in '' | *[!0-9]*) continue ;; esac
+    if [ "$started" -gt "$orphan_start" ]; then
+      :
+    else
+      continue
+    fi
+    case "${cmd-}" in *"$target_prefix"*)
+      echo "leaked process $pid: $cmd" >&2
+      leaks=$((leaks + 1))
+      continue
+      ;;
+    esac
+    word=${cmd-}
+    word=${word%% *}
+    case $word in '' ) continue ;; esac
+    base=${word##*/}
+    case $base in sh | bash | sleep)
+      echo "warning: orphan process $pid: $cmd (started $lstart; may belong to another run)" >&2
+      ;;
+    esac
+  done <<<"$orphans"
 fi
 
 if [ "$leaks" -eq 0 ]; then

@@ -19,7 +19,11 @@ rc=0
 # Set to 1 once the test run's nonce is exported: the EXIT trap then scans
 # for leaked processes, failing a passing run that leaked any.
 scan_leaks=0
-trap 'rc=$?; rm -f "$log"; if [ "$scan_leaks" = 1 ]; then echo "== leak scan"; if scripts/leak-scan "$FIBER_CHECK_RUN"; then :; else leak_rc=$?; echo "scripts/check: leaked processes (exit $leak_rc)" >&2; if [ "$rc" -eq 0 ]; then rc=$leak_rc; fi; fi; fi; if [ $rc -eq 0 ]; then echo "scripts/check: PASS"; else echo "scripts/check: FAIL (exit $rc)"; fi; exit $rc' EXIT
+# Epoch seconds when the check began: the macOS orphan scan lists only
+# processes owned by the user with ppid 1 that started after this time.
+check_start=$(date +%s)
+export FIBER_CHECK_START=$check_start
+trap 'rc=$?; rm -f "$log"; if [ "$scan_leaks" = 1 ]; then echo "== leak scan"; if scripts/leak-scan "$FIBER_CHECK_RUN" "$check_start"; then :; else leak_rc=$?; echo "scripts/check: leaked processes (exit $leak_rc)" >&2; if [ "$rc" -eq 0 ]; then rc=$leak_rc; fi; fi; fi; if [ $rc -eq 0 ]; then echo "scripts/check: PASS"; else echo "scripts/check: FAIL (exit $rc)"; fi; exit $rc' EXIT
 cd "$(git rev-parse --show-toplevel)"
 
 base=origin/main
