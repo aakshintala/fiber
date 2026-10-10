@@ -338,6 +338,13 @@ pub(crate) const KEYS: &[Key] = &[
     person_files("reviewer.context", Str),
 ];
 
+/// Every row whose layers all apply, as dotted segments, in table order.
+pub(crate) fn union_rows() -> impl Iterator<Item = Vec<String>> {
+    KEYS.iter()
+        .filter(|key| key.merge == Merge::Union)
+        .map(|key| key.path.split('.').map(str::to_owned).collect())
+}
+
 /// Every key's path that names no `*`, in table order.
 pub(crate) fn plain_paths() -> impl Iterator<Item = &'static str> {
     KEYS.iter()

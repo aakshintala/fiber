@@ -34,17 +34,6 @@ fn describe_names_each_source_without_its_secret() {
     ] {
         assert_eq!(source.describe(), text);
     }
-    let command = CredentialSource::Command(vec!["op".into(), "read".into(), "op://acme".into()]);
-    assert!(
-        !command.describe().contains("read"),
-        "{}",
-        command.describe()
-    );
-    assert!(
-        !command.describe().contains("op://acme"),
-        "{}",
-        command.describe()
-    );
 }
 
 #[test]

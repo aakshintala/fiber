@@ -252,7 +252,16 @@ impl Config {
     /// layer's names, a credential entry is replaced whole, and any other
     /// value replaces the one below it, an object key by key.
     pub fn merged(&self, model: Option<&str>) -> Value {
-        merge_layers(&self.layers, model)
+        let mut merged = merge_layers(&self.layers, model);
+        for key in keys::union_rows() {
+            let names: Vec<Value> = self
+                .unioned(&key, model)
+                .into_iter()
+                .map(|(name, _)| Value::String(name))
+                .collect();
+            path::set(&mut merged, &key, Value::Array(names));
+        }
+        merged
     }
 
     /// The effective value of a dotted key and the layer it came from, as
@@ -290,18 +299,22 @@ impl Config {
         let Some(key) = path::parse(key) else {
             return Vec::new();
         };
-        self.unioned(&key)
+        self.unioned(&key, None)
             .into_iter()
             .map(|(name, _)| name)
             .collect()
     }
 
     /// Every name in the list at `key` with the lowest layer listing it,
-    /// lowest layer first, each name once at its first appearance.
-    pub(crate) fn unioned(&self, key: &[String]) -> Vec<(String, Source)> {
+    /// lowest layer first, each name once at its first appearance: the one
+    /// union `merged`, `union_list` and `setting` share, selected by the
+    /// key's `Merge` row. Reads each layer through its per-model view, as
+    /// `merged` does, so a model view and the raw layer never disagree.
+    pub(crate) fn unioned(&self, key: &[String], model: Option<&str>) -> Vec<(String, Source)> {
         let mut names: Vec<(String, Source)> = Vec::new();
         for (source, layer) in &self.layers {
-            let items = path::get(layer, key).and_then(Value::as_array);
+            let seen = view(layer, model);
+            let items = path::get(&seen, key).and_then(Value::as_array);
             for name in items.into_iter().flatten().filter_map(Value::as_str) {
                 if !names.iter().any(|(seen, _)| seen == name) {
                     names.push((name.to_owned(), source.clone()));
@@ -487,37 +500,17 @@ fn merge_layers(layers: &[(Source, Value)], model: Option<&str>) -> Value {
     merged
 }
 
-/// Lays `upper` over `merged` as one row's merge kind says: a union key
-/// gains every new name, a credential entry replaces the one below as a
-/// whole, and any other value replaces the one below it, an object key
-/// by key.
+/// Lays `upper` over `merged` as one row's merge kind says: a credential
+/// entry replaces the one below as a whole, and any other value replaces
+/// the one below it, an object key by key. Union keys are skipped: after
+/// the walk `merged` fills them from `unioned`, so every reader shares one
+/// table-selected union.
 fn lay(merged: &mut Value, upper: &Value, path: &mut Vec<String>) {
-    if let Some(row) = keys::leaf(path) {
-        match row.merge {
-            keys::Merge::Union => {
-                let mut names: Vec<Value> = path::get(merged, path)
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                for name in upper
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                {
-                    if !names.iter().any(|seen| seen == name) {
-                        names.push(Value::String(name.to_owned()));
-                    }
-                }
-                path::set(merged, path, Value::Array(names));
-                return;
-            }
-            keys::Merge::EntryReplace => {
-                path::set(merged, path, upper.clone());
-                return;
-            }
-            keys::Merge::Replace => {}
-        }
+    if let Some(row) = keys::leaf(path)
+        && row.merge == keys::Merge::EntryReplace
+    {
+        path::set(merged, path, upper.clone());
+        return;
     }
     match upper {
         Value::Object(map) if map.is_empty() => {

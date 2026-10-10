@@ -78,7 +78,7 @@ impl Config {
     /// One key's value as `/settings` shows it.
     fn setting(&self, segments: &[String]) -> SettingValue {
         if keys::leaf(segments).is_some_and(|row| row.merge == keys::Merge::Union) {
-            let names = self.unioned(segments);
+            let names = self.unioned(segments, None);
             if !names.is_empty() {
                 return SettingValue::Union(names);
             }
