@@ -101,8 +101,6 @@ fn fold(events: &str, width: u16, height: u16) -> Result<App, String> {
 /// (`docs/performance.md`, "Measuring").
 #[derive(Debug)]
 pub struct OpenStages {
-    /// The non-empty lines folded.
-    pub lines: usize,
     /// Time in `serde_json::from_str`, one line at a time.
     pub parse: Duration,
     /// Time in `App::on_line`, one line at a time.
@@ -134,7 +132,6 @@ pub fn measure_open(
     let mut screen = Screen::new(CrosstermBackend::new(Counter::default()), width, height)
         .map_err(|error| error.to_string())?;
     let mut stages = OpenStages {
-        lines: 0,
         parse: Duration::ZERO,
         fold: Duration::ZERO,
         frames: 0,
@@ -159,7 +156,6 @@ pub fn measure_open(
         stages.fold = stages
             .fold
             .saturating_add(clock.now().saturating_duration_since(started));
-        stages.lines = stages.lines.saturating_add(1);
         since_frame = since_frame.saturating_add(1);
         if since_frame >= frame_every {
             stages.frame_time =

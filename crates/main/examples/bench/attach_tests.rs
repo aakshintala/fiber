@@ -3,8 +3,8 @@ use serde_json::json;
 use crate::busy::filler;
 
 use super::{
-    ATTACH_TAIL, PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES, feed_step, plan_turns, size_note,
-    stage_rows,
+    ATTACH_TAIL, PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES, feed_step, plan_turns, replay_finished,
+    size_note, stage_rows,
 };
 
 fn status(id: &str, state: &str) -> serde_json::Value {
@@ -123,6 +123,26 @@ fn size_note_is_none_at_each_bound_and_some_just_outside() {
         assert!(size_note(fixture, high).is_some());
     }
     assert!(size_note("2 MiB", 2_097_152).is_some());
+}
+
+#[test]
+fn replay_finished_needs_the_ack_then_the_tail() {
+    let ack = json!({"kind": "command_accepted", "payload": {"command_id": "c_1"}});
+    // The acknowledgement arrives first, but alone it never finishes.
+    assert!(!replay_finished(false, &ack));
+    assert!(!replay_finished(true, &ack));
+    let tail = json!({"kind": "session_event", "payload": {"text": "quokkas"}});
+    assert!(!replay_finished(false, &tail));
+    assert!(replay_finished(true, &tail));
+}
+
+#[test]
+fn replay_finished_ignores_a_line_without_the_tail() {
+    let line = json!({"kind": "session_event", "payload": {"text": "wombats"}});
+    assert!(!replay_finished(true, &line));
+    // The tail nested anywhere in the line still finishes.
+    let nested = json!({"kind": "session_event", "payload": {"lines": ["quokkas"]}});
+    assert!(replay_finished(true, &nested));
 }
 
 fn stages() -> super::Samples {

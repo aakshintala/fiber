@@ -76,11 +76,10 @@ impl contract::clock::Clock for TickClock {
 }
 
 #[test]
-fn measure_open_counts_the_lines_and_draws_one_frame_for_usize_max() {
+fn measure_open_draws_one_frame_for_usize_max() {
     let clock = fakes::clock::FakeClock::new();
     let stages = crate::measure_open(&events(5), 60, 12, usize::MAX, clock)
         .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(stages.lines, 5);
     assert_eq!(stages.frames, 1);
     assert!(stages.parse.is_zero());
     assert!(stages.fold.is_zero());
@@ -89,7 +88,8 @@ fn measure_open_counts_the_lines_and_draws_one_frame_for_usize_max() {
     let clock = fakes::clock::FakeClock::new();
     let one = crate::measure_open(&events(1), 60, 12, usize::MAX, clock)
         .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!((one.lines, one.frames), (1, 1));
+    assert_eq!(one.frames, 1);
+    assert_ne!(one.frames, 2);
 }
 
 #[test]
@@ -101,7 +101,6 @@ fn measure_open_draws_after_every_k_lines_and_once_at_the_end() {
         let clock = fakes::clock::FakeClock::new();
         let stages = crate::measure_open(&events(lines), 60, 12, 3, clock)
             .unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(stages.lines, lines);
         assert_eq!(stages.frames, frames, "for {lines} lines at every 3");
     }
     // Every line draws at 1, and an empty log still draws its final frame.
@@ -112,7 +111,7 @@ fn measure_open_draws_after_every_k_lines_and_once_at_the_end() {
     assert_ne!(every.frames, 5);
     let clock = fakes::clock::FakeClock::new();
     let empty = crate::measure_open("", 60, 12, 3, clock).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!((empty.lines, empty.frames), (0, 1));
+    assert_eq!(empty.frames, 1);
 }
 
 #[test]
@@ -130,7 +129,7 @@ fn measure_open_skips_blank_lines_without_counting_them() {
         clock,
     )
     .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!((stages.lines, stages.frames), (2, 1));
+    assert_eq!(stages.frames, 1);
 }
 
 #[test]
@@ -164,7 +163,6 @@ fn measure_open_times_each_stage_on_a_ticking_clock() {
     // one millisecond per step.
     let stages = crate::measure_open(&events(2), 60, 12, 1, TickClock::clock(origin))
         .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(stages.lines, 2);
     assert_eq!(stages.frames, 2);
     assert_eq!(stages.parse, Duration::from_millis(2));
     assert_eq!(stages.fold, Duration::from_millis(2));
@@ -182,13 +180,9 @@ fn measure_open_reports_no_stages_for_an_empty_log_but_still_draws() {
     let origin = fakes::clock::FakeClock::new().origin();
     let stages = crate::measure_open("", 60, 12, usize::MAX, TickClock::clock(origin))
         .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(stages.lines, 0);
     assert_eq!(stages.frames, 1);
     assert!(stages.parse.is_zero());
     assert!(stages.fold.is_zero());
     assert_eq!(stages.frame_time, Duration::from_millis(1));
-    assert_eq!(
-        json!({"lines": stages.lines, "frames": stages.frames}),
-        json!({"lines": 0, "frames": 1})
-    );
+    assert_eq!(json!({"frames": stages.frames}), json!({"frames": 1}));
 }
