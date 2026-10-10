@@ -1,0 +1,67 @@
+{
+  "call": {
+    "provider": "codex",
+    "function": "login",
+    "arg": {
+      "method": "browser"
+    }
+  },
+  "host": {
+    "oauth": [
+      {
+        "pkce": {
+          "verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+          "challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        }
+      },
+      {
+        "pkce": {
+          "verifier": "E9MelKWq4JU1B2wsM-35S5ZJi-CIrU8mAJo5GzlJw01",
+          "challenge": "E9MelKWq4JU1B2wsM-35S5ZJi-CIrU8mAJo5GzlJw01"
+        }
+      },
+      {
+        "open": {
+          "url": "https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid%20profile%20email%20offline_access&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&state=E9MelKWq4JU1B2wsM-35S5ZJi-CIrU8mAJo5GzlJw01&id_token_add_organizations=true&codex_cli_simplified_flow=true&originator=fiber"
+        }
+      },
+      {
+        "callback": {
+          "reply": {
+            "query": {
+              "code": "authcode-1",
+              "state": "E9MelKWq4JU1B2wsM-35S5ZJi-CIrU8mAJo5GzlJw01"
+            }
+          }
+        }
+      }
+    ],
+    "http": [
+      {
+        "request": {
+          "method": "POST",
+          "url": "https://auth.openai.com/oauth/token",
+          "body": "grant_type=authorization_code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&code=authcode-1&code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"access_token\": \"eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xIn0sImV4cCI6NDEwMjQ0NDgwMH0.\", \"refresh_token\": \"rt_1\", \"id_token\": \"eyJhbGciOiJub25lIn0.eyJlbWFpbCI6ImFsaWNlQGV4YW1wbGUuY29tIiwiZXhwIjo0MTAyNDQ0ODAwfQ.\", \"expires_in\": 864000}"
+        }
+      }
+    ]
+  },
+  "returns": {
+    "token": "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xIn0sImV4cCI6NDEwMjQ0NDgwMH0.",
+    "expires_at": 4102444800,
+    "refresh_token": "rt_1",
+    "account_id": "acct_1"
+  },
+  "expect_credentials": {
+    "codex/alice@example.com": {
+      "token": "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xIn0sImV4cCI6NDEwMjQ0NDgwMH0.",
+      "expires_at": 4102444800,
+      "refresh_token": "rt_1",
+      "account_id": "acct_1"
+    }
+  }
+}

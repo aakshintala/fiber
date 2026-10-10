@@ -1,0 +1,98 @@
+{
+  "call": {
+    "provider": "codex",
+    "function": "login",
+    "arg": {
+      "method": "device"
+    }
+  },
+  "clock": [
+    {
+      "advance_ms": 5000
+    },
+    {
+      "advance_ms": 5000
+    }
+  ],
+  "host": {
+    "oauth": [
+      {
+        "show": {
+          "url": "https://auth.openai.com/codex/device",
+          "code": "ABCD-1234"
+        }
+      }
+    ],
+    "http": [
+      {
+        "request": {
+          "method": "POST",
+          "url": "https://auth.openai.com/api/accounts/deviceauth/usercode",
+          "body": "{\"client_id\":\"app_EMoamEEZ73f0CkXaXp7hrann\"}"
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"device_auth_id\": \"da_1\", \"user_code\": \"ABCD-1234\", \"interval\": \"5\"}"
+        }
+      },
+      {
+        "request": {
+          "method": "POST",
+          "url": "https://auth.openai.com/api/accounts/deviceauth/token",
+          "body": "{\"device_auth_id\":\"da_1\",\"user_code\":\"ABCD-1234\"}"
+        },
+        "reply": {
+          "status": 403,
+          "body": "{\"error\": {\"code\": \"deviceauth_authorization_pending\"}}"
+        }
+      },
+      {
+        "request": {
+          "method": "POST",
+          "url": "https://auth.openai.com/api/accounts/deviceauth/token",
+          "body": "{\"device_auth_id\":\"da_1\",\"user_code\":\"ABCD-1234\"}"
+        },
+        "reply": {
+          "status": 404,
+          "body": "not here"
+        }
+      },
+      {
+        "request": {
+          "method": "POST",
+          "url": "https://auth.openai.com/api/accounts/deviceauth/token",
+          "body": "{\"device_auth_id\":\"da_1\",\"user_code\":\"ABCD-1234\"}"
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"authorization_code\": \"authcode-2\", \"code_verifier\": \"verifier-2\"}"
+        }
+      },
+      {
+        "request": {
+          "method": "POST",
+          "url": "https://auth.openai.com/oauth/token",
+          "body": "grant_type=authorization_code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&code=authcode-2&code_verifier=verifier-2&redirect_uri=https%3A%2F%2Fauth.openai.com%2Fdeviceauth%2Fcallback"
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"access_token\": \"eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xIn0sImV4cCI6NDEwMjQ0NDgwMH0.\", \"refresh_token\": \"rt_1\", \"id_token\": \"eyJhbGciOiJub25lIn0.eyJlbWFpbCI6ImFsaWNlQGV4YW1wbGUuY29tIiwiZXhwIjo0MTAyNDQ0ODAwfQ.\", \"expires_in\": 864000}"
+        }
+      }
+    ]
+  },
+  "returns": {
+    "token": "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xIn0sImV4cCI6NDEwMjQ0NDgwMH0.",
+    "expires_at": 4102444800,
+    "refresh_token": "rt_1",
+    "account_id": "acct_1"
+  },
+  "expect_credentials": {
+    "codex/alice@example.com": {
+      "token": "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xIn0sImV4cCI6NDEwMjQ0NDgwMH0.",
+      "expires_at": 4102444800,
+      "refresh_token": "rt_1",
+      "account_id": "acct_1"
+    }
+  }
+}

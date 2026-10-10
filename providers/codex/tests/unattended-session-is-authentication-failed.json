@@ -1,0 +1,27 @@
+{
+  "call": {
+    "provider": "codex",
+    "function": "credential",
+    "arg": {}
+  },
+  "attended": false,
+  "host": {
+    "oauth": [
+      {
+        "pkce": {
+          "verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+          "challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        }
+      },
+      {
+        "pkce": {
+          "verifier": "E9MelKWq4JU1B2wsM-35S5ZJi-CIrU8mAJo5GzlJw01",
+          "challenge": "E9MelKWq4JU1B2wsM-35S5ZJi-CIrU8mAJo5GzlJw01"
+        }
+      }
+    ]
+  },
+  "error": {
+    "code": "authentication_failed"
+  }
+}
