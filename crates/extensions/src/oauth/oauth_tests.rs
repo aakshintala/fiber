@@ -312,7 +312,6 @@ fn a_malformed_parameter_is_named_only_when_recognised_and_its_value_never_shown
 }
 
 /// The reply `work` delivers: every failure carries its code and message.
-#[track_caller]
 fn delivered(work: impl FnOnce(&Deliver)) -> Reply {
     let (tx, rx) = mpsc::channel();
     let deliver: Deliver = Arc::new(move |reply| match tx.send(reply) {

@@ -49,7 +49,6 @@ const CONNECT_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
 /// `extra`, on top of the proxy URL and the marker. The child re-runs
 /// this same test, which downloads and fails the child when the bytes do
 /// not arrive. `None` in the child, after its assertions.
-#[track_caller]
 fn download_in_child(
     test: &str,
     extra: &[(&str, &str)],

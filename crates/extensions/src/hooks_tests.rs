@@ -95,12 +95,10 @@ impl Home {
         .unwrap()
     }
 
-    #[track_caller]
     fn load(&self, overrides: &[&str]) -> Arc<SessionExtensions> {
         self.load_with_host(overrides, None)
     }
 
-    #[track_caller]
     fn load_with_host(
         &self,
         overrides: &[&str],
@@ -136,7 +134,6 @@ const WAIT: Duration = Duration::from_secs(5);
 
 /// Runs `f` on its own thread and waits for it under [`WAIT`], so a runtime
 /// that never answers fails the test instead of hanging it.
-#[track_caller]
 fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -145,7 +142,6 @@ fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     rx.recv_timeout(WAIT).expect("waited for the extensions")
 }
 
-#[track_caller]
 fn after_tool(session: &Arc<SessionExtensions>, content: &str) -> AfterToolAnswer {
     let (session, content) = (Arc::clone(session), content.to_owned());
     bounded(move || {
@@ -1168,7 +1164,6 @@ fn crediting(provider: &str) -> String {
 }
 
 /// `start_provider` on its own thread under [`WAIT`].
-#[track_caller]
 fn start(
     home: &Home,
     session: &Arc<SessionExtensions>,
