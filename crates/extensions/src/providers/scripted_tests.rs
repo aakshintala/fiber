@@ -3,6 +3,7 @@
 
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
+use crate::test_support::write_record;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -22,24 +23,6 @@ fn scripted_ids(providers: &Providers) -> Vec<String> {
         .get("scripted")
         .map(|data| data.models.iter().map(|m| m.id.clone()).collect())
         .unwrap_or_default()
-}
-
-/// Writes the install record `extensions/<dir>/.fiber.json` holds, so the
-/// directory is healthy: a directory with no record is damaged and its
-/// providers are left out (`docs/extensions.md`, "Installing").
-fn write_record(dir: &std::path::Path) {
-    let text = std::fs::read_to_string(dir.join("extension.json")).unwrap();
-    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let name = manifest.get("name").and_then(|n| n.as_str()).unwrap();
-    let version = manifest
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("1.0.0");
-    std::fs::write(
-        dir.join(".fiber.json"),
-        serde_json::json!({"name": name, "version": version, "requested": true, "source": {"path": "/p"}}).to_string(),
-    )
-    .unwrap();
 }
 
 /// Writes an installed extension `name` serving one provider of the same

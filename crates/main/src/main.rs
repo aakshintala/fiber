@@ -47,6 +47,8 @@ mod lua_warm_tests;
 #[cfg(test)]
 #[path = "reviewer_tests.rs"]
 mod reviewer_tests;
+#[cfg(test)]
+mod test_support;
 
 use std::collections::BTreeMap;
 use std::fmt::Display;

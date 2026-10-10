@@ -8,6 +8,7 @@
     reason = "test code; a failure is the test's"
 )]
 
+use crate::test_support::write_record;
 use std::fs;
 use std::io::{self, BufRead, Cursor, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -33,24 +34,6 @@ use super::{
 };
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
-
-/// Writes the install record `extensions/<dir>/.fiber.json` holds, so the
-/// directory is healthy: a directory with no record is damaged and its
-/// providers are left out (`docs/extensions.md`, "Installing").
-fn write_record(dir: &std::path::Path) {
-    let text = std::fs::read_to_string(dir.join("extension.json")).unwrap();
-    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let name = manifest.get("name").and_then(|n| n.as_str()).unwrap();
-    let version = manifest
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("v0.0.0");
-    std::fs::write(
-        dir.join(".fiber.json"),
-        serde_json::json!({"name": name, "version": version, "requested": true, "source": {"path": "/p"}}).to_string(),
-    )
-    .unwrap();
-}
 
 /// Gives one key, or an error, and records that it was asked.
 struct Fake {
