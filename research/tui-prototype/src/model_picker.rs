@@ -5,7 +5,7 @@
 use crate::cases::{Case, Surface};
 use crate::input::{Key, Mods};
 use crate::{bold, dim, fg, hot_row, panel, row, sp, width, Act, Row, Ui, BLUE, ORANGE, SPIN};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use unicode_width::UnicodeWidthStr;
 
@@ -423,19 +423,24 @@ fn provider_row(p: &Provider, refreshing: bool, s: &State) -> Row {
     row(vec![sp(p.name, dim()), sp(" ", Style::new()), sp(what, st)])
 }
 
-fn model_row(f: usize, m: &Model, focused: bool, scoped_mark: bool) -> Row {
+fn model_row(f: usize, m: &Model, focused: bool, scoped_mark: bool, hits: &[usize]) -> Row {
     let mut spans = vec![
         sp(if focused { "› " } else { "  " }, if focused { bold() } else { Style::new() }),
-        sp(
-            m.id,
-            if focused {
-                bold().patch(fg(BLUE))
-            } else {
-                fg(BLUE)
-            },
-        ),
-        sp(" ", Style::new()),
     ];
+    // The id reads as one word even underlined per matched char: matched
+    // chars carry underline plus bold over the row's own colour.
+    for (i, ch) in m.id.chars().enumerate() {
+        let mut st = if focused {
+            bold().patch(fg(BLUE))
+        } else {
+            fg(BLUE)
+        };
+        if hits.contains(&i) {
+            st = st.patch(bold()).add_modifier(Modifier::UNDERLINED);
+        }
+        spans.push(sp(ch.to_string(), st));
+    }
+    spans.push(sp(" ", Style::new()));
     for r in &m.roles {
         spans.push(sp(format!("[{r}] "), dim()));
     }
@@ -447,8 +452,9 @@ fn model_row(f: usize, m: &Model, focused: bool, scoped_mark: bool) -> Row {
     }
     spans.extend([sp("\t", Style::new()), sp(m.rebuild, dim())]);
     // The focused model reads bold throughout, like every focused choice.
+    let rest = 2 + m.id.chars().count();
     if focused {
-        for s in spans.iter_mut().skip(3) {
+        for s in spans.iter_mut().skip(rest) {
             s.style = s.style.patch(bold());
         }
     }
@@ -489,9 +495,21 @@ fn note_row() -> Row {
     row(vec![sp("    ⓢ this session only · nothing saved", dim())])
 }
 
+/// The filter line above the controls: a muted placeholder until typed,
+/// then the query in bold after a muted marker, always with a block cursor.
+fn search_row(query: &str) -> Row {
+    if query.is_empty() {
+        row(vec![sp("Type to search ", dim()), sp("█", dim())])
+    } else {
+        row(vec![sp("› ", dim()), sp(query.to_string(), bold()), sp("█", dim())])
+    }
+}
+
 /// The controls: the scope chip, the show-all toggle, and the refresh button.
 fn controls(s: &State, w: usize) -> Row {
-    let scope = if s.scoped.is_empty() {
+    let scope = if !s.query.is_empty() {
+        format!(" {} of {} models ", visible(s).len(), count())
+    } else if s.scoped.is_empty() {
         format!(" {} models ", visible(s).len())
     } else {
         format!(" scoped · {} of {} ", visible(s).len(), count())
@@ -523,9 +541,9 @@ fn footer() -> Row {
         ("↑↓", "move"),
         ("←→", "levels"),
         ("enter", "choose"),
-        ("s", "session only"),
-        ("a", "show all"),
-        ("r", "refresh"),
+        ("tab", "show all"),
+        ("ctrl+s", "session only"),
+        ("ctrl+r", "refresh"),
         ("esc", "close"),
     ])
 }
@@ -541,8 +559,12 @@ fn body(s: &State, inner: usize) -> Vec<Row> {
         }
     }
     let vis = visible(s);
+    let mut out = vec![search_row(&s.query), controls(s, inner)];
+    if vis.is_empty() {
+        out.push(row(vec![sp("No models match", dim())]));
+        return out;
+    }
     let pos = vis.iter().position(|&i| i == s.focus).unwrap_or(0);
-    let mut out = vec![controls(s, inner)];
     let mut first_section = true;
     for (pi, p) in all.iter().enumerate() {
         let here: Vec<usize> = vis.iter().copied().filter(|&i| at[i].0 == pi).collect();
@@ -559,10 +581,11 @@ fn body(s: &State, inner: usize) -> Vec<Row> {
             let m = &all[ppi].models[mi];
             let focused = vis[pos] == f;
             let scoped_mark = s.show_all && s.scoped.contains(&f);
+            let hits = id_hits(&s.query, m.id);
             if focused {
-                out.extend(panel::bar(vec![model_row(f, m, focused, scoped_mark)]));
+                out.extend(panel::bar(vec![model_row(f, m, focused, scoped_mark, &hits)]));
             } else {
-                out.push(model_row(f, m, focused, scoped_mark));
+                out.push(model_row(f, m, focused, scoped_mark, &hits));
             }
             out.push(chips_row(s, f, m, focused));
             if s.session_only == Some(f) {
@@ -578,11 +601,14 @@ fn body(s: &State, inner: usize) -> Vec<Row> {
 /// keeps its coordinates.
 pub fn view(s: &State, w: usize) -> Vec<Row> {
     let probe = body(s, 10_000);
-    // The controls row pads to its width, so it never sizes the panel.
+    // The search and controls rows pad to their width, so neither sizes the panel.
     // The legend sizes unfitted now, straight from its row.
-    let natural = probe.iter().skip(1).map(|r| width(&r.spans)).max().unwrap_or(0);
-    let natural = natural.max(width(&footer().spans));
-    let panel_w = panel::fit_width(natural, w.saturating_sub(4).min(96), w);
+    let legend_w = width(&footer().spans);
+    let natural = probe.iter().skip(2).map(|r| width(&r.spans)).max().unwrap_or(0).max(legend_w);
+    // The legend always fits: the preferred width stretches past the usual
+    // cap rather than cutting the foot.
+    let prefer = w.saturating_sub(4).min(96).max(legend_w);
+    let panel_w = panel::fit_width(natural, prefer, w);
     let inner = panel::inner_w(panel_w);
     let rows = panel::frame(None, body(s, inner), Some(footer()), panel_w);
     panel::centre(rows, panel_w, w)
@@ -714,7 +740,7 @@ mod tests {
 
     #[test]
     fn the_picker_is_a_centred_panel_with_a_bar_and_legend() {
-        let rows = view(&for_case("list"), 100);
+        let rows = view(&for_case("list"), 120);
         let t = text(&rows);
         assert!(t.contains("\u{2584}"), "no top edge");
         assert!(t.contains("\u{2580}"), "no bottom edge");
@@ -724,7 +750,7 @@ mod tests {
         let edge = t.split('\n').find(|l| l.contains("\u{2584}")).unwrap();
         let run = edge.chars().filter(|&c| c == '\u{2584}').count();
         assert!(edge.starts_with(' '), "panel flush left");
-        assert!(run < 100, "panel fills the area");
+        assert!(run < 120, "panel fills the area");
         // The focused model rides a full-width accent bar inside blank margins.
         let picked = rows.iter().find(|r| matches!(r.act, Some(Act::Pick(0)))).unwrap();
         assert_eq!(picked.spans[0].style.bg, None, "no margin");
@@ -747,7 +773,7 @@ mod tests {
         let pi = b.iter().position(|r| plain(r).contains("openai-codex")).unwrap();
         assert!(plain(&b[pi - 1]).trim().is_empty(), "no blank before the section");
         // The foot is a bold-key legend.
-        assert!(t.contains("\u{2191}\u{2193} move · \u{2190}\u{2192} levels · enter choose · s session only · a show all · r refresh · esc close"));
+        assert!(t.contains("\u{2191}\u{2193} move · \u{2190}\u{2192} levels · enter choose · tab show all · ctrl+s session only · ctrl+r refresh · esc close"));
     }
 
     #[test]
@@ -972,6 +998,96 @@ mod tests {
         let p = ui.picker.as_ref().unwrap();
         assert_eq!((p.focus, p.chip), (focus, None));
         assert!(visible(p).is_empty());
+    }
+
+    #[test]
+    fn the_search_line_reads_typed_or_placeholder() {
+        let t = text(&view(&for_case("list"), 100));
+        assert!(t.contains("Type to search"), "missing the placeholder");
+        assert!(!t.contains("No models match"), "empty line with matches");
+        let mut q = for_case("list");
+        q.query = "so".into();
+        let t = text(&view(&q, 100));
+        assert!(t.contains("› so"), "missing the typed query");
+        assert!(!t.contains("Type to search"), "placeholder behind the query");
+        assert!(t.contains("6 of 12 models"), "controls miss the match count");
+    }
+
+    #[test]
+    fn only_matched_id_chars_read_underlined() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        // gpt-6-sol-mini plain on screen while gemini-3-pro rides the bar.
+        let mut q = for_case("list");
+        q.query = "mini".into();
+        q.focus = 8;
+        let rows = view(&q, 100);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, rows.len() as u16));
+        for (y, r) in rows.iter().enumerate() {
+            crate::paint(&mut buf, 0, y as u16, 100, r);
+        }
+        let lines: Vec<String> = rows.iter().map(plain).collect();
+        let y = lines.iter().position(|l| l.contains("gpt-6-sol-mini")).unwrap() as u16;
+        let start = lines[y as usize][..lines[y as usize].find("gpt-6-sol-mini").unwrap()].chars().count();
+        let hits = id_hits("mini", "gpt-6-sol-mini");
+        assert_eq!(hits, vec![10, 11, 12, 13]);
+        for (i, _) in "gpt-6-sol-mini".chars().enumerate() {
+            let cell = &buf[(start as u16 + i as u16, y)];
+            if hits.contains(&i) {
+                assert!(cell.modifier.contains(Modifier::UNDERLINED), "hit {i} not underlined");
+                assert!(cell.modifier.contains(Modifier::BOLD), "hit {i} not bold");
+            } else {
+                assert!(!cell.modifier.contains(Modifier::UNDERLINED), "char {i} underlined");
+            }
+        }
+        // The row is off the bar: none of its spans carry the accent behind.
+        assert!(
+            rows[y as usize].spans.iter().all(|s| s.style.bg != Some(BLUE)),
+            "plain row picked up the bar"
+        );
+    }
+
+    #[test]
+    fn the_bar_row_keeps_the_underline() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        let mut q = for_case("list");
+        q.query = "mini".into();
+        q.focus = 5;
+        let rows = view(&q, 100);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, rows.len() as u16));
+        for (y, r) in rows.iter().enumerate() {
+            crate::paint(&mut buf, 0, y as u16, 100, r);
+        }
+        let lines: Vec<String> = rows.iter().map(plain).collect();
+        let y = lines.iter().position(|l| l.contains("gpt-6-sol-mini")).unwrap() as u16;
+        let start = lines[y as usize][..lines[y as usize].find("gpt-6-sol-mini").unwrap()].chars().count();
+        assert!(
+            rows[y as usize].spans.iter().any(|s| s.style.bg == Some(BLUE)),
+            "focus lost the bar"
+        );
+        for i in id_hits("mini", "gpt-6-sol-mini") {
+            let cell = &buf[(start as u16 + i as u16, y)];
+            assert!(cell.modifier.contains(Modifier::UNDERLINED), "bar stripped hit {i}");
+            assert_eq!(cell.bg, BLUE, "hit {i} left the bar");
+        }
+    }
+
+    #[test]
+    fn no_matches_draws_one_muted_line() {
+        let mut q = for_case("list");
+        q.query = "zzz".into();
+        let rows = view(&q, 100);
+        let t = text(&rows);
+        assert!(t.contains("No models match"), "missing the empty line");
+        assert!(t.contains("0 of 12 models"), "controls miss the zero count");
+        for id in ["claude-opus-5-5", "anthropic", "thinking"] {
+            assert!(!t.contains(id), "empty list still draws {id}");
+        }
+        let line = rows.iter().find(|r| plain(r).contains("No models match")).unwrap();
+        let ink = line.spans.iter().find(|s| s.content.contains("No models match")).unwrap();
+        assert!(ink.style.add_modifier.contains(Modifier::DIM), "empty line is not muted");
+        assert_eq!(picks(&rows), 0);
     }
 
     #[test]
