@@ -22,7 +22,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use extension_harness::Setup;
-use fakes::{ProviderServer, Response, Watchdog};
+use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{function_call, hello_single_delta as hello, outputs_sent, stream};
 

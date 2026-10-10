@@ -15,7 +15,7 @@ mod support;
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::{ProviderServer, Response};
+use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::pty::{KITTY_PUSH, TITLE};
 use support::{Deadline, hello_inline_completed as hello};

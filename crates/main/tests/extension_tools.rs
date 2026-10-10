@@ -17,13 +17,13 @@ mod extension_harness;
 mod support;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Output;
 use std::sync::mpsc;
 use std::thread;
 
 use extension_harness::Setup;
-use fakes::{ProviderServer, Response, Watchdog};
+use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{function_call, hello_single_delta as hello, on_disk, outputs_sent, stream};
 

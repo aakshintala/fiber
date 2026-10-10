@@ -12,7 +12,7 @@
 mod support;
 
 use fakes::{ProviderServer, Response};
-use serde_json::{Value, json};
+use serde_json::json;
 use support::function_call;
 
 /// An `openai-responses` stream answering `text`: what a scripted

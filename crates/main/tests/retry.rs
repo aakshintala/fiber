@@ -14,13 +14,12 @@
 mod support;
 
 use std::fs;
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::{ProviderServer, Response, Watchdog};
+use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::{Deadline, HELLO_KINDS, KillGroup, group_alive, is_status, spawn_watched};
 

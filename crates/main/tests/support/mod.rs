@@ -1077,7 +1077,9 @@ pub(crate) fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
 
 /// Kills process group `group` on drop. After the child is reaped and the
 /// group is empty, [`std::mem::forget`] skips that kill.
-pub(crate) struct KillGroup(u32);
+// The group kill needs the id where the guard is armed, so the field is
+// visible to the tests sharing this guard.
+pub(crate) struct KillGroup(pub(crate) u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {

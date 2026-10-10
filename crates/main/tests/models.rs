@@ -16,13 +16,11 @@ mod support;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use support::write_record;
-
-use std::os::unix::process::CommandExt;
 
 use fakes::Watchdog;
 use serde_json::{Value, json};

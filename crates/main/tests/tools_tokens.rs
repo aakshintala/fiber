@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use fakes::{ProviderServer, Watchdog};
-use serde_json::{Value, json};
+use serde_json::json;
 use support::*;
 
 /// `fiber ask` with its stdout kept drained and its stderr kept for a failure.

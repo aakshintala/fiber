@@ -13,13 +13,11 @@
 
 mod support;
 
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use fakes::ProviderServer;
-use serde_json::{Value, json};
+use serde_json::json;
 use support::{
     Deadline, HubProc, SessionGuard, Setup, connect_hub, git, kinds, recv_reply, subscribe, until,
 };

@@ -17,7 +17,7 @@ mod support;
 use std::sync::{Arc, Mutex};
 
 use fakes::{ProviderServer, Response};
-use serde_json::{Value, json};
+use serde_json::json;
 use support::kinds_without_attention as kinds;
 use support::*;
 

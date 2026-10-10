@@ -13,16 +13,15 @@ mod support;
 
 use std::fs;
 use std::io::Write;
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, mpsc};
 use std::thread;
 
 use contract::shapes::ContentPart;
 use contract::tool::Tool;
+use fakes::CancelToken;
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, Watchdog};
 use serde_json::{Map, Value};
 use support::{Deadline, KillGroup, spawn_watched};
 

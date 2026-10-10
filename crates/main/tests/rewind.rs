@@ -19,7 +19,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use fakes::{ProviderServer, Response};
+use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::hello_item_done as hello;
 use support::*;
