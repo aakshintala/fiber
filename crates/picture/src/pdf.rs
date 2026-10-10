@@ -24,14 +24,13 @@ const MAX_DECOMPRESSED_BYTES: usize = 67_108_864;
 
 /// Options for loading an untrusted PDF: each object and cross-reference
 /// stream's decompressed size is bounded, and anything else parses
-/// leniently. `strict` stays off on purpose: it would also reject readable
-/// but non-conforming files, such as 19-byte xref entries or a header line
-/// with trailing bytes, which today load. A dropped object stream is refused
-/// by [`dropped_packed_object`] instead: the lenient load skips a stream it
-/// cannot decode where `strict` would fail it, so `run` compares the packed
-/// objects the cross-reference table promises against the ones that loaded
-/// and refuses the file when any is missing. An over-limit cross-reference
-/// stream already fails the load itself.
+/// leniently. `strict` stays off so files that are readable but
+/// non-conforming still load, such as 19-byte xref entries or a header line
+/// with trailing bytes. A dropped object is refused by
+/// [`dropped_referenced_object`]: the lenient load skips an object it
+/// cannot decode, so `run` walks the references reachable from the trailer
+/// and refuses the file when a reached reference is missing. An over-limit
+/// cross-reference stream already fails the load itself.
 fn load_options() -> lopdf::LoadOptions {
     lopdf::LoadOptions {
         max_decompressed_size: Some(MAX_DECOMPRESSED_BYTES),
@@ -39,15 +38,25 @@ fn load_options() -> lopdf::LoadOptions {
     }
 }
 
-/// Whether any object the cross-reference table packs into an object stream
-/// is missing from the loaded document. The lenient load drops a stream it
-/// cannot decode, such as one past [`MAX_DECOMPRESSED_BYTES`], instead of
-/// failing, which would serve the file with objects silently missing, so
-/// any load error, including one such stream, fails the whole file.
-fn dropped_packed_object(document: &lopdf::Document) -> bool {
-    document.reference_table.entries.iter().any(|(id, entry)| {
-        matches!(entry, lopdf::xref::XrefEntry::Compressed { .. })
-            && !document.objects.contains_key(&(*id, 0))
+/// Whether any object a reached reference names failed to load. The lenient
+/// load skips an object it cannot decode, whether packed in an object stream
+/// past [`MAX_DECOMPRESSED_BYTES`] or stored as an ordinary object with
+/// malformed bytes. `run` walks the references reachable from the trailer
+/// with [`lopdf::Document::traverse_objects`] and refuses the file when a
+/// reached reference names an object the cross-reference table lists as
+/// `Normal` or `Compressed` but the document does not hold: the cut would
+/// otherwise run with objects silently missing, so any load error fails the
+/// whole file. A reached reference with no cross-reference entry is null
+/// and is fine, as is an unreferenced entry, whose object number need not
+/// match any header. The walk is iterative over a visited set, so reference
+/// cycles terminate.
+fn dropped_referenced_object(document: &mut lopdf::Document) -> bool {
+    let reached = document.traverse_objects(|_| {});
+    reached.iter().any(|id| {
+        matches!(
+            document.reference_table.entries.get(&id.0),
+            Some(lopdf::xref::XrefEntry::Normal { .. } | lopdf::xref::XrefEntry::Compressed { .. })
+        ) && !document.objects.contains_key(id)
     })
 }
 
@@ -112,10 +121,10 @@ pub(crate) fn run(
             return REFUSED;
         }
     };
-    if dropped_packed_object(&document) {
+    if dropped_referenced_object(&mut document) {
         writeln!(
             stderr,
-            "an object stream could not be decoded, so the file would run with objects missing"
+            "an object failed to load, so the file would run with objects missing"
         )
         .unwrap_or(());
         return REFUSED;

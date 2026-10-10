@@ -257,6 +257,10 @@ fn objstm_pdf_with_plain_pages(decompressed: usize) -> Vec<u8> {
             .objects
             .insert(pad_id, Object::string_literal("A".repeat(pad).as_str()));
         document.trailer.set("Root", catalog_id);
+        // The padding is referenced from the trailer so the reference check
+        // reaches it: without the reference a dropped second stream would
+        // leave both pages loading and nothing to refuse.
+        document.trailer.set("Pad", pad_id);
         let mut bytes = Vec::new();
         document
             .save_with_options(
@@ -309,6 +313,175 @@ fn objstm_pdf_with_plain_pages(decompressed: usize) -> Vec<u8> {
         let (_, padded) = stream_sizes(&bytes, decompressed - overhead);
         assert_eq!(padded, decompressed);
     }
+    bytes
+}
+
+// A one-page PDF saved without object streams, with its content stream's
+// id: every object has a `Normal` cross-reference entry, so corrupting one
+// object's bytes exercises the reference check on an ordinary object.
+fn plain_pdf() -> (Vec<u8>, lopdf::ObjectId) {
+    use lopdf::content::{Content, Operation};
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut document = Document::with_version("1.5");
+    let pages_id = document.new_object_id();
+    let content = Content {
+        operations: vec![
+            Operation::new("BT", vec![]),
+            Operation::new("Tf", vec!["F1".into(), 48.into()]),
+            Operation::new("Td", vec![100.into(), 600.into()]),
+            Operation::new("Tj", vec![Object::string_literal("page")]),
+            Operation::new("ET", vec![]),
+        ],
+    };
+    let content_id = document.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+    let font_id = document.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Courier",
+    });
+    let page_id = document.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+        "Resources" => dictionary! {
+            "Font" => dictionary! {
+                "F1" => font_id,
+            },
+        },
+        "Contents" => content_id,
+    });
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        }),
+    );
+    let catalog_id = document.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    document.trailer.set("Root", catalog_id);
+    let mut bytes = Vec::new();
+    // A plain cross-reference table, so the test below can add an entry.
+    document.reference_table.cross_reference_type = lopdf::xref::XrefType::CrossReferenceTable;
+    document
+        .save_with_options(
+            &mut bytes,
+            lopdf::SaveOptions {
+                use_object_streams: false,
+                use_xref_streams: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    (bytes, content_id)
+}
+
+// `bytes` with one object's header overwritten in place: the object's offset
+// still points at it, so the lenient load skips only it.
+fn pdf_with_broken_object(bytes: &[u8], id: lopdf::ObjectId) -> Vec<u8> {
+    let marker = format!("{} {} obj", id.0, id.1).into_bytes();
+    let at = bytes
+        .windows(marker.len())
+        .position(|window| window == marker.as_slice())
+        .expect("the object header");
+    let mut broken = bytes.to_vec();
+    for byte in &mut broken[at..at + marker.len()] {
+        *byte = b'X';
+    }
+    broken
+}
+
+// `bytes` with one more cross-reference entry past the last object, pointing
+// at the file header: no object loads for it and nothing references it. The
+// fresh save writes one `0 <count>` section, so the new entry takes the
+// next id and both the section count and `/Size` grow by one. Bytes are
+// only inserted past every object, so no listed offset moves.
+fn pdf_with_dangling_entry(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    let xref = out
+        .windows(5)
+        .position(|window| window == b"xref\n")
+        .expect("an xref table");
+    let header_start = xref + 5;
+    let header_end = header_start
+        + out[header_start..]
+            .iter()
+            .position(|&byte| byte == b'\n')
+            .unwrap();
+    let header = std::str::from_utf8(&out[header_start..header_end]).unwrap();
+    let (start, count) = header.split_once(' ').unwrap();
+    assert_eq!(start, "0");
+    let count: u32 = count.parse().unwrap();
+    out.splice(header_start..header_end, format!("0 {}", count + 1).bytes());
+    let trailer = out
+        .windows(7)
+        .position(|window| window == b"trailer")
+        .expect("a trailer");
+    out.splice(trailer..trailer, b"0000000000 00000 n \n".iter().copied());
+    let size = out
+        .windows(6)
+        .position(|window| window == b"/Size ")
+        .expect("a /Size entry");
+    let digits = size + 6;
+    let end = digits
+        + out[digits..]
+            .iter()
+            .position(|&byte| !byte.is_ascii_digit())
+            .unwrap();
+    assert_eq!(
+        std::str::from_utf8(&out[digits..end]).unwrap(),
+        count.to_string()
+    );
+    out.splice(digits..end, (count + 1).to_string().bytes());
+    out
+}
+
+// A one-page PDF whose catalog references two dictionaries that reference
+// each other: the reference walk must terminate on the cycle.
+fn pdf_with_cycle() -> Vec<u8> {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut document = Document::with_version("1.5");
+    let pages_id = document.new_object_id();
+    let first_id = document.new_object_id();
+    let second_id = document.new_object_id();
+    let content_id = document.add_object(Stream::new(dictionary! {}, b"page".to_vec()));
+    let page_id = document.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+        "Contents" => content_id,
+    });
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        }),
+    );
+    document.objects.insert(
+        first_id,
+        Object::Dictionary(dictionary! {
+            "Next" => Object::Reference(second_id),
+        }),
+    );
+    document.objects.insert(
+        second_id,
+        Object::Dictionary(dictionary! {
+            "Next" => Object::Reference(first_id),
+        }),
+    );
+    let catalog_id = document.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+        "Cycle" => first_id,
+    });
+    document.trailer.set("Root", catalog_id);
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
     bytes
 }
 
@@ -549,6 +722,74 @@ fn an_object_stream_at_the_limit_beside_two_plain_pages_loads_two_pages() {
         std::fs::read(dir.path().join("p_at_beside.pdf")).unwrap(),
         bytes
     );
+}
+
+#[test]
+fn a_malformed_content_stream_the_page_needs_is_refused() {
+    let (bytes, content_id) = plain_pdf();
+    let broken = pdf_with_broken_object(&bytes, content_id);
+    // The page itself still loads, so only the reference check can refuse
+    // the file: the dropped object is an ordinary one, not a packed one.
+    let document = load(&broken).unwrap();
+    assert_eq!(document.get_pages().len(), 1);
+    assert!(!document.objects.contains_key(&content_id));
+    let dir = fakes::TempDir::new("fiber-pdf-bad-content");
+    let input = write_input(dir.path(), "in.pdf", &broken);
+    let arguments = vec![
+        OsString::from("pdf"),
+        input.into_os_string(),
+        dir.path().as_os_str().to_owned(),
+        OsString::from("p_bad_content"),
+        OsString::from("whole=10"),
+    ];
+    let (code, stdout, stderr) = child(&arguments);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("failed to load"));
+    assert!(!dir.path().join("p_bad_content.pdf").exists());
+}
+
+#[test]
+fn an_unreferenced_dangling_xref_entry_still_loads() {
+    let (bytes, _) = plain_pdf();
+    let dangling = pdf_with_dangling_entry(&bytes);
+    assert_eq!(load(&dangling).unwrap().get_pages().len(), 1);
+    let dir = fakes::TempDir::new("fiber-pdf-dangling");
+    let input = write_input(dir.path(), "in.pdf", &dangling);
+    let arguments = vec![
+        OsString::from("pdf"),
+        input.into_os_string(),
+        dir.path().as_os_str().to_owned(),
+        OsString::from("p_dangling"),
+        OsString::from("whole=10"),
+    ];
+    let (code, stdout, stderr) = child(&arguments);
+    assert_eq!((code, stderr.as_str()), (0, ""));
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(value.get("page_count"), Some(&serde_json::json!(1)));
+    assert_eq!(
+        std::fs::read(dir.path().join("p_dangling.pdf")).unwrap(),
+        dangling
+    );
+}
+
+#[test]
+fn a_reference_cycle_terminates_and_loads() {
+    let bytes = pdf_with_cycle();
+    assert_eq!(load(&bytes).unwrap().get_pages().len(), 1);
+    let dir = fakes::TempDir::new("fiber-pdf-cycle");
+    let input = write_input(dir.path(), "in.pdf", &bytes);
+    let arguments = vec![
+        OsString::from("pdf"),
+        input.into_os_string(),
+        dir.path().as_os_str().to_owned(),
+        OsString::from("p_cycle"),
+        OsString::from("whole=10"),
+    ];
+    let (code, stdout, stderr) = child(&arguments);
+    assert_eq!((code, stderr.as_str()), (0, ""));
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(value.get("page_count"), Some(&serde_json::json!(1)));
 }
 
 #[test]

@@ -244,8 +244,8 @@ path's directory, ending in `/`.
   file's size; `read` checks the file's size before the child loads it. The
   cap is a file-size limit, not a memory bound. While
   loading, the child also refuses any object or cross-reference stream that
-  would decompress past 64 MiB (67,108,864 bytes), and any load error fails
-  the whole file.
+  would decompress past 64 MiB (67,108,864 bytes), and any load error,
+  including a dropped object that a page needs, fails the whole file.
   When rendering fails for another
   reason the part has no `pages` and the result says why. The
   provider module sends the PDF natively where its protocol accepts a PDF in a
