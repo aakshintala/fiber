@@ -13,7 +13,7 @@ if [ ! -x "$BIN" ]; then
   CARGO_BUILD_JOBS=3 cargo build --release
 fi
 mkdir -p "$OUT/sgr"
-for c in empty sessions live-only past-only selected hover-workspace hover-worktree hover-model hover-thinking worktree-on worktree-off picker-recent picker-typed; do
+for c in empty sessions live-only past-only selected hover-workspace hover-worktree hover-model hover-thinking worktree-on worktree-off picker-recent picker-typed focus-entry focus-chip-workspace focus-chip-model focus-chip-picker focus-chip-typing focus-session; do
   tmux kill-session -t home1657 2>/dev/null || true
   # shellcheck disable=SC2086
   tmux new-session -d -x 160 -y 48 -s home1657 "$BIN $FIX --static --home $c"

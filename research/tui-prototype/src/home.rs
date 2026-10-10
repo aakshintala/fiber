@@ -138,6 +138,62 @@ const CASES: &[Case<Look>] = &[
             ..base()
         },
     },
+    Case {
+        name: "focus-entry",
+        help: "the entry bar focused, a still frame",
+        check: "the entry bar focused, today's look: no chip in the hover lift tint and no row marked with `▸`.",
+        build: base,
+    },
+    Case {
+        name: "focus-chip-workspace",
+        help: "the workspace chip focused, a still frame",
+        check: "the chip row focused: the workspace chip in the hover look (the lift tint with its own text colour, as hover-workspace) and no row marked.",
+        build: || Look {
+            chip: Some(0),
+            last_chip: 0,
+            ..base()
+        },
+    },
+    Case {
+        name: "focus-chip-model",
+        help: "the model chip focused, a still frame",
+        check: "the chip row focused after → twice: the model chip in the hover look (the lift tint keeping its cyan, as hover-model), the other chips untinted.",
+        build: || Look {
+            chip: Some(2),
+            last_chip: 2,
+            ..base()
+        },
+    },
+    Case {
+        name: "focus-chip-picker",
+        help: "the workspace picker with chip 0 focused behind",
+        check: "workspace chip Enter: the picker-recent frame with chip 0 still in the hover lift tint behind the picker.",
+        build: || Look {
+            chip: Some(0),
+            last_chip: 0,
+            picker: Some(Picker::Recent),
+            ..base()
+        },
+    },
+    Case {
+        name: "focus-chip-typing",
+        help: "a draft typed after a chip was focused, a still frame",
+        check: "typing after a chip was focused: `fix` in the entry bar, the chip row untinted and no row marked; typing cleared chip focus into the entry bar.",
+        build: || {
+            let mut l = base();
+            l.ui.input = "fix".into();
+            l
+        },
+    },
+    Case {
+        name: "focus-session",
+        help: "the first live row selected from the chip row, a still frame",
+        check: "the second ↓: the first live row with the blue `▸` marker as selected, the chips untinted.",
+        build: || Look {
+            sel: Some(0),
+            ..base()
+        },
+    },
 ];
 
 /// `--home`, for `--help` and `check/home.md`.
@@ -188,6 +244,14 @@ struct Look {
     list: List,
     /// the selected session in live-then-past order, if any
     sel: Option<usize>,
+    /// the focused chip, an index into `chips()`: 0 workspace, 1 worktree,
+    /// 2 model, 3 thinking. Focus runs top to bottom: the entry bar
+    /// (`chip` None, `sel` None), the chip row (`chip` Some, `sel` None),
+    /// then the session list (`sel` Some).
+    chip: Option<usize>,
+    /// the chip last focused, so ↑ from the first session row returns to
+    /// the same chip ↓ from the entry bar left
+    last_chip: usize,
     hover: Option<Hover>,
     worktree: bool,
     picker: Option<Picker>,
@@ -210,6 +274,8 @@ fn base() -> Look {
     Look {
         list: List::Both,
         sel: None,
+        chip: None,
+        last_chip: 0,
         hover: None,
         worktree: true,
         picker: None,
@@ -409,7 +475,9 @@ fn chip(text: &str, st: Style, hovered: bool) -> Span<'static> {
 
 /// The chip row's clickable chips: target, text, style and hover.
 fn chips(c: &Look) -> Vec<(Target, String, Style, bool)> {
-    let h = |k: Hover| c.hover == Some(k);
+    // A focused chip reuses the hover look: the lift tint with its own
+    // text colour. Hover and focus may both apply.
+    let h = |k: Hover, i: usize| c.hover == Some(k) || c.chip == Some(i);
     // The chips start from the model picker's current model, so a pick
     // agrees with them; a recorded pick moves them.
     let (worktree, wst) = if c.worktree {
@@ -422,15 +490,20 @@ fn chips(c: &Look) -> Vec<(Target, String, Style, bool)> {
             Target::Workspace,
             format!("▣ {}", c.workspace),
             Style::new(),
-            h(Hover::Workspace),
+            h(Hover::Workspace, 0),
         ),
-        (Target::Worktree, worktree.into(), wst, h(Hover::Worktree)),
-        (Target::Model, c.model.into(), fg(CYAN), h(Hover::Model)),
+        (
+            Target::Worktree,
+            worktree.into(),
+            wst,
+            h(Hover::Worktree, 1),
+        ),
+        (Target::Model, c.model.into(), fg(CYAN), h(Hover::Model, 2)),
         (
             Target::Thinking,
             c.level.into(),
             fg(ORANGE),
-            h(Hover::Thinking),
+            h(Hover::Thinking, 3),
         ),
     ]
 }
@@ -707,7 +780,7 @@ struct Placed {
 
 /// What a click lands on: home-local targets; the model picker's rows
 /// reuse its own `Act`.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Target {
     Workspace,
     Worktree,
@@ -1101,8 +1174,13 @@ fn end_key(c: &mut Look, before: &str) {
 /// picker records on Enter and otherwise takes the picker's keys; Ctrl+L
 /// and `/model` open the model picker; `/` opens slash completions, and
 /// `/mo` Enter completes to `/model ` and opens the picker; Esc quits;
-/// arrows walk the list; Enter switches on a draft or a row; Backspace
-/// pops; `q` on an empty draft quits; other text fills the box.
+/// focus runs top to bottom, entry bar, chip row, session list: ↓ from the
+/// entry bar focuses the last chip, ↓ from a chip focuses the first row,
+/// ↑ returns the same way, ← → move between chips clamped at the ends,
+/// Enter opens the focused chip as a click does, and typing or Backspace
+/// clears chip focus into the entry bar; Enter switches on a draft or a
+/// row; Backspace pops; `q` on an empty draft with no chip focused quits;
+/// other text fills the box.
 fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
     // Ctrl+C quits, always.
     if k == Key::Char('c') && m.ctrl {
@@ -1140,6 +1218,16 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
         return Step::Stay;
     }
     let before = c.ui.input.clone();
+    let plain = !m.ctrl && !m.alt && !m.sup;
+    // A focused chip's Enter always acts as a click: before the
+    // draft-based `/model` dispatch below, which would otherwise consume
+    // Enter on a `/model` draft, clear it and open the wrong picker. The
+    // workspace and model pickers returned above, and the completion panel
+    // is checked here, so this only runs with none of them open.
+    if c.chip.is_some() && c.ui.completions.is_none() && k == Key::Enter && plain {
+        open_chip(c, chip_target(c.chip.unwrap()));
+        return Step::Stay;
+    }
     if crate::model_picker::on_key(&mut c.ui, k, m) {
         end_key(c, &before);
         return Step::Stay;
@@ -1153,31 +1241,88 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
         return Step::Stay;
     }
     // Enter that just completed `/mo` to `/model ` opens the picker.
+    // (Unreachable with a chip focused: `had` means the panel was open.)
     if had && k == Key::Enter && crate::model_picker::on_key(&mut c.ui, k, m) {
         end_key(c, &before);
         return Step::Stay;
     }
-    let plain = !m.ctrl && !m.alt && !m.sup;
+    // With the completion panel open, arrows keep the panel's keys.
+    let overlay = c.ui.completions.is_some();
     let step = match k {
         Key::Esc => Step::Quit,
         Key::Down if !m.alt && !m.ctrl => {
-            let n = sessions_of(c).len();
-            c.sel = Some(match c.sel {
-                None if n > 0 => 0,
-                Some(i) => i.saturating_add(1).min(n.saturating_sub(1)),
-                None => return Step::Stay,
-            });
-            Step::Stay
+            if overlay {
+                let n = sessions_of(c).len();
+                c.sel = Some(match c.sel {
+                    None if n > 0 => 0,
+                    Some(i) => i.saturating_add(1).min(n.saturating_sub(1)),
+                    None => return Step::Stay,
+                });
+                Step::Stay
+            } else if c.chip.is_some() {
+                if !sessions_of(c).is_empty() {
+                    c.chip = None;
+                    c.sel = Some(0);
+                }
+                Step::Stay
+            } else {
+                match c.sel {
+                    None => {
+                        c.chip = Some(c.last_chip);
+                        Step::Stay
+                    }
+                    Some(i) => {
+                        let n = sessions_of(c).len();
+                        c.sel = Some(i.saturating_add(1).min(n.saturating_sub(1)));
+                        Step::Stay
+                    }
+                }
+            }
         }
         Key::Up if !m.alt && !m.ctrl => {
-            c.sel = match c.sel {
-                Some(0) | None => None,
-                Some(i) => Some(i - 1),
-            };
+            if overlay {
+                c.sel = match c.sel {
+                    Some(0) | None => None,
+                    Some(i) => Some(i - 1),
+                };
+                Step::Stay
+            } else if c.chip.is_some() {
+                c.chip = None;
+                Step::Stay
+            } else {
+                match c.sel {
+                    Some(0) => {
+                        c.sel = None;
+                        c.chip = Some(c.last_chip);
+                        Step::Stay
+                    }
+                    Some(i) => {
+                        c.sel = Some(i - 1);
+                        Step::Stay
+                    }
+                    None => Step::Stay,
+                }
+            }
+        }
+        Key::Left if plain => {
+            if let Some(i) = c.chip {
+                c.chip = Some(i.saturating_sub(1));
+                c.last_chip = c.chip.unwrap();
+            }
+            Step::Stay
+        }
+        Key::Right if plain => {
+            if let Some(i) = c.chip {
+                c.chip = Some((i + 1).min(3));
+                c.last_chip = c.chip.unwrap();
+            }
             Step::Stay
         }
         Key::Enter if plain => {
-            if !c.ui.input.trim().is_empty() {
+            if let Some(i) = c.chip {
+                open_chip(c, chip_target(i));
+                Step::Stay
+            } else if !c.ui.input.trim().is_empty() {
                 Step::Conversation
             } else {
                 match c.sel.and_then(|i| sessions_of(c).get(i).copied()) {
@@ -1187,11 +1332,13 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
             }
         }
         Key::Backspace if plain => {
+            c.chip = None;
             c.ui.input.pop();
             Step::Stay
         }
-        Key::Char('q') if plain && c.ui.input.is_empty() => Step::Quit,
+        Key::Char('q') if plain && c.ui.input.is_empty() && c.chip.is_none() => Step::Quit,
         Key::Char(ch) if plain => {
+            c.chip = None;
             c.ui.input.push(ch);
             c.sel = None;
             Step::Stay
@@ -1202,10 +1349,48 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
     step
 }
 
+/// What a chip does when Enter or a click activates it: the workspace chip
+/// opens the workspace picker, the worktree switch toggles, and the model
+/// and thinking chips open the model picker where the click opens it.
+/// Focus stays on the chip: the caller keeps `chip` as it was.
+fn open_chip(c: &mut Look, t: Target) {
+    match t {
+        Target::Workspace => {
+            c.picker = Some(Picker::Recent);
+            c.wsel = 0;
+        }
+        Target::Worktree => {
+            c.worktree = !c.worktree;
+        }
+        Target::Model => {
+            c.ui.picker = Some(crate::model_picker::opened_at(c.model, None));
+            c.ui.vscroll = 0;
+        }
+        Target::Thinking => {
+            c.ui.picker = Some(crate::model_picker::opened_at(c.model, Some(c.level)));
+            c.ui.vscroll = 0;
+        }
+        _ => {}
+    }
+}
+
+/// A focused chip as its click target: index 0 workspace, 1 worktree,
+/// 2 model, 3 thinking, the order of `chips()`.
+fn chip_target(i: usize) -> Target {
+    match i {
+        0 => Target::Workspace,
+        1 => Target::Worktree,
+        2 => Target::Model,
+        _ => Target::Thinking,
+    }
+}
+
 /// The live home's clicks: the chips open their pickers, the worktree
 /// switch toggles, a session row switches unless foreign, and a recent
-/// chooses its workspace.
+/// chooses its workspace. Any click clears chip focus.
 fn on_click(c: &mut Look, x: u16, y: u16, cols: usize, rows: usize) -> Step {
+    // Any mouse click clears chip focus.
+    c.chip = None;
     let fr = frame(c, cols, rows, false);
     // Later hits sit above earlier ones: the picker floats over the list.
     let hit = fr
@@ -1217,23 +1402,8 @@ fn on_click(c: &mut Look, x: u16, y: u16, cols: usize, rows: usize) -> Step {
         return Step::Stay;
     };
     match t {
-        Target::Workspace => {
-            c.picker = Some(Picker::Recent);
-            c.wsel = 0;
-            Step::Stay
-        }
-        Target::Worktree => {
-            c.worktree = !c.worktree;
-            Step::Stay
-        }
-        Target::Model => {
-            c.ui.picker = Some(crate::model_picker::opened_at(c.model, None));
-            c.ui.vscroll = 0;
-            Step::Stay
-        }
-        Target::Thinking => {
-            c.ui.picker = Some(crate::model_picker::opened_at(c.model, Some(c.level)));
-            c.ui.vscroll = 0;
+        Target::Workspace | Target::Worktree | Target::Model | Target::Thinking => {
+            open_chip(c, t);
             Step::Stay
         }
         Target::Session(i) => {
@@ -1382,7 +1552,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 14);
+        assert_eq!(CASES.len(), 20);
         assert!(crate::cases::lookup(CASES, "nope").is_none());
     }
 
@@ -1891,23 +2061,33 @@ mod tests {
 
     #[test]
     fn arrows_walk_the_list() {
+        // Focus runs entry bar, chip row, session list: ↓ stops at the
+        // chips before the first row, and ↑ returns the same way.
         let mut c = live_look();
         press(&mut c, Key::Down);
-        assert_eq!(c.sel, Some(0));
+        assert_eq!((c.chip, c.sel), (Some(0), None));
+        press(&mut c, Key::Down);
+        assert_eq!((c.chip, c.sel), (None, Some(0)));
         press(&mut c, Key::Up);
-        assert_eq!(c.sel, None);
+        assert_eq!((c.chip, c.sel), (Some(0), None));
         press(&mut c, Key::Up);
-        assert_eq!(c.sel, None);
+        assert_eq!((c.chip, c.sel), (None, None));
+        press(&mut c, Key::Up);
+        assert_eq!((c.chip, c.sel), (None, None));
         c.sel = Some(10);
         press(&mut c, Key::Down);
-        assert_eq!(c.sel, Some(10));
+        assert_eq!((c.chip, c.sel), (None, Some(10)));
+        // An empty list still reaches the chips; the next ↓ stays there.
         let mut empty = Look {
             list: List::None,
             ..base()
         };
         press(&mut empty, Key::Down);
-        assert_eq!(empty.sel, None);
+        assert_eq!((empty.chip, empty.sel), (Some(0), None));
+        press(&mut empty, Key::Down);
+        assert_eq!((empty.chip, empty.sel), (Some(0), None));
         let mut c = live_look();
+        press(&mut c, Key::Down);
         press(&mut c, Key::Down);
         let buf = buffer(&c, 160, 48);
         let y1 = find_row(&buf, 160, 48, "cut the 0.0.1 release");
@@ -2266,5 +2446,183 @@ mod tests {
             buf[(col as u16, y)].modifier.contains(Modifier::BOLD),
             "selection not bold"
         );
+    }
+
+    #[test]
+    fn arrows_move_between_chips_clamped() {
+        let mut c = live_look();
+        press(&mut c, Key::Down);
+        assert_eq!((c.chip, c.last_chip), (Some(0), 0));
+        press(&mut c, Key::Right);
+        assert_eq!((c.chip, c.last_chip), (Some(1), 1));
+        press(&mut c, Key::Right);
+        press(&mut c, Key::Right);
+        assert_eq!((c.chip, c.last_chip), (Some(3), 3));
+        // Clamped at the end: no wrap.
+        press(&mut c, Key::Right);
+        assert_eq!((c.chip, c.last_chip), (Some(3), 3));
+        press(&mut c, Key::Left);
+        assert_eq!((c.chip, c.last_chip), (Some(2), 2));
+        press(&mut c, Key::Left);
+        press(&mut c, Key::Left);
+        assert_eq!((c.chip, c.last_chip), (Some(0), 0));
+        // Clamped at the start.
+        press(&mut c, Key::Left);
+        assert_eq!((c.chip, c.last_chip), (Some(0), 0));
+        // ← → with no chip focused stay, as today.
+        let mut c = live_look();
+        press(&mut c, Key::Left);
+        press(&mut c, Key::Right);
+        assert_eq!((c.chip, c.sel), (None, None));
+    }
+
+    #[test]
+    fn up_returns_to_the_same_chip() {
+        let mut c = live_look();
+        press(&mut c, Key::Down);
+        press(&mut c, Key::Right);
+        press(&mut c, Key::Right);
+        assert_eq!(c.chip, Some(2));
+        press(&mut c, Key::Down);
+        assert_eq!((c.chip, c.sel), (None, Some(0)));
+        press(&mut c, Key::Up);
+        assert_eq!((c.chip, c.sel), (Some(2), None));
+        assert_eq!(c.last_chip, 2);
+        press(&mut c, Key::Up);
+        assert_eq!((c.chip, c.sel), (None, None));
+    }
+
+    #[test]
+    fn enter_on_each_chip() {
+        // Workspace opens the workspace picker; focus stays on the chip.
+        let mut c = live_look();
+        press(&mut c, Key::Down);
+        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
+        assert_eq!((c.picker, c.chip), (Some(Picker::Recent), Some(0)));
+        press(&mut c, Key::Esc);
+        assert_eq!((c.picker, c.chip), (None, Some(0)));
+        // Worktree toggles.
+        let mut c = live_look();
+        press(&mut c, Key::Down);
+        press(&mut c, Key::Right);
+        assert!(c.worktree);
+        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
+        assert!(!c.worktree);
+        assert_eq!(c.chip, Some(1));
+        // Model opens the model picker where the click opens it.
+        let mut c = live_look();
+        press(&mut c, Key::Down);
+        press(&mut c, Key::Right);
+        press(&mut c, Key::Right);
+        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
+        assert_eq!(c.chip, Some(2));
+        let p = c.ui.picker.as_ref().unwrap();
+        assert_eq!((p.focus, p.chip), (0, None));
+        // Thinking opens on the current level.
+        let mut c = live_look();
+        press(&mut c, Key::Down);
+        press(&mut c, Key::Right);
+        press(&mut c, Key::Right);
+        press(&mut c, Key::Right);
+        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
+        assert_eq!(c.chip, Some(3));
+        let p = c.ui.picker.as_ref().unwrap();
+        assert_eq!((p.focus, p.chip), (0, Some(2)));
+    }
+
+    #[test]
+    fn typing_while_a_chip_is_focused_goes_to_the_entry_bar() {
+        let mut c = live_look();
+        press(&mut c, Key::Down);
+        assert_eq!(c.chip, Some(0));
+        press(&mut c, Key::Char('f'));
+        assert_eq!(c.chip, None);
+        assert_eq!(c.ui.input, "f");
+        // `q` with a chip focused types `q`: it does not quit.
+        let mut c = live_look();
+        press(&mut c, Key::Down);
+        assert!(matches!(press(&mut c, Key::Char('q')), Step::Stay));
+        assert_eq!(c.chip, None);
+        assert_eq!(c.ui.input, "q");
+        // Backspace while a chip is focused clears focus and pops.
+        let mut c = live_look();
+        type_str(&mut c, "ab");
+        press(&mut c, Key::Down);
+        assert_eq!(c.chip, Some(0));
+        press(&mut c, Key::Backspace);
+        assert_eq!(c.chip, None);
+        assert_eq!(c.ui.input, "a");
+    }
+
+    #[test]
+    fn keys_while_a_picker_is_open_ignore_chip_moves() {
+        // The workspace picker keeps its own keys; chip focus stays behind it.
+        let mut c = live_look();
+        press(&mut c, Key::Down);
+        press(&mut c, Key::Enter);
+        assert_eq!((c.picker, c.chip), (Some(Picker::Recent), Some(0)));
+        press(&mut c, Key::Down);
+        assert_eq!((c.wsel, c.chip), (1, Some(0)));
+        press(&mut c, Key::Up);
+        assert_eq!((c.wsel, c.chip), (0, Some(0)));
+        // The model picker keeps its own keys.
+        let mut c = live_look();
+        press(&mut c, Key::Down);
+        press(&mut c, Key::Right);
+        press(&mut c, Key::Right);
+        press(&mut c, Key::Enter);
+        assert!(c.ui.picker.is_some());
+        let focus = c.ui.picker.as_ref().unwrap().focus;
+        press(&mut c, Key::Down);
+        assert_eq!(c.ui.picker.as_ref().unwrap().focus, focus + 1);
+        assert_eq!(c.chip, Some(2));
+        // The completion panel keeps its own keys.
+        let mut c = live_look();
+        press(&mut c, Key::Char('/'));
+        assert!(c.ui.completions.is_some());
+        press(&mut c, Key::Down);
+        assert_eq!((c.chip, c.sel), (None, None));
+    }
+
+    #[test]
+    fn any_click_clears_chip_focus() {
+        let mut c = live_look();
+        press(&mut c, Key::Down);
+        assert_eq!(c.chip, Some(0));
+        // Clicking empty space clears the focus and stays.
+        assert!(matches!(on_click(&mut c, 0, 0, 160, 48), Step::Stay));
+        assert_eq!(c.chip, None);
+    }
+
+    #[test]
+    fn chip_enter_wins_over_the_model_slash_command() {
+        // Type `/model`, dismiss the panel, focus the workspace chip: Enter
+        // opens the workspace picker as a click does. Before the fix, the
+        // draft-based `/model` dispatch consumed Enter first, cleared the
+        // draft and opened the model picker.
+        let mut c = live_look();
+        type_str(&mut c, "/model");
+        assert!(c.ui.completions.is_some());
+        press(&mut c, Key::Esc);
+        assert!(c.ui.completions.is_none());
+        press(&mut c, Key::Down);
+        assert_eq!(c.chip, Some(0));
+        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
+        assert_eq!(c.picker, Some(Picker::Recent));
+        assert!(c.ui.picker.is_none());
+        assert_eq!(c.ui.input, "/model");
+        assert_eq!(c.chip, Some(0));
+    }
+
+    #[test]
+    fn focused_chip_reuses_the_hover_tint() {
+        let mut focused = base();
+        focused.chip = Some(2);
+        focused.last_chip = 2;
+        let mut hovered = base();
+        hovered.hover = Some(Hover::Model);
+        let f = chips(&focused);
+        let h = chips(&hovered);
+        assert_eq!(f, h);
     }
 }

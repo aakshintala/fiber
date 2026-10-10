@@ -16,3 +16,9 @@ One run per case: `--home CASE`.
 - worktree-off: the switch should read `[○ new worktree]` dim.
 - picker-recent: the picker should float centred over home with ▄ ▀ edges and the ▌ stripe; `Workspaces` bold accent; four recent workspaces, the first `›` on a full-width accent bar; a bold-key legend foot.
 - picker-typed: the typed row should read `› ~/work/fi█` with `fiber` and `fiber-worktrees` under it, the first `›` on the accent bar; the recents below dimmed; same frame and legend foot.
+- focus-entry: the entry bar focused, today's look: no chip in the hover lift tint and no row marked with `▸`.
+- focus-chip-workspace: the chip row focused: the workspace chip in the hover look (the lift tint with its own text colour, as hover-workspace) and no row marked.
+- focus-chip-model: the chip row focused after → twice: the model chip in the hover look (the lift tint keeping its cyan, as hover-model), the other chips untinted.
+- focus-chip-picker: workspace chip Enter: the picker-recent frame with chip 0 still in the hover lift tint behind the picker.
+- focus-chip-typing: typing after a chip was focused: `fix` in the entry bar, the chip row untinted and no row marked; typing cleared chip focus into the entry bar.
+- focus-session: the second ↓: the first live row with the blue `▸` marker as selected, the chips untinted.
