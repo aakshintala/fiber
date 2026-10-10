@@ -163,6 +163,12 @@ pub(crate) fn follow(
     // second relay. The relays lock is never held while blocking on the
     // gate; the guard is held through the attach below.
     let gate = lock(relays).gate(&next.0);
+    #[cfg(test)]
+    let at_gate = lock(relays).at_gate.take();
+    #[cfg(test)]
+    if let Some(at_gate) = at_gate {
+        at_gate();
+    }
     let _held_gate = lock(&gate);
     let _opening = {
         let mut held = lock(relays);

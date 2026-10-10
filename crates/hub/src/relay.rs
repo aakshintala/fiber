@@ -94,6 +94,11 @@ pub(crate) struct Relays {
     /// as sent and writing it, with the relays lock held.
     #[cfg(test)]
     pub(crate) before_command_write: Option<Box<dyn FnOnce() + Send>>,
+    /// Tests only: a one-shot signal an opener calls after cloning its
+    /// session's gate and dropping the relays lock, immediately before
+    /// blocking on the gate.
+    #[cfg(test)]
+    pub(crate) at_gate: Option<Box<dyn FnOnce() + Send>>,
     /// Per session, the last `subscribe` it accepted, without its
     /// `session_id`: what a reconnect sends again.
     pub(crate) subscribed: Vec<(String, Map<String, Value>)>,
@@ -441,6 +446,12 @@ pub(crate) fn route(
     // publishes. An opener ahead publishes first: the re-check finds its
     // entry and serves there instead.
     let gate = lock(relays).gate(session);
+    #[cfg(test)]
+    let at_gate = lock(relays).at_gate.take();
+    #[cfg(test)]
+    if let Some(at_gate) = at_gate {
+        at_gate();
+    }
     let _held_gate = lock(&gate);
     // Mark opening before the re-check, under one lock hold with the
     // kept read: a rejoin worker either published before this mark (the

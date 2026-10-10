@@ -1001,24 +1001,17 @@ fn arm_before_open(hub: &Arc<Hub>) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
     (paused, release_tx)
 }
 
-/// Spawns `job` on a worker: signals `started` immediately before running
-/// it and `done` after it returns, so the test knows the opener reached
-/// its call before releasing the parked one.
-fn spawn_opener(
-    job: impl FnOnce() + Send + 'static,
-    name: &str,
-) -> (mpsc::Receiver<()>, mpsc::Receiver<()>) {
-    let (started_tx, started) = mpsc::channel();
+/// Spawns `job` on a worker and reports when it returns.
+fn spawn_opener(job: impl FnOnce() + Send + 'static, name: &str) -> mpsc::Receiver<()> {
     let (done_tx, done) = mpsc::channel();
     thread::Builder::new()
         .name(name.to_owned())
         .spawn(move || {
-            started_tx.send(()).unwrap_or(());
             job();
             done_tx.send(()).unwrap_or(());
         })
         .unwrap();
-    (started, done)
+    done
 }
 
 /// Parks the first opener in the open hook, then the second in the
@@ -1030,23 +1023,31 @@ fn spawn_opener(
 /// when it is the command it takes the existing relay outright.
 fn race_openers(
     hub: &Arc<Hub>,
+    relays: &Arc<Mutex<crate::relay::Relays>>,
     first: impl FnOnce() + Send + 'static,
     second: impl FnOnce() + Send + 'static,
     second_is_follow: bool,
 ) {
     let (paused_first, release_first) = arm_before_open(hub);
-    let (_started_first, done_first) = spawn_opener(first, "race-first");
+    let done_first = spawn_opener(first, "race-first");
     assert!(
         paused_first.recv_timeout(OPEN_DEADLINE).is_ok(),
         "the first opener parked after its opening"
     );
+    // Arm the gate seam now: the first opener already passed it (it is
+    // parked past the gate), so only the contender signals.
+    let (reached_tx, reached) = mpsc::channel();
+    lock(relays).at_gate = Some(Box::new(move || {
+        reached_tx.send(()).unwrap_or(());
+    }));
     let (paused_second, release_second) = arm_before_open(hub);
-    let (started_second, done_second) = spawn_opener(second, "race-second");
-    // The first opener stays parked until the second reached its call: a
-    // thread that never started must not read as one queued on the gate.
+    let done_second = spawn_opener(second, "race-second");
+    // The first opener stays parked until the contender reached the
+    // gate: releasing it on a thread start alone could release it
+    // before any contention.
     assert!(
-        started_second.recv_timeout(OPEN_DEADLINE).is_ok(),
-        "the second opener started"
+        reached.recv_timeout(OPEN_DEADLINE).is_ok(),
+        "the second opener reached the gate"
     );
     if paused_second.recv_timeout(OPEN_DEADLINE).is_err() {
         drop(release_first);
@@ -1210,6 +1211,7 @@ fn route_paused_in_before_open_shares_one_relay_with_follow() {
     // hook once it too is about to open, still having published nothing.
     race_openers(
         &hub,
+        &relays,
         route_job(&hub, &writer, &relays, &next),
         follow_job(&hub, &writer, &relays, &old),
         true,
@@ -1236,6 +1238,7 @@ fn follow_paused_in_before_open_shares_one_relay_with_route() {
     // hook once it too is about to open, still having published nothing.
     race_openers(
         &hub,
+        &relays,
         follow_job(&hub, &writer, &relays, &old),
         route_job(&hub, &writer, &relays, &next),
         false,
