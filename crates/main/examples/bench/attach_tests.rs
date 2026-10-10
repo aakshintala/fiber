@@ -3,7 +3,8 @@ use serde_json::json;
 use crate::busy::filler;
 
 use super::{
-    ATTACH_TAIL, PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES, feed_step, plan_turns, size_note,
+    ATTACH_TAIL, PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES, feed_step, plan_turns, replay_finished,
+    size_note, stage_rows,
 };
 
 fn status(id: &str, state: &str) -> serde_json::Value {
@@ -122,4 +123,137 @@ fn size_note_is_none_at_each_bound_and_some_just_outside() {
         assert!(size_note(fixture, high).is_some());
     }
     assert!(size_note("2 MiB", 2_097_152).is_some());
+}
+
+#[test]
+fn replay_finished_needs_the_ack_then_the_tail() {
+    let ack = json!({"kind": "command_accepted", "payload": {"command_id": "c_1"}});
+    // The acknowledgement arrives first, but alone it never finishes.
+    assert!(!replay_finished(false, &ack));
+    assert!(!replay_finished(true, &ack));
+    let tail = json!({"kind": "session_event", "payload": {"text": "quokkas"}});
+    assert!(!replay_finished(false, &tail));
+    assert!(replay_finished(true, &tail));
+}
+
+#[test]
+fn replay_finished_ignores_a_line_without_the_tail() {
+    let line = json!({"kind": "session_event", "payload": {"text": "wombats"}});
+    assert!(!replay_finished(true, &line));
+    // The tail nested anywhere in the line still finishes.
+    let nested = json!({"kind": "session_event", "payload": {"lines": ["quokkas"]}});
+    assert!(replay_finished(true, &nested));
+}
+
+fn stages() -> super::Samples {
+    stage_rows(
+        "1 MiB",
+        1_050_231,
+        31.0,
+        20.0,
+        2.0,
+        5.0,
+        &[
+            ("frames_1", 1, 1.5),
+            ("frames_4096", 3, 4.0),
+            ("frames_64", 10, 30.0),
+        ],
+    )
+}
+
+#[test]
+fn stage_rows_reports_every_stage_with_the_fixture_and_log_size() {
+    let rows = stages();
+    let names: Vec<&str> = rows
+        .iter()
+        .map(|(_, sample)| {
+            sample
+                .get("stage")
+                .and_then(|stage| stage.as_str())
+                .unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "terminal",
+            "hub_replay",
+            "parse",
+            "fold",
+            "frames_1",
+            "frames_4096",
+            "frames_64"
+        ]
+    );
+    for (_, sample) in &rows {
+        assert_eq!(sample.get("fixture"), Some(&json!("1 MiB")));
+        assert_eq!(sample.get("log_bytes"), Some(&json!(1_050_231)));
+    }
+    let ms: Vec<f64> = rows
+        .iter()
+        .map(|(_, sample)| {
+            sample
+                .get("ms")
+                .and_then(|ms| ms.as_f64())
+                .unwrap_or(f64::NAN)
+        })
+        .collect();
+    assert_eq!(ms, [31.0, 20.0, 2.0, 5.0, 1.5, 4.0, 30.0]);
+    // A different hub time is a different row, so equal medians never hide
+    // a swapped stage.
+    assert_ne!(
+        stages(),
+        stage_rows(
+            "1 MiB",
+            1_050_231,
+            31.0,
+            21.0,
+            2.0,
+            5.0,
+            &[
+                ("frames_1", 1, 1.5),
+                ("frames_4096", 3, 4.0),
+                ("frames_64", 10, 30.0)
+            ],
+        )
+    );
+}
+
+#[test]
+fn stage_rows_counts_the_frames_only_on_the_frame_stages() {
+    let rows = stages();
+    for (_, sample) in rows.iter().take(4) {
+        assert!(sample.get("frames").is_none(), "{sample}");
+    }
+    let counts: Vec<u64> = rows
+        .iter()
+        .skip(4)
+        .map(|(_, sample)| {
+            sample
+                .get("frames")
+                .and_then(|frames| frames.as_u64())
+                .unwrap_or(0)
+        })
+        .collect();
+    assert_eq!(counts, [1, 3, 10]);
+    // Zero frames still reports its count, rather than dropping the key.
+    let rows = stage_rows(
+        "10 MiB",
+        10_492_016,
+        88.0,
+        60.0,
+        9.0,
+        20.0,
+        &[("frames_1", 1, 6.0)],
+    );
+    assert_eq!(rows.len(), 5);
+    assert_eq!(rows[4].1.get("frames"), Some(&json!(1)));
+    assert_eq!(rows[0].1.get("frames"), None);
+}
+
+#[test]
+fn stage_rows_keeps_the_metric_id_the_bench_report_ignores() {
+    for (metric, _) in stages() {
+        assert_eq!(metric, "attach_stage_ms");
+    }
 }

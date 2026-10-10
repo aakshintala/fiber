@@ -95,6 +95,100 @@ fn fold(events: &str, width: u16, height: u16) -> Result<App, String> {
     Ok(app)
 }
 
+/// What reopening `events` costs, split into stages: parsing each line,
+/// folding it into the app, and drawing frames through the loop's screen.
+/// The bench prints these beside the terminal's attach time
+/// (`docs/performance.md`, "Measuring").
+#[derive(Debug)]
+pub struct OpenStages {
+    /// Time in `serde_json::from_str`, one line at a time.
+    pub parse: Duration,
+    /// Time in `App::on_line`, one line at a time.
+    pub fold: Duration,
+    /// The frames drawn: one after every `frame_every` lines, and one at
+    /// the end, which the last periodic frame covers when the count lands
+    /// on it.
+    pub frames: usize,
+    /// Time in `Screen::draw` across those frames.
+    pub frame_time: Duration,
+}
+
+/// Reopens `events`, one envelope per line as one session's stream, at
+/// `width` by `height` through the loop's screen: each line is parsed
+/// and folded as [`draw`] folds it, and a frame is drawn after every
+/// `frame_every` lines and once at the end. `usize::MAX` draws the single
+/// final frame. An unreadable line is an error naming its number, as
+/// [`draw`] names it. Only the bench calls this; the shipped event loop
+/// never does.
+pub fn measure_open(
+    events: &str,
+    width: u16,
+    height: u16,
+    frame_every: usize,
+    clock: Arc<dyn Clock>,
+) -> Result<OpenStages, String> {
+    let mut app = App::new(PathBuf::new());
+    app.set_size(width, height);
+    let mut screen = Screen::new(CrosstermBackend::new(Counter::default()), width, height)
+        .map_err(|error| error.to_string())?;
+    let mut stages = OpenStages {
+        parse: Duration::ZERO,
+        fold: Duration::ZERO,
+        frames: 0,
+        frame_time: Duration::ZERO,
+    };
+    let mut since_frame = 0usize;
+    for (at, line) in events.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let started = clock.now();
+        let envelope: Envelope = serde_json::from_str(line)
+            .map_err(|error| format!("line {}: {error}", at.saturating_add(1)))?;
+        stages.parse = stages
+            .parse
+            .saturating_add(clock.now().saturating_duration_since(started));
+        if app.session().is_none() {
+            app.attach(envelope.session_id.clone());
+        }
+        let started = clock.now();
+        app.on_line(Line::Session(envelope));
+        stages.fold = stages
+            .fold
+            .saturating_add(clock.now().saturating_duration_since(started));
+        since_frame = since_frame.saturating_add(1);
+        if since_frame >= frame_every {
+            stages.frame_time =
+                stages
+                    .frame_time
+                    .saturating_add(draw_frame(&mut screen, &mut app, &clock)?);
+            stages.frames = stages.frames.saturating_add(1);
+            since_frame = 0;
+        }
+    }
+    // The final frame, unless the last periodic draw already drew it; an
+    // empty log still draws once.
+    if stages.frames == 0 || since_frame > 0 {
+        stages.frame_time =
+            stages
+                .frame_time
+                .saturating_add(draw_frame(&mut screen, &mut app, &clock)?);
+        stages.frames = stages.frames.saturating_add(1);
+    }
+    Ok(stages)
+}
+
+/// One frame through the loop's screen, and how long it took.
+fn draw_frame(
+    screen: &mut Screen<CrosstermBackend<Counter>>,
+    app: &mut App,
+    clock: &Arc<dyn Clock>,
+) -> Result<Duration, String> {
+    let started = clock.now();
+    screen.draw(app, None).map_err(|error| error.to_string())?;
+    Ok(clock.now().saturating_duration_since(started))
+}
+
 /// Opens `events`, one envelope per line as one session's stream, at
 /// `width` by `height` through the terminal's own paging, with `history`
 /// answered from the events in memory as the hub answers from the log. The
@@ -213,6 +307,10 @@ pub fn measure_paging(
         paging.most,
     ))
 }
+
+#[cfg(test)]
+#[path = "jigs_tests.rs"]
+mod tests;
 
 /// The paging jig's terminal: the app, and the session's durable lines as
 /// the hub's log holds them, by `seq`.

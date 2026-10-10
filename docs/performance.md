@@ -150,7 +150,16 @@ repository whose project holds 1,000 exited sessions to its output closing,
 with the hub running and one listing before the timed ones. Attaching is timed
 from spawning `fiber resume <id>` in a pseudo-terminal to the session's last
 reply on screen, for a live, idle session whose log is 1 MiB and one whose log
-is 10 MiB, with the hub running.
+is 10 MiB, with the hub running. The same run splits each attach into stages,
+reported as `attach_stage_ms` but never gated. `terminal` is the spawn-to-tail
+time above; `hub_replay` replays it with no terminal, timing a `subscribe` at
+`full` over a raw hub-socket client from the send to its acknowledgement.
+`parse`, `fold` and `frames_1`, `frames_4096` and `frames_64` replay the
+session's `events.jsonl` in process through the terminal's own fold and draw:
+parsing each line, folding it into the app, and drawing one frame, one frame
+per 4,096 lines and one per 64 lines. The table also shows the residual, the
+terminal time minus the hub replay, the parse, the fold and the single frame:
+process start, home and the extra frames.
 
 No test asserts a timing (`docs/testing.md`). The budgets are a benchmark job,
 separate from the tests. The harness, `cargo run -p main --example bench`,
