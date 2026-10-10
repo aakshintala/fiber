@@ -489,7 +489,7 @@ fn resize_redraws_at_the_new_size() {
     // resize.
     let shown = crate::view::text(lp.screen.backend().buffer());
     let rows: Vec<&str> = shown.lines().collect();
-    assert_eq!(rows.get(8).copied(), Some("▌ > hi"));
+    assert_eq!(rows.get(8).copied(), Some("▌ › hi█"));
     assert!(
         rows.get(9)
             .is_some_and(|row| row.chars().all(|ch| ch == '▀')),

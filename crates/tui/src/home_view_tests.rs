@@ -393,9 +393,17 @@ fn the_four_row_logo_needs_its_height_exactly() {
     // At 80 columns the threshold is 17 rows: a pad of 2, the four-row
     // logo, one blank row, the six-row box, three list rows, the foot.
     let tall = screen(&home(80, 17), 80, 17);
-    assert!(tall.contains('█'), "four pixel rows at the threshold");
+    // The four pixel rows sit under the pad of 2; the drawn cursor in
+    // the box below must not stand in for them.
+    assert!(
+        tall.lines().skip(2).take(4).any(|row| row.contains('█')),
+        "four pixel rows at the threshold"
+    );
     let short = screen(&home(80, 16), 80, 16);
-    assert!(!short.contains('█'), "one row below the threshold");
+    assert!(
+        short.lines().take(3).all(|row| !row.contains('█')),
+        "one row below the threshold"
+    );
     assert!(short.contains("⌇ fiber 0.0.1"), "the one-row logo");
 }
 
@@ -405,7 +413,12 @@ fn a_screen_narrower_than_the_logo_gets_one_row() {
     let mut buf = Buffer::empty(area);
     home_only(&home(20, 24), area, &mut buf);
     let narrow = text(&buf);
-    assert!(!narrow.contains('█'), "no pixel rows without the width");
+    // The pad of 3 and the one logo row hold no pixel rows; the drawn
+    // cursor in the box below is out of the probe.
+    assert!(
+        narrow.lines().take(4).all(|row| !row.contains('█')),
+        "no pixel rows without the width"
+    );
     assert!(narrow.contains("⌇ fiber 0.0.1"), "the one-row logo");
 }
 
@@ -564,7 +577,12 @@ fn blockers_count_against_the_four_row_logo() {
         .collect(),
     }));
     let text = screen(&app, 80, 17);
-    assert!(!text.contains('█'), "one row while the blockers show");
+    // The pad of 2 and the one logo row hold no pixel rows while the
+    // blockers show.
+    assert!(
+        text.lines().take(3).all(|row| !row.contains('█')),
+        "one row while the blockers show"
+    );
     assert!(text.contains("⌇ fiber 0.0.1"), "the one-row logo");
     assert_eq!(
         app.home_screen()
