@@ -654,6 +654,8 @@ fn a_session_started_after_the_first_scan_keeps_it() {
         "a_session_started_after_the_first_scan_keeps_it",
         BUDGET,
         || {
+            // Starts before setup and expires before `within`'s outer guard, so a hang names this wait.
+            let wait = fakes::Deadline::after(BUDGET / 2);
             let home = fakes::TempDir::new("doors-end-late-home");
             let repo = repo("doors-end-late");
             let key = key_of(repo.path());
@@ -665,10 +667,10 @@ fn a_session_started_after_the_first_scan_keeps_it() {
             let release_rx = Mutex::new(release_rx);
             let isolation = isolation.with_pause(Arc::new(move || {
                 parked_tx.send(()).unwrap();
-                release_rx.lock().unwrap().recv().unwrap();
+                wait.recv_or_fail(&release_rx.lock().unwrap(), "the test releases the end");
             }));
             let ending = std::thread::spawn(move || isolation.end());
-            parked_rx.recv().unwrap();
+            wait.recv_or_fail(&parked_rx, "the end parks");
             // While `end` is parked, a new session starts in the worktree.
             let sessions = home.path().join("projects").join(&key).join("sessions");
             let _late = held(&sessions, "s_0123456789abcde0", path.to_str().unwrap());
@@ -686,6 +688,8 @@ fn end_holds_every_users_lock_while_it_removes() {
         "end_holds_every_users_lock_while_it_removes",
         BUDGET,
         || {
+            // Starts before setup and expires before `within`'s outer guard, so a hang names this wait.
+            let wait = fakes::Deadline::after(BUDGET / 2);
             let home = fakes::TempDir::new("doors-end-locks-home");
             let repo = repo("doors-end-locks");
             let key = key_of(repo.path());
@@ -697,7 +701,7 @@ fn end_holds_every_users_lock_while_it_removes() {
             let release_rx = Mutex::new(release_rx);
             let isolation = isolation.with_pause(Arc::new(move || {
                 parked_tx.send(()).unwrap();
-                release_rx.lock().unwrap().recv().unwrap();
+                wait.recv_or_fail(&release_rx.lock().unwrap(), "the test releases the end");
             }));
             let sessions = home.path().join("projects").join(&key).join("sessions");
             let dir = sessions.join(id);
@@ -706,7 +710,7 @@ fn end_holds_every_users_lock_while_it_removes() {
             // log may stay while `end` parks.
             drop(held(&sessions, id, isolation.path().to_str().unwrap()));
             let ending = std::thread::spawn(move || isolation.end());
-            parked_rx.recv().unwrap();
+            wait.recv_or_fail(&parked_rx, "the end parks");
             assert!(
                 matches!(log::try_hold(&dir).unwrap(), log::Hold::Busy),
                 "the creator's lock is held while parked"

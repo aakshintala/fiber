@@ -1175,9 +1175,8 @@ fn a_transfer_registers_before_the_session_can_answer() {
     let (release_transfer_tx, release_transfer_rx) = mpsc::channel();
     crate::connection::lock(&relays).after_transfer_write = Some(Box::new(move || {
         written_tx.send(()).unwrap_or(());
-        release_transfer_rx
-            .recv()
-            .expect("the test releases the transfer pause");
+        Deadline::start()
+            .recv_or_fail(&release_transfer_rx, "the test releases the transfer pause");
     }));
     let (filter_tx, filter_rx) = mpsc::channel();
     let (release_filter_tx, release_filter_rx) = mpsc::channel();
@@ -1185,9 +1184,7 @@ fn a_transfer_registers_before_the_session_can_answer() {
         filter_tx
             .send((acknowledgement(line).is_some(), muted))
             .unwrap_or(());
-        release_filter_rx
-            .recv()
-            .expect("the test releases the relay pause");
+        Deadline::start().recv_or_fail(&release_filter_rx, "the test releases the relay pause");
     }));
     let (client_write, client_read) = UnixStream::pair().unwrap();
     client_read.set_read_timeout(Some(DEADLINE)).unwrap();
