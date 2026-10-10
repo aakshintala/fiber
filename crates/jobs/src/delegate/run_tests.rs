@@ -28,6 +28,7 @@ use contract::inbox::Delivery;
 use contract::jobs::Jobs as _;
 use contract::shapes::{Failure, Tokens, Usage};
 use contract::{ActionId, ErrorCode, JobId, Seq, SessionId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir, Watchdog, group_empties, kill_pid, pids_exit, within};
 
@@ -279,14 +280,50 @@ fn park_ahead(clock: &FakeClock) -> Option<std::time::Instant> {
 /// and timeouts"): a park at most one poll ahead moves time to its
 /// `until`; a park further ahead is the drain wait and is never advanced,
 /// because the drain's end wakes the runner itself; with no park ahead
-/// the driver yields. The test thread's single `recv_timeout(DEADLINE)`
+/// the driver yields. The test thread's single `Deadline` receive
 /// is the wall-clock deadline for the whole wait, driver included
 /// (docs/testing.md, "Waits and timeouts": every wait has a deadline on
 /// the wall clock). The stop flag is set on every outcome of that
 /// receive, before the result is inspected, so the driver always ends
 /// within `DEADLINE` and the scope never outlives the wait.
+#[track_caller]
 fn reported(rig: &Rig) -> contract::inbox::JobNotice {
     reported_before(rig, None)
+}
+
+/// Takes the runner's report with one wall-clock deadline for the whole
+/// wait, failing at the caller's line: `#[track_caller]` reports the
+/// test's line, which the `thread::scope` closure below cannot.
+#[track_caller]
+fn take_report(rig: &Rig, stop: &AtomicBool) -> contract::inbox::JobNotice {
+    let result = Deadline::after(DEADLINE).recv(&rig.inbox);
+    stop.store(true, Ordering::Relaxed);
+    match result {
+        Ok(Delivery::Job(notice)) => notice,
+        Ok(other) => panic!("expected the runner's report, got {other:?}"),
+        Err(_) => panic!(
+            "the runner did not report; now={:?} parked={:?}",
+            rig.clock.now(),
+            rig.clock.parked()
+        ),
+    }
+}
+
+/// The drain-wait twin of [`take_report`]: the inline scope below has its
+/// own expiry message, kept exact.
+#[track_caller]
+fn take_drain_report(rig: &Rig, stop: &AtomicBool) -> contract::inbox::JobNotice {
+    let result = Deadline::after(DEADLINE).recv(&rig.inbox);
+    stop.store(true, Ordering::Relaxed);
+    match result {
+        Ok(Delivery::Job(notice)) => notice,
+        Ok(other) => panic!("expected the runner's report, got {other:?}"),
+        Err(_) => panic!(
+            "the drain's end did not report; now={:?} parked={:?}",
+            rig.clock.now(),
+            rig.clock.parked()
+        ),
+    }
 }
 
 /// `reported` with a horizon: fake time never reaches `horizon`. A park
@@ -295,6 +332,7 @@ fn reported(rig: &Rig) -> contract::inbox::JobNotice {
 /// zombie state is still reaped on a later pass (docs/testing.md,
 /// "Waits and timeouts": deadlines are hang guards, never timing
 /// assertions; no timing is asserted here).
+#[track_caller]
 fn reported_before(rig: &Rig, horizon: Option<std::time::Instant>) -> contract::inbox::JobNotice {
     let stop = Arc::new(AtomicBool::new(false));
     let driver_stop = Arc::clone(&stop);
@@ -323,17 +361,7 @@ fn reported_before(rig: &Rig, horizon: Option<std::time::Instant>) -> contract::
                 }
             }
         });
-        let result = rig.inbox.recv_timeout(DEADLINE);
-        stop.store(true, Ordering::Relaxed);
-        match result {
-            Ok(Delivery::Job(notice)) => notice,
-            Ok(other) => panic!("expected the runner's report, got {other:?}"),
-            Err(_) => panic!(
-                "the runner did not report; now={:?} parked={:?}",
-                rig.clock.now(),
-                rig.clock.parked()
-            ),
-        }
+        take_report(rig, &stop)
     })
 }
 
@@ -344,6 +372,7 @@ fn reported_before(rig: &Rig, horizon: Option<std::time::Instant>) -> contract::
 /// since the reap, and an ordinary poll parks at most one interval ahead.
 /// One wall-clock deadline covers the whole loop, so a runner that never
 /// reaches the drain fails the test instead of hanging it.
+#[track_caller]
 fn wake_until_draining(clock: &Arc<FakeClock>, bound: Duration) {
     within("the runner waits for the drain", DEADLINE, {
         let clock = Arc::clone(clock);
@@ -383,6 +412,7 @@ fn fifo(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
 /// reader at all, so a write to a dead child's fifo fails the test
 /// instead of hanging it. A starting child may not have opened yet; the
 /// retries absorb that within a wall-clock bound.
+#[track_caller]
 fn release_fifo(fifo: &std::path::Path, bytes: &[u8]) {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
@@ -412,6 +442,7 @@ fn release_fifo(fifo: &std::path::Path, bytes: &[u8]) {
 }
 
 /// A pid `shell` wrote to `pid`: the leader's, or a member's.
+#[track_caller]
 fn pid_in_file(pid: &std::path::Path) -> u32 {
     let pid = pid.to_path_buf();
     within("the leader writes its pid", DEADLINE, move || {
@@ -456,6 +487,7 @@ fn wake_retry(rig: &Rig, at: std::time::Instant, gap: Duration, calls: usize) {
 
 /// Waits until `shell` writes its readiness file: its traps are armed, so
 /// a stop from here cannot land before them.
+#[track_caller]
 fn wait_ready(path: &std::path::Path) {
     let path = path.to_path_buf();
     within("the child arms its traps", DEADLINE, move || {
@@ -636,7 +668,7 @@ fn a_delayed_drain_still_feeds_the_fold() {
         "the fold waits for the drain"
     );
     release_fifo(&release, b"go\n");
-    let Ok(Delivery::Job(notice)) = rig.inbox.recv_timeout(DEADLINE) else {
+    let Ok(Delivery::Job(notice)) = Deadline::after(DEADLINE).recv(&rig.inbox) else {
         panic!("the drain's end did not wake the runner");
     };
     assert_eq!(notice.completed.status, Outcome::Completed);
@@ -712,17 +744,7 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
                 }
             }
         });
-        let result = rig.inbox.recv_timeout(DEADLINE);
-        stop.store(true, Ordering::Relaxed);
-        match result {
-            Ok(Delivery::Job(notice)) => notice,
-            Ok(other) => panic!("expected the runner's report, got {other:?}"),
-            Err(_) => panic!(
-                "the drain's end did not report; now={:?} parked={:?}",
-                rig.clock.now(),
-                rig.clock.parked()
-            ),
-        }
+        take_drain_report(&rig, &stop)
     });
     assert_eq!(notice.completed.status, Outcome::Failed);
     assert_eq!(
@@ -829,7 +851,8 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
         Some("Bound.".into())
     );
     // Waiting for the runner to return rules out later watches and timer signals.
-    done.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("the runner returns after `fiber_exited`");
     assert_eq!(
         rig.script.calls().len(),
@@ -896,7 +919,8 @@ fn the_watch_is_not_called_again_after_fiber_exited() {
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Completed);
     // Waiting for the runner to return rules out later watches and timer signals.
-    done.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("the runner returns after `fiber_exited`");
     assert_eq!(rig.script.calls().len(), 1);
     watchdog.stand_down(DEADLINE);
@@ -938,7 +962,8 @@ fn a_stop_on_a_term_trap_cancels_without_sigkill() {
         Some(143)
     );
     // Waiting for the runner to return rules out later watches and timer signals.
-    done.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("the runner returns after the trap's exit");
     assert!(
         !crate::delegate::group::sent_signals()
@@ -1024,7 +1049,10 @@ fn the_cap_at_an_exact_boundary_trips_only_past_it() {
     for (gap, calls) in [(50, 2), (100, 3), (200, 4)] {
         at += Duration::from_millis(gap);
         wake_retry(&rig, at, Duration::from_millis(gap), calls);
-        if rig.inbox.recv_timeout(Duration::from_millis(20)).is_ok() {
+        if Deadline::after(Duration::from_millis(20))
+            .recv(&rig.inbox)
+            .is_ok()
+        {
             panic!("exactly at the cap is not past it");
         }
     }
@@ -1034,7 +1062,10 @@ fn the_cap_at_an_exact_boundary_trips_only_past_it() {
         rig.clock.await_parked(at, DEADLINE),
         "the runner parks until {at:?}"
     );
-    if rig.inbox.recv_timeout(Duration::from_millis(20)).is_ok() {
+    if Deadline::after(Duration::from_millis(20))
+        .recv(&rig.inbox)
+        .is_ok()
+    {
         panic!("exactly at the cap is not past it");
     }
     std::fs::write(&rig.events, "01234567890").unwrap();
@@ -1142,7 +1173,8 @@ fn a_child_that_exits_in_the_stop_timer_sends_no_kill() {
     let notice = reported_before(&rig, Some(kill_at));
     assert_eq!(notice.completed.status, Outcome::Cancelled);
     // Waiting for the runner to return rules out later watches and timer signals.
-    done.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("the runner returns after the quick exit");
     assert!(
         !crate::delegate::group::sent_signals()
@@ -1258,13 +1290,13 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         let _status = member.wait();
         let _sent = reaped_tx.send(());
     });
-    reaped_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&reaped_rx)
         .expect("the killed member was reaped");
 
     let _mark = clock.advance_marked(Duration::from_secs(1));
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("retire returned once the group was empty");
     assert!(!listed(pgid));
     watchdog.stand_down(DEADLINE);
@@ -1347,7 +1379,8 @@ fn a_blocked_watch_still_lets_a_stop_through() {
         "SIGKILL went out once the bound passed"
     );
     // Waiting for the runner to return rules out later watches and timer signals.
-    done.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("the runner returns after the stop");
     assert_eq!(
         rig.script.calls().len(),
