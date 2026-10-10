@@ -162,7 +162,11 @@ fn typing_filters_prefix_matches_first() {
         ]
     );
     type_text(&mut app, "zz");
-    assert_eq!(app.completions(), None);
+    // An empty list shows its dim row, with no selection and no range.
+    let completions = app.completions().expect("the dim row shows");
+    assert_eq!(completions.lines, ["no matches"]);
+    assert_eq!(completions.selected, None);
+    assert!(matches!(completions.rows, super::Rows::Message(_)));
 }
 
 #[test]
@@ -403,9 +407,12 @@ fn home_and_new_return_to_the_screen_before_a_session() {
         assert!(app.lines().is_empty(), "{command}");
         assert_eq!(app.top(), None, "{command}");
         assert_eq!(app.draft(), "", "{command}");
-        // The old session's skills are gone with it.
+        // The old session's skills are gone with it: `/td` finds
+        // nothing, so the panel holds only its dim row.
         type_text(&mut app, "/td");
-        assert_eq!(app.completions(), None, "{command}");
+        let completions = app.completions().expect("the dim row shows");
+        assert_eq!(completions.lines, ["no matches"], "{command}");
+        assert_eq!(completions.selected, None, "{command}");
         app.on_key(Key::Esc, now());
         app.on_key(Key::CtrlC, now());
         // The next Enter starts a new session.
@@ -487,14 +494,16 @@ fn the_approvals_row_opens_the_waiting_queue() {
 }
 
 #[test]
-fn the_conversation_gives_up_the_panel_rows() {
+fn the_slash_panel_reserves_no_rows() {
     let mut app = connected();
     app.set_size(80, 24);
     assert_eq!(app.conversation_height(), 21);
+    // The `/` panel draws over the conversation, reserving nothing,
+    // however many rows match (`docs/tui.md`, "Look", "Overlays").
     type_text(&mut app, "/");
-    assert_eq!(app.conversation_height(), 13);
+    assert_eq!(app.conversation_height(), 21);
     type_text(&mut app, "han");
-    assert_eq!(app.conversation_height(), 20);
+    assert_eq!(app.conversation_height(), 21);
 }
 
 #[test]
@@ -1071,4 +1080,124 @@ fn close_with_a_running_job_and_delegate_sends_one_close_with_now() {
     assert_eq!(app.session(), None);
     assert!(!app.item_open());
     assert!(app.lines().is_empty());
+}
+
+/// The structured `/` panel: the windowed rows, the selection among
+/// them, the window's start and the match count, with today's text
+/// form beside them (`docs/tui.md`, "Rules").
+#[test]
+fn slash_completions_carry_their_window() {
+    let mut app = attached();
+    answer_commands(&mut app, &["tdd", "areview"]);
+    type_text(&mut app, "/re");
+    let completions = app.completions().expect("the panel shows");
+    assert_eq!(completions.query, "re");
+    assert_eq!(completions.total, 3);
+    assert_eq!(completions.start, 0);
+    assert_eq!(completions.selected, Some(0));
+    let names: Vec<&str> = match &completions.rows {
+        super::Rows::Slash(rows) => rows.iter().map(|row| row.name.as_str()).collect(),
+        rows => panic!("a slash window, not {rows:?}"),
+    };
+    assert_eq!(names, ["resume", "reload", "areview"]);
+    assert_eq!(
+        completions.lines,
+        [
+            "/resume  Opens home at the session list.  command",
+            "/reload  Reloads configuration, MCP servers and extensions.  command",
+            "/areview  Runs areview.  skill",
+        ]
+    );
+    // The `/` panel draws over the conversation, reserving nothing.
+    assert_eq!(app.completion_rows(), 0);
+}
+
+/// A long `/` list windows around the selection, keeping it in view.
+#[test]
+fn a_long_slash_list_windows_around_the_selection() {
+    let mut app = attached();
+    let skills: Vec<String> = (0..30).map(|n| format!("skill{n:02}")).collect();
+    let refs: Vec<&str> = skills.iter().map(String::as_str).collect();
+    answer_commands(&mut app, &refs);
+    type_text(&mut app, "/");
+    let total = crate::slash::rows(&[]).len() + skills.len();
+    assert!(total > crate::slash::SHOWN + 1);
+    for _ in 0..10 {
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    }
+    let completions = app.completions().expect("the panel shows");
+    assert_eq!(completions.total, total);
+    assert_eq!(completions.start, 3);
+    assert_eq!(completions.selected, Some(7));
+    match &completions.rows {
+        super::Rows::Slash(rows) => {
+            assert_eq!(rows.len(), crate::slash::SHOWN);
+            assert_eq!(rows.first().map(|row| row.name.as_str()), Some("model"));
+            assert_eq!(rows.last().map(|row| row.name.as_str()), Some("rules"));
+        }
+        rows => panic!("a slash window, not {rows:?}"),
+    }
+}
+
+/// An empty `/` list shows its dim row, with no selection and no range.
+#[test]
+fn an_empty_slash_list_shows_no_matches() {
+    let mut app = attached();
+    type_text(&mut app, "/zzz");
+    let completions = app.completions().expect("the dim row shows");
+    assert_eq!(completions.query, "zzz");
+    assert_eq!(completions.total, 0);
+    assert_eq!(completions.start, 0);
+    assert_eq!(completions.selected, None);
+    assert_eq!(completions.lines, ["no matches"]);
+    assert!(matches!(completions.rows, super::Rows::Message(_)));
+    assert_eq!(app.completion_rows(), 0);
+}
+
+/// The structured `@` panel: the windowed paths and the query behind
+/// the `@`, with today's text form beside them.
+#[test]
+fn file_completions_carry_their_window() {
+    let mut app = connected();
+    assert_eq!(key(&mut app, '@'), Effect::ListFiles);
+    key(&mut app, 's');
+    app.on_files(app.generation(), paths(&["src/a.rs", "src/b.rs"]));
+    let completions = app.completions().expect("the panel shows");
+    assert_eq!(completions.query, "s");
+    assert_eq!(completions.total, 2);
+    assert_eq!(completions.start, 0);
+    assert_eq!(completions.selected, Some(0));
+    match &completions.rows {
+        super::Rows::Files(rows) => assert_eq!(rows, &["src/a.rs", "src/b.rs"]),
+        rows => panic!("a file window, not {rows:?}"),
+    }
+    assert_eq!(completions.lines, ["src/a.rs", "src/b.rs"]);
+    assert_eq!(app.completion_rows(), 0);
+}
+
+/// An empty `@` result shows its dim row, with no selection and no range.
+#[test]
+fn an_empty_file_result_shows_no_files_match() {
+    let mut app = connected();
+    assert_eq!(key(&mut app, '@'), Effect::ListFiles);
+    app.on_files(app.generation(), Ok(Vec::new()));
+    let completions = app.completions().expect("the dim row shows");
+    assert_eq!(completions.query, "");
+    assert_eq!(completions.total, 0);
+    assert_eq!(completions.start, 0);
+    assert_eq!(completions.selected, None);
+    assert_eq!(completions.lines, ["no files match"]);
+    assert!(matches!(completions.rows, super::Rows::Message(_)));
+}
+
+/// An `@` error keeps its text as one dim row with no selection.
+#[test]
+fn a_file_error_is_a_message_with_no_selection() {
+    let mut app = connected();
+    assert_eq!(key(&mut app, '@'), Effect::ListFiles);
+    app.on_files(app.generation(), Err("gone".to_owned()));
+    let completions = app.completions().expect("the dim row shows");
+    assert_eq!(completions.lines, ["No files: gone"]);
+    assert_eq!(completions.selected, None);
+    assert!(matches!(completions.rows, super::Rows::Message(_)));
 }

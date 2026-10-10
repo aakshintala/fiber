@@ -17,6 +17,7 @@ mod catalogue;
 mod cells;
 mod changed_files_view;
 mod clipboard;
+mod completion_rows;
 mod configure;
 #[cfg(test)]
 mod configure_fake;

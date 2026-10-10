@@ -122,10 +122,37 @@ pub(crate) fn filter<'a>(rows: &'a [Row], query: &str) -> Vec<&'a Row> {
     starts.chain(contains).map(|(row, _)| row).collect()
 }
 
+/// The rows matching `query`, the text after `/`, in `filter` order,
+/// owned for the panel's window.
+pub(crate) fn filtered(rows: &[Row], query: &str) -> Vec<Row> {
+    filter(rows, query).into_iter().cloned().collect()
+}
+
 /// The first row shown so that `selected` is in view: rows
 /// scroll once the selection passes the last of [`SHOWN`].
 pub(crate) fn window_start(selected: usize) -> usize {
     selected.saturating_add(1).saturating_sub(SHOWN)
+}
+
+/// The first case-folded occurrence of `query` in `name`, as byte
+/// offsets on char boundaries; `None` when the query is empty or the
+/// name holds none of it (`docs/tui.md`, "Rules").
+pub(crate) fn matched(name: &str, query: &str) -> Option<std::ops::Range<usize>> {
+    if query.is_empty() {
+        return None;
+    }
+    let at = name.to_lowercase().find(&query.to_lowercase())?;
+    // The fold can move byte offsets across char boundaries, so each
+    // end widens to one it can cut at.
+    let mut start = at;
+    while !name.is_char_boundary(start) {
+        start = start.saturating_add(1);
+    }
+    let mut end = at.saturating_add(query.len()).min(name.len());
+    while !name.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    (start < end).then_some(start..end)
 }
 
 #[cfg(test)]

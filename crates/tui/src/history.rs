@@ -11,7 +11,7 @@ use contract::events::InputItem;
 use contract::shapes::{ContentPart, Origin};
 use serde_json::{Value, json};
 
-use super::commands::Completions;
+use super::commands::{Completions, Rows};
 use super::{App, Effect, Link, mint};
 use crate::keys::{Edit, Key};
 use crate::slash::{SHOWN, window_start};
@@ -351,14 +351,20 @@ impl App {
         let search = self.history.search.as_ref()?;
         let mut lines = vec![format!("{SEARCH}{}", search.query)];
         let matches = self.history.matches(self.session());
+        let query = search.query.clone();
         if matches.is_empty() {
             lines.push(NO_MATCH.to_owned());
             return Some(Completions {
+                rows: Rows::Search(lines.clone()),
                 lines,
                 selected: None,
+                start: 0,
+                total: 0,
+                query,
             });
         }
-        let selected = search.selected.min(matches.len().saturating_sub(1));
+        let total = matches.len();
+        let selected = search.selected.min(total.saturating_sub(1));
         let start = window_start(selected);
         lines.extend(
             matches
@@ -369,8 +375,12 @@ impl App {
         );
         let row = selected.saturating_sub(start).saturating_add(1);
         Some(Completions {
+            rows: Rows::Search(lines.clone()),
             lines,
             selected: Some(row),
+            start,
+            total,
+            query,
         })
     }
 

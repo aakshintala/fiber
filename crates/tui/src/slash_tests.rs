@@ -125,3 +125,16 @@ fn an_answer_row_keeps_its_hint_and_tag() {
         ]
     );
 }
+
+#[test]
+fn matched_is_the_first_case_folded_occurrence_on_char_boundaries() {
+    use super::matched;
+    assert_eq!(matched("reload", "re"), Some(0..2));
+    assert_eq!(matched("reload", "load"), Some(2..6));
+    assert_eq!(matched("reload", "RE"), Some(0..2));
+    assert_eq!(matched("close", "ose"), Some(2..5));
+    assert_eq!(matched("caf\u{e9}", "F\u{c9}"), Some(2..5));
+    assert_eq!(matched("reload", "zzz"), None);
+    assert_eq!(matched("reload", ""), None);
+    assert_eq!(matched("", "re"), None);
+}
