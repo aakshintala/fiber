@@ -431,19 +431,19 @@ fn main() {
     std::fs::create_dir_all("fixtures").ok();
 
     // median: 5 prompts (Claude Code median session length)
-    let (g, total) = build_by_prompts(0xC0FFEE_1, 5);
+    let (g, total) = build_by_prompts(0x0C0F_FEE1, 5);
     eprintln!("median: 5 prompts, {total} tool calls (target: per-prompt lognormal fit to median 5 / p90 28)");
     write("fixtures/large-median.jsonl", &g.out);
 
     // p90: 17 prompts (Claude Code p90 session length), same per-prompt distribution
-    let (g, total) = build_by_prompts(0xC0FFEE_2, 17);
+    let (g, total) = build_by_prompts(0x0C0F_FEE2, 17);
     eprintln!("p90: 17 prompts, {total} tool calls (same per-prompt distribution as median, more prompts)");
     write("fixtures/large-p90.jsonl", &g.out);
 
     // heavy: p99-centred prompts until the total matches the longest real
     // Claude Code session by tool-call count (984, found by measuring the
     // owner's ~/.claude/projects/*/*.jsonl main sessions for this ticket).
-    let (g, total, prompts) = build_heavy(0xC0FFEE_3, 984);
+    let (g, total, prompts) = build_heavy(0x0C0F_FEE3, 984);
     eprintln!("heavy: {prompts} prompts, {total} tool calls (target: 984, the longest real session found)");
     write("fixtures/large-heavy.jsonl", &g.out);
 }

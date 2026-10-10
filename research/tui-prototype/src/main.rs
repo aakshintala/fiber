@@ -464,6 +464,8 @@ struct Reason {
     end: Option<i64>,
     step: usize,
 }
+// boxing the call would churn every match site in a throwaway prototype
+#[allow(clippy::large_enum_variant)]
 enum Item {
     R(Reason),
     C(Call),
@@ -641,15 +643,12 @@ impl Fold {
     }
     /// A call's tool and arguments, from this session's turns or a delegate's relayed lines.
     fn call_of(&self, sid: &str, aid: &str) -> (String, Value) {
-        if sid == self.session_id {
-            if let Some(&(ti, bi, ii)) = self.at.get(aid) {
-                if let Block::Group(g) = &self.turns[ti].blocks[bi] {
-                    if let Item::C(c) = &g.items[ii] {
+        if sid == self.session_id
+            && let Some(&(ti, bi, ii)) = self.at.get(aid)
+                && let Block::Group(g) = &self.turns[ti].blocks[bi]
+                    && let Item::C(c) = &g.items[ii] {
                         return (c.name.clone(), c.args.clone());
                     }
-                }
-            }
-        }
         self.dcalls.get(aid).cloned().unwrap_or_default()
     }
     /// Action ids of this session's calls still running.
@@ -675,11 +674,10 @@ impl Fold {
         let ti = self.turns.len() - 1;
         let t = &mut self.turns[ti];
         // an MCP line lands where it happened but does not end the group, as in the mock
-        if let Some(bi) = t.blocks.iter().rposition(|b| !matches!(b, Block::Mcp(_))) {
-            if matches!(t.blocks[bi], Block::Group(_)) {
+        if let Some(bi) = t.blocks.iter().rposition(|b| !matches!(b, Block::Mcp(_)))
+            && matches!(t.blocks[bi], Block::Group(_)) {
                 return (ti, bi);
             }
-        }
         t.blocks.push(Block::Group(Group { items: vec![], steps: 0, step_closed: true, open: false, last_ts: ts }));
         (ti, t.blocks.len() - 1)
     }
@@ -802,11 +800,10 @@ impl Fold {
                         .collect()
                 };
                 let note = p["note"].as_str().map(str::to_string);
-                if let Some(&(ti, bi, ii)) = self.at.get(&caid) {
-                    if let Item::C(c) = &mut Self::group_at(&mut self.turns, ti, bi).items[ii] {
+                if let Some(&(ti, bi, ii)) = self.at.get(&caid)
+                    && let Item::C(c) = &mut Self::group_at(&mut self.turns, ti, bi).items[ii] {
                         c.asked = Some(if declined { "declined" } else { "answered" });
                     }
-                }
                 if let Some(t) = self.turn() {
                     t.blocks.push(Block::Answer(rows, note, ts, declined));
                 }
@@ -841,11 +838,10 @@ impl Fold {
                 // every model call opens with this line, so it is the step boundary;
                 // whether it is a piece of text that ends the group is known only once text arrives
                 self.text_start.insert(aid, ts);
-                if let Some(Turn { blocks, .. }) = self.turns.last_mut() {
-                    if let Some(Block::Group(g)) = blocks.iter_mut().rev().find(|b| !matches!(b, Block::Mcp(_))) {
+                if let Some(Turn { blocks, .. }) = self.turns.last_mut()
+                    && let Some(Block::Group(g)) = blocks.iter_mut().rev().find(|b| !matches!(b, Block::Mcp(_))) {
                         g.step_closed = true;
                     }
-                }
             }
             "assistant_message_delta" | "assistant_message_completed" => {
                 let text = p["text"].as_str().unwrap_or("");
@@ -857,20 +853,18 @@ impl Fold {
                     t.blocks.push(Block::Text(String::new()));
                     self.at.insert(aid.clone(), (ti, t.blocks.len() - 1, 0));
                 }
-                if let Some(&(ti, bi, _)) = self.at.get(&aid) {
-                    if let Block::Text(t) = &mut self.turns[ti].blocks[bi] {
+                if let Some(&(ti, bi, _)) = self.at.get(&aid)
+                    && let Block::Text(t) = &mut self.turns[ti].blocks[bi] {
                         if kind.ends_with("delta") {
                             t.push_str(text);
                         } else {
                             *t = text.into();
                         }
                     }
-                }
-                if kind.ends_with("completed") {
-                    if let Some(s) = self.text_start.get(&aid) {
+                if kind.ends_with("completed")
+                    && let Some(s) = self.text_start.get(&aid) {
                         self.text_dur.insert(aid, ts - s);
                     }
-                }
             }
             "tool_call_requested" => {
                 let (ti, bi) = self.group(ts);
@@ -943,12 +937,11 @@ impl Fold {
                     h.after = Some(ctx);
                     self.ho = None;
                 }
-                if !aid.is_empty() {
-                    if let Some(d) = self.text_dur.get(&aid) {
+                if !aid.is_empty()
+                    && let Some(d) = self.text_dur.get(&aid) {
                         self.text_ms += d;
                         self.text_out += o;
                     }
-                }
             }
             "handoff_started" => {
                 let Some(t) = self.turns.last_mut() else { return };
@@ -1155,10 +1148,9 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
             .enumerate()
             .filter_map(|(ii, i)| if let Item::R(r) = i { Some((ii, r)) } else { None })
             .flat_map(|(ii, r)| {
-                let t = if r.end.is_none() {
-                    format!("Thinking{}", heading(&r.text, true).map(|h| format!(": {h}")).unwrap_or_default())
-                } else {
-                    format!("+ Thought{} · {}", heading(&r.text, false).map(|h| format!(": {h}")).unwrap_or_default(), dur(r.end.unwrap() - r.start))
+                let t = match r.end {
+                    Some(end) => format!("+ Thought{} · {}", heading(&r.text, false).map(|h| format!(": {h}")).unwrap_or_default(), dur(end - r.start)),
+                    None => format!("Thinking{}", heading(&r.text, true).map(|h| format!(": {h}")).unwrap_or_default()),
                 };
                 let mut out = vec![Row { spans: vec![sp(t, dim().add_modifier(Modifier::ITALIC))], act: Some(Act::Item(ti, bi, ii)), ..Default::default() }];
                 if v.exp.contains(&(ti, bi, ii)) {
@@ -1195,10 +1187,9 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
         last_step = step;
         match it {
             Item::R(r) => {
-                let t = if r.end.is_none() {
-                    format!("○ Thinking{}", heading(&r.text, true).map(|h| format!(": {h}")).unwrap_or_default())
-                } else {
-                    format!("+ Thought{} · {}", heading(&r.text, false).map(|h| format!(": {h}")).unwrap_or_default(), dur(r.end.unwrap() - r.start))
+                let t = match r.end {
+                    Some(end) => format!("+ Thought{} · {}", heading(&r.text, false).map(|h| format!(": {h}")).unwrap_or_default(), dur(end - r.start)),
+                    None => format!("○ Thinking{}", heading(&r.text, true).map(|h| format!(": {h}")).unwrap_or_default()),
                 };
                 ledger.push(Row { act: Some(key), ..row(vec![sp(gutter, dim()), sp(t, dim().add_modifier(Modifier::ITALIC))]) });
                 if open {
@@ -1414,7 +1405,7 @@ fn left_cut(p: &str, w: usize) -> String {
 fn cards(f: &Fold, now: i64, keys: &str, pw: usize) -> (Vec<Card>, Vec<Vec<Span<'static>>>) {
     let mut c = vec![];
     let mut short = vec![];
-    let hit = if f.input + f.cache_read + f.cache_write > 0 { 100 * f.cache_read / (f.input + f.cache_read + f.cache_write) } else { 0 };
+    let hit = (100 * f.cache_read).checked_div(f.input + f.cache_read + f.cache_write).unwrap_or(0);
     let tps = if f.text_ms > 0 { f.text_out * 1000 / f.text_ms as u64 } else { 0 };
     let mode = if f.mode.is_empty() { "?".to_string() } else { f.mode.clone() };
     let down = f.mcp_down.first().map(|s| format!("✗ {s} down"));
@@ -1631,7 +1622,7 @@ fn wait_glyph(tick: u64, reduced: bool) -> Style {
     if reduced {
         return fg(ORANGE).add_modifier(Modifier::BOLD);
     }
-    if tick / 4 % 2 == 0 { fg(ORANGE).add_modifier(Modifier::BOLD) } else { fg(CYAN) }
+    if (tick / 4).is_multiple_of(2) { fg(ORANGE).add_modifier(Modifier::BOLD) } else { fg(CYAN) }
 }
 /// A session's state glyph, as on the rail and home's list: working `●`
 /// under reduced motion in the accent, waiting `!` attention, died `✗`
@@ -1756,7 +1747,7 @@ fn rail_dense_top(s: &Fake, n: usize, tick: u64, reduced: bool, iw: usize) -> Ve
         sp(format!("{n} "), dim()),
         rail_glyph(s, tick, reduced),
         sp(" ", Style::new()),
-        sp(cut(&s.name, iw.saturating_sub(5)), bold()),
+        sp(cut(s.name, iw.saturating_sub(5)), bold()),
         t(),
         rail_age_or_dismiss(s),
     ]
@@ -1814,7 +1805,7 @@ fn rail_card_b(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: bool,
     let stripe = || rail_stripe(s, tick, reduced);
     let pad = || sp("  ", Style::new());
     let r1 = rail_word_top(s, n, tick, reduced);
-    let r2 = vec![stripe(), pad(), sp(cut(&s.name, iw.saturating_sub(3)), bold())];
+    let r2 = vec![stripe(), pad(), sp(cut(s.name, iw.saturating_sub(3)), bold())];
     let r3 = if s.st == SState::NeedsInput {
         vec![stripe(), pad(), sp(cut(&s.wait, iw.saturating_sub(3)), fg(ORANGE))]
     } else {
@@ -1868,7 +1859,7 @@ fn rail_card_medium(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: 
 /// The 4 content rows medium shares with three's lower rows: word-top, name, wait reason or branch,
 /// spend/bar/percentage (bar dropped below RAIL_COMPACT). `iw` is the content width.
 fn rail_medium_inner(s: &Fake, n: usize, tick: u64, reduced: bool, iw: usize, w: usize) -> Vec<Vec<Span<'static>>> {
-    let r2 = vec![rail_stripe(s, tick, reduced), sp("  ", Style::new()), sp(cut(&s.name, iw.saturating_sub(3)), bold())];
+    let r2 = vec![rail_stripe(s, tick, reduced), sp("  ", Style::new()), sp(cut(s.name, iw.saturating_sub(3)), bold())];
     let r3 = if s.st == SState::NeedsInput {
         vec![rail_stripe(s, tick, reduced), sp("  ", Style::new()), sp(cut(&s.wait, iw.saturating_sub(3)), fg(ORANGE))]
     } else {
@@ -2005,7 +1996,7 @@ fn rail_full_b(sess: &[Fake], shown: &[usize], screen: usize, tick: u64, reduced
         let members: Vec<usize> = shown.iter().filter(|&&i| sess[i].project == *p).copied().collect();
         let dollars: f64 = members.iter().map(|&i| sess[i].dollars).sum();
         let di = projects.iter().position(|q| q == p).unwrap_or(0);
-        out.push(rail_project_head(*p, dollars, done.get(di).copied().unwrap_or(0), w));
+        out.push(rail_project_head(p, dollars, done.get(di).copied().unwrap_or(0), w));
         for &i in &members {
             // numbers are stable per session: a dismissal leaves its number's gap
             let n = i + 1;
@@ -2258,13 +2249,11 @@ impl Ui {
     }
     /// Starts a fresh form state when the form on top changes.
     fn sync_form(&mut self, f: &Fold) {
-        if let Some((_, p)) = self.top(f) {
-            if let Asking::Form(fields) = &p.what {
-                if self.form.rid != p.rid {
+        if let Some((_, p)) = self.top(f)
+            && let Asking::Form(fields) = &p.what
+                && self.form.rid != p.rid {
                     self.form = Form { rid: p.rid.clone(), sel: vec![vec![]; fields.len()], text: vec![String::new(); fields.len()], ..Default::default() };
                 }
-            }
-        }
     }
     fn answer_of(&self, k: usize) -> Option<String> {
         let mut v = self.form.sel.get(k)?.clone();
@@ -2592,6 +2581,8 @@ fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usi
     slab(rows, BC, None, w)
 }
 
+// the footer reads every part of the frame, so one drawing function takes them all
+#[allow(clippy::too_many_arguments)]
 fn bottom(f: &Fold, w: usize, tick: u64, now: i64, v: &View, narrow: bool, ui: &Ui, rail_note: Option<String>) -> Vec<Row> {
     let mut out = vec![];
     let aside = f.pending.iter().filter(|p| ui.aside.contains(&p.rid)).count();
@@ -2666,8 +2657,7 @@ fn selection_text(rows: &[Row], a: (usize, usize), b: (usize, usize)) -> String 
     let (a, b) = if a <= b { (a, b) } else { (b, a) };
     let mut out = String::new();
     let mut first = true;
-    for r in a.0..=b.0.min(rows.len().saturating_sub(1)) {
-        let row = &rows[r];
+    for (r, row) in rows.iter().enumerate().take(b.0.min(rows.len().saturating_sub(1)) + 1).skip(a.0) {
         let t = plain(row);
         let tt = t.trim();
         if !tt.is_empty() && tt.chars().all(|c| c == '▄' || c == '▀') {
@@ -3462,7 +3452,8 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         None => None,
     };
     let exit_at = a.exit_after.map(|s| v0 + Duration::from_secs_f64(s));
-    let mut window: Option<(Instant, u64, u64, u64, (f64, i64, i64, u64, u64))> = None;
+    type FrameWindow = (Instant, u64, u64, u64, (f64, i64, i64, u64, u64));
+    let mut window: Option<FrameWindow> = None;
     let mut audit = Audit::default();
     let mut prev_buf: Option<Buffer> = None;
     let mut frames: u64 = 0;
@@ -3924,34 +3915,30 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 }
                 // `--hover` over a rail row (not a B card): one tooltip line with the full
                 // name, workspace and spend
-                if ui.rail != 1 {
-                    if let Some((hy, _, _)) = hovered {
+                if ui.rail != 1
+                    && let Some((hy, _, _)) = hovered {
                         let act = hits.iter().find(|h| Some((h.0, h.1, h.2)) == hovered).map(|h| h.3);
-                        if let Some(Act::Rail(i)) = act {
-                            if let Some(s) = sess.get(i) {
+                        if let Some(Act::Rail(i)) = act
+                            && let Some(s) = sess.get(i) {
                                 let tip = format!(" {} · {} · {} ", s.name, s.ws, s.spend);
                                 let tw = tip.width().min(cw).max(1);
                                 paint(buf, rail_w + 1, hy, tw as u16, &Row { spans: tint(vec![sp(tip, Style::new())], BI), bg: Some(BI), ..Default::default() });
                             }
-                        }
                     }
-                }
                 // compact hides the name behind truncation and drops the workspace and
                 // thinking level: hovering a card shows its full identity in a dim footer
                 // at the rail's bottom row, running over the conversation like the A
                 // tooltip when it needs the room (`--hover` only, like the brightening)
-                if ui.rail == 1 && (ui.density == 3) && rail_w > 1 {
-                    if let Some(i) = hover_card {
-                        if let Some(s) = sess.get(i) {
+                if ui.rail == 1 && (ui.density == 3) && rail_w > 1
+                    && let Some(i) = hover_card
+                        && let Some(s) = sess.get(i) {
                             let tip = format!(" {} · {} · {} · {} ", s.name, s.ws, s.model, s.spend);
                             let tw = tip.width().min(rail_w as usize + cw).max(1);
                             paint(buf, 0, rows - 1, tw as u16, &Row { spans: tint(vec![sp(cut(&tip, tw), dim())], BI), bg: Some(BI), ..Default::default() });
                         }
-                    }
-                }
                 // a resize drag's live share, as a dim pill over the conversation's bottom edge
-                if let Some(lab) = &drag_lab {
-                    if view_h > 0 {
+                if let Some(lab) = &drag_lab
+                    && view_h > 0 {
                         let dw = lab.width() as u16 + 2;
                         let dy = if start < max_top && vrows.is_none() { (view_h as u16).saturating_sub(2) } else { view_h as u16 - 1 };
                         let dx = rail_w + 1 + (cw as u16).saturating_sub(dw) / 2;
@@ -3959,14 +3946,13 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         buf.set_string(dx + 1, dy, lab, dim().bg(SEL));
                         buf.set_string(dx + dw - 1, dy, "▌", fg(SEL));
                     }
-                }
             })?;
             rail_lay = (rrows.len(), rows as usize, rmap);
             let frame_buf = (links_at != (conv_gen, start, ui.ctx_view, ui.picker.is_some(), ui.search.is_some()) || a.audit).then(|| completed.buffer.clone());
             if a.audit && window.is_some() {
                 let cur = frame_buf.clone().unwrap();
-                if let Some(prev) = &prev_buf {
-                    if prev.area == cur.area {
+                if let Some(prev) = &prev_buf
+                    && prev.area == cur.area {
                         let d = prev.diff(&cur);
                         let mut ys: Vec<u16> = d.iter().map(|(_, y, _)| *y).collect();
                         ys.sort();
@@ -3977,7 +3963,6 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         audit.rows_max = audit.rows_max.max(ys.len());
                         *audit.rows_hist.entry(ys.len()).or_default() += 1;
                     }
-                }
                 prev_buf = Some(cur);
             }
             // links: mouse capture turns off the terminal's own link detection, so replies
@@ -4160,8 +4145,8 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         panel_cache = None;
                         continue;
                     }
-                    if m.alt {
-                        if let Key::Char(c) = k {
+                    if m.alt
+                        && let Key::Char(c) = k {
                             if c == 'a' || c == 'A' {
                                 let sess = live_sessions(f, &ui, vnow);
                                 if let Some(i) = sess.iter().position(|s| s.st == SState::NeedsInput) {
@@ -4175,8 +4160,8 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                 panel_cache = None;
                                 continue;
                             }
-                            if let Some(d) = c.to_digit(10) {
-                                if (1..=9).contains(&d) {
+                            if let Some(d) = c.to_digit(10)
+                                && (1..=9).contains(&d) {
                                     let sess = live_sessions(f, &ui, vnow);
                                     let shown: Vec<usize> = rail_seq(&sess, ui.rail).into_iter().filter(|&i| !ui.dismissed.contains(&i) && (ui.rail == 1 || ui.show_all || sess[i].project == "fiber")).collect();
                                     // numbers are stable per session, so ⌥N maps the number to its index
@@ -4186,9 +4171,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                     }
                                     continue;
                                 }
-                            }
                         }
-                    }
                     if let Some(s) = ui.search.as_mut() {
                         let n = s.hits.len().max(1);
                         match k {
@@ -4422,11 +4405,11 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                         ui.rail_off = false;
                                         ui.rail_share = x as f64 * 100.0 / cols.max(1) as f64;
                                     }
-                                } else if (x as u16) < 22 {
+                                } else if x < 22 {
                                     ui.rail_off = true;
                                 } else {
                                     let maxw = cols.saturating_sub(CONV_MIN + panel_w).max(22);
-                                    let w = (x as u16).clamp(22, 48).min(maxw);
+                                    let w = x.clamp(22, 48).min(maxw);
                                     ui.rail_share = w as f64 * 100.0 / cols.max(1) as f64;
                                 }
                             } else {
@@ -4578,12 +4561,11 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 }
                 Act::Opt(j) => {
                     ui.form.cur = j;
-                    if let Some((_, p)) = ui.top(f) {
-                        if let Asking::Form(fields) = &p.what {
+                    if let Some((_, p)) = ui.top(f)
+                        && let Asking::Form(fields) = &p.what {
                             let fields = fields.clone();
                             form_choose(&mut ui, &fields);
                         }
-                    }
                 }
                 Act::Next => {
                     ui.form.tab += 1;
@@ -4925,8 +4907,7 @@ mod tests {
         ];
         let f = Fold::default();
         let p = Pending { rid: "r".into(), sid: String::new(), aid: "a".into(), what: Asking::Form(fields.clone()) };
-        let mut ui = Ui::default();
-        ui.form = Form { rid: "r".into(), sel: vec![vec![]; 3], text: vec![String::new(); 3], ..Default::default() };
+        let mut ui = Ui { form: Form { rid: "r".into(), sel: vec![vec![]; 3], text: vec![String::new(); 3], ..Default::default() }, ..Default::default() };
         let texts = |ui: &Ui| form_panel(&f, ui, 0, &p, &fields, 100).iter().map(plain).collect::<Vec<_>>();
         let t = texts(&ui);
         let (words, next) = (t.iter().position(|l| l.contains("Type an answer")).unwrap(), t.iter().position(|l| l.contains("Next →")).unwrap());

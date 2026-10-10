@@ -138,10 +138,8 @@ impl Pager {
                 }
             }
             sum.apply(&e);
-            if kind == "usage_recorded" && sid == sum.session_id {
-                if let Some(l) = waiting.take() {
-                    afters.insert(l, sum.ctx);
-                }
+            if kind == "usage_recorded" && sid == sum.session_id && let Some(l) = waiting.take() {
+                afters.insert(l, sum.ctx);
             }
             trim(&mut sum, kind, sid, e["action_id"].as_str().unwrap_or(""));
             i += 1;
@@ -402,8 +400,8 @@ pub fn thumb_jumps(real: &[usize], weight: &[u64], vh: usize, m: usize) -> (f64,
         let s = prefix(&est(&known));
         let start = s[ap] + off;
         let (lo, hi) = (start.saturating_sub(m * vh), (start + vh + m * vh).min(s[n]));
-        for p in at(&s, lo)..=at(&s, hi.saturating_sub(1).max(lo)) {
-            known[p] = true;
+        for p in known.iter_mut().take(at(&s, hi.saturating_sub(1).max(lo)) + 1).skip(at(&s, lo)) {
+            *p = true;
         }
         let s = prefix(&est(&known));
         let t = thumb(s[ap] + off, s[n], vh);
