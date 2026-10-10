@@ -16,6 +16,7 @@ use contract::SessionId;
 use serde_json::json;
 
 use super::*;
+use crate::fixtures::session_log as write_log;
 
 fn session(home: &Path, project: &str, id: &str, first: &str) {
     let dir = home
@@ -23,8 +24,7 @@ fn session(home: &Path, project: &str, id: &str, first: &str) {
         .join(project)
         .join("sessions")
         .join(id);
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("events.jsonl"), format!("{first}\n")).unwrap();
+    write_log(&dir, format!("{first}\n").as_bytes());
 }
 
 fn started(workspace: Option<&str>, from: Option<&str>) -> String {
@@ -160,11 +160,6 @@ fn a_first_line_with_no_trailing_newline_is_included() {
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("events.jsonl"), started(Some("/w"), None)).unwrap();
     assert_eq!(ids(&started_sessions(home)), ["s_0000000000000001"]);
-}
-
-fn write_log(dir: &Path, bytes: &[u8]) {
-    fs::create_dir_all(dir).unwrap();
-    fs::write(dir.join("events.jsonl"), bytes).unwrap();
 }
 
 fn event(ts: u64) -> String {

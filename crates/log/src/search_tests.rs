@@ -9,8 +9,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::fs::{self, OpenOptions};
-use std::io::Write as _;
+use std::fs::{self};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::sync::Weak;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
@@ -19,14 +18,16 @@ use std::time::Duration;
 use contract::clock::Wake;
 use contract::events::Event;
 use contract::session_search::Label;
-use contract::{Envelope, Seq};
+use contract::Seq;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, TempDir};
 use proptest::prelude::*;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::*;
 use crate::Log;
+use crate::fixtures::event;
+pub(super) use crate::fixtures::append_raw as raw;
 
 /// A Fiber home whose sessions are written with [`Log`].
 pub(super) struct Home {
@@ -92,20 +93,6 @@ impl Home {
     }
 }
 
-fn event(kind: &str, payload: Value) -> Event {
-    let line = Envelope {
-        kind: kind.into(),
-        session_id: SessionId("x".into()),
-        ts: 0,
-        schema_version: 1,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload: payload.as_object().unwrap().clone(),
-    };
-    Event::from_envelope(&line).unwrap().unwrap()
-}
-
 fn started(workspace: &str) -> Event {
     event(
         "session_started",
@@ -132,14 +119,6 @@ fn sessions_of(found: &Found) -> Vec<&str> {
     let mut ids: Vec<&str> = found.hits.iter().map(|h| h.session_id.0.as_str()).collect();
     ids.dedup();
     ids
-}
-
-pub(super) fn raw(dir: &Path, bytes: &[u8]) {
-    let mut log = OpenOptions::new()
-        .append(true)
-        .open(dir.join("events.jsonl"))
-        .unwrap();
-    log.write_all(bytes).unwrap();
 }
 
 fn set_mode(path: &Path, mode: u32) {

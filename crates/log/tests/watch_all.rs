@@ -361,12 +361,8 @@ fn watch_all_over_a_log_cut_short_returns_the_whole_lines_before_the_cut_then_an
     let (tmp, log, written) = steps("watch-all-cut", 5);
     let dir = tmp.session(&id("s_1"));
     let whole = fs::read(dir.join("events.jsonl")).unwrap();
-    let mut start = 0;
-    for line in whole.split_inclusive(|b| *b == b'\n').take(2) {
-        start += line.len();
-    }
-    let len = whole[start..].iter().position(|b| *b == b'\n').unwrap();
-    let cut = truncate(&dir, 2, len / 2);
+    let (start, len) = line_at(&whole, 2);
+    let cut_off = cut(&dir, start + len / 2);
     let mut watcher = log.watch_all();
     assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[0]));
     assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[1]));
@@ -379,7 +375,7 @@ fn watch_all_over_a_log_cut_short_returns_the_whole_lines_before_the_cut_then_an
         .append(true)
         .open(dir.join("events.jsonl"))
         .unwrap();
-    std::io::Write::write_all(&mut file, &cut).unwrap();
+    std::io::Write::write_all(&mut file, &cut_off).unwrap();
     assert_eq!(fs::read(dir.join("events.jsonl")).unwrap(), whole);
 }
 

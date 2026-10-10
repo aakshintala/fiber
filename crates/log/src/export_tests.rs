@@ -1,9 +1,10 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::*;
 use contract::ErrorCode;
+use crate::fixtures::session_log;
 
 const FIRST: &str = "{\"seq\":0,\"kind\":\"a\"}\n";
 const SECOND: &str = "{\"seq\":1,\"kind\":\"b\"}\n";
@@ -11,8 +12,8 @@ const SECOND: &str = "{\"seq\":1,\"kind\":\"b\"}\n";
 /// A session directory `id` under `root` with `log` as its `events.jsonl`.
 fn session(root: &Path, id: &str, log: &[u8]) -> PathBuf {
     let dir = root.join(id);
+    session_log(&dir, log);
     fs::create_dir_all(dir.join("artifacts")).unwrap();
-    fs::write(dir.join("events.jsonl"), log).unwrap();
     dir
 }
 

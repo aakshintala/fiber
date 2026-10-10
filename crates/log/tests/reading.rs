@@ -91,15 +91,6 @@ fn reading_a_missing_session_is_not_found() {
     assert_eq!(err.code(), contract::ErrorCode::SessionNotFound);
 }
 
-/// Appends `line` to the session's log as raw bytes, behind the writer's back.
-fn append_raw(dir: &std::path::Path, line: &[u8]) {
-    let mut file = fs::OpenOptions::new()
-        .append(true)
-        .open(dir.join("events.jsonl"))
-        .unwrap();
-    file.write_all(line).unwrap();
-}
-
 #[test]
 fn lines_yield_every_complete_line_in_order_and_skip_a_torn_tail() {
     let tmp = TestDir::new("lines");
@@ -706,12 +697,8 @@ fn a_range_over_a_log_cut_short_is_an_error_with_no_lines() {
     let (tmp, log, written) = steps("range-cut", 6);
     let dir = tmp.session(&id("s_1"));
     let whole = fs::read(dir.join("events.jsonl")).unwrap();
-    let mut start = 0;
-    for line in whole.split_inclusive(|b| *b == b'\n').take(3) {
-        start += line.len();
-    }
-    let len = whole[start..].iter().position(|b| *b == b'\n').unwrap();
-    let _cut = truncate(&dir, 3, len / 2);
+    let (start, len) = line_at(&whole, 3);
+    let _cut = cut(&dir, start + len / 2);
     // A window holding the cut is an error with no lines; a window before
     // it still reads.
     let err = log.range(0, 6).unwrap_err();

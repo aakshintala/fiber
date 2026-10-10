@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::event;
+use common::line;
 use contract::ActionId;
 use contract::SessionId;
 use contract::session_search::{Label, Query, Scan};
@@ -212,12 +213,6 @@ fn a_search_never_returns_session_search_own_calls_or_results() {
     assert_eq!(found.total, 2);
     assert!(found.hits.iter().all(|hit| hit.artifact.is_none()));
     assert!(found.problems.is_empty(), "{:?}", found.problems);
-}
-
-/// One raw log line of session `id`.
-fn line(kind: &str, id: &str, ts: u64, seq: u64, payload: &serde_json::Value) -> String {
-    let line = json!({"kind": kind, "session_id": id, "ts": ts, "schema_version": 1, "seq": seq, "payload": payload});
-    format!("{line}\n")
 }
 
 /// Session `id` under project key `key`, started in `workspace`, then

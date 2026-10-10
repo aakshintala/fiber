@@ -9,28 +9,14 @@
 )]
 
 use std::fs;
-use std::path::Path;
 
 use contract::Seq;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::*;
+use crate::fixtures::{corrupt, line as fixture_line, session_log};
 
-fn line(kind: &str, session: &str, seq: u64, payload: Value) -> Value {
-    let Value::Object(payload) = payload else {
-        panic!("a payload is an object");
-    };
-    json!({
-        "kind": kind,
-        "session_id": session,
-        "ts": 1_759_150_000_000_u64 + seq,
-        "schema_version": 1,
-        "seq": seq,
-        "payload": payload,
-    })
-}
-
-fn started(session: &str, seq: u64, from: Option<(&str, u64)>) -> Value {
+fn started(session: &str, seq: u64, from: Option<(&str, u64)>) -> String {
     let mut payload = json!({
         "workspace": "/w",
         "variables": {"path": "/usr/bin", "names": [], "source": "inherited"},
@@ -38,30 +24,34 @@ fn started(session: &str, seq: u64, from: Option<(&str, u64)>) -> Value {
     if let Some((parent, at)) = from {
         payload["forked_from"] = json!({"session_id": parent, "seq": at});
     }
-    line("session_started", session, seq, payload)
+    fixture_line(
+        "session_started",
+        session,
+        1_759_150_000_000_u64 + seq,
+        seq,
+        &payload,
+    )
 }
 
-fn plain(session: &str, seq: u64, kind: &str) -> Value {
-    line(kind, session, seq, json!({}))
+fn plain(session: &str, seq: u64, kind: &str) -> String {
+    fixture_line(
+        kind,
+        session,
+        1_759_150_000_000_u64 + seq,
+        seq,
+        &json!({}),
+    )
 }
 
-/// Writes `sessions/id/events.jsonl` holding `lines`, one per line.
-fn write_log(sessions: &Path, id: &str, lines: &[Value]) {
-    let dir = sessions.join(id);
-    fs::create_dir_all(&dir).unwrap();
-    let mut text = String::new();
-    for line in lines {
-        text.push_str(&line.to_string());
-        text.push('\n');
-    }
-    fs::write(dir.join(EVENTS), text).unwrap();
+fn write_lines(sessions: &std::path::Path, id: &str, lines: &[String]) {
+    session_log(&sessions.join(id), lines.concat().as_bytes());
 }
 
 fn chain_fixture(name: &str) -> (fakes::TempDir, std::path::PathBuf) {
     let home = fakes::TempDir::new(&format!("log-history-{name}"));
     let sessions = home.path().join("sessions");
     // Root A: six lines. B continues A at 2. C continues B at 1.
-    write_log(
+    write_lines(
         &sessions,
         "s_aaaaaaaaaaaaaaaa",
         &[
@@ -73,7 +63,7 @@ fn chain_fixture(name: &str) -> (fakes::TempDir, std::path::PathBuf) {
             plain("s_aaaaaaaaaaaaaaaa", 5, "turn_completed"),
         ],
     );
-    write_log(
+    write_lines(
         &sessions,
         "s_bbbbbbbbbbbbbbbb",
         &[
@@ -82,7 +72,7 @@ fn chain_fixture(name: &str) -> (fakes::TempDir, std::path::PathBuf) {
             plain("s_bbbbbbbbbbbbbbbb", 2, "turn_completed"),
         ],
     );
-    write_log(
+    write_lines(
         &sessions,
         "s_cccccccccccccccc",
         &[
@@ -112,7 +102,7 @@ fn tos(segments: &[Segment]) -> Vec<Option<u64>> {
 fn a_root_alone_is_one_segment_holding_all_of_it() {
     let home = fakes::TempDir::new("log-history-root");
     let sessions = home.path().join("sessions");
-    write_log(
+    write_lines(
         &sessions,
         "s_aaaaaaaaaaaaaaaa",
         &[started("s_aaaaaaaaaaaaaaaa", 0, None)],
@@ -168,7 +158,7 @@ fn history_to_on_the_root_sets_the_only_segments_to() {
 fn a_missing_parent_is_not_found() {
     let home = fakes::TempDir::new("log-history-missing");
     let sessions = home.path().join("sessions");
-    write_log(
+    write_lines(
         &sessions,
         "s_bbbbbbbbbbbbbbbb",
         &[started(
@@ -186,7 +176,7 @@ fn a_missing_parent_is_not_found() {
 fn a_cycle_is_a_pointer_and_the_walk_stops() {
     let home = fakes::TempDir::new("log-history-cycle");
     let sessions = home.path().join("sessions");
-    write_log(
+    write_lines(
         &sessions,
         "s_aaaaaaaaaaaaaaaa",
         &[started(
@@ -195,7 +185,7 @@ fn a_cycle_is_a_pointer_and_the_walk_stops() {
             Some(("s_bbbbbbbbbbbbbbbb", 0)),
         )],
     );
-    write_log(
+    write_lines(
         &sessions,
         "s_bbbbbbbbbbbbbbbb",
         &[started(
@@ -213,12 +203,12 @@ fn a_cycle_is_a_pointer_and_the_walk_stops() {
 fn a_point_past_the_parents_end_is_a_pointer_from_lines() {
     let home = fakes::TempDir::new("log-history-past-end");
     let sessions = home.path().join("sessions");
-    write_log(
+    write_lines(
         &sessions,
         "s_aaaaaaaaaaaaaaaa",
         &[started("s_aaaaaaaaaaaaaaaa", 0, None)],
     );
-    write_log(
+    write_lines(
         &sessions,
         "s_bbbbbbbbbbbbbbbb",
         &[started(
@@ -276,7 +266,7 @@ fn lines_to_the_last_line_holds_the_whole_log() {
 fn a_first_line_that_is_no_session_started_is_a_pointer() {
     let home = fakes::TempDir::new("log-history-first");
     let sessions = home.path().join("sessions");
-    write_log(
+    write_lines(
         &sessions,
         "s_aaaaaaaaaaaaaaaa",
         &[plain("s_aaaaaaaaaaaaaaaa", 0, "turn_started")],
@@ -300,7 +290,7 @@ fn last_line_on_a_missing_or_empty_log_is_none() {
 fn last_line_returns_the_one_line_of_a_one_line_log() {
     let home = fakes::TempDir::new("log-history-last-one");
     let sessions = home.path().join("sessions");
-    write_log(
+    write_lines(
         &sessions,
         "s_aaaaaaaaaaaaaaaa",
         &[started("s_aaaaaaaaaaaaaaaa", 0, None)],
@@ -314,7 +304,7 @@ fn last_line_returns_the_one_line_of_a_one_line_log() {
 fn last_line_drops_a_torn_tail() {
     let home = fakes::TempDir::new("log-history-last-torn");
     let sessions = home.path().join("sessions");
-    write_log(
+    write_lines(
         &sessions,
         "s_aaaaaaaaaaaaaaaa",
         &[
@@ -323,10 +313,10 @@ fn last_line_drops_a_torn_tail() {
         ],
     );
     let dir = sessions.join("s_aaaaaaaaaaaaaaaa");
-    let first = serde_json::to_string(&started("s_aaaaaaaaaaaaaaaa", 0, None)).unwrap();
+    let first = started("s_aaaaaaaaaaaaaaaa", 0, None);
     fs::write(
         dir.join(EVENTS),
-        format!("{first}\n{{\"kind\": \"turn_started\", torn"),
+        format!("{first}{{\"kind\": \"turn_started\", torn"),
     )
     .unwrap();
     // The fixture above holds one complete line and a torn tail.
@@ -340,15 +330,41 @@ fn a_forked_from_that_names_no_point_is_a_pointer() {
     // `forked_from` without either is corrupt, not absent.
     let home = fakes::TempDir::new("log-history-bad-fork");
     let sessions = home.path().join("sessions");
-    let mut without_seq = started("s_aaaaaaaaaaaaaaaa", 0, None);
+    let mut without_seq = json!({
+        "kind": "session_started",
+        "session_id": "s_aaaaaaaaaaaaaaaa",
+        "ts": 1_759_150_000_000_u64,
+        "schema_version": 1,
+        "seq": 0,
+        "payload": {
+            "workspace": "/w",
+            "variables": {"path": "/usr/bin", "names": [], "source": "inherited"},
+        },
+    });
     without_seq["payload"]["forked_from"] = json!({"session_id": "s_bbbbbbbbbbbbbbbb"});
-    write_log(&sessions, "s_aaaaaaaaaaaaaaaa", &[without_seq]);
+    session_log(
+        &sessions.join("s_aaaaaaaaaaaaaaaa"),
+        format!("{without_seq}\n").as_bytes(),
+    );
     let error = history(&sessions.join("s_aaaaaaaaaaaaaaaa")).unwrap_err();
     assert!(matches!(error, Error::Pointer { .. }));
     assert_eq!(error.code(), contract::ErrorCode::LogCorrupt);
-    let mut not_an_object = started("s_bbbbbbbbbbbbbbbb", 0, None);
+    let mut not_an_object = json!({
+        "kind": "session_started",
+        "session_id": "s_bbbbbbbbbbbbbbbb",
+        "ts": 1_759_150_000_000_u64,
+        "schema_version": 1,
+        "seq": 0,
+        "payload": {
+            "workspace": "/w",
+            "variables": {"path": "/usr/bin", "names": [], "source": "inherited"},
+        },
+    });
     not_an_object["payload"]["forked_from"] = json!("s_aaaaaaaaaaaaaaaa");
-    write_log(&sessions, "s_bbbbbbbbbbbbbbbb", &[not_an_object]);
+    session_log(
+        &sessions.join("s_bbbbbbbbbbbbbbbb"),
+        format!("{not_an_object}\n").as_bytes(),
+    );
     let error = history(&sessions.join("s_bbbbbbbbbbbbbbbb")).unwrap_err();
     assert!(matches!(error, Error::Pointer { .. }));
 }
@@ -366,8 +382,7 @@ fn lines_past_the_point_are_never_parsed() {
         started("s_aaaaaaaaaaaaaaaa", 0, None),
         plain("s_aaaaaaaaaaaaaaaa", 1, "turn_started"),
     ] {
-        text.push_str(&line.to_string());
-        text.push('\n');
+        text.push_str(&line);
     }
     text.push_str("{\"kind\": \"turn_started\", broken\n");
     fs::write(dir.join(EVENTS), text).unwrap();
@@ -395,8 +410,7 @@ fn a_garbage_line_right_past_the_point_is_never_read() {
         plain("s_aaaaaaaaaaaaaaaa", 1, "turn_started"),
         plain("s_aaaaaaaaaaaaaaaa", 2, "turn_completed"),
     ] {
-        text.push_str(&line.to_string());
-        text.push('\n');
+        text.push_str(&line);
     }
     text.push_str("{\"kind\": \"turn_started\", broken\n");
     fs::write(dir.join(EVENTS), text).unwrap();
@@ -410,13 +424,6 @@ fn a_garbage_line_right_past_the_point_is_never_read() {
     assert_eq!(held, [1, 2]);
 }
 
-/// A log file holding `text` as it is, under `sessions/id`.
-fn write_raw(sessions: &Path, id: &str, text: &str) {
-    let dir = sessions.join(id);
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join(EVENTS), text).unwrap();
-}
-
 #[test]
 fn a_torn_tail_is_dropped_even_when_its_bytes_parse() {
     // The last line has no newline, so it is torn and is not a line, even
@@ -425,12 +432,10 @@ fn a_torn_tail_is_dropped_even_when_its_bytes_parse() {
     let sessions = home.path().join("sessions");
     let id = "s_aaaaaaaaaaaaaaaa";
     let mut text = String::new();
-    text.push_str(&started(id, 0, None).to_string());
-    text.push('\n');
-    text.push_str(&plain(id, 1, "turn_started").to_string());
-    text.push('\n');
-    text.push_str(&plain(id, 2, "turn_completed").to_string());
-    write_raw(&sessions, id, &text);
+    text.push_str(&started(id, 0, None));
+    text.push_str(&plain(id, 1, "turn_started"));
+    text.push_str(plain(id, 2, "turn_completed").trim_end());
+    session_log(&sessions.join(id), text.as_bytes());
     let segments = history(&sessions.join(id)).unwrap();
     let held: Vec<u64> = segments[0]
         .lines(0)
@@ -446,7 +451,7 @@ fn an_empty_log_holds_no_lines() {
     let home = fakes::TempDir::new("log-history-empty");
     let sessions = home.path().join("sessions");
     let id = "s_aaaaaaaaaaaaaaaa";
-    write_raw(&sessions, id, "");
+    session_log(&sessions.join(id), b"");
     let segment = Segment {
         session_id: SessionId(id.to_owned()),
         dir: sessions.join(id),
@@ -499,12 +504,10 @@ fn an_unreadable_line_reports_its_own_one_based_number() {
     let sessions = home.path().join("sessions");
     let id = "s_aaaaaaaaaaaaaaaa";
     let mut text = String::new();
-    text.push_str(&started(id, 0, None).to_string());
-    text.push('\n');
-    text.push_str(&plain(id, 1, "turn_started").to_string());
-    text.push('\n');
+    text.push_str(&started(id, 0, None));
+    text.push_str(&plain(id, 1, "turn_started"));
     text.push_str("not an event\n");
-    write_raw(&sessions, id, &text);
+    session_log(&sessions.join(id), text.as_bytes());
     let segments = history(&sessions.join(id)).unwrap();
     let line = match segments[0].lines(0) {
         Ok(_) => panic!("a garbage line is unreadable"),
@@ -518,11 +521,10 @@ fn an_unreadable_line_reports_its_own_one_based_number() {
 fn a_read_from_n_parses_no_line_below_n() {
     // Only the window from `from` is parsed: a corrupt line below `from`
     // fails nothing, while a corrupt line at `from` names its own number.
-    use std::os::unix::fs::FileExt;
     let home = fakes::TempDir::new("log-history-from-n");
     let sessions = home.path().join("sessions");
     let id = "s_aaaaaaaaaaaaaaaa";
-    write_log(
+    write_lines(
         &sessions,
         id,
         &[
@@ -534,19 +536,7 @@ fn a_read_from_n_parses_no_line_below_n() {
         ],
     );
     let dir = sessions.join(id);
-    let path = dir.join(EVENTS);
-    let bytes = fs::read(&path).unwrap();
-    let mut start = 0;
-    for line in bytes.split_inclusive(|b| *b == b'\n').take(1) {
-        start += line.len();
-    }
-    let len = bytes[start..].iter().position(|b| *b == b'\n').unwrap();
-    fs::OpenOptions::new()
-        .write(true)
-        .open(&path)
-        .unwrap()
-        .write_all_at(&vec![b'x'; len], start as u64)
-        .unwrap();
+    corrupt(&dir, 1);
     let segments = history_to(&dir, Seq(4)).unwrap();
     let held: Vec<u64> = segments[0]
         .lines(2)

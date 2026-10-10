@@ -3,6 +3,7 @@ use contract::events::{Event, TextCompleted};
 
 use super::*;
 use crate::Log;
+use crate::fixtures::{corrupt, cut, line_at};
 
 /// A log of one `text_completed` line per entry of `texts`, each with a text
 /// of that many bytes, and its offset table read back from the file.
@@ -139,54 +140,6 @@ fn a_page_never_goes_past_its_end_bound() {
     }
     assert_eq!(shape(&offsets.page(0, 0)), (Vec::new(), false));
     assert_eq!(shape(&offsets.page(0, u64::MAX)), (seqs(&written), false));
-}
-
-/// Overwrites line `index` (from 0) of the session's log in place with bytes
-/// that do not parse, keeping its length, so every offset stays true, and
-/// returns the line's original bytes.
-fn corrupt(dir: &std::path::Path, index: usize) -> Vec<u8> {
-    use std::os::unix::fs::FileExt;
-    let path = dir.join("events.jsonl");
-    let whole = std::fs::read(&path).unwrap();
-    let mut start = 0;
-    for line in whole.split_inclusive(|b| *b == b'\n').take(index) {
-        start += line.len();
-    }
-    let len = whole[start..].iter().position(|b| *b == b'\n').unwrap();
-    let original = whole[start..start + len].to_vec();
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(&path)
-        .unwrap()
-        .write_all_at(&vec![b'x'; len], u64::try_from(start).unwrap())
-        .unwrap();
-    original
-}
-
-/// Cuts the session's log at `at` bytes and returns the bytes cut off, so
-/// the test can write them back.
-fn cut(dir: &std::path::Path, at: usize) -> Vec<u8> {
-    let path = dir.join("events.jsonl");
-    let whole = std::fs::read(&path).unwrap();
-    let cut = whole[at..].to_vec();
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(&path)
-        .unwrap()
-        .set_len(u64::try_from(at).unwrap())
-        .unwrap();
-    cut
-}
-
-/// The byte offset where line `index` (from 0) of `bytes` starts, and the
-/// line's length without its newline.
-fn line_at(bytes: &[u8], index: usize) -> (usize, usize) {
-    let mut start = 0;
-    for line in bytes.split_inclusive(|b| *b == b'\n').take(index) {
-        start += line.len();
-    }
-    let len = bytes[start..].iter().position(|b| *b == b'\n').unwrap();
-    (start, len)
 }
 
 #[test]
