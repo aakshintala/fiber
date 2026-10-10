@@ -34,6 +34,7 @@ fn spawn(path: &Path, args: &[&str]) -> Child {
         .unwrap()
 }
 
+#[track_caller]
 fn run(path: &Path, args: &[&str]) -> Output {
     waited(spawn(path, args))
 }
@@ -106,6 +107,7 @@ fn the_mcp_fixture_points_at_server_sh() {
 }
 
 /// Runs the MCP fixture over `dir`, feeding it `lines` and closing stdin.
+#[track_caller]
 fn fixture(dir: &Path, lines: &[&str]) -> Output {
     use std::io::Write;
     let mut child = Command::new(mcp_fixture())

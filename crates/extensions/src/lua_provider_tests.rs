@@ -93,11 +93,14 @@ fn credential_header_parser_distinguishes_empty_and_non_empty_arrays() {
     }
 }
 
+#[track_caller]
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(f()));
-    rx.recv_timeout(WAIT)
-        .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
+    match rx.recv_timeout(WAIT) {
+        Ok(value) => value,
+        Err(err) => panic!("the call did not return within {WAIT:?}: {err}"),
+    }
 }
 
 #[test]

@@ -151,6 +151,7 @@ pub(crate) fn write_line(
 /// and returns its value, waiting `deadline.left()`: on expiry it panics
 /// naming `what`, and a panic in `work` is raised again naming `what`. It
 /// never joins the thread.
+#[track_caller]
 pub(crate) fn bounded<T: Send + 'static>(
     deadline: Deadline,
     what: &str,
@@ -161,6 +162,7 @@ pub(crate) fn bounded<T: Send + 'static>(
 
 /// `fakes::kill_group` bounded by `deadline.cleanup()`: it sends a signal,
 /// it does not wait on the code under test.
+#[track_caller]
 pub(crate) fn kill_group(deadline: Deadline, group: u32, signal: &'static str) -> io::Result<bool> {
     fakes::within(
         &format!("kill -{signal} of process group {group}"),
@@ -170,6 +172,7 @@ pub(crate) fn kill_group(deadline: Deadline, group: u32, signal: &'static str) -
 }
 
 /// `fakes::kill_pid` bounded by `deadline.cleanup()`.
+#[track_caller]
 pub(crate) fn kill_pid(deadline: Deadline, pid: u32, signal: &'static str) -> io::Result<bool> {
     fakes::within(
         &format!("kill -{signal} of pid {pid}"),
@@ -179,6 +182,7 @@ pub(crate) fn kill_pid(deadline: Deadline, pid: u32, signal: &'static str) -> io
 }
 
 /// `fakes::kill_matching` bounded by `deadline.cleanup()`.
+#[track_caller]
 pub(crate) fn kill_matching(deadline: Deadline, text: &str) -> io::Result<()> {
     let text = text.to_owned();
     fakes::within(
@@ -189,6 +193,7 @@ pub(crate) fn kill_matching(deadline: Deadline, text: &str) -> io::Result<()> {
 }
 
 /// Whether any process remains in process group `group`.
+#[track_caller]
 pub(crate) fn group_alive(deadline: Deadline, group: u32) -> bool {
     kill_group(deadline, group, "0").unwrap()
 }
@@ -366,6 +371,7 @@ impl HubProc {
         }
     }
 
+    #[track_caller]
     pub(crate) fn kill(&self, signal: &'static str) {
         kill_group(self.deadline, self.group, signal).unwrap();
     }
@@ -439,6 +445,7 @@ pub(crate) struct Socket {
 
 impl Socket {
     /// Connects to `path` on a thread bounded by the deadline.
+    #[track_caller]
     pub(crate) fn connect(deadline: Deadline, path: &Path) -> Self {
         let target = path.to_owned();
         let stream = bounded(
@@ -541,6 +548,7 @@ pub(crate) fn until_close(client: &Socket) -> Vec<Value> {
 /// Connects to the hub through `doors::hub::connect`, starting
 /// `fiber hub serve` when none runs. The starter records the hub for the
 /// caller to kill and wait. Returns the client and the `hub_hello`.
+#[track_caller]
 pub(crate) fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>) -> (Socket, Value) {
     connect_hub_within(setup, hub, setup.deadline.left())
 }
@@ -684,6 +692,7 @@ impl SessionGuard {
     }
 
     /// Stands the watchdog down, leaving the drop's kill as the only one.
+    #[track_caller]
     pub(crate) fn stand_down_watchdog(&mut self) {
         if let Some(watchdog) = self.watchdog.take() {
             watchdog.stand_down(self.deadline.cleanup());
@@ -694,6 +703,7 @@ impl SessionGuard {
     /// (its socket closed, its session_left, or the guard's SIGKILL): waits
     /// under the test's [`Deadline`] for every process holding the workspace
     /// path to exit, then stands the guard down.
+    #[track_caller]
     pub(crate) fn wait_gone(mut self) {
         assert!(
             fakes::matching_exits(&self.workspace, self.deadline.left()),

@@ -182,6 +182,7 @@ fn in_group(pid: u32, group: u32) -> bool {
         == Some(group)
 }
 
+#[track_caller]
 fn mkfifo(path: &Path) {
     let path = path.to_path_buf();
     let shown = path.display().to_string();

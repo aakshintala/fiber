@@ -178,6 +178,7 @@ impl Clock for AfterReady {
     fn wall(&self) -> std::time::SystemTime {
         self.inner.wall()
     }
+    #[track_caller]
     fn sleep(&self, d: Duration) {
         let ready = self
             .ready
@@ -347,6 +348,7 @@ impl Clock for AfterEof {
     fn wall(&self) -> std::time::SystemTime {
         self.inner.wall()
     }
+    #[track_caller]
     fn sleep(&self, d: Duration) {
         if let Some(marker) = self.marker.lock().unwrap().take() {
             std::fs::remove_file(&marker).unwrap();

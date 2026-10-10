@@ -79,6 +79,7 @@ const CALL_WITHIN: Duration = Duration::from_secs(10);
 /// Runs one builtin tool call on its own thread and returns its output.
 /// Calling code that blocks is a wait too (`docs/testing.md`, "Waits and
 /// timeouts"): on expiry the test fails naming the call.
+#[track_caller]
 fn ran(
     tool: Arc<dyn contract::tool::Tool>,
     arguments: serde_json::Map<String, serde_json::Value>,

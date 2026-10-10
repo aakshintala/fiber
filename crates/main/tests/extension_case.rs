@@ -76,6 +76,7 @@ fn case_file(setup: &Setup, name: &str, value: &Value) -> String {
     format!("tests/{name}.json")
 }
 
+#[track_caller]
 fn run_case(setup: &Setup, name: &str, value: &Value) -> Output {
     let path = case_file(setup, name, value);
     let mut command = setup.fiber(&["extension-case", &path]);
@@ -131,6 +132,7 @@ fn write_tool_fixture(setup: &Setup) {
     fs::write(setup.workspace().join("fixture.txt"), "fixture").unwrap();
 }
 
+#[track_caller]
 fn run_ask(setup: &Setup, args: &[&str]) -> Output {
     let mut command = setup.fiber(args);
     command.current_dir(setup.workspace()).stdin(Stdio::null());

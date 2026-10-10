@@ -155,6 +155,7 @@ impl Proc {
 
     /// Ends the process: SIGTERM, then SIGKILL after [`STOP`], then waits
     /// for its group to empty and stands the watchdog down.
+    #[track_caller]
     pub(crate) fn stop(mut self, clock: &dyn Clock) -> Result<(), String> {
         if !self.exits(clock, Duration::ZERO)? {
             signal(self.group, "TERM")?;
@@ -200,6 +201,7 @@ pub(crate) struct Finished {
 /// group's cleanup error if there was one. Output still open
 /// [`STOP`] after the group is gone, held by a process that left the group,
 /// is an error rather than a wait.
+#[track_caller]
 pub(crate) fn run_to_end(
     command: &mut Command,
     clock: &dyn Clock,
@@ -251,6 +253,7 @@ pub(crate) fn run_to_end(
 /// timed. Past `within` it errs naming `what`. Output still open [`STOP`]
 /// after the group is gone, held by a process that left the group, is an
 /// error rather than a wait.
+#[track_caller]
 pub(crate) fn timed_to_end(
     command: &mut Command,
     clock: &dyn Clock,

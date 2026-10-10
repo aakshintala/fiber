@@ -68,6 +68,7 @@ fn collect_to_eof<T: Send + 'static>(rx: mpsc::Receiver<T>, what: &str) -> Vec<T
     }
 }
 
+#[track_caller]
 fn disconnected<T: std::fmt::Debug>(result: Result<T, mpsc::RecvTimeoutError>, what: &str) {
     match result {
         Err(mpsc::RecvTimeoutError::Disconnected) => {}
