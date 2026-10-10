@@ -112,6 +112,12 @@ pub(crate) fn render(
         let mut targets = Vec::new();
         crate::swapped::draw(app, area, buf, &mut targets);
         notices(app, area, buf, &mut targets);
+        // The quit question takes every key over these views, so it
+        // draws over them too: without it Enter would quit while the
+        // choices never show.
+        if app.quit_open() {
+            quit::draw(app, area, buf, &mut targets);
+        }
         if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
             for target in targets.iter().filter(|target| target.id == id) {
                 buf.set_style(target.rect, HOVER_TINT);

@@ -9,15 +9,15 @@ expression: "screen(&app, 80, 24)"
                      ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
                      ▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀
                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-                     ▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █ 0.0.1
+
                   Quit                                       ✕
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 › █? for shortcu  1 session working
 
                   › enter  leave them running
 [w]  [no model]     c      close all
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    esc    stay                                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-●  fix the parser                                                              ✕
+●  fix the parse                                                               ✕
 ✓  tidy docs      click a choice · they keep running meanwhile                 ✕
 
                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

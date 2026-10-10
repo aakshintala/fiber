@@ -274,6 +274,50 @@ fn the_title_is_bold_accent_and_the_footer_dim() {
 }
 
 #[test]
+fn quit_draws_over_the_model_picker_on_home() {
+    let mut app = home(80, 24);
+    let clock = fakes::clock::FakeClock::new();
+    assert_eq!(app.on_key(Key::CtrlL, clock.now()), Effect::None);
+    assert!(app.model_picker_open());
+    ask_quit(&mut app);
+    assert!(app.quit_open());
+    assert!(app.model_picker_open());
+    let shown = screen(&app, 80, 24);
+    assert!(shown.contains("Quit"), "{shown}");
+    assert!(shown.contains("leave them running"), "{shown}");
+}
+
+#[test]
+fn quit_draws_over_the_config_view_on_home() {
+    let mut app = home(80, 24);
+    app.open_config_view(crate::app::ConfigView::Settings);
+    assert!(app.config_view_open());
+    ask_quit(&mut app);
+    assert!(app.quit_open());
+    assert!(app.config_view_open());
+    let shown = screen(&app, 80, 24);
+    assert!(shown.contains("Quit"), "{shown}");
+    assert!(shown.contains("leave them running"), "{shown}");
+}
+
+#[test]
+fn quit_draws_over_keys_on_home() {
+    let mut app = home(80, 24);
+    let clock = fakes::clock::FakeClock::new();
+    for ch in "/keys".chars() {
+        assert_eq!(app.on_key(Key::Char(ch), clock.now()), Effect::None);
+    }
+    assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
+    assert!(app.keys_screen_open());
+    ask_quit(&mut app);
+    assert!(app.quit_open());
+    assert!(app.keys_screen_open());
+    let shown = screen(&app, 80, 24);
+    assert!(shown.contains("Quit"), "{shown}");
+    assert!(shown.contains("leave them running"), "{shown}");
+}
+
+#[test]
 fn the_hint_row_no_longer_shows_the_question() {
     let mut app = home(80, 24);
     ask_quit(&mut app);

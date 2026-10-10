@@ -378,15 +378,29 @@ pub(crate) fn draw(
         ),
     };
     let slab = Rect::new(slab_x, slab_y, slab_w, slab_h);
-    // The tint covers the slab's text rows; both edge rows draw through
-    // the surface slab helper.
+    // The tint covers the slab's text rows, with only the edges the
+    // height stack kept: a trimmed edge row would draw above or below
+    // the slab, outside the area.
     let edged =
         |slot: Option<&Slot>| u16::from(matches!(slot, Some(Slot::EdgeTop | Slot::EdgeBottom)));
     let text_top = slab_y.saturating_add(edged(stack.first()));
     let text_bottom = slab.bottom().saturating_sub(edged(stack.last()));
     if text_bottom > text_top {
         let text = Rect::new(slab_x, text_top, slab_w, text_bottom - text_top);
-        crate::surface::draw_slab(buf, text, Role::Surface, None, crate::surface::Edges::BOTH);
+        let edges = crate::surface::Edges {
+            top: matches!(stack.first(), Some(Slot::EdgeTop)),
+            bottom: matches!(stack.last(), Some(Slot::EdgeBottom)),
+        };
+        crate::surface::draw_slab(buf, text, Role::Surface, None, edges);
+        // The tint keeps the symbols underneath: blank the interior so
+        // the screen behind cannot bleed through the pad and gap rows.
+        // The content rows repaint over it below.
+        let blank = text.intersection(area).intersection(buf.area);
+        for y in blank.top()..blank.bottom() {
+            for x in blank.left()..blank.right() {
+                buf[(x, y)].set_symbol(" ");
+            }
+        }
     }
     let mut y = slab_y;
     for slot in &stack {
@@ -421,8 +435,8 @@ pub(crate) fn draw(
         };
         let Some(line) = line else { continue };
         draw_line(buf, &slab, area, row_y, &line, inner_w);
-        if overlay.close.is_some_and(|_| matches!(slot, Slot::Title))
-            && let Some(close) = overlay.close
+        if let Some(close) = overlay.close
+            && matches!(slot, Slot::Title)
         {
             let cross = Rect::new(slab.right().saturating_sub(3), row_y, 1, 1);
             let cross = cross.intersection(slab).intersection(area);

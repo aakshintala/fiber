@@ -209,8 +209,17 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     let cols = keymap::columns(&visible, keys, inner);
     let grown = keymap::heights(&visible, keys, &cols);
     let chrome = keymap::chrome(usize::from(area.height));
-    let top = map.top().min(total.saturating_sub(1));
-    let focus = map.focus().min(total.saturating_sub(1));
+    // The columns wrap and the body shortens after the last key
+    // settled the scroll: settle again from this layout, so the
+    // focused binding stays whole instead of vanishing below the
+    // window until another key.
+    let mut live = map.clone();
+    {
+        let fits = |top: usize| keymap::fits_from(top, &grown, chrome.body);
+        live.settle(total, &fits);
+    }
+    let top = live.top();
+    let focus = live.focus();
     let shown = keymap::fits_from(top, &grown, chrome.body);
     let end = top.saturating_add(shown).min(total);
     let below = total.saturating_sub(end);

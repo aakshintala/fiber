@@ -296,6 +296,62 @@ fn targets_shift_by_the_frame_and_clip_to_the_area() {
     }
 }
 
+/// A buffer full of text, as a conversation behind an overlay.
+fn full_of_text(area: Rect) -> Buffer {
+    let mut buf = Buffer::empty(area);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            buf[(x, y)].set_symbol("x");
+        }
+    }
+    buf
+}
+
+#[test]
+fn pad_and_gap_rows_blank_the_screen_behind() {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = full_of_text(area);
+    let mut targets = Vec::new();
+    let slab = draw(&mut buf, area, &overlay(), Place::Centre, &mut targets);
+    assert_eq!(slab, Rect::new(20, 7, 40, 10));
+    let shown = rows(&buf);
+    // The pad rows inside the edges and the gaps between sections
+    // blank the conversation behind them instead of tinting its text.
+    for y in [8u16, 10, 13, 15] {
+        for x in 20u16..60 {
+            assert_eq!(
+                shown[usize::from(y)].chars().nth(x.into()).unwrap(),
+                ' ',
+                "row {y} col {x}"
+            );
+        }
+    }
+    // The content rows still draw their text.
+    assert!(shown[9].contains("Title"), "{}", shown[9]);
+    assert!(shown[11].contains("first"), "{}", shown[11]);
+}
+
+#[test]
+fn short_areas_write_no_edge_outside_the_area() {
+    for height in [1u16, 2] {
+        let area = Rect::new(0, 5, 80, height);
+        let mut buf = full_of_text(Rect::new(0, 0, 80, 24));
+        let mut targets = Vec::new();
+        let slab = draw(&mut buf, area, &overlay(), Place::Centre, &mut targets);
+        assert_eq!(slab.height, height, "height {height}");
+        // Above and below the area the buffer keeps its text: no ▄
+        // or ▀ edge spills out of a trimmed stack.
+        for y in [4u16, 7] {
+            for x in 0u16..80 {
+                assert_eq!(buf[(x, y)].symbol(), "x", "height {height} row {y} col {x}");
+            }
+        }
+        // The area itself keeps the title.
+        let shown: String = (0..80).map(|x| buf[(x, 5)].symbol().to_owned()).collect();
+        assert!(shown.contains("Title"), "height {height}: {shown}");
+    }
+}
+
 #[test]
 fn an_empty_area_draws_nothing() {
     let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));

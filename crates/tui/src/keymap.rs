@@ -139,8 +139,9 @@ impl KeyMap {
 
     /// Keeps the focused binding whole on screen: the scroll is the first
     /// binding shown, moved down until the focus sits in the window that
-    /// fits whole from it.
-    fn settle(&mut self, total: usize, fits: &dyn Fn(usize) -> usize) {
+    /// fits whole from it. The key map's draw re-runs it from the drawn
+    /// layout, so a resize after the last key keeps the focus whole too.
+    pub(crate) fn settle(&mut self, total: usize, fits: &dyn Fn(usize) -> usize) {
         if total == 0 {
             self.focus = 0;
             self.top = 0;

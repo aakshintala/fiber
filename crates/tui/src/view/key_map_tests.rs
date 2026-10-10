@@ -230,6 +230,51 @@ fn a_binding_taller_than_the_body_shows_its_top_cut() {
 }
 
 #[test]
+fn shrinking_keeps_the_focused_binding_whole() {
+    let mut app = attached(100, 40);
+    open(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..10 {
+        app.on_key(Key::Down, now);
+    }
+    let focus = app.keymap().expect("open").focus();
+    assert_eq!(focus, 10);
+    // Narrower and shorter: the columns wrap each binding taller and
+    // the body holds fewer, so the old scroll would leave the focus
+    // below the window.
+    app.set_size(80, 30);
+    let buf = buffer(&app, 80, 30);
+    let shown = rows(&buf);
+    // The focused binding's height in the drawn layout.
+    let keys = app.keys().clone();
+    let map = app.keymap().expect("open").clone();
+    let visible = map.visible(&keys);
+    let inner = app.column_width().saturating_sub(4);
+    let cols = crate::keymap::columns(&visible, &keys, inner);
+    let grown = crate::keymap::heights(&visible, &keys, &cols);
+    let body = crate::keymap::chrome(app.conversation_height()).body;
+    let height = grown[focus];
+    // Preconditions: the old scroll hides the focus, while the new
+    // body fits it whole, so the test discriminates the reconcile.
+    assert!(crate::keymap::fits_from(0, &grown, body) <= focus);
+    assert!(height <= body.saturating_sub(1));
+    // Every row of the focused binding draws barred and contiguous,
+    // with › in its first row's gutter: it is whole, not cut or gone.
+    let barred: Vec<u16> = (0..30)
+        .filter(|y| (0..80).any(|x| buf[(x, *y)].bg == crate::theme::Role::Accent.color()))
+        .collect();
+    assert_eq!(barred.len(), height, "{shown:?}");
+    assert!(
+        barred.windows(2).all(|pair| pair[1] == pair[0] + 1),
+        "{shown:?}"
+    );
+    assert!(
+        shown[usize::from(barred[0])].starts_with("  › "),
+        "{shown:?}"
+    );
+}
+
+#[test]
 fn draw_takes_no_room_and_keeps_the_screen() {
     // The draw entry point draws nothing without an open map, and keeps
     // the buffer it is given.
