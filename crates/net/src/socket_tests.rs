@@ -8,7 +8,7 @@ use ureq::unversioned::resolver::DefaultResolver;
 use ureq::unversioned::transport::time::Duration;
 use ureq::unversioned::transport::{LazyBuffers, NextTimeout, Transport};
 
-use super::{Socket, open, read_retrying};
+use super::{Socket, connect_bound, connect_error, open, read_retrying};
 use crate::{Error, Keep, LIMITS, Limits};
 
 fn wait() -> NextTimeout {
@@ -426,6 +426,9 @@ fn an_expired_ureq_deadline_uses_its_one_second_substitute() {
     );
 }
 
+// macOS sometimes ends a close with unread bytes in a plain end of stream
+// instead of a reset, so only Linux gives this test a reset every run.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_reset_peer_is_not_a_stall() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -599,4 +602,62 @@ fn a_read_failure_that_is_not_an_interruption_is_returned() {
     let error = read_retrying(&mut Interrupting { interruptions: 0 }, &mut [])
         .expect_err("the reader fails");
     assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+}
+
+const CONNECT_15S: std::time::Duration = std::time::Duration::from_secs(15);
+
+fn bound_for(after: Duration) -> (std::time::Duration, bool) {
+    connect_bound(CONNECT_15S, ureq_after(after, Timeout::Connect))
+}
+
+#[test]
+fn a_connect_waits_the_shorter_of_the_limit_and_ureqs_bound() {
+    let secs = std::time::Duration::from_secs;
+    // Just below, at and just above the limit; ureq's wins only when strictly shorter.
+    assert_eq!(bound_for(Duration::Exact(secs(14))), (secs(14), true));
+    assert_eq!(bound_for(Duration::Exact(secs(15))), (secs(15), false));
+    assert_eq!(bound_for(Duration::Exact(secs(16))), (secs(15), false));
+    assert_eq!(bound_for(Duration::NotHappening), (secs(15), false));
+}
+
+fn connect_failure(kind: io::ErrorKind, reason: Option<Timeout>) -> ureq::Error {
+    let addr: SocketAddr = "127.0.0.1:9".parse().unwrap();
+    connect_error(io::Error::from(kind), addr, CONNECT_15S, reason)
+}
+
+#[test]
+fn a_connect_that_reached_the_limit_is_a_connect_timeout() {
+    let error = connect_failure(io::ErrorKind::TimedOut, None);
+    let ureq::Error::Io(failed) = &error else {
+        panic!("a connect limit is an Io error: {error}");
+    };
+    assert_eq!(failed.kind(), io::ErrorKind::TimedOut);
+    let inner = failed.get_ref().and_then(|e| e.downcast_ref::<Error>());
+    assert!(
+        matches!(inner, Some(Error::ConnectTimedOut { addr, limit })
+            if addr.port() == 9 && *limit == CONNECT_15S),
+        "{error}"
+    );
+    assert!(crate::timed_out(&error));
+}
+
+#[test]
+fn a_connect_that_reached_ureqs_bound_keeps_ureqs_reason() {
+    let error = connect_failure(io::ErrorKind::TimedOut, Some(Timeout::Connect));
+    assert!(
+        matches!(error, ureq::Error::Timeout(Timeout::Connect)),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_refused_connect_is_not_a_timeout() {
+    for reason in [None, Some(Timeout::Connect)] {
+        let error = connect_failure(io::ErrorKind::ConnectionRefused, reason);
+        assert!(
+            matches!(&error, ureq::Error::Io(e) if e.kind() == io::ErrorKind::ConnectionRefused),
+            "{error}"
+        );
+        assert!(!crate::timed_out(&error));
+    }
 }

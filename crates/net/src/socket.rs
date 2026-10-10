@@ -77,19 +77,10 @@ fn open(
         }
         match TcpStream::connect_timeout(addr, bound) {
             Ok(stream) => return Ok(stream),
-            Err(failed) if failed.kind() == io::ErrorKind::TimedOut && ureq_wins => {
-                last = Some(ureq::Error::Timeout(timeout.reason));
+            Err(failed) => {
+                let reason = ureq_wins.then_some(timeout.reason);
+                last = Some(connect_error(failed, *addr, limits.connect(), reason));
             }
-            Err(failed) if failed.kind() == io::ErrorKind::TimedOut => {
-                last = Some(ureq::Error::Io(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    Error::ConnectTimedOut {
-                        addr: *addr,
-                        limit: limits.connect(),
-                    },
-                )));
-            }
-            Err(failed) => last = Some(ureq::Error::Io(failed)),
         }
     }
     match last {
@@ -99,6 +90,27 @@ fn open(
             Ok(stream) => Ok(stream),
             Err(failed) => Err(ureq::Error::Io(failed)),
         },
+    }
+}
+
+/// A failed connect attempt as the error ureq sees: a timeout is ureq's own
+/// when `ureq_reason` is set, so ureq's state machine keeps its reason, and
+/// the connect limit's otherwise; any other failure passes through.
+fn connect_error(
+    failed: io::Error,
+    addr: SocketAddr,
+    limit: Duration,
+    ureq_reason: Option<ureq::Timeout>,
+) -> ureq::Error {
+    if failed.kind() != io::ErrorKind::TimedOut {
+        return ureq::Error::Io(failed);
+    }
+    match ureq_reason {
+        Some(reason) => ureq::Error::Timeout(reason),
+        None => ureq::Error::Io(io::Error::new(
+            io::ErrorKind::TimedOut,
+            Error::ConnectTimedOut { addr, limit },
+        )),
     }
 }
 
