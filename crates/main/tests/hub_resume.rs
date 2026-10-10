@@ -23,13 +23,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use contract::events::{Event, Parent, SessionStarted, Variables, VariablesSource};
 use contract::{JobId, SessionId};
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, assert_one_continued_log, group_alive};
+use support::{Deadline, SystemClock, assert_one_continued_log, group_alive};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
@@ -199,46 +198,6 @@ impl Setup {
 fn write_json(file: &Path, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();
-}
-
-/// The process clock behind `contract::clock::Clock`.
-struct SystemClock;
-
-impl contract::clock::Clock for SystemClock {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::now"
-    )]
-    fn now(&self) -> std::time::Instant {
-        std::time::Instant::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::wall"
-    )]
-    fn wall(&self) -> std::time::SystemTime {
-        std::time::SystemTime::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::sleep"
-    )]
-    fn sleep(&self, d: Duration) {
-        thread::sleep(d);
-    }
-
-    fn wait_until(
-        &self,
-        until: Option<std::time::Instant>,
-        wait: &mut dyn FnMut(Option<Duration>),
-    ) {
-        let bound = until.map(|until| until.saturating_duration_since(self.now()));
-        wait(bound);
-    }
-
-    fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
 }
 
 /// A hub the test started, and every session process it starts: each

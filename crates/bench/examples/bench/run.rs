@@ -9,11 +9,11 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::{Arc, Mutex, Weak, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
-use contract::clock::{Clock, Wake};
+use contract::clock::Clock;
 use fakes::Watchdog;
 use serde_json::Value;
 
@@ -26,39 +26,7 @@ pub(crate) const PROBE: Duration = Duration::from_millis(5);
 
 /// The operating system's clock: the one place the harness reads or waits
 /// on real time.
-pub(crate) struct System;
-
-impl Clock for System {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the benchmark measures real time"
-    )]
-    fn now(&self) -> Instant {
-        Instant::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the benchmark measures real time"
-    )]
-    fn wall(&self) -> SystemTime {
-        SystemTime::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the idle window and the probes wait on real time"
-    )]
-    fn sleep(&self, d: Duration) {
-        thread::sleep(d);
-    }
-
-    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
-        wait(until.map(|until| until.saturating_duration_since(self.now())));
-    }
-
-    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
-}
+pub(crate) use fakes::clock::SystemClock as System;
 
 /// The time left until `until`, at least a millisecond, or an error naming
 /// `what` once it has passed.

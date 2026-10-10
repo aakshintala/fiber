@@ -301,44 +301,9 @@ impl Clock for FakeClock {
     }
 }
 
-/// The process clock behind [`Clock`].
-pub struct SystemClock;
-
-impl Clock for SystemClock {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::now"
-    )]
-    fn now(&self) -> Instant {
-        Instant::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::wall"
-    )]
-    fn wall(&self) -> SystemTime {
-        SystemTime::now()
-    }
-
-    // A wall-clock sleep; docs/testing.md, "Values that change every run",
-    // permits only main's real-clock sleep test.
-    #[cfg_attr(false, mutants::skip)]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::sleep"
-    )]
-    fn sleep(&self, d: Duration) {
-        std::thread::sleep(d);
-    }
-
-    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
-        let bound = until.map(|until| until.saturating_duration_since(self.now()));
-        wait(bound);
-    }
-
-    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
-}
+/// The process clock tests use (`docs/testing.md`, "Values that change
+/// every run"): the operating system's clock in [`support::clock`].
+pub use support::clock::System as SystemClock;
 
 /// Drops a thread's parked entry when [`Clock::wait_until`] returns, a panic
 /// in `wait` included.

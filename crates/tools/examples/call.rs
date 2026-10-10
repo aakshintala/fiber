@@ -14,11 +14,8 @@
 )]
 
 use std::process::ExitCode;
-use std::sync::{Arc, Weak};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::Arc;
 
-use contract::clock::{Clock, Wake};
 use contract::tool::{Output, Tool};
 use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Map, Value};
@@ -64,7 +61,7 @@ fn main() -> ExitCode {
     };
     let cancel = CancelToken::new();
     let output = match name.as_str() {
-        "shell" => Shell::new(workspace, Arc::new(ProcessClock)).run(
+        "shell" => Shell::new(workspace, Arc::new(fakes::clock::SystemClock)).run(
             &arguments,
             &cancel,
             &Recorder::default(),
@@ -80,11 +77,11 @@ fn main() -> ExitCode {
             .run(&arguments, &cancel, &Recorder::default()),
         "web_fetch" => {
             let session = TempDir::new("fiber-call-web-fetch");
-            WebFetch::new(session.path().join("artifacts"), Arc::new(ProcessClock)).run(
-                &arguments,
-                &cancel,
-                &Recorder::default(),
+            WebFetch::new(
+                session.path().join("artifacts"),
+                Arc::new(fakes::clock::SystemClock),
             )
+            .run(&arguments, &cancel, &Recorder::default())
         }
         _ => {
             usage();
@@ -137,41 +134,4 @@ fn output_json(output: &Output) -> Map<String, Value> {
         map.insert("control".to_owned(), control);
     }
     map
-}
-
-/// The process clock. `tools` cannot depend on `main`, which owns the one the
-/// binary uses, so the jig keeps a small one.
-struct ProcessClock;
-
-impl Clock for ProcessClock {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the call jig reads the process clock; tools cannot depend on main"
-    )]
-    fn now(&self) -> Instant {
-        Instant::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the call jig reads the process clock; tools cannot depend on main"
-    )]
-    fn wall(&self) -> SystemTime {
-        SystemTime::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the call jig waits on the process clock; tools cannot depend on main"
-    )]
-    fn sleep(&self, duration: Duration) {
-        thread::sleep(duration);
-    }
-
-    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
-        let bound = until.map(|until| until.saturating_duration_since(self.now()));
-        wait(bound);
-    }
-
-    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
 }
