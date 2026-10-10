@@ -305,12 +305,28 @@ impl Config {
             .collect()
     }
 
-    /// Every name in the list at `key` with the lowest layer listing it,
-    /// lowest layer first, each name once at its first appearance: the one
-    /// union `merged`, `union_list` and `setting` share, selected by the
-    /// key's `Merge` row. Reads each layer through its per-model view, as
-    /// `merged` does, so a model view and the raw layer never disagree.
+    /// The names at `key` with their source. A union carries each name's
+    /// lowest layer; any other merge kind carries the effective list's
+    /// highest layer. The key's `Merge` row selects which behavior applies.
+    /// Reads each layer through its per-model view, as `merged` does, so a
+    /// model view and the raw layer never disagree.
     pub(crate) fn unioned(&self, key: &[String], model: Option<&str>) -> Vec<(String, Source)> {
+        let Some(row) = keys::leaf(key) else {
+            return Vec::new();
+        };
+        if row.merge != keys::Merge::Union {
+            let Some((value, source)) = self.get(&path::display(key), model) else {
+                return Vec::new();
+            };
+            return value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(|name| (name.to_owned(), source.clone()))
+                .collect();
+        }
+
         let mut names: Vec<(String, Source)> = Vec::new();
         for (source, layer) in &self.layers {
             let seen = view(layer, model);

@@ -608,6 +608,21 @@ fn a_list_key_unions_the_layers_that_set_it() {
 }
 
 #[test]
+fn a_replaced_list_returns_only_the_highest_layer_through_union_list() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"mcp": {"servers": {"x": {"args": ["global"]}}}}"#,
+    );
+    setup.write(
+        &setup.project(),
+        r#"{"mcp": {"servers": {"x": {"args": ["project"]}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(config.union_list("mcp.servers.x.args"), ["project"]);
+}
+
+#[test]
 fn a_list_key_with_one_layer_is_that_layer() {
     let setup = Setup::new();
     setup.write(&setup.project(), r#"{"skills": {"disabled": ["x"]}}"#);
