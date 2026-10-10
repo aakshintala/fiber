@@ -818,10 +818,8 @@ impl Drop for Run {
         }
         if let Some(mut child) = self.child.take() {
             kill_group_detached(child.id(), "KILL");
-            let reaped = thread::Builder::new().spawn(move || {
-                match child.wait() {
-                    Ok(_) | Err(_) => {}
-                }
+            let reaped = thread::Builder::new().spawn(move || match child.wait() {
+                Ok(_) | Err(_) => {}
             });
             match reaped {
                 Ok(_) | Err(_) => {}
