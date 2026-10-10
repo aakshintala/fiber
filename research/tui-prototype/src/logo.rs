@@ -137,11 +137,6 @@ fn mark_of(pixel: Pixel) -> char {
     }
 }
 
-/// The logo's width in cells: one cell per pixel column.
-pub(crate) fn pixel_width() -> usize {
-    pixels().len()
-}
-
 /// The four-row logo: exactly 4 rows, each `CELLS_W` cells of logo then,
 /// on row 4 only, one blank and the version dim. One span per cell. With
 /// `image`, the logo's cells are blank spaces (the mask is transparent in
@@ -150,7 +145,7 @@ pub(crate) fn pixel_width() -> usize {
 pub(crate) fn rows(version: &str, image: bool) -> Vec<Vec<Span<'static>>> {
     let columns = pixels();
     // The pixel columns fill exactly the cells the image places.
-    debug_assert_eq!(pixel_width(), CELLS_W as usize);
+    debug_assert_eq!(columns.len(), CELLS_W as usize);
     let mut out = vec![Vec::new(); CELLS_H as usize];
     for (r, line) in out.iter_mut().enumerate() {
         for column in &columns {
@@ -409,11 +404,6 @@ mod tests {
         for r in 0..3 {
             assert_eq!(got[(32, r)].symbol(), " ", "row {r} runs past the logo");
         }
-    }
-
-    #[test]
-    fn the_logo_is_32_cells_wide() {
-        assert_eq!(pixel_width(), 32);
     }
 
     #[test]

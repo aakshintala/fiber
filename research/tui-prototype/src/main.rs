@@ -3158,6 +3158,22 @@ fn home_case(next: Option<&str>) -> Option<String> {
         _ => None,
     }
 }
+/// What home's outcome means for the replay: quit with home's line, or
+/// switch to the conversation. An error from home stays an error here,
+/// so the terminal below is restored before it propagates: `?` on
+/// `run_home` would skip the raw-mode, mouse and alt-screen cleanup and
+/// leave a typo like `--home typo` owning the screen.
+enum HomeNext {
+    Quit(String),
+    Conversation,
+}
+fn home_next(r: io::Result<home::Done>) -> io::Result<HomeNext> {
+    match r {
+        Err(e) => Err(e),
+        Ok(home::Done::Quit(s)) => Ok(HomeNext::Quit(s)),
+        Ok(home::Done::Conversation) => Ok(HomeNext::Conversation),
+    }
+}
 fn args() -> Args {
     let mut a = Args {
         path: "fixtures/session.jsonl".into(),
@@ -3341,11 +3357,12 @@ fn main() -> io::Result<()> {
     let mut term = Terminal::new(CrosstermBackend::new(out))?;
     let mut home_switched = false;
     let res: io::Result<String> = if a.home.is_some() {
-        match home::run_home(&a, &mut term)? {
-            home::Done::Quit(s) => Ok(s),
+        match home_next(home::run_home(&a, &mut term)) {
+            Err(e) => Err(e),
+            Ok(HomeNext::Quit(s)) => Ok(s),
             // Entering a session runs the fixture replay on the same
             // terminal; the typed prompt is not injected into it.
-            home::Done::Conversation => {
+            Ok(HomeNext::Conversation) => {
                 home_switched = true;
                 run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index)
             }
@@ -4665,6 +4682,30 @@ mod tests {
         assert_eq!(home_case(Some("-h")), None);
         assert_eq!(home_case(Some("sessions")), Some("sessions".into()));
         assert_eq!(home_case(Some("live")), Some("live".into()));
+    }
+
+    #[test]
+    fn home_errors_stay_errors_until_cleanup() {
+        // The `--home typo` path: the error passes through, so the
+        // caller restores the terminal before propagating it.
+        let e = home_next(Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unknown --home case \"typo\"; one of: empty, sessions",
+        )));
+        assert!(e.is_err());
+        assert_eq!(
+            e.map(|_| ()).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        // The helper is not `Err` always: both outcomes map through.
+        assert!(matches!(
+            home_next(Ok(home::Done::Quit("home typo\n".into()))),
+            Ok(HomeNext::Quit(_))
+        ));
+        assert!(matches!(
+            home_next(Ok(home::Done::Conversation)),
+            Ok(HomeNext::Conversation)
+        ));
     }
 
     #[test]

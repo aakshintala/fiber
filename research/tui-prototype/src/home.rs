@@ -658,8 +658,10 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
             let y = (k - off) as u16;
             let bg = r.bg;
             put(&mut screen, y as usize, 0, cols, r.spans.clone(), bg);
-            if r.act == Some(Act::Back) {
-                hits.push((y, 0, cols as u16, Target::Picker(Act::Back)));
+            // A model row's name focuses it: its whole row is a click
+            // target, while its chips keep their narrower targets below.
+            if let Some(act @ (Act::Back | Act::Pick(_))) = r.act {
+                hits.push((y, 0, cols as u16, Target::Picker(act)));
             }
             for &(a, b, act) in &r.hot {
                 hits.push((y, a, b, Target::Picker(act)));
@@ -688,9 +690,13 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
         put(&mut screen, y, x0, w, r.spans, bg);
         y += 1;
     }
-    // The chip row is the box's fifth row: its chips are click targets.
-    for (a, b, t) in chip_hits(c) {
-        hits.push(((box_top + 4) as u16, (x0 + a) as u16, (x0 + b) as u16, t));
+    // The chip row is the box's fifth row: its chips are click targets,
+    // but only while no workspace picker covers them. An open picker
+    // owns every click: background targets do nothing.
+    if c.picker.is_none() {
+        for (a, b, t) in chip_hits(c) {
+            hits.push(((box_top + 4) as u16, (x0 + a) as u16, (x0 + b) as u16, t));
+        }
     }
     // The `/` and `@` panel draws directly above the input box, entries
     // first: focus starts at the top, so when the panel is taller than
@@ -758,7 +764,10 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
             if let Some((x, spans, sess)) = l {
                 let sy = list_top + k - off;
                 put(&mut screen, sy, *x, rw, spans.clone(), None);
-                if let Some(k) = sess {
+                // An open workspace picker covers the list: its blank
+                // rows and footer are not session targets, so clicking
+                // them never enters a conversation.
+                if c.picker.is_none() && let Some(k) = sess {
                     hits.push((sy as u16, *x as u16, (*x + rw) as u16, Target::Session(*k)));
                 }
             }
@@ -1073,7 +1082,15 @@ fn on_click(c: &mut Look, x: u16, y: u16, cols: usize, rows: usize) -> Step {
 /// Draws home and waits for a key: `--home` bare or `live` runs the
 /// interactive home, the other cases one still frame each. Mutually
 /// exclusive with the conversation view: the fixture replay never draws.
+/// Every result passes through here, and here frees the image, so a
+/// propagated error never leaves a placement behind.
 pub(crate) fn run_home(a: &Args, term: &mut Term) -> io::Result<Done> {
+    let r = run_home_inner(a, term);
+    free(term);
+    r
+}
+
+fn run_home_inner(a: &Args, term: &mut Term) -> io::Result<Done> {
     let name = a.home.clone().unwrap_or("live".into());
     if name == "live" {
         return run_live(term);
@@ -1089,38 +1106,25 @@ pub(crate) fn run_home(a: &Args, term: &mut Term) -> io::Result<Done> {
     // The first frame always draws the pixel logo; where supported, a
     // second draw at once transmits and places the image, so it shows
     // without a keystroke.
-    let mut err = draw(term, &c, &mut img, supported, true).err();
-    if err.is_none() && supported {
-        err = draw(term, &c, &mut img, supported, false).err();
-    }
-    if let Some(e) = err {
-        free(term);
-        return Err(e);
+    draw(term, &c, &mut img, supported, true)?;
+    if supported {
+        draw(term, &c, &mut img, supported, false)?;
     }
     let mut rd = super::input::Reader::new()?;
     loop {
         let (evs, resized) = rd.wait(wait_for(rd.deadline(), Instant::now()))?;
-        let err = if resized {
-            draw(term, &c, &mut img, supported, false).err()
-        } else {
-            None
-        };
-        if let Some(e) = err {
-            free(term);
-            return Err(e);
+        if resized {
+            draw(term, &c, &mut img, supported, false)?;
         }
         for ev in evs {
             match ev {
                 Ev::Key(Key::Char('c'), m) if m.ctrl => {
-                    free(term);
                     return Ok(Done::Quit(format!("home {name}\n")));
                 }
                 Ev::Key(Key::Esc, _) => {
-                    free(term);
                     return Ok(Done::Quit(format!("home {name}\n")));
                 }
                 Ev::Key(Key::Char('q'), m) if !m.ctrl && !m.alt && !m.sup => {
-                    free(term);
                     return Ok(Done::Quit(format!("home {name}\n")));
                 }
                 _ => {}
@@ -1135,25 +1139,15 @@ fn run_live(term: &mut Term) -> io::Result<Done> {
     let mut c = base();
     let supported = crate::logo::supported(|k| std::env::var(k).ok());
     let mut img = Image::default();
-    let mut err = draw(term, &c, &mut img, supported, true).err();
-    if err.is_none() && supported {
-        err = draw(term, &c, &mut img, supported, false).err();
-    }
-    if let Some(e) = err {
-        free(term);
-        return Err(e);
+    draw(term, &c, &mut img, supported, true)?;
+    if supported {
+        draw(term, &c, &mut img, supported, false)?;
     }
     let mut rd = super::input::Reader::new()?;
     loop {
         let (evs, resized) = rd.wait(wait_for(rd.deadline(), Instant::now()))?;
-        let err = if resized {
-            draw(term, &c, &mut img, supported, false).err()
-        } else {
-            None
-        };
-        if let Some(e) = err {
-            free(term);
-            return Err(e);
+        if resized {
+            draw(term, &c, &mut img, supported, false)?;
         }
         for ev in evs {
             let step = match ev {
@@ -1167,18 +1161,13 @@ fn run_live(term: &mut Term) -> io::Result<Done> {
             match step {
                 Step::Stay => {}
                 Step::Quit => {
-                    free(term);
                     return Ok(Done::Quit("home live\n".into()));
                 }
                 Step::Conversation => {
-                    free(term);
                     return Ok(Done::Conversation);
                 }
             }
-            if let Some(e) = draw(term, &c, &mut img, supported, false).err() {
-                free(term);
-                return Err(e);
-            }
+            draw(term, &c, &mut img, supported, false)?;
         }
     }
 }
@@ -1853,6 +1842,43 @@ mod tests {
         let (x, y) = hit(&c, Target::Model);
         on_click(&mut c, x, y, 160, 48);
         assert_eq!(c.ui.picker.as_ref().unwrap().focus, 1);
+    }
+
+    #[test]
+    fn model_name_click_focuses_that_model() {
+        let mut c = live_look();
+        let (x, y) = hit(&c, Target::Model);
+        on_click(&mut c, x, y, 160, 48);
+        assert_eq!(c.ui.picker.as_ref().unwrap().focus, 0);
+        // The model name in the buffer is a click target: clicking its
+        // row focuses that model instead of doing nothing.
+        let buf = buffer(&c, 160, 48);
+        let y = find_row(&buf, 160, 48, "claude-sonnet-5-5");
+        assert!(matches!(on_click(&mut c, 0, y, 160, 48), Step::Stay));
+        assert!(c.ui.picker.is_some());
+        assert_eq!(c.ui.picker.as_ref().unwrap().focus, 1);
+    }
+
+    #[test]
+    fn open_workspace_picker_swallows_background_clicks() {
+        let mut c = live_look();
+        // Session and chip coordinates from the plain home frame.
+        let rows = session_hits(&c, 0);
+        assert!(!rows.is_empty());
+        let (wx, wy) = hit(&c, Target::Workspace);
+        let fr = frame(&c, 160, 48, false);
+        let (cy, cx0, _, _) = fr.hits.iter().find(|h| h.3 == Target::Worktree).copied().unwrap();
+        on_click(&mut c, wx, wy, 160, 48);
+        assert_eq!(c.picker, Some(Picker::Recent));
+        // Clicking where a session row sits now does nothing: the
+        // picker stays open and home never enters a conversation.
+        for (x, y) in rows {
+            assert!(matches!(on_click(&mut c, x, y, 160, 48), Step::Stay));
+            assert_eq!(c.picker, Some(Picker::Recent));
+        }
+        // A chip click while the picker is open does nothing either.
+        assert!(matches!(on_click(&mut c, cx0, cy, 160, 48), Step::Stay));
+        assert_eq!((c.picker, c.worktree), (Some(Picker::Recent), true));
     }
 
     #[test]
