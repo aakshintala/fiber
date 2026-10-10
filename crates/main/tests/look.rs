@@ -401,10 +401,9 @@ fn the_hub_wait_outlives_the_sockets_absence() {
     let dir = fakes::TempDir::new("hub-exit");
     let socket = dir.path().join("hub");
     fs::write(&socket, b"").unwrap();
-    let mut child = Command::new("/bin/sh")
+    let mut child = Command::new("python3")
         .arg("-c")
-        .arg(": hub serve; rm -f \"$1\"; read -r line")
-        .arg("sh")
+        .arg("import os, sys; os.unlink(sys.argv[1]); sys.stdin.read()  # hub serve")
         .arg(&socket)
         .env_clear()
         .envs(fakes::check_run())
@@ -420,8 +419,11 @@ fn the_hub_wait_outlives_the_sockets_absence() {
     let watchdog = fakes::Watchdog::group(group);
     let stdin = child.stdin.take().unwrap();
     // The pause point: the fake removed its socket and now blocks in
-    // `read`, a shell builtin, so its command line still holds
-    // `hub serve`.
+    // `sys.stdin.read()`. python3, not sh: macOS `ps -E` shows the
+    // environment of python but not of sh or sleep
+    // (`scripts/test-leak-scan`: "only a python leaker proves the scan
+    // names it"), and the wait lists hubs by their `FIBER_HOME`
+    // environment token.
     while socket.exists() {
         if deadline.left().is_zero() {
             panic!("waited until the deadline for the fake hub to remove its socket");
@@ -439,14 +441,16 @@ fn the_hub_wait_outlives_the_sockets_absence() {
         vec![group],
         "the hub is listed after its socket is gone"
     );
-    // Releasing stdin ends `read` at end of file, and reaping proves
+    // Releasing stdin ends the read at end of file, and reaping proves
     // the exit, both bounded by the deadline.
     drop(stdin);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    finished
+    let status = finished
         .recv_timeout(deadline.left())
-        .expect("the fake hub back after the release");
+        .expect("the fake hub back after the release")
+        .expect("the fake hub reaped");
+    assert!(status.success(), "the fake hub exits cleanly after the release");
     assert!(
         hub_pids(&list_processes(deadline.left()), &home).is_empty(),
         "no hub of this run remains"

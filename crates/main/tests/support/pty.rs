@@ -562,6 +562,10 @@ pub(crate) struct Run {
     child: Option<Child>,
     /// The hub's socket, removed when the hub exits.
     hub_socket: PathBuf,
+    /// The hub's home: its `hub serve` carries `FIBER_HOME=<home>` in
+    /// its environment, which the exit wait lists for. Empty for an
+    /// attached run, which waits on no hub.
+    hub_home: PathBuf,
     watchdog: Option<Watchdog>,
     sessions: Option<Watchdog>,
     shared: Arc<Mutex<Shared>>,
@@ -627,6 +631,7 @@ impl Run {
         Self {
             child: Some(child),
             hub_socket: setup.home().join("run").join("hub"),
+            hub_home: setup.home().to_path_buf(),
             watchdog: Some(watchdog),
             sessions: Some(sessions),
             shared,
@@ -650,6 +655,7 @@ impl Run {
         Self {
             child: None,
             hub_socket: PathBuf::new(),
+            hub_home: PathBuf::new(),
             watchdog: None,
             sessions: None,
             shared,
@@ -803,9 +809,8 @@ impl Run {
     /// parser, the query tail) and the writer. Then waits for the child
     /// to exit and reaps it, checks its group empties, waits for the
     /// reader to end at end of file so every queued byte is read, stands
-    /// the watchdog down and waits for the hub to idle out and remove
-    /// its socket. Returns the exit and every byte read from the master
-    /// since spawn.
+    /// the watchdog down and waits for the hub process to exit. Returns
+    /// the exit and every byte read from the master since spawn.
     pub(crate) fn wait(mut self) -> Exited {
         if self.reader.is_none() {
             let main = self.writer.lock().unwrap().try_clone().unwrap();
@@ -844,7 +849,12 @@ impl Run {
             .take()
             .unwrap()
             .stand_down(self.deadline.cleanup());
-        until_gone(self.deadline, &self.hub_socket, "the hub to idle out");
+        until_hub_exits(
+            self.deadline,
+            &self.hub_socket,
+            &self.hub_home,
+            "the hub process to exit",
+        );
         Exited {
             status: output.status,
             terminal: self.shared.lock().unwrap().output(),
@@ -873,15 +883,90 @@ impl Drop for Run {
     }
 }
 
-/// Waits under `deadline` for `socket` to go, naming `what` on expiry. The
-/// spin stops when the deadline's remainder is zero.
-fn until_gone(deadline: Deadline, socket: &Path, what: &str) {
+/// Waits under `deadline` for the hub's socket to go and then for its
+/// `hub serve` process to exit, naming `what` on expiry: the socket's
+/// absence alone cannot prove the hub is gone, since the hub removes the
+/// socket before it drops its hub and returns. An empty `hub_home` is an
+/// attached run, which waits on no hub. Every poll carries what remains of
+/// the deadline, so the wait ends at the deadline however the listing and
+/// probing below behave.
+pub(crate) fn until_hub_exits(deadline: Deadline, socket: &Path, hub_home: &Path, what: &str) {
     while socket.exists() {
         if deadline.left().is_zero() {
             panic!("waited until the deadline for {what}");
         }
         thread::yield_now();
     }
+    if hub_home.as_os_str().is_empty() {
+        return;
+    }
+    let home = hub_home.to_string_lossy();
+    loop {
+        if deadline.left().is_zero() {
+            panic!("waited until the deadline for {what}");
+        }
+        let pids = hub_pids(&list_processes(deadline.left()), &home);
+        assert!(
+            fakes::pids_exit(&pids, deadline.left()),
+            "waited until the deadline for {what}"
+        );
+        if hub_pids(&list_processes(deadline.left()), &home).is_empty() {
+            return;
+        }
+        thread::yield_now();
+    }
+}
+
+/// The pids in the `ps` table `table` that are this run's hub: every row
+/// whose command holds `hub serve` and whose whitespace-split words hold
+/// the exact token `FIBER_HOME=<home>`. Pure, so the boundary table in
+/// `look.rs` pins it: a longer value is a different home, and a row
+/// without the token, such as the lister's own, never matches.
+pub(crate) fn hub_pids(table: &str, home: &str) -> Vec<u32> {
+    let token = format!("FIBER_HOME={home}");
+    table
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let pid: u32 = words.next()?.parse().ok()?;
+            if !line.contains("hub serve") {
+                return None;
+            }
+            if !words.any(|word| word == token.as_str()) {
+                return None;
+            }
+            Some(pid)
+        })
+        .collect()
+}
+
+/// Every process's pid with its command line and environment appended:
+/// the table `hub_pids` parses. `ps` appends the environment with `-E`
+/// on macOS and `e` on Linux. It runs with a cleared environment holding
+/// only `PATH`, never the check-run nonce and never `FIBER_HOME`, so its
+/// own row holds no token and it can never match itself.
+pub(crate) fn list_processes(within: Duration) -> String {
+    let user = std::env::var("USER").expect("USER names the test's user");
+    let mut command = Command::new("ps");
+    if cfg!(target_os = "macos") {
+        command.args(["-E", "-ww", "-o", "pid=,command=", "-U", &user]);
+    } else {
+        command.args(["e", "-ww", "-o", "pid=,command=", "-U", &user]);
+    }
+    command
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let output = fakes::within("ps to list every process", within, move || command.output())
+        .expect("ps to list every process");
+    assert!(
+        output.status.success(),
+        "ps to list every process failed: {}",
+        output.status
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 /// Whether `haystack` holds `needle` as bytes.
