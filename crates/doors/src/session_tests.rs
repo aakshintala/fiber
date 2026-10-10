@@ -1540,9 +1540,15 @@ impl Tool for HeldShell {
             sender.send(()).expect("the test is waiting");
         }
         let guard = lock(&flag.ready);
-        let _wait = flag
+        // The wait's guard is dropped before waiting for the test's
+        // release below: the cancel path wakes through this same mutex,
+        // so holding it across the release deadlocks the test inside
+        // `ShellCancel::cancel` while this shell waits for the release.
+        let (guard, _waited) = flag
             .cv
-            .wait_timeout_while(guard, SHELL_LIMIT, |_| !cancel.is_cancelled());
+            .wait_timeout_while(guard, SHELL_LIMIT, |_| !cancel.is_cancelled())
+            .unwrap_or_else(PoisonError::into_inner);
+        drop(guard);
         if cancel.is_cancelled()
             && let Some(sender) = lock(&self.cancelled).take()
         {
