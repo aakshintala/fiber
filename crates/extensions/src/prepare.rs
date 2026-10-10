@@ -156,6 +156,16 @@ pub(crate) fn download(name: &str, url: &str) -> Result<Vec<u8>, Error> {
     download_with(name, url, ureq::Proxy::try_from_env(), net::LIMITS)
 }
 
+/// The agent config for `url`. Only https needs roots, and choosing them
+/// loads the system store on Linux, memory a plain-http download never uses.
+fn config_for(url: &str) -> ureq::config::ConfigBuilder<ureq::typestate::AgentScope> {
+    if url.starts_with("https://") {
+        net::config()
+    } else {
+        ureq::config::Config::builder()
+    }
+}
+
 /// Downloads `url` over the shared connector, so a download that connects
 /// to no address within the connect bound, or waits out the idle bound for
 /// a byte, fails instead of hanging the install. Redirects are followed and
@@ -172,7 +182,7 @@ fn download_with(
         why: format!("{url}: {why}"),
     };
     let agent = net::agent(
-        net::config().proxy(proxy).build(),
+        config_for(url).proxy(proxy).build(),
         Arc::new(()),
         DefaultResolver::default(),
         limits,

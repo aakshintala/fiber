@@ -15,7 +15,7 @@ use std::time::Duration;
 use contract::clock::Clock as _;
 use fakes::clock::FakeClock;
 
-use super::{INSTALL_STEP_DEADLINE, binary_name, download, download_with, platform};
+use super::{INSTALL_STEP_DEADLINE, binary_name, config_for, download, download_with, platform};
 use crate::host::exec::{GRACE, GROUP_POLL};
 
 /// How long a test waits on the run before it fails.
@@ -269,4 +269,16 @@ fn a_missing_install_step_program_is_the_spawn_error() {
         err.to_string().contains("`fiber-definitely-missing-xyz`:"),
         "the spawn error names the program: {err}"
     );
+}
+
+#[test]
+fn only_an_https_download_takes_the_shared_roots() {
+    use ureq::tls::RootCerts;
+    let roots = |url: &str| format!("{:?}", config_for(url).build().tls_config().root_certs());
+    let shared = format!("{:?}", net::tls_config().root_certs());
+    assert_eq!(roots("https://example.test/tool"), shared);
+    // Plain http keeps ureq's default roots instead of loading the store.
+    let default = format!("{:?}", RootCerts::WebPki);
+    assert_eq!(roots("http://example.test/tool"), default);
+    assert_eq!(roots("ftp://example.test/tool"), default);
 }
