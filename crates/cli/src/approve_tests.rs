@@ -73,6 +73,7 @@ fn go(setup: &Setup, yes: bool, terminal: bool, input: &str) -> Run {
         &mut Cursor::new(input.as_bytes().to_vec()),
         &mut out,
         &mut err,
+        fakes::clock::FakeClock::new(),
     );
     Run {
         result,

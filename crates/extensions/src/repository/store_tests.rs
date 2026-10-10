@@ -4,20 +4,29 @@
 use std::fs::{self, File};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, UNIX_EPOCH};
 
 use config::ProjectKey;
+use contract::clock::Clock as _;
 use contract::events::OfferedKind;
+use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::declared_tests::Repo;
 use super::{Decision, Index, RepoItem, Store, hash};
 use crate::Error;
+use crate::host::exec::{GRACE, GROUP_POLL};
+use crate::prepare::INSTALL_STEP_DEADLINE;
 
 const KEY: &str = "-tmp-project-.git";
 
 fn store(repo: &Repo) -> Store {
-    Store::new(&repo.home(), &ProjectKey::new(KEY).unwrap())
+    Store::new(
+        &repo.home(),
+        &ProjectKey::new(KEY).unwrap(),
+        fakes::clock::FakeClock::new(),
+    )
 }
 
 fn hashed(item: &RepoItem) -> String {
@@ -142,7 +151,8 @@ fn approvals_land_per_project_for_extensions_and_hooks_and_per_machine_for_serve
             item.kind
         );
         let other = ProjectKey::new("-another").unwrap();
-        let elsewhere = Store::new(&repo.home(), &other).decision(item.kind, &hash);
+        let elsewhere = Store::new(&repo.home(), &other, fakes::clock::FakeClock::new())
+            .decision(item.kind, &hash);
         assert_eq!(elsewhere.is_some(), !project, "{:?}", item.kind);
     }
 }
@@ -608,4 +618,66 @@ fn a_stray_symlink_where_the_copy_goes_is_replaced_by_the_copy() {
     assert!(copy.join("init.lua").is_file());
     assert!(copy.join("extension.json").is_file());
     assert!(ready(&repo, &hash).is_file());
+}
+
+/// An install step that never finishes approves nothing and leaves no copy:
+/// the approval is recorded only after the copy builds.
+#[test]
+fn a_stalled_install_step_approves_nothing_and_leaves_no_copy() {
+    const WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;
+
+    let repo = Repo::new();
+    let ready = fakes::children::Ready::new(&repo.home());
+    // The step ignores SIGTERM, so the stop runs the full grace to SIGKILL.
+    // Its pid line proves the trap is set before the clock moves.
+    let script = format!(
+        "trap '' TERM\necho $$ > '{}'\nwhile :; do :; done\n",
+        ready.path().display()
+    );
+    let item = extension(&repo, &json!({"install": ["sh", "-c", script]}));
+    let hash = hashed(&item);
+    let kind = item.kind;
+    let worker_hash = hash.clone();
+    let clock = FakeClock::new();
+    let deadline = clock.now() + INSTALL_STEP_DEADLINE;
+    let home = repo.home();
+    let project = ProjectKey::new(KEY).unwrap();
+    let worker_clock = Arc::clone(&clock);
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("stalled approve".into())
+        .spawn(move || {
+            let store = Store::new(&home, &project, worker_clock);
+            let _sent = done_tx.send(store.approve(&item, &worker_hash));
+        })
+        .unwrap();
+    let _pid = ready.wait(WITHIN);
+    assert!(
+        clock.await_parked(clock.now() + GROUP_POLL, WITHIN),
+        "waited {WITHIN:?} for the step to park while running"
+    );
+    // Past the install-step deadline the run stops.
+    clock.advance(INSTALL_STEP_DEADLINE + Duration::from_secs(1));
+    let kill_at = clock.now() + GRACE;
+    assert!(
+        clock.await_parked(kill_at, WITHIN),
+        "waited {WITHIN:?} for the step to park for the grace"
+    );
+    clock.advance(GRACE);
+    let err = done_rx
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("waited {WITHIN:?} for the stalled approval"))
+        .expect_err("a stalled step approves nothing");
+    assert!(
+        matches!(err, Error::InstallExited { .. }),
+        "a stalled step fails as its install step failed: {err}"
+    );
+    assert!(
+        pinned_names(&repo).is_empty(),
+        "a failed step leaves no copy"
+    );
+    assert!(
+        store(&repo).decision(kind, &hash).is_none(),
+        "a failed step records no approval"
+    );
 }

@@ -2,9 +2,24 @@
 //! through the proxy environment (`docs/extensions.md`, "Versions" and
 //! "Installing").
 
-#![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code"
+)]
 
-use super::{binary_name, download, hex, platform};
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
+
+use contract::clock::Clock as _;
+use fakes::clock::FakeClock;
+
+use super::{INSTALL_STEP_DEADLINE, binary_name, download, hex, platform};
+use crate::host::exec::{GRACE, GROUP_POLL};
+
+/// How long a test waits on the run before it fails.
+const WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 #[test]
 fn a_url_names_its_file_without_the_query() {
@@ -100,4 +115,72 @@ fn download_bypasses_the_proxy_for_no_proxy_hosts() {
         "nothing went through the proxy"
     );
     assert_eq!(server.requests().len(), 1);
+}
+
+/// A step that never finishes is stopped at the install-step deadline, and
+/// the step is gone afterwards.
+#[test]
+fn a_stalled_install_step_is_stopped_at_its_deadline() {
+    let dir = fakes::TempDir::new("fiber-prepare-stall");
+    let ready = fakes::children::Ready::new(dir.path());
+    // The step ignores SIGTERM, so the stop runs the full grace to SIGKILL.
+    // Its pid line proves the trap is set before the clock moves: a TERM
+    // before the trap would kill the step at once.
+    let script = format!(
+        "trap '' TERM\necho $$ > '{}'\nwhile :; do :; done\n",
+        ready.path().display()
+    );
+    let manifest: config::Manifest = serde_json::from_value(serde_json::json!({
+        "name": "acme",
+        "version": "v1.0.0",
+        "fiber": "0.1.0",
+        "api": 1,
+        "install": ["sh", "-c", script],
+    }))
+    .unwrap();
+    let clock = FakeClock::new();
+    let deadline = clock.now() + INSTALL_STEP_DEADLINE;
+    let worker_clock = Arc::clone(&clock);
+    let worker_dir = dir.path().to_path_buf();
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("prepare stall".into())
+        .spawn(move || {
+            let _sent = done_tx.send(super::prepare(
+                &worker_dir,
+                &manifest,
+                worker_clock.as_ref(),
+            ));
+        })
+        .unwrap();
+    let pid = ready.wait(WITHIN)[0];
+    assert!(
+        clock.await_parked(clock.now() + GROUP_POLL, WITHIN),
+        "waited {WITHIN:?} for the step to park while running"
+    );
+    // Past the install-step deadline the run stops.
+    clock.advance(INSTALL_STEP_DEADLINE + Duration::from_secs(1));
+    let kill_at = clock.now() + GRACE;
+    assert!(
+        clock.await_parked(kill_at, WITHIN),
+        "waited {WITHIN:?} for the step to park for the grace"
+    );
+    clock.advance(GRACE);
+    let err = done_rx
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("waited {WITHIN:?} for the stalled step"))
+        .expect_err("a stalled step fails");
+    assert!(
+        matches!(err, crate::Error::InstallExited { .. }),
+        "a stalled step fails as its install step failed: {err}"
+    );
+    assert!(
+        err.to_string()
+            .contains(&format!("{} s", INSTALL_STEP_DEADLINE.as_secs())),
+        "the failure names the deadline's seconds: {err}"
+    );
+    assert!(
+        !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
+        "the stopped step is gone"
+    );
 }

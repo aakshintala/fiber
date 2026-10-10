@@ -4,8 +4,10 @@
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
+use std::sync::Arc;
 
 use contract::ErrorCode;
+use contract::clock::Clock;
 use contract::shapes::Failure;
 use extensions::{Index, Store};
 
@@ -18,8 +20,9 @@ const PROMPT: &str = "approve all? [y/N]";
 const NOBODY: &str = "`fiber approve` has no terminal to ask on and no input. Pass `--yes` to approve without asking.";
 
 /// `fiber approve [--yes]` in the current directory. Without `--yes` it asks
-/// once, and refuses when nobody can answer.
-pub fn approve(yes: bool) -> i32 {
+/// once, and refuses when nobody can answer. The clock bounds an extension's
+/// install step when its copy is built.
+pub fn approve(yes: bool, clock: Arc<dyn Clock>) -> i32 {
     let prepared = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| {
@@ -38,6 +41,7 @@ pub fn approve(yes: bool) -> i32 {
             &mut stdin.lock(),
             &mut io::stdout(),
             &mut io::stderr(),
+            clock,
         )
     });
     match ran {
@@ -57,9 +61,10 @@ fn run(
     input: &mut dyn BufRead,
     out: &mut dyn Write,
     err: &mut dyn Write,
+    clock: Arc<dyn Clock>,
 ) -> Result<(), Failure> {
     let (_, project) = project_of(home, workspace)?;
-    let store = Store::new(home, &project);
+    let store = Store::new(home, &project, clock);
     let mut index = Index::load(home);
     let items = extensions::declared_items(workspace).map_err(|e| failed(e.code(), e))?;
     let pending =

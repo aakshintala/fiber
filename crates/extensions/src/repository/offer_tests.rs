@@ -10,7 +10,11 @@ use super::declared_tests::Repo;
 use super::{Index, Store, hash, pending};
 
 fn store(repo: &Repo) -> Store {
-    Store::new(&repo.home(), &ProjectKey::new("-p").unwrap())
+    Store::new(
+        &repo.home(),
+        &ProjectKey::new("-p").unwrap(),
+        fakes::clock::FakeClock::new(),
+    )
 }
 
 fn offered(repo: &Repo) -> Vec<OfferedItem> {

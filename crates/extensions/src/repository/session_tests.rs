@@ -15,11 +15,16 @@ fn project() -> ProjectKey {
 }
 
 fn session(repo: &Repo) -> SessionOffer {
-    SessionOffer::new(&repo.home(), &project(), &repo.root())
+    SessionOffer::new(
+        &repo.home(),
+        &project(),
+        &repo.root(),
+        fakes::clock::FakeClock::new(),
+    )
 }
 
 fn store(repo: &Repo) -> Store {
-    Store::new(&repo.home(), &project())
+    Store::new(&repo.home(), &project(), fakes::clock::FakeClock::new())
 }
 
 fn unapproved(repo: &Repo) -> Vec<Unapproved> {

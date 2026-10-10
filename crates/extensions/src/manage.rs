@@ -112,15 +112,16 @@ pub(crate) fn carries(dir: &Path, manifest: &Manifest) -> Vec<String> {
 /// Everything an install will put in place, fetched and checked, holding the
 /// lock over `extensions/`. Dropping it installs nothing and removes what
 /// was fetched.
-pub struct Plan {
+pub struct Plan<'c> {
     root: String,
     items: BTreeMap<String, Item>,
     damaged: Vec<Damaged>,
     scratch: PathBuf,
     _lock: Lock,
+    clock: &'c dyn Clock,
 }
 
-impl Plan {
+impl Plan<'_> {
     /// The extensions to install, the one asked for and its dependencies.
     pub fn items(&self) -> impl Iterator<Item = &Item> {
         self.items.values()
@@ -139,6 +140,7 @@ impl Plan {
     pub fn commit(self) -> Result<Vec<String>, Error> {
         let paths: Vec<Paths> = self.items.values().map(|i| i.paths.clone()).collect();
         let manifests: Vec<&Manifest> = self.items.values().map(|i| &i.manifest).collect();
+        let clock = self.clock;
         commit_all(
             &paths,
             |from, to| fs::rename(from, to),
@@ -150,7 +152,7 @@ impl Plan {
                         "a commit step without a staged manifest",
                     )));
                 };
-                prepare(target, manifest)
+                prepare(target, manifest, clock)
             },
         )?;
         let mut names: Vec<String> = self.items.keys().cloned().collect();
@@ -159,7 +161,7 @@ impl Plan {
     }
 }
 
-impl Drop for Plan {
+impl Drop for Plan<'_> {
     fn drop(&mut self) {
         remove(&self.scratch).unwrap_or(());
         for item in self.items.values() {
@@ -170,14 +172,15 @@ impl Drop for Plan {
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
-/// Fetches and checks what `request` and its dependencies need.
-pub fn plan(
+/// Fetches and checks what `request` and its dependencies need. The plan
+/// keeps `clock` for its commit, which runs each install step under it.
+pub fn plan<'c>(
     home: &Path,
     request: &Request,
     fiber_version: &str,
     origin: &Origin,
-    clock: &dyn Clock,
-) -> Result<Plan, Error> {
+    clock: &'c dyn Clock,
+) -> Result<Plan<'c>, Error> {
     let lock = lock(home, clock)?;
     let listing = read(home)?;
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -190,6 +193,7 @@ pub fn plan(
         damaged: listing.damaged,
         scratch,
         _lock: lock,
+        clock,
     };
     let mut ctx = Ctx {
         id,

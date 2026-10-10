@@ -6,17 +6,24 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use config::Manifest;
+use contract::clock::Clock;
 use ureq::Agent;
 use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::Error;
+use crate::host::exec;
 
 /// The largest binary Fiber downloads.
 // debt: a fixed 256 MiB cap; raise it when a real binary needs more.
 const MAX_BINARY: u64 = 268_435_456;
+
+/// How long an install step may run before it is stopped
+/// (`docs/extensions.md`, "Installing").
+pub(crate) const INSTALL_STEP_DEADLINE: Duration = Duration::from_secs(600);
 
 /// This platform's key in a manifest's `binaries`, such as `darwin-arm64`.
 pub fn platform() -> String {
@@ -34,8 +41,9 @@ pub fn platform() -> String {
 
 /// Downloads this platform's binary into `dir/bin/` and checks its SHA-256,
 /// then runs the install step in `dir`. Another platform's binary is never
-/// fetched.
-pub(crate) fn prepare(dir: &Path, manifest: &Manifest) -> Result<(), Error> {
+/// fetched. The step runs in Fiber's process group, so its terminal prompts
+/// still work, and is stopped at [`INSTALL_STEP_DEADLINE`] on `clock`.
+pub(crate) fn prepare(dir: &Path, manifest: &Manifest, clock: &dyn Clock) -> Result<(), Error> {
     if let Some(binary) = manifest.binaries.get(&platform()) {
         let bytes = download(&manifest.name, &binary.url)?;
         let got = hex(ring::digest::digest(&ring::digest::SHA256, &bytes).as_ref());
@@ -71,27 +79,76 @@ pub(crate) fn prepare(dir: &Path, manifest: &Manifest) -> Result<(), Error> {
     if let Some(step) = &manifest.install
         && let Some((program, args)) = step.split_first()
     {
-        let out = Command::new(program)
-            .args(args)
-            .current_dir(dir)
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| Error::InstallStep {
-                name: manifest.name.clone(),
-                why: format!("`{program}`: {e}"),
-            })?;
-        if !out.status.success() {
-            return Err(Error::InstallExited {
-                name: manifest.name.clone(),
-                why: format!(
-                    "`{}` failed: {}",
-                    step.join(" "),
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ),
-            });
-        }
+        run_step(dir, &manifest.name, step, program, args, clock)?;
     }
     Ok(())
+}
+
+/// Runs the manifest's install `step` in `dir`, stopped at
+/// [`INSTALL_STEP_DEADLINE`] on `clock`.
+fn run_step(
+    dir: &Path,
+    name: &str,
+    step: &[String],
+    program: &str,
+    args: &[String],
+    clock: &dyn Clock,
+) -> Result<(), Error> {
+    let failed = |why: String| Error::InstallStep {
+        name: name.into(),
+        why,
+    };
+    let req = exec::ExecRequest {
+        program: program.into(),
+        args: args.to_vec(),
+        cwd: dir.to_path_buf(),
+        // The step's output is not capped today.
+        cap: usize::MAX,
+        // In Fiber's process group, so terminal prompts still work and
+        // Ctrl-C at the terminal still reaches the step as it does today.
+        own_group: false,
+    };
+    let deadline = clock
+        .now()
+        .checked_add(INSTALL_STEP_DEADLINE)
+        .unwrap_or(clock.now());
+    // Never cancelled except by the step's own end: the sender drops when
+    // this returns.
+    let (_cancel, cancel) = mpsc::channel::<()>();
+    match exec::run(&req, clock, Some(deadline), cancel) {
+        Err(stalled) if stalled.ran.as_ref().is_some_and(|ran| ran.timed_out) => {
+            Err(Error::InstallExited {
+                name: name.into(),
+                why: format!(
+                    "`{}` did not finish within {} s, so it was stopped",
+                    step.join(" "),
+                    INSTALL_STEP_DEADLINE.as_secs()
+                ),
+            })
+        }
+        Err(failed_run) => match failed_run.source {
+            Some(source) => Err(failed(format!("`{program}`: {source}"))),
+            // After the spawn: a reader thread that could not start.
+            None => Err(failed(failed_run.message)),
+        },
+        Ok(ran) if ran.timed_out => Err(Error::InstallExited {
+            name: name.into(),
+            why: format!(
+                "`{}` did not finish within {} s, so it was stopped",
+                step.join(" "),
+                INSTALL_STEP_DEADLINE.as_secs()
+            ),
+        }),
+        Ok(ran) if ran.exit_code != Some(0) => Err(Error::InstallExited {
+            name: name.into(),
+            why: format!(
+                "`{}` failed: {}",
+                step.join(" "),
+                String::from_utf8_lossy(&ran.stderr).trim()
+            ),
+        }),
+        Ok(_) => Ok(()),
+    }
 }
 
 /// The file name a URL ends in, without its query.

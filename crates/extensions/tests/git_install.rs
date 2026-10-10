@@ -319,12 +319,13 @@ fn a_dependency_gets_the_lowest_version_meeting_every_minimum() {
             .requested
     );
     // A second dependent raises the minimum, and the dependency moves up.
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Install(b.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let moved: Vec<_> = p.items().filter(|i| i.name == dep).collect();
@@ -350,12 +351,13 @@ fn a_dependency_asked_for_by_name_stays_requested_when_it_moves_up() {
     for tag in ["v1.0.0", "v1.5.0"] {
         repos.tag(dep, "", tag, &manifest(dep), &[]);
     }
+    let clock = fakes::clock::FakeClock::new();
     let first = plan(
         &setup.home(),
         &Request::Install(dep.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     );
     first.unwrap().commit().unwrap();
     repos.tag(dep, "", "v1.6.0", &manifest(dep), &[]);
@@ -496,12 +498,13 @@ fn the_fetch_leaves_nothing_in_the_temporary_directory_or_home() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Install(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     assert_eq!(p.items().count(), 1);
@@ -551,12 +554,13 @@ fn an_update_moves_to_the_newest_tag_and_shows_what_changed() {
     install(&setup, &repos, LIB).unwrap();
     let first = repos.commit(LIB, "v1.0.0");
     repos.tag(LIB, "", "v1.1.0", &manifest(LIB), &[("b.lua", "return 2")]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Update(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let item = p.items().next().unwrap();
@@ -591,12 +595,13 @@ fn an_update_re_resolves_the_dependencies_and_an_uninstalled_name_is_refused() {
         repos.tag(dep, "", tag, &manifest(dep), &[]);
     }
     repos.tag(LIB, "", "v1.0.0", &named(LIB, &[(dep, "1.0")]), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let err = plan(
         &setup.home(),
         &Request::Update(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     );
     assert!(matches!(err, Err(Error::NotInstalled { .. })));
     install(&setup, &repos, LIB).unwrap();
@@ -697,12 +702,13 @@ fn a_local_install_lists_its_manifest_version_and_no_commit() {
 fn missing_git_fails_with_the_usage_code_and_says_to_install_it() {
     let setup = Setup::new();
     let origin = Origin::new("fiber-no-such-git-program", |repo| repo.to_owned());
+    let clock = fakes::clock::FakeClock::new();
     let err = plan(
         &setup.home(),
         &Request::Install(LIB.into()),
         FIBER,
         &origin,
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     );
     let Err(err) = err else { panic!("planned") };
     assert!(matches!(err, Error::GitMissing));
@@ -850,12 +856,13 @@ fn a_plan_that_is_dropped_releases_the_lock_and_removes_what_it_fetched() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let first = plan(
         &setup.home(),
         &Request::Install(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let staged = first.items().next().unwrap().staged().to_path_buf();
@@ -1320,12 +1327,13 @@ fn installing_another_extension_with_a_damaged_one_present_succeeds_and_names_it
     )
     .unwrap();
     let fresh = setup.source("fresh", &manifest("example.com/acme/fresh"), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Path(fresh),
         FIBER,
         &Origin::github(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     assert_eq!(
@@ -1572,12 +1580,13 @@ fn an_install_step_runs_at_the_final_path_after_the_plan_and_again_on_update() {
         marker.display()
     );
     let source = setup.source("local", &with_step("acme", &["sh", "-c", &step]), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Path(source),
         FIBER,
         &Origin::github(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     assert!(!marker.exists(), "the step must wait for the approval");
@@ -1969,12 +1978,13 @@ fn a_raised_memory_cap_appears_in_carries_only_for_lua_extensions() {
             m["process"] = json!({ "program": "node", "args": [] });
         }
         let source = setup.source("local", &m, &[]);
+        let clock = fakes::clock::FakeClock::new();
         let p = plan(
             &setup.home(),
             &Request::Path(source),
             FIBER,
             &Origin::github(),
-            &*fakes::clock::FakeClock::new(),
+            &*clock,
         )
         .unwrap();
         let carries = p.items().next().unwrap().carries();
@@ -1999,12 +2009,13 @@ fn what_a_package_carries_is_listed_from_its_files_and_manifest() {
     write(&source.join("skills/plan/SKILL.md"), "s");
     write(&source.join("themes/dark.json"), "{}");
     write(&source.join("tui/init.lua"), "");
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Path(source),
         FIBER,
         &Origin::github(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let carries = p.items().next().unwrap().carries();
@@ -2047,12 +2058,13 @@ fn an_items_source_is_its_path_or_its_name() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[]);
+    let clock = fakes::clock::FakeClock::new();
     let p = plan(
         &setup.home(),
         &Request::Install(LIB.into()),
         FIBER,
         &repos.origin(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     assert_eq!(p.items().next().unwrap().source(), LIB);
@@ -2063,7 +2075,7 @@ fn an_items_source_is_its_path_or_its_name() {
         &Request::Path(source.clone()),
         FIBER,
         &Origin::github(),
-        &*fakes::clock::FakeClock::new(),
+        &*clock,
     )
     .unwrap();
     let shown = fs::canonicalize(&source).unwrap().display().to_string();
