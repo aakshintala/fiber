@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# The self-test for scripts/flaky-tests: a fixture in nextest's real JUnit
+# shape proves only the tests that passed after a retry print, one line
+# each, with nothing else on stdout; empty and missing input print nothing
+# and exit 0; malformed XML exits 1.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  echo "scripts/test-flaky-tests: $1" >&2
+  exit 1
+}
+
+# The fixture mirrors target/nextest/ci/junit.xml from a run where one
+# integration test passed after a retry: the flakyFailure child carries
+# the failed attempt, with nextest's escaped entities in its message.
+cat >"$tmp/junit.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="5" failures="1" errors="0" uuid="2ca09716-36ca-4a8a-84e8-ec39804fa3d1" timestamp="2026-10-10T11:29:01.823-07:00" time="0.013">
+    <testsuite name="main::flaky_probe" tests="4" disabled="0" errors="0" failures="1">
+        <testcase name="fails_once_then_passes" classname="main::flaky_probe" timestamp="2026-10-10T11:29:01.831-07:00" time="0.005">
+            <flakyFailure timestamp="2026-10-10T11:29:01.823-07:00" time="0.006" message="thread &apos;fails_once_then_passes&apos; panicked at crates/main/tests/flaky_probe.rs:10:9" type="test failure with exit code 101">first attempt fails on purpose
+            </flakyFailure>
+        </testcase>
+        <testcase name="always_passes" classname="main::flaky_probe" timestamp="2026-10-10T11:29:01.831-07:00" time="0.004">
+        </testcase>
+        <testcase name="always_fails" classname="main::flaky_probe" timestamp="2026-10-10T11:29:01.831-07:00" time="0.004">
+            <failure message="assertion failed">output
+            </failure>
+        </testcase>
+        <testcase name="fails_twice" classname="main::flaky_probe" timestamp="2026-10-10T11:29:01.831-07:00" time="0.004">
+            <flakyFailure timestamp="2026-10-10T11:29:01.823-07:00" time="0.006" message="first attempt" type="test failure with exit code 101">output
+            </flakyFailure>
+            <failure message="second attempt">output
+            </failure>
+        </testcase>
+    </testsuite>
+    <testsuite name="main::bin/fiber" tests="1" disabled="0" errors="0" failures="0">
+        <testcase name="flaky_probe_tests::unit_fails_once_then_passes" classname="main::bin/fiber" timestamp="2026-10-10T11:29:01.831-07:00" time="0.005">
+            <flakyFailure timestamp="2026-10-10T11:29:01.823-07:00" time="0.006" message="first attempt" type="test failure with exit code 101">output
+            </flakyFailure>
+        </testcase>
+    </testsuite>
+</testsuites>
+EOF
+printf '%s\n%s\n' 'main::flaky_probe fails_once_then_passes' 'main::bin/fiber flaky_probe_tests::unit_fails_once_then_passes' >"$tmp/want.txt"
+
+scripts/flaky-tests "$tmp/junit.xml" >"$tmp/got.txt" 2>"$tmp/err.txt" || fail "exit $? on the fixture"
+cmp -s "$tmp/want.txt" "$tmp/got.txt" || {
+  echo "--- want:" >&2
+  cat "$tmp/want.txt" >&2
+  echo "--- got:" >&2
+  cat "$tmp/got.txt" >&2
+  fail "fixture output differs"
+}
+[ -s "$tmp/err.txt" ] && { cat "$tmp/err.txt" >&2; fail "fixture run printed to stderr"; }
+
+# A missing file prints nothing and exits 0.
+scripts/flaky-tests "$tmp/does-not-exist" >"$tmp/got.txt" 2>"$tmp/err.txt" || fail "exit $? on a missing file"
+[ -s "$tmp/got.txt" ] && fail "missing file printed output"
+
+# An empty file prints nothing and exits 0.
+: >"$tmp/empty.xml"
+scripts/flaky-tests "$tmp/empty.xml" >"$tmp/got.txt" 2>"$tmp/err.txt" || fail "exit $? on an empty file"
+[ -s "$tmp/got.txt" ] && fail "empty file printed output"
+
+# Malformed XML exits 1 with a message.
+echo "<not xml" >"$tmp/bad.xml"
+rc=0
+scripts/flaky-tests "$tmp/bad.xml" >"$tmp/got.txt" 2>"$tmp/err.txt" || rc=$?
+[ "$rc" -eq 1 ] || fail "malformed XML exited $rc, want 1"
+[ -s "$tmp/err.txt" ] || fail "malformed XML printed no message"
+
+# No argument is a usage error, not a silent empty run.
+if scripts/flaky-tests >"$tmp/got.txt" 2>/dev/null; then
+  fail "exited 0 with no argument"
+fi
