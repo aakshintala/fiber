@@ -20,6 +20,7 @@
 //! replayed `subscribe`.
 
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use contract::SessionId;
@@ -39,16 +40,18 @@ pub(crate) fn on_end(
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<Relays>>,
+    gone: &AtomicBool,
 ) {
     if !closed_by_session {
         return;
     }
-    // Peek without blocking: a routed command may hold the relays lock
-    // while it waits for this thread's end, so waiting here would
-    // deadlock; when the lock is held the holder releases it without
-    // waiting on this thread, so the probe below runs first. A disconnect
-    // mid-probe only makes the drop and the line unobservable.
-    if relays.try_lock().is_ok_and(|held| held.rejoin.is_closed()) {
+    // `gone` is the connection's closed flag, set before `close_all` shuts
+    // any stream. Read without the relays lock: `close_all` holds it while
+    // it wakes this thread, and a routed command may hold it while it
+    // waits for this thread's end, so waiting here would deadlock or read
+    // the flag too late. A disconnect mid-probe only makes the drop and
+    // the line unobservable.
+    if gone.load(Ordering::SeqCst) {
         return;
     }
     if !running(hub, session) {

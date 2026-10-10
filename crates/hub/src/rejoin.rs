@@ -13,6 +13,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, Weak};
@@ -32,8 +33,9 @@ pub(crate) struct Rejoin {
     opening: HashMap<String, usize>,
     /// Per session, the `Mark` of its last relay.
     marks: HashMap<String, Mark>,
-    /// Set by `Relays::close_all`: the connection is gone.
-    closed: bool,
+    /// Set by `Relays::close_all`: the connection is gone. Shared with each
+    /// relay thread, so its end reads it without the relays lock.
+    closed: Arc<AtomicBool>,
 }
 
 /// Where `session`'s log stood when a relay to it opened, and what was read since.
@@ -84,14 +86,19 @@ fn discovered(home: &Path, session: &str, epoch: u64) -> Option<Mark> {
 
 impl Rejoin {
     pub(crate) fn close(&mut self) {
-        self.closed = true;
+        self.closed.store(true, Ordering::SeqCst);
     }
 
-    /// Whether the connection is gone: its end skips the running-session
-    /// check, since the probe would connect to sessions the gone client
-    /// relayed.
-    pub(crate) fn is_closed(&self) -> bool {
-        self.closed
+    /// Whether the connection is gone.
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+
+    /// The flag `close` sets: a relay thread's end skips the
+    /// running-session check when it is set, since the probe would connect
+    /// to sessions the gone client relayed.
+    pub(crate) fn closed_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.closed)
     }
 }
 
@@ -118,7 +125,7 @@ pub(crate) fn admit(
     epoch: u64,
 ) -> bool {
     if exclusive
-        && (held.rejoin.closed
+        && (held.rejoin.is_closed()
             || held.entries.iter().any(|entry| entry.session == session)
             || held.rejoin.opening.contains_key(session))
     {
@@ -142,7 +149,7 @@ pub(crate) fn kept_for_candidate(
     session: &str,
     candidate_epoch: u64,
 ) -> Option<Map<String, Value>> {
-    if held.rejoin.closed
+    if held.rejoin.is_closed()
         || held.entries.iter().any(|entry| entry.session == session)
         || held.rejoin.opening.contains_key(session)
         || !held
@@ -211,7 +218,7 @@ pub(crate) struct Candidate {
 /// connection's sessions with a kept subscription, no relay, a mark, a name
 /// in `names`, not opening and not closed.
 pub(crate) fn candidates(held: &Relays, names: &BTreeSet<String>) -> Vec<(String, Mark)> {
-    if held.rejoin.closed {
+    if held.rejoin.is_closed() {
         return Vec::new();
     }
     held.subscribed

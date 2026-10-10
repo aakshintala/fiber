@@ -33,6 +33,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -670,6 +671,7 @@ fn attach_inner(
             replayed: Arc::clone(&replayed),
             kept,
             order: Arc::clone(&order),
+            gone: held.rejoin.closed_flag(),
         };
         move || relay(owned, &session, reader, &hub, &writer, &relays)
     });
@@ -698,6 +700,9 @@ struct RelayThread {
     replayed: Replayed,
     kept: Kept,
     order: Arc<AckOrder>,
+    /// The connection's closed flag (`Rejoin::closed_flag`), read at the
+    /// thread's end without the relays lock.
+    gone: Arc<AtomicBool>,
 }
 
 /// Tests only: runs a relay thread as `attach` would, without an entry:
@@ -717,7 +722,10 @@ pub(crate) fn spawn_for_test(
     relays: Arc<Mutex<Relays>>,
     kept: Kept,
 ) -> thread::JoinHandle<()> {
-    let order = lock(&relays).order.clone();
+    let (order, gone) = {
+        let held = lock(&relays);
+        (held.order.clone(), held.rejoin.closed_flag())
+    };
     thread::Builder::new()
         .name("hub-relay-test".to_owned())
         .spawn(move || {
@@ -727,6 +735,7 @@ pub(crate) fn spawn_for_test(
                     replayed: Replayed::default(),
                     kept,
                     order,
+                    gone,
                 },
                 &session,
                 reader,
@@ -767,6 +776,7 @@ fn relay(
         replayed,
         kept,
         order,
+        gone,
     } = owned;
     let mut read = BufReader::new(reader);
     let mut buf = Vec::new();
@@ -867,7 +877,7 @@ fn relay(
             }
         }
     }
-    crate::closed::on_end(session, ended && !exiting, hub, writer, relays);
+    crate::closed::on_end(session, ended && !exiting, hub, writer, relays, &gone);
     crate::retire::drain(session, epoch, &kept, &order, hub, writer, relays);
     if ended {
         crate::rewind::follow(hub, writer, relays, session);
