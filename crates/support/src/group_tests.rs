@@ -366,9 +366,15 @@ fn run_on_pty(
     // read below would never end.
     drop(cmd);
     let watchdog = Watchdog::group(child.id());
-    let status = child.wait().expect("sh reaped");
-    let mut output = String::new();
-    std::io::Read::read_to_string(&mut read, &mut output).expect("the output read");
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let status = child.wait().expect("sh reaped");
+        let mut output = String::new();
+        std::io::Read::read_to_string(&mut read, &mut output).expect("the output read");
+        let _sent = done.send((output, status));
+    });
+    let (output, status) =
+        Deadline::after(DEADLINE).recv_or_fail(&finished, "the pty child to end");
     watchdog.stand_down(DEADLINE);
     (output, status)
 }
