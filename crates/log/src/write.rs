@@ -3,7 +3,7 @@
 //! and fans every event out to watchers.
 
 use std::collections::BTreeMap;
-use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
+use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
@@ -656,25 +656,17 @@ impl Drop for Lock {
 /// who holds it.
 fn lock(dir: &Path, id: &SessionId, clock: &dyn Clock) -> Result<Lock, Error> {
     let path = dir.join(LOCK);
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)
-        .map_err(io_at(&path))?;
-    match file.try_lock() {
-        Ok(()) => {
+    match crate::scan::try_lock_file(dir)? {
+        Some(mut file) => {
             file.set_len(0).map_err(io_at(&path))?;
             file.write_all(format!("{}\n", std::process::id()).as_bytes())
                 .map_err(io_at(&path))?;
             Ok(Lock(file))
         }
-        Err(TryLockError::WouldBlock) => Err(Error::Held {
+        None => Err(Error::Held {
             session: id.0.clone(),
             holder: holder(&path, clock),
         }),
-        Err(TryLockError::Error(e)) => Err(io_at(&path)(e)),
     }
 }
 
