@@ -262,14 +262,8 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
     // session reads the settled count when it folds a line, so an attach
     // and a close that finish before it folds send no `clients: 1` and no
     // second `clients: 0` (`crates/loop/src/status.rs`, `Fold::observe`).
-    // The test waits for nothing between them; the reopen's count below
-    // is the first one that stays.
-    let clients_is = |count: u64| {
-        move |line: &Value| {
-            line.get("kind").and_then(Value::as_str) == Some("session_status")
-                && line["payload"].get("clients").and_then(Value::as_u64) == Some(count)
-        }
-    };
+    // The test waits for no count between them; the settled count is read
+    // at the end.
 
     // A send from the composer is rejected `not_subscribed`: the hub's
     // rejection message is `Send `subscribe` first.`
@@ -304,19 +298,8 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
     drop(file);
     assert_eq!(fs::read(&events).unwrap(), whole);
     // Enter opens the focused list row through the normal open path:
-    // the hub gets a new `subscribe` for the session, and the summary
-    // client reads its count going back to one full client.
+    // the hub gets a new `subscribe` for the session.
     run.write(b"\r");
-    let resubscribed = until(
-        &observer,
-        "the reopened subscribe's clients count",
-        clients_is(1),
-    );
-    assert_eq!(
-        resubscribed.last().unwrap()["payload"]["clients"],
-        1,
-        "{resubscribed:?}"
-    );
     let reopened = run.wait_screen("the reopened conversation", |screen| {
         shows(screen, "zebraflight")
     });
@@ -326,13 +309,27 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
         "no second close notice: {}",
         reopened.contents
     );
-    drop(observer);
 
     // The held turn runs on: the reply finishes the turn, the session
     // exits, and the terminal quits with its resume line.
     let completed_from = run.output().len();
     server.release_one();
     run.turn_finished(completed_from);
+    // The held turn kept the state `streaming` until the release, which
+    // came after the reopen, so the first `idle` status is written with
+    // the reopened terminal attached and carries its count. A `clients`
+    // line before it may be a first attach's, so none is read for the
+    // reopen.
+    let settled = until(&observer, "the idle status after the reopen", |line| {
+        line.get("kind").and_then(Value::as_str) == Some("session_status")
+            && line["payload"].get("state").and_then(Value::as_str) == Some("idle")
+    });
+    assert_eq!(
+        settled.last().unwrap()["payload"]["clients"],
+        1,
+        "{settled:?}"
+    );
+    drop(observer);
     finish(running);
     // The session has exited, so nothing is live: quitting restores
     // the primary screen with no resume line (`docs/tui.md`, "On exit").
