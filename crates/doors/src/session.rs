@@ -367,12 +367,18 @@ impl Session {
         self.gate.wait_shells();
     }
 
-    /// Ends the door side: stops accepting, unlinks the socket, drops `log`
+    /// Ends the door side: marks the gate stopped and makes a best-effort
+    /// wake of `accept`, unlinks the socket, drops `log`
     /// (the last handle, which releases the lock), waits up to [`conns::GRACE`] for
     /// each writer, then shuts down whatever is still open. Every driver
     /// shell is cancelled first, since shutting its socket does not stop the
     /// tool, and waited for: its thread is not joined, and its answer is
-    /// queued before it ends. A reader can still admit one until it is
+    /// queued before it ends. The accept thread is never joined either: when
+    /// the socket path is gone, or was rebound by another listener, the wake
+    /// misses and the thread stays blocked until the process exit ends it. A
+    /// connection the loop admits after the stop is dropped, not served: the
+    /// loop checks `stopped()` after `accept` returns before serving
+    /// anything. A reader can still admit one until it is
     /// joined; that shell starts cancelled and is waited for once no reader
     /// is left, though its answer may reach no writer.
     pub fn close(self, log: Arc<Log>) {
@@ -381,14 +387,11 @@ impl Session {
         #[cfg(test)]
         self.gate.note(tests::Probe::FirstShellWaitDone);
         self.gate.mark_stopped();
-        // Wakes `accept` if it is blocked in `accept`. A connection during
-        // teardown is dropped, not served.
-        match UnixStream::connect(&self.socket) {
-            Ok(_) | Err(_) => {}
-        }
-        if let Some(accept) = lock(&self.accept).take() {
-            join(accept);
-        }
+        // Best effort only: when the path is gone, or reaches another
+        // listener, nothing wakes this session's `accept`.
+        drop(UnixStream::connect(&self.socket));
+        // Detached, never joined: a missed wake would block the join forever.
+        let _accept = lock(&self.accept).take();
         drop(lock(&self.listener).take());
         remove_socket(&self.socket);
         if !prompted(&self.dir) {

@@ -6,10 +6,12 @@
 //! it waits on the injected clock until that instant plus `idle_exit`, and
 //! while a client is open it waits with no deadline. At expiry with 0
 //! clients it writes `peak_memory` at the debug level, then `hub_stopped`,
-//! removes `run/hub` while still holding the lock, and returns 0. On the
+//! removes `run/hub` while still holding the lock when the path is still
+//! its own socket (see `Held::stop`), and returns 0. On the
 //! first SIGTERM, SIGINT or SIGHUP it shuts down every client connection and
 //! relay stream, writes `peak_memory` at the debug level, then
-//! `hub_stopped`, removes `run/hub`, and returns 128 plus the signal.
+//! `hub_stopped`, removes `run/hub` on the same condition, and returns 128
+//! plus the signal.
 //! Sessions are untouched either way. A hub that cannot start accepting
 //! writes an `error` line and returns 1: it never served, so it did not
 //! exit for idleness.
@@ -94,21 +96,24 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
             }
         }
     });
-    let acceptor = match acceptor {
-        Ok(acceptor) => acceptor,
+    // The acceptor is never joined (`wake_acceptor` says why no wake
+    // through the socket path can be relied on), so the handle is dropped
+    // here and the thread is detached. Process exit ends it.
+    match acceptor {
+        Ok(_) => {}
         Err(error) => return failed(hub, &format!("starting the accept thread: {error}")),
     };
     loop {
         match hub.idle_wait(idle_exit, &stop, got) {
             Idle::Signal(signal) => {
                 stop.store(true, Ordering::SeqCst);
-                join_after_wake(&socket, acceptor);
+                wake_acceptor(&socket);
                 hub.shutdown_clients();
                 hub.diag.stopped("The hub stopped: signal.");
                 return Exit::Signal(signal);
             }
             Idle::Expired => {
-                join_after_wake(&socket, acceptor);
+                wake_acceptor(&socket);
                 hub.diag.stopped("The hub stopped: idle.");
                 return Exit::Idle;
             }
@@ -126,17 +131,20 @@ fn failed(hub: &Hub, what: &str) -> Exit {
     Exit::Failed
 }
 
-/// Wakes the acceptor's blocking `accept`, which sees `stop` and returns,
-/// then joins it. The wake connection is dropped unanswered; the client
-/// retries. When the socket path was removed the connect fails and nothing
-/// can wake `accept`: the acceptor is left blocked, and the process exit
-/// ends it.
-fn join_after_wake(socket: &std::path::Path, acceptor: thread::JoinHandle<()>) {
-    if UnixStream::connect(socket).is_ok() {
-        match acceptor.join() {
-            Ok(()) | Err(_) => {}
-        }
-    }
+/// Makes a best-effort wake of the acceptor's blocking `accept`: when the
+/// socket path still reaches this hub's listener, the connection lands
+/// there, the loop sees `stop` and returns, and the thread ends promptly.
+/// The wake connection is dropped unanswered; the client retries. The hub
+/// never joins the acceptor: a `UnixListener` has no portable way to wake
+/// its own blocked `accept`, so when the path is gone, or reaches another
+/// listener after `run/` was removed and recreated, nothing can wake it,
+/// and a join would block forever. A late connection is never counted:
+/// [`Hub::poll_accept`] checks `stop` under the same connection lock the
+/// exit claim takes and answers [`Accept::Exiting`], so the stream is
+/// dropped unanswered, EOF with no `hub_hello`, and the client retries. A
+/// missed wake leaves the acceptor blocked, and the process exit ends it.
+fn wake_acceptor(socket: &std::path::Path) {
+    drop(UnixStream::connect(socket));
 }
 
 #[cfg(test)]

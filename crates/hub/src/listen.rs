@@ -13,7 +13,7 @@
 
 use std::fs::{self, DirBuilder, File, Permissions, TryLockError};
 use std::io;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
@@ -29,10 +29,14 @@ pub(crate) struct Lock {
     _file: File,
 }
 
-/// `run/hub`, bound by the lock's holder.
+/// `run/hub`, bound by the lock's holder. `dev` and `ino` identify the
+/// bound socket, so [`Held::stop`] removes it only while the path is still
+/// this hub's socket.
 pub(crate) struct Bound {
     listener: UnixListener,
     socket: PathBuf,
+    dev: u64,
+    ino: u64,
 }
 
 /// The hub's hold on `run/`: the lock, the bound socket, and its path.
@@ -40,6 +44,8 @@ pub(crate) struct Held {
     _lock: Lock,
     pub(crate) listener: UnixListener,
     pub(crate) socket: PathBuf,
+    dev: u64,
+    ino: u64,
 }
 
 impl Held {
@@ -48,13 +54,22 @@ impl Held {
             _lock: lock,
             listener: bound.listener,
             socket: bound.socket,
+            dev: bound.dev,
+            ino: bound.ino,
         }
     }
 
-    /// Removes `run/hub` while still holding the lock, then releases it.
+    /// Removes `run/hub` while still holding the lock, but only while the
+    /// path is still this hub's socket: `run/` may have been removed and
+    /// recreated while this hub lived, and another hub may serve at the path
+    /// now. On a mismatch, or when the path is gone, the socket is left alone.
     pub(crate) fn stop(self) {
         drop(self.listener);
-        fs::remove_file(&self.socket).unwrap_or(());
+        let own = fs::metadata(&self.socket)
+            .is_ok_and(|meta| meta.dev() == self.dev && meta.ino() == self.ino);
+        if own {
+            fs::remove_file(&self.socket).unwrap_or(());
+        }
     }
 }
 
@@ -111,7 +126,20 @@ pub(crate) fn bind(_lock: &Lock, home: &Path) -> Result<Option<Bound>, StartErro
         remove_socket(&socket);
         return Err(refused(&socket, e));
     }
-    Ok(Some(Bound { listener, socket }))
+    let (dev, ino) = match fs::metadata(&socket) {
+        Ok(meta) => (meta.dev(), meta.ino()),
+        Err(e) => {
+            drop(listener);
+            remove_socket(&socket);
+            return Err(refused(&socket, e));
+        }
+    };
+    Ok(Some(Bound {
+        listener,
+        socket,
+        dev,
+        ino,
+    }))
 }
 
 /// Whether nothing live can hide behind `socket`, whose connect failed

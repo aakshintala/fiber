@@ -539,65 +539,43 @@ fn zero_idle_exit_stops_at_the_first_empty_wait() {
     );
 }
 
-/// An acceptor thread that returns after one `accept`, with a flag set as it
-/// ends, on a listener at `socket`.
-fn one_accept_thread(socket: &std::path::Path) -> (thread::JoinHandle<()>, Arc<AtomicBool>) {
+/// An acceptor that ends once `stop` is set, woken by one connection, on a
+/// listener at `socket`: what the hub's accept loop does. The sender fires
+/// as the thread ends.
+fn stop_checked_thread(socket: &std::path::Path, stop: Arc<AtomicBool>) -> mpsc::Receiver<()> {
     let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
-    let ended = Arc::new(AtomicBool::new(false));
-    let handle = thread::Builder::new()
+    let (ended_tx, ended_rx) = mpsc::channel();
+    thread::Builder::new()
         .name("hub-test-acceptor".to_owned())
-        .spawn({
-            let ended = Arc::clone(&ended);
-            move || {
-                listener.accept().map(drop).unwrap_or(());
-                ended.store(true, Ordering::SeqCst);
+        .spawn(move || {
+            if listener.accept().is_ok() && stop.load(Ordering::SeqCst) {
+                ended_tx.send(()).unwrap_or(());
             }
         })
         .unwrap();
-    (handle, ended)
+    ended_rx
 }
 
 #[test]
-fn join_after_wake_unblocks_and_joins_a_blocked_acceptor() {
+fn wake_acceptor_ends_a_blocked_acceptor_without_waiting_for_it() {
     let temp = Temp::new();
     let socket = temp.dir.join("wake");
-    let (acceptor, ended) = one_accept_thread(&socket);
-    let (done_tx, done_rx) = mpsc::channel();
-    let wake_socket = socket.clone();
-    thread::Builder::new()
-        .name("hub-test-wake".to_owned())
-        .spawn(move || {
-            join_after_wake(&wake_socket, acceptor);
-            done_tx.send(()).unwrap_or(());
-        })
-        .unwrap();
+    let ended = stop_checked_thread(&socket, Arc::new(AtomicBool::new(true)));
+    // The wake returns at once: the hub never joins the thread. The
+    // acceptor ends on its own once the connection arrives.
+    wake_acceptor(&socket);
     Deadline::after(DEADLINE)
-        .recv(&done_rx)
-        .expect("the wake joins the acceptor");
-    assert!(
-        ended.load(Ordering::SeqCst),
-        "the acceptor ended before the join returned"
-    );
+        .recv(&ended)
+        .expect("the acceptor ends after the wake");
 }
 
 #[test]
-fn join_after_wake_returns_when_the_socket_path_is_gone() {
+fn wake_acceptor_returns_when_the_socket_path_is_gone() {
     let temp = Temp::new();
     let socket = temp.dir.join("wake");
-    let (acceptor, ended) = one_accept_thread(&socket);
-    fs::remove_file(&socket).unwrap();
-    let (done_tx, done_rx) = mpsc::channel();
-    thread::Builder::new()
-        .name("hub-test-wake".to_owned())
-        .spawn(move || {
-            join_after_wake(&socket, acceptor);
-            done_tx.send(()).unwrap_or(());
-        })
-        .unwrap();
-    Deadline::after(DEADLINE)
-        .recv(&done_rx)
-        .expect("the wake returns without a join");
-    assert!(!ended.load(Ordering::SeqCst), "nothing woke the acceptor");
+    // No listener: the connect fails, nothing is woken, and the hub still
+    // exits instead of joining a thread that can never wake.
+    wake_acceptor(&socket);
 }
 
 #[test]
