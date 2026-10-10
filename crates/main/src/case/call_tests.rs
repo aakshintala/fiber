@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{CallOutcome, compare_result, provider_extension};
+use super::{CallOutcome, compare_credential, compare_result, provider_extension};
 
 #[test]
 fn cost_and_models_dispatch_and_anything_else_names_both() {
@@ -139,6 +139,82 @@ fn returns_and_error_use_the_case_json_subset_matcher() {
     )
     .join("\n");
     assert!(mismatch.contains("error.code"), "{mismatch}");
+}
+
+#[test]
+fn exact_credential_expectations_compare_the_whole_nested_value() {
+    let expected = json!({"token": "t", "metadata": {"account_id": "a"}});
+    assert!(compare_credential(&expected, &expected, true).is_ok());
+    let wrong_value = json!({"token": "wrong", "metadata": {"account_id": "a"}});
+    assert!(compare_credential(&expected, &wrong_value, true).is_err());
+    assert!(compare_credential(&expected, &wrong_value, false).is_err());
+
+    let extra = json!({"token": "t", "metadata": {"account_id": "a"}, "email": "a@example.test"});
+    assert!(compare_credential(&expected, &extra, true).is_err());
+    assert!(compare_credential(&expected, &extra, false).is_ok());
+
+    let missing = json!({"metadata": {"account_id": "a"}});
+    assert!(compare_credential(&expected, &missing, true).is_err());
+    assert!(compare_credential(&expected, &missing, false).is_err());
+
+    let nested_extra =
+        json!({"token": "t", "metadata": {"account_id": "a", "email": "a@example.test"}});
+    assert!(compare_credential(&expected, &nested_extra, true).is_err());
+
+    let null_field = json!({"token": "t", "email": null});
+    let missing_null = json!({"token": "t"});
+    assert!(compare_credential(&null_field, &missing_null, true).is_err());
+    assert!(compare_credential(&null_field, &missing_null, false).is_ok());
+}
+
+#[test]
+fn exact_credential_arrays_match_when_every_element_matches() {
+    let expected = json!([{"id": 1, "meta": {"account": "a"}}, {"id": 2}]);
+    let same = json!([{"id": 1, "meta": {"account": "a"}}, {"id": 2}]);
+    assert!(compare_credential(&expected, &same, true).is_ok());
+}
+
+#[test]
+fn exact_credential_arrays_of_different_length_do_not_match() {
+    let expected = json!([{"id": 1}, {"id": 2}]);
+    let longer = json!([{"id": 1}, {"id": 2}, {"id": 3}]);
+    let shorter = json!([{"id": 1}]);
+    for actual in [&longer, &shorter] {
+        assert!(
+            compare_credential(&expected, actual, true).is_err(),
+            "{actual}"
+        );
+    }
+}
+
+#[test]
+fn exact_credential_arrays_need_every_element_to_match_in_shape() {
+    let expected = json!([{"id": 1}, {"id": 2, "meta": {"account": "a"}}]);
+
+    let differing_value = json!([{"id": 1}, {"id": 3, "meta": {"account": "a"}}]);
+    assert!(compare_credential(&expected, &differing_value, true).is_err());
+    assert!(compare_credential(&expected, &differing_value, false).is_err());
+
+    let extra_element_field =
+        json!([{"id": 1}, {"id": 2, "meta": {"account": "a"}, "email": "a@example.test"}]);
+    assert!(compare_credential(&expected, &extra_element_field, true).is_err());
+    assert!(compare_credential(&expected, &extra_element_field, false).is_ok());
+
+    let nested_extra_in_element =
+        json!([{"id": 1}, {"id": 2, "meta": {"account": "a", "email": "a@example.test"}}]);
+    assert!(compare_credential(&expected, &nested_extra_in_element, true).is_err());
+    assert!(compare_credential(&expected, &nested_extra_in_element, false).is_ok());
+}
+
+#[test]
+fn exact_credential_same_length_arrays_pass_and_an_array_is_not_a_scalar_or_object() {
+    let expected = json!([1, "two", null]);
+    let same = json!([1, "two", null]);
+    assert!(compare_credential(&expected, &same, true).is_ok());
+
+    let object = json!({"0": 1});
+    assert!(compare_credential(&json!([1]), &object, true).is_err());
+    assert!(compare_credential(&json!([1]), &json!(1), true).is_err());
 }
 
 #[test]

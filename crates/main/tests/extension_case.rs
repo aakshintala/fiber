@@ -45,7 +45,7 @@ fn ordered_login_credential_and_sign_share_stored_credentials_and_oauth_script()
     let setup = setup(CREDENTIAL_PROVIDER);
     let value = json!({
         "calls": [
-            {"call": {"provider": "casefixture", "function": "login", "arg": {"method": "browser"}}, "returns": {"token": "new", "account": "fixed"}},
+            {"call": {"provider": "casefixture", "function": "login", "arg": {"method": "browser"}}, "returns": {"token": "new", "expires_at": 1700001000, "account": "fixed"}},
             {"call": {"provider": "casefixture", "function": "credential", "arg": {}}, "returns": {"token": "new", "expires_at": 1700001000, "headers": {"x-account": "fixed"}}},
             {"await": "credential_idle"},
             {"call": {"provider": "casefixture", "function": "sign", "arg": {"method": "POST", "url": "https://example.test", "headers": {}}}, "returns": {"authorization": "Bearer new", "x-account": "fixed"}}
@@ -55,7 +55,8 @@ fn ordered_login_credential_and_sign_share_stored_credentials_and_oauth_script()
             {"open": {"url": "https://example.test/challenge"}},
             {"callback": {"reply": {"query": {"code": "new"}}}}
         ]},
-        "expect_credentials": {"casefixture/default": {"token": "new", "account": "fixed", "expires_at": 1700001000}}
+        "exact_credentials": true,
+        "expect_credentials": {"casefixture/default": {"token": "new", "expires_at": 1700001000, "account": "fixed"}}
     });
     assert_success(&run_case(&setup, "ordered-login", &value));
     let mut bad = value.clone();
@@ -64,6 +65,17 @@ fn ordered_login_credential_and_sign_share_stored_credentials_and_oauth_script()
         &run_case(&setup, "wrong-stored", &bad),
         "expect_credentials",
     );
+    let mut omitted = value.clone();
+    omitted["expect_credentials"]["casefixture/default"]
+        .as_object_mut()
+        .unwrap()
+        .remove("account");
+    assert_failure(
+        &run_case(&setup, "exact-omitted-field", &omitted),
+        "expect_credentials",
+    );
+    omitted["exact_credentials"] = json!(false);
+    assert_success(&run_case(&setup, "subset-omitted-field", &omitted));
     let mut both = value;
     both["call"] = json!({"provider": "casefixture", "function": "models", "arg": {}});
     assert_malformed(&run_case(&setup, "both-calls", &both), "call and calls");

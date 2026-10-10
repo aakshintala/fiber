@@ -132,6 +132,7 @@ fn ordered_outcomes_and_clock_entries_stay_with_their_call() {
     for (field, value) in [
         ("credentials", json!({})),
         ("expect_credentials", json!({})),
+        ("exact_credentials", json!(true)),
         ("attended", json!(false)),
     ] {
         let mut case = session_case();
@@ -157,6 +158,35 @@ fn parse(value: &Value) -> Result<Case, String> {
 
 fn case_error(value: &Value) -> String {
     parse(value).err().expect("malformed case is rejected")
+}
+
+#[test]
+fn exact_credentials_parses_boolean_values_and_defaults_to_false() {
+    for (value, expected) in [(json!(true), true), (json!(false), false)] {
+        let case = json!({
+            "call": {"provider": "p", "function": "credential", "arg": {}},
+            "returns": {},
+            "exact_credentials": value
+        });
+        let Case::Call(parsed) = parse(&case).expect("boolean exact_credentials is valid") else {
+            panic!("call case parsed as a session case");
+        };
+        assert_eq!(parsed.exact_credentials, expected);
+    }
+
+    let default = json!({
+        "call": {"provider": "p", "function": "credential", "arg": {}},
+        "returns": {}
+    });
+    let Case::Call(parsed) = parse(&default).expect("exact_credentials defaults to false") else {
+        panic!("call case parsed as a session case");
+    };
+    assert!(!parsed.exact_credentials);
+
+    let mut malformed = default;
+    malformed["exact_credentials"] = json!(null);
+    let error = case_error(&malformed);
+    assert!(error.contains("exact_credentials"), "{error}");
 }
 
 #[test]

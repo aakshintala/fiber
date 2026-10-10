@@ -399,30 +399,3 @@ pub(crate) fn go_module(dir: &Path, name: &str) -> mpsc::Receiver<()> {
     });
     rx
 }
-
-/// Copies the first-party package `name` from `providers/` to `dest`,
-/// replacing each `(from, to)` string in every file's text, so a test copy
-/// points at its fakes.
-pub(crate) fn copy_package(dest: &Path, name: &str, replacements: &[(&str, &str)]) {
-    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../providers")
-        .join(name);
-    copy_tree(&source, dest, replacements);
-}
-
-fn copy_tree(source: &Path, dest: &Path, replacements: &[(&str, &str)]) {
-    fs::create_dir_all(dest).unwrap();
-    for entry in fs::read_dir(source).unwrap() {
-        let entry = entry.unwrap();
-        let target = dest.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &target, replacements);
-        } else {
-            let mut text = fs::read_to_string(entry.path()).unwrap();
-            for (from, to) in replacements {
-                text = text.replace(from, to);
-            }
-            fs::write(target, text).unwrap();
-        }
-    }
-}

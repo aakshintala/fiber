@@ -1,0 +1,46 @@
+{
+  "credentials": {
+    "codex/default": {
+      "token": "old",
+      "expires_at": 1700000060,
+      "refresh_token": "rt_1",
+      "account_id": "acct_1"
+    }
+  },
+  "calls": [
+    {
+      "call": {
+        "provider": "codex",
+        "function": "credential",
+        "arg": {}
+      },
+      "error": {
+        "code": "authentication_failed"
+      }
+    }
+  ],
+  "exact_credentials": true,
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "POST",
+          "url": "https://auth.openai.com/oauth/token",
+          "body": "grant_type=refresh_token&refresh_token=rt_1&client_id=app_EMoamEEZ73f0CkXaXp7hrann"
+        },
+        "reply": {
+          "status": 401,
+          "body": "{}"
+        }
+      }
+    ]
+  },
+  "expect_credentials": {
+    "codex/default": {
+      "token": "old",
+      "expires_at": 1700000060,
+      "refresh_token": "rt_1",
+      "account_id": "acct_1"
+    }
+  }
+}

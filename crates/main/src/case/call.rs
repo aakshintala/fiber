@@ -158,7 +158,11 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
         failures.push("credential fetch did not finish within the runner bound".to_owned());
     }
     provider.stop();
-    failures.extend(check_credentials(&home, &case.expect_credentials));
+    failures.extend(check_credentials(
+        &home,
+        &case.expect_credentials,
+        case.exact_credentials,
+    ));
     failures.extend(
         host.unmet()
             .iter()
@@ -275,7 +279,11 @@ fn write_credentials(home: &Path, values: &serde_json::Map<String, Value>) -> Re
     Ok(())
 }
 
-fn check_credentials(home: &Path, expected: &serde_json::Map<String, Value>) -> Vec<String> {
+fn check_credentials(
+    home: &Path,
+    expected: &serde_json::Map<String, Value>,
+    exact: bool,
+) -> Vec<String> {
     expected
         .iter()
         .filter_map(|(key, value)| {
@@ -293,13 +301,38 @@ fn check_credentials(home: &Path, expected: &serde_json::Map<String, Value>) -> 
                     .read()
                     .map_err(|error| error.to_string())?
                     .unwrap_or(Value::Null);
-                extensions::json_matches(value, &actual)
+                compare_credential(value, &actual, exact)
             })();
             result
                 .err()
                 .map(|error| format!("expect_credentials.{key}: {error}"))
         })
         .collect()
+}
+
+fn compare_credential(expected: &Value, actual: &Value, exact: bool) -> Result<(), String> {
+    if exact && !same_json_shape(expected, actual) {
+        return Err("stored value differs from the expected whole value".to_owned());
+    }
+    extensions::json_matches(expected, actual)
+}
+
+fn same_json_shape(expected: &Value, actual: &Value) -> bool {
+    match (expected, actual) {
+        (Value::Object(expected), Value::Object(actual)) => {
+            expected.len() == actual.len()
+                && expected.iter().all(|(key, value)| {
+                    actual
+                        .get(key)
+                        .is_some_and(|actual| same_json_shape(value, actual))
+                })
+        }
+        (Value::Array(expected), Value::Array(actual)) => expected
+            .iter()
+            .zip(actual)
+            .all(|(expected, actual)| same_json_shape(expected, actual)),
+        _ => true,
+    }
 }
 
 struct CaseBrowser(bool);

@@ -616,7 +616,13 @@ The credential functions take these arguments:
 
 `credentials` maps `<credential>/<label>` to stored JSON, written before the
 first call. `expect_credentials` checks those files after the calls, using
-`expect`'s matching rules. `attended: false` runs with nobody attached.
+`expect`'s matching rules. Set `exact_credentials` to true to compare each
+listed file as a whole JSON value instead. In exact mode, extra object fields
+at any depth fail, and a missing field differs from a field set to null. The
+field defaults to false. A seeded credential listed with its seeded value is
+unchanged when its stored value equals the seed; the bytes need not match.
+Files not listed in `expect_credentials` are not compared. `attended: false`
+runs with nobody attached.
 
 Use `calls` instead of `call` for an ordered list on one provider instance in
 one Fiber home. A case cannot have both. Each entry has `call` and exactly
