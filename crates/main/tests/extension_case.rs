@@ -126,6 +126,81 @@ fn unattended_calls_and_scripted_callback_errors_keep_their_codes() {
     assert_success(&run_case(&setup, "callback-error", &value));
 }
 
+#[test]
+fn login_labels_and_email_carry_into_the_following_sign() {
+    for (label, email, stored_label) in [
+        (None, None, "default"),
+        (None, Some("person@example.test"), "person@example.test"),
+        (Some("work"), Some("person@example.test"), "work"),
+    ] {
+        let lua = format!(
+            r#"
+            fiber.provider("casefixture", {{credential = {{timeout = 5000, run = function(arg)
+                local stored = host.oauth.refresh(function(old)
+                    assert(old ~= nil or arg.login ~= nil, "sign read the wrong credential label")
+                    return {{token = "label-token", expires_at = 1700001000}}
+                end)
+                return {{token = stored.token, expires_at = stored.expires_at, email = {}}}
+            end}}}})
+        "#,
+            email
+                .map(|email| format!("{email:?}"))
+                .unwrap_or_else(|| "nil".to_owned())
+        );
+        let setup = setup(&lua);
+        let mut arg = json!({"method": "browser"});
+        if let Some(label) = label {
+            arg["label"] = json!(label);
+        }
+        let value = json!({
+            "calls": [
+                {"call": {"provider": "casefixture", "function": "login", "arg": arg}, "returns": {"token": "label-token"}},
+                {"call": {"provider": "casefixture", "function": "sign", "arg": {"method": "GET", "url": "https://example.test", "headers": {}}}, "returns": {"authorization": "Bearer label-token"}}
+            ],
+            "expect_credentials": {format!("casefixture/{stored_label}"): {"token": "label-token"}}
+        });
+        assert_success(&run_case(&setup, "login-label", &value));
+    }
+}
+
+#[test]
+fn sign_cases_forward_the_request_and_match_the_added_headers() {
+    let setup = setup(
+        r#"
+        fiber.provider("casefixture", {sign = {timeout = 5000, run = function(arg)
+            assert(arg.method == "POST")
+            assert(arg.url == "https://example.test/signed")
+            assert(arg.headers["x-input"] == "input")
+            assert(arg.body_sha256 == host.sha256(""))
+            return {["x-signed"] = "signature"}
+        end}})
+    "#,
+    );
+    let value = json!({
+        "call": {"provider": "casefixture", "function": "sign", "arg": {"method": "POST", "url": "https://example.test/signed", "headers": {"x-input": "input"}}},
+        "returns": {"x-signed": "signature"}
+    });
+    assert_success(&run_case(&setup, "sign-request", &value));
+}
+
+#[test]
+fn ordered_calls_require_a_provider_and_reject_mixed_providers() {
+    let setup = setup(CREDENTIAL_PROVIDER);
+    assert_malformed(
+        &run_case(
+            &setup,
+            "await-only",
+            &json!({"calls": [{"await": "credential_idle"}]}),
+        ),
+        "at least one provider call",
+    );
+    let value = json!({"calls": [
+        {"call": {"provider": "casefixture", "function": "models", "arg": {}}, "returns": []},
+        {"call": {"provider": "other", "function": "models", "arg": {}}, "returns": []}
+    ]});
+    assert_malformed(&run_case(&setup, "mixed-providers", &value), "one provider");
+}
+
 const SESSION_KINDS: &[&str] = &[
     "session_started",
     "fiber_started",

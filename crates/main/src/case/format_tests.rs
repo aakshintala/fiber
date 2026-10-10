@@ -111,6 +111,38 @@ fn new_case_fields_reject_malformed_shapes() {
     }
 }
 
+#[test]
+fn ordered_outcomes_and_clock_entries_stay_with_their_call() {
+    let entry =
+        json!({"call": {"provider": "p", "function": "credential", "arg": {}}, "returns": {}});
+    for (field, value) in [
+        ("returns", json!({})),
+        ("error", json!({"code": "credential_failed"})),
+    ] {
+        let mut case = json!({"calls": [entry]});
+        case[field] = value;
+        assert!(
+            case_error(&case).contains("their own returns or error"),
+            "{case}"
+        );
+    }
+    let mut entry = entry;
+    entry["clock"] = json!([{"advance_ms": 1, "after": {"kind": "notice"}}]);
+    assert!(case_error(&json!({"calls": [entry]})).contains("clock.after"));
+    for (field, value) in [
+        ("credentials", json!({})),
+        ("expect_credentials", json!({})),
+        ("attended", json!(false)),
+    ] {
+        let mut case = session_case();
+        case[field] = value;
+        assert!(
+            case_error(&case).contains("only valid in a call case"),
+            "{case}"
+        );
+    }
+}
+
 fn session_case() -> Value {
     json!({
         "script": {"steps": [{"text": "hello"}]},
