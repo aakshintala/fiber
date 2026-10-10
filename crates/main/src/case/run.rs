@@ -203,7 +203,7 @@ impl CaseRun {
             failures.push(format!("clock advance[{next}] was not reached"));
         }
         failures.extend(session_verdict(&self.expected, &events, &self.host.unmet()));
-        if !failures.is_empty() || advance < self.advances.len() {
+        if !reached_until || !has_fiber_exited(&events) || advance < self.advances.len() {
             failures.push(self.diagnostics(advance, &seen_order));
         }
         failures

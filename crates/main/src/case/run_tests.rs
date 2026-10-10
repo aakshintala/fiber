@@ -427,12 +427,14 @@ fn an_expired_until_wait_dumps_parked_deadlines_events_and_next_advance() {
     assert!(dump.starts_with("diagnostics:"), "{failures:?}");
     assert!(dump.contains("now_offset_ms=0"), "{failures:?}");
     assert!(dump.contains("parked_ms=[200ms]"), "{failures:?}");
-    let events = dump.split("events=[").nth(1).unwrap_or_default();
-    let delta_at = events.find("assistant_message_delta");
-    let completed_at = events.find("turn_completed");
-    assert!(
-        delta_at.is_some_and(|delta| completed_at.is_some_and(|completed| delta < completed)),
-        "ephemeral and durable kinds stay in order: {failures:?}"
+    let events = dump
+        .split("events=[")
+        .nth(1)
+        .and_then(|rest| rest.split(']').next())
+        .unwrap_or_default();
+    assert_eq!(
+        events, "assistant_message_delta, turn_completed",
+        "the complete ordered kinds seen: {failures:?}"
     );
     assert!(dump.contains("next_advance=1"), "{failures:?}");
 }
