@@ -1463,7 +1463,7 @@ fn cap_due_checks_once_per_poll_interval() {
     assert!(cap_due(last, None, POLL), "the first envelope always stats");
     let tick = Duration::from_nanos(1);
     for (case, now, expected) in [
-        ("just below the interval", last + (POLL - tick), false),
+        ("just below the interval", last + POLL.checked_sub(tick).unwrap(), false),
         ("at the interval", last + POLL, true),
         ("just above the interval", last + POLL + tick, true),
     ] {
