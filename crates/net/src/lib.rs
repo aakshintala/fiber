@@ -83,9 +83,9 @@ pub fn config() -> ureq::config::ConfigBuilder<ureq::typestate::AgentScope> {
 /// closes the tunnel.
 // debt: builds the TLS config per call; share one agent with a per-call
 // socket slot if the handshake setup shows in a profile.
-pub fn agent<K: Keep>(
+pub fn agent(
     config: ureq::config::Config,
-    keep: Arc<K>,
+    keep: Arc<dyn Keep>,
     resolver: impl Resolver,
     limits: Limits,
 ) -> ureq::Agent {
