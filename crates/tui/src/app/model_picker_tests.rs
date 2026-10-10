@@ -39,6 +39,7 @@ fn entry(reference: &str) -> ModelEntry {
         default_level: None,
         configured: None,
         roles: Vec::new(),
+        name: None,
     }
 }
 
@@ -148,6 +149,7 @@ fn three() -> Catalogue {
                 default_level: Some("high".to_owned()),
                 configured: None,
                 roles: Vec::new(),
+                name: None,
             },
             ModelEntry {
                 reference: "acme/m2".to_owned(),
@@ -157,6 +159,7 @@ fn three() -> Catalogue {
                 default_level: None,
                 configured: None,
                 roles: Vec::new(),
+                name: None,
             },
             ModelEntry {
                 reference: "zeta/z1".to_owned(),
@@ -166,6 +169,7 @@ fn three() -> Catalogue {
                 default_level: None,
                 configured: Some("low".to_owned()),
                 roles: Vec::new(),
+                name: None,
             },
         ],
         notices: Vec::new(),
@@ -639,6 +643,7 @@ fn thirty() -> Catalogue {
                     default_level: None,
                     configured: None,
                     roles: Vec::new(),
+                    name: None,
                 }
             })
             .collect(),
@@ -1521,10 +1526,12 @@ fn session_only_rebinds() {
     };
     assert_eq!(lines.len(), 1);
     assert!(!app.model_picker_open());
-    // `s` moved off the action: it does nothing in the picker.
+    // `s` moved off the action: it types into the filter instead,
+    // sending nothing.
     open(&mut app);
     let stroke = Stroke::parse("s").unwrap();
     assert_eq!(app.on_press(stroke, now()), Effect::None);
+    assert_eq!(app.model_picker.query(), "s");
     assert!(app.model_picker_open());
 }
 
@@ -1694,6 +1701,7 @@ fn a_suffix_named_model_is_not_chosen_by_mistake() {
                 default_level: Some("high".to_owned()),
                 configured: None,
                 roles: Vec::new(),
+                name: None,
             },
             ModelEntry {
                 reference: "p/m:high".to_owned(),
@@ -1703,6 +1711,7 @@ fn a_suffix_named_model_is_not_chosen_by_mistake() {
                 default_level: None,
                 configured: None,
                 roles: Vec::new(),
+                name: None,
             },
         ],
         notices: Vec::new(),
@@ -2586,4 +2595,95 @@ fn opening_before_the_first_read_marks_toggles_and_saves() {
         app.model_picker.scoped,
         vec!["acme/m1".to_owned(), "gone/x".to_owned()]
     );
+}
+
+/// Presses `name` through the bindings.
+fn press(app: &mut App, name: &str) -> Effect {
+    app.on_press(Stroke::parse(name).unwrap(), now())
+}
+
+#[test]
+fn bare_letters_extend_the_query() {
+    let (mut app, _) = choosing_app();
+    open(&mut app);
+    assert_eq!(press(&mut app, "s"), Effect::None);
+    assert_eq!(press(&mut app, "r"), Effect::None);
+    assert_eq!(press(&mut app, "a"), Effect::None);
+    assert_eq!(app.model_picker.query(), "sra");
+    assert!(app.model_picker_open());
+}
+
+#[test]
+fn esc_with_a_query_clears_it_and_stays_open() {
+    let (mut app, _) = choosing_app();
+    open(&mut app);
+    assert_eq!(press(&mut app, "s"), Effect::None);
+    assert_eq!(app.model_picker.query(), "s");
+    // The first Esc clears the query, keeping the picker open.
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert_eq!(app.model_picker.query(), "");
+    assert!(app.model_picker_open());
+    // The next Esc closes it.
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert!(!app.model_picker_open());
+}
+
+#[test]
+fn enter_with_no_match_stays_open_and_sends_nothing() {
+    let (mut app, _) = choosing_app();
+    open(&mut app);
+    assert_eq!(press(&mut app, "q"), Effect::None);
+    assert_eq!(press(&mut app, "q"), Effect::None);
+    assert_eq!(press(&mut app, "q"), Effect::None);
+    assert_eq!(press(&mut app, "enter"), Effect::None);
+    assert!(app.model_picker_open());
+}
+
+#[test]
+fn ctrl_r_with_a_query_asks_every_and_keeps_the_query() {
+    let (mut app, _) = choosing_app();
+    open(&mut app);
+    assert_eq!(press(&mut app, "m"), Effect::None);
+    assert_eq!(press(&mut app, "ctrl+r"), Effect::None);
+    assert_eq!(
+        app.take_reads(),
+        Some(crate::catalogue::Refresh::Every)
+    );
+    assert_eq!(app.model_picker.query(), "m");
+    assert!(app.model_picker_open());
+}
+
+#[test]
+fn typing_in_the_checklist_leaves_the_query_empty_and_space_marks() {
+    let mut app = scoped_home(&["acme/m1"]);
+    app.on_line(hello());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.on_models(Ok(three()));
+    assert_eq!(
+        app.open_model_picker(crate::model_picker::Mode::Scope),
+        Effect::None
+    );
+    // Typing takes no filter in the checklist: the query stays empty.
+    assert_eq!(press(&mut app, "a"), Effect::None);
+    assert_eq!(app.model_picker.query(), "");
+    assert_eq!(press(&mut app, "backspace"), Effect::None);
+    assert_eq!(app.model_picker.query(), "");
+    assert!(app.model_picker_open());
+    // Space toggles the selected row's mark: `acme/m1` starts marked.
+    assert_eq!(
+        app.model_picker
+            .open
+            .as_ref()
+            .map(|open| open.marks.clone()),
+        Some(vec![true, false, false])
+    );
+    assert_eq!(press(&mut app, "space"), Effect::None);
+    assert_eq!(
+        app.model_picker
+            .open
+            .as_ref()
+            .map(|open| open.marks.clone()),
+        Some(vec![false, false, false])
+    );
+    assert!(app.model_picker_open());
 }

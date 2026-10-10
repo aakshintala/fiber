@@ -508,8 +508,16 @@ impl App {
                 Some(super::Effect::None)
             }
             Key::Esc => {
-                self.model_picker.close();
-                Some(super::Effect::None)
+                // The first Esc while a query is typed clears it, keeping
+                // the picker open; the next closes it.
+                let typed = !self.model_picker.query().is_empty();
+                if typed {
+                    self.model_picker.clear_query();
+                    Some(super::Effect::None)
+                } else {
+                    self.model_picker.close();
+                    Some(super::Effect::None)
+                }
             }
             Key::Enter => {
                 // The checklist saves its marks; choosing sends one
@@ -523,16 +531,30 @@ impl App {
                     None => super::Effect::None,
                 })
             }
-            Key::Char(' ') => {
-                // Space marks in the checklist; everywhere else it does
-                // nothing. Only the checklist keeps marks.
-                self.model_picker.toggle_mark();
+            Key::Char(c) => {
+                // Typing filters the choosing list on every letter. The
+                // checklist takes no filter: Space marks its row there,
+                // and every other character does nothing.
+                if self.model_picker.is_scope() {
+                    if *c == ' ' {
+                        self.model_picker.toggle_mark();
+                    }
+                    Some(super::Effect::None)
+                } else {
+                    self.model_picker.push_query(*c);
+                    Some(super::Effect::None)
+                }
+            }
+            Key::Backspace => {
+                // Backspace shortens the filter query; the checklist
+                // takes none, so it does nothing there.
+                if !self.model_picker.is_scope() {
+                    self.model_picker.pop_query();
+                }
                 Some(super::Effect::None)
             }
             // Every other key does nothing, and no key cycles.
-            Key::Char(_)
-            | Key::Backspace
-            | Key::BackTab
+            Key::BackTab
             | Key::CtrlG
             | Key::CtrlF
             | Key::CtrlV

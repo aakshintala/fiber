@@ -90,6 +90,7 @@ fn choose_session_model(app: &mut App) {
             default_level: None,
             configured: None,
             roles: Vec::new(),
+            name: None,
         }],
         notices: Vec::new(),
     }));

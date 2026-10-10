@@ -67,6 +67,7 @@ fn catalogue() -> Catalogue {
                 default_level: Some("high".to_owned()),
                 configured: None,
                 roles: vec!["deep".to_owned(), "review".to_owned()],
+                name: None,
             },
             ModelEntry {
                 reference: "acme/m2".to_owned(),
@@ -76,6 +77,7 @@ fn catalogue() -> Catalogue {
                 default_level: None,
                 configured: None,
                 roles: Vec::new(),
+                name: None,
             },
             ModelEntry {
                 reference: "zeta/z1".to_owned(),
@@ -85,6 +87,7 @@ fn catalogue() -> Catalogue {
                 default_level: None,
                 configured: Some("low".to_owned()),
                 roles: Vec::new(),
+                name: None,
             },
             ModelEntry {
                 reference: "zeta/z2".to_owned(),
@@ -94,6 +97,7 @@ fn catalogue() -> Catalogue {
                 default_level: Some("low".to_owned()),
                 configured: Some("high".to_owned()),
                 roles: vec!["chat".to_owned()],
+                name: None,
             },
         ],
         notices: Vec::new(),
@@ -209,6 +213,7 @@ fn model_picker_long_list_scrolls_to_the_selection() {
                     default_level: Some("high".to_owned()),
                     configured: None,
                     roles: Vec::new(),
+                    name: None,
                 }
             })
             .collect(),

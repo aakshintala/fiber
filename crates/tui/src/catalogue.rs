@@ -16,6 +16,8 @@ pub struct ModelEntry {
     pub provider: String,
     /// The model's id, as the vendor spells it.
     pub id: String,
+    /// The model's display name, when its provider data names one.
+    pub name: Option<String>,
     /// The thinking levels the model takes, as words.
     pub levels: Vec<String>,
     /// The model's own default level, when it names one.
