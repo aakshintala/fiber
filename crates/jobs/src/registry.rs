@@ -15,8 +15,8 @@ use contract::emit::Emit;
 use contract::events::{DelegateFinished, JobCompleted, JobLine, JobStarted, Outcome};
 use contract::inbox::{Claim, Delivery, JobNotice};
 use contract::jobs::{End, Foreground, JobRecord, Lines, OpenError, Opened, Opening, Stop};
-use contract::shapes::Failure;
-use contract::tool::Cancel;
+use contract::shapes::{ContentPart, Failure};
+use contract::tool::{Cancel, Output};
 use contract::{ErrorCode, JobId};
 
 #[path = "registry/park.rs"]
@@ -135,6 +135,30 @@ struct Job {
 
 type Typer = Arc<dyn Fn(&[u8], &dyn Clock, &dyn Cancel) -> std::io::Result<usize> + Send + Sync>;
 
+impl Job {
+    /// A job that has started and not yet ended; `open` and `open_started`
+    /// both record one, and only differ in what they pass in.
+    fn running(
+        started: JobStarted,
+        path: PathBuf,
+        stop: Arc<dyn Fn() + Send + Sync>,
+        input: Option<Typer>,
+        delegate: bool,
+    ) -> Self {
+        Self {
+            started,
+            path,
+            phase: Phase::Running,
+            stop,
+            input,
+            stop_sent: false,
+            claimed: false,
+            delegate,
+            finished: None,
+        }
+    }
+}
+
 enum Phase {
     Running,
     /// Boxed: `JobCompleted` is far larger than `Running`, and a registry
@@ -234,17 +258,13 @@ impl Registry {
         let end = End(Box::new(move |completed| {
             unreported.report(completed, None)
         }));
-        inner.jobs.push(Job {
-            started: started.clone(),
-            path: path.clone(),
-            phase: Phase::Running,
-            stop: Arc::from(opening.stop.0),
-            input: opening.input.map(|input| Arc::from(input.0)),
-            stop_sent: false,
-            claimed: false,
-            delegate: false,
-            finished: None,
-        });
+        inner.jobs.push(Job::running(
+            started.clone(),
+            path.clone(),
+            Arc::from(opening.stop.0),
+            opening.input.map(|input| Arc::from(input.0)),
+            false,
+        ));
         Ok(Opened {
             started,
             path,
@@ -281,17 +301,13 @@ impl Registry {
             registry: Some(Arc::clone(self)),
             delegate: true,
         });
-        lock(&self.inner).jobs.push(Job {
-            started: started.clone(),
-            path: PathBuf::from(output_path),
-            phase: Phase::Running,
-            stop: Arc::from(stop.0),
-            input: None,
-            stop_sent: false,
-            claimed: false,
-            delegate: true,
-            finished: None,
-        });
+        lock(&self.inner).jobs.push(Job::running(
+            started.clone(),
+            PathBuf::from(output_path),
+            Arc::from(stop.0),
+            None,
+            true,
+        ));
         (started, finish)
     }
 
@@ -620,6 +636,24 @@ pub(crate) fn status_word(status: Outcome) -> &'static str {
         Outcome::Completed => "completed",
         Outcome::Failed => "failed",
         Outcome::Cancelled => "cancelled",
+    }
+}
+
+/// A tool call's failure: the model reads `content`, the caller matches
+/// on the error's `message`. The trailing newline differs by caller —
+/// the `jobs` tool ends its content line, `delegate_spawn` does not —
+/// so both are passed in and neither is invented here. The one place a
+/// tool `Output`'s `Failure` is built.
+pub(crate) fn failed(code: ErrorCode, content: String, message: String) -> Output {
+    Output {
+        content: vec![ContentPart::Text { text: content }],
+        error: Some(Failure {
+            code,
+            message,
+            retry_after_ms: None,
+            provider: None,
+        }),
+        ..Output::default()
     }
 }
 

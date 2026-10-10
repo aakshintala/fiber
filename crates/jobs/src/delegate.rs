@@ -9,7 +9,7 @@ use contract::emit::Emit;
 use contract::events::DelegateStarted;
 use contract::jobs::JobRecord;
 use contract::provider::ToolDefinition;
-use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
+use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use contract::{ErrorCode, SessionId};
 use serde_json::{Map, Value, json};
@@ -171,20 +171,28 @@ impl Tool for DelegateSpawn {
     ) -> Output {
         let call = match check_arguments(arguments) {
             Ok(call) => call,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(message) => {
+                return crate::registry::failed(
+                    ErrorCode::InvalidArguments,
+                    message.clone(),
+                    message,
+                );
+            }
         };
         // Checked when the call is made, before any process starts: an
         // invalid value fails and lists the valid references.
         let resolved = match (self.resolve)(&call.model) {
             Ok(resolved) => resolved,
             Err(valid) => {
-                return failed(
+                let message = format!(
+                    "Unknown delegate model {:?}. Valid models:\n{}",
+                    call.model,
+                    valid.join("\n")
+                );
+                return crate::registry::failed(
                     ErrorCode::InvalidArguments,
-                    format!(
-                        "Unknown delegate model {:?}. Valid models:\n{}",
-                        call.model,
-                        valid.join("\n")
-                    ),
+                    message.clone(),
+                    message,
                 );
             }
         };
@@ -216,9 +224,11 @@ impl Tool for DelegateSpawn {
         let (child, listing) = match runner.spawn(&self.launch, &launched) {
             Ok(child) => child,
             Err(source) => {
-                return failed(
+                let message = format!("Starting the delegate failed: {source}.");
+                return crate::registry::failed(
                     ErrorCode::IoFailed,
-                    format!("Starting the delegate failed: {source}."),
+                    message.clone(),
+                    message,
                 );
             }
         };
@@ -249,21 +259,6 @@ impl Tool for DelegateSpawn {
             ],
             ..Output::default()
         }
-    }
-}
-
-fn failed(code: ErrorCode, message: String) -> Output {
-    Output {
-        content: vec![ContentPart::Text {
-            text: message.clone(),
-        }],
-        error: Some(Failure {
-            code,
-            message,
-            retry_after_ms: None,
-            provider: None,
-        }),
-        ..Output::default()
     }
 }
 
