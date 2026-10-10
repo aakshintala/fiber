@@ -1597,19 +1597,19 @@ fn run_home_names_the_key_maps_bound_key() {
     let mut started = launch();
     started.keys = crate::KeysSetup { user: keys };
     let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    // The footer draws word by word: unchanged cells are never
+    // rewritten, so the spaces between its words never arrive as bytes.
+    // The markers arrive in order, which is the whole phrase.
     let (mut pair, finished, frames) =
-        spawn_run_with_launch(hub, vec![b"F2 the key map" as &[u8]], started);
-    let first = watched(&frames, "the first frame");
+        spawn_run_with_launch(hub, vec![b"F2", b"the", b"key", b"map"], started);
+    let first = watched(&frames, "F2");
     assert!(
         first.starts_with(START),
         "the first chunk starts with the start bytes: {first:?}"
     );
-    assert!(
-        first
-            .windows(b"F2 the key map".len())
-            .any(|window| window == b"F2 the key map"),
-        "home names the rebound key: {first:?}"
-    );
+    for marker in ["the", "key", "map"] {
+        watched(&frames, marker);
+    }
     // Nothing works: Ctrl+C twice quits at once.
     pair.main
         .write_all(&[0x03, 0x03])
