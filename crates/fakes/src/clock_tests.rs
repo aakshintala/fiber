@@ -838,9 +838,8 @@ fn await_any_parked_since_is_false_when_no_thread_parks_again() {
 
 /// A thread that left its park before the advance matches its next park:
 /// without the `!` (a surviving mutant) the wait ends at once with false.
-/// The helper starts awaiting while nothing is parked, and the settle
-/// waits out its first check before the gate opens, so the mutant's early
-/// false is deterministic, not a race with the re-park.
+/// The waiter reports its empty-predicate check and pauses; the test checks
+/// that no result arrived before it opens the re-park gate.
 #[test]
 fn await_any_parked_since_matches_a_next_park_after_a_leave() {
     let clock = FakeClock::new();
@@ -854,32 +853,38 @@ fn await_any_parked_since_matches_a_next_park_after_a_leave() {
         .expect("waited for the thread to leave its park");
     let mark = clock.advance_marked(Duration::from_millis(1));
     let (awaited_tx, awaited_rx) = mpsc::channel();
+    let (checked, release_check) = clock.pause_next_await_any_predicate();
     let clock_wait = Arc::clone(&clock);
     let mark_wait = mark.clone();
     thread::spawn(move || {
         let result = clock_wait.await_any_parked_since(&mark_wait, Duration::from_secs(5));
         if let Ok(()) = awaited_tx.send(result) {}
     });
-    // The helper has checked by now: nothing is parked, so the wait holds
-    // on correct code and has already answered false without the `!`.
-    // A receive with a bound, never a sleep.
-    let (_settle_tx, settle_rx) = mpsc::channel::<()>();
-    match settle_rx.recv_timeout(Duration::from_millis(200)) {
-        Ok(()) | Err(_) => {}
-    }
+    checked
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for await_any to check the predicate");
+    release_check.send(()).unwrap();
+    let before_repark = awaited_rx.recv_timeout(Duration::from_millis(200));
+    assert!(
+        matches!(before_repark, Err(mpsc::RecvTimeoutError::Timeout)),
+        "await_any remains unanswered while the re-park is gated"
+    );
     gate.send(()).unwrap();
     second
         .recv_timeout(Duration::from_secs(5))
         .expect("waited for the thread to park again");
-    assert!(
-        awaited_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("waited for a later park at any deadline"),
-        "the park after the advance is later than the mark"
-    );
+    let later = if matches!(before_repark, Err(mpsc::RecvTimeoutError::Timeout)) {
+        awaited_rx.recv_timeout(Duration::from_secs(5))
+    } else {
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    };
     release.send(()).unwrap();
     exit.recv_timeout(Duration::from_secs(5))
         .expect("the parked thread exits");
+    assert!(
+        matches!(later, Ok(true)),
+        "the park after the advance is later than the mark"
+    );
 }
 
 /// A park carrying the mark's own id is the same park, not a later one;

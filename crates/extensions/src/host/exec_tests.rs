@@ -64,6 +64,7 @@ fn request(program: &str, args: &[&str], cwd: PathBuf, cap: usize) -> ExecReques
         cwd,
         cap,
         own_group: true,
+        stdout_read: None,
     }
 }
 
@@ -75,6 +76,7 @@ fn sh_pid(script: &str, cwd: PathBuf, cap: usize) -> ExecRequest {
         cwd,
         cap,
         own_group: false,
+        stdout_read: None,
     }
 }
 
@@ -863,6 +865,7 @@ fn a_pid_mode_missing_program_reports_its_spawn_error() {
         cwd,
         cap: CAP,
         own_group: false,
+        stdout_read: None,
     };
     let (_cancel, done) = spawn(req, Arc::clone(&clock), None);
     let err = done
@@ -980,19 +983,21 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
         holder_file.display()
     );
     let deadline = clock.now() + Duration::from_secs(60);
-    let (_cancel, done) = spawn(
-        sh_pid(&script, cwd, CAP),
-        Arc::clone(&clock),
-        Some(deadline),
-    );
+    let (stdout_read_tx, stdout_read_rx) = mpsc::channel();
+    let mut req = sh_pid(&script, cwd, CAP);
+    req.stdout_read = Some(stdout_read_tx);
+    let (_cancel, done) = spawn(req, Arc::clone(&clock), Some(deadline));
     // The holder's argv carries its pid file: the guard matches it alone.
     let watchdog = fakes::Watchdog::matching(&holder_file.display().to_string());
     // The reap starts the 2 s drain on the fake clock.
     let drain_until = clock.now() + DRAIN;
-    assert!(
-        clock.mark_parked(drain_until, DEADLINE).is_some(),
-        "waited {DEADLINE:?} for the pid-mode run to park for the 2 s drain"
-    );
+    clock
+        .mark_parked(drain_until, DEADLINE)
+        .expect("waited {DEADLINE:?} for the pid-mode run to park for the 2 s drain");
+    stdout_read_rx
+        .recv_timeout(DRAIN_BOUNDARY_DEADLINE)
+        .expect("waited for stdout to be read before the drain bound");
+    let unanswered_before_advance = matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty));
     clock.advance(DRAIN);
     let outcome = done.recv_timeout(DEADLINE);
     // The holder keeps the pipe whether the wait ended or not: kill it by
@@ -1019,6 +1024,10 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
     );
     let holder = holder.expect("the script wrote its holder's pid");
     assert!(fakes::pids_exit(&[holder], DEADLINE), "the holder is gone");
+    assert!(
+        unanswered_before_advance,
+        "the run is unanswered while it is still draining"
+    );
     watchdog.stand_down(DEADLINE);
 }
 
@@ -1053,18 +1062,22 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
         } else {
             drain_until
         };
-        let (_cancel, done) = spawn(
-            sh_pid(&script, cwd.clone(), CAP),
-            Arc::clone(&clock),
-            Some(deadline),
-        );
+        let (stdout_read_tx, stdout_read_rx) = mpsc::channel();
+        let mut req = sh_pid(&script, cwd.clone(), CAP);
+        req.stdout_read = Some(stdout_read_tx);
+        let (_cancel, done) = spawn(req, Arc::clone(&clock), Some(deadline));
         // The reap starts the 2 s drain on the fake clock.
-        assert!(
-            clock
-                .mark_parked(drain_until, DRAIN_BOUNDARY_DEADLINE)
-                .is_some(),
-            "waited {DRAIN_BOUNDARY_DEADLINE:?} for the pid-mode run to park for the 2 s drain ({case})"
-        );
+        clock
+            .mark_parked(drain_until, DRAIN_BOUNDARY_DEADLINE)
+            .unwrap_or_else(|| {
+                panic!("waited {DRAIN_BOUNDARY_DEADLINE:?} for the pid-mode run to park for the 2 s drain ({case})")
+            });
+        stdout_read_rx
+            .recv_timeout(DRAIN_BOUNDARY_DEADLINE)
+            .unwrap_or_else(|_| {
+                panic!("waited for stdout to be read before the drain bound ({case})")
+            });
+        let unanswered_before_advance = matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty));
         // Reach one step before the drain bound first. For the `before`
         // case this is also the deadline: expiry must not start a stop once
         // the child has been reaped and draining has begun.
@@ -1076,10 +1089,7 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
             clock.await_parked_since(&mark, Some(drain_until), DRAIN_BOUNDARY_DEADLINE),
             "waited {DRAIN_BOUNDARY_DEADLINE:?} for the pid-mode run to keep draining ({case})"
         );
-        assert!(
-            matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty)),
-            "the pid-mode run is still draining just before the bound ({case})"
-        );
+        let unanswered_before_bound = matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty));
 
         // At the drain bound the child status wins for deadlines just before,
         // exactly at, and just after it. Do not jump past the bound before
@@ -1110,6 +1120,14 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
         assert!(
             fakes::pids_exit(&[holder], DRAIN_BOUNDARY_DEADLINE),
             "the holder is gone ({case})"
+        );
+        assert!(
+            unanswered_before_advance,
+            "the run is unanswered while it is still draining ({case})"
+        );
+        assert!(
+            unanswered_before_bound,
+            "the pid-mode run is still draining just before the bound ({case})"
         );
     }
     watchdog.stand_down(DEADLINE);

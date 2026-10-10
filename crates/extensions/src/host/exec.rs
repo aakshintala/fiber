@@ -38,6 +38,9 @@ pub(crate) struct ExecRequest {
     /// terminal prompts and Ctrl-C still reach the program, passes `false`:
     /// the program is never listed, and only its pid is ever signalled.
     pub own_group: bool,
+    /// Test acknowledgement after the stdout reader retains its first bytes.
+    #[cfg(test)]
+    pub stdout_read: Option<mpsc::Sender<()>>,
 }
 
 /// How a run that started ended.
@@ -198,9 +201,16 @@ pub(crate) fn run(
         ));
     };
     let out_shared = Arc::clone(&shared);
+    #[cfg(test)]
+    let stdout_read = req.stdout_read.clone();
     if let Err(source) = std::thread::Builder::new()
         .name("exec stdout".into())
-        .spawn(move || read_into(out, &out_shared, true))
+        .spawn(move || {
+            #[cfg(test)]
+            read_into(out, &out_shared, true, stdout_read);
+            #[cfg(not(test))]
+            read_into(out, &out_shared, true);
+        })
     {
         return Err(abort_startup(
             req,
@@ -215,7 +225,12 @@ pub(crate) fn run(
     let err_shared = Arc::clone(&shared);
     if let Err(source) = std::thread::Builder::new()
         .name("exec stderr".into())
-        .spawn(move || read_into(err, &err_shared, false))
+        .spawn(move || {
+            #[cfg(test)]
+            read_into(err, &err_shared, false, None);
+            #[cfg(not(test))]
+            read_into(err, &err_shared, false);
+        })
     {
         return Err(abort_startup(
             req,
@@ -633,7 +648,12 @@ fn park(clock: &dyn Clock, shared: &Shared, seen: u64, until: Option<Instant>) {
     });
 }
 
-fn read_into(mut read: impl Read, shared: &Shared, stdout: bool) {
+fn read_into(
+    mut read: impl Read,
+    shared: &Shared,
+    stdout: bool,
+    #[cfg(test)] mut stdout_read: Option<mpsc::Sender<()>>,
+) {
     let mut buf = [0_u8; 8192];
     loop {
         match read.read(&mut buf) {
@@ -662,6 +682,11 @@ fn read_into(mut read: impl Read, shared: &Shared, stdout: bool) {
                     }
                 }
                 bump(&mut inner, shared);
+                drop(inner);
+                #[cfg(test)]
+                if stdout && let Some(ack) = stdout_read.take() {
+                    let _sent = ack.send(());
+                }
             }
             Err(_) => break,
         }

@@ -290,6 +290,8 @@ fn git_files(name: &str, dir: &Path, clock: &dyn Clock) -> Result<Vec<String>, E
         // In Fiber's process group, so terminal prompts still work as they
         // do today.
         own_group: false,
+        #[cfg(test)]
+        stdout_read: None,
     };
     let deadline = clock.now().checked_add(GIT_DEADLINE).unwrap_or(clock.now());
     // Never cancelled except by the call's own end: the sender drops when

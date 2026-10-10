@@ -107,6 +107,8 @@ fn run_step(
         // In Fiber's process group, so terminal prompts still work and
         // Ctrl-C at the terminal still reaches the step as it does today.
         own_group: false,
+        #[cfg(test)]
+        stdout_read: None,
     };
     let deadline = clock
         .now()

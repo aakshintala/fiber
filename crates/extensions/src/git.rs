@@ -121,6 +121,8 @@ impl Origin {
             // In Fiber's process group, so SSH and credential-helper
             // prompts on the terminal still work as they do today.
             own_group: false,
+            #[cfg(test)]
+            stdout_read: None,
         };
         let deadline = clock.now().checked_add(GIT_DEADLINE).unwrap_or(clock.now());
         // Never cancelled except by the call's own end: the sender drops

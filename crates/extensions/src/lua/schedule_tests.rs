@@ -114,6 +114,8 @@ fn a_stopped_extension_starts_no_exec_for_a_suspended_callback() {
             cwd: dir.path().to_path_buf(),
             cap: 1024,
             own_group: true,
+            #[cfg(test)]
+            stdout_read: None,
         }),
     });
     settle(
@@ -491,6 +493,8 @@ fn an_abandon_before_admission_starts_no_host_work() {
                 cwd: dir.path().to_path_buf(),
                 cap: 1024,
                 own_group: true,
+                #[cfg(test)]
+                stdout_read: None,
             }),
         }),
     );
@@ -604,6 +608,8 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
                     cwd: dir.path().to_path_buf(),
                     cap: 1024,
                     own_group: true,
+                    #[cfg(test)]
+                    stdout_read: None,
                 }),
             ),
             "drive" => (
