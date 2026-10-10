@@ -175,6 +175,17 @@ fn an_empty_text_part_adds_nothing_to_the_joined_text() {
 }
 
 #[test]
+fn an_empty_resource_text_adds_nothing_to_the_joined_text() {
+    assert_eq!(
+        read_text(json!({"messages": [
+            {"role": "user", "content": {"type": "resource", "resource": {"text": ""}}},
+            {"role": "user", "content": {"type": "text", "text": "Only this."}},
+        ]})),
+        Ok("Only this.".to_owned())
+    );
+}
+
+#[test]
 fn embedded_resource_text_and_blob_guard_are_distinct() {
     assert_eq!(
         read_text(
