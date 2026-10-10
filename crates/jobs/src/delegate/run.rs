@@ -22,8 +22,8 @@ use rustix::process::Signal;
 
 use super::group;
 use super::outcome::{Termination, outcome};
-use support::group::Listing;
 use crate::registry::Finish;
+use support::group::Listing;
 
 /// Resolves a `fiber:` model reference to the `provider/model[:level]` the
 /// child is started with, or lists the valid references for the refusal.
@@ -296,10 +296,11 @@ impl Runner {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .process_group(0);
-        let (child, listing) = support::group::spawn(&mut command).map_err(|source| match source {
-            support::group::Error::Spawn(error) => error,
-            source => io::Error::other(source.to_string()),
-        })?;
+        let (child, listing) =
+            support::group::spawn(&mut command).map_err(|source| match source {
+                support::group::Error::Spawn(error) => error,
+                source => io::Error::other(source.to_string()),
+            })?;
         self.shared.set_pgid(child.id());
         Ok((child, listing))
     }

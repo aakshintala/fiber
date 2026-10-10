@@ -149,10 +149,7 @@ fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
     });
     child.wait().unwrap();
     reap_locked(&mut child, &mut listing);
-    assert!(
-        listing.is_some(),
-        "with a member surviving the token stays"
-    );
+    assert!(listing.is_some(), "with a member surviving the token stays");
     assert!(
         listed(pgid),
         "with a member surviving the group stays listed"
