@@ -1780,6 +1780,32 @@ mod tests {
                 .contains(Modifier::BOLD)),
             "unfocused mark went bold"
         );
+        // claude-haiku-5-5 is unmarked: its `[ ]` reads dim, never bold.
+        let y3 = lines
+            .iter()
+            .position(|l| l.contains("claude-haiku-5-5"))
+            .unwrap() as u16;
+        let start3 = lines[y3 as usize][..lines[y3 as usize].find("[ ]").unwrap()]
+            .chars()
+            .count();
+        for i in 0..3 {
+            let cell = &buf[(start3 as u16 + i as u16, y3)];
+            assert!(
+                cell.modifier.contains(Modifier::DIM),
+                "unmarked cell not dim"
+            );
+            assert!(
+                !cell.modifier.contains(Modifier::BOLD),
+                "unmarked cell went bold"
+            );
+        }
+        // The marked but unfocused `[x]` above reads plain: dim would lie.
+        assert!(
+            !(0..3).any(|i| buf[(start2 as u16 + i as u16, y2)]
+                .modifier
+                .contains(Modifier::DIM)),
+            "unfocused mark went dim"
+        );
     }
 
     #[test]
@@ -1790,6 +1816,19 @@ mod tests {
             .find(|r| matches!(r.act, Some(Act::Pick(0))))
             .unwrap();
         assert_eq!(r.hot, vec![(2, 5, Act::Toggle(0))]);
+    }
+
+    #[test]
+    fn the_checklist_chips_carry_no_click_targets() {
+        // Only marks toggle: every hot target in the body is a Toggle.
+        let b = body(&for_case("checklist"), 90);
+        assert!(!b.is_empty());
+        assert!(
+            b.iter()
+                .flat_map(|r| r.hot.iter())
+                .all(|h| matches!(h.2, Act::Toggle(_))),
+            "a chip kept its click target"
+        );
     }
 
     /// The loop's matcher over one row: a hot range holding x wins, else the row act.
