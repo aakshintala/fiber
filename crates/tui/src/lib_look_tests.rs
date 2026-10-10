@@ -203,9 +203,9 @@ fn a_light_report_through_the_loop_repaints_light() {
 }
 
 #[test]
-fn the_rail_and_panel_regions_paint_as_the_background() {
-    // The rail's and the panel's regions paint as the theme's
-    // background, not the surface tint (`docs/tui.md`, "Themes").
+fn the_rail_and_panel_regions_paint_in_the_panel_tint() {
+    // The rail's and the panel's regions paint in the `panel` tint
+    // (`docs/tui.md`, "Themes").
     use crate::home::Launch;
     let mut app = App::new(std::path::PathBuf::from("/w"));
     app.set_home(Launch {
@@ -257,14 +257,14 @@ fn the_rail_and_panel_regions_paint_as_the_background() {
         .draw_with(&mut app, None, crate::view::render)
         .expect("a draw");
     let buf = screen.backend().buffer();
-    // Dark `background` against dark `surface` (`docs/tui.md`, "Themes").
-    let background = Color::Reset;
+    // Dark `panel` (`docs/tui.md`, "Themes").
+    let panel_tint = Color::Rgb(0x0c, 0x0c, 0x11);
     assert_eq!(
         buf[(panel.right().saturating_sub(1), panel.y)].bg,
-        background
+        panel_tint
     );
     assert_eq!(
         buf[(rail.x, rail.bottom().saturating_sub(1))].bg,
-        background
+        panel_tint
     );
 }

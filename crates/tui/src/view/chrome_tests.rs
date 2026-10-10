@@ -273,8 +273,9 @@ fn grip_excludes_the_bottom_edge() {
 }
 
 #[test]
-fn the_regions_are_on_the_background() {
+fn the_rail_and_panel_regions_take_the_panel_tint() {
     use crate::theme::Role;
+    use ratatui::style::Color;
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
         workspace: PathBuf::from("/w"),
@@ -293,32 +294,62 @@ fn the_regions_are_on_the_background() {
     });
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.set_size(160, 40);
-    app.on_line(session_line(
-        "session_status",
-        serde_json::json!({
-            "name": "fix the parser", "workspace": "/w",
-            "project": "-w", "state": "idle", "since": 0,
-            "spend": {"tokens": {"input": 1, "cache_read": 0,
-                "cache_write": {}, "output": 2},
-                "cost": 0.0, "subscription_cost": 0.0},
-            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
-        }),
-    ));
+    for session in [SESSION, "s_bbbbbbbbbbbbbbbb"] {
+        app.on_line(crate::link::Line::Session(contract::Envelope {
+            kind: "session_status".to_owned(),
+            session_id: contract::SessionId(session.to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload: serde_json::json!({
+                "name": "fix the parser", "workspace": "/w",
+                "project": "-w", "state": "idle", "since": 0,
+                "spend": {"tokens": {"input": 1, "cache_read": 0,
+                    "cache_write": {}, "output": 2},
+                    "cost": 0.0, "subscription_cost": 0.0},
+                "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+            })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        }));
+    }
     let (buf, _) = draw(&app, 160, 40);
-    // The panel's region draws on the background (`docs/tui.md`,
-    // "Themes"): every cell of its top row, which no card covers, is
-    // not the surface tint.
-    let surface = Role::Surface.color();
-    let panel = app
-        .chrome()
-        .layout()
-        .expect("a layout")
-        .panel
-        .expect("a panel");
+    let layout = app.chrome().layout().expect("a layout");
+    let panel = layout.panel.expect("a panel");
+    let rail = layout.rail.expect("a rail");
+    let panel_tint = Role::Panel.color();
+    for y in panel.top()..panel.bottom() {
+        assert_eq!(buf[(panel.x, y)].bg, panel_tint, "panel edge row {y}");
+    }
     for x in panel.left()..panel.right() {
-        assert_ne!(buf[(x, panel.y)].bg, surface, "column {x}");
+        assert_eq!(buf[(x, panel.y)].bg, panel_tint, "panel top column {x}");
+    }
+    for y in panel.top()..panel.bottom() {
+        for x in panel.left()..panel.right() {
+            assert_ne!(buf[(x, y)].bg, Color::Reset, "panel cell ({x}, {y})");
+        }
+    }
+    let edge = rail.right().saturating_sub(1);
+    for y in rail.top()..rail.bottom() {
+        assert_eq!(buf[(edge, y)].bg, panel_tint, "rail edge row {y}");
+    }
+    for x in rail.left()..rail.right() {
+        assert_eq!(
+            buf[(x, rail.bottom().saturating_sub(1))].bg,
+            panel_tint,
+            "rail bottom column {x}"
+        );
+    }
+    for y in rail.top()..rail.bottom() {
+        for x in rail.left()..rail.right() {
+            assert_ne!(buf[(x, y)].bg, Color::Reset, "rail cell ({x}, {y})");
+        }
     }
     // A card row of the panel still carries the surface tint.
+    let surface = Role::Surface.color();
     let card = (panel.y..panel.bottom())
         .find(|y| buf[(panel.x + 1, *y)].bg == surface)
         .expect("a card row");

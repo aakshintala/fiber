@@ -22,17 +22,38 @@ pub(super) fn floor(text: &str, area: Rect, buf: &mut Buffer) {
 
 use ratatui::style::Style;
 
-/// Draws the chrome of `layout`: the regions' grips. The conversation
-/// draws in the column's full rect; its rows inset past the gutter where
-/// they draw.
+/// Draws the chrome of `layout`: the rail's and the panel's regions in
+/// the `panel` tint, then the regions' grips. The conversation draws in
+/// the column's full rect; its rows inset past the gutter where they
+/// draw.
 pub(super) fn draw(layout: &Layout, buf: &mut Buffer) {
     if let Some(rail) = layout.rail {
+        crate::surface::draw_slab(
+            buf,
+            rail,
+            Role::Panel,
+            None,
+            crate::surface::Edges {
+                top: false,
+                bottom: false,
+            },
+        );
         grip(buf, rail.right().saturating_sub(1), rail);
     }
     if let Some(at) = layout.grip {
         grip(buf, at.x, at);
     }
     if let Some(panel) = layout.panel {
+        crate::surface::draw_slab(
+            buf,
+            panel,
+            Role::Panel,
+            None,
+            crate::surface::Edges {
+                top: false,
+                bottom: false,
+            },
+        );
         grip(buf, panel.x, panel);
     }
 }
