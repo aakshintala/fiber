@@ -493,7 +493,8 @@ fn control(kind: &str) -> Envelope {
 /// thread that cannot start leaves the session with no status. A first page
 /// that does not parse folds the lines before the failure, then the follow
 /// loop ends at the failure as it does for a later page; only a line
-/// damaged after [`Log::open`] parsed it reaches this.
+/// damaged after [`Log::open`] read it, or a line of a kind open does not
+/// fold that is JSON but not an event line, reaches this.
 pub(crate) fn spawn(looped: &Loop) -> Option<Status> {
     let jobs = looped.ending.jobs.clone();
     let workspace = looped.workspace.clone();
