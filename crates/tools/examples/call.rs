@@ -81,11 +81,7 @@ fn main() -> ExitCode {
                 session.path().join("artifacts"),
                 Arc::new(fakes::clock::SystemClock),
             )
-            .run(
-                &arguments,
-                &cancel,
-                &Recorder::default(),
-            )
+            .run(&arguments, &cancel, &Recorder::default())
         }
         _ => {
             usage();
@@ -139,4 +135,3 @@ fn output_json(output: &Output) -> Map<String, Value> {
     }
     map
 }
-

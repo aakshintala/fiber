@@ -175,17 +175,10 @@ fn done_writes_to_the_state_are_visible_in_the_returned_guard() {
     let cv = Condvar::new();
     // A `done` check replaced with `false` parks on a zero bound and hands
     // back the unwritten state, failing the assertion below.
-    let guard = park(
-        &clock,
-        None,
-        None,
-        &cv,
-        lock(&mutex),
-        |state| {
-            *state = 7;
-            true
-        },
-    );
+    let guard = park(&clock, None, None, &cv, lock(&mutex), |state| {
+        *state = 7;
+        true
+    });
     match guard {
         Some(guard) => assert_eq!(*guard, 7),
         None => panic!("a done park returns its guard"),
@@ -241,7 +234,9 @@ fn a_bump_between_generation_and_park_returns_at_once() {
         Ok("entered")
     );
     assert!(
-        Deadline::after(Duration::from_secs(5)).recv(&result_rx).is_ok(),
+        Deadline::after(Duration::from_secs(5))
+            .recv(&result_rx)
+            .is_ok(),
         "the bump before the park wakes it at once"
     );
 }
@@ -272,7 +267,9 @@ fn a_parked_thread_returns_after_a_bump() {
     );
     parker.bump();
     assert!(
-        Deadline::after(Duration::from_secs(5)).recv(&result_rx).is_ok(),
+        Deadline::after(Duration::from_secs(5))
+            .recv(&result_rx)
+            .is_ok(),
         "the bump wakes the parked thread"
     );
 }

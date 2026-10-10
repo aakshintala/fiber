@@ -94,4 +94,3 @@ fn measure(files: usize, bytes: usize) -> Result<String, String> {
         ms(slowest),
     ))
 }
-

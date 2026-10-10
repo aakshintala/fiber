@@ -111,10 +111,12 @@ pub fn park<'a, T>(
             return;
         }
         let guard = match bounded(bound, poll) {
-            Some(limit) => changed
-                .wait_timeout(guard, limit)
-                .unwrap_or_else(PoisonError::into_inner)
-                .0,
+            Some(limit) => {
+                changed
+                    .wait_timeout(guard, limit)
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .0
+            }
             None => changed.wait(guard).unwrap_or_else(PoisonError::into_inner),
         };
         slot = Some(guard);
