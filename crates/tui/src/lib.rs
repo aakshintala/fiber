@@ -173,7 +173,7 @@ pub(crate) enum Input {
     /// ticket no longer waiting changes nothing and opens nothing.
     Login {
         /// The waiting view's ticket.
-        ticket: u64,
+        ticket: login_worker::LoginTicket,
         /// The login's progress or its end.
         step: login_worker::LoginStep,
     },

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 
-use super::{LoginStart, LoginStep, LoginWorker, start};
+use super::{LoginStart, LoginStep, LoginTicket, LoginWorker, start};
 use crate::configure::{BrowserLogin, ConfigureError, LoginTarget, Stored};
 use crate::configure_fake::Fake;
 use crate::{Configure, Input};
@@ -31,7 +31,7 @@ fn seam() -> Arc<Fake> {
 }
 
 /// The next posted login event within the deadline.
-fn next(out: &mpsc::Receiver<Input>) -> (u64, LoginStep) {
+fn next(out: &mpsc::Receiver<Input>) -> (LoginTicket, LoginStep) {
     match out.recv_timeout(WAIT) {
         Ok(Input::Login { ticket, step }) => (ticket, step),
         Ok(_) => panic!("the worker posted something else"),
@@ -45,14 +45,14 @@ fn start_posts_the_end_with_the_login_s_result() {
     let (tx, rx) = mpsc::channel();
     let worker = start(
         LoginStart {
-            ticket: 3,
+            ticket: LoginTicket(3),
             name: "codex".to_owned(),
             seam: Arc::clone(&seam) as Arc<dyn Configure>,
         },
         fakes::clock::FakeClock::new(),
         tx,
     );
-    assert_eq!(worker.ticket(), 3);
+    assert_eq!(worker.ticket(), LoginTicket(3));
     assert_eq!(seam.login_names(), ["codex"]);
     let login = seam.login(0).expect("one login started");
     login.answer(Ok(Stored {
@@ -60,7 +60,7 @@ fn start_posts_the_end_with_the_login_s_result() {
         replaced: false,
     }));
     let (ticket, step) = next(&rx);
-    assert_eq!(ticket, 3);
+    assert_eq!(ticket, LoginTicket(3));
     match step {
         LoginStep::Done(Ok(stored)) => {
             assert_eq!(stored.path, "credentials/codex/alice@example.com");
@@ -79,7 +79,7 @@ fn the_posting_show_sends_open_and_code_with_the_ticket() {
     let (tx, rx) = mpsc::channel();
     let worker = start(
         LoginStart {
-            ticket: 7,
+            ticket: LoginTicket(7),
             name: "codex".to_owned(),
             seam: Arc::clone(&seam) as Arc<dyn Configure>,
         },
@@ -90,13 +90,13 @@ fn the_posting_show_sends_open_and_code_with_the_ticket() {
     shown.open("https://auth.example/authorize?state=1");
     shown.show("https://auth.example/device", "ABCD-1234");
     let (ticket, step) = next(&rx);
-    assert_eq!(ticket, 7);
+    assert_eq!(ticket, LoginTicket(7));
     assert!(
         matches!(step, LoginStep::Open(ref url) if url == "https://auth.example/authorize?state=1"),
         "{step:?}"
     );
     let (ticket, step) = next(&rx);
-    assert_eq!(ticket, 7);
+    assert_eq!(ticket, LoginTicket(7));
     assert!(
         matches!(step, LoginStep::Code { ref url, ref code }
             if url == "https://auth.example/device" && code == "ABCD-1234"),
@@ -134,6 +134,6 @@ fn dropping_the_worker_cancels_once() {
     let login: Arc<dyn BrowserLogin> = Arc::new(Counting {
         cancels: Arc::clone(&cancels),
     });
-    drop(LoginWorker::new(2, login));
+    drop(LoginWorker::new(LoginTicket(2), login));
     assert_eq!(cancels.lock().map(|cancels| *cancels).unwrap_or(0), 1);
 }

@@ -212,14 +212,14 @@ fn enter_on_a_browser_row_queues_a_ticketed_start() {
     let seam = browser_seam();
     let mut app = browser_login_app(&seam);
     let start = start_login(&mut app);
-    assert_eq!(start.ticket, 1);
+    assert_eq!(start.ticket, crate::login_worker::LoginTicket(1));
     assert_eq!(start.name, "codex");
     assert!(app.take_login_start().is_none());
     // Esc returns to the rows; a second start waits on ticket 2.
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     app.on_key(Key::Down, now());
     let start = start_login(&mut app);
-    assert_eq!(start.ticket, 2);
+    assert_eq!(start.ticket, crate::login_worker::LoginTicket(2));
     assert_eq!(start.name, "codex");
 }
 
@@ -238,7 +238,7 @@ fn only_the_waiting_ticket_s_open_returns_its_url() {
     );
     assert_eq!(
         app.on_login(
-            start.ticket + 1,
+            start.ticket.next(),
             crate::login_worker::LoginStep::Open("https://auth.example/other".to_owned())
         ),
         None

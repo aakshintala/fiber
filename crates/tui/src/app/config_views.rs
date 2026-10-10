@@ -15,7 +15,7 @@ use crate::ThemeSetting;
 use crate::configure::{Configure, Layer};
 use crate::keys::{Edit, Key};
 use crate::login_view::Login;
-use crate::login_worker::{LoginStart, LoginStep, LoginWorker};
+use crate::login_worker::{LoginStart, LoginStep, LoginTicket, LoginWorker};
 use crate::rules_view::Rules;
 use crate::settings_view::{Act, Ctx, Settings};
 use crate::skills_view::Skills;
@@ -92,7 +92,7 @@ pub(in crate::app) struct ConfigViews {
     usage: Option<(SessionId, u64)>,
     /// The browser login tickets handed out, in order: incremented before
     /// use, so the first ticket is 1 and every ticket is used once.
-    tickets: u64,
+    tickets: LoginTicket,
     /// The browser login start the loop has not picked up yet.
     pending_login: Option<LoginStart>,
 }
@@ -339,7 +339,7 @@ impl App {
             Act::Login(name) => {
                 // The ticket is handed out before use, so the first login
                 // waits on 1 and no two logins share one.
-                self.config_views.tickets = self.config_views.tickets.saturating_add(1);
+                self.config_views.tickets = self.config_views.tickets.next();
                 let ticket = self.config_views.tickets;
                 if let Some(seam) = self.configure_seam() {
                     self.config_views.pending_login = Some(LoginStart { ticket, name, seam });
@@ -375,7 +375,7 @@ impl App {
     /// Folds the waiting ticket's login progress into the view: an event
     /// for another ticket changes nothing. Returns the URL to open, only
     /// for `Open` on the waiting ticket.
-    pub(crate) fn on_login(&mut self, ticket: u64, step: LoginStep) -> Option<String> {
+    pub(crate) fn on_login(&mut self, ticket: LoginTicket, step: LoginStep) -> Option<String> {
         match &mut self.config_views.open {
             Some(Open::Login(login)) => login.step(ticket, step),
             _ => None,

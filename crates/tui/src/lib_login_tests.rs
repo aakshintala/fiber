@@ -69,7 +69,12 @@ fn start_login(lp: &mut super::Loop<TestBackend>) {
 }
 
 /// The next login event within the deadline.
-fn next(rx: &Receiver<Input>) -> (u64, crate::login_worker::LoginStep) {
+fn next(
+    rx: &Receiver<Input>,
+) -> (
+    crate::login_worker::LoginTicket,
+    crate::login_worker::LoginStep,
+) {
     match rx.recv_timeout(WAIT) {
         Ok(Input::Login { ticket, step }) => (ticket, step),
         Ok(_) => panic!("the worker posted something else"),
@@ -80,25 +85,18 @@ fn next(rx: &Receiver<Input>) -> (u64, crate::login_worker::LoginStep) {
 /// Waits for the opener's file to hold `url`, within the deadline: the
 /// opener runs on its own thread.
 fn await_opened(path: &str, url: &str) {
-    let (done, finished) = mpsc::channel();
     let path = path.to_owned();
     let url = url.to_owned();
-    std::thread::Builder::new()
-        .name("login-wait".to_owned())
-        .spawn(move || {
-            let (_pace_tx, pace) = mpsc::channel::<()>();
-            for _ in 0..WAIT.as_millis() {
-                if std::fs::read_to_string(&path).ok().as_deref() == Some(url.as_str()) {
-                    done.send(()).unwrap_or(());
-                    return;
-                }
-                pace.recv_timeout(Duration::from_millis(1)).unwrap_or(());
+    fakes::within("the opener to write its file", WAIT, move || {
+        // The park between polls reads no clock.
+        let (_pace_tx, pace) = std::sync::mpsc::channel::<()>();
+        loop {
+            if std::fs::read_to_string(&path).ok().as_deref() == Some(url.as_str()) {
+                return;
             }
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
-    if finished.recv_timeout(WAIT).is_err() {
-        panic!("waited {WAIT:?} for the opener to write its file");
-    }
+            pace.recv_timeout(Duration::from_millis(1)).unwrap_or(());
+        }
+    });
 }
 
 #[test]
@@ -124,7 +122,7 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
     feed(
         &mut lp,
         vec![Input::Login {
-            ticket: 1,
+            ticket: crate::login_worker::LoginTicket(1),
             step: crate::login_worker::LoginStep::Open(url.clone()),
         }],
     );
@@ -143,7 +141,7 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
     feed(
         &mut lp,
         vec![Input::Login {
-            ticket: 1,
+            ticket: crate::login_worker::LoginTicket(1),
             step: crate::login_worker::LoginStep::Done(Ok(crate::configure::Stored {
                 path: "credentials/codex/alice@example.com".to_owned(),
                 replaced: false,
@@ -172,7 +170,7 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
     feed(
         &mut lp,
         vec![Input::Login {
-            ticket: 1,
+            ticket: crate::login_worker::LoginTicket(1),
             step: crate::login_worker::LoginStep::Open(url.clone()),
         }],
     );
@@ -195,7 +193,7 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
     feed(
         &mut lp,
         vec![Input::Login {
-            ticket: 1,
+            ticket: crate::login_worker::LoginTicket(1),
             step: crate::login_worker::LoginStep::Done(Ok(crate::configure::Stored {
                 path: "credentials/codex/alice@example.com".to_owned(),
                 replaced: false,

@@ -12,6 +12,7 @@ use crate::ConfigureError;
 use crate::configure::{LoginKind, LoginTarget, Stored};
 use crate::configure_fake::Fake;
 use crate::keys::{Edit, Key};
+use crate::login_worker::LoginTicket;
 use crate::swapped::{Spot, render};
 
 /// A key provider, a browser provider and a secret.
@@ -606,7 +607,7 @@ fn login_key_panel_80x24() {
 }
 
 /// A waiting view over `codex`, on `ticket`.
-fn waiting(fake: &Fake, ticket: u64) -> Login {
+fn waiting(fake: &Fake, ticket: LoginTicket) -> Login {
     let mut login = at(fake, 2);
     assert!(matches!(
         login.key(&Key::Enter, &ctx(fake)),
@@ -619,7 +620,7 @@ fn waiting(fake: &Fake, ticket: u64) -> Login {
 #[test]
 fn enter_on_a_browser_row_waits_and_says_starting() {
     let fake = fake_with(targets());
-    let login = waiting(&fake, 1);
+    let login = waiting(&fake, LoginTicket(1));
     let frame = login.frame(80);
     assert_eq!(frame.field, None);
     assert_eq!(frame.below, ["Starting the login to codex…"]);
@@ -632,10 +633,13 @@ fn enter_on_a_browser_row_waits_and_says_starting() {
 #[test]
 fn open_on_the_waiting_ticket_shows_the_url_and_returns_it() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, 1);
+    let mut login = waiting(&fake, LoginTicket(1));
     let url = "https://auth.example/authorize?state=1";
     assert_eq!(
-        login.step(1, crate::login_worker::LoginStep::Open(url.to_owned())),
+        login.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Open(url.to_owned())
+        ),
         Some(url.to_owned())
     );
     let frame = login.frame(80);
@@ -652,19 +656,25 @@ fn open_on_the_waiting_ticket_shows_the_url_and_returns_it() {
 #[test]
 fn steps_for_other_tickets_change_nothing_and_open_nothing() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, 5);
+    let mut login = waiting(&fake, LoginTicket(5));
     let url = "https://auth.example/authorize?state=1";
     assert_eq!(
-        login.step(4, crate::login_worker::LoginStep::Open(url.to_owned())),
-        None
-    );
-    assert_eq!(
-        login.step(6, crate::login_worker::LoginStep::Open(url.to_owned())),
+        login.step(
+            LoginTicket(4),
+            crate::login_worker::LoginStep::Open(url.to_owned())
+        ),
         None
     );
     assert_eq!(
         login.step(
-            4,
+            LoginTicket(6),
+            crate::login_worker::LoginStep::Open(url.to_owned())
+        ),
+        None
+    );
+    assert_eq!(
+        login.step(
+            LoginTicket(4),
             crate::login_worker::LoginStep::Code {
                 url: url.to_owned(),
                 code: "ABCD-1234".to_owned(),
@@ -680,11 +690,11 @@ fn steps_for_other_tickets_change_nothing_and_open_nothing() {
 #[test]
 fn a_code_step_shows_the_code_and_opens_nothing() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, 1);
+    let mut login = waiting(&fake, LoginTicket(1));
     let url = "https://auth.example/device";
     assert_eq!(
         login.step(
-            1,
+            LoginTicket(1),
             crate::login_worker::LoginStep::Code {
                 url: url.to_owned(),
                 code: "ABCD-1234".to_owned(),
@@ -706,10 +716,13 @@ fn a_code_step_shows_the_code_and_opens_nothing() {
 #[test]
 fn y_copies_the_shown_url_whole_and_nothing_before_it_arrives() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, 1);
+    let mut login = waiting(&fake, LoginTicket(1));
     assert!(matches!(login.key(&Key::Char('y'), &ctx(&fake)), Act::Stay));
     let url = "https://auth.example/authorize?state=1";
-    login.step(1, crate::login_worker::LoginStep::Open(url.to_owned()));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Open(url.to_owned()),
+    );
     assert!(matches!(
         login.key(&Key::Char('y'), &ctx(&fake)),
         Act::Copy(shown) if shown == url
@@ -719,13 +732,13 @@ fn y_copies_the_shown_url_whole_and_nothing_before_it_arrives() {
 #[test]
 fn the_end_returns_to_the_rows_saying_what_it_stored() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, 1);
+    let mut login = waiting(&fake, LoginTicket(1));
     login.step(
-        1,
+        LoginTicket(1),
         crate::login_worker::LoginStep::Open("https://auth.example/authorize".to_owned()),
     );
     login.step(
-        1,
+        LoginTicket(1),
         crate::login_worker::LoginStep::Done(Ok(Stored {
             path: "credentials/codex/alice@example.com".to_owned(),
             replaced: false,
@@ -745,9 +758,8 @@ fn the_end_returns_to_the_rows_saying_what_it_stored() {
 #[test]
 fn a_failed_end_returns_to_the_rows_saying_why() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, 1);
-    login.step(
-        1,
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(LoginTicket(1),
         crate::login_worker::LoginStep::Done(Err(ConfigureError {
             code: ErrorCode::Usage,
             message: "credentials/codex/alice@example.com is already stored; log in under another label with --as <label>, or run `fiber logout codex --as alice@example.com` first.".to_owned(),
@@ -763,10 +775,10 @@ fn a_failed_end_returns_to_the_rows_saying_why() {
 #[test]
 fn esc_while_waiting_returns_to_the_rows_and_cancels_once() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, 1);
+    let mut login = waiting(&fake, LoginTicket(1));
     let held = std::sync::Arc::new(crate::configure_fake::FakeLogin::new());
     login.started(crate::login_worker::LoginWorker::new(
-        1,
+        LoginTicket(1),
         held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,
     ));
     assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
@@ -779,9 +791,9 @@ fn dropping_a_waiting_view_cancels_once() {
     let fake = fake_with(targets());
     let held = std::sync::Arc::new(crate::configure_fake::FakeLogin::new());
     {
-        let mut login = waiting(&fake, 1);
+        let mut login = waiting(&fake, LoginTicket(1));
         login.started(crate::login_worker::LoginWorker::new(
-            1,
+            LoginTicket(1),
             held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,
         ));
     }
@@ -791,17 +803,20 @@ fn dropping_a_waiting_view_cancels_once() {
 #[test]
 fn a_started_worker_for_another_ticket_is_cancelled_at_once() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, 1);
+    let mut login = waiting(&fake, LoginTicket(1));
     let held = std::sync::Arc::new(crate::configure_fake::FakeLogin::new());
     login.started(crate::login_worker::LoginWorker::new(
-        2,
+        LoginTicket(2),
         held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,
     ));
     assert_eq!(held.cancels(), 1);
     // The view still waits on its own ticket.
     let url = "https://auth.example/authorize?state=1";
     assert_eq!(
-        login.step(1, crate::login_worker::LoginStep::Open(url.to_owned())),
+        login.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Open(url.to_owned())
+        ),
         Some(url.to_owned())
     );
 }
@@ -809,24 +824,33 @@ fn a_started_worker_for_another_ticket_is_cancelled_at_once() {
 #[test]
 fn a_url_at_the_width_is_one_row_and_past_it_is_two() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, 1);
+    let mut login = waiting(&fake, LoginTicket(1));
     let one = "u".repeat(80);
-    login.step(1, crate::login_worker::LoginStep::Open(one.clone()));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Open(one.clone()),
+    );
     assert_eq!(login.frame(80).below.len(), 2);
     let two = "u".repeat(81);
-    login.step(1, crate::login_worker::LoginStep::Open(two));
+    login.step(LoginTicket(1), crate::login_worker::LoginStep::Open(two));
     assert_eq!(login.frame(80).below.len(), 3);
     // Width 0 wraps at 1: every character takes its own row.
-    login.step(1, crate::login_worker::LoginStep::Open("ab".to_owned()));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Open("ab".to_owned()),
+    );
     assert_eq!(login.frame(0).below.len(), 3);
 }
 
 #[test]
 fn a_wide_character_wraps_by_columns_not_chars() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, 1);
+    let mut login = waiting(&fake, LoginTicket(1));
     let url = "https://例え.jp/authorize";
-    login.step(1, crate::login_worker::LoginStep::Open(url.to_owned()));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Open(url.to_owned()),
+    );
     let below = login.frame(20).below;
     for row in below.iter().skip(1) {
         assert!(
@@ -840,9 +864,12 @@ fn a_wide_character_wraps_by_columns_not_chars() {
 #[test]
 fn a_view_too_short_for_the_url_cuts_rows_and_keeps_copy_whole() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, 1);
+    let mut login = waiting(&fake, LoginTicket(1));
     let url = format!("https://auth.example/{}", "u".repeat(300));
-    login.step(1, crate::login_worker::LoginStep::Open(url.clone()));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Open(url.clone()),
+    );
     let area = Rect::new(0, 0, 20, 8);
     let mut buf = Buffer::empty(area);
     render(&login.frame(20), area, &mut buf, &mut Vec::new());
@@ -889,18 +916,21 @@ fn a_view_too_short_for_the_url_cuts_rows_and_keeps_copy_whole() {
 #[test]
 fn login_browser_waiting_80x24() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, 1);
+    let mut login = waiting(&fake, LoginTicket(1));
     let url = format!("https://auth.example/authorize?state={}", "s".repeat(100));
-    login.step(1, crate::login_worker::LoginStep::Open(url));
+    login.step(LoginTicket(1), crate::login_worker::LoginStep::Open(url));
     insta::assert_snapshot!("login_browser_waiting_80x24", drawn(&login, 80, 24));
 }
 
 #[test]
 fn a_row_click_while_waiting_keeps_the_waiting_mode() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, 1);
+    let mut login = waiting(&fake, LoginTicket(1));
     let url = "https://auth.example/authorize?state=1";
-    login.step(1, crate::login_worker::LoginStep::Open(url.to_owned()));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Open(url.to_owned()),
+    );
     assert!(matches!(login.click(Spot::Row(1), &ctx(&fake)), Act::Stay));
     let frame = login.frame(80);
     assert_eq!(

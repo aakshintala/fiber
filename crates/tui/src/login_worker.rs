@@ -11,10 +11,24 @@ use contract::clock::Clock;
 use crate::Input;
 use crate::configure::{BrowserLogin, Configure, LoginShow};
 
+/// A browser login's ticket: only its events land. A newtype so it
+/// cannot be confused with an image ticket
+/// (`docs/code-quality.md`, "Types").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub(crate) struct LoginTicket(pub(crate) u64);
+
+impl LoginTicket {
+    /// The next ticket: the counter starts at none, so the first handed
+    /// out is 1 and every ticket is used once.
+    pub(crate) fn next(self) -> Self {
+        Self(self.0.saturating_add(1))
+    }
+}
+
 /// Starts a browser login: its ticket, the provider's name and the seam.
 pub(crate) struct LoginStart {
     /// The waiting view's ticket: only its events land.
-    pub(crate) ticket: u64,
+    pub(crate) ticket: LoginTicket,
     /// The provider to log in to.
     pub(crate) name: String,
     /// The seam the login runs through.
@@ -41,7 +55,7 @@ pub(crate) enum LoginStep {
 /// and asks the terminal to open it, `show` shows the code and opens
 /// nothing.
 struct PostingShow {
-    ticket: u64,
+    ticket: LoginTicket,
     out: Sender<Input>,
 }
 
@@ -67,24 +81,24 @@ impl LoginShow for PostingShow {
 /// A running browser login: dropping it cancels the login, so every way
 /// out of the waiting mode stores nothing further.
 pub(crate) struct LoginWorker {
-    ticket: u64,
+    ticket: LoginTicket,
     login: Arc<dyn BrowserLogin>,
 }
 
 impl std::fmt::Debug for LoginWorker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "LoginWorker({})", self.ticket)
+        write!(f, "LoginWorker({})", self.ticket.0)
     }
 }
 
 impl LoginWorker {
     /// The worker over `login`, waiting on `ticket`.
-    pub(crate) fn new(ticket: u64, login: Arc<dyn BrowserLogin>) -> Self {
+    pub(crate) fn new(ticket: LoginTicket, login: Arc<dyn BrowserLogin>) -> Self {
         Self { ticket, login }
     }
 
     /// The waiting ticket.
-    pub(crate) fn ticket(&self) -> u64 {
+    pub(crate) fn ticket(&self) -> LoginTicket {
         self.ticket
     }
 }
