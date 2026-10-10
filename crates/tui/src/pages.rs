@@ -245,6 +245,7 @@ impl Index {
 
     /// Every row the conversation draws.
     pub(crate) fn total(&self) -> usize {
+        crate::work::add(|work| work.index_pages += self.pages.len());
         self.pages
             .iter()
             .fold(0usize, |sum, page| sum.saturating_add(page.rows))
@@ -252,6 +253,7 @@ impl Index {
 
     /// Page `at`'s first row: the rows of the pages before it.
     pub(crate) fn start(&self, at: usize) -> usize {
+        crate::work::add(|work| work.index_pages += at.min(self.pages.len()));
         self.pages
             .iter()
             .take(at)
@@ -302,6 +304,7 @@ impl Index {
     /// in `[top - height, top + 2 * height)`, clamped to the conversation.
     /// A page in the range that draws no row is in no window.
     pub(crate) fn window(&self, top: usize, height: usize) -> Range<usize> {
+        crate::work::add(|work| work.index_pages += self.pages.len());
         let from = top.saturating_sub(height);
         let to = top
             .saturating_add(height.saturating_mul(2))

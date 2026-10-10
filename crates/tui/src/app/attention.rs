@@ -105,6 +105,7 @@ impl App {
     /// with no row yet, or a row not yet waiting, still awaits its status. Runs after every hub line, which is where
     /// every row change folds in.
     pub(super) fn reconcile_attention(&mut self) {
+        crate::work::add(|work| work.reconcile_attention += 1);
         let session = match &self.attention.latest {
             Some(Latest::Waiting { session, .. }) => session.clone(),
             Some(Latest::Finished) | None => return,

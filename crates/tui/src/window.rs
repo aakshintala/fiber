@@ -442,10 +442,14 @@ impl Pages {
         let Some(line) = read!(envelope, UsageRecorded) else {
             return Folded::Nothing;
         };
+        crate::work::add(|work| work.usage_summaries += 1);
         let known = self
             .summaries
             .iter()
-            .rposition(|summary| summary.spend.holds(&line.generation_id));
+            .rposition(|summary| {
+                crate::work::add(|work| work.usage_summaries += 1);
+                summary.spend.holds(&line.generation_id)
+            });
         let Some(summary) = known
             .or_else(|| self.running())
             .and_then(|at| self.summaries.get_mut(at))
@@ -733,6 +737,7 @@ impl Pages {
     /// the pages a pending copy asked for until it runs.
     pub(crate) fn trim(&mut self, top: usize, height: usize) {
         let window = self.index.window(top, height);
+        crate::work::add(|work| work.trim_pages += self.closed.len());
         for (at, part) in self.closed.iter_mut().enumerate() {
             if !window.contains(&at) && !self.pins.contains(at) {
                 *part = None;
@@ -1120,6 +1125,7 @@ impl Pages {
 
     /// A page's lines, their turn ranges, and stable focus stops.
     fn draw_data(&self, page: usize, part: &Part, mode: Draw) -> DrawData {
+        crate::work::add(|work| work.page_builds += 1);
         let mut out = match mode {
             Draw::Shown => Rows::default(),
             Draw::AllOpen => Rows::all_open(),
@@ -1205,6 +1211,7 @@ impl Pages {
 
     /// Counts page `at`'s rows and focus stops from its cards, while it holds them.
     fn count(&mut self, at: usize) {
+        crate::work::add(|work| work.page_counts += 1);
         let Some(part) = self.part(at) else {
             return;
         };
@@ -1307,3 +1314,7 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
 #[cfg(test)]
 #[path = "paging_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "window/usage_tests.rs"]
+mod usage_tests;

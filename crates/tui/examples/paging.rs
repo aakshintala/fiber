@@ -117,8 +117,19 @@ fn open_report(
         "fold_ms": ms(stages.fold),
         "frames": stages.frames,
         "frame_ms": ms(stages.frame_time),
+        "fold_work": work(&stages.fold_work),
+        "frame_work": work(&stages.frame_work),
     })
     .to_string())
+}
+
+/// The work counts as one JSON object, by name.
+fn work(work: &tui::work::Work) -> serde_json::Value {
+    work.named()
+        .into_iter()
+        .map(|(name, count)| (name.to_owned(), serde_json::json!(count)))
+        .collect::<serde_json::Map<_, _>>()
+        .into()
 }
 
 fn main() -> ExitCode {

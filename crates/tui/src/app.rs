@@ -476,6 +476,7 @@ impl App {
     /// Folds one line from the hub, returning command lines to send. An
     /// answer first releases the line kept for resending.
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
+        crate::work::add(|work| work.lines += 1);
         self.answered_line(&line);
         let mut lines = match self.home_line(&line) {
             Some(consumed) => consumed,

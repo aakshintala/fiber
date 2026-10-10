@@ -394,6 +394,7 @@ impl App {
 
     /// The search's unsent command lines.
     pub(in crate::app) fn find_outgoing(&mut self) -> Vec<String> {
+        crate::work::add(|work| work.find_outgoing += 1);
         self.find.outgoing()
     }
 

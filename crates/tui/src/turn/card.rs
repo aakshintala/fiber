@@ -36,6 +36,7 @@ impl Turn {
         layout: &crate::image::Layout,
         out: &mut Rows,
     ) -> Pieces {
+        crate::work::add(|work| work.turn_rows += 1);
         for prompt in &self.prompts {
             let before = out.len();
             super::images::bubble_rows(prompt, width, layout, out);

@@ -319,6 +319,7 @@ impl App {
     /// first `recent` page, naming the launch project while scoped. The
     /// session list fills in when the hub's feed arrives.
     pub(super) fn home_outgoing(&mut self) -> Vec<String> {
+        crate::work::add(|work| work.home_outgoing += 1);
         if self.link != Link::Up {
             return Vec::new();
         }

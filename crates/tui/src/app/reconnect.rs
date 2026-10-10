@@ -198,6 +198,7 @@ impl App {
     /// on this `on_line` tail, so this runs after it. Nothing on the first
     /// connection.
     pub(super) fn sessions_outgoing(&mut self) -> Vec<String> {
+        crate::work::add(|work| work.sessions_outgoing += 1);
         if !self.reconnect.sessions_due {
             return Vec::new();
         }

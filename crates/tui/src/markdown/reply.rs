@@ -55,6 +55,7 @@ impl Reply {
     /// The text rendered at `width`, from the shared slot when it was
     /// rendered at that width.
     pub(crate) fn rendered(&self, width: u16) -> Arc<Rendered> {
+        crate::work::add(|work| work.reply_renders += 1);
         let mut cached = self.cache.lock().unwrap_or_else(|error| error.into_inner());
         if let Some((at, rendered)) = &*cached
             && *at == width
