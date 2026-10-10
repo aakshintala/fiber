@@ -25,7 +25,7 @@ pub use image::ImageChild;
 pub use read::Read;
 pub use search::{find_main, grep_main};
 pub use session_search::SessionSearch;
-pub use shell::{Shell, kill_every_group};
+pub use shell::Shell;
 pub use skill::Skill;
 pub use web_fetch::WebFetch;
 pub use web_search::{BackendSearch, HostedSearch};

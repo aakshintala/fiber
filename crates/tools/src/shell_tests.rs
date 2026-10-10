@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 
 use contract::ErrorCode;
@@ -8,10 +9,9 @@ use contract::shapes::Effect;
 use contract::tool::Tool;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder};
-use rustix::process::Signal;
 use serde_json::{Map, Value, json};
 
-use super::{Mode, Shell, bare_wait, exit_line, from_spawn, parse, signal_name, timeout_line};
+use super::{Mode, Shell, bare_wait, exit_line, from_spawn, observed, parse, timeout_line};
 
 fn shell() -> Shell {
     Shell::new(std::env::temp_dir(), FakeClock::new())
@@ -372,10 +372,14 @@ fn result_lines_name_what_was_observed() {
     assert_eq!(exit_line(0), "Exit code 0.");
     assert_eq!(exit_line(3), "Exit code 3.");
     assert_eq!(timeout_line(1000), "Timed out after 1000 ms and stopped.");
-    assert_eq!(signal_name(Signal::SEGV.as_raw()), "SIGSEGV");
-    assert_eq!(signal_name(Signal::KILL.as_raw()), "SIGKILL");
-    assert_eq!(signal_name(Signal::TERM.as_raw()), "SIGTERM");
-    assert_eq!(signal_name(0), "SIG0");
+    // Wiring: a signalled status reads its name through the shared helper.
+    let killed = Command::new("sh")
+        .args(["-c", "kill -TERM $$"])
+        .status()
+        .unwrap();
+    let (_, signal, line) = observed(killed);
+    assert_eq!(signal.as_deref(), Some("SIGTERM"));
+    assert_eq!(line, "Killed by SIGTERM.");
 }
 
 #[test]

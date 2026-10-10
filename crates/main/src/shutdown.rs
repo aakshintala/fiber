@@ -20,7 +20,6 @@ pub(crate) fn arm(signals: &Signals) {
         Box::new(mcp::stop_every_start),
         Box::new(|| {
             support::group::kill_every_group();
-            tools::kill_every_group();
             extensions::kill_every_group();
             mcp::kill_every_server();
         }),
@@ -43,7 +42,6 @@ pub(crate) fn arm_isolating(signals: &Signals, reads: &Arc<crate::switch::Reads>
         Box::new(move || {
             bound_reads.cancel();
             support::group::kill_every_group();
-            tools::kill_every_group();
             extensions::kill_every_group();
             mcp::kill_every_server();
         }),
@@ -76,7 +74,6 @@ pub(crate) fn start(
         }),
         Box::new(|| {
             support::group::kill_every_group();
-            tools::kill_every_group();
             extensions::kill_every_group();
         }),
     );

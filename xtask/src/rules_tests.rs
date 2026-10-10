@@ -85,7 +85,6 @@ fn signal_sites_ignores_each_pattern_inside_the_allowlist() {
             ("cli", "src/extension_test.rs"),
             ("mcp", "src/registry.rs"),
             ("tui", "src/paste_image.rs"),
-            ("tools", "src/shell/process_group.rs"),
             ("support", "src/group.rs"),
         ] {
             let files = [file(krate, rel, line.clone())];

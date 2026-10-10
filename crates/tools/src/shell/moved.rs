@@ -11,7 +11,6 @@ use contract::tool::Cancel;
 
 use super::command::{Finished, MovePolicy, MoveReason};
 use super::drive::{LoopEnd, Run, finish, pump, view};
-use super::groups;
 use super::monitor::Feed;
 use super::output::{JobStream, Shared, lock};
 
@@ -127,7 +126,14 @@ impl Moved {
             // `Stay` does not move. Finishing here keeps a bug from spinning.
             LoopEnd::Move(_) => {
                 let view = view(&progress.shared, cancel);
-                groups::finished(progress.pgid, progress.seen_empty);
+                // The group leaves the list only once this run saw it
+                // empty; a group never seen empty stays until the shared
+                // kill prunes it.
+                if progress.seen_empty
+                    && let Some(listing) = progress.listing.take()
+                {
+                    support::group::live().unlist(*listing);
+                }
                 finish(
                     &progress.shared,
                     progress.stop,

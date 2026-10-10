@@ -15,22 +15,10 @@ use contract::tool::Cancel;
 
 use super::background::MoveAsk;
 use super::drive::{LoopEnd, Phase, Run, pump};
-use super::groups;
 use super::moved::{CancelBridge, Moved};
 use super::output::{Errors, OUTPUT_CAP, Shared, bump, lock, read_errors, read_output};
-use super::spawn::{detach, scrub_env};
+use super::spawn::scrub_env;
 use super::tty;
-
-/// How often a group is re-checked while the shell has exited and members
-/// remain. Picked, not measured.
-pub(super) const GROUP_POLL: Duration = Duration::from_millis(10);
-
-/// SIGKILL follows SIGTERM by this long (`docs/tools.md`, "Stopping a command").
-pub(super) const GRACE: Duration = Duration::from_millis(800);
-
-/// How long output is read after the group is empty or the stop
-/// (`docs/tools.md`, "Stopping a command").
-pub(super) const DRAIN: Duration = Duration::from_secs(2);
 
 /// A foreground command moves after this long
 /// (`docs/tools.md`, "Moving to the background").
@@ -154,8 +142,14 @@ pub(crate) fn execute(
         Box::new(read)
     };
     scrub_env(&mut cmd);
-    detach(&mut cmd, tty);
-    let child = groups::spawn(&mut cmd)?;
+    support::group::detach(&mut cmd, tty);
+    let (child, listing) = support::group::spawn(&mut cmd).map_err(|source| match source {
+        support::group::Error::Spawn(error) => error,
+        support::group::Error::Refused(id) => {
+            std::io::Error::other(format!("refusing to list process group {id}"))
+        }
+        support::group::Error::Signal { source, .. } => source,
+    })?;
     // The parent drops every write end, or every secondary, so EOF arrives
     // when the last holder exits.
     drop(cmd);
@@ -212,6 +206,7 @@ pub(crate) fn execute(
             | MovePolicy::Monitor => None,
         },
         pgid,
+        listing: Some(Box::new(listing)),
         shared,
         job: None,
         feed: None,

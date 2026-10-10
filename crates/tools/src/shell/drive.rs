@@ -10,11 +10,10 @@ use contract::tool::Cancel;
 use rustix::process::Signal;
 
 use super::background::{MoveAsk, Step, running_step, wait_deadline};
-use super::command::{DRAIN, Finished, GRACE, GROUP_POLL, MovePolicy, MoveReason, StopKind};
-use super::groups;
+use super::command::{Finished, MovePolicy, MoveReason, StopKind};
 use super::monitor::Feed;
 use super::output::{JobStream, Shared, lock, stream_output, stream_tail};
-use super::process_group::{group_alive, send_term, signal_group};
+use super::process_group::send_term;
 
 pub(super) struct View {
     reaped: bool,
@@ -43,6 +42,10 @@ pub(super) struct Run {
     pub(super) timeout_at: Option<Instant>,
     pub(super) move_at: Option<Instant>,
     pub(super) pgid: u32,
+    /// The run's registration in the process-wide list, boxed so the run
+    /// stays small. A run whose group was never seen empty drops it; the
+    /// entry stays until the shared kill prunes it.
+    pub(super) listing: Option<Box<support::group::Listing>>,
     pub(super) shared: Arc<Shared>,
     /// A job's `job_delta` lines. Set only on a job's drive.
     pub(super) job: Option<JobStream>,
@@ -72,7 +75,7 @@ pub(super) fn pump(
     loop {
         let view = view(&progress.shared, cancel);
         // Empty only counts after the shell is reaped, so its zombie is gone.
-        if view.reaped && !group_alive(progress.pgid) {
+        if view.reaped && !support::group::alive(progress.pgid) {
             progress.seen_empty = true;
         }
         // Stopping or draining: a later `background` moves nothing.
@@ -115,12 +118,12 @@ pub(super) fn pump(
                     progress.sent_signal =
                         send_term(progress.pgid, progress.sent_signal, progress.seen_empty);
                     progress.phase = Phase::Stopping {
-                        kill_at: after(clock, GRACE),
+                        kill_at: after(clock, support::group::GRACE),
                     };
                 }
                 Step::Drain => {
                     progress.phase = Phase::Draining {
-                        until: after(clock, DRAIN),
+                        until: after(clock, support::group::DRAIN),
                     };
                 }
                 Step::Move(reason) => return LoopEnd::Move(reason),
@@ -140,14 +143,16 @@ pub(super) fn pump(
             Phase::Stopping { kill_at } => {
                 if progress.seen_empty {
                     progress.phase = Phase::Draining {
-                        until: after(clock, DRAIN),
+                        until: after(clock, support::group::DRAIN),
                     };
                 } else if clock.now() >= kill_at {
                     // One SIGKILL. The next state is the drain, so it is not sent again.
-                    signal_group(progress.pgid, Signal::KILL);
+                    match support::group::signal(progress.pgid, Signal::KILL) {
+                        Ok(()) | Err(_) => {}
+                    }
                     progress.sent_signal = true;
                     progress.phase = Phase::Draining {
-                        until: after(clock, DRAIN),
+                        until: after(clock, support::group::DRAIN),
                     };
                 } else {
                     park(
@@ -167,7 +172,14 @@ pub(super) fn pump(
                 // passes with the pipe open or the group occupied.
                 let settled = view.eof && progress.seen_empty;
                 if settled || clock.now() >= until {
-                    groups::finished(progress.pgid, progress.seen_empty);
+                    // The group leaves the list only once this run saw it
+                    // empty; a group never seen empty stays until the
+                    // shared kill prunes it.
+                    if progress.seen_empty
+                        && let Some(listing) = progress.listing.take()
+                    {
+                        support::group::live().unlist(*listing);
+                    }
                     let mut finished = finish(
                         &progress.shared,
                         progress.stop,
@@ -277,8 +289,8 @@ pub(super) fn park(
             return;
         };
         let timeout = match (bound, poll) {
-            (Some(bound), true) => Some(bound.min(GROUP_POLL)),
-            (None, true) => Some(GROUP_POLL),
+            (Some(bound), true) => Some(bound.min(support::group::GROUP_POLL)),
+            (None, true) => Some(support::group::GROUP_POLL),
             (bound, false) => bound,
         };
         if already_woken(guard.seq, seen, wake_on_cancel, cancel.is_cancelled()) {

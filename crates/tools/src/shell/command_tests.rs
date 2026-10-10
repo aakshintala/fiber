@@ -1,5 +1,6 @@
 use std::io::{self, ErrorKind, Read};
-use std::process::{Child, Command};
+use std::os::unix::process::ExitStatusExt as _;
+use std::process::Command;
 use std::sync::{Arc, TryLockError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -18,8 +19,10 @@ use super::super::moved::Moved;
 use super::super::output::{
     Inner, OUTPUT_CAP, Shared, bump, complete_prefix, lock, note_eof, read_output, stream_output,
 };
-use super::super::process_group::{group_alive, refused_group, suppress_term};
+use super::super::process_group::suppress_term;
 use super::{MovePolicy, MoveReason, StopKind};
+use fakes::children::{Ready, ignores_sigterm};
+use support::group::alive;
 
 #[test]
 fn a_moved_sequence_wakes_without_a_cancel() {
@@ -279,39 +282,105 @@ fn a_wake_inside_wait_until_is_not_lost() {
     );
 }
 
-/// A process in the test's own group that a stray group signal would kill.
-fn sentinel() -> Child {
-    Command::new("sleep").arg("30").spawn().unwrap()
-}
+/// How long a listing test waits on a command before it fails.
+const LIST_DEADLINE: Duration = Duration::from_secs(10);
 
-/// Whether the sentinel is still running; ends it either way.
-fn survived(mut sentinel: Child) -> bool {
-    let alive = sentinel.try_wait().unwrap().is_none();
-    sentinel.kill().unwrap();
-    sentinel.wait().unwrap();
-    alive
+/// Runs `command` in the foreground with no move, on its own thread, and
+/// returns how it finished.
+fn run(dir: &std::path::Path, command: String) -> mpsc::Receiver<super::Finished> {
+    let dir = dir.to_path_buf();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let clock = FakeClock::new();
+        let cancel = CancelToken::new();
+        let ran = super::execute(
+            std::path::Path::new("/bin/sh"),
+            &command,
+            &dir,
+            Duration::from_secs(3600),
+            clock.as_ref(),
+            &cancel,
+            &Recorder::default(),
+            MovePolicy::Stay,
+            None,
+        )
+        .unwrap();
+        let super::Ran::Finished(finished) = ran else {
+            panic!("a command that may not move moved");
+        };
+        let _sent = tx.send(finished);
+    });
+    rx
 }
 
 #[test]
-fn group_zero_and_one_are_refused() {
-    assert!(refused_group(0));
-    assert!(refused_group(1));
-    assert!(!refused_group(2));
+fn a_command_is_listed_while_it_runs_and_not_once_it_ends() {
+    let dir = fakes::TempDir::new("fiber-groups-listed");
+    let ready = Ready::new(dir.path());
+    let done = run(dir.path(), ignores_sigterm(ready.path()));
+    let pgid = ready.wait(LIST_DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    let _own = ready.wait(LIST_DEADLINE);
+    assert!(
+        support::group::live().contains(pgid),
+        "the running group is listed"
+    );
+
+    support::group::kill_every_group();
+    // The run ends on its own pass: no cancel, no clock move.
+    let finished = Deadline::after(LIST_DEADLINE)
+        .recv(&done)
+        .expect("the run ended");
+    assert_eq!(finished.status.and_then(|status| status.signal()), Some(9));
+    assert_eq!(finished.stop, None);
+    assert!(!fakes::kill_group(pgid, "0").unwrap(), "the group is gone");
+    assert!(
+        !support::group::live().contains(pgid),
+        "an empty group leaves the list"
+    );
+    watchdog.stand_down(LIST_DEADLINE);
 }
 
-/// Only the probe runs here. A test never hands 0 or 1 to `signal_group`:
-/// a mutant of its guard would then send that signal to every process the
-/// user owns.
 #[test]
-fn group_zero_and_one_are_never_occupied() {
-    for group in [0, 1] {
-        let sentinel = sentinel();
-        assert!(!group_alive(group), "group {group} looked occupied");
-        assert!(
-            survived(sentinel),
-            "group {group} probe touched the sentinel"
-        );
-    }
+fn a_finished_command_is_not_listed() {
+    let dir = fakes::TempDir::new("fiber-groups-done");
+    let ready = Ready::new(dir.path());
+    let done = run(
+        dir.path(),
+        format!("echo $$ > '{}'", ready.path().display()),
+    );
+    let pgid = ready.wait(LIST_DEADLINE)[0];
+    let finished = Deadline::after(LIST_DEADLINE)
+        .recv(&done)
+        .expect("the run ended");
+    assert_eq!(finished.status.and_then(|status| status.code()), Some(0));
+    assert!(!support::group::live().contains(pgid));
+}
+
+#[test]
+fn kill_every_group_kills_a_listed_group_and_then_drops_it() {
+    let mut cmd = Command::new("sleep");
+    cmd.arg("60");
+    support::group::detach(&mut cmd, false);
+    let (mut child, listing) = support::group::spawn(&mut cmd).expect("sleep spawned");
+    let pgid = child.id();
+    let watchdog = fakes::Watchdog::group(pgid);
+    assert!(support::group::live().contains(pgid));
+
+    support::group::kill_every_group();
+    let (done, waited) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait()).unwrap());
+    let status = Deadline::after(LIST_DEADLINE)
+        .recv(&waited)
+        .expect("the killed child was reaped")
+        .unwrap();
+    assert_eq!(status.signal(), Some(9));
+    // Reaped, the group is empty: the next kill drops it unsignalled.
+    assert!(support::group::live().contains(pgid));
+    support::group::kill_every_group();
+    assert!(!support::group::live().contains(pgid));
+    support::group::live().unlist(listing);
+    watchdog.stand_down(LIST_DEADLINE);
 }
 
 #[test]
@@ -750,6 +819,7 @@ fn parked(shared: Arc<Shared>) -> Moved {
             timeout_at: None,
             move_at: None,
             pgid: 2,
+            listing: None,
             shared,
             ask: None,
             job: None,
@@ -890,7 +960,7 @@ impl Job {
         let finished = Deadline::after(JOB_DEADLINE)
             .recv(&self.done)
             .expect("the job's drive did not return within the deadline");
-        assert!(!group_alive(self.pgid), "the group was left running");
+        assert!(!alive(self.pgid), "the group was left running");
         self.watchdog.stand_down(JOB_DEADLINE);
         (finished, self.dir, self.deltas)
     }
