@@ -266,16 +266,15 @@ fn a_cached_server_whose_command_fails_dies_on_the_first_call() {
 #[test]
 fn a_lazy_start_that_misses_its_deadline_fails_with_deadline() {
     let setup = Setup::new();
-    // Silent behind a wrapper that reports its pid, so the watchdog below
-    // guards its group.
-    let ready = fakes::children::Ready::new(setup.dir.path());
-    let quoted = ready.path().display().to_string().replace('\'', "'\\''");
+    // Silent: `sleep` answers nothing, so only the deadline ends the
+    // lazy start. Armed before the start: the marker survives `exec` as
+    // argv[0], so a failure below still kills the detached group.
+    let marker = setup.dir.path().display().to_string();
+    let watchdog = fakes::Watchdog::matching(&marker);
+    let quoted = marker.replace('\'', "'\\''");
     let mut spec = setup.spec("slow");
     spec.command = "/bin/bash".to_owned();
-    spec.args = vec![
-        "-c".to_owned(),
-        format!("echo $$ > '{quoted}'\nexec sleep 30"),
-    ];
+    spec.args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
     setup.write_cache(&spec, &Setup::listed("echo"));
     let started = setup.start(vec![spec]);
     let tool = setup.tool(&started, "mcp__slow__echo");
@@ -300,14 +299,6 @@ fn a_lazy_start_that_misses_its_deadline_fails_with_deadline() {
         setup.fake.await_parked(deadline, WITHIN),
         "the lazy start waits on the startup deadline",
     );
-    // Armed once the wrapper reports its pid: a failure below still kills
-    // the detached group.
-    let pid = ready
-        .wait(WITHIN)
-        .into_iter()
-        .next()
-        .expect("the ready line holds the server's pid");
-    let watchdog = fakes::Watchdog::group(pid);
     setup.fake.advance(DEFAULT_STARTUP_TIMEOUT);
     let output = Deadline::after(WITHIN)
         .recv(&result)

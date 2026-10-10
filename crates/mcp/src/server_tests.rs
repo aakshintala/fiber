@@ -373,11 +373,13 @@ fn a_server_that_exits_at_once_fails_the_start() {
 fn a_server_that_misses_its_startup_deadline_is_left_out() {
     let setup = Setup::with_tools(&json!([]));
     let workspace = setup.dir.path().to_path_buf();
-    // Silent behind a wrapper that reports its pid: `sleep` answers
-    // nothing, so only the deadline ends the start.
-    let ready = fakes::children::Ready::new(&workspace);
-    let quoted = ready.path().display().to_string().replace('\'', "'\\''");
-    let script = format!("echo $$ > '{quoted}'\nexec sleep 30");
+    // Silent: `sleep` answers nothing, so only the deadline ends the
+    // start. Armed before the start: the marker survives `exec` as
+    // argv[0], so a failure below still kills the detached group.
+    let marker = workspace.display().to_string();
+    let watchdog = fakes::Watchdog::matching(&marker);
+    let quoted = marker.replace('\'', "'\\''");
+    let script = format!("exec -a '{quoted}' /bin/sleep 30");
     let timeout = Duration::from_secs(5);
     let deadline = setup.fake.now().checked_add(timeout).expect("deadline");
     let clock = setup.clock();
@@ -396,14 +398,6 @@ fn a_server_that_misses_its_startup_deadline_is_left_out() {
         .expect("a silent server misses its deadline");
         done.send(error).expect("collected");
     });
-    // Armed once the wrapper reports its pid: a failure below still kills
-    // the detached group.
-    let pid = ready
-        .wait(WITHIN)
-        .into_iter()
-        .next()
-        .expect("the ready line holds the server's pid");
-    let watchdog = fakes::Watchdog::group(pid);
     assert!(
         setup.fake.await_parked(deadline, WITHIN),
         "the start waits on the startup deadline within {WITHIN:?}",
@@ -583,9 +577,6 @@ fn a_stopped_server_takes_its_grandchild_with_it() {
     setup.write("grandchild", "");
     let opened = setup.start_expect(Duration::from_secs(5));
     let grandchild = setup.grandchild();
-    // The server is outside the test's own process group, so a failure
-    // below still kills the server's group when the watchdog drops.
-    let watchdog = fakes::Watchdog::group(setup.pid());
     let stopped = stopping(opened.server);
     // The grandchild holds stdout open, so the stop waits out the grace
     // on the clock: move the clock past it.
@@ -606,7 +597,6 @@ fn a_stopped_server_takes_its_grandchild_with_it() {
         fakes::pids_exit(&[grandchild], WITHIN),
         "the grandchild {grandchild} outlived the stop"
     );
-    watchdog.stand_down(WITHIN);
 }
 
 fn greet_prompts() -> serde_json::Value {
@@ -739,13 +729,6 @@ fn endless_pages_end_at_the_startup_deadline() {
             );
             done.send(outcome).expect("collected");
         });
-        // Detached from the test's own group: the guard kills it on a
-        // failure or timeout below.
-        let dir = setup.dir.path().to_path_buf();
-        crate::test_support::await_until("the server to spawn", move || {
-            dir.join("pid.txt").exists()
-        });
-        let watchdog = fakes::Watchdog::group(setup.pid());
         setup.await_requests(&format!(r#""method":"{method}""#), 2);
         let pid = setup.pid();
         setup.fake.advance(timeout + Duration::from_millis(1));
@@ -757,17 +740,14 @@ fn endless_pages_end_at_the_startup_deadline() {
             "endless {method} pages end at the startup deadline",
         );
         setup.await_reaped(pid);
-        watchdog.stand_down(WITHIN);
     }
 }
 
 /// A server that keeps running after its stdin ends: the fixture under a
 /// shell that loops once it returns. `term` is the shell's TERM trap:
-/// `exit 0` to end on SIGTERM, empty to ignore it. The wrapper shell is the
-/// group leader, so the watchdog guards its group: a failure below still
-/// kills it.
+/// `exit 0` to end on SIGTERM, empty to ignore it.
 #[track_caller]
-fn lingering(setup: &Setup, term: &str) -> (super::OpenServer, fakes::Watchdog) {
+fn lingering(setup: &Setup, term: &str) -> super::OpenServer {
     let script = format!("trap '{term}' TERM\n\"$1\" \"$2\"\nwhile :; do sleep 0.05; done\n");
     let fixture = fakes::mcp_fixture().display().to_string();
     let workspace = setup.dir.path().to_path_buf();
@@ -791,15 +771,9 @@ fn lingering(setup: &Setup, term: &str) -> (super::OpenServer, fakes::Watchdog) 
         );
         done.send(outcome).expect("collected");
     });
-    let opened = Deadline::after(WITHIN)
+    Deadline::after(WITHIN)
         .recv_or_fail(&result, "the lingering server starts")
-        .expect("the lingering server starts");
-    let pid = super::lock(&opened.server.inner.child)
-        .as_ref()
-        .expect("unreaped")
-        .0
-        .id();
-    (opened, fakes::Watchdog::group(pid))
+        .expect("the lingering server starts")
 }
 
 /// Runs `stop` on its own thread; the receiver hears when it returns.
@@ -815,19 +789,18 @@ fn stopping(server: super::Server) -> mpsc::Receiver<()> {
 #[test]
 fn a_server_that_ignores_end_of_input_stops_on_sigterm_before_the_grace() {
     let setup = Setup::with_tools(&json!([{"name": "hang"}]));
-    let (opened, watchdog) = lingering(&setup, "exit 0");
+    let opened = lingering(&setup, "exit 0");
     let stopped = stopping(opened.server);
     // The clock never moves: only the SIGTERM ends the server.
     Deadline::after(WITHIN).recv(&stopped).unwrap_or_else(|_| {
         panic!("the stop returned without the grace passing within {WITHIN:?}")
     });
-    watchdog.stand_down(WITHIN);
 }
 
 #[test]
 fn kill_every_server_kills_one_that_ignores_sigterm() {
     let setup = Setup::with_tools(&json!([{"name": "hang"}]));
-    let (opened, watchdog) = lingering(&setup, "");
+    let opened = lingering(&setup, "");
     let grace = setup.fake.now() + support::group::GRACE;
     let stopped = stopping(opened.server);
     assert!(
@@ -839,7 +812,6 @@ fn kill_every_server_kills_one_that_ignores_sigterm() {
     Deadline::after(WITHIN).recv(&stopped).unwrap_or_else(|_| {
         panic!("the stop returned once the server was killed within {WITHIN:?}")
     });
-    watchdog.stand_down(WITHIN);
 }
 
 #[test]
@@ -964,7 +936,7 @@ fn a_reap_unlists_under_the_shared_list_lock_before_it_waits() {
 #[test]
 fn stop_holds_the_child_unreaped_while_it_sends_sigterm() {
     let setup = Setup::with_tools(&json!([{"name": "hang"}]));
-    let (opened, watchdog) = lingering(&setup, "exit 0");
+    let opened = lingering(&setup, "exit 0");
     let server = std::sync::Arc::new(opened.server);
     let shared = std::sync::Arc::clone(&server.inner.shared);
     let pid = super::lock(&server.inner.child)
@@ -1011,7 +983,6 @@ fn stop_holds_the_child_unreaped_while_it_sends_sigterm() {
         .recv(&reaped)
         .unwrap_or_else(|_| panic!("the reap finished within {WITHIN:?}"));
     assert!(!support::group::live().contains(pid));
-    watchdog.stand_down(WITHIN);
 }
 
 /// A server start on its own thread; the receiver hears the outcome.
@@ -1046,7 +1017,8 @@ fn starting(
 /// inherited across `exec`, so `sleep` holds its stdout pipe open until it
 /// is killed. The script writes its pid to `ready` after installing the
 /// trap, so the wait below proves the trap is set before the stop signals
-/// it.
+/// it. The workspace path rides along as argv[0], surviving the `exec`:
+/// the test arms a watchdog matching it before the start.
 fn starting_silent_ignoring(
     ready: &std::path::Path,
     clock: &std::sync::Arc<dyn Clock>,
@@ -1054,7 +1026,8 @@ fn starting_silent_ignoring(
     timeout: Duration,
 ) -> mpsc::Receiver<Result<super::OpenServer, StartError>> {
     let quoted = ready.display().to_string().replace('\'', "'\\''");
-    let script = format!("trap '' TERM\necho $$ > '{quoted}'\nexec sleep 300");
+    let marker = workspace.display().to_string().replace('\'', "'\\''");
+    let script = format!("trap '' TERM\necho $$ > '{quoted}'\nexec -a '{marker}' sleep 300");
     starting(
         "/bin/bash",
         &["-c".to_owned(), script],
@@ -1082,23 +1055,22 @@ fn a_stopped_start_waits_out_the_grace_before_its_kill() {
     let setup = Setup::with_tools(&json!([]));
     let workspace = setup.dir.path().to_path_buf();
     let ready = fakes::children::Ready::new(setup.dir.path());
+    // Armed before the start on the marker the script carries as argv[0]:
+    // a failure below still kills the detached group.
+    let watchdog = fakes::Watchdog::matching(&workspace.display().to_string());
     let result = starting_silent_ignoring(
         ready.path(),
         &setup.clock(),
         &workspace,
         Duration::from_secs(600),
     );
-    // After the trap: the script writes its pid only once `trap '' TERM`
-    // is set, so the stop below cannot signal before it ignores SIGTERM.
-    // The ready line holds the server's pid: the shared list exposes no
-    // entries to read it from.
     let pid = ready
         .wait(WITHIN)
         .into_iter()
         .next()
         .expect("the ready line holds the server's pid");
-    // Armed on the reported group: a failure below still kills it.
-    let watchdog = fakes::Watchdog::group(pid);
+    // The script writes its pid only once `trap '' TERM` is set, so the
+    // stop below cannot signal before it ignores SIGTERM.
     crate::registry::stop_every_start();
     let grace = setup
         .fake
@@ -1131,11 +1103,13 @@ fn a_stopped_start_waits_out_the_grace_before_its_kill() {
 fn a_stopped_start_whose_server_exits_on_sigterm_returns_without_the_clock_moving() {
     let setup = Setup::with_tools(&json!([]));
     let workspace = setup.dir.path().to_path_buf();
-    // Silent behind a wrapper that reports its pid, but SIGTERM ends it:
-    // its output ends inside the grace.
-    let ready = fakes::children::Ready::new(&workspace);
-    let quoted = ready.path().display().to_string().replace('\'', "'\\''");
-    let script = format!("echo $$ > '{quoted}'\nexec sleep 30");
+    // Silent, but SIGTERM ends it: its output ends inside the grace.
+    // Armed before the start: the marker survives `exec` as argv[0], so
+    // a failure below still kills the detached group.
+    let marker = workspace.display().to_string();
+    let watchdog = fakes::Watchdog::matching(&marker);
+    let quoted = marker.replace('\'', "'\\''");
+    let script = format!("exec -a '{quoted}' /bin/sleep 30");
     let start_deadline = setup
         .fake
         .now()
@@ -1148,14 +1122,6 @@ fn a_stopped_start_whose_server_exits_on_sigterm_returns_without_the_clock_movin
         &workspace,
         Duration::from_secs(600),
     );
-    // Armed once the wrapper reports its pid: a failure below still kills
-    // the detached group.
-    let pid = ready
-        .wait(WITHIN)
-        .into_iter()
-        .next()
-        .expect("the ready line holds the server's pid");
-    let watchdog = fakes::Watchdog::group(pid);
     assert!(
         setup.fake.await_parked(start_deadline, WITHIN),
         "the start waits on its startup deadline within {WITHIN:?}"

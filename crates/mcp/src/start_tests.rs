@@ -209,16 +209,15 @@ fn a_failing_command_leaves_the_other_servers_tools_declared() {
 #[test]
 fn a_server_that_misses_its_deadline_is_left_out() {
     let setup = Setup::new();
-    // Silent behind a wrapper that reports its pid, so the watchdog below
-    // guards its group.
-    let ready = fakes::children::Ready::new(setup.dir.path());
-    let quoted = ready.path().display().to_string().replace('\'', "'\\''");
+    // Silent: `sleep` answers nothing, so only the deadline ends the
+    // start. Armed before the start: the marker survives `exec` as
+    // argv[0], so a failure below still kills the detached group.
+    let marker = setup.dir.path().display().to_string();
+    let watchdog = fakes::Watchdog::matching(&marker);
+    let quoted = marker.replace('\'', "'\\''");
     let mut spec = setup.spec("slow");
     spec.command = "/bin/bash".to_owned();
-    spec.args = vec![
-        "-c".to_owned(),
-        format!("echo $$ > '{quoted}'\nexec sleep 30"),
-    ];
+    spec.args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
     let deadline = setup
         .fake
         .now()
@@ -233,12 +232,6 @@ fn a_server_that_misses_its_deadline_is_left_out() {
             done.send(start(vec![spec], &workspace, &cache, &clock, "0.0.0"))
                 .expect("collected");
         });
-        let pid = ready
-            .wait(WITHIN)
-            .into_iter()
-            .next()
-            .expect("the ready line holds the server's pid");
-        let watchdog = fakes::Watchdog::group(pid);
         assert!(
             setup.fake.await_parked(deadline, WITHIN),
             "the start waits on the startup deadline",
@@ -274,25 +267,15 @@ fn servers_stop_at_once() {
     // Each server ignores SIGTERM and outlives the end of its input, so
     // each stop waits out the grace: both are parked on the clock together.
     let setups = [Setup::new(), Setup::new()];
-    let readys: Vec<fakes::children::Ready> = setups
-        .iter()
-        .map(|setup| fakes::children::Ready::new(setup.dir.path()))
-        .collect();
     let specs = setups
         .iter()
         .enumerate()
         .map(|(index, setup)| {
             setup.tools(&json!([{"name": format!("tool{index}")}]));
-            // The wrapper reports its pid: it is the group leader, so the
-            // watchdog below guards its group.
-            let quoted = readys[index]
-                .path()
-                .display()
-                .to_string()
-                .replace('\'', "'\\''");
-            let script = format!(
-                "echo $$ > '{quoted}'\ntrap '' TERM\n\"$1\" \"$2\"\nwhile :; do sleep 0.05; done\n"
-            );
+            // The wrapper loops past the end of its input, ignoring
+            // SIGTERM: the fixture directory rides along as its argument,
+            // so each setup's guard covers it.
+            let script = "trap '' TERM\n\"$1\" \"$2\"\nwhile :; do sleep 0.05; done\n".to_owned();
             ServerSpec {
                 command: "/bin/bash".to_owned(),
                 args: vec![
@@ -319,16 +302,6 @@ fn servers_stop_at_once() {
         .recv(&started)
         .unwrap_or_else(|_| panic!("both servers start within {WITHIN:?}"));
     assert_eq!(started.failed.len(), 0);
-    // Armed on each wrapper's group: a failure below still kills them.
-    let mut watchdogs = Vec::new();
-    for ready in &readys {
-        let pid = ready
-            .wait(WITHIN)
-            .into_iter()
-            .next()
-            .expect("the ready line holds the server's pid");
-        watchdogs.push(fakes::Watchdog::group(pid));
-    }
     let grace = setups[0].fake.now() + Duration::from_millis(800);
     let (done, stopped) = std::sync::mpsc::channel();
     let servers = started.servers;
@@ -344,9 +317,6 @@ fn servers_stop_at_once() {
     Deadline::after(WITHIN)
         .recv(&stopped)
         .unwrap_or_else(|_| panic!("the stop returned within {WITHIN:?}"));
-    for watchdog in watchdogs {
-        watchdog.stand_down(WITHIN);
-    }
 }
 
 #[test]
@@ -459,16 +429,15 @@ fn a_required_server_that_fails_to_start_yields_required_failed() {
 #[test]
 fn a_required_server_that_misses_its_deadline_yields_required_failed() {
     let setup = Setup::new();
-    // Silent behind a wrapper that reports its pid, so the watchdog below
-    // guards its group.
-    let ready = fakes::children::Ready::new(setup.dir.path());
-    let quoted = ready.path().display().to_string().replace('\'', "'\\''");
+    // Silent: `sleep` answers nothing, so only the deadline ends the
+    // start. Armed before the start: the marker survives `exec` as
+    // argv[0], so a failure below still kills the detached group.
+    let marker = setup.dir.path().display().to_string();
+    let watchdog = fakes::Watchdog::matching(&marker);
+    let quoted = marker.replace('\'', "'\\''");
     let mut spec = setup.spec("slow");
     spec.command = "/bin/bash".to_owned();
-    spec.args = vec![
-        "-c".to_owned(),
-        format!("echo $$ > '{quoted}'\nexec sleep 30"),
-    ];
+    spec.args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
     spec.required = true;
     let deadline = setup
         .fake
@@ -489,14 +458,6 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
         setup.fake.await_parked(deadline, WITHIN),
         "the start waits on the startup deadline",
     );
-    // Armed once the wrapper reports its pid: a failure below still kills
-    // the detached group.
-    let pid = ready
-        .wait(WITHIN)
-        .into_iter()
-        .next()
-        .expect("the ready line holds the server's pid");
-    let watchdog = fakes::Watchdog::group(pid);
     setup.fake.advance(DEFAULT_STARTUP_TIMEOUT);
     let started = Deadline::after(WITHIN)
         .recv(&result)
