@@ -474,7 +474,7 @@ fn query_replies(pending: &mut Vec<u8>) -> Vec<u8> {
         let mut first: Option<(usize, usize)> = None;
         for (at, (query, _)) in CAPABILITIES.iter().enumerate() {
             if let Some(pos) = find(pending, query)
-                && first.map_or(true, |(best, _)| pos < best)
+                && first.is_none_or(|(best, _)| pos < best)
             {
                 first = Some((pos, at));
             }
