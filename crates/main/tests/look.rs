@@ -380,7 +380,9 @@ const RULE_RGB: Colour = Colour::Rgb(58, 58, 74);
 fn hel_row(screen: &Screen) -> u16 {
     for y in 0..48 {
         for x in 0..157 {
-            let word: String = (0..3).map(|dx| screen.cell(x + dx, y).symbol.as_str()).collect();
+            let word: String = (0..3)
+                .map(|dx| screen.cell(x + dx, y).symbol.as_str())
+                .collect();
             if word == "Hel" {
                 return y;
             }
@@ -424,7 +426,9 @@ fn one_session_has_no_header_row_and_a_blank_column_each_side() {
         s.cell(126, 0).bg == PANEL_RGB
             && (0..48).any(|y| {
                 (0..157).any(|x| {
-                    (0..3).map(|dx| s.cell(x + dx, y).symbol.as_str()).collect::<String>()
+                    (0..3)
+                        .map(|dx| s.cell(x + dx, y).symbol.as_str())
+                        .collect::<String>()
                         == "Hel"
                 })
             })
@@ -441,7 +445,11 @@ fn one_session_has_no_header_row_and_a_blank_column_each_side() {
     assert_eq!(screen.cell(125, y).bg, Colour::Default);
     for y in 0..48 {
         for x in 126..160 {
-            assert_ne!(screen.cell(x, y).bg, Colour::Default, "panel cell ({x}, {y})");
+            assert_ne!(
+                screen.cell(x, y).bg,
+                Colour::Default,
+                "panel cell ({x}, {y})"
+            );
         }
     }
     for y in 0..48 {
@@ -466,10 +474,7 @@ fn hovering_the_panel_edge_tints_its_column_and_brightens_the_grip() {
         (0..48).all(|y| s.cell(126, y).bg == RULE_RGB)
             && (23..=25).all(|y| {
                 let grip = s.cell(126, y);
-                grip.symbol.as_str() == "⋮"
-                    && grip.fg == ACCENT_RGB
-                    && grip.bold
-                    && !grip.dim
+                grip.symbol.as_str() == "⋮" && grip.fg == ACCENT_RGB && grip.bold && !grip.dim
             })
     });
     for y in 0..48 {
@@ -510,12 +515,15 @@ fn two_sessions_show_the_rail_on_panel_and_hiding_it_leaves_the_grip() {
     run.read_until("Hel");
     run.read_until("finished");
     let screen = run.screen_until(160, 48, "the rail", |s| {
-        (23..=25).all(|y| s.cell(23, y).symbol.as_str() == "⋮")
-            && s.cell(23, 0).bg == PANEL_RGB
+        (23..=25).all(|y| s.cell(23, y).symbol.as_str() == "⋮") && s.cell(23, 0).bg == PANEL_RGB
     });
     for y in 0..48 {
         for x in 0..24 {
-            assert_ne!(screen.cell(x, y).bg, Colour::Default, "rail cell ({x}, {y})");
+            assert_ne!(
+                screen.cell(x, y).bg,
+                Colour::Default,
+                "rail cell ({x}, {y})"
+            );
         }
     }
     assert_eq!(screen.cell(23, 0).bg, PANEL_RGB);

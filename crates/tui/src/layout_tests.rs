@@ -272,14 +272,8 @@ fn past_gutter_moves_the_left_edge_and_keeps_the_right() {
     let area = Rect::new(3, 1, 10, 4);
     assert_eq!(past_gutter(area, 0), Rect::new(3, 1, 10, 4));
     assert_eq!(past_gutter(area, 1), Rect::new(4, 1, 9, 4));
-    assert_eq!(
-        past_gutter(Rect::new(3, 1, 1, 4), 1),
-        Rect::new(4, 1, 0, 4)
-    );
-    assert_eq!(
-        past_gutter(Rect::new(3, 1, 0, 4), 1),
-        Rect::new(3, 1, 0, 4)
-    );
+    assert_eq!(past_gutter(Rect::new(3, 1, 1, 4), 1), Rect::new(4, 1, 0, 4));
+    assert_eq!(past_gutter(Rect::new(3, 1, 0, 4), 1), Rect::new(3, 1, 0, 4));
     for (area, gutter) in [
         (area, 0),
         (area, 1),

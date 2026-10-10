@@ -205,8 +205,7 @@ pub(crate) fn render(
             let body_height = conversation.height.saturating_sub(header_height);
             let body = Rect::new(conversation.x, body_y, conversation.width, body_height);
             if app.item_view().is_some_and(|view| view.has_transcript) {
-                let inset =
-                    crate::layout::past_gutter(body, app.chrome().gutter());
+                let inset = crate::layout::past_gutter(body, app.chrome().gutter());
                 conversation_rows(app, inset, buf, &mut targets);
                 marks::draw(app, inset, buf, &mut targets);
             } else {
@@ -236,10 +235,7 @@ pub(crate) fn render(
                         // the last column to the bar, which draws before
                         // the marks over it. The rows keep one blank column
                         // on the left while the layout applies.
-                        let inset = crate::layout::past_gutter(
-                            conversation,
-                            app.chrome().gutter(),
-                        );
+                        let inset = crate::layout::past_gutter(conversation, app.chrome().gutter());
                         let (rows, bar) = scroll_bar::split(inset);
                         conversation_rows(app, rows, buf, &mut targets);
                         scroll_bar::draw(app, bar, buf);

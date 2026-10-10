@@ -643,7 +643,11 @@ fn the_transcript_keeps_the_gutter() {
             "type": "message", "source": "driver",
             "content": [{"type": "text", "text": "review it"}]}]}),
     ));
-    app.on_line(delegate_line("text_completed", 0, json!({"text": "looks good"})));
+    app.on_line(delegate_line(
+        "text_completed",
+        0,
+        json!({"text": "looks good"}),
+    ));
     let layout = app.chrome().layout().expect("a layout");
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);

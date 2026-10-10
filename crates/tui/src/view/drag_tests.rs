@@ -137,7 +137,14 @@ fn no_tint_without_a_pointer() {
     for (x, row) in [(29, 10), (158, 10)] {
         assert_ne!(bg(&buf, x, row), Role::Rule.color(), "column {x}");
     }
-    for (x, y) in [(29, 19), (29, 20), (29, 21), (158, 19), (158, 20), (158, 21)] {
+    for (x, y) in [
+        (29, 19),
+        (29, 20),
+        (29, 21),
+        (158, 19),
+        (158, 20),
+        (158, 21),
+    ] {
         let cell = buf.cell((x, y)).expect("a grip cell");
         assert_eq!(cell.fg, Role::Muted.color(), "grip ({x}, {y})");
         assert!(!cell.modifier.contains(Modifier::BOLD), "grip ({x}, {y})");

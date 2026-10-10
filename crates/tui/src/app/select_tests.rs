@@ -1190,7 +1190,10 @@ fn a_selection_with_the_layout_covers_the_pressed_text() {
     reply(&mut app, "a_m", "hello there");
     done(&mut app);
     let at = find(&app, "hello");
-    assert_eq!(select(&mut app, at, right(at, 4)), Effect::Copy("hello".to_owned()));
+    assert_eq!(
+        select(&mut app, at, right(at, 4)),
+        Effect::Copy("hello".to_owned())
+    );
     let area = app.conversation_area();
     let cells = app.selection_cells(area);
     assert_eq!(cells.len(), 1);
