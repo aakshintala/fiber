@@ -1002,6 +1002,78 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
     assert!(fakes::pids_exit(&[holder], DEADLINE), "the holder is gone");
 }
 
+/// A pid-mode drain that crosses the deadline still returns the child's
+/// own status with no timeout: once the reap starts draining, the deadline
+/// never starts a stop. The deadline sits just before, exactly at, and
+/// just after the drain bound.
+#[test]
+fn a_drain_crossing_the_deadline_returns_without_timeout() {
+    let (_dir, cwd) = dir("fiber-exec-drain-deadline");
+    let holder_file = cwd.join("holder-pid");
+    // The background `sleep` inherits stdout and holds the pipe open after
+    // the shell exits, so EOF never comes on its own.
+    let script = format!(
+        "(exec sleep 1000) & echo $! > '{}'; echo out; exit 0",
+        holder_file.display()
+    );
+    // One step of the fake clock: the three deadlines straddle the drain
+    // bound by it.
+    let step = Duration::from_millis(1);
+    for (case, shift) in [("before", -1), ("at", 0), ("after", 1)] {
+        let clock = FakeClock::new();
+        let drain_until = clock.now() + DRAIN;
+        let deadline = if shift < 0 {
+            drain_until
+                .checked_sub(step)
+                .expect("the deadline stays past the start")
+        } else if shift > 0 {
+            drain_until + step
+        } else {
+            drain_until
+        };
+        let (_cancel, done) = spawn(
+            sh_pid(&script, cwd.clone(), CAP),
+            Arc::clone(&clock),
+            Some(deadline),
+        );
+        // The reap starts the 2 s drain on the fake clock.
+        assert!(
+            clock.mark_parked(drain_until, DEADLINE).is_some(),
+            "waited {DEADLINE:?} for the pid-mode run to park for the 2 s drain ({case})"
+        );
+        // To the first bound, then past the later one: the run answers at
+        // the drain bound in every case, before any stop could start.
+        let first = deadline.min(drain_until);
+        clock.advance(first - clock.now());
+        let last = deadline.max(drain_until) + Duration::from_secs(1);
+        clock.advance(last - clock.now());
+        let outcome = done.recv_timeout(DEADLINE);
+        // The holder keeps the pipe whether the wait ended or not: kill it
+        // by its pid file before asserting, so no `sleep` outlives the test.
+        let holder: Option<u32> = std::fs::read_to_string(&holder_file)
+            .ok()
+            .and_then(|text| text.trim().parse().ok());
+        if let Some(holder) = holder {
+            kill_pid_now(holder);
+        }
+        let ran = outcome
+            .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the drained run ({case})"))
+            .unwrap_or_else(|err| panic!("the drained run returns ({case}): {}", err.message));
+        assert_eq!(
+            ran.exit_code,
+            Some(0),
+            "the run keeps the child's own status ({case})"
+        );
+        assert_eq!(ran.stdout, b"out\n", "the run keeps what it read ({case})");
+        assert!(!ran.timed_out, "no stop started, so no timeout ({case})");
+        let holder = holder.expect("the script wrote its holder's pid");
+        assert!(
+            fakes::pids_exit(&[holder], DEADLINE),
+            "the holder is gone ({case})"
+        );
+    }
+}
+
 /// A run without its own group is stopped by a signal to its pid: the
 /// program dies of SIGTERM itself, so no grace elapses.
 #[test]

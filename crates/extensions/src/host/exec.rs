@@ -374,8 +374,11 @@ fn supervise(
             drain_until = Some(add(now, DRAIN));
         }
         // A stop starts once: the cap, the deadline, or the drop. No signal
-        // to a group already seen empty: its id may be reused.
-        if kill_at.is_none() && (capped || deadline_due || cancelled) {
+        // to a group already seen empty: its id may be reused. Once the
+        // reap starts draining, the run ends at the drain bound with the
+        // child's own status, so the deadline never starts a stop after that.
+        let stop_due = capped || cancelled || (deadline_due && drain_until.is_none());
+        if kill_at.is_none() && stop_due {
             timed_out = deadline_due;
             if !seen_empty {
                 if let Some(child) = pid_child.as_deref_mut() {
