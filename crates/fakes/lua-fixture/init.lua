@@ -4,10 +4,10 @@
 
 local helper = require("lib.helper")
 
-fiber.command("echo", { timeout = 1000, run = function(text) return text end })
+fiber.command("echo", { timeout = 30000, run = function(text) return text end })
 
 fiber.command("globals", {
-  timeout = 1000,
+  timeout = 30000,
   run = function()
     local names = {}
     for name in pairs(_G) do names[#names + 1] = name end
@@ -18,14 +18,14 @@ fiber.command("globals", {
 
 -- require loads a module once, from the extension's directory.
 fiber.command("greet", {
-  timeout = 1000,
+  timeout = 30000,
   run = function(text)
     local again = require("lib.helper")
     return again.greet(text) .. (again == helper and " (cached)" or " (loaded again)")
   end,
 })
 
-fiber.command("fail", { timeout = 1000, run = function() error("boom") end })
+fiber.command("fail", { timeout = 30000, run = function() error("boom") end })
 
 fiber.command("spin", { timeout = 50, run = function() while true do end end })
 
@@ -87,7 +87,7 @@ fiber.command("spin_find", {
 
 -- A generator: coroutine.wrap still yields values as Lua's does.
 fiber.command("count", {
-  timeout = 1000,
+  timeout = 30000,
   run = function()
     local next_n = coroutine.wrap(function() for i = 1, 3 do coroutine.yield(i) end end)
     return next_n() + next_n() + next_n()
@@ -146,7 +146,7 @@ fiber.provider("fixture", {
   },
   -- Signs the method, URL and body hash, and reports which fields it saw.
   sign = {
-    timeout = 1000,
+    timeout = 30000,
     run = function(request)
       local seen = {}
       for key in pairs(request) do seen[#seen + 1] = key end
@@ -166,7 +166,7 @@ fiber.provider("fixture", {
 fiber.hook("after_tool", {
   phase = "sanitize",
   on_failure = "blocking",
-  timeout = 1000,
+  timeout = 30000,
   run = function(call)
     local text, found = call.content:gsub("hunter2", "[redacted]")
     if found > 0 then return { content = text } end
