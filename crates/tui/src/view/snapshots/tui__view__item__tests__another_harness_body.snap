@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view/item_tests.rs
-assertion_line: 809
 expression: "rows.join(\"\\n\")"
 ---
 fix the parser
@@ -23,7 +22,7 @@ Output since this terminal attached · /tmp/other.out
 ● claude  other/model
   task j_1
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
->
+▌ >
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 $0.00
 1 delegate running

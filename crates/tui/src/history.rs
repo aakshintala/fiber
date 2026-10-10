@@ -210,14 +210,14 @@ impl App {
         let browsing = self.history.browsing(&self.draft.expand());
         let effect = match key {
             Key::Up => {
-                if self.draft.is_empty() || (!self.draft.up(self.column_width()) && browsing) {
+                if self.draft.is_empty() || (!self.draft.up(self.draft_width()) && browsing) {
                     self.older()
                 } else {
                     Effect::None
                 }
             }
             Key::Down => {
-                if !self.draft.down(self.column_width()) && browsing {
+                if !self.draft.down(self.draft_width()) && browsing {
                     self.newer()
                 } else {
                     Effect::None
