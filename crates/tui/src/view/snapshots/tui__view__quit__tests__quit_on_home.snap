@@ -1,6 +1,6 @@
 ---
-source: crates/tui/src/home_view_tests.rs
-assertion_line: 1060
+source: crates/tui/src/view/quit_tests.rs
+assertion_line: 114
 expression: "screen(&app, 80, 24)"
 ---
 
@@ -12,13 +12,13 @@ expression: "screen(&app, 80, 24)"
                      ▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █ 0.0.1
                   Quit                                       ✕
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-› █? for shortcu  1 session working
+› █? for shortcu  2 sessions working
 
                   › enter  leave them running
 [w]  [no model]     c      close all
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    esc    stay                                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ●  fix the parser                                                              ✕
-✓  tidy docs      click a choice · they keep running meanwhile                 ✕
+●  fix the parse  click a choice · they keep running meanwhile                 ✕
 
                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 

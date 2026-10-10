@@ -26,6 +26,7 @@ mod marks;
 mod offer;
 mod overlay;
 pub(crate) mod panel;
+mod quit;
 pub(crate) mod rail;
 pub(crate) mod request;
 mod results;
@@ -245,6 +246,9 @@ pub(crate) fn render(
         }
     }
     drag::draw(app, buf, pointer);
+    if app.quit_open() {
+        quit::draw(app, area, buf, &mut targets);
+    }
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {
             buf.set_style(target.rect, HOVER_TINT);

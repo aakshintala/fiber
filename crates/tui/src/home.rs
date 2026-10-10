@@ -10,7 +10,8 @@ use serde_json::Value;
 /// A click target on home: one row's line, by the key [`Sessions`]
 /// gave it when it first appeared, its ✕ in the last column, the scope
 /// toggle heading the list, the workspace chip opening the workspace
-/// picker, and one picker row by its index in the list fixed at open.
+/// picker, one picker row by its index in the list fixed at open, and one
+/// quit choice while the quit question is open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Spot {
     /// A session row: clicking it, or Enter on it while focused, opens
@@ -29,6 +30,21 @@ pub(crate) enum Spot {
     Worktree,
     /// A picker row, by its index in the list fixed at open.
     Pick(usize),
+    /// A quit choice while the quit question is open: clicking it does
+    /// what its key does.
+    Quit(QuitChoice),
+}
+
+/// A quit choice: leaving working sessions running, closing them all
+/// now, or staying.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QuitChoice {
+    /// Enter: leave them running.
+    Leave,
+    /// `c`: close all now.
+    CloseAll,
+    /// Esc, or the title's ✕: stay.
+    Stay,
 }
 
 /// What the terminal knows about where it was launched.
@@ -623,11 +639,10 @@ pub(crate) fn toggle_line(waiting: usize, show_all: bool) -> String {
     }
 }
 
-/// The quit question on the foot: how many sessions work, and of them
-/// how many are also open elsewhere. With some working it asks: "2
-/// sessions working · enter leave them running · c close all · esc
-/// stay".
-pub(crate) fn quit_line(working: usize, elsewhere: usize) -> String {
+/// The quit question's count line: how many sessions work, and of them
+/// how many are also open elsewhere. The overlay draws it under its
+/// title (`docs/tui.md`, "Quit").
+pub(crate) fn quit_count(working: usize, elsewhere: usize) -> String {
     let sessions = if working == 1 {
         "1 session working".to_owned()
     } else {
@@ -640,7 +655,7 @@ pub(crate) fn quit_line(working: usize, elsewhere: usize) -> String {
     } else {
         format!(", {elsewhere} also open elsewhere")
     };
-    format!("{sessions}{elsewhere} · enter leave them running · c close all · esc stay")
+    format!("{sessions}{elsewhere}")
 }
 
 /// A resume line on exit: the session's id and the command resuming

@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 use super::{App, Effect, Kind, Link, Phase, mint, session_command};
 use crate::focus::{Area, order};
 use crate::home::{
-    HomeScreen, Launch, Left, Level, Sessions, Spot, State, Subs, cascade_line, delete_line,
-    dependents, from_status, line, line_with, recent_rows, toggle_line,
+    HomeScreen, Launch, Left, Level, QuitChoice, Sessions, Spot, State, Subs, cascade_line,
+    delete_line, dependents, from_status, line, line_with, recent_rows, toggle_line,
 };
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -796,9 +796,23 @@ impl App {
 
     /// Clicks `spot` on home: a row opens its session, its ✕ stops a
     /// live session or asks to delete an exited one, the toggle flips
-    /// the scope, the workspace chip opens the picker, and a picker row
-    /// chooses its workspace.
+    /// the scope, the workspace chip opens the picker, a picker row
+    /// chooses its workspace, and a quit choice does what its key does
+    /// while the quit question is open, on home or over a session.
     pub(super) fn home_click(&mut self, spot: Spot) -> Effect {
+        if let Spot::Quit(choice) = spot {
+            if !self.quit_open() {
+                return Effect::None;
+            }
+            match choice {
+                QuitChoice::Leave => return Effect::Quit,
+                QuitChoice::CloseAll => return self.close_all(),
+                QuitChoice::Stay => {
+                    self.close_prompt();
+                    return Effect::None;
+                }
+            }
+        }
         match spot {
             Spot::Entry(key) => self.open_row(key),
             Spot::Stop(key) => self.stop_or_ask(key),
@@ -806,6 +820,7 @@ impl App {
             Spot::Workspace => self.open_picker(),
             Spot::Worktree => self.toggle_worktree(),
             Spot::Pick(at) => self.pick(at),
+            Spot::Quit(_) => Effect::None,
         }
     }
 
@@ -1219,7 +1234,12 @@ impl App {
                 let row = home.sessions.by_key(key)?;
                 Some(line(row, &home.launch.project))
             }
-            Spot::Stop(_) | Spot::Toggle | Spot::Workspace | Spot::Worktree | Spot::Pick(_) => None,
+            Spot::Stop(_)
+            | Spot::Toggle
+            | Spot::Workspace
+            | Spot::Worktree
+            | Spot::Pick(_)
+            | Spot::Quit(_) => None,
         }
     }
 

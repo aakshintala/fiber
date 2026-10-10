@@ -632,10 +632,10 @@ impl App {
         self.draft.rows(self.draft_width()).len().min(cap)
     }
 
-    /// Whether the quit hint shows: armed by a first Ctrl+C, or asking
-    /// while sessions work.
+    /// Whether the quit hint shows: armed by a first Ctrl+C. The quit
+    /// question draws as an overlay, not through the hint.
     pub(crate) fn hint(&self) -> bool {
-        self.armed_at.is_some() || self.quit_open()
+        self.armed_at.is_some()
     }
 
     /// Whether new output arrived while scrolled up.
