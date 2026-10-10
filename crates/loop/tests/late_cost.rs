@@ -33,7 +33,8 @@ use r#loop::{BlockLimits, Model, Reviewer, TurnCancel};
 use serde_json::json;
 
 use support::{
-    DEADLINE, REVIEWER_MODEL, Session, TestTool, calls_reply, delivery, ignore, kinds, on_request,
+    DEADLINE, REVIEWER_MODEL, Session, TestTool, allow, calls_reply, delivery, kinds, on_request,
+    reply_delivery,
 };
 
 /// How long after a call's first record its lookup runs.
@@ -598,24 +599,6 @@ fn a_completed_reply_without_the_vendor_s_figure_is_looked_up() {
     assert_late_record_first(&lines, &first, 0.5);
 }
 
-fn allow() -> ReplyAnswer {
-    ReplyAnswer::Approval {
-        decision: Decision::Allow,
-        feedback: None,
-        remember: None,
-    }
-}
-
-fn answer(id: RequestId, answer: ReplyAnswer) -> Delivery {
-    Delivery::Reply(
-        Answer {
-            request_id: id,
-            answer,
-        },
-        ignore(),
-    )
-}
-
 #[test]
 fn a_reviewer_call_s_cost_settles_with_no_action() {
     let mut tool = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
@@ -663,7 +646,7 @@ fn a_reviewer_call_s_cost_settles_with_no_action() {
     session.looped = Some(looped);
     let answered = on_request(&session, {
         let inbox = session.inbox.clone();
-        move |id| inbox.send(answer(id, allow())).unwrap()
+        move |id| inbox.send(reply_delivery(id, allow())).unwrap()
     });
     let start = session.clock.now();
     session.inbox.send(delivery("go")).unwrap();

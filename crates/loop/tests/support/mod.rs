@@ -19,19 +19,22 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::Wake;
+use contract::commands::ReplyAnswer;
 use contract::emit::Emit;
 use contract::events::{
-    CacheLifetime, Event, ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
-    TurnOutcome,
+    AskStep, CacheLifetime, CallStatus, Decision, Event, InputItem, PermissionRequested,
+    ReasoningCompleted, RuleScope, SessionStarted, StandingRule, TextDelta, ToolCallArgumentsDelta,
+    ToolCallCompleted, ToolCallRequested, ToolCallStarted, TurnOutcome, TurnStarted, Variables,
+    VariablesSource,
 };
-use contract::inbox::{Ack, Delivery, Message};
+use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
 use contract::provider::{
     CallError, Delta, ModelCall, ModelRequest, Provider, Reply, ReplyAction, ToolDefinition,
 };
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
-use contract::{CommandId, Envelope, RequestId, SessionId};
+use contract::{ActionId, CommandId, Envelope, ErrorCode, RequestId, SessionId, TurnId};
 use fakes::clock::FakeClock;
 use fakes::{BlockingProvider, Scripted, ScriptedProvider, reply};
 use log::{Log, Watcher};
@@ -1584,6 +1587,319 @@ fn unpriced() -> Model {
 /// The kinds of `lines`, in order.
 pub(crate) fn kinds(lines: &[Envelope]) -> Vec<&str> {
     lines.iter().map(|l| l.kind.as_str()).collect()
+}
+
+/// The start of every turn's event kinds: the session opens and the turn
+/// begins. Tests compose it with [`STEP`], a reply segment such as
+/// [`REPLY`], and scenario-specific tails.
+pub(crate) const OPENING: &[&str] = &[
+    "session_started",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+];
+
+/// The event kinds opening one model step.
+pub(crate) const STEP: &[&str] = &["step_started"];
+
+/// The event kinds of a reply of one text part, streamed as two
+/// fragments.
+pub(crate) const REPLY: &[&str] = &[
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+];
+
+/// The event kinds closing a turn.
+pub(crate) const ENDED: &[&str] = &["turn_completed"];
+
+/// Asserts the complete, ordered event kinds of `lines`, streamed
+/// fragments included: `parts`, concatenated (`docs/testing.md`, "Event
+/// streams"). Every segment together must name every line; never a
+/// subset.
+pub(crate) fn assert_kinds(lines: &[Envelope], parts: &[&[&str]]) {
+    assert_eq!(kinds(lines), parts.concat());
+}
+
+/// The `{"city": "Paris"}` arguments every weather-tool test calls with.
+pub(crate) fn paris() -> Value {
+    json!({"city": "Paris"})
+}
+
+/// The `tool_call_completed` lines, in request order.
+pub(crate) fn completed(lines: &[Envelope]) -> Vec<&Envelope> {
+    lines
+        .iter()
+        .filter(|line| line.kind == "tool_call_completed")
+        .collect()
+}
+
+/// The first text part of a completed call's content.
+pub(crate) fn text_first(line: &Envelope) -> &str {
+    line.payload["content"][0]["text"].as_str().unwrap()
+}
+
+/// The text of a completed call's content, every part joined.
+pub(crate) fn text_all(line: &Envelope) -> String {
+    line.payload["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|part| part["text"].as_str().unwrap())
+        .collect()
+}
+
+/// A tool whose calls declare `executes`, with `subject` and `prefix` as
+/// its tool reads them.
+pub(crate) fn shell(subject: Option<&str>, prefix: Option<&str>) -> Arc<TestTool> {
+    let mut tool = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
+    tool.subject = subject.map(str::to_owned);
+    tool.prefix = prefix.map(str::to_owned);
+    Arc::new(tool)
+}
+
+/// An approval that allows the call.
+pub(crate) fn allow() -> ReplyAnswer {
+    ReplyAnswer::Approval {
+        decision: Decision::Allow,
+        feedback: None,
+        remember: None,
+    }
+}
+
+/// An approval that denies the call, with `feedback` as its reason.
+pub(crate) fn deny(feedback: Option<&str>) -> ReplyAnswer {
+    ReplyAnswer::Approval {
+        decision: Decision::Deny,
+        feedback: feedback.map(str::to_owned),
+        remember: None,
+    }
+}
+
+/// A reply to `request_id` carrying `answer`, acknowledged by `ack`.
+pub(crate) fn reply_to(request_id: RequestId, answer: ReplyAnswer, ack: Ack) -> Delivery {
+    Delivery::Reply(contract::commands::Reply { request_id, answer }, ack)
+}
+
+/// A reply to `request_id` carrying `answer`, whose acknowledgement is
+/// dropped unread.
+pub(crate) fn reply_delivery(request_id: RequestId, answer: ReplyAnswer) -> Delivery {
+    Delivery::Reply(contract::commands::Reply { request_id, answer }, ignore())
+}
+
+/// Sends `answer` to `request` and returns how the command was answered,
+/// waiting one [`DEADLINE`] instead of hanging.
+pub(crate) fn answer(session: &Session, request: &str, answer: ReplyAnswer) -> Answer {
+    let (tx, rx) = mpsc::channel();
+    let ack = Ack(Box::new(move |answer| {
+        let _sent = tx.send(answer);
+    }));
+    session
+        .inbox
+        .send(Delivery::Reply(
+            contract::commands::Reply {
+                request_id: RequestId(request.into()),
+                answer,
+            },
+            ack,
+        ))
+        .unwrap();
+    rx.recv_timeout(DEADLINE).expect("the reply is answered")
+}
+
+/// Sends the JSON `answer` to `request` and returns how the command was
+/// answered, waiting one [`DEADLINE`] instead of hanging.
+pub(crate) fn answer_value(session: &Session, request: &str, value: Value) -> Answer {
+    answer(
+        session,
+        request,
+        serde_json::from_value::<ReplyAnswer>(value).unwrap(),
+    )
+}
+
+/// The lines of `kind`, in order.
+pub(crate) fn of_kind<'a>(lines: &'a [Envelope], kind: &str) -> Vec<&'a Envelope> {
+    lines.iter().filter(|line| line.kind == kind).collect()
+}
+
+/// A command answer that accepts with no result.
+pub(crate) fn accepted() -> Answer {
+    Ok(None)
+}
+
+/// A command answer that rejects with `code` and `message`.
+pub(crate) fn rejected(code: ErrorCode, message: &str) -> Answer {
+    Err(Rejection {
+        code,
+        message: message.to_owned(),
+    })
+}
+
+/// A history log with helpers, then a resumed loop on it: a temp dir
+/// holding `workspace/` and `credentials/`, a `FakeClock`, a `Log` opened
+/// on session `s_1`, and its `SessionStarted` line. Per-binary extras live
+/// in that binary's own `impl History` block.
+pub(crate) struct History {
+    pub(crate) root: fakes::TempDir,
+    pub(crate) dir: PathBuf,
+    pub(crate) log: Arc<Log>,
+    pub(crate) workspace: String,
+    pub(crate) credentials: PathBuf,
+    pub(crate) clock: Arc<FakeClock>,
+    pub(crate) provider: Arc<ScriptedProvider>,
+    pub(crate) rules: Arc<FakeRules>,
+    pub(crate) inbox_tx: mpsc::Sender<Delivery>,
+    pub(crate) inbox_rx: Option<mpsc::Receiver<Delivery>>,
+    /// How many lines the history held when the test froze it.
+    pub(crate) history_len: usize,
+}
+
+impl History {
+    /// A history answering `script`, with its `SessionStarted` line written.
+    pub(crate) fn new(script: Vec<Scripted>) -> Self {
+        let root = fakes::TempDir::new("fiber-history");
+        let workspace_dir = root.path().join("w");
+        std::fs::create_dir_all(&workspace_dir).unwrap();
+        let credentials = root.path().join("credentials");
+        std::fs::create_dir_all(&credentials).unwrap();
+        let workspace = workspace_dir.display().to_string();
+        let clock = FakeClock::new();
+        let log = Arc::new(
+            Log::create(
+                root.path(),
+                SessionId("s_1".into()),
+                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+            )
+            .unwrap(),
+        );
+        let dir = root.path().join("s_1");
+        let (tx, rx) = mpsc::channel();
+        let history = Self {
+            root,
+            dir,
+            log,
+            workspace,
+            credentials,
+            clock,
+            provider: Arc::new(ScriptedProvider::new(script)),
+            rules: Arc::new(FakeRules::empty()),
+            inbox_tx: tx,
+            inbox_rx: Some(rx),
+            history_len: 0,
+        };
+        history.session_started();
+        history
+    }
+
+    /// Appends the opening `SessionStarted` line.
+    pub(crate) fn session_started(&self) {
+        self.log
+            .append(
+                &Event::SessionStarted(SessionStarted {
+                    workspace: self.workspace.clone(),
+                    variables: Variables {
+                        path: String::new(),
+                        names: Vec::new(),
+                        source: VariablesSource::Inherited,
+                    },
+                    parent: None,
+                    forked_from: None,
+                    rewind: None,
+                    worktree: None,
+                }),
+                None,
+                None,
+            )
+            .unwrap();
+    }
+
+    /// Every line of the session log.
+    pub(crate) fn lines(&self) -> Vec<Envelope> {
+        log::read(&self.dir).unwrap()
+    }
+
+    /// Appends `event` on `turn` and `action`.
+    pub(crate) fn append(&self, event: &Event, turn: Option<TurnId>, action: Option<ActionId>) {
+        self.log.append(event, turn, action).unwrap();
+    }
+}
+
+/// The turn-starting event of a driver turn saying `text`.
+pub(crate) fn user_turn(text: &str) -> Event {
+    Event::TurnStarted(TurnStarted {
+        input: vec![InputItem::Message {
+            content: vec![ContentPart::Text { text: text.into() }],
+            sender: contract::shapes::Sender {
+                origin: Origin::Driver,
+                command_id: Some(CommandId("c_1".into())),
+            },
+            changed_by: None,
+        }],
+    })
+}
+
+/// The request event of a call to `name` with `{"city": city}` arguments.
+pub(crate) fn requested(name: &str, city: &str) -> Event {
+    Event::ToolCallRequested(ToolCallRequested {
+        name: name.into(),
+        arguments: json!({"city": city}),
+        provider_id: None,
+        repair: None,
+        ran_by: None,
+        provider_item: None,
+    })
+}
+
+/// The start event of a call that declares no effects.
+pub(crate) fn started() -> Event {
+    Event::ToolCallStarted(ToolCallStarted {
+        declared: DeclaredEffects {
+            effects: Vec::new(),
+            reversible: true,
+            paths: None,
+        },
+        arguments: None,
+        changed_by: None,
+    })
+}
+
+/// The completion event of a call that returned `text`. Named apart from
+/// the `tool_call_completed` line filter because it builds an event.
+pub(crate) fn completed_event(text: &str) -> Event {
+    Event::ToolCallCompleted(ToolCallCompleted {
+        status: CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![ContentPart::Text { text: text.into() }],
+        details: None,
+        artifact: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        provider_item: None,
+    })
+}
+
+/// A standing-ask approval carrying `request_id`.
+pub(crate) fn standing_request(request_id: &str) -> Event {
+    Event::PermissionRequested(PermissionRequested {
+        request_id: RequestId(request_id.into()),
+        declared: DeclaredEffects {
+            effects: vec![Effect::Executes],
+            reversible: true,
+            paths: None,
+        },
+        step: AskStep::StandingAsk {
+            standing_rule: StandingRule {
+                scope: RuleScope::Project,
+                prefix: "run tests".into(),
+            },
+        },
+    })
 }
 
 /// One attempt number per `assistant_message_started`, in order. A start

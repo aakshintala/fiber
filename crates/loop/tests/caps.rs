@@ -19,9 +19,9 @@ use contract::events::TurnOutcome;
 use contract::tool::{Bound, Tool};
 use fakes::Scripted;
 use r#loop::{ResultCaps, capped};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use support::{Session, TestTool, calls_reply, delivery, kinds};
+use support::{Session, TestTool, calls_reply, completed, delivery, kinds, paris, text_first};
 
 /// A session whose first reply makes `calls` and whose second says "Done.",
 /// with `tools` passed through `capped` with `caps` before they are
@@ -84,21 +84,6 @@ fn turn(
     (session, lines)
 }
 
-fn paris() -> Value {
-    json!({"city": "Paris"})
-}
-
-fn completed(lines: &[Envelope]) -> Vec<&Envelope> {
-    lines
-        .iter()
-        .filter(|l| l.kind == "tool_call_completed")
-        .collect()
-}
-
-fn text(line: &Envelope) -> &str {
-    line.payload["content"][0]["text"].as_str().unwrap()
-}
-
 /// A tool returning `size` bytes of text, cut to `bound`, plus one image
 /// part.
 fn long(size: usize, bound: Bound) -> (Arc<TestTool>, String) {
@@ -139,7 +124,7 @@ fn a_cap_smaller_than_the_tools_own_keeps_that_many_bytes_and_moves_the_rest_to_
     assert_eq!(done.payload["artifact"], artifact.as_str());
     let path = session.dir.join(&artifact);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), full);
-    let kept = text(done);
+    let kept = text_first(done);
     let (head, notice) = kept.split_once('\n').unwrap();
     assert_eq!(head, &full[..1000]);
     assert_eq!(
@@ -161,7 +146,7 @@ fn a_cap_larger_than_the_tools_own_leaves_a_result_uncut() {
         &[("cat", paris())],
     );
     let done = completed(&lines)[0];
-    assert_eq!(text(done), full);
+    assert_eq!(text_first(done), full);
     assert_eq!(done.payload.get("artifact"), None);
 }
 
@@ -173,7 +158,7 @@ fn a_cap_on_a_both_ends_tool_keeps_both_ends_in_proportion() {
         &caps(&[("cat", 16)]),
         &[("cat", paris())],
     );
-    let kept: Vec<&str> = text(completed(&lines)[0]).split('\n').collect();
+    let kept: Vec<&str> = text_first(completed(&lines)[0]).split('\n').collect();
     assert_eq!(kept.len(), 3);
     assert_eq!(kept[0], &full[..6]);
     assert!(kept[1].starts_with("[84 bytes cut."), "{}", kept[1]);
@@ -189,7 +174,7 @@ fn a_zero_cap_keeps_only_the_notice() {
         &[("cat", paris())],
     );
     let done = completed(&lines)[0];
-    let kept = text(done);
+    let kept = text_first(done);
     let (head, notice) = kept.split_once('\n').unwrap();
     assert_eq!(head, "");
     assert!(notice.starts_with("[100 bytes cut."), "{notice}");

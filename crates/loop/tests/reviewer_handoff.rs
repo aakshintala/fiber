@@ -17,28 +17,17 @@ use std::thread;
 
 use contract::events::{CacheLifetime, Control, TurnOutcome};
 use contract::provider::{Cost, Input, ModelRequest, Provider};
-use contract::shapes::{Effect, Failure};
+use contract::shapes::Failure;
 use contract::tool::Tool;
 use contract::{Envelope, ErrorCode, ThinkingLevel};
 use fakes::{Scripted, ScriptedProvider};
 use r#loop::{BlockLimits, Loop, Model, Permissions, PromptInputs, Reviewer};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use support::{
     DEADLINE, MODEL, REVIEWER_MODEL, Session, TestTool, calls_reply, delivery, handoff, kinds,
+    paris, shell,
 };
-
-fn paris() -> Value {
-    json!({"city": "Paris"})
-}
-
-/// A tool whose calls declare `executes`, so the reviewer judges them.
-fn shell() -> Arc<TestTool> {
-    let mut tool = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
-    tool.subject = None;
-    tool.prefix = None;
-    Arc::new(tool)
-}
 
 /// The session script every selection flow shares: a reviewed call, a
 /// said message, the handoff's note request, then a reviewed call.
@@ -142,7 +131,7 @@ fn failed(message: &str) -> Scripted {
 
 #[test]
 fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
-    let tool = shell();
+    let tool = shell(None, None);
     let mut session = Session::with_tools(script(), None, vec![tool as Arc<dyn Tool>]);
     let reviewer = session.reviewer_thinking(
         vec![
@@ -266,7 +255,7 @@ fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
 
 #[test]
 fn selection_prose_never_reaches_a_later_prompt() {
-    let tool = shell();
+    let tool = shell(None, None);
     let mut session = Session::with_tools(script(), None, vec![tool as Arc<dyn Tool>]);
     let reviewer = session.reviewer(vec![
         Scripted::text("allow"),
@@ -358,7 +347,7 @@ fn selection_prose_never_reaches_a_later_prompt() {
 #[test]
 fn a_resume_rebuilds_the_reviewers_input_from_the_selection() {
     // Run A goes straight through the shared flow.
-    let tool = shell();
+    let tool = shell(None, None);
     let mut session_a = Session::with_tools(script(), None, vec![tool as Arc<dyn Tool>]);
     let reviewer_a = session_a.reviewer(vec![
         Scripted::text("allow"),
@@ -369,7 +358,7 @@ fn a_resume_rebuilds_the_reviewers_input_from_the_selection() {
 
     // Run B stops after the handoff turn, drops the loop, resumes from the
     // log with a reviewer answering what is left, then runs the last turn.
-    let tool = shell();
+    let tool = shell(None, None);
     let mut session_b = Session::with_tools(script(), None, vec![tool as Arc<dyn Tool>]);
     session_b.reviewer(vec![Scripted::text("allow"), Scripted::text("1")]);
     prompt_turn(&mut session_b, "never push to main");
@@ -391,7 +380,7 @@ fn a_resume_rebuilds_the_reviewers_input_from_the_selection() {
     );
     prompt.credential = Some("work".into());
     let rules: Arc<dyn contract::rules::Rules> = session_b.rules.clone();
-    let tool = shell();
+    let tool = shell(None, None);
     let reviewer_b = Arc::new(ScriptedProvider::new(vec![Scripted::text("allow")]));
     let mut looped = Loop::resume(
         Arc::clone(&session_b.log),
@@ -474,7 +463,7 @@ fn a_resume_rebuilds_the_reviewers_input_from_the_selection() {
 
 #[test]
 fn a_failed_selection_keeps_every_earlier_person_message() {
-    let tool = shell();
+    let tool = shell(None, None);
     let mut session = Session::with_tools(script(), None, vec![tool as Arc<dyn Tool>]);
     let reviewer = session.reviewer(vec![
         Scripted::text("allow"),
@@ -596,7 +585,7 @@ fn a_failed_selection_keeps_every_earlier_person_message() {
 fn an_unreadable_selection_is_asked_once_more() {
     // "keep all" then "1": two selection requests, and the line keeps
     // message 1.
-    let tool = shell();
+    let tool = shell(None, None);
     let mut session = Session::with_tools(script(), None, vec![tool as Arc<dyn Tool>]);
     let reviewer = session.reviewer(vec![
         Scripted::text("allow"),
@@ -693,7 +682,7 @@ fn an_unreadable_selection_is_asked_once_more() {
     assert!(kept[0].payload.get("failed").is_none());
 
     // "keep all" twice: two requests, then the fallback.
-    let tool = shell();
+    let tool = shell(None, None);
     let mut session = Session::with_tools(script(), None, vec![tool as Arc<dyn Tool>]);
     let reviewer = session.reviewer(vec![
         Scripted::text("allow"),
@@ -785,7 +774,7 @@ fn an_unreadable_selection_is_asked_once_more() {
 
 #[test]
 fn none_keeps_nothing_and_a_second_handoff_with_no_person_message_asks_nothing() {
-    let tool = shell();
+    let tool = shell(None, None);
     let mut session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", paris())]),
@@ -1040,7 +1029,7 @@ fn the_oldest_kept_messages_drop_past_the_reviewers_window() {
 
 #[test]
 fn the_selection_is_not_asked_past_the_spending_budget() {
-    let tool = shell();
+    let tool = shell(None, None);
     let mut handoffer = TestTool::reads("handoffer", "Noted.");
     handoffer.output.control = Some(Control {
         handoff: Some("note".into()),
@@ -1114,7 +1103,7 @@ fn the_selection_is_not_asked_past_the_spending_budget() {
 /// reviewed no tool call, so `action_id` is absent.
 #[test]
 fn the_handoff_selection_marks_its_usage_with_no_call() {
-    let tool = shell();
+    let tool = shell(None, None);
     let mut session = Session::with_tools(script(), None, vec![tool as Arc<dyn Tool>]);
     let _reviewer = session.reviewer(vec![
         Scripted::text("allow"),

@@ -22,46 +22,14 @@ use contract::provider::{Input, ModelRequest};
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{Effect, Failure};
 use contract::tool::Tool;
-use contract::{Envelope, ErrorCode, RequestId, ThinkingLevel};
+use contract::{Envelope, ErrorCode, ThinkingLevel};
 use fakes::{Scripted, ScriptedProvider};
 use serde_json::{Value, json};
 
 use support::{
-    REVIEWER_MODEL, Session, TestTool, calls_reply, delivery, ignore, kinds, on_request,
+    REVIEWER_MODEL, Session, TestTool, allow, calls_reply, completed, delivery, deny, ignore,
+    kinds, on_request, paris, reply_delivery, shell, text_first,
 };
-
-fn paris() -> Value {
-    json!({"city": "Paris"})
-}
-
-/// A tool whose calls declare `executes`, with `subject` and `prefix` as its
-/// tool reads them.
-fn shell(subject: Option<&str>, prefix: Option<&str>) -> Arc<TestTool> {
-    let mut tool = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
-    tool.subject = subject.map(str::to_owned);
-    tool.prefix = prefix.map(str::to_owned);
-    Arc::new(tool)
-}
-
-fn allow() -> ReplyAnswer {
-    ReplyAnswer::Approval {
-        decision: Decision::Allow,
-        feedback: None,
-        remember: None,
-    }
-}
-
-fn deny(feedback: Option<&str>) -> ReplyAnswer {
-    ReplyAnswer::Approval {
-        decision: Decision::Deny,
-        feedback: feedback.map(str::to_owned),
-        remember: None,
-    }
-}
-
-fn reply(request_id: RequestId, answer: ReplyAnswer) -> Delivery {
-    Delivery::Reply(Reply { request_id, answer }, ignore())
-}
 
 /// Sends "go", runs one turn, and returns its lines.
 fn go(session: &mut Session) -> Vec<Envelope> {
@@ -72,17 +40,6 @@ fn go(session: &mut Session) -> Vec<Envelope> {
 
 fn line<'a>(lines: &'a [Envelope], kind: &str) -> &'a Envelope {
     lines.iter().find(|l| l.kind == kind).unwrap()
-}
-
-fn completed(lines: &[Envelope]) -> Vec<&Envelope> {
-    lines
-        .iter()
-        .filter(|l| l.kind == "tool_call_completed")
-        .collect()
-}
-
-fn text(line: &Envelope) -> &str {
-    line.payload["content"][0]["text"].as_str().unwrap()
 }
 
 fn usages(lines: &[Envelope]) -> Vec<&Envelope> {
@@ -424,7 +381,7 @@ fn a_block_returns_the_reason_and_the_turn_continues() {
     assert_eq!(done.payload["status"], "denied");
     assert_eq!(done.payload["reason"], "reviewer");
     assert_eq!(
-        text(done),
+        text_first(done),
         "The reviewer blocked this call: force-pushes to main Respect this boundary and \
          find another way to do the task. It did not run."
     );
@@ -550,7 +507,7 @@ fn a_verdict_still_unreadable_escalates() {
     ]);
     let answered = on_request(&session, {
         let inbox = session.inbox.clone();
-        move |id| inbox.send(reply(id, allow())).unwrap()
+        move |id| inbox.send(reply_delivery(id, allow())).unwrap()
     });
     let lines = go(&mut session);
     answered.join().unwrap();
@@ -608,7 +565,7 @@ fn a_failed_reviewer_call_escalates_with_its_failure() {
     })]);
     let answered = on_request(&session, {
         let inbox = session.inbox.clone();
-        move |id| inbox.send(reply(id, allow())).unwrap()
+        move |id| inbox.send(reply_delivery(id, allow())).unwrap()
     });
     let lines = go(&mut session);
     answered.join().unwrap();
@@ -825,7 +782,11 @@ fn the_third_consecutive_block_asks_a_person() {
     );
     let answered = on_request(&session, {
         let inbox = session.inbox.clone();
-        move |id| inbox.send(reply(id, deny(Some("not on main")))).unwrap()
+        move |id| {
+            inbox
+                .send(reply_delivery(id, deny(Some("not on main"))))
+                .unwrap()
+        }
     });
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
@@ -912,7 +873,7 @@ fn an_allow_between_blocks_resets_the_consecutive_count() {
     assert_eq!(tool.ran().len(), 1);
     let answered = on_request(&session, {
         let inbox = session.inbox.clone();
-        move |id| inbox.send(reply(id, deny(None))).unwrap()
+        move |id| inbox.send(reply_delivery(id, deny(None))).unwrap()
     });
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
@@ -963,7 +924,7 @@ fn the_session_limit_escalates_with_a_raised_consecutive_limit() {
     );
     let answered = on_request(&session, {
         let inbox = session.inbox.clone();
-        move |id| inbox.send(reply(id, allow())).unwrap()
+        move |id| inbox.send(reply_delivery(id, allow())).unwrap()
     });
     let lines = go(&mut session);
     answered.join().unwrap();
@@ -1051,7 +1012,7 @@ fn a_persons_allow_with_remember_adds_a_grant_later_calls_match() {
         let inbox = session.inbox.clone();
         move |id| {
             inbox
-                .send(reply(
+                .send(reply_delivery(
                     id,
                     ReplyAnswer::Approval {
                         decision: Decision::Allow,

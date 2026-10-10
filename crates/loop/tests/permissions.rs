@@ -13,8 +13,7 @@ mod support;
 
 use std::sync::Arc;
 
-use contract::commands::{Reply, ReplyAnswer};
-use contract::events::{Decision, TurnOutcome};
+use contract::events::TurnOutcome;
 use contract::inbox::Delivery;
 use contract::provider::Input;
 use contract::rules::{Rule, RuleDecision, RulesError, StandingRules};
@@ -22,13 +21,12 @@ use contract::shapes::Effect;
 use contract::tool::Tool;
 use contract::{Envelope, RequestId};
 use fakes::Scripted;
-use serde_json::{Value, json};
+use serde_json::json;
 
-use support::{Session, TestTool, calls_reply, delivery, ignore, kinds, message, on_request};
-
-fn paris() -> Value {
-    json!({"city": "Paris"})
-}
+use support::{
+    Session, TestTool, allow, calls_reply, completed, delivery, deny, ignore, kinds, message,
+    on_request, paris, reply_delivery, shell, text_first,
+};
 
 fn rule(decision: RuleDecision, tool: &str, prefix: &str) -> Rule {
     Rule {
@@ -44,33 +42,6 @@ fn standing(global: Vec<Rule>, project: Vec<Rule>) -> StandingRules {
     StandingRules { global, project }
 }
 
-/// A tool whose calls execute with `subject`.
-fn shell(subject: Option<&str>) -> Arc<TestTool> {
-    let mut tool = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
-    tool.subject = subject.map(str::to_owned);
-    Arc::new(tool)
-}
-
-fn allow() -> ReplyAnswer {
-    ReplyAnswer::Approval {
-        decision: Decision::Allow,
-        feedback: None,
-        remember: None,
-    }
-}
-
-fn deny(feedback: Option<&str>) -> ReplyAnswer {
-    ReplyAnswer::Approval {
-        decision: Decision::Deny,
-        feedback: feedback.map(str::to_owned),
-        remember: None,
-    }
-}
-
-fn reply(request_id: RequestId, answer: ReplyAnswer) -> Delivery {
-    Delivery::Reply(Reply { request_id, answer }, ignore())
-}
-
 /// Sends "go", runs one turn, and returns its lines.
 fn go(session: &mut Session) -> Vec<Envelope> {
     session.inbox.send(delivery("go")).unwrap();
@@ -80,17 +51,6 @@ fn go(session: &mut Session) -> Vec<Envelope> {
 
 fn line<'a>(lines: &'a [Envelope], kind: &str) -> &'a Envelope {
     lines.iter().find(|l| l.kind == kind).unwrap()
-}
-
-fn completed(lines: &[Envelope]) -> Vec<&Envelope> {
-    lines
-        .iter()
-        .filter(|l| l.kind == "tool_call_completed")
-        .collect()
-}
-
-fn text(line: &Envelope) -> &str {
-    line.payload["content"][0]["text"].as_str().unwrap()
 }
 
 /// The full ordered kind list of a first turn whose first reply calls once
@@ -288,7 +248,7 @@ fn a_git_diff_of_fiber_home_is_refused() {
 
 #[test]
 fn a_standing_deny_refuses_and_never_runs() {
-    let tool = shell(Some("npm publish"));
+    let tool = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", paris())]),
@@ -317,7 +277,7 @@ fn a_standing_deny_refuses_and_never_runs() {
     assert_eq!(done.payload["status"], "denied");
     assert_eq!(done.payload["reason"], "standing_rule");
     assert_eq!(
-        text(done),
+        text_first(done),
         "A standing rule refuses this call. It did not run."
     );
     assert!(!kinds(&lines).contains(&"tool_call_started"));
@@ -326,7 +286,7 @@ fn a_standing_deny_refuses_and_never_runs() {
 
 #[test]
 fn a_standing_allow_runs_an_executes_call() {
-    let tool = shell(Some("npm test --watch"));
+    let tool = shell(Some("npm test --watch"), None);
     let mut session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", paris())]),
@@ -356,13 +316,13 @@ fn a_standing_allow_runs_an_executes_call() {
     assert_eq!(resolved.action_id, started.action_id);
     let done = completed(&lines)[0];
     assert_eq!(done.payload["status"], "completed");
-    assert_eq!(text(done), "Ran it.");
+    assert_eq!(text_first(done), "Ran it.");
     assert_eq!(tool.ran().len(), 1);
 }
 
 #[test]
 fn a_call_no_rule_can_match_is_not_matched_by_a_deny() {
-    let tool = shell(None);
+    let tool = shell(None, None);
     let mut session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", paris())]),
@@ -394,7 +354,7 @@ fn a_call_no_rule_can_match_is_not_matched_by_a_deny() {
 
 #[test]
 fn a_standing_ask_runs_on_a_persons_allow() {
-    let tool = shell(Some("npm publish"));
+    let tool = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", paris())]),
@@ -409,7 +369,7 @@ fn a_standing_ask_runs_on_a_persons_allow() {
     ));
     let answered = on_request(&session, {
         let inbox = session.inbox.clone();
-        move |id| inbox.send(reply(id, allow())).unwrap()
+        move |id| inbox.send(reply_delivery(id, allow())).unwrap()
     });
     let lines = go(&mut session);
     answered.join().unwrap();
@@ -444,7 +404,7 @@ fn a_standing_ask_runs_on_a_persons_allow() {
 
 #[test]
 fn a_reply_naming_a_wrong_request_is_ignored_and_the_right_one_answers() {
-    let tool = shell(Some("npm publish"));
+    let tool = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", paris())]),
@@ -461,9 +421,9 @@ fn a_reply_naming_a_wrong_request_is_ignored_and_the_right_one_answers() {
         let inbox = session.inbox.clone();
         move |id| {
             inbox
-                .send(reply(RequestId("r_wrong".into()), allow()))
+                .send(reply_delivery(RequestId("r_wrong".into()), allow()))
                 .unwrap();
-            inbox.send(reply(id, allow())).unwrap();
+            inbox.send(reply_delivery(id, allow())).unwrap();
         }
     });
     let lines = go(&mut session);
@@ -499,7 +459,7 @@ fn a_reply_naming_a_wrong_request_is_ignored_and_the_right_one_answers() {
 
 #[test]
 fn a_persons_deny_with_feedback_reaches_the_models_next_request() {
-    let tool = shell(Some("npm publish"));
+    let tool = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", paris())]),
@@ -514,7 +474,11 @@ fn a_persons_deny_with_feedback_reaches_the_models_next_request() {
     ));
     let answered = on_request(&session, {
         let inbox = session.inbox.clone();
-        move |id| inbox.send(reply(id, deny(Some("not on main")))).unwrap()
+        move |id| {
+            inbox
+                .send(reply_delivery(id, deny(Some("not on main"))))
+                .unwrap()
+        }
     });
     let lines = go(&mut session);
     answered.join().unwrap();
@@ -534,7 +498,7 @@ fn a_persons_deny_with_feedback_reaches_the_models_next_request() {
     assert_eq!(done.payload["status"], "denied");
     assert_eq!(done.payload["reason"], "person");
     assert_eq!(
-        text(done),
+        text_first(done),
         "A person refused this call: not on main. It did not run."
     );
     assert!(tool.ran().is_empty());
@@ -553,7 +517,7 @@ fn a_persons_deny_with_feedback_reaches_the_models_next_request() {
 
 #[test]
 fn a_message_sent_while_waiting_steers_the_next_step() {
-    let tool = shell(Some("npm publish"));
+    let tool = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", paris())]),
@@ -572,7 +536,7 @@ fn a_message_sent_while_waiting_steers_the_next_step() {
             inbox
                 .send(Delivery::Steer(message("wait, actually"), ignore()))
                 .unwrap();
-            inbox.send(reply(id, allow())).unwrap();
+            inbox.send(reply_delivery(id, allow())).unwrap();
         }
     });
     let lines = go(&mut session);
@@ -597,7 +561,7 @@ fn a_message_sent_while_waiting_steers_the_next_step() {
 
 #[test]
 fn an_unanswerable_session_denies_a_standing_ask_without_asking() {
-    let tool = shell(Some("npm publish"));
+    let tool = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", paris())]),
@@ -629,7 +593,7 @@ fn an_unanswerable_session_denies_a_standing_ask_without_asking() {
 
 #[test]
 fn unreadable_rules_deny_with_the_file_and_line() {
-    let tool = shell(Some("npm publish"));
+    let tool = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", paris())]),
@@ -658,7 +622,7 @@ fn unreadable_rules_deny_with_the_file_and_line() {
 
 #[test]
 fn the_projects_rule_is_reported_over_a_global_one() {
-    let tool = shell(Some("npm test --watch"));
+    let tool = shell(Some("npm test --watch"), None);
     let mut session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", paris())]),
@@ -673,7 +637,7 @@ fn the_projects_rule_is_reported_over_a_global_one() {
     ));
     let answered = on_request(&session, {
         let inbox = session.inbox.clone();
-        move |id| inbox.send(reply(id, allow())).unwrap()
+        move |id| inbox.send(reply_delivery(id, allow())).unwrap()
     });
     let lines = go(&mut session);
     answered.join().unwrap();
@@ -722,7 +686,11 @@ fn an_always_reviewed_call_reaches_the_reviewer_despite_a_project_allow() {
     );
     let answered = on_request(&session, {
         let inbox = session.inbox.clone();
-        move |id| inbox.send(reply(id, deny(Some("not now")))).unwrap()
+        move |id| {
+            inbox
+                .send(reply_delivery(id, deny(Some("not now"))))
+                .unwrap()
+        }
     });
     let lines = go(&mut session);
     answered.join().unwrap();

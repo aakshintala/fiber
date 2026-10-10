@@ -78,17 +78,13 @@ fn turn(tool: TestTool, hooks: Option<Arc<dyn Hooks>>) -> (Session, Vec<Envelope
     (session, lines, peak)
 }
 
-fn completed(lines: &[Envelope]) -> &Envelope {
-    lines
-        .iter()
-        .find(|line| line.kind == "tool_call_completed")
-        .unwrap()
-}
-
 /// Checks the completion carries the 16 KiB cut of `full` with its notice,
 /// and the artifact holds `full` byte for byte.
 fn assert_cut(session: &Session, lines: &[Envelope], full: &str) {
-    let done = completed(lines);
+    let done = lines
+        .iter()
+        .find(|line| line.kind == "tool_call_completed")
+        .unwrap();
     let id = done.action_id.clone().unwrap().0;
     let artifact = format!("artifacts/{id}.txt");
     assert_eq!(done.payload["artifact"], artifact.as_str());

@@ -11,10 +11,12 @@
 
 mod support;
 
+use support::History;
+use support::{completed_event, requested, standing_request, started, user_turn};
+
 use contract::events::{
-    CallStatus, Empty, Environment, Event, InputItem, OpeningMessage, ReasoningCompleted,
-    SteeringApplied, TextCompleted, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
-    TurnStarted,
+    Empty, Environment, Event, InputItem, OpeningMessage, ReasoningCompleted, SteeringApplied,
+    TextCompleted, ToolCallCompleted, ToolCallRequested, TurnStarted,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, DeclaredEffects, Origin, Sender};
@@ -62,58 +64,6 @@ impl LogLines {
     fn lines(&self) -> Vec<Envelope> {
         log::read(&self.dir).unwrap()
     }
-}
-
-fn user_turn(text: &str) -> Event {
-    Event::TurnStarted(TurnStarted {
-        input: vec![InputItem::Message {
-            content: vec![ContentPart::Text { text: text.into() }],
-            sender: Sender {
-                origin: Origin::Driver,
-                command_id: Some(CommandId("c_1".into())),
-            },
-            changed_by: None,
-        }],
-    })
-}
-
-fn requested(name: &str) -> Event {
-    Event::ToolCallRequested(ToolCallRequested {
-        name: name.into(),
-        arguments: json!({"city": "Paris"}),
-        provider_id: None,
-        repair: None,
-        ran_by: None,
-        provider_item: None,
-    })
-}
-
-fn started() -> Event {
-    Event::ToolCallStarted(ToolCallStarted {
-        declared: DeclaredEffects {
-            effects: Vec::new(),
-            reversible: true,
-            paths: None,
-        },
-        arguments: None,
-        changed_by: None,
-    })
-}
-
-fn completed(text: &str) -> Event {
-    Event::ToolCallCompleted(ToolCallCompleted {
-        status: CallStatus::Completed,
-        reason: None,
-        error: None,
-        process: None,
-        content: vec![ContentPart::Text { text: text.into() }],
-        details: None,
-        artifact: None,
-        changes: None,
-        control: None,
-        changed_by: None,
-        provider_item: None,
-    })
 }
 
 fn assistant(text: &str) -> Event {
@@ -166,9 +116,9 @@ fn result_of(input: &Input) -> (&ActionId, &str, bool) {
 fn a_completed_call_is_unchanged() {
     let log = LogLines::new();
     log.append(user_turn("one"), None);
-    log.append(requested("read"), Some("a_1"));
+    log.append(requested("read", "Paris"), Some("a_1"));
     log.append(started(), Some("a_1"));
-    log.append(completed("Paris."), Some("a_1"));
+    log.append(completed_event("Paris."), Some("a_1"));
 
     let lines = log.lines();
     assert_eq!(
@@ -195,7 +145,7 @@ fn a_completed_call_is_unchanged() {
 fn a_requested_only_call_is_sent_as_never_ran() {
     let log = LogLines::new();
     log.append(user_turn("one"), None);
-    log.append(requested("read"), Some("a_1"));
+    log.append(requested("read", "Paris"), Some("a_1"));
 
     let lines = log.lines();
     assert_eq!(kinds_of(&lines), ["turn_started", "tool_call_requested"]);
@@ -212,7 +162,7 @@ fn a_requested_only_call_is_sent_as_never_ran() {
 fn a_started_call_without_a_result_is_sent_as_outcome_unknown() {
     let log = LogLines::new();
     log.append(user_turn("one"), None);
-    log.append(requested("read"), Some("a_1"));
+    log.append(requested("read", "Paris"), Some("a_1"));
     log.append(started(), Some("a_1"));
 
     let lines = log.lines();
@@ -233,10 +183,10 @@ fn a_started_call_without_a_result_is_sent_as_outcome_unknown() {
 fn one_completed_and_one_cut_short_call_share_a_batch() {
     let log = LogLines::new();
     log.append(user_turn("one"), None);
-    log.append(requested("read"), Some("a_1"));
-    log.append(requested("search"), Some("a_2"));
+    log.append(requested("read", "Paris"), Some("a_1"));
+    log.append(requested("search", "Paris"), Some("a_2"));
     log.append(started(), Some("a_1"));
-    log.append(completed("Paris."), Some("a_1"));
+    log.append(completed_event("Paris."), Some("a_1"));
     log.append(started(), Some("a_2"));
 
     let lines = log.lines();
@@ -269,7 +219,7 @@ fn one_completed_and_one_cut_short_call_share_a_batch() {
 fn a_fixed_result_sits_before_the_next_user_message() {
     let log = LogLines::new();
     log.append(user_turn("one"), None);
-    log.append(requested("read"), Some("a_1"));
+    log.append(requested("read", "Paris"), Some("a_1"));
     log.append(user_turn("two"), None);
 
     let lines = log.lines();
@@ -294,7 +244,7 @@ fn a_text_between_request_and_start_does_not_flush_early() {
     let log = LogLines::new();
     log.append(user_turn("one"), None);
     log.append(assistant("Looking."), Some("a_0"));
-    log.append(requested("read"), Some("a_1"));
+    log.append(requested("read", "Paris"), Some("a_1"));
     log.append(assistant("Found it."), Some("a_0"));
     log.append(started(), Some("a_1"));
 
@@ -326,10 +276,10 @@ fn a_later_text_does_not_flush_a_pending_call() {
     let log = LogLines::new();
     log.append(user_turn("one"), None);
     log.append(reasoning("Hmm."), Some("a_0"));
-    log.append(requested("read"), Some("a_1"));
-    log.append(requested("search"), Some("a_2"));
+    log.append(requested("read", "Paris"), Some("a_1"));
+    log.append(requested("search", "Paris"), Some("a_2"));
     log.append(assistant("One down."), Some("a_0"));
-    log.append(completed("Paris."), Some("a_1"));
+    log.append(completed_event("Paris."), Some("a_1"));
 
     let lines = log.lines();
     assert_eq!(
@@ -365,9 +315,9 @@ fn a_completion_after_a_flush_leaves_exactly_one_result() {
     // real one stays where the log put it, the only result the call has.
     let log = LogLines::new();
     log.append(user_turn("one"), None);
-    log.append(requested("read"), Some("a_1"));
+    log.append(requested("read", "Paris"), Some("a_1"));
     log.append(user_turn("two"), None);
-    log.append(completed("Paris."), Some("a_1"));
+    log.append(completed_event("Paris."), Some("a_1"));
 
     let lines = log.lines();
     assert_eq!(
@@ -402,9 +352,9 @@ fn a_completion_after_a_flush_leaves_exactly_one_result() {
 fn two_pending_calls_get_fixed_results_in_request_order() {
     let log = LogLines::new();
     log.append(user_turn("one"), None);
-    log.append(requested("read"), Some("a_1"));
+    log.append(requested("read", "Paris"), Some("a_1"));
     log.append(assistant("Two calls."), Some("a_0"));
-    log.append(requested("search"), Some("a_2"));
+    log.append(requested("search", "Paris"), Some("a_2"));
 
     let lines = log.lines();
     assert_eq!(
@@ -429,7 +379,7 @@ fn two_pending_calls_get_fixed_results_in_request_order() {
 fn steering_starts_a_new_batch() {
     let log = LogLines::new();
     log.append(user_turn("one"), None);
-    log.append(requested("read"), Some("a_1"));
+    log.append(requested("read", "Paris"), Some("a_1"));
     log.append(steering("wait"), Some("a_9"));
 
     let lines = log.lines();
@@ -453,7 +403,7 @@ fn an_assistant_message_start_starts_a_new_batch() {
     // the text at the end of the log.
     let log = LogLines::new();
     log.append(user_turn("one"), None);
-    log.append(requested("read"), Some("a_1"));
+    log.append(requested("read", "Paris"), Some("a_1"));
     log.append(message_started(), Some("a_9"));
     log.append(assistant("On it."), Some("a_9"));
 
@@ -481,7 +431,7 @@ fn a_fixed_result_at_the_end_of_the_log_ends_the_conversation() {
     let log = LogLines::new();
     log.append(user_turn("one"), None);
     log.append(assistant("Looking."), Some("a_0"));
-    log.append(requested("read"), Some("a_1"));
+    log.append(requested("read", "Paris"), Some("a_1"));
 
     let lines = log.lines();
     assert_eq!(
@@ -500,8 +450,8 @@ fn a_fixed_result_at_the_end_of_the_log_ends_the_conversation() {
 fn a_call_with_no_action_id_is_skipped() {
     let log = LogLines::new();
     log.append(user_turn("one"), None);
-    log.append(requested("read"), None);
-    log.append(completed("Paris."), None);
+    log.append(requested("read", "Paris"), None);
+    log.append(completed_event("Paris."), None);
 
     let lines = log.lines();
     assert_eq!(
@@ -544,63 +494,7 @@ fn resume_prompt(home: &std::path::Path) -> r#loop::PromptInputs {
     )
 }
 
-/// A history log with helpers, then a resumed loop on it.
-struct History {
-    _root: fakes::TempDir,
-    dir: std::path::PathBuf,
-    log: Arc<Log>,
-    workspace: String,
-    credentials: std::path::PathBuf,
-    rules: Arc<support::FakeRules>,
-    provider: Arc<ScriptedProvider>,
-    inbox_tx: mpsc::Sender<Delivery>,
-    inbox_rx: Option<mpsc::Receiver<Delivery>>,
-    history_len: usize,
-    /// The log's clock: what an idle wait reads.
-    clock: Arc<fakes::clock::FakeClock>,
-}
-
-impl History {
-    fn new(script: Vec<Scripted>) -> Self {
-        let root = fakes::TempDir::new("fiber-resume");
-        let workspace_dir = root.path().join("w");
-        std::fs::create_dir_all(&workspace_dir).unwrap();
-        let credentials = root.path().join("credentials");
-        std::fs::create_dir_all(&credentials).unwrap();
-        let workspace = workspace_dir.display().to_string();
-        let clock = fakes::clock::FakeClock::new();
-        let log = Arc::new(
-            Log::create(
-                root.path(),
-                SessionId("s_1".into()),
-                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-            )
-            .unwrap(),
-        );
-        let dir = root.path().join("s_1");
-        let history = Self {
-            _root: root,
-            dir,
-            log,
-            workspace,
-            credentials,
-            rules: Arc::new(support::FakeRules::empty()),
-            provider: Arc::new(ScriptedProvider::new(script)),
-            inbox_tx: mpsc::channel().0,
-            inbox_rx: None,
-            history_len: 0,
-            clock,
-        };
-        let (tx, rx) = mpsc::channel();
-        let mut history = History {
-            inbox_tx: tx,
-            inbox_rx: Some(rx),
-            ..history
-        };
-        history.session_started();
-        history
-    }
-
+impl support::History {
     fn tid(&self) -> contract::TurnId {
         contract::TurnId("t_1".into())
     }
@@ -609,31 +503,6 @@ impl History {
         self.log
             .append(&event, Some(self.tid()), action.map(|a| ActionId(a.into())))
             .unwrap();
-    }
-
-    fn session_started(&mut self) {
-        self.log
-            .append(
-                &Event::SessionStarted(SessionStarted {
-                    workspace: self.workspace.clone(),
-                    variables: Variables {
-                        path: String::new(),
-                        names: Vec::new(),
-                        source: VariablesSource::Inherited,
-                    },
-                    parent: None,
-                    forked_from: None,
-                    rewind: None,
-                    worktree: None,
-                }),
-                None,
-                None,
-            )
-            .unwrap();
-    }
-
-    fn lines(&self) -> Vec<Envelope> {
-        log::read(&self.dir).unwrap()
     }
 
     /// Freezes the history: the lines a resume folds.
@@ -652,7 +521,7 @@ impl History {
     /// `PromptInputs` over a temp home with a fixed shell: the opening
     /// message reads no real files.
     fn prompt(&self) -> r#loop::PromptInputs {
-        resume_prompt(self._root.path())
+        resume_prompt(self.root.path())
     }
 
     fn resume(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> Loop {
@@ -762,7 +631,7 @@ fn the_first_request_after_resume_carries_the_earlier_turn_the_fixed_result_and_
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(Event::AssistantMessageStarted(Empty {}), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
     history.freeze();
     assert_eq!(
         history.history_kinds(),
@@ -823,7 +692,7 @@ fn the_first_request_after_resume_carries_the_earlier_turn_the_fixed_result_and_
 fn resume_writes_no_session_started_and_seq_continues() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
-    history.write(requested("read"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
     history.freeze();
 
     let looped = history.resume(Vec::new());
@@ -870,7 +739,7 @@ fn a_session_grant_from_before_the_resume_is_honoured() {
         Scripted::text("Done."),
     ]);
     history.write(user_turn("one"), None);
-    history.write(requested("exec"), Some("a_1"));
+    history.write(requested("exec", "Paris"), Some("a_1"));
     history.write(
         Event::PermissionResolved(PermissionResolved {
             request_id: None,
@@ -888,7 +757,7 @@ fn a_session_grant_from_before_the_resume_is_honoured() {
         Some("a_1"),
     );
     history.write(started(), Some("a_1"));
-    history.write(completed("done"), Some("a_1"));
+    history.write(completed_event("done"), Some("a_1"));
     history.freeze();
     assert_eq!(
         history.history_kinds(),
@@ -1245,8 +1114,8 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
     tool.subject = Some("run tests".into());
     let tool = Arc::new(tool);
     history.write(user_turn("one"), None);
-    history.write(requested("read"), Some("a_1"));
-    history.write(completed("Paris."), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
+    history.write(completed_event("Paris."), Some("a_1"));
     history.freeze();
     assert_eq!(
         history.history_kinds(),
@@ -1338,7 +1207,7 @@ fn sent_counts_the_fixed_results_flushed_at_the_last_request() {
     // conversation, so `sent` counts it.
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
-    history.write(requested("read"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
     history.write(message_started(), Some("a_0"));
     history.freeze();
     assert_eq!(
@@ -1695,29 +1564,10 @@ use std::sync::Mutex;
 
 use contract::events::{
     AskStep, Escalation, FiberExited, FiberStarted, Interaction, InteractionRequested,
-    PermissionRequested, RuleOffer, RuleScope, StandingRule, TurnCompleted,
-    TurnOutcome as CompletedOutcome,
+    PermissionRequested, RuleOffer, TurnCompleted, TurnOutcome as CompletedOutcome,
 };
 use contract::inbox::{Ack, Answer};
 use contract::shapes::{Effect, Usage};
-
-/// A standing-ask approval for `action`, carrying `request_id`.
-fn standing_request(request_id: &str) -> Event {
-    Event::PermissionRequested(PermissionRequested {
-        request_id: contract::RequestId(request_id.into()),
-        declared: DeclaredEffects {
-            effects: vec![Effect::Executes],
-            reversible: true,
-            paths: None,
-        },
-        step: AskStep::StandingAsk {
-            standing_rule: StandingRule {
-                scope: RuleScope::Project,
-                prefix: "run tests".into(),
-            },
-        },
-    })
-}
 
 /// A review approval for `action`, carrying `request_id`, an escalation and
 /// a rule offer.
@@ -1844,7 +1694,7 @@ fn is_accepted(seen: &Arc<Mutex<Option<Answer>>>) -> bool {
     matches!(&*seen.lock().unwrap(), Some(Ok(_)))
 }
 
-impl History {
+impl support::History {
     /// Resumes with `tools` as an unattended session answers: no person
     /// can answer an approval.
     fn resume_headless(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> Loop {
@@ -1918,7 +1768,7 @@ fn suspended_history(script: Vec<Scripted>) -> History {
     let mut history = History::new(script);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -1931,8 +1781,8 @@ fn an_open_batch_gets_no_fixed_result() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
-    history.write(requested("search"), Some("a_2"));
+    history.write(requested("read", "Paris"), Some("a_1"));
+    history.write(requested("search", "Paris"), Some("a_2"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -1991,8 +1841,8 @@ fn without_a_suspend_the_same_batch_gets_fixed_results() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
-    history.write(requested("search"), Some("a_2"));
+    history.write(requested("read", "Paris"), Some("a_1"));
+    history.write(requested("search", "Paris"), Some("a_2"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.freeze();
     history
@@ -2046,10 +1896,10 @@ fn a_call_outside_the_open_batch_still_gets_its_fixed_result() {
     // is outside the suspended batch; only it gets a fixed result.
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
-    history.write(requested("read"), Some("a_0"));
+    history.write(requested("read", "Paris"), Some("a_0"));
     history.write(message_started(), Some("a_9"));
-    history.write(requested("read"), Some("a_1"));
-    history.write(requested("search"), Some("a_2"));
+    history.write(requested("read", "Paris"), Some("a_1"));
+    history.write(requested("search", "Paris"), Some("a_2"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -2105,7 +1955,7 @@ fn no_suspended_on_resumes_as_a_cut_short_turn() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(None), None);
@@ -2158,7 +2008,7 @@ fn a_suspended_on_naming_an_unknown_request_resumes_as_cut_short() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_unknown")), None);
@@ -2200,7 +2050,7 @@ fn a_suspended_on_naming_an_interaction_resumes_as_cut_short() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
     history.write(confirm_requested("r_7"), None);
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_7")), None);
@@ -2243,7 +2093,7 @@ fn an_already_resolved_request_resumes_as_cut_short() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(denied_resolved(Some("r_9")), Some("a_1"));
     history.write(fiber_started(), None);
@@ -2290,7 +2140,7 @@ fn a_line_after_fiber_exited_resumes_as_cut_short() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -2336,7 +2186,7 @@ fn a_completed_turn_resumes_as_cut_short() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(turn_completed(), None);
     history.write(fiber_started(), None);
@@ -2381,7 +2231,7 @@ fn a_request_outside_the_batch_resumes_as_cut_short() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
     history.write(standing_request("r_9"), Some("a_9"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -2543,7 +2393,7 @@ fn a_suspended_call_touching_a_configured_credential_file_is_refused_without_ask
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -2611,9 +2461,9 @@ fn a_resumed_credential_refusal_answers_its_request_and_spares_later_calls() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("first"), Some("a_1"));
-    history.write(requested("read"), Some("a_2"));
-    history.write(requested("last"), Some("a_3"));
+    history.write(requested("first", "Paris"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_2"));
+    history.write(requested("last", "Paris"), Some("a_3"));
     history.write(standing_request("r_9"), Some("a_2"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -2709,8 +2559,8 @@ fn a_cancel_reaches_a_call_running_after_a_resumed_credential_refusal() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
-    history.write(requested("last"), Some("a_2"));
+    history.write(requested("read", "Paris"), Some("a_1"));
+    history.write(requested("last", "Paris"), Some("a_2"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -2772,9 +2622,9 @@ fn a_resumed_credential_refusal_hands_off_from_a_later_call() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("first"), Some("a_1"));
-    history.write(requested("read"), Some("a_2"));
-    history.write(requested("wrapup"), Some("a_3"));
+    history.write(requested("first", "Paris"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_2"));
+    history.write(requested("wrapup", "Paris"), Some("a_3"));
     history.write(standing_request("r_9"), Some("a_2"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -2855,8 +2705,8 @@ fn a_resumed_credential_refusal_ends_the_turn_on_a_later_calls_questions() {
     let mut history = History::new(Vec::new());
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
-    history.write(requested("ask"), Some("a_2"));
+    history.write(requested("read", "Paris"), Some("a_1"));
+    history.write(requested("ask", "Paris"), Some("a_2"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -2977,9 +2827,9 @@ fn a_resumed_credential_refusal_prefers_the_block_budget_over_later_questions() 
     twenty_prior_denials(&history);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
-    history.write(requested("exec"), Some("a_2"));
-    history.write(requested("ask"), Some("a_3"));
+    history.write(requested("read", "Paris"), Some("a_1"));
+    history.write(requested("exec", "Paris"), Some("a_2"));
+    history.write(requested("ask", "Paris"), Some("a_3"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -3067,9 +2917,9 @@ fn a_cancel_after_a_resumed_credential_refusal_skips_the_tool_handoff() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
-    history.write(requested("wrapup"), Some("a_2"));
-    history.write(requested("slow"), Some("a_3"));
+    history.write(requested("read", "Paris"), Some("a_1"));
+    history.write(requested("wrapup", "Paris"), Some("a_2"));
+    history.write(requested("slow", "Paris"), Some("a_3"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -3142,9 +2992,9 @@ fn a_three_call_batch_completes_in_request_order() {
     let mut history = History::new(vec![Scripted::text("Hello."), Scripted::text("Second.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
-    history.write(requested("exec"), Some("a_2"));
-    history.write(requested("search"), Some("a_3"));
+    history.write(requested("read", "Paris"), Some("a_1"));
+    history.write(requested("exec", "Paris"), Some("a_2"));
+    history.write(requested("search", "Paris"), Some("a_3"));
     // The first call was allowed in the log; the second is pending.
     history.write(allowed_resolved(), Some("a_1"));
     history.write(standing_request("r_9"), Some("a_2"));
@@ -3223,7 +3073,7 @@ fn a_review_request_re_raises_with_its_escalation_and_offer() {
     let mut history = History::new(vec![Scripted::text("Hello."), Scripted::text("Second.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("exec"), Some("a_1"));
+    history.write(requested("exec", "Paris"), Some("a_1"));
     history.write(review_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -3280,7 +3130,7 @@ fn a_tool_called_in_the_finishing_turn_runs() {
     ]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("exec"), Some("a_1"));
+    history.write(requested("exec", "Paris"), Some("a_1"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -3338,9 +3188,9 @@ fn a_completed_call_in_the_window_is_not_in_the_batch() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_9"));
-    history.write(requested("read"), Some("a_0"));
-    history.write(completed("Paris."), Some("a_0"));
-    history.write(requested("exec"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_0"));
+    history.write(completed_event("Paris."), Some("a_0"));
+    history.write(requested("exec", "Paris"), Some("a_1"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -3441,13 +3291,13 @@ fn assert_orphaned(line: &Envelope, id: &str) {
 fn a_job_with_no_completion_is_marked_orphaned_on_resume() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
-    history.write(requested("shell"), Some("a_1"));
+    history.write(requested("shell", "Paris"), Some("a_1"));
     history.write(job_started("j_a"), Some("a_1"));
     history.write(job_started("j_b"), Some("a_1"));
     history.write(job_started("j_c"), Some("a_1"));
     // As a `jobs wait` records it, under its call's action.
     history.write(job_completed("j_b"), Some("a_1"));
-    history.write(completed("Started."), Some("a_1"));
+    history.write(completed_event("Started."), Some("a_1"));
     history.freeze();
 
     let looped = history.resume(Vec::new());
@@ -3502,9 +3352,9 @@ fn a_job_with_no_completion_is_marked_orphaned_on_resume() {
 fn a_job_a_rewind_handed_on_is_not_marked() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
-    history.write(requested("shell"), Some("a_1"));
+    history.write(requested("shell", "Paris"), Some("a_1"));
     history.write(job_started("j_a"), Some("a_1"));
-    history.write(completed("Started."), Some("a_1"));
+    history.write(completed_event("Started."), Some("a_1"));
     history
         .log
         .append(
@@ -3546,10 +3396,10 @@ fn an_orphan_behind_a_suspended_batch_renders_after_its_results() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_9"));
-    history.write(requested("shell"), Some("a_0"));
+    history.write(requested("shell", "Paris"), Some("a_0"));
     history.write(job_started("j_a"), Some("a_0"));
-    history.write(completed("Started j_a."), Some("a_0"));
-    history.write(requested("exec"), Some("a_1"));
+    history.write(completed_event("Started j_a."), Some("a_0"));
+    history.write(requested("exec", "Paris"), Some("a_1"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -3607,10 +3457,10 @@ fn a_second_resume_over_a_logged_orphan_keeps_it_after_the_results() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_9"));
-    history.write(requested("shell"), Some("a_0"));
+    history.write(requested("shell", "Paris"), Some("a_0"));
     history.write(job_started("j_a"), Some("a_0"));
-    history.write(completed("Started j_a."), Some("a_0"));
-    history.write(requested("exec"), Some("a_1"));
+    history.write(completed_event("Started j_a."), Some("a_0"));
+    history.write(requested("exec", "Paris"), Some("a_1"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -3891,7 +3741,7 @@ fn a_note_call_cut_short_by_a_crash_leaves_no_result_behind() {
     note_lines(&log);
     // The process died after logging the note reply's call, before its
     // completion; a new process resumed and took a turn.
-    log.append(requested("read"), Some("a_call"));
+    log.append(requested("read", "Paris"), Some("a_call"));
     log.append(fiber_started(), None);
     log.append(user_turn("two"), None);
 
@@ -4007,7 +3857,7 @@ fn a_handoff_item_renders_nothing_and_a_turn_of_only_one_carries_no_input() {
 }
 
 fn completed_with_note(text: &str, note: Option<&str>) -> Event {
-    let Event::ToolCallCompleted(mut done) = completed(text) else {
+    let Event::ToolCallCompleted(mut done) = completed_event(text) else {
         panic!("a completion");
     };
     done.control = note.map(|handoff| contract::events::Control {
@@ -4030,7 +3880,7 @@ fn tool_handoff(log: &LogLines, notes: &[(&str, &str)]) {
         ("a_h1", "wrapup"),
         ("a_w2", "get_weather"),
     ] {
-        log.append(requested(name), Some(id));
+        log.append(requested(name, "Paris"), Some(id));
     }
     for id in ["a_w1", "a_h1", "a_w2"] {
         log.append(started(), Some(id));
@@ -4337,7 +4187,7 @@ fn hosted_requested() -> Event {
 }
 
 fn hosted_completed() -> Event {
-    let Event::ToolCallCompleted(done) = completed("https://blog.rust-lang.org/") else {
+    let Event::ToolCallCompleted(done) = completed_event("https://blog.rust-lang.org/") else {
         panic!("completed builds a tool_call_completed");
     };
     Event::ToolCallCompleted(ToolCallCompleted {
@@ -4404,7 +4254,7 @@ fn a_suspended_batch_leaves_a_hosted_call_out() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("read"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
     history.write(hosted_requested(), Some("a_2"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
@@ -4660,7 +4510,7 @@ fn a_turn_suspended_after_a_handoff_re_raises_its_request_past_lines_written_aft
     let mut history = handed_off(vec![Scripted::text("Hello.")]);
     history.write(user_turn("three"), None);
     history.write(message_started(), Some("a_5"));
-    history.write(requested("read"), Some("a_1"));
+    history.write(requested("read", "Paris"), Some("a_1"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -4711,7 +4561,7 @@ fn suspended_batch(script: Vec<Scripted>, names: &[&str], action: usize) -> Hist
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
     for (at, name) in names.iter().enumerate() {
-        history.write(requested(name), Some(&format!("a_{}", at + 1)));
+        history.write(requested(name, "Paris"), Some(&format!("a_{}", at + 1)));
     }
     history.write(standing_request("r_9"), Some(&format!("a_{action}")));
     history.write(fiber_started(), None);
@@ -4878,9 +4728,9 @@ fn an_answered_resume_prefers_the_block_budget_over_later_questions() {
     twenty_prior_denials(&history);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("act"), Some("a_1"));
-    history.write(requested("exec"), Some("a_2"));
-    history.write(requested("ask"), Some("a_3"));
+    history.write(requested("act", "Paris"), Some("a_1"));
+    history.write(requested("exec", "Paris"), Some("a_2"));
+    history.write(requested("ask", "Paris"), Some("a_3"));
     history.write(standing_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -5062,7 +4912,7 @@ fn close_while_waiting_denies_the_re_raised_review_request_by_cancel() {
     let mut history = History::new(vec![Scripted::text("Done.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("exec"), Some("a_1"));
+    history.write(requested("exec", "Paris"), Some("a_1"));
     history.write(review_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -5095,7 +4945,7 @@ fn a_headless_resume_denies_the_re_raised_review_request_by_cancel() {
     let mut history = History::new(vec![Scripted::text("Done.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("exec"), Some("a_1"));
+    history.write(requested("exec", "Paris"), Some("a_1"));
     history.write(review_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);
@@ -5145,7 +4995,7 @@ fn a_shutdown_that_closes_the_inbox_while_waiting_keeps_the_re_raised_request() 
     let mut history = History::new(vec![Scripted::text("Done.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_0"));
-    history.write(requested("exec"), Some("a_1"));
+    history.write(requested("exec", "Paris"), Some("a_1"));
     history.write(review_request("r_9"), Some("a_1"));
     history.write(fiber_started(), None);
     history.write(fiber_exited(Some("r_9")), None);

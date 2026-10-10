@@ -23,11 +23,7 @@ use contract::{Envelope, ErrorCode};
 use fakes::Scripted;
 use serde_json::{Value, json};
 
-use support::{Gate, Script, Session, Tap, TestTool, calls_reply, delivery, kinds};
-
-fn paris() -> Value {
-    json!({"city": "Paris"})
-}
+use support::{Gate, Script, Session, Tap, TestTool, calls_reply, delivery, kinds, paris};
 
 fn question(text: &str) -> Question {
     Question {

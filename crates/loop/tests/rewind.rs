@@ -33,8 +33,8 @@ use r#loop::{Loop, Model, Permissions, PromptInputs, Rewound, rewind_note};
 use serde_json::{Map, Value, json};
 
 use support::{
-    DEADLINE, MODEL, Session, TestTool, calls_reply, delivery, ignore, kinds, message, read_until,
-    rewind,
+    DEADLINE, MODEL, Session, TestTool, allow, calls_reply, delivery, ignore, kinds, message,
+    paris, read_until, reply_to, rewind,
 };
 
 const B_ID: &str = "s_rewound00000001";
@@ -55,10 +55,6 @@ fn exec_tool() -> Arc<TestTool> {
         vec![contract::shapes::Effect::Executes],
         None,
     ))
-}
-
-fn paris() -> Value {
-    json!({"city": "Paris"})
 }
 
 fn allow_rule(tool: &str) -> Rule {
@@ -1409,18 +1405,6 @@ fn ask_rule() -> Rule {
     }
 }
 
-fn allow_answer() -> contract::commands::ReplyAnswer {
-    contract::commands::ReplyAnswer::Approval {
-        decision: contract::events::Decision::Allow,
-        feedback: None,
-        remember: None,
-    }
-}
-
-fn reply_to(request_id: RequestId, answer: contract::commands::ReplyAnswer) -> Delivery {
-    Delivery::Reply(contract::commands::Reply { request_id, answer }, ignore())
-}
-
 #[test]
 fn a_rewind_while_an_approval_waits_is_busy() {
     let tool = ask_shell();
@@ -1454,7 +1438,9 @@ fn a_rewind_while_an_approval_waits_is_busy() {
         let answer = answered
             .recv_timeout(DEADLINE)
             .expect("the rewind is answered in time");
-        inbox.send(reply_to(RequestId(id), allow_answer())).unwrap();
+        inbox
+            .send(reply_to(RequestId(id), allow(), ignore()))
+            .unwrap();
         checked.send(answer).unwrap();
     });
     session.inbox.send(delivery("go")).unwrap();

@@ -32,7 +32,7 @@ use fakes::Scripted;
 use log::Watcher;
 use serde_json::Value;
 
-use support::{DEADLINE, Session, delivery, ignore, read_until, steer};
+use support::{DEADLINE, History, Session, delivery, deny, ignore, read_until, steer};
 
 /// A fake repository: a fixed list of unapproved items, every call recorded.
 #[derive(Default)]
@@ -879,78 +879,19 @@ fn the_failure_names_each_required_item_and_how_to_approve() {
 
 use contract::events::{
     AskStep, Empty, InputItem, PermissionRequested, RepositoryCodeOffered, RepositoryCodeResolved,
-    RuleScope, SessionStarted, StandingRule, ToolCallRequested, TurnStarted, Variables,
-    VariablesSource,
+    RuleScope, StandingRule, ToolCallRequested, TurnStarted,
 };
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
-use contract::{ActionId, CommandId, SessionId, TurnId};
-use fakes::ScriptedProvider;
-use log::Log;
+use contract::{ActionId, CommandId, TurnId};
 use r#loop::Loop;
 
-/// A session log with earlier processes, resumed by each [`History::resume`].
-struct History {
-    root: fakes::TempDir,
-    dir: std::path::PathBuf,
-    log: Arc<Log>,
-    workspace: String,
-    credentials: std::path::PathBuf,
-    clock: Arc<fakes::clock::FakeClock>,
-    provider: Arc<ScriptedProvider>,
-}
-
-impl History {
-    fn new(script: Vec<Scripted>) -> Self {
-        let root = fakes::TempDir::new("fiber-offer-resume");
-        let workspace = root.path().join("w");
-        std::fs::create_dir_all(&workspace).unwrap();
-        let credentials = root.path().join("credentials");
-        std::fs::create_dir_all(&credentials).unwrap();
-        let clock = fakes::clock::FakeClock::new();
-        let log = Arc::new(
-            Log::create(
-                root.path(),
-                SessionId("s_1".into()),
-                Arc::clone(&clock) as Arc<dyn Clock>,
-            )
-            .unwrap(),
-        );
-        let history = Self {
-            dir: root.path().join("s_1"),
-            root,
-            log,
-            workspace: workspace.display().to_string(),
-            credentials,
-            clock,
-            provider: Arc::new(ScriptedProvider::new(script)),
-        };
-        history.write(
-            &Event::SessionStarted(SessionStarted {
-                workspace: history.workspace.clone(),
-                variables: Variables {
-                    path: String::new(),
-                    names: Vec::new(),
-                    source: VariablesSource::Inherited,
-                },
-                parent: None,
-                forked_from: None,
-                rewind: None,
-                worktree: None,
-            }),
-            None,
-            None,
-        );
-        history
-    }
-
+impl support::History {
     fn write(&self, event: &Event, turn: Option<&str>, action: Option<&str>) {
-        self.log
-            .append(
-                event,
-                turn.map(|t| TurnId(t.into())),
-                action.map(|a| ActionId(a.into())),
-            )
-            .unwrap();
+        self.append(
+            event,
+            turn.map(|t| TurnId(t.into())),
+            action.map(|a| ActionId(a.into())),
+        );
     }
 
     /// A process starts.
@@ -1010,10 +951,6 @@ impl History {
         .repository_code(Arc::clone(code) as Arc<dyn RepositoryCode>)
         .answerable(answerable);
         (looped, tx)
-    }
-
-    fn lines(&self) -> Vec<Envelope> {
-        log::read(&self.dir).unwrap()
     }
 
     fn of(&self, kind: &str) -> Vec<Envelope> {
@@ -1138,14 +1075,6 @@ fn reply_on(
         ))
         .unwrap();
     rx
-}
-
-fn deny() -> ReplyAnswer {
-    ReplyAnswer::Approval {
-        decision: Decision::Deny,
-        feedback: None,
-        remember: None,
-    }
 }
 
 fn finished_ok(finished: &mpsc::Receiver<Result<(), r#loop::Error>>) {
@@ -1372,7 +1301,7 @@ fn an_offer_comes_before_a_suspended_approval_and_both_are_answered_in_order() {
     assert!(answered(&reply).is_ok());
     let (watcher, lines) = until_kind(watcher, "permission_requested");
     assert_eq!(lines.last().unwrap().payload["request_id"], "r_9");
-    let reply = reply_on(&inbox, "r_9", deny());
+    let reply = reply_on(&inbox, "r_9", deny(None));
     assert!(answered(&reply).is_ok());
     let (_, _) = until_kind(watcher, "turn_completed");
     inbox.send(Delivery::Close(ignore())).unwrap();
@@ -1404,7 +1333,7 @@ fn an_approvals_reply_sent_while_the_offer_waits_answers_it_after() {
     let finished = run_on(looped);
     let (watcher, lines) = until_kind(watcher, "repository_code_offered");
     let offer = request_of(lines.last().unwrap());
-    let approval = reply_on(&inbox, "r_9", deny());
+    let approval = reply_on(&inbox, "r_9", deny(None));
     let reply = reply_on(&inbox, offer.0.as_str(), decisions(&[Approve]));
     assert!(answered(&reply).is_ok());
     let (_, _) = until_kind(watcher, "turn_completed");
@@ -1467,7 +1396,7 @@ fn an_idle_exit_on_the_offer_keeps_the_suspended_approval_for_the_next_resume() 
     let reply = reply_on(&inbox, offer.0.as_str(), decisions(&[Approve]));
     assert!(answered(&reply).is_ok());
     let (watcher, _) = until_kind(watcher, "permission_requested");
-    let reply = reply_on(&inbox, "r_9", deny());
+    let reply = reply_on(&inbox, "r_9", deny(None));
     assert!(answered(&reply).is_ok());
     let (_, lines) = until_kind(watcher, "turn_completed");
     assert_eq!(lines.last().unwrap().turn_id, Some(TurnId("t_1".into())));
@@ -1524,7 +1453,7 @@ fn a_failed_offer_step_keeps_the_suspended_approval_and_a_repaired_resume_finish
         let finished = run_on(looped);
         let watcher = if answerable {
             let (watcher, _) = until_kind(watcher, "permission_requested");
-            let reply = reply_on(&inbox, "r_9", deny());
+            let reply = reply_on(&inbox, "r_9", deny(None));
             assert!(answered(&reply).is_ok());
             watcher
         } else {
@@ -1672,7 +1601,7 @@ fn an_answer_to_the_offer_sent_before_it_is_raised_again_is_taken_first() {
     assert_eq!(raised.len(), 1);
     assert_eq!(raised[0].payload["request_id"], "r_old");
     assert!(lines.iter().any(|l| l.kind == "repository_code_resolved"));
-    let reply = reply_on(&inbox, "r_9", deny());
+    let reply = reply_on(&inbox, "r_9", deny(None));
     assert!(answered(&reply).is_ok());
     let (_, _) = until_kind(watcher, "turn_completed");
     inbox.send(Delivery::Close(ignore())).unwrap();

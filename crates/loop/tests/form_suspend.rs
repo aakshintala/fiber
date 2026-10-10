@@ -37,7 +37,10 @@ use fakes::clock::FakeClock;
 use r#loop::{Error, Loop};
 use serde_json::{Map, Value, json};
 
-use support::{DEADLINE, Gate, Session, Tap, TestTool, calls_reply, delivery, kinds};
+use support::{
+    DEADLINE, Gate, OPENING, STEP, Session, Tap, TestTool, answer_value, assert_kinds, calls_reply,
+    delivery, kinds, of_kind,
+};
 
 /// The idle delay every test but the no-timeout one sets.
 const IDLE: Duration = Duration::from_secs(60);
@@ -320,12 +323,6 @@ fn send_reply(
     rx
 }
 
-/// Sends `answer` to `request` and returns how the command was answered.
-fn answer(session: &Session, request: &str, answer: Value) -> contract::inbox::Answer {
-    let rx = send_reply(session, request, answer);
-    rx.recv_timeout(DEADLINE).expect("the reply is answered")
-}
-
 /// A reply that fits `questions()`.
 fn main_branch() -> Value {
     json!({"answers": [{"labels": ["main"]}]})
@@ -333,10 +330,6 @@ fn main_branch() -> Value {
 
 fn request_id(line: &Envelope) -> String {
     line.payload["request_id"].as_str().unwrap().to_owned()
-}
-
-fn of_kind<'a>(lines: &'a [Envelope], kind: &str) -> Vec<&'a Envelope> {
-    lines.iter().filter(|line| line.kind == kind).collect()
 }
 
 fn no_resolution(tap: &Tap) {
@@ -355,13 +348,9 @@ fn exit(session: &mut Session, signal: Option<i32>) -> Vec<Envelope> {
     session.events_until("fiber_exited", |line| line.kind == "fiber_exited")
 }
 
-/// One call in the first reply.
-const OPENING: &[&str] = &[
-    "session_started",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
+/// The first reply's one tool call: the tail after [`support::OPENING`]
+/// and [`support::STEP`] open the turn.
+const FIRST_CALL: &[&str] = &[
     "assistant_message_started",
     "assistant_message_delta",
     "tool_call_arguments_delta",
@@ -370,13 +359,9 @@ const OPENING: &[&str] = &[
     "assistant_message_completed",
 ];
 
-/// Two calls in the first reply.
-const OPENING_TWO: &[&str] = &[
-    "session_started",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
+/// The first reply's two tool calls: the tail after [`support::OPENING`]
+/// and [`support::STEP`] open the turn.
+const TWO_CALLS: &[&str] = &[
     "assistant_message_started",
     "assistant_message_delta",
     "tool_call_arguments_delta",
@@ -398,10 +383,6 @@ const DONE: &[&str] = &[
     "assistant_message_completed",
     "turn_completed",
 ];
-
-fn assert_kinds(lines: &[Envelope], parts: &[&[&str]]) {
-    assert_eq!(kinds(lines), parts.concat());
-}
 
 /// Waits until the step parks at `at`, then advances the clock to 1 ms
 /// before it and checks the step waits again with the form pending, then
@@ -451,6 +432,8 @@ fn the_idle_delay_exits_on_a_form_that_is_the_steps_only_call() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &["tool_call_started", "interaction_requested", "fiber_exited"],
         ],
     );
@@ -472,7 +455,7 @@ fn a_rejected_reply_does_not_move_the_idle_deadline() {
     let mark = clock
         .mark_parked(at, DEADLINE)
         .expect("the step waits again");
-    let answered = answer(&session, &request, json!({"confirmed": true}));
+    let answered = answer_value(&session, &request, json!({"confirmed": true}));
     assert_eq!(answered.unwrap_err().code, ErrorCode::InvalidArguments);
     assert!(
         clock.await_parked_since(&mark, Some(at), DEADLINE),
@@ -486,6 +469,8 @@ fn a_rejected_reply_does_not_move_the_idle_deadline() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &["tool_call_started", "interaction_requested", "fiber_exited"],
         ],
     );
@@ -514,11 +499,11 @@ fn waits_past_the_idle_delay(later: &'static str) {
         "past the idle delay the step still waits with no deadline"
     );
     // A stale reply is answered from the step's wait, after the advance.
-    let stale = answer(&session, "r_nope", main_branch());
+    let stale = answer_value(&session, "r_nope", main_branch());
     assert_eq!(stale.unwrap_err().code, ErrorCode::StaleRequest);
     still_running(&finished);
     no_resolution(&tap);
-    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+    assert_eq!(answer_value(&session, &request, main_branch()), Ok(None));
 
     assert_eq!(
         finish(&mut session, &finished),
@@ -537,7 +522,7 @@ fn waits_past_the_idle_delay(later: &'static str) {
         "tool_call_completed",
         "tool_call_completed",
     ]);
-    assert_kinds(&lines, &[OPENING_TWO, &middle, DONE]);
+    assert_kinds(&lines, &[OPENING, STEP, TWO_CALLS, &middle, DONE]);
     let requested = of_kind(&lines, "tool_call_requested");
     let completed: Vec<_> = of_kind(&lines, "tool_call_completed")
         .iter()
@@ -589,7 +574,9 @@ fn the_idle_delay_counts_from_when_the_earlier_call_completes() {
     assert_kinds(
         &lines,
         &[
-            OPENING_TWO,
+            OPENING,
+            STEP,
+            TWO_CALLS,
             &[
                 "tool_call_started",
                 "tool_call_started",
@@ -636,6 +623,8 @@ fn a_running_job_keeps_a_pending_form_from_going_idle() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &["tool_call_started", "interaction_requested", "fiber_exited"],
         ],
     );
@@ -666,7 +655,9 @@ fn a_shutdown_leaves_a_form_pending_when_it_is_the_last_call_without_a_result() 
     assert_kinds(
         &lines,
         &[
-            OPENING_TWO,
+            OPENING,
+            STEP,
+            TWO_CALLS,
             &[
                 "tool_call_started",
                 "tool_call_started",
@@ -709,7 +700,9 @@ fn a_shutdown_resolves_a_form_with_a_later_call_without_a_result() {
     assert_kinds(
         &lines,
         &[
-            OPENING_TWO,
+            OPENING,
+            STEP,
+            TWO_CALLS,
             &[
                 "tool_call_started",
                 "tool_call_started",
@@ -749,7 +742,9 @@ fn a_cancel_resolves_a_form_that_is_the_last_call_without_a_result() {
     assert_kinds(
         &lines,
         &[
-            OPENING_TWO,
+            OPENING,
+            STEP,
+            TWO_CALLS,
             &[
                 "tool_call_started",
                 "tool_call_started",
@@ -786,6 +781,8 @@ fn a_cancel_resolves_a_form_that_is_the_steps_only_call() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -816,7 +813,7 @@ fn without_an_idle_delay_a_form_waits_a_day_for_its_answer() {
     );
     still_running(&finished);
     no_resolution(&tap);
-    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+    assert_eq!(answer_value(&session, &request, main_branch()), Ok(None));
 
     assert_eq!(
         finish(&mut session, &finished),
@@ -827,6 +824,8 @@ fn without_an_idle_delay_a_form_waits_a_day_for_its_answer() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -856,12 +855,12 @@ fn an_ask_that_does_not_suspend_keeps_the_session_past_the_idle_delay() {
         clock.await_parked_since(&mark, None, DEADLINE),
         "past the idle delay the step still waits with no deadline"
     );
-    let stale = answer(&session, "r_nope", main_branch());
+    let stale = answer_value(&session, "r_nope", main_branch());
     assert_eq!(stale.unwrap_err().code, ErrorCode::StaleRequest);
     still_running(&finished);
     no_resolution(&tap);
     let request = request_id(&requested);
-    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+    assert_eq!(answer_value(&session, &request, main_branch()), Ok(None));
     assert_eq!(
         finish(&mut session, &finished),
         Some(TurnOutcome::Completed)
@@ -871,6 +870,8 @@ fn an_ask_that_does_not_suspend_keeps_the_session_past_the_idle_delay() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -916,6 +917,8 @@ fn a_shutdown_leaves_a_form_that_is_the_steps_only_call_pending() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &["tool_call_started", "interaction_requested", "fiber_exited"],
         ],
     );
@@ -944,7 +947,7 @@ fn a_reply_after_a_shutdown_answers_the_form_raised_again() {
     let raised = tap.wait_for("interaction_requested");
     assert_eq!(raised.payload, requested.payload, "the same request");
     let request = request_id(&raised);
-    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+    assert_eq!(answer_value(&session, &request, main_branch()), Ok(None));
     assert_eq!(
         finish(&mut session, &finished),
         Some(TurnOutcome::Completed)
@@ -1086,7 +1089,7 @@ fn a_reply_after_the_form_is_raised_again_answers_it() {
     let raised = tap.wait_for("interaction_requested");
     assert_eq!(raised.payload, requested.payload);
     let request = request_id(&raised);
-    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+    assert_eq!(answer_value(&session, &request, main_branch()), Ok(None));
 
     assert_eq!(
         finish(&mut session, &finished),

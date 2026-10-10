@@ -13,16 +13,15 @@ mod support;
 
 use std::sync::Arc;
 
-use contract::commands::{Reply, ReplyAnswer};
-use contract::events::{Decision, Event, TurnOutcome, UsageRecorded};
-use contract::inbox::Delivery;
-use contract::shapes::{Effect, Failure};
-use contract::{Envelope, ErrorCode, RequestId, SessionId};
+use contract::events::{Event, TurnOutcome, UsageRecorded};
+use contract::shapes::Failure;
+use contract::{Envelope, ErrorCode, SessionId};
 use fakes::{Scripted, call_usage, unnamed_usage};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use support::{
-    REVIEWER_MODEL, Session, TestTool, calls_reply, delivery, ignore, kinds, on_request,
+    REVIEWER_MODEL, Session, allow, calls_reply, delivery, kinds, on_request, paris,
+    reply_delivery, shell,
 };
 
 fn failed_after(generation: &str, input: u64, output: u64, bytes: u64) -> Scripted {
@@ -247,38 +246,9 @@ fn a_failed_call_s_usage_counts_toward_the_budget() {
     assert_eq!(session.requests().len(), 1);
 }
 
-fn paris() -> Value {
-    json!({"city": "Paris"})
-}
-
-fn shell() -> Arc<TestTool> {
-    let mut tool = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
-    tool.subject = None;
-    tool.prefix = None;
-    Arc::new(tool)
-}
-
-fn allow() -> ReplyAnswer {
-    ReplyAnswer::Approval {
-        decision: Decision::Allow,
-        feedback: None,
-        remember: None,
-    }
-}
-
-fn answer(id: RequestId, answer: ReplyAnswer) -> Delivery {
-    Delivery::Reply(
-        Reply {
-            request_id: id,
-            answer,
-        },
-        ignore(),
-    )
-}
-
 #[test]
 fn a_failed_review_after_its_generation_writes_its_usage() {
-    let tool = shell();
+    let tool = shell(None, None);
     let mut session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", paris())]),
@@ -309,7 +279,7 @@ fn a_failed_review_after_its_generation_writes_its_usage() {
     );
     let answered = on_request(&session, {
         let inbox = session.inbox.clone();
-        move |id| inbox.send(answer(id, allow())).unwrap()
+        move |id| inbox.send(reply_delivery(id, allow())).unwrap()
     });
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
