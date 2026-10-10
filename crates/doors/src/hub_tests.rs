@@ -695,30 +695,6 @@ fn connect_until_silent_hub_times_out_at_the_shared_deadline() {
     release_tx.send(()).unwrap_or(());
 }
 
-#[test]
-fn connect_until_hello_from_a_peer_that_already_closed_is_read() {
-    // Setting or clearing the read timeout on a socket whose peer has
-    // closed fails on macOS, while the buffered hello stays readable.
-    let (mut peer, reader) = UnixStream::pair().unwrap();
-    peer.write_all(&hello_line()).unwrap();
-    peer.write_all(b"\n").unwrap();
-    drop(peer);
-    let clock = fakes::clock::FakeClock::new();
-    let deadline = clock.now() + DEADLINE;
-    let got = read_hello_until(
-        reader,
-        Path::new("run/hub"),
-        deadline,
-        DEADLINE,
-        &*clock,
-        &mut || {},
-    );
-    let Ok((stream, hello)) = got else {
-        panic!("the buffered hello is read");
-    };
-    assert_eq!(hello.kind, "hub_hello");
-    assert_eq!(stream.read_timeout().unwrap(), None);
-}
 #[track_caller]
 fn run_connect_within(home: PathBuf, hello_within: Duration) -> io::Result<Hub> {
     let (done_tx, done_rx) = mpsc::channel();
@@ -834,7 +810,8 @@ fn a_hello_from_a_peer_that_already_closed_is_read() {
     peer.write_all(b"\n").unwrap();
     drop(peer);
     let clock = fakes::clock::FakeClock::new();
-    let got = read_hello_with(reader, Path::new("run/hub"), DEADLINE, &*clock, &mut || {});
+    let deadline = clock.now().checked_add(DEADLINE);
+    let got = read_hello(reader, Path::new("run/hub"), deadline, DEADLINE, &*clock, &mut || {});
     let Ok((stream, hello)) = got else {
         panic!("the buffered hello is read");
     };
@@ -871,9 +848,11 @@ fn a_trickling_hub_cannot_extend_the_handshake_deadline() {
             let clock = Arc::clone(&clock);
             move || {
                 let mut before_read = || read_tx.send(()).unwrap_or(());
-                let got = read_hello_with(
+                let deadline = clock.now().checked_add(DEADLINE);
+                let got = read_hello(
                     reader,
                     Path::new("run/hub"),
+                    deadline,
                     DEADLINE,
                     &*clock,
                     &mut before_read,
