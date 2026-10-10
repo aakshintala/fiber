@@ -15,10 +15,10 @@ use contract::{Envelope, SessionId};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use serde_json::Value;
 
-use super::{Collect, kind_of, unreadable};
 use super::fields;
 use super::read::Cancelling;
 use super::text::{Text, escaped, snippet};
+use super::{Collect, kind_of, unreadable};
 use crate::{ARTIFACTS, EVENTS};
 
 /// File extensions never searched as text, compared ignoring case.

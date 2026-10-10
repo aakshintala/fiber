@@ -1,4 +1,11 @@
-#![allow(dead_code, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, reason = "test support shared by unit tests, integration tests and the jigs; each uses a different part")]
+#![allow(
+    dead_code,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test support shared by unit tests, integration tests and the jigs; each uses a different part"
+)]
 
 use std::path::Path;
 

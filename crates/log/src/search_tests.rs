@@ -16,10 +16,10 @@ use std::sync::Weak;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
 
+use contract::Seq;
 use contract::clock::Wake;
 use contract::events::Event;
 use contract::session_search::Label;
-use contract::Seq;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, TempDir};
 use proptest::prelude::*;
@@ -27,8 +27,8 @@ use serde_json::json;
 
 use super::*;
 use crate::Log;
-use crate::fixtures::event;
 pub(super) use crate::fixtures::append_raw as raw;
+use crate::fixtures::event;
 
 /// A Fiber home whose sessions are written with [`Log`].
 pub(super) struct Home {

@@ -34,13 +34,7 @@ fn started(session: &str, seq: u64, from: Option<(&str, u64)>) -> String {
 }
 
 fn plain(session: &str, seq: u64, kind: &str) -> String {
-    fixture_line(
-        kind,
-        session,
-        1_759_150_000_000_u64 + seq,
-        seq,
-        &json!({}),
-    )
+    fixture_line(kind, session, 1_759_150_000_000_u64 + seq, seq, &json!({}))
 }
 
 fn write_lines(sessions: &std::path::Path, id: &str, lines: &[String]) {

@@ -402,7 +402,8 @@ impl Collect {
         self.hits.push(hit);
         let cap = self.limit.saturating_mul(2);
         if self.hits.len() > cap {
-            self.hits.select_nth_unstable_by(self.limit, |a, b| key(a).cmp(&key(b)));
+            self.hits
+                .select_nth_unstable_by(self.limit, |a, b| key(a).cmp(&key(b)));
             self.hits.truncate(self.limit);
         }
     }

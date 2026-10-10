@@ -3,8 +3,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use super::*;
-use contract::ErrorCode;
 use crate::fixtures::session_log;
+use contract::ErrorCode;
 
 const FIRST: &str = "{\"seq\":0,\"kind\":\"a\"}\n";
 const SECOND: &str = "{\"seq\":1,\"kind\":\"b\"}\n";
