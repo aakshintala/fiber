@@ -92,9 +92,9 @@ pub use attention::Attention;
 
 pub use catalogue::{Catalogue, ModelEntry, ReadModels, Refresh};
 pub use configure::{
-    Configure, ConfigureError, KeyEdit, Layer, LoginKind, LoginTarget, Revoked, RuleRow,
-    RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope,
-    ToolGroup, ToolLists, ToolSwitches, WriteScope,
+    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginKind, LoginShow, LoginTarget,
+    Revoked, RuleRow, RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored,
+    SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 
 pub use home::Launch;

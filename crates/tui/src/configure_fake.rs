@@ -6,12 +6,28 @@ use std::sync::Mutex;
 
 use contract::{ErrorCode, Secret};
 
+use std::sync::Arc;
+
+use contract::clock::Clock;
+
 use crate::ThemeSetting;
 use crate::configure::{
-    Configure, ConfigureError, KeyEdit, Layer, LoginTarget, Revoked, RulesScope, RulesSection,
-    Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists,
-    ToolSwitches, WriteScope,
+    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget, Revoked,
+    RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope,
+    ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
+
+/// A browser login the recording seam never starts: its tests arrive with
+/// the seam's own in the next task.
+struct Unstarted;
+
+impl BrowserLogin for Unstarted {
+    fn run(&self) -> Result<Stored, ConfigureError> {
+        unreachable!("no test starts a browser login through this seam yet");
+    }
+
+    fn cancel(&self) {}
+}
 
 /// One revoke the view asked for: the workspace, scope, line and text.
 pub(crate) type Revoke = (PathBuf, RulesScope, usize, String);
@@ -274,6 +290,16 @@ impl Configure for Fake {
             },
             |targets| targets.clone(),
         )
+    }
+
+    fn browser_login(
+        &self,
+        name: &str,
+        shown: Arc<dyn LoginShow>,
+        clock: Arc<dyn Clock>,
+    ) -> Arc<dyn BrowserLogin> {
+        let _ = (name, shown, clock);
+        Arc::new(Unstarted)
     }
 
     fn store_key(
