@@ -11,6 +11,7 @@ use contract::ErrorCode;
 use contract::clock::Wake;
 use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output, Tool};
+use fakes::Deadline;
 use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Map, Value, json};
 
@@ -617,7 +618,9 @@ printf 'fakepng' > "$root.png""#,
         "the call ended before the cancel"
     );
     flag.store(true, Ordering::SeqCst);
-    let output = done_rx.recv_timeout(LIMIT).expect("the call ends");
+    let output = Deadline::after(LIMIT)
+        .recv(&done_rx)
+        .expect("the call ends");
     assert_eq!(code(&output), None);
     assert_eq!(message(&output), "Cancelled and stopped.\n");
     assert!(pdf_part(&output).is_none());

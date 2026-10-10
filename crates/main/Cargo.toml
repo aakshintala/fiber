@@ -8,13 +8,6 @@ publish.workspace = true
 name = "fiber"
 path = "src/main.rs"
 
-# The benchmark harness behind docs/performance.md; its unit tests run
-# with the crate's.
-[[example]]
-name = "bench"
-path = "examples/bench/main.rs"
-test = true
-
 [dependencies]
 clap.workspace = true
 clap_complete.workspace = true

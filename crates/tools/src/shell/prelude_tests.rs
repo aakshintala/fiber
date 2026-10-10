@@ -11,6 +11,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::{define, quoted};
+use fakes::Deadline;
 
 #[test]
 fn no_binary_defines_nothing() {
@@ -47,6 +48,7 @@ fn stand_in(dir: &Path) -> std::path::PathBuf {
 
 /// Runs `command` under `program -c` with the real prelude, waiting under
 /// [`DEADLINE`].
+#[track_caller]
 fn under(program: &str, dir: &Path, command: &str) -> String {
     let child = Command::new(program)
         .arg("-c")
@@ -61,7 +63,7 @@ fn under(program: &str, dir: &Path, command: &str) -> String {
     thread::spawn(move || {
         done.send(child.wait_with_output()).unwrap_or(());
     });
-    match waited.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&waited) {
         Ok(Ok(output)) => {
             assert!(
                 output.status.success(),

@@ -15,6 +15,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use fakes::Deadline;
 use fakes::children::{Ready, ignores_sigterm};
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder, Watchdog, kill_group};
@@ -78,7 +79,9 @@ fn a_command_is_listed_while_it_runs_and_not_once_it_ends() {
 
     kill_every_group();
     // The run ends on its own pass: no cancel, no clock move.
-    let finished = done.recv_timeout(DEADLINE).expect("the run ended");
+    let finished = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("the run ended");
     assert_eq!(finished.status.and_then(|status| status.signal()), Some(9));
     assert_eq!(finished.stop, None);
     assert!(!kill_group(pgid, "0").unwrap(), "the group is gone");
@@ -95,7 +98,9 @@ fn a_finished_command_is_not_listed() {
         format!("echo $$ > '{}'", ready.path().display()),
     );
     let pgid = ready.wait(DEADLINE)[0];
-    let finished = done.recv_timeout(DEADLINE).expect("the run ended");
+    let finished = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("the run ended");
     assert_eq!(finished.status.and_then(|status| status.code()), Some(0));
     assert!(!listed().contains(&pgid));
 }
@@ -114,8 +119,8 @@ fn kill_every_group_kills_a_listed_group_and_then_drops_it() {
     kill_every_group();
     let (done, waited) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = waited
-        .recv_timeout(DEADLINE)
+    let status = Deadline::after(DEADLINE)
+        .recv(&waited)
         .expect("the killed child was reaped")
         .unwrap();
     assert_eq!(status.signal(), Some(9));

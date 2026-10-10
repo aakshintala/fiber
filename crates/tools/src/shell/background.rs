@@ -484,6 +484,10 @@ fn until_exited(
                 Some(_) => Some(bound.map_or(PS_POLL, |bound| bound.min(PS_POLL))),
                 None => bound,
             };
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "the bound the injected clock's wait_until hands this closure"
+            )]
             let received = match wait {
                 Some(wait) => rx.recv_timeout(wait).ok(),
                 None => rx.recv().ok(),

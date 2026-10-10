@@ -10,6 +10,7 @@ use contract::ErrorCode;
 use contract::events::FileChange;
 use contract::shapes::{ContentPart, Effect};
 use contract::tool::Tool;
+use fakes::Deadline;
 use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Map, Value, json};
 
@@ -65,6 +66,7 @@ fn set_mode(path: &Path, mode: u32) {
     fs::set_permissions(path, perms).unwrap();
 }
 
+#[track_caller]
 fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
@@ -74,7 +76,7 @@ fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
         done.send(()).unwrap();
     });
     assert!(
-        finished.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&finished).is_ok(),
         "waited {DEADLINE:?} for {what}"
     );
 }
@@ -310,11 +312,11 @@ fn two_replacing_writes_after_one_read_do_not_mix() {
         locks.waiting() == 2
     });
     drop(hold);
-    let left = left_rx
-        .recv_timeout(DEADLINE)
+    let left = Deadline::after(DEADLINE)
+        .recv(&left_rx)
         .expect("waited 10s for the first write");
-    let right = right_rx
-        .recv_timeout(DEADLINE)
+    let right = Deadline::after(DEADLINE)
+        .recv(&right_rx)
         .expect("waited 10s for the second write");
     let outputs = [left, right];
     assert_eq!(
@@ -359,8 +361,8 @@ fn a_held_lock_blocks_write_until_it_is_released() {
     });
     assert!(done_rx.try_recv().is_err());
     drop(hold);
-    let output = done_rx
-        .recv_timeout(DEADLINE)
+    let output = Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("waited 10s for write to finish");
     assert!(output.error.is_none(), "{}", text(&output));
     assert_eq!(fs::read(&path).unwrap(), b"hi\n");
@@ -413,8 +415,8 @@ fn a_symlink_retargeted_while_the_lock_is_held_writes_nothing() {
     fs::remove_file(dir.path().join("link")).unwrap();
     symlink("b.txt", dir.path().join("link")).unwrap();
     drop(hold);
-    let output = done_rx
-        .recv_timeout(DEADLINE)
+    let output = Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("waited 10s for write to finish");
     assert_eq!(code(&output), Some(ErrorCode::PathChanged));
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"A\n");

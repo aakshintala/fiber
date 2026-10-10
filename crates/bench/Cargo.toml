@@ -1,0 +1,27 @@
+[package]
+name = "bench"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The benchmark harness behind docs/performance.md; its unit tests run
+# with the crate's.
+[[example]]
+name = "bench"
+path = "examples/bench/main.rs"
+test = true
+
+[dev-dependencies]
+contract = { path = "../contract" }
+doors = { path = "../doors" }
+extensions = { path = "../extensions" }
+fakes = { path = "../fakes" }
+hub = { path = "../hub" }
+log = { path = "../log" }
+rustix.workspace = true
+serde_json.workspace = true
+tui = { path = "../tui" }
+
+[lints]
+workspace = true

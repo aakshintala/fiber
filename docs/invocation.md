@@ -747,7 +747,9 @@ and a repeat does nothing. A SIGTERM or SIGINT after it is a second signal.
 - Each MCP call in flight gets `notifications/cancelled` and ends `failed`
   with code `mcp_cancel_requested`, as on a cancelled turn (`docs/mcp.md`,
   "Calls"); a pending elicitation goes with its call. Then each stdio
-  server's stdin is closed and it gets SIGTERM, then SIGKILL 800 ms later.
+  server's stdin is closed. Each server runs in its own process session and
+  process group, and its process group gets SIGTERM, then SIGKILL 800 ms
+  later.
 - A credential command a `model` or `credential` switch is reading gets SIGKILL, and the
   switch is rejected `closing`.
 - No model request is made, no ending notice is given, and no hook runs.
@@ -794,7 +796,8 @@ nothing more: the loop may be stuck holding the log, so no other thread
 writes to it. The log ends as a process that died leaves it, with no
 `fiber_exited`, and a resume reads it as it reads any such log: a call left
 open has an unknown outcome and is never re-run, and a job left open
-completes `orphaned` (`docs/events.md`, "Resume").
+completes `orphaned` (`docs/events.md`, "Resume"). A child started in the
+instant before the bound fires may outlive Fiber.
 
 **What a crash leaves.** A crash, a SIGKILL, or a supervisor that gives up
 before the bound stops nothing. A command whose output goes to the pipe
@@ -937,6 +940,7 @@ websocket for everything it does.
 | `delete` | `session` (string), `cascade` (boolean, optional), `expect` (array of strings, optional) | Deletes an exited session ("Deleting and pruning"). With `cascade`, `expect` is the sessions the person confirmed; the delete is rejected `stale_request` when the sessions it would remove differ. |
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). `project` is the project's key, as for `recent`. |
 | `read_file` | `session` (string), `path` (string, relative to the session directory, as the log names the file, such as `artifacts/i_3f2a.png`) | Answers with one file from the session's `artifacts/` ("A session's files"). |
+| `directories` | `path` (string, absolute, or starting with `~/` for the hub's home) | Answers with the names of the subdirectories `path` holds, sorted, one level only. A path that is not a readable directory answers an empty list; a relative path is rejected `invalid_arguments`. The terminal's workspace picker completes a typed path with it (`docs/tui.md`, "Home"). |
 | `status` | none | Answers with `running`, `fiber_version` and `clients` (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
 | `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |

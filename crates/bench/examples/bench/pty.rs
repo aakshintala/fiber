@@ -6,14 +6,11 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
-use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Instant;
 
 use contract::clock::Clock;
-use rustix::pty;
 
 use crate::home::Home;
 use crate::run::{Proc, left};
@@ -60,15 +57,7 @@ impl Terminal {
         path: Option<&OsStr>,
         clock: &dyn Clock,
     ) -> Result<Self, String> {
-        let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY)
-            .map_err(err("opening a pty"))?;
-        // Not inherited: a hub the terminal starts would hold the master open.
-        rustix::io::fcntl_setfd(&main, rustix::io::FdFlags::CLOEXEC)
-            .map_err(err("marking the pty close-on-exec"))?;
-        pty::grantpt(&main).map_err(err("granting the pty"))?;
-        pty::unlockpt(&main).map_err(err("unlocking the pty"))?;
-        let name = pty::ptsname(&main, Vec::new()).map_err(err("naming the pty"))?;
-        let name = PathBuf::from(OsStr::from_bytes(name.as_bytes()));
+        let (main, name) = fakes::pty::open().map_err(|err| format!("opening a pty: {err}"))?;
         let terminal = fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -101,7 +90,6 @@ impl Terminal {
         let proc = Proc::spawn(&mut command, clock)?;
         drop(command);
         drop(terminal);
-        let main = fs::File::from(main);
         let reader = main
             .try_clone()
             .map_err(|e| format!("cloning the pty master: {e}"))?;

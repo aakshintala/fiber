@@ -136,7 +136,7 @@ fn measure_session(
 ) -> Result<Samples, String> {
     let pid = session.proc.pid();
     session.wait_started(ctx.clock, ctx.clock.now() + READY)?;
-    let (switches, rss, idle_threads) = idle_window(ctx, pid, notes)?;
+    let (switches, rss, split, idle_threads) = idle_window(ctx, pid, notes)?;
     let mut client = Client::connect(&ctx.home.socket(id))?;
     client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#)?;
     let until = ctx.clock.now() + READY;
@@ -151,7 +151,7 @@ fn measure_session(
     }
     let attached_threads = linux::threads(pid)?.len();
     drop(client);
-    Ok(vec![
+    let mut samples = vec![
         ("session_idle_rss_kib", json!(rss)),
         ("session_idle_switches", json!(switches)),
         (
@@ -161,7 +161,14 @@ fn measure_session(
                 {"clients": 1, "threads": attached_threads},
             ]),
         ),
-    ])
+    ];
+    // The split is diagnostic: it is omitted when the kernel does not
+    // report it, and the peak still stands.
+    if let Some((anon, file)) = split {
+        samples.push(("session_idle_rss_anon_kib", json!(anon)));
+        samples.push(("session_idle_rss_file_kib", json!(file)));
+    }
+    Ok(samples)
 }
 
 /// Reads every thread until two readings one [`run::PROBE`] apart find
@@ -199,22 +206,27 @@ pub(crate) fn settle(
     }
 }
 
+/// What `idle_window` measures: the per-thread switch deltas, the peak
+/// RSS, the anon/file split when the kernel reports it, and the thread
+/// count at the end.
+type IdleWindow = (Vec<Value>, u64, Option<(u64, u64)>, usize);
+
 /// Reads every thread's switch counters once they settle ([`settle`]),
 /// waits the idle window touching nothing, reads them again, then reads the
-/// peak RSS. Returns the per-thread deltas, the peak RSS and the thread
-/// count at the end.
-fn idle_window(
-    ctx: &Ctx<'_>,
-    pid: u32,
-    notes: &mut Vec<String>,
-) -> Result<(Vec<Value>, u64, usize), String> {
+/// peak RSS and its anon/file split from one status read. Returns the
+/// per-thread deltas, the peak RSS, the split when the kernel reports it
+/// (`None` when it does not: a diagnostic never fails a run, and a note
+/// would count as a failure) and the thread count at the end.
+fn idle_window(ctx: &Ctx<'_>, pid: u32, notes: &mut Vec<String>) -> Result<IdleWindow, String> {
     let before = settle(ctx.clock, READY, || linux::threads(pid))?;
     ctx.clock.sleep(ctx.idle);
     let after = linux::threads(pid)?;
-    let rss = linux::peak_rss_kib(pid)?;
+    let (rss, split) = linux::rss_kib(pid)?;
+    let split = split.ok();
     Ok((
         linux::idle_switches(&before, &after, notes),
         rss,
+        split,
         after.len(),
     ))
 }
@@ -375,12 +387,19 @@ fn terminal_idle(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, Stri
             .wait_for(ctx.clock, ctx.clock.now() + READY, &needle)
             .and_then(|()| idle_window(&ctx, pid, notes));
         let quit = quit(&ctx, terminal, notes, HubExit::Wait);
-        let (switches, rss, _) = measured?;
+        let (switches, rss, split, _) = measured?;
         quit?;
-        Ok(vec![
+        let mut samples = vec![
             ("terminal_idle_rss_kib", json!(rss)),
             ("terminal_idle_switches", json!(switches)),
-        ])
+        ];
+        // The split is diagnostic: it is omitted when the kernel does not
+        // report it, and the peak still stands.
+        if let Some((anon, file)) = split {
+            samples.push(("terminal_idle_rss_anon_kib", json!(anon)));
+            samples.push(("terminal_idle_rss_file_kib", json!(file)));
+        }
+        Ok(samples)
     })
 }
 

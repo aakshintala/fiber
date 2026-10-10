@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use super::to_markdown;
+use fakes::Deadline;
 
 #[test]
 fn headings_take_their_level() {
@@ -847,15 +848,17 @@ fn a_script_inside_svg_does_not_switch_to_raw_text() {
 /// The result of `run` with a deadline on the wall clock (docs/testing.md,
 /// "Waits and timeouts"): a mutant that hangs the conversion fails here
 /// naming what it waited for, instead of hanging CI.
+#[track_caller]
 fn with_deadline(what: &'static str, run: impl FnOnce() -> String + Send + 'static) -> String {
     let (done, result) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let markdown = run();
         done.send(markdown).unwrap_or(());
     });
-    result
-        .recv_timeout(Duration::from_secs(10))
-        .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+    match Deadline::after(Duration::from_secs(10)).recv(&result) {
+        Ok(markdown) => markdown,
+        Err(_) => panic!("timed out waiting for {what}"),
+    }
 }
 
 #[test]

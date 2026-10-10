@@ -2,13 +2,38 @@ use std::collections::BTreeMap;
 
 use serde_json::json;
 
-use super::{Counts, comm, hub_connected, idle_switches, switches, unsettled, vm_hwm_kib};
+use super::{
+    Counts, comm, hub_connected, idle_switches, rss_split_kib, switches, unsettled, vm_hwm_kib,
+};
 
-const STATUS: &str = "Name:\tfiber\nState:\tS (sleeping)\nVmHWM:\t   10840 kB\nVmRSS:\t   10812 kB\nThreads:\t5\nvoluntary_ctxt_switches:\t12\nnonvoluntary_ctxt_switches:\t3\n";
+const STATUS: &str = "Name:\tfiber\nState:\tS (sleeping)\nVmHWM:\t   10840 kB\nVmRSS:\t   10812 kB\nRssAnon:\t    4100 kB\nRssFile:\t    4800 kB\nThreads:\t5\nvoluntary_ctxt_switches:\t12\nnonvoluntary_ctxt_switches:\t3\n";
 
 #[test]
 fn vm_hwm_is_read_in_kib() {
     assert_eq!(vm_hwm_kib(STATUS), Ok(10840));
+}
+
+#[test]
+fn the_rss_split_is_anon_and_file_in_kib() {
+    assert_eq!(rss_split_kib(STATUS), Ok((4100, 4800)));
+}
+
+#[test]
+fn a_status_without_the_split_errors_naming_the_missing_field() {
+    let without_anon = STATUS.replace("RssAnon:\t    4100 kB\n", "");
+    assert!(
+        rss_split_kib(&without_anon)
+            .unwrap_err()
+            .contains("RssAnon"),
+        "{without_anon:?}"
+    );
+    let without_file = STATUS.replace("RssFile:\t    4800 kB\n", "");
+    assert!(
+        rss_split_kib(&without_file)
+            .unwrap_err()
+            .contains("RssFile"),
+        "{without_file:?}"
+    );
 }
 
 #[test]

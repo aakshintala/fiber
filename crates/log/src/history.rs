@@ -101,60 +101,19 @@ impl Segment {
         if from > end {
             return Ok(Vec::new());
         }
-        let path = self.dir.join(EVENTS);
-        let file = File::open(&path).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                Error::NotFound(self.dir.clone())
-            } else {
-                io_at(&path)(error)
-            }
-        })?;
-        // Past the point the bytes are never read, let alone parsed:
-        // stopping on the point's own line leaves line `to + 1`
-        // unread, however corrupt it is.
-        let mut reader = BufReader::new(file);
-        let mut buf = Vec::new();
-        let mut held = Vec::new();
-        let mut last = None;
-        let mut number = 0u64;
-        loop {
-            buf.clear();
-            let read = reader.read_until(b'\n', &mut buf).map_err(io_at(&path))?;
-            if read == 0 || buf.last() != Some(&b'\n') {
-                break;
-            }
-            number += 1;
-            let line: Envelope =
-                serde_json::from_slice(&buf).map_err(|source| Error::Unreadable {
-                    path: path.clone(),
-                    line: usize::try_from(number).unwrap_or(usize::MAX),
-                    source,
-                })?;
-            let Some(seq) = line.seq.as_ref().map(|seq| seq.0) else {
-                continue;
-            };
-            if seq > end {
-                break;
-            }
-            last = Some(seq);
-            if seq >= from {
-                held.push(line);
-            }
-            if seq == end {
-                break;
-            }
-        }
+        let offsets = crate::offsets::Offsets::scan(&self.dir, end.saturating_add(1))?;
         // The log ends before `to`: nothing past its last line is in
         // this session's history.
         if let Some(to) = &self.to
-            && last.is_none_or(|last| last < to.0)
+            && offsets.count() <= to.0
         {
             return Err(Error::Pointer {
                 path: self.dir.join(EVENTS),
                 reason: format!("session {} ends before seq {}", self.session_id.0, to.0),
             });
         }
-        Ok(held)
+        // The scan stopped at `to`, so the table holds nothing past it.
+        offsets.range(from, usize::MAX)
     }
 }
 
