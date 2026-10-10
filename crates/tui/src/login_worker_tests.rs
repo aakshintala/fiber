@@ -115,6 +115,13 @@ fn the_posting_show_sends_open_and_code_with_the_ticket() {
 }
 
 #[test]
+fn the_worker_debug_names_its_ticket_and_nothing_else() {
+    let login: Arc<dyn BrowserLogin> = Arc::new(crate::configure_fake::FakeLogin::new());
+    let worker = LoginWorker::new(LoginTicket(3), login);
+    assert_eq!(format!("{worker:?}"), "LoginWorker(3)");
+}
+
+#[test]
 fn dropping_the_worker_cancels_once() {
     let cancels = Arc::new(std::sync::Mutex::new(0));
     struct Counting {

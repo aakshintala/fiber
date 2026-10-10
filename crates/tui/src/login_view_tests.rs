@@ -822,6 +822,20 @@ fn a_started_worker_for_another_ticket_is_cancelled_at_once() {
 }
 
 #[test]
+fn a_started_worker_for_the_waiting_ticket_is_kept_until_esc() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    let held = std::sync::Arc::new(crate::configure_fake::FakeLogin::new());
+    login.started(crate::login_worker::LoginWorker::new(
+        LoginTicket(1),
+        held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,
+    ));
+    assert_eq!(held.cancels(), 0);
+    assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
+    assert_eq!(held.cancels(), 1);
+}
+
+#[test]
 fn a_url_at_the_width_is_one_row_and_past_it_is_two() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));

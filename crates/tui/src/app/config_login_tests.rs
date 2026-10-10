@@ -295,6 +295,17 @@ fn esc_over_a_waiting_login_cancels_once() {
 }
 
 #[test]
+fn a_started_worker_for_the_waiting_ticket_is_held_by_the_view() {
+    let seam = browser_seam();
+    let mut app = browser_login_app(&seam);
+    let start = start_login(&mut app);
+    let login = keep_worker(&mut app, &seam, start);
+    assert_eq!(login.cancels(), 0);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(login.cancels(), 1);
+}
+
+#[test]
 fn closing_a_waiting_login_cancels_once() {
     let seam = browser_seam();
     let mut app = browser_login_app(&seam);

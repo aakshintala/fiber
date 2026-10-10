@@ -158,6 +158,35 @@ fn login_targets_maps_a_browser_provider_to_browser() {
     assert_eq!(rows[1].kind, LoginKind::Browser);
 }
 
+/// A `LoginShow` that records each `show` and nothing else.
+struct ShowCode {
+    shown: std::sync::mpsc::Sender<(String, String)>,
+}
+
+impl tui::LoginShow for ShowCode {
+    fn open(&self, _url: &str) {}
+
+    fn show(&self, url: &str, code: &str) {
+        drop(self.shown.send((url.to_owned(), code.to_owned())));
+    }
+}
+
+#[test]
+fn the_browser_shows_the_url_and_code_through_the_login_show() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let browser = super::ShownBrowser {
+        shown: std::sync::Arc::new(ShowCode { shown: tx }),
+    };
+    extensions::Browser::show(&browser, "https://auth.example/device", "ABCD-1234");
+    assert_eq!(
+        rx.try_recv().ok(),
+        Some((
+            "https://auth.example/device".to_owned(),
+            "ABCD-1234".to_owned()
+        ))
+    );
+}
+
 #[cfg(test)]
 mod browser {
     use std::fs;
