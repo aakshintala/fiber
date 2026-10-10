@@ -17,8 +17,9 @@ use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
@@ -45,7 +46,13 @@ const TOOL_NAMES: [&str; 11] = [
 struct Setup {
     root: fakes::TempDir,
     deadline: Deadline,
+    /// The fixture server's directory, when the test wrote one: `run`
+    /// guards its group as soon as it spawns.
+    fx: Mutex<Option<PathBuf>>,
 }
+
+/// How often the server watcher polls for `pid.txt`.
+const SERVER_POLL: Duration = Duration::from_millis(50);
 
 impl Setup {
     fn new() -> Self {
@@ -53,7 +60,11 @@ impl Setup {
         let root = fakes::TempDir::new("fa");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { deadline, root }
+        Self {
+            deadline,
+            root,
+            fx: Mutex::new(None),
+        }
     }
 
     fn home(&self) -> PathBuf {
@@ -106,7 +117,8 @@ impl Setup {
     }
 
     /// Writes the fixture server's directory: `tools.json` and one result
-    /// file per `(name, body)` pair. Returns the directory.
+    /// file per `(name, body)` pair. Returns the directory, and remembers
+    /// it so `run` guards its server's group as soon as it spawns.
     fn fixture(&self, tools: &Value, calls: &[(&str, &str)]) -> PathBuf {
         let dir = self.root.path().join("fx");
         fs::create_dir_all(&dir).unwrap();
@@ -114,6 +126,10 @@ impl Setup {
         for (name, body) in calls {
             fs::write(dir.join(name), body).unwrap();
         }
+        *self
+            .fx
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(dir.clone());
         dir
     }
 
@@ -121,6 +137,10 @@ impl Setup {
     /// test's [`Deadline`], and asserts that nothing it started is left in the
     /// group, after a timeout too (`docs/testing.md`, "Running tests").
     /// A watchdog beside it kills that group if this process dies first.
+    /// The fixture server runs detached from Fiber's group, so a watcher
+    /// guards its group as soon as `pid.txt` exists: a hang or a failing
+    /// exit still kills the server and its grandchild. The run holds the
+    /// guard until it drops, covering the asserts below.
     fn run(&self, args: &[&str]) -> Run {
         let home = self.home();
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
@@ -139,6 +159,7 @@ impl Setup {
         let (child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
         let guard = KillGroup(group);
+        let server_watch = self.watch_server();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match finished.recv_timeout(self.deadline.left()) {
@@ -156,7 +177,50 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run::from(output)
+        let server = server_watch.and_then(|(stop, guarded)| {
+            drop(stop);
+            guarded.recv_timeout(self.deadline.cleanup()).ok().flatten()
+        });
+        Run::new(output, server)
+    }
+
+    /// Watches the fixture directory for the server's `pid.txt` and guards
+    /// its group: the stop sender ends the watch, and the receiver hears
+    /// the guard once armed, or nothing when no server started. `None` when
+    /// the test wrote no fixture directory.
+    fn watch_server(&self) -> Option<(mpsc::Sender<()>, mpsc::Receiver<Option<Watchdog>>)> {
+        let dir = self
+            .fx
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()?;
+        let deadline = self.deadline;
+        let (stop, stopped) = mpsc::channel::<()>();
+        let (done, guarded) = mpsc::channel();
+        thread::spawn(move || {
+            let guard = loop {
+                match stopped.recv_timeout(SERVER_POLL) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break None,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+                if deadline.left().is_zero() {
+                    break None;
+                }
+                let pid: Option<u32> = fs::read_to_string(dir.join("pid.txt"))
+                    .ok()
+                    .and_then(|text| text.trim().parse().ok());
+                if let Some(pid) = pid
+                    && pid > 1
+                    && fakes::kill_pid(pid, "0").unwrap_or(false)
+                {
+                    break Some(Watchdog::group(pid));
+                }
+            };
+            match done.send(guard) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        Some((stop, guarded))
     }
 }
 
@@ -190,11 +254,15 @@ impl Drop for KillGroup {
 }
 
 /// One finished run: its exit code, stdout's lines, as text and parsed, and
-/// stderr.
+/// stderr. It holds the fixture server's group guard, armed while Fiber
+/// ran, so a failing assert still kills the detached server and its
+/// grandchild when the run drops.
 struct Run {
     code: Option<i32>,
     lines: Vec<Value>,
     stderr: String,
+    #[allow(dead_code, reason = "held only for its drop")]
+    server: Option<Watchdog>,
 }
 
 /// A `session_status` line: ephemeral, and written by an observer thread, so
@@ -204,8 +272,8 @@ fn is_status(line: &str) -> bool {
     line.contains(r#""kind":"session_status""#)
 }
 
-impl From<Output> for Run {
-    fn from(output: Output) -> Self {
+impl Run {
+    fn new(output: Output, server: Option<Watchdog>) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
         let lines = stdout
             .lines()
@@ -216,6 +284,7 @@ impl From<Output> for Run {
             code: output.status.code(),
             lines,
             stderr: String::from_utf8(output.stderr).unwrap(),
+            server,
         }
     }
 }
@@ -520,24 +589,17 @@ fn a_servers_grandchild_is_gone_after_fiber_exits() {
     let run = setup.run(&["ask", "hi"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    let server_pid: u32 = fs::read_to_string(dir.join("pid.txt"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    // The run holds the server's group guard from while Fiber ran, so a
+    // failure above still kills the server and its grandchild.
     let grandchild: u32 = fs::read_to_string(dir.join("grandchild.txt"))
         .unwrap()
         .trim()
         .parse()
         .unwrap();
-    // Held until the asserts pass: a failure still kills the server's
-    // group when the watchdog drops.
-    let watchdog = Watchdog::group(server_pid);
     assert!(
         fakes::pids_exit(&[grandchild], setup.deadline.left()),
         "waited until the deadline for grandchild {grandchild} to exit after `fiber`"
     );
-    watchdog.stand_down(setup.deadline.cleanup());
 }
 
 #[test]

@@ -1,8 +1,8 @@
 //! One harness for the crate's tests: the fixture directory, the fake
 //! clock, and every wait with its named deadline.
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use contract::clock::Clock;
@@ -29,12 +29,24 @@ pub(crate) const WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;
 /// One real-time poll of a file or a child's exit.
 const POLL: Duration = Duration::from_millis(50);
 
-/// One fixture directory and the fake clock every test drives.
+/// One fixture directory and the fake clock every test drives. The setup
+/// holds a watchdog for every server it started, so a failure or a
+/// timeout kills the detached groups when the setup drops; `stop` stands
+/// them down once the servers are reaped.
 pub(crate) struct Setup {
     /// The fixture directory: `tools.json`, `prompts.json`, results.
     pub dir: TempDir,
     /// The fake clock the server waits on.
     pub fake: Arc<FakeClock>,
+    /// One watchdog per server pid the harness guarded.
+    guards: Mutex<Guards>,
+}
+
+/// The setup's guards: the watchdogs and the pids already guarded, so one
+/// server is never guarded twice.
+struct Guards {
+    watchdogs: Vec<fakes::Watchdog>,
+    guarded: HashSet<u32>,
 }
 
 impl Setup {
@@ -43,6 +55,10 @@ impl Setup {
         Self {
             dir: TempDir::new("fiber-mcp-support"),
             fake: FakeClock::new(),
+            guards: Mutex::new(Guards {
+                watchdogs: Vec::new(),
+                guarded: HashSet::new(),
+            }),
         }
     }
 
@@ -119,24 +135,40 @@ impl Setup {
     }
 
     /// Starts `specs` through the public `start`, with a deadline naming the wait.
+    /// Every fixture directory the specs name gets a watchdog on its
+    /// server's group, so a failure or timeout below still kills it.
     #[track_caller]
     pub(crate) fn start(&self, specs: Vec<ServerSpec>) -> Started {
         let workspace = self.workspace();
         let cache = self.cache();
         let clock = self.clock();
-        fakes::within("the start", WITHIN, move || {
+        let mut dirs = vec![workspace.clone()];
+        for spec in &specs {
+            for arg in &spec.args {
+                dirs.push(std::path::PathBuf::from(arg));
+            }
+        }
+        let started = fakes::within("the start", WITHIN, move || {
             crate::start::start(specs, &workspace, &cache, &clock, "0.0.0")
-        })
+        });
+        for dir in &dirs {
+            self.guard(dir);
+        }
+        started
     }
 
     /// Starts the fixture directly, expecting success, with a deadline naming the wait.
+    /// The server's group gets a watchdog, so a failure or timeout below
+    /// still kills it.
     #[track_caller]
     pub(crate) fn start_expect(&self, timeout: Duration) -> OpenServer {
         let script = fakes::mcp_fixture().display().to_string();
         let workspace = self.workspace();
         let arg = workspace.display().to_string();
-        Self::start_result(&script, &[arg], &workspace, &self.clock(), timeout)
-            .expect("the fixture server starts")
+        let opened = Self::start_result(&script, &[arg], &workspace, &self.clock(), timeout)
+            .expect("the fixture server starts");
+        self.guard(&workspace);
+        opened
     }
 
     /// Starts `command` with an explicit workspace and clock, with a deadline naming the wait.
@@ -176,17 +208,20 @@ impl Setup {
             .clone()
     }
 
-    /// Runs `tool` with no arguments, with a deadline naming the wait.
+    /// Runs `tool` with no arguments, with a deadline naming the wait. A
+    /// lazily started server gets a watchdog on its group.
     #[track_caller]
     pub(crate) fn run(&self, tool: &Arc<dyn Tool>) -> contract::tool::Output {
         let tool = Arc::clone(tool);
-        fakes::within("the call", WITHIN, move || {
+        let output = fakes::within("the call", WITHIN, move || {
             tool.run(
                 &Default::default(),
                 &fakes::CancelToken::new(),
                 &fakes::Recorder::default(),
             )
-        })
+        });
+        self.guard(self.dir.path());
+        output
     }
 
     /// Runs `prompts.get`, with a deadline naming the wait.
@@ -204,24 +239,68 @@ impl Setup {
         let prompt = prompt.to_owned();
         let arguments = arguments.to_owned();
         let cancel = cancel.clone();
-        fakes::within("the prompt get", WITHIN, move || {
+        let output = fakes::within("the prompt get", WITHIN, move || {
             prompts.get(&server, &prompt, &arguments, &cancel)
-        })
+        });
+        self.guard(self.dir.path());
+        output
     }
 
-    /// Serves `slot`, with a deadline naming the wait.
+    /// Serves `slot`, with a deadline naming the wait. A lazily started
+    /// server gets a watchdog on its group.
     #[track_caller]
     pub(crate) fn serve(&self, slot: &Arc<Slot>) -> Served {
         let slot = Arc::clone(slot);
-        fakes::within("the serve", WITHIN, move || slot.serve())
+        let served = fakes::within("the serve", WITHIN, move || slot.serve());
+        self.guard(self.dir.path());
+        served
     }
 
-    /// Stops `servers`, with a deadline naming the wait.
+    /// Stops `servers`, with a deadline naming the wait, then stands the
+    /// guards down: the servers are reaped, so nothing is left to kill.
     #[track_caller]
     pub(crate) fn stop(&self, servers: Servers) {
         fakes::within("the stop", WITHIN, move || {
             servers.stop();
         });
+        self.stand_down();
+    }
+
+    /// Arms a `Watchdog::group` for the server that wrote `dir/pid.txt`,
+    /// once per pid. A pid already reaped needs no guard; a dropped guard
+    /// kills its group, so the setup holds it until `stop` stands it down.
+    fn guard(&self, dir: &std::path::Path) {
+        let pid: Option<u32> = std::fs::read_to_string(dir.join("pid.txt"))
+            .ok()
+            .and_then(|text| text.trim().parse().ok());
+        let Some(pid) = pid else { return };
+        if pid <= 1 {
+            return;
+        }
+        let mut guards = self
+            .guards
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !guards.guarded.insert(pid) {
+            return;
+        }
+        if fakes::kill_pid(pid, "0").ok() != Some(true) {
+            return;
+        }
+        guards.watchdogs.push(fakes::Watchdog::group(pid));
+    }
+
+    /// Stands every guard down: the servers are reaped, so nothing is left
+    /// to kill. Guards never stood down drop with the setup and kill what
+    /// a failure left behind.
+    fn stand_down(&self) {
+        let mut guards = self
+            .guards
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for watchdog in guards.watchdogs.drain(..) {
+            watchdog.stand_down(WITHIN);
+        }
     }
 
     /// The fixture's child pid.
