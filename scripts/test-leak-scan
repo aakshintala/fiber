@@ -47,6 +47,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Every deliberately leaked fixture below self-terminates after ~120 s
+# without any signal (a python deadline checked in its loop, SECONDS-bound
+# sh spinners, sleep 120): the EXIT trap cannot run if this self-test is
+# SIGKILLed, so an unbounded leaker would survive forever. 120 s is well
+# above this test's few-second runtime; the trap still reaps by explicit
+# PID first, so no extra watchdog process is needed.
+
 n="self-test-$$-$(date +%s)-$RANDOM"
 other="sibling-$$-$(date +%s)-$RANDOM"
 secret="leak-secret-$$-$(date +%s)-$RANDOM"
@@ -55,7 +62,7 @@ secret="leak-secret-$$-$(date +%s)-$RANDOM"
 # environment of python but not of sh or sleep, so only a python leaker
 # proves the scan names it. It ignores SIGTERM like the fixtures, so only
 # SIGKILL reaps it, and time.sleep starts no child to outlive it.
-FIBER_CHECK_RUN=$n LEAK_SCAN_SECRET="$secret" python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(10000)' &
+FIBER_CHECK_RUN=$n LEAK_SCAN_SECRET="$secret" python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); end=time.time()+120; exec("while time.time()<end:\n time.sleep(1)")' &
 leaker1=$!
 
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
@@ -79,7 +86,7 @@ fi
 # A leaker that escapes its process group: no group reap reaches it, and it
 # stays in python for the same reason as the first leaker. python3 is
 # already required by scripts/check, and macOS ships no setsid.
-FIBER_CHECK_RUN=$n python3 -c 'import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); os.setsid(); time.sleep(10000)' &
+FIBER_CHECK_RUN=$n python3 -c 'import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); os.setsid(); end=time.time()+120; exec("while time.time()<end:\n time.sleep(1)")' &
 leaker2=$!
 
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
@@ -99,7 +106,7 @@ fi
 
 # A process carrying this run's nonce under another name is not a leak:
 # only the exact token FIBER_CHECK_RUN=NONCE matches.
-UNRELATED_TOKEN=$n python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(10000)' &
+UNRELATED_TOKEN=$n python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); end=time.time()+120; exec("while time.time()<end:\n time.sleep(1)")' &
 leaker5=$!
 
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
@@ -180,7 +187,7 @@ if [ "$(uname -s)" = Darwin ]; then
   mkdir -p "$tmp/target"
   # An sh fixture orphaned by a double fork, as the extensions fixtures
   # were: reparented to init, ignoring SIGTERM like them.
-  ( sh -c "trap '' TERM; while :; do :; done # $marker" & )
+  ( sh -c "trap '' TERM; while [ \"\$SECONDS\" -lt 120 ]; do :; done # $marker" & )
   tries=0
   while [ "$tries" -lt 30 ] && [ -z "$leaker3" ]; do
     # awk exits at the first match, so ps can die of SIGPIPE under
@@ -249,7 +256,7 @@ if [ "$(uname -s)" = Darwin ]; then
   # SIGTERM ignored across the exec like the fixtures); ps shows the
   # target/ path as the executable. LEAK_SCAN_ROOT points the rule at a
   # temp dir instead of the worktree.
-  ( bash -c 'trap "" TERM; exec -a "$1/target/x" sleep 10000' _ "$tmp" & )
+  ( bash -c 'trap "" TERM; exec -a "$1/target/x" sleep 120' _ "$tmp" & )
   tries=0
   while [ "$tries" -lt 30 ] && [ -z "$leaker4" ]; do
     leaker4=$(env -u FIBER_CHECK_RUN ps -U "$owner" -o pid=,ppid=,lstart=,command= | awk -v t="$tmp/target/x" '$2 == 1 && index($0, t) { print $1; exit }' || true)
@@ -280,7 +287,7 @@ if [ "$(uname -s)" = Darwin ]; then
   leaker4=
   # A shell orphan carrying a target/ path in its arguments is not this
   # run's leak: only argv0 names it, so this warns like sh, not fails.
-  printf '#!/bin/sh\ntrap "" TERM\nwhile :; do :; done\n' >"$tmp/target/argscript"
+  printf "#!/bin/sh\ntrap \"\" TERM\nwhile [ \"\$SECONDS\" -lt 120 ]; do :; done\n" >"$tmp/target/argscript"
   chmod +x "$tmp/target/argscript"
   ( bash "$tmp/target/argscript" & )
   tries=0
