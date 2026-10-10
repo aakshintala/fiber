@@ -101,8 +101,9 @@ fn hold_open(dir: &std::path::Path) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
         match tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
-        match release_rx.recv() {
-            Ok(()) | Err(mpsc::RecvError) => {}
+        match release_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(())
+            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
         }
         drop(held);
     });
@@ -504,8 +505,8 @@ fn answer_when_released(
     let mut sock = listener.accept().unwrap().0;
     read_head(&mut sock);
     accepted.send(()).unwrap();
-    match release.recv() {
-        Ok(()) | Err(mpsc::RecvError) => {}
+    match release.recv_timeout(Duration::from_secs(5)) {
+        Ok(()) | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
     }
     drop(sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"));
 }
@@ -572,7 +573,7 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
         &dir.join("init.lua"),
         &format!(
             "seen = \"no\"\n\
-             fiber.command(\"slow\", {{ timeout = 30000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+             fiber.command(\"slow\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
              fiber.command(\"quick\", {{ timeout = 300, run = function() seen = \"yes\"; return \"ran\" end }})\n\
              fiber.command(\"after\", {{ timeout = 1000, run = function() return seen end }})\n"
         ),
@@ -724,7 +725,7 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     write(
         &dir.join("init.lua"),
         &format!(
-            "fiber.command(\"p.sign\", {{ timeout = 30000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+            "fiber.command(\"p.sign\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
              fiber.provider(\"p\", {{ sign = {{ timeout = 50, run = function() return {{}} end }} }})\n"
         ),
     );
@@ -735,7 +736,7 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     ok_rx
         .recv_timeout(WAIT)
         .expect("waited for p.sign to reach the server");
-    let grace = asked + Duration::from_millis(30000) + GRACE;
+    let grace = asked + Duration::from_millis(5000) + GRACE;
     assert!(
         clock.await_parked(grace, WAIT),
         "waited for p.sign to park at its own grace"
@@ -758,8 +759,6 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     );
 }
 
-/// Answers `times` connections, each once the test sends on `release` or
-/// drops it, so a parked `host.http` stays parked until the test says.
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 fn answer_n(
     listener: std::net::TcpListener,
@@ -771,8 +770,9 @@ fn answer_n(
         let mut sock = listener.accept().unwrap().0;
         read_head(&mut sock);
         accepted.send(()).unwrap();
-        match release.recv() {
-            Ok(()) | Err(mpsc::RecvError) => {}
+        match release.recv_timeout(Duration::from_secs(8)) {
+            Ok(())
+            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
         }
         drop(
             sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"),

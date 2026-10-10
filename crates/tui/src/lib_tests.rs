@@ -1597,8 +1597,7 @@ fn run_home_names_the_key_maps_bound_key() {
     let mut started = launch();
     started.keys = crate::KeysSetup { user: keys };
     let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    let (mut pair, finished, frames) =
-        spawn_run_with_launch(hub, vec![b"F2 the key map" as &[u8]], started);
+    let (mut pair, finished, frames) = spawn_run_with_launch(hub, vec![b"quit" as &[u8]], started);
     let first = watched(&frames, "the first frame");
     assert!(
         first.starts_with(START),
