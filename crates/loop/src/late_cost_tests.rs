@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use contract::clock::Clock;
-use contract::events::UsageRecorded;
+use contract::events::{ReviewerPurpose, ReviewerUse, UsageRecorded};
 use contract::provider::CostLookup;
 use contract::shapes::Tokens;
 use contract::{ActionId, GenerationId, TurnId};
@@ -357,4 +357,38 @@ fn dropping_the_queue_stops_the_worker_before_the_due() {
     clock.advance(LOOKUP_AFTER);
     seen.await_dropped();
     assert!(seen.calls().is_empty());
+}
+
+#[test]
+fn a_settled_record_keeps_the_reviewer_use() {
+    let (clock, dyn_clock) = clocks();
+    let due = clock.now() + LOOKUP_AFTER;
+    let (lookup, seen) = lookup(Some(0.0000072));
+    let mut first = first("gen-9");
+    first.reviewer = Some(ReviewerUse {
+        purpose: ReviewerPurpose::Stage2,
+        action_id: Some(ActionId("a_9".into())),
+    });
+    let mut late = LateCost::default();
+    late.schedule(lookup, first.clone(), turn(), action(), &dyn_clock)
+        .unwrap();
+    assert!(clock.await_parked(due, WAIT), "the worker parks at the due");
+    let mark = clock.advance_marked(LOOKUP_AFTER);
+    assert!(
+        clock.await_parked_since(&mark, None, WAIT),
+        "the worker parks with an empty queue after the call"
+    );
+    assert_eq!(seen.calls(), ["gen-9"]);
+    // The settlement only sets the late cost: the reviewer object rides
+    // along unchanged.
+    let mut want = first;
+    want.cost = Some(0.0000072);
+    assert_eq!(
+        late.take_settled(),
+        [Settled {
+            record: want,
+            turn: turn(),
+            action: action(),
+        }]
+    );
 }

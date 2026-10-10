@@ -4,13 +4,13 @@
 
 use std::sync::Arc;
 
-use contract::events::{Event, KeptMessage, Notice, ReviewerKept};
+use contract::events::{Event, KeptMessage, Notice, ReviewerKept, ReviewerUse};
 use contract::provider::{CallError, Input};
 use contract::shapes::True;
 use contract::{ErrorCode, TurnId};
 
 use super::shown::Shown;
-use super::{ReviewEndpoint, sections};
+use super::{ReviewEndpoint, ReviewerPurpose, sections};
 use crate::{Error, Loop};
 
 /// The listed numbers (1-based) a selection reply keeps, ascending and
@@ -172,6 +172,10 @@ impl Loop {
             match self.send_review(
                 turn,
                 &endpoint,
+                ReviewerUse {
+                    purpose: ReviewerPurpose::Handoff,
+                    action_id: None,
+                },
                 &prompt.shared,
                 conversation,
                 self.reviewer_sent,
