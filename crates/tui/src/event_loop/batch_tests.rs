@@ -43,6 +43,7 @@ fn described(inputs: &[Input]) -> Vec<String> {
             | Input::Files { .. }
             | Input::FindDue(_)
             | Input::Image { .. }
+            | Input::Viewed { .. }
             | Input::Models(_) => "other".to_owned(),
         })
         .collect()
