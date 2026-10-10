@@ -127,12 +127,13 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
         }],
     );
     await_opened(&out, &url);
-    seam.login(0)
-        .expect("one login started")
-        .answer(Ok(crate::configure::Stored {
+    seam.answer(
+        0,
+        Ok(crate::configure::Stored {
             path: "credentials/codex/alice@example.com".to_owned(),
             replaced: false,
-        }));
+        }),
+    );
     let (_, step) = next(&rx);
     assert!(
         matches!(step, crate::login_worker::LoginStep::Done(Ok(_))),
@@ -179,12 +180,13 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
         frame.below,
         ["Open this URL to log in to codex:".to_owned(), url.clone()]
     );
-    seam.login(0)
-        .expect("one login started")
-        .answer(Ok(crate::configure::Stored {
+    seam.answer(
+        0,
+        Ok(crate::configure::Stored {
             path: "credentials/codex/alice@example.com".to_owned(),
             replaced: false,
-        }));
+        }),
+    );
     let (_, step) = next(&rx);
     assert!(
         matches!(step, crate::login_worker::LoginStep::Done(Ok(_))),

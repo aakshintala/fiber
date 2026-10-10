@@ -21,9 +21,7 @@ struct Fake {
 
 impl Fake {
     fn read(&self) -> Result<Catalogue, String> {
-        self.release
-            .recv_timeout(DEADLINE)
-            .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the read's release"));
+        self.release.recv().expect("the test releases the read");
         Ok(Catalogue::default())
     }
 }

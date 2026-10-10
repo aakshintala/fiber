@@ -134,7 +134,7 @@ fn await_parked_returns_once_a_thread_parks_at_the_deadline() {
         clock_t.wait_until(Some(until), &mut |bound| {
             assert_eq!(bound, None);
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv()
                 .expect("waited for the test to release the parked thread");
         });
         if let Ok(()) = exit_tx.send(()) {}
@@ -165,7 +165,7 @@ fn await_parked_returns_at_once_when_a_thread_is_already_parked() {
     thread::spawn(move || {
         clock_t.wait_until(Some(until), &mut |_bound| {
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv()
                 .expect("waited for the test to release the parked thread");
         });
         if let Ok(()) = exit_tx.send(()) {}
@@ -366,7 +366,7 @@ fn park_once(
                 Ok(()) | Err(mpsc::SendError(())) => {}
             }
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv()
                 .expect("waited for the test to release the parked thread");
         });
         if let Ok(()) = exit_tx.send(()) {}
@@ -412,7 +412,7 @@ fn a_later_park_by_a_thread_in_the_mark_matches() {
                 Ok(()) | Err(mpsc::SendError(())) => {}
             }
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv()
                 .expect("waited for release of the first park");
         });
         clock_t.wait_until(Some(until), &mut |_bound| {
@@ -420,7 +420,7 @@ fn a_later_park_by_a_thread_in_the_mark_matches() {
                 Ok(()) | Err(mpsc::SendError(())) => {}
             }
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv()
                 .expect("waited for release of the second park");
         });
         clock_t.wait_until(Some(until), &mut |_bound| {
@@ -428,7 +428,7 @@ fn a_later_park_by_a_thread_in_the_mark_matches() {
                 Ok(()) | Err(mpsc::SendError(())) => {}
             }
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv()
                 .expect("waited for release of the third park");
         });
         if let Ok(()) = exit_tx.send(()) {}
@@ -497,7 +497,7 @@ fn only_the_park_with_the_awaited_until_matches() {
                 Ok(()) | Err(mpsc::SendError(_)) => {}
             }
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv()
                 .expect("waited for release of the first park");
         });
         clock_t.wait_until(Some(later), &mut |_bound| {
@@ -505,7 +505,7 @@ fn only_the_park_with_the_awaited_until_matches() {
                 Ok(()) | Err(mpsc::SendError(_)) => {}
             }
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv()
                 .expect("waited for release of the second park");
         });
         clock_t.wait_until(None, &mut |_bound| {
@@ -513,7 +513,7 @@ fn only_the_park_with_the_awaited_until_matches() {
                 Ok(()) | Err(mpsc::SendError(_)) => {}
             }
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv()
                 .expect("waited for release of the third park");
         });
         if let Ok(()) = exit_tx.send(()) {}
@@ -669,7 +669,7 @@ fn a_later_park_after_mark_parked_matches() {
                 Ok(()) | Err(mpsc::SendError(())) => {}
             }
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv()
                 .expect("waited for release of the first park");
         });
         clock_t.wait_until(Some(until), &mut |_bound| {
@@ -677,7 +677,7 @@ fn a_later_park_after_mark_parked_matches() {
                 Ok(()) | Err(mpsc::SendError(())) => {}
             }
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv()
                 .expect("waited for release of the second park");
         });
         if let Ok(()) = exit_tx.send(()) {}
@@ -704,7 +704,7 @@ fn a_later_park_after_mark_parked_matches() {
 
 /// Parks one thread twice at `until`: reports each park from inside
 /// the wait, leaves the first on release, reports left, waits for the
-/// gate, parks again, exits. Every wait bounds at 5 s wall-clock.
+/// gate, parks again, exits. The test's own waits bound the run at 5 s wall-clock.
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
 type Twice = (
     mpsc::Receiver<()>,
@@ -729,21 +729,21 @@ fn park_twice(clock: &Arc<FakeClock>, until: std::time::Instant) -> Twice {
                 Ok(()) | Err(mpsc::SendError(())) => {}
             }
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv()
                 .expect("waited for release of the first park");
         });
         match left_tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
         gate_rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv()
             .expect("waited for the test to open the gate");
         clock.wait_until(Some(until), &mut |_bound| {
             match second_tx.send(()) {
                 Ok(()) | Err(mpsc::SendError(())) => {}
             }
             release_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv()
                 .expect("waited for release of the second park");
         });
         if let Ok(()) = exit_tx.send(()) {}

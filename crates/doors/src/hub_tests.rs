@@ -678,7 +678,7 @@ fn connect_until_silent_hub_times_out_at_the_shared_deadline() {
     thread::spawn(move || {
         let (silent, _) = listener.accept().unwrap();
         // Held open, silent, until the test is done.
-        release_rx.recv_timeout(DEADLINE).unwrap_or(());
+        release_rx.recv().unwrap_or(());
         drop(silent);
     });
     let error = run_connect_until(
@@ -759,7 +759,7 @@ fn a_hub_that_accepts_and_never_speaks_times_out_naming_the_socket() {
     thread::spawn(move || {
         let (silent, _) = listener.accept().unwrap();
         // Held open, silent, until the test is done.
-        release_rx.recv_timeout(DEADLINE).unwrap_or(());
+        release_rx.recv().unwrap_or(());
         drop(silent);
     });
     let error = run_connect_within(temp.dir.clone(), Duration::from_millis(10))
@@ -846,7 +846,7 @@ fn the_connected_stream_has_no_read_timeout() {
         let (mut stream, _) = listener.accept().unwrap();
         stream.write_all(&hello_line()).unwrap();
         stream.write_all(b"\n").unwrap();
-        release_rx.recv_timeout(DEADLINE).unwrap_or(());
+        release_rx.recv().unwrap_or(());
     });
     let (stream, hello) = run_connect_within(temp.dir.clone(), DEADLINE).unwrap();
     assert_eq!(hello.kind, "hub_hello");

@@ -3209,7 +3209,8 @@ impl contract::extension::ExtensionDoor for FakeDoor {
 }
 
 struct HeldDoor {
-    admitted: Mutex<Vec<mpsc::Sender<()>>>,
+    entered: mpsc::Sender<()>,
+    release: Mutex<Option<mpsc::Receiver<()>>>,
 }
 
 impl contract::extension::ExtensionDoor for HeldDoor {
@@ -3224,12 +3225,18 @@ impl contract::extension::ExtensionDoor for HeldDoor {
                 message: format!("`{name}` names no extension command."),
             });
         }
-        let (tx, rx) = mpsc::channel();
-        self.admitted.lock().unwrap().push(tx);
+        self.entered.send(()).unwrap_or(());
+        let rx = self
+            .release
+            .lock()
+            .unwrap()
+            .take()
+            .expect("one slow command");
         // The release runs only after `command_accepted` is on the queue;
-        // the fake records the order by releasing the waiter then.
+        // the test releases the waiter then. The sender lives only in the
+        // test, so unwinding drops it and disconnects this wait.
         Ok(Box::new(move || {
-            let _ = rx.recv_timeout(DEADLINE).ok();
+            let _ = rx.recv().ok();
         }))
     }
 
@@ -3241,8 +3248,11 @@ fn command_accepted_arrives_before_run_starts_and_text_absent_is_empty() {
     // `command_accepted` is on the client's stream before the fake's release
     // is called; `text` absent is `""`.
     let opened = Opened::open(vec![]);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
     let door = Arc::new(HeldDoor {
-        admitted: Mutex::new(Vec::new()),
+        entered: entered_tx,
+        release: Mutex::new(Some(release_rx)),
     });
     opened.session.extensions(door.clone());
     let socket = opened.socket.clone();
@@ -3259,8 +3269,8 @@ fn command_accepted_arrives_before_run_starts_and_text_absent_is_empty() {
             assert_eq!(kind(&accepted), "command_accepted");
             // The fake's release blocks until the test lets it go; the
             // acceptance above arrived first, which is the order asserted.
-            let tx = door.admitted.lock().unwrap().pop().expect("admitted");
-            tx.send(()).unwrap();
+            entered_rx.recv_timeout(DEADLINE).expect("admitted");
+            release_tx.send(()).unwrap();
             Ok(())
         })
         .unwrap();
@@ -3646,7 +3656,7 @@ fn close_now_starts_the_shutdown_and_sends_the_loop_nothing() {
         release_rx
             .lock()
             .unwrap()
-            .recv_timeout(DEADLINE)
+            .recv()
             .expect("the test releases the hook");
     }));
     opened

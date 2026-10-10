@@ -935,7 +935,7 @@ fn a_cancel_during_the_store_waits_for_it() {
     thread::spawn(move || {
         let result = cancel_for_commit.commit(|| {
             entered_tx.send(()).unwrap();
-            release_rx.recv_timeout(WAIT).expect("the release arrives");
+            release_rx.recv().expect("the release arrives");
             log_for_commit.lock().unwrap().push("stored".to_owned());
             Ok::<_, Failure>(7)
         });

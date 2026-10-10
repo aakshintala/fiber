@@ -190,7 +190,7 @@ fn an_eof_retry_does_not_extend_the_total_deadline() {
     thread::spawn(move || {
         let (mut first, _) = listener.accept().unwrap();
         first.write_all(b"{").unwrap();
-        wait_go.recv_timeout(DEADLINE).unwrap();
+        wait_go.recv().unwrap();
         drop(first);
         let (silent, _) = listener.accept().unwrap();
         second_accepted.send(()).unwrap();
@@ -205,7 +205,7 @@ fn an_eof_retry_does_not_extend_the_total_deadline() {
             reads += 1;
             if reads == 2 {
                 checked_read.send(()).unwrap_or(());
-                wait_resume.recv_timeout(DEADLINE).unwrap();
+                wait_resume.recv().unwrap();
             }
         };
         done.send(probe_with(
@@ -266,7 +266,7 @@ fn two_part_hub(home: &Path, first: String, second: String) -> Sender<()> {
     let (go, wait) = mpsc::channel::<()>();
     let (_got, _hub) = fake_hub(home, move |mut stream| {
         stream.write_all(first.as_bytes()).unwrap();
-        wait.recv_timeout(DEADLINE).unwrap();
+        wait.recv().unwrap();
         stream.write_all(second.as_bytes()).unwrap();
         hold(&stream);
     });

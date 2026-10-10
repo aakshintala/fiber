@@ -1834,7 +1834,7 @@ impl crate::Starter for GateStarter {
         if *id == self.held {
             self.entered.send(()).unwrap_or(());
             if let Some(release) = lock(&self.release).take() {
-                release.recv_timeout(DEADLINE).unwrap_or(());
+                release.recv().unwrap_or(());
             }
         }
         self.inner.rewind(id, workspace, from)
@@ -1882,7 +1882,7 @@ fn route_and_the_sweep_open_only_one_relay() {
     let (release_tx, release) = mpsc::channel::<()>();
     *lock(&hub.before_open) = Some(Box::new(move || {
         paused_tx.send(()).unwrap_or(());
-        release.recv_timeout(DEADLINE).unwrap_or(());
+        release.recv().unwrap_or(());
     }));
     client.send(&json!({
         "id": "c_cmd", "session_id": sid, "command": "prompt",
@@ -1951,7 +1951,7 @@ fn route_and_the_sweep_open_only_one_relay() {
     let (release_tx, release) = mpsc::channel::<()>();
     *lock(&hub.rejoins.before_connect) = Some(Box::new(move || {
         paused_tx.send(()).unwrap_or(());
-        release.recv_timeout(DEADLINE).unwrap_or(());
+        release.recv().unwrap_or(());
     }));
     let done = arm_pass(&hub);
     clock.advance(RUN_SCAN);
@@ -2014,7 +2014,7 @@ fn a_level_changed_while_the_worker_waits_is_the_one_rejoined() {
     let (release_tx, release) = mpsc::channel::<()>();
     *lock(&hub.rejoins.before_connect) = Some(Box::new(move || {
         paused_tx.send(()).unwrap_or(());
-        release.recv_timeout(DEADLINE).unwrap_or(());
+        release.recv().unwrap_or(());
     }));
     let done = arm_pass(&hub);
     clock.advance(RUN_SCAN);
@@ -2192,7 +2192,7 @@ fn a_paused_worker_blocks_no_scan_and_starts_no_second_worker() {
     let (release_tx, release) = mpsc::channel::<()>();
     *lock(&hub.rejoins.before_connect) = Some(Box::new(move || {
         paused_tx.send(()).unwrap_or(());
-        release.recv_timeout(DEADLINE).unwrap_or(());
+        release.recv().unwrap_or(());
     }));
     clock.advance(RUN_SCAN);
     await_scanner(&clock);

@@ -211,7 +211,7 @@ struct Held {
 impl std::io::Read for Held {
     fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
         let _sent = self.entered.send(());
-        match self.release.recv_timeout(DEADLINE) {
+        match self.release.recv() {
             Ok(()) => Ok(0),
             Err(_) => Err(std::io::Error::other("the test ended before releasing")),
         }

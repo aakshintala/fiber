@@ -1115,7 +1115,7 @@ fn attention_reaches_every_connection_after_hub_hello_with_or_without_a_feed() {
     let (release_tx, release_rx) = mpsc::channel();
     *guard(&hub.before_hello) = Some(Box::new(move || {
         reached_tx.send(()).unwrap_or(());
-        release_rx.recv_timeout(DEADLINE).unwrap_or(());
+        release_rx.recv().unwrap_or(());
     }));
     let mut c = Client::connect(&hub);
     reached_rx

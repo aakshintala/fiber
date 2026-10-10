@@ -276,10 +276,13 @@ fn keep_worker(
     let (tx, _rx) = std::sync::mpsc::channel();
     let worker = crate::login_worker::start(start, fakes::clock::FakeClock::new(), tx);
     let login = seam.login(0).expect("one login started");
-    login.answer(Err(crate::configure::ConfigureError {
-        code: contract::ErrorCode::AuthenticationFailed,
-        message: "the login was cancelled; nothing was stored.".to_owned(),
-    }));
+    seam.answer(
+        0,
+        Err(crate::configure::ConfigureError {
+            code: contract::ErrorCode::AuthenticationFailed,
+            message: "the login was cancelled; nothing was stored.".to_owned(),
+        }),
+    );
     app.login_started(worker);
     login
 }

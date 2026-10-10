@@ -51,9 +51,7 @@ fn two_paths_do_not_block_each_other() {
     let holder = thread::spawn(move || {
         let guard = first.lock(std::path::Path::new("/ws/a.txt"));
         entered.send(()).unwrap();
-        release_rx
-            .recv_timeout(DEADLINE)
-            .expect("waited 10s for the release of the first path");
+        release_rx.recv().expect("the test releases the first path");
         drop(guard);
     });
     assert!(
@@ -89,8 +87,8 @@ fn a_second_lock_on_a_held_path_blocks_until_the_guard_drops() {
         let guard = first.lock(&first_path);
         holding.send(()).unwrap();
         release_first_rx
-            .recv_timeout(DEADLINE)
-            .expect("waited 10s for the release of the held path");
+            .recv()
+            .expect("the test releases the held path");
         drop(guard);
     });
     assert!(
@@ -153,9 +151,7 @@ fn a_dyn_hold_blocks_a_second_hold_on_the_same_path() {
         let lock: &dyn PathLock = &*first;
         lock.hold(&first_path, &mut || {
             entered.send(()).unwrap();
-            release_rx
-                .recv_timeout(DEADLINE)
-                .expect("waited 10s for the release of the first hold");
+            release_rx.recv().expect("the test releases the first hold");
         });
     });
     assert!(
@@ -198,9 +194,7 @@ fn a_dyn_hold_does_not_block_a_different_path() {
         let lock: &dyn PathLock = &*first;
         lock.hold(std::path::Path::new("/ws/dyn-a.txt"), &mut || {
             entered.send(()).unwrap();
-            release_rx
-                .recv_timeout(DEADLINE)
-                .expect("waited 10s for the release of the first hold");
+            release_rx.recv().expect("the test releases the first hold");
         });
     });
     assert!(
@@ -262,8 +256,8 @@ fn an_alias_contends_with_the_built_in_key() {
             let guard = first.lock(&key_for_hold);
             holding.send(()).unwrap();
             release_rx
-                .recv_timeout(DEADLINE)
-                .expect("waited 10s for the release of the built-in key");
+                .recv()
+                .expect("the test releases the built-in key");
             drop(guard);
         });
         assert!(

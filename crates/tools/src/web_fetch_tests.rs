@@ -1423,7 +1423,7 @@ impl std::io::Write for HoldsFirst {
             }
             let release = self.release.lock().unwrap();
             // A test that never releases fails on its own deadline.
-            match release.recv_timeout(SIGNAL) {
+            match release.recv() {
                 Ok(()) | Err(_) => {}
             }
         }

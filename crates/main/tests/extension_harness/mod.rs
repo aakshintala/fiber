@@ -419,9 +419,9 @@ pub(crate) type Held = (String, mpsc::Receiver<()>, mpsc::Sender<()>);
 
 /// Holds one HTTP connection open (head read, body never sent), so a
 /// `host.http` against it stays parked. Each header read takes what remains
-/// of `deadline`; the connection is held until the returned sender drops or
-/// the cleanup deadline passes. The caller receives the accepted signal
-/// with the deadline, which bounds the accept.
+/// of `deadline`; the connection is held until the returned sender sends or
+/// drops. The caller receives the accepted signal with the deadline, which
+/// bounds the accept.
 pub(crate) fn hold_server(deadline: Deadline) -> Held {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
@@ -451,7 +451,7 @@ pub(crate) fn hold_server(deadline: Deadline) -> Held {
         match accepted_tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
-        match release_rx.recv_timeout(deadline.cleanup()) {
+        match release_rx.recv() {
             Ok(()) | Err(_) => {}
         }
     });

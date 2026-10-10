@@ -1029,7 +1029,7 @@ fn reply_server() -> (String, mpsc::Receiver<()>, mpsc::Sender<()>) {
         let mut sock = listener.accept().unwrap().0;
         read_head(&mut sock);
         let _sent = accepted_tx.send(());
-        let _got = release_rx.recv_timeout(WAIT);
+        let _got = release_rx.recv();
         let _wrote = std::io::Write::write_all(
             &mut sock,
             b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",

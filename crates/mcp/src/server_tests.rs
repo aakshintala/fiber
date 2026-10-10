@@ -751,8 +751,8 @@ fn pause_signallers() -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
             .send(())
             .expect("the test is waiting");
         super::lock(&go_rx)
-            .recv_timeout(WITHIN)
-            .unwrap_or_else(|_| panic!("the test let the signaller go within {WITHIN:?}"));
+            .recv()
+            .unwrap_or_else(|_| panic!("the test let the signaller go"));
     }));
     (entered, go)
 }

@@ -65,15 +65,15 @@ fn a_writer_never_exposes_a_file_wider_than_0600() {
     let dir = home.path().join("credentials/acme");
     const DEADLINE: Duration = Duration::from_secs(5);
     let (paused_tx, paused) = mpsc::channel();
-    let (release_tx, release) = mpsc::channel();
 
     thread::scope(|scope| {
+        // Owned inside the scope: unwinding drops the sender before the
+        // scope's implicit join, disconnecting the held writer.
+        let (release_tx, release) = mpsc::channel();
         scope.spawn(|| {
             crate::write::before_rename(move || {
                 paused_tx.send(()).unwrap();
-                release
-                    .recv_timeout(DEADLINE)
-                    .expect("the test released the writer");
+                release.recv().expect("the test released the writer");
             });
             lock.write(&json!({ "token": "t" })).unwrap();
         });

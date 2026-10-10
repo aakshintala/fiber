@@ -856,11 +856,8 @@ fn a_recovered_command_never_queues_behind_an_older_relay() {
     let parked = std::thread::Builder::new()
         .name("parked-relay".to_owned())
         .spawn(move || {
-            let parked = park_rx.recv_timeout(DEADLINE);
-            assert!(
-                matches!(parked, Err(std::sync::mpsc::RecvTimeoutError::Disconnected)),
-                "the test releases the parked relay before its deadline"
-            );
+            // Parked until the test drops its sender.
+            let _released = park_rx.recv();
         })
         .unwrap();
     let (retired_write, _) = UnixStream::pair().unwrap();
@@ -1151,7 +1148,7 @@ fn a_transfer_registers_before_the_session_can_answer() {
     crate::connection::lock(&relays).after_transfer_write = Some(Box::new(move || {
         written_tx.send(()).unwrap_or(());
         release_transfer_rx
-            .recv_timeout(DEADLINE)
+            .recv()
             .expect("the test releases the transfer pause");
     }));
     let (filter_tx, filter_rx) = mpsc::channel();
@@ -1161,7 +1158,7 @@ fn a_transfer_registers_before_the_session_can_answer() {
             .send((acknowledgement(line).is_some(), muted))
             .unwrap_or(());
         release_filter_rx
-            .recv_timeout(DEADLINE)
+            .recv()
             .expect("the test releases the relay pause");
     }));
     let (client_write, client_read) = UnixStream::pair().unwrap();

@@ -776,7 +776,8 @@ fn a_failed_end_returns_to_the_rows_saying_why() {
 fn esc_while_waiting_returns_to_the_rows_and_cancels_once() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
-    let held = std::sync::Arc::new(crate::configure_fake::FakeLogin::new());
+    let (fake_login, _answer) = crate::configure_fake::FakeLogin::new();
+    let held = std::sync::Arc::new(fake_login);
     login.started(crate::login_worker::LoginWorker::new(
         LoginTicket(1),
         held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,
@@ -789,7 +790,8 @@ fn esc_while_waiting_returns_to_the_rows_and_cancels_once() {
 #[test]
 fn dropping_a_waiting_view_cancels_once() {
     let fake = fake_with(targets());
-    let held = std::sync::Arc::new(crate::configure_fake::FakeLogin::new());
+    let (fake_login, _answer) = crate::configure_fake::FakeLogin::new();
+    let held = std::sync::Arc::new(fake_login);
     {
         let mut login = waiting(&fake, LoginTicket(1));
         login.started(crate::login_worker::LoginWorker::new(
@@ -804,7 +806,8 @@ fn dropping_a_waiting_view_cancels_once() {
 fn a_started_worker_for_another_ticket_is_cancelled_at_once() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
-    let held = std::sync::Arc::new(crate::configure_fake::FakeLogin::new());
+    let (fake_login, _answer) = crate::configure_fake::FakeLogin::new();
+    let held = std::sync::Arc::new(fake_login);
     login.started(crate::login_worker::LoginWorker::new(
         LoginTicket(2),
         held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,
@@ -825,7 +828,8 @@ fn a_started_worker_for_another_ticket_is_cancelled_at_once() {
 fn a_started_worker_for_the_waiting_ticket_is_kept_until_esc() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
-    let held = std::sync::Arc::new(crate::configure_fake::FakeLogin::new());
+    let (fake_login, _answer) = crate::configure_fake::FakeLogin::new();
+    let held = std::sync::Arc::new(fake_login);
     login.started(crate::login_worker::LoginWorker::new(
         LoginTicket(1),
         held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,

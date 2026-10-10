@@ -224,7 +224,7 @@ fn hold(body: &'static str) -> Held {
         match accepted_tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
-        if release_rx.recv_timeout(WAIT).is_ok() {
+        if release_rx.recv().is_ok() {
             let reply = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()

@@ -1458,7 +1458,7 @@ impl Tool for HeldShell {
             sender.send(()).expect("the test is waiting");
         }
         if let Some(release) = lock(&self.release).take() {
-            let _released = release.recv_timeout(SHELL_LIMIT);
+            let _released = release.recv();
         }
         Output {
             content: vec![ContentPart::Text {
@@ -1699,9 +1699,7 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
     *super::lock(&gate.probe) = Some(Arc::new(move |point| match point {
         Probe::FirstShellWaitDone => {
             if let Ok(()) = first_tx.send(()) {}
-            lock(&resume_rx)
-                .recv_timeout(DEADLINE)
-                .expect("the test resumes close");
+            lock(&resume_rx).recv().expect("the test resumes close");
         }
         Probe::ShellsWaiting => if let Ok(()) = waiting_tx.send(()) {},
         Probe::SubscribeSeeded | Probe::SubscribeAcknowledged => {}
@@ -2059,7 +2057,7 @@ fn a_full_subscriber_sees_the_kept_ui_line_before_a_later_one() {
         }
         if let Ok(()) = parked_tx.send(()) {}
         lock(&release_rx)
-            .recv_timeout(DEADLINE)
+            .recv()
             .expect("the test releases the subscribe");
     }));
     let socket = opened.socket.clone();

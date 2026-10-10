@@ -6,17 +6,12 @@
 
 #[cfg(test)]
 use std::sync::MutexGuard;
-#[cfg(test)]
-use std::time::Duration;
 use std::time::Instant;
 
 use contract::clock::Wake;
 use contract::events::SessionStatus;
 
 use super::{Entry, Feed, PoisonError, RUN_SCAN, State, lock};
-
-#[cfg(test)]
-const PAUSE_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Settles session `id` when dropped: the caller has taken its line.
 pub(super) struct Settle<'a>(pub(super) &'a Feed, pub(super) &'a str);
@@ -98,10 +93,7 @@ impl Feed {
             return;
         };
         pause.arrived.send(()).unwrap_or(());
-        assert!(
-            pause.release.recv_timeout(PAUSE_DEADLINE).is_ok(),
-            "the settle wait is released"
-        );
+        assert!(pause.release.recv().is_ok(), "the settle wait is released");
     }
 
     /// Every running session's latest status, in the feed's order, copied
