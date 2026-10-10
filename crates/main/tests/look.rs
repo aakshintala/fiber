@@ -515,7 +515,18 @@ fn two_sessions_show_the_rail_on_panel_and_hiding_it_leaves_the_grip() {
     run.read_until("Hel");
     run.read_until("finished");
     let screen = run.screen_until(160, 48, "the rail", |s| {
-        (23..=25).all(|y| s.cell(23, y).symbol.as_str() == "⋮") && s.cell(23, 0).bg == PANEL_RGB
+        (23..=25).all(|y| s.cell(23, y).symbol.as_str() == "⋮")
+            && s.cell(23, 0).bg == PANEL_RGB
+            && (0..48).all(|y| (0..24).all(|x| s.cell(x, y).bg != Colour::Default))
+            && (0..48).any(|y| {
+                (0..157).any(|x| {
+                    (0..3)
+                        .map(|dx| s.cell(x + dx, y).symbol.as_str())
+                        .collect::<String>()
+                        == "Hel"
+                }) && s.cell(25, y).bg != Colour::Default
+                    && s.cell(24, y).bg == Colour::Default
+            })
     });
     for y in 0..48 {
         for x in 0..24 {
@@ -535,6 +546,17 @@ fn two_sessions_show_the_rail_on_panel_and_hiding_it_leaves_the_grip() {
     run.write(b"\x1br");
     let screen = run.screen_until(160, 48, "the grip", |s| {
         (23..=25).all(|y| s.cell(0, y).symbol.as_str() == "⋮")
+            && (0..48).any(|y| {
+                (0..157).any(|x| {
+                    (0..3)
+                        .map(|dx| s.cell(x + dx, y).symbol.as_str())
+                        .collect::<String>()
+                        == "Hel"
+                }) && s.cell(2, y).bg != Colour::Default
+                    && s.cell(1, y).bg == Colour::Default
+                    && s.cell(124, y).bg == s.cell(2, y).bg
+                    && s.cell(125, y).bg == Colour::Default
+            })
     });
     for y in 23..=25 {
         assert_eq!(screen.cell(0, y).symbol.as_str(), "⋮", "grip row {y}");

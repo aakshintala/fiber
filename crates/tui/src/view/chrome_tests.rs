@@ -60,6 +60,30 @@ fn named(app: &mut App, name: &str) {
     ));
 }
 
+/// A `session_status` line for `session` named `name`.
+fn status(session: &str, name: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({
+            "name": name, "workspace": "/w", "project": "-w", "state": "idle",
+            "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
 /// Draws `app` at `width` by `height`: the buffer and the target count.
 fn draw(app: &App, width: u16, height: u16) -> (Buffer, usize) {
     let area = Rect::new(0, 0, width, height);
@@ -131,7 +155,6 @@ fn floor_centres_with_division() {
 
 #[test]
 fn the_conversation_has_no_header_and_a_blank_column_each_side() {
-    use crate::theme::Role;
     use ratatui::style::Color;
     let mut app = app(160, 40, false);
     named(&mut app, "fix the parser");
@@ -169,39 +192,8 @@ fn the_conversation_has_no_header_and_a_blank_column_each_side() {
     assert_eq!(buf.cell((125, y)).map(|cell| cell.bg), Some(Color::Reset));
     // A second live session shows the rail: the card starts one column
     // after the rail's edge.
-    app.on_line(session_line(
-        "session_status",
-        serde_json::json!({
-            "name": "two", "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
-            "spend": {"tokens": {"input": 1, "cache_read": 0,
-                "cache_write": {}, "output": 2},
-                "cost": 0.0, "subscription_cost": 0.0},
-            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
-        }),
-    ));
-    // The status above names the attached session; a second session needs
-    // its own id. Send it directly.
-    app.on_line(crate::link::Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
-        session_id: contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload: serde_json::json!({
-            "name": "two", "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
-            "spend": {"tokens": {"input": 1, "cache_read": 0,
-                "cache_write": {}, "output": 2},
-                "cost": 0.0, "subscription_cost": 0.0},
-            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
-        })
-        .as_object()
-        .cloned()
-        .unwrap_or_default(),
-    }));
+    app.on_line(status(SESSION, "two"));
+    app.on_line(status("s_bbbbbbbbbbbbbbbb", "two"));
     let layout = app.chrome().layout().expect("a layout with the rail");
     let rail = layout.rail.expect("a rail");
     let (buf, _) = draw(&app, 160, 40);
@@ -243,7 +235,6 @@ fn the_conversation_has_no_header_and_a_blank_column_each_side() {
     assert_ne!(tint, Color::Reset);
     assert_eq!(buf.cell((1, y)).map(|cell| cell.bg), Some(Color::Reset));
     assert_eq!(buf.cell((2, y)).map(|cell| cell.bg), Some(tint));
-    let _ = Role::Muted;
 }
 
 #[test]
@@ -317,26 +308,7 @@ fn the_rail_and_panel_regions_take_the_panel_tint() {
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.set_size(160, 40);
     for session in [SESSION, "s_bbbbbbbbbbbbbbbb"] {
-        app.on_line(crate::link::Line::Session(contract::Envelope {
-            kind: "session_status".to_owned(),
-            session_id: contract::SessionId(session.to_owned()),
-            ts: 0,
-            schema_version: contract::SCHEMA_VERSION,
-            turn_id: None,
-            action_id: None,
-            seq: None,
-            payload: serde_json::json!({
-                "name": "fix the parser", "workspace": "/w",
-                "project": "-w", "state": "idle", "since": 0,
-                "spend": {"tokens": {"input": 1, "cache_read": 0,
-                    "cache_write": {}, "output": 2},
-                    "cost": 0.0, "subscription_cost": 0.0},
-                "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
-            })
-            .as_object()
-            .cloned()
-            .unwrap_or_default(),
-        }));
+        app.on_line(status(session, "fix the parser"));
     }
     let (buf, _) = draw(&app, 160, 40);
     let layout = app.chrome().layout().expect("a layout");
