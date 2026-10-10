@@ -1,7 +1,7 @@
 //! `/login` through the seam: the rows it lists and the keys it stores
 //! (`docs/tui.md`, "Logging in").
 
-use crate::test_support::write_record;
+use crate::test_support::install_extension;
 use std::fs;
 use std::path::PathBuf;
 
@@ -27,39 +27,31 @@ impl Setup {
 
     /// Installs a provider `name`.
     fn install(&self, name: &str) {
-        let dir = self.home().join("extensions").join(name);
-        fs::create_dir_all(dir.join("providers")).unwrap();
-        fs::write(
-            dir.join("extension.json"),
-            json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
-        )
-        .unwrap();
-        write_record(&dir);
-        fs::write(
-            dir.join("providers").join(format!("{name}.json")),
-            json!({
+        install_extension(
+            &self.home(),
+            &format!("extensions/{name}"),
+            json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+            &[(
+                name,
+                json!({
                 "name": name,
                 "models": [{"id": "m", "protocol": "openai-responses",
                     "base_url": "http://x/v1", "context_window": 1000}],
-            })
-            .to_string(),
-        )
-        .unwrap();
+            }),
+            )],
+        );
     }
 
     /// Installs the extension `extension` with no provider, declaring
     /// `secrets`.
     fn declare(&self, extension: &str, secrets: &[&str]) {
-        let dir = self.home().join("extensions").join(extension);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join("extension.json"),
+        install_extension(
+            &self.home(),
+            &format!("extensions/{extension}"),
             json!({"name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
-                "secrets": secrets})
-            .to_string(),
-        )
-        .unwrap();
-        write_record(&dir);
+                "secrets": secrets}),
+            &[],
+        );
     }
 }
 
@@ -349,7 +341,7 @@ mod browser {
                 ("local PORT = 1455", &format!("local PORT = {port}")),
             ],
         );
-        super::write_record(&dest);
+        crate::test_support::write_record(&dest);
     }
 
     #[test]

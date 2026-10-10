@@ -11,7 +11,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use config::{Config, ProjectKey, Protocol, ProviderData, Sources};
+use config::{Config, Protocol, ProviderData};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use extensions::Providers;
@@ -21,13 +21,7 @@ use super::{access, credential, is_scripted, label, prepare, warm};
 use crate::lua_providers::Access;
 
 fn config(home: &Path, workspace: &Path, overrides: &[&str]) -> Config {
-    Config::load(Sources {
-        home: home.to_path_buf(),
-        workspace: workspace.to_path_buf(),
-        project: ProjectKey::new("test").unwrap(),
-        overrides: overrides.iter().map(|o| (*o).to_owned()).collect(),
-    })
-    .unwrap()
+    crate::test_support::load(home, workspace, "test", overrides)
 }
 
 /// The ids the `scripted` provider holds, in order.

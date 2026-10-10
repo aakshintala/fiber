@@ -9,42 +9,30 @@ use serde_json::json;
 use super::specs;
 
 struct Setup {
-    _root: fakes::TempDir,
-    home: std::path::PathBuf,
-    workspace: std::path::PathBuf,
+    rig: crate::test_support::Rig,
 }
 
 impl Setup {
     fn new() -> Self {
-        let root = fakes::TempDir::new("fiber-mcp-servers");
-        let home = root.path().join("home");
-        let workspace = root.path().join("workspace");
-        std::fs::create_dir_all(&home).unwrap();
-        std::fs::create_dir_all(workspace.join(".fiber")).unwrap();
-        Self {
-            _root: root,
-            home,
-            workspace,
-        }
+        let rig = crate::test_support::Rig::new("fiber-mcp-servers");
+        std::fs::create_dir_all(rig.workspace.join(".fiber")).unwrap();
+        Self { rig }
     }
 
     fn global(&self, value: &serde_json::Value) {
-        std::fs::write(self.home.join("config.json"), value.to_string()).unwrap();
+        self.rig.write_global(value);
     }
 
     fn repository(&self, value: &serde_json::Value) {
-        std::fs::write(self.workspace.join(".fiber/config.json"), value.to_string()).unwrap();
+        std::fs::write(
+            self.rig.workspace.join(".fiber/config.json"),
+            value.to_string(),
+        )
+        .unwrap();
     }
 
     fn specs(&self) -> super::Specs {
-        let project = config::ProjectKey::new("test").unwrap();
-        let config = config::Config::load(config::Sources {
-            home: self.home.clone(),
-            workspace: self.workspace.clone(),
-            project,
-            overrides: Vec::new(),
-        })
-        .unwrap();
+        let config = self.rig.config(Vec::<String>::new());
         specs(&config)
     }
 }

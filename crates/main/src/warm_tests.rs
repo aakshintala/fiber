@@ -1,20 +1,10 @@
 //! `cache.warm_idle` and `cache.warm_cap` reach the loop's warming cap.
 
 use super::warm;
+use crate::test_support;
 
 fn config(overrides: &[&str]) -> config::Config {
-    let root = fakes::TempDir::new("fiber-warm-settings");
-    let home = root.path().join("home");
-    let workspace = root.path().join("workspace");
-    std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&workspace).unwrap();
-    config::Config::load(config::Sources {
-        home,
-        workspace,
-        project: config::ProjectKey::new("test").unwrap(),
-        overrides: overrides.iter().map(|o| (*o).to_owned()).collect(),
-    })
-    .unwrap()
+    test_support::config("fiber-warm-settings", overrides)
 }
 
 #[test]

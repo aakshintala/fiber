@@ -1,23 +1,10 @@
 //! `retry.attempts` from configuration reaches the loop's retry policy.
 
 use super::retry_policy;
+use crate::test_support;
 
 fn config(overrides: Vec<String>) -> config::Config {
-    let root = fakes::TempDir::new("fiber-retry-policy");
-    let home = root.path().join("home");
-    let workspace = root.path().join("workspace");
-    std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&workspace).unwrap();
-    let project = config::ProjectKey::new("test").unwrap();
-    let config = config::Config::load(config::Sources {
-        home,
-        workspace,
-        project,
-        overrides,
-    })
-    .unwrap();
-    // `root` is dropped here; the configuration was already read.
-    config
+    test_support::config("fiber-retry-policy", overrides)
 }
 
 #[test]

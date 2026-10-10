@@ -3,21 +3,10 @@
 use std::time::Duration;
 
 use super::idle_exit;
+use crate::test_support;
 
 fn config(overrides: Vec<String>) -> config::Config {
-    let root = fakes::TempDir::new("fiber-idle-exit");
-    let home = root.path().join("home");
-    let workspace = root.path().join("workspace");
-    std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&workspace).unwrap();
-    let project = config::ProjectKey::new("test").unwrap();
-    config::Config::load(config::Sources {
-        home,
-        workspace,
-        project,
-        overrides,
-    })
-    .unwrap()
+    test_support::config("fiber-idle-exit", overrides)
 }
 
 #[test]

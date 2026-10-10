@@ -4,23 +4,18 @@ use std::cell::RefCell;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use config::{Config, Sources};
+use config::Config;
 
 use super::{named, names, setting};
 
 /// The configuration for `home`, with `tui.theme` set to `theme` when given.
 fn config(home: &Path, theme: Option<&str>) -> Config {
-    let project = config::ProjectKey::new("-w").unwrap_or_else(|err| panic!("key: {err}"));
-    Config::load(Sources {
-        home: home.to_path_buf(),
-        workspace: home.to_path_buf(),
-        project,
-        overrides: theme
-            .map(|theme| format!("tui.theme={theme}"))
-            .into_iter()
-            .collect(),
-    })
-    .unwrap_or_else(|err| panic!("config: {err}"))
+    crate::test_support::load(
+        home,
+        home,
+        "-w",
+        theme.map(|theme| format!("tui.theme={theme}")),
+    )
 }
 
 /// The setting for `theme`, and every path the reader was asked for. The
@@ -573,14 +568,7 @@ fn setting_with_a_disabled_extension_reads_it_as_absent() {
         r#"{"extensions": {"acme": {"enabled": false}}, "tui": {"theme": "dusk"}}"#,
     )
     .unwrap_or_else(|e| panic!("write: {e}"));
-    let project = config::ProjectKey::new("-w").unwrap_or_else(|err| panic!("key: {err}"));
-    let config = Config::load(Sources {
-        home: home.path().to_path_buf(),
-        workspace: home.path().to_path_buf(),
-        project,
-        overrides: Vec::new(),
-    })
-    .unwrap_or_else(|err| panic!("config: {err}"));
+    let config = crate::test_support::load(home.path(), home.path(), "-w", Vec::<String>::new());
     let got = setting(home.path(), &config, &|path| std::fs::read_to_string(path));
     let tui::ThemeSetting::File { name, text } = got else {
         panic!("not a theme file");

@@ -3,6 +3,7 @@
 //! does not take fails before any request.
 
 use super::thinking as resolve;
+use crate::test_support::Rig;
 use config::ModelData;
 use contract::events::Notice;
 use contract::shapes::Failure;
@@ -34,22 +35,11 @@ fn config(overrides: Vec<String>) -> config::Config {
 }
 
 fn config_with_global(global: Option<serde_json::Value>, overrides: Vec<String>) -> config::Config {
-    let root = fakes::TempDir::new("fiber-thinking");
-    let home = root.path().join("home");
-    let workspace = root.path().join("workspace");
-    std::fs::create_dir_all(&home).unwrap();
+    let rig = Rig::new("fiber-thinking");
     if let Some(global) = global {
-        std::fs::write(home.join("config.json"), global.to_string()).unwrap();
+        rig.write_global(&global);
     }
-    std::fs::create_dir_all(&workspace).unwrap();
-    let project = config::ProjectKey::new("test").unwrap();
-    config::Config::load(config::Sources {
-        home,
-        workspace,
-        project,
-        overrides,
-    })
-    .unwrap()
+    rig.config(overrides)
 }
 
 fn thinking(
