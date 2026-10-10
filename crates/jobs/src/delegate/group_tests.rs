@@ -1,6 +1,6 @@
-//! Tests first for the delegate group list: refusal of unsafe ids,
-//! signalling a live group, killing every group, retiring an empty one,
-//! killing a surviving member, and the reap holding the lock.
+//! Tests first for the delegate group extension: signalling a live
+//! group, retiring an empty one, killing a surviving member, and the reap
+//! holding the lock.
 
 #![allow(
     clippy::unwrap_used,
@@ -17,18 +17,17 @@ use std::time::Duration;
 
 use fakes::Deadline;
 use fakes::{Watchdog, group_empties, kill_group, within};
+use support::group::Listing;
 
-use super::{
-    group_alive, insert, kill_every_group, listed, pid, reap_locked, refused, retire_if_empty,
-    serial_exclusive, serial_shared, signal, spawn, with_lock,
-};
+use super::{listed, reap_locked, retire_if_empty, serial_shared, signal};
 
 /// How long a test waits on a child before it fails.
 const DEADLINE: Duration = Duration::from_secs(3);
 
-/// A group that holds `sleep 60`, listed through [`spawn`]. Its stdio is
-/// null, so even a child that outlives the test holds no harness pipe.
-fn sleeping() -> (std::process::Child, fakes::Watchdog) {
+/// A group that holds `sleep 60`, listed through the shared spawn. Its
+/// stdio is null, so even a child that outlives the test holds no harness
+/// pipe.
+fn sleeping() -> (std::process::Child, Listing, fakes::Watchdog) {
     let mut command = Command::new("sleep");
     command
         .arg("60")
@@ -36,35 +35,19 @@ fn sleeping() -> (std::process::Child, fakes::Watchdog) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
-    let child = spawn(&mut command).unwrap();
+    let (child, listing) = support::group::spawn(&mut command).unwrap();
     let pgid = child.id();
     let watchdog = Watchdog::group(pgid);
-    (child, watchdog)
-}
-
-#[test]
-fn group_zero_and_one_are_refused() {
-    assert!(refused(0));
-    assert!(refused(1));
-    assert!(!refused(2));
-}
-
-#[test]
-fn unsafe_ids_are_refused_before_anything_runs() {
-    assert!(!signal(0, rustix::process::Signal::TERM));
-    assert!(!signal(1, rustix::process::Signal::TERM));
-    assert!(!signal(u32::MAX, rustix::process::Signal::TERM));
-    assert!(!group_alive(0));
-    assert!(!group_alive(1));
+    (child, listing, watchdog)
 }
 
 #[test]
 fn a_spawned_group_is_listed() {
     let _serial = serial_shared();
-    let (mut child, watchdog) = sleeping();
+    let (mut child, _listing, watchdog) = sleeping();
     let pgid = child.id();
     assert!(listed(pgid));
-    assert!(group_alive(pgid));
+    assert!(support::group::alive(pgid));
     child.kill().unwrap();
     child.wait().unwrap();
     watchdog.stand_down(DEADLINE);
@@ -88,7 +71,7 @@ fn reap(mut child: std::process::Child, signal: &str) -> std::process::ExitStatu
 #[test]
 fn a_live_group_gets_sigterm() {
     let _serial = serial_shared();
-    let (child, watchdog) = sleeping();
+    let (child, _listing, watchdog) = sleeping();
     let pgid = child.id();
     assert!(signal(pgid, rustix::process::Signal::TERM));
     // Reaped before the emptiness check: on Linux a zombie still answers
@@ -99,30 +82,16 @@ fn a_live_group_gets_sigterm() {
 }
 
 #[test]
-fn kill_every_group_kills_every_listed_group() {
-    let _serial = serial_exclusive();
-    let (first, first_watch) = sleeping();
-    let (second, second_watch) = sleeping();
-    let (first_pgid, second_pgid) = (first.id(), second.id());
-    kill_every_group();
-    // Reaped before the emptiness checks, as above: zombies read occupied.
-    assert_eq!(reap(first, "SIGKILL").signal(), Some(9));
-    assert_eq!(reap(second, "SIGKILL").signal(), Some(9));
-    assert!(group_empties(first_pgid, DEADLINE));
-    assert!(group_empties(second_pgid, DEADLINE));
-    first_watch.stand_down(DEADLINE);
-    second_watch.stand_down(DEADLINE);
-}
-
-#[test]
 fn a_reaped_group_whose_members_are_gone_leaves_the_list() {
     let _serial = serial_shared();
-    let (mut child, watchdog) = sleeping();
+    let (mut child, listing, watchdog) = sleeping();
     let pgid = child.id();
+    let mut listing = Some(listing);
     child.kill().unwrap();
     child.wait().unwrap();
     assert!(group_empties(pgid, DEADLINE));
-    assert!(retire_if_empty(pgid));
+    assert!(retire_if_empty(&mut listing));
+    assert!(listing.is_none(), "the token is gone with its entry");
     assert!(!listed(pgid));
     // Retired, a signal to it is a no-op: the id may already belong to
     // someone else.
@@ -133,13 +102,15 @@ fn a_reaped_group_whose_members_are_gone_leaves_the_list() {
 #[test]
 fn a_listed_but_empty_group_is_not_signalled() {
     let _serial = serial_shared();
-    // Listed without a member: the guard needs both, so neither `&&`
-    // operand alone sends.
+    // Listed without a member: the guard needs both, so neither part
+    // alone sends.
     let pgid = 999_999_007;
-    insert(pgid);
-    assert!(!group_alive(pgid), "nothing holds the group");
+    let mut listing = support::group::live().list(pgid);
+    assert!(listing.is_some(), "the id lists");
+    assert!(listed(pgid));
+    assert!(!support::group::alive(pgid), "nothing holds the group");
     assert!(!signal(pgid, rustix::process::Signal::KILL));
-    assert!(retire_if_empty(pgid));
+    assert!(retire_if_empty(&mut listing));
 }
 
 #[test]
@@ -159,8 +130,9 @@ fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
-    let mut child = spawn(&mut command).unwrap();
+    let (mut child, listing) = support::group::spawn(&mut command).unwrap();
     let pgid = child.id();
+    let mut listing = Some(listing);
     let watchdog = Watchdog::group(pgid);
     let member: u32 = within("the member writes its pid", DEADLINE, move || {
         loop {
@@ -176,7 +148,11 @@ fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
         }
     });
     child.wait().unwrap();
-    reap_locked(&mut child, pgid);
+    reap_locked(&mut child, &mut listing);
+    assert!(
+        listing.is_some(),
+        "with a member surviving the token stays"
+    );
     assert!(
         listed(pgid),
         "with a member surviving the group stays listed"
@@ -186,7 +162,7 @@ fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
         "the surviving member got SIGKILL"
     );
     assert!(group_empties(pgid, DEADLINE));
-    assert!(retire_if_empty(pgid));
+    assert!(retire_if_empty(&mut listing));
     assert!(!listed(pgid));
     // The watchdog finds nothing left to kill.
     watchdog.stand_down(DEADLINE);
@@ -223,8 +199,9 @@ fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
-    let mut child = spawn(&mut command).unwrap();
+    let (mut child, listing) = support::group::spawn(&mut command).unwrap();
     let pid = child.id();
+    let mut listing = Some(listing);
     // Short-lived, but guarded like every spawned child: a mutant that
     // kept it alive would otherwise leave it behind.
     let watchdog = Watchdog::group(pid);
@@ -232,10 +209,10 @@ fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
     exited(pid);
     // The lock is held while the reap runs on another thread: it cannot
     // reap until the lock is released.
-    let held = with_lock();
+    let held = support::group::live();
     let (done, waited) = mpsc::channel();
     thread::spawn(move || {
-        reap_locked(&mut child, pid);
+        reap_locked(&mut child, &mut listing);
         let _sent = done.send(());
     });
     exited(pid);
@@ -277,39 +254,19 @@ fn exited(pid: u32) {
 }
 
 #[test]
-fn refused_ids_never_convert_or_list() {
-    // Below any syscall: `pid` refuses them, so no probe or send can
-    // observe them and no platform variance leaks through. Deleting the
-    // refusal converts 1, which this pins.
-    assert_eq!(pid(0), None);
-    assert_eq!(pid(1), None);
-    assert!(pid(2).is_some());
-}
-
-#[test]
-fn refused_ids_are_never_listed() {
-    let _serial = serial_shared();
-    insert(0);
-    insert(1);
-    assert!(!listed(0));
-    assert!(!listed(1));
-    // A large id still lists: the refusal is specific to 1 or less.
-    insert(u32::MAX);
-    assert!(listed(u32::MAX));
-    assert!(retire_if_empty(u32::MAX));
-}
-
-#[test]
 fn a_listed_group_with_a_member_is_not_retired() {
     let _serial = serial_shared();
-    let (mut child, watchdog) = sleeping();
+    let (mut child, listing, watchdog) = sleeping();
     let pgid = child.id();
+    let mut listing = Some(listing);
     // Listed and alive, the guard keeps it: retiring it here would drop a
     // live group from the list while its id is still in use.
-    assert!(!retire_if_empty(pgid));
+    assert!(!retire_if_empty(&mut listing));
+    assert!(listing.is_some(), "a live group keeps its token");
     assert!(listed(pgid), "a live group stays listed");
-    // Unknown to the list, there is nothing to retire either.
-    assert!(!retire_if_empty(888_888_007));
+    // Without a registration there is nothing to retire either.
+    let mut none: Option<Listing> = None;
+    assert!(!retire_if_empty(&mut none));
     child.kill().unwrap();
     child.wait().unwrap();
     watchdog.stand_down(DEADLINE);

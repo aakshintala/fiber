@@ -22,6 +22,7 @@ use rustix::process::Signal;
 
 use super::group;
 use super::outcome::{Termination, outcome};
+use support::group::Listing;
 use crate::registry::Finish;
 
 /// Resolves a `fiber:` model reference to the `provider/model[:level]` the
@@ -282,17 +283,25 @@ impl Runner {
     /// Builds the child's command, pipes its stdio, makes it the leader
     /// of its own group, and lists the group with the spawn: stdin is the
     /// lifeline the parent holds open, stdout is drained, and stderr is
-    /// dropped.
-    pub(crate) fn spawn(&self, launch: &Launch, launched: &Launched) -> io::Result<Child> {
+    /// dropped. Returns the child's registration with it: only that token
+    /// unlists that entry.
+    pub(crate) fn spawn(
+        &self,
+        launch: &Launch,
+        launched: &Launched,
+    ) -> io::Result<(Child, Listing)> {
         let mut command = launch(launched);
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .process_group(0);
-        let child = group::spawn(&mut command)?;
+        let (child, listing) = support::group::spawn(&mut command).map_err(|source| match source {
+            support::group::Error::Spawn(error) => error,
+            source => io::Error::other(source.to_string()),
+        })?;
         self.shared.set_pgid(child.id());
-        Ok(child)
+        Ok((child, listing))
     }
 
     /// One wait on the clock, taken only while the generation still
@@ -335,7 +344,7 @@ impl Runner {
     /// is also where its group retires or its surviving member is
     /// killed: no `waitid` peek is needed, and none is used, because
     /// macOS blocks in `waitid` even with `WNOWAIT`.
-    pub(crate) fn drive(self, mut child: Child, finish: Finish) {
+    pub(crate) fn drive(self, mut child: Child, mut listing: Option<Listing>, finish: Finish) {
         // The lifeline: held open and never written to. End of file on it
         // means this parent is gone, so it stays open until the job ends.
         let _lifeline = child.stdin.take();
@@ -379,7 +388,7 @@ impl Runner {
             }
             // Reaped only under the list's lock: the reap cannot race a
             // signal to a retired group. Then the fold waits for the drain.
-            if let Some(status) = group::reap_locked(&mut child, pgid) {
+            if let Some(status) = group::reap_locked(&mut child, &mut listing) {
                 let stdout = self.await_drain(&drain_rx);
                 drop(_lifeline);
                 let socket = lock(&fold).socket.clone();
@@ -391,7 +400,7 @@ impl Runner {
                     &self.job_id,
                 );
                 finish.report(completed, Some(finished));
-                self.retire(pgid);
+                self.retire(&mut listing);
                 return;
             }
             if let Some(kill_at) = self.shared.kill_at()
@@ -464,12 +473,13 @@ impl Runner {
     /// its group is empty; the report above never waits for this. Past the
     /// stop bound a member still holding the group gets SIGKILL again:
     /// the reap's signal and this timer are what end every survivor
-    /// (`docs/delegates.md`, "Lifetime"), and the pgid stays listed
-    /// until the group is empty, re-checked on each clock wake.
-    fn retire(&self, pgid: u32) {
-        while group::listed(pgid) {
+    /// (`docs/delegates.md`, "Lifetime"), and the listing stays until
+    /// the group is empty, re-checked on each clock wake. Ends once this
+    /// run's own registration is gone, whatever else shares the id.
+    fn retire(&self, listing: &mut Option<Listing>) {
+        while let Some(pgid) = listing.as_ref().map(Listing::pgid) {
             let seen = self.park.generation();
-            if group::retire_if_empty(pgid) {
+            if group::retire_if_empty(listing) {
                 return;
             }
             if kill_due(self.shared.kill_at(), self.clock.now()) {

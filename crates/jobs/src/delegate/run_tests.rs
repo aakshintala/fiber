@@ -236,7 +236,7 @@ impl Rig {
             prompt: "hi".into(),
             workspace: self.events.parent().unwrap().to_path_buf(),
         };
-        let child = runner.spawn(&launch, &launched).unwrap();
+        let (child, listing) = runner.spawn(&launch, &launched).unwrap();
         let (_started, finish) = self.registry.open_started(
             self.job.clone(),
             "delegate_spawn".into(),
@@ -246,7 +246,7 @@ impl Rig {
         );
         let (done, waited) = mpsc::channel();
         thread::spawn(move || {
-            runner.drive(child, finish);
+            runner.drive(child, Some(listing), finish);
             let _sent = done.send(());
         });
         waited
@@ -1263,8 +1263,9 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
-    let mut member = crate::delegate::group::spawn(&mut member).unwrap();
+    let (mut member, listing) = support::group::spawn(&mut member).unwrap();
     let pgid = member.id();
+    let mut listing = Some(listing);
     let watchdog = Watchdog::group(pgid);
     let watch: Watch = Arc::new(|_: &SessionId, _: &mut dyn FnMut(&Envelope)| {
         Err(std::io::Error::other("refused"))
@@ -1283,7 +1284,7 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
     stop.0();
     let (done_tx, done_rx) = mpsc::channel();
     thread::spawn(move || {
-        runner.retire(pgid);
+        runner.retire(&mut listing);
         let _sent = done_tx.send(());
     });
     let first_poll = clock.origin() + Duration::from_secs(1);
