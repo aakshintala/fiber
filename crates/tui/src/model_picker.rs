@@ -12,8 +12,9 @@ use crate::catalogue::{Catalogue, ModelEntry, Refresh};
 use crate::keys::Key;
 use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
 
-/// What the picker was opened for: choosing a model and its level, or
-/// choosing a level for the current model.
+/// What the picker was opened for: choosing a model and its level,
+/// choosing a level for the current model, or marking the models a
+/// `/scoped-models` save keeps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
     /// Choosing a model, and its thinking level.
@@ -21,6 +22,9 @@ pub(crate) enum Mode {
     /// Choosing a thinking level for the current model: its row shows
     /// whatever the scope, and choosing it saves only the level.
     Thinking,
+    /// Marking which installed models `scoped_models` keeps: every row
+    /// shows whatever the scope, with a mark, and Enter saves the list.
+    Scope,
 }
 
 /// One choice: the model and level under the cursor, whether the level
@@ -58,6 +62,9 @@ pub(crate) struct Open {
     pub(crate) chips: Vec<Option<usize>>,
     /// Each row touched by the chip keys, by catalogue index.
     pub(crate) touched: Vec<bool>,
+    /// Each row marked for the saved list, by catalogue index: only the
+    /// checklist keeps marks, starting from the saved list.
+    pub(crate) marks: Vec<bool>,
     /// The on-screen model and level the open is for, kept until a read
     /// answers: an open before the first catalogue still lands on it.
     pub(crate) target: Option<(String, Option<String>)>,
@@ -215,6 +222,25 @@ impl ModelPicker {
         open.selected = selected;
         open.chips = chips;
         open.touched = touched;
+        // A read answering over the checklist keeps each kept model's
+        // mark, and a new row starts marked from the saved list, even
+        // when the open began with no catalogue. Any other open keeps
+        // no marks.
+        open.marks = if open.mode == Mode::Scope {
+            self.catalogue
+                .models
+                .iter()
+                .map(|entry| {
+                    old.models
+                        .iter()
+                        .position(|old_entry| old_entry.reference == entry.reference)
+                        .and_then(|at| open.marks.get(at).copied())
+                        .unwrap_or_else(|| self.scoped.contains(&entry.reference))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
     }
 
     /// The read the loop owes, if one is owed.
@@ -260,6 +286,17 @@ impl ModelPicker {
             .map(|entry| preselect(entry, on_screen))
             .collect();
         let mut touched = vec![false; self.catalogue.models.len()];
+        // The checklist starts marked from the saved list; any other
+        // open keeps no marks.
+        let marks = if mode == Mode::Scope {
+            self.catalogue
+                .models
+                .iter()
+                .map(|entry| self.scoped.contains(&entry.reference))
+                .collect()
+        } else {
+            Vec::new()
+        };
         // The current model's row starts touched: choosing it is a level
         // choice, saving only the level.
         if mode == Mode::Thinking
@@ -278,6 +315,7 @@ impl ModelPicker {
             selected,
             chips,
             touched,
+            marks,
             show_all: false,
             target,
         });
@@ -331,6 +369,10 @@ impl ModelPicker {
         let Some(open) = self.open.as_mut() else {
             return;
         };
+        // Checklist rows have no level chips to move.
+        if open.mode == Mode::Scope {
+            return;
+        }
         let Some(entry) = self.catalogue.models.get(open.selected) else {
             return;
         };
@@ -382,12 +424,37 @@ impl ModelPicker {
         }
     }
 
+    /// Whether the open picker is the `/scoped-models` checklist.
+    pub(crate) fn is_scope(&self) -> bool {
+        self.open
+            .as_ref()
+            .is_some_and(|open| open.mode == Mode::Scope)
+    }
+
+    /// Flips the selected row's mark. Only the checklist keeps marks,
+    /// so everywhere else this changes nothing.
+    pub(crate) fn toggle_mark(&mut self) {
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        // The checklist shows every installed model, so the selection
+        // always names a marked row.
+        if let Some(mark) = open.marks.get_mut(open.selected) {
+            *mark = !*mark;
+        }
+    }
+
     /// Flips "show all", only when a scope is set. The selection stays on
     /// its model when shown, else moves to the first row.
     pub(crate) fn toggle_show_all(&mut self) {
         let Some(open) = self.open.as_mut() else {
             return;
         };
+        // The checklist already shows every installed model: the toggle
+        // has nothing to show.
+        if open.mode == Mode::Scope {
+            return;
+        }
         if self.scoped.is_empty() {
             return;
         }
@@ -432,8 +499,12 @@ impl ModelPicker {
     /// its chip, `level_chosen` exactly when the row was touched. A
     /// `/thinking` choice of the current model's own row saves only the
     /// level; any other row is an ordinary choice. `None` while closed,
-    /// or with no scoped row to choose.
+    /// with no scoped row to choose, or while the checklist is open: it
+    /// saves its marks with Enter and never chooses.
     pub(crate) fn choice(&self, session_only: bool) -> Option<Choice> {
+        if self.is_scope() {
+            return None;
+        }
         let open = self.open.as_ref()?;
         let (rows, _) = shown_in(
             &self.catalogue.models,
@@ -479,6 +550,18 @@ impl ModelPicker {
             Some(RowAt::Heading(_)) | None => None,
             Some(RowAt::Model(index)) => {
                 let index = *index;
+                // The checklist has no chips to choose: the mark cell
+                // toggles its row, and any other cell selects it.
+                if self.is_scope() {
+                    let open = self.open.as_mut()?;
+                    open.selected = index;
+                    if cell == 0
+                        && let Some(mark) = open.marks.get_mut(index)
+                    {
+                        *mark = !*mark;
+                    }
+                    return None;
+                }
                 let entry = self.catalogue.models.get(index)?;
                 // The chips start past the name, and past the roles when
                 // the row shows any; a click on the name chooses the row
@@ -544,8 +627,13 @@ impl ModelPicker {
             list: List::default(),
             below: self.status(),
             field: None,
-            footer: "Enter set as default · s this session only · ↑↓ move · ←→ level · PageUp PageDown page · Tab scope · Ctrl+R refresh · Esc close"
-                .to_owned(),
+            footer: match open.mode {
+                // The checklist marks rows and saves the list: no model
+                // or level is chosen here.
+                Mode::Scope => "Space mark · Enter save · Esc back".to_owned(),
+                Mode::Choose | Mode::Thinking => "Enter set as default · s this session only · ↑↓ move · ←→ level · PageUp PageDown page · Tab scope · Ctrl+R refresh · Esc close"
+                    .to_owned(),
+            },
         };
         // The selection may sit off the scoped rows after a read
         // answered, so it falls to the first model row shown.
@@ -606,6 +694,12 @@ impl ModelPicker {
             }
             RowAt::Heading(provider) => vec![(provider.clone(), None, Ink::Heading)],
             RowAt::Model(index) => {
+                if self.is_scope() {
+                    let Some(entry) = self.catalogue.models.get(*index) else {
+                        return Vec::new();
+                    };
+                    return self.scope_cells(at, *index, entry);
+                }
                 let Some(entry) = self.catalogue.models.get(*index) else {
                     return Vec::new();
                 };
@@ -643,6 +737,44 @@ impl ModelPicker {
                 cells
             }
         }
+    }
+
+    /// One checklist row's cells: the mark, the name, and the roles
+    /// when the row shows any. A marked row draws bold, as a chosen
+    /// multi-select option does. The mark cell toggles its row; any
+    /// other cell selects it. There are no level chips here.
+    fn scope_cells(
+        &self,
+        at: usize,
+        index: usize,
+        entry: &ModelEntry,
+    ) -> Vec<(String, Option<Spot>, Ink)> {
+        let marked = self
+            .open
+            .as_ref()
+            .and_then(|open| open.marks.get(index).copied())
+            .unwrap_or(false);
+        let ink = if marked { Ink::Heading } else { Ink::Plain };
+        let mut cells = vec![
+            (
+                if marked {
+                    "[x] ".to_owned()
+                } else {
+                    "[ ] ".to_owned()
+                },
+                Some(Spot::Cell(at, 0)),
+                ink,
+            ),
+            (entry.id.clone(), Some(Spot::Cell(at, 1)), ink),
+        ];
+        if !entry.roles.is_empty() {
+            cells.push((
+                format!(" · {}   ", entry.roles.join(", ")),
+                Some(Spot::Cell(at, 2)),
+                Ink::Muted,
+            ));
+        }
+        cells
     }
 
     /// The lines below the rows: a read error with no catalogue yet shows
@@ -687,6 +819,31 @@ pub(crate) fn saves(choice: &Choice) -> Vec<(String, String)> {
             format!("models.\"{}\".thinking", choice.reference),
             level.clone(),
         ));
+    }
+    out
+}
+
+/// What the `/scoped-models` checklist saves, in order: the marked
+/// references in catalogue order, then the old list's entries that are
+/// not installed, in their old order. An entry that is installed but
+/// unmarked is dropped. With none marked, nothing: written as `[]`, an
+/// empty list reads as every model (`docs/configuration.md`, "Keys").
+pub(crate) fn scoped_save(models: &[ModelEntry], marks: &[bool], old: &[String]) -> Vec<String> {
+    let picked: Vec<String> = models
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| marks.get(*at).copied().unwrap_or(false))
+        .map(|(_, entry)| entry.reference.clone())
+        .collect();
+    if picked.is_empty() {
+        // Marking none clears the list, dropping every old entry.
+        return Vec::new();
+    }
+    let mut out = picked;
+    for name in old {
+        if !models.iter().any(|entry| &entry.reference == name) {
+            out.push(name.clone());
+        }
     }
     out
 }
@@ -746,6 +903,11 @@ pub(crate) fn shown_in(
     mode: Mode,
     target: Option<&(String, Option<String>)>,
 ) -> (Vec<usize>, Option<String>) {
+    // The checklist opens over every installed model whatever the
+    // scope, with no scope line and no toggle.
+    if mode == Mode::Scope {
+        return ((0..models.len()).collect(), None);
+    }
     let (mut rows, line) = visible(models, scoped, show_all);
     if mode == Mode::Thinking
         && let Some((model, _)) = target

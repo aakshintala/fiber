@@ -18,6 +18,11 @@ const BUILT_INS: &[(&str, &str, Option<&str>)] = &[
         "Sets the thinking level, or opens the model picker on it.",
         Some("[<level>]"),
     ),
+    (
+        "scoped-models",
+        "Chooses which models the model picker shows.",
+        None,
+    ),
     ("tools", "Opens the tools view.", None),
     ("context", "Opens the context breakdown.", None),
     ("usage", "Opens the usage view.", None),

@@ -93,6 +93,8 @@ still loads but the overlay ignores it.
 
 ```sh
 cargo run --release -- fixtures/session.jsonl --static --overlay keymap
+cargo run --release -- fixtures/session.jsonl --static --overlay keymap-tab
+cargo run --release -- fixtures/session.jsonl --static --overlay keymap-search
 cargo run --release -- fixtures/session.jsonl --static --overlay keymap-narrow
 cargo run --release -- fixtures/session.jsonl --static --overlay quit
 cargo run --release -- fixtures/session.jsonl --static --overlay delete
@@ -101,11 +103,13 @@ cargo run --release -- fixtures/session.jsonl --static --overlay notice
 cargo run --release -- fixtures/session.jsonl --static --overlay close-mouse
 ```
 
-- `keymap`: every binding grouped by area (Session, Input, Conversation,
-  Panels, Search, Steering, Requests, Model), each with its id, key and other
-  paths, in two aligned columns.
-- `keymap-narrow`: the same content in one column, opened scrolled, with an
-  "↑ N more · ↓ M more" indicator; run it in a 100x40 tmux.
+- `keymap`: every binding in one panel docked at the bottom, with group tabs,
+  type-to-search, and three fixed columns (group, action, keys with other
+  paths); the All tab selected and nothing typed.
+- `keymap-tab`: the same panel with the Session tab selected.
+- `keymap-search`: the same panel with `session` typed, narrowing the rows.
+- `keymap-narrow`: the same panel at 100 columns, rows wrapped, opened
+  scrolled, with an "↑ N more · ↓ M more" indicator; run it in a 100x40 tmux.
 - `quit`: the quit question for 2 working sessions, with the three ways out.
 - `delete`: home's delete question for the exited "docs: rail spec" session,
   naming what `--cascade` would add.
@@ -414,7 +418,7 @@ For `docs/tui.md`: every frame is written inside synchronised output; a frame is
 
 ## Model picker (#1629)
 
-A second swapped view, drawn like the context breakdown: Ctrl+L and `/model` open it over the conversation area, under a "Models /model" header, with the side panel and the input box still there. Typing still goes to the input box. It draws from a fixture in `src/model_picker.rs` (three providers, twelve models): the stream names only the current model, so the roles, thinking levels and rebuild costs are made up. Every body row sits on the raised surface (`SEL`); the model name is in the accent colour, its thinking chips in the attention colour, the rest dim.
+A second swapped view, drawn like the context breakdown: Ctrl+L and `/model` open it over the conversation area, under a "Models /model" header, with the side panel and the input box still there. Typing still goes to the input box. It draws from a fixture in `src/model_picker.rs` (three providers, twelve models): the stream names only the current model, so the roles, thinking levels and rebuild costs are made up. A centred panel on the raised surface; dim provider sections with a blank row between them; the focused model on a full-width accent bar with a `›` marker; the model name in the accent colour, its thinking chips in the attention colour, the rest dim.
 
 | Case | How to reach it |
 |---|---|
@@ -426,3 +430,18 @@ A second swapped view, drawn like the context breakdown: Ctrl+L and `/model` ope
 | `session-only` | `cargo run --release -- fixtures/idle.jsonl --static --picker session-only`: a non-current model focused with the `s` mark, "this session only · nothing saved" |
 
 Live keys while it is open: ↑/↓ move between models, ←/→ between the focused model's thinking chips, Enter chooses and closes, `s` marks the choice this session only (then nothing is saved), `a` toggles show all when scoped, `r` refreshes every list (cosmetic), Esc closes. Clicking a row focuses it; clicking a chip focuses that chip.
+
+## Completions (#1631)
+
+Typing `/` opens one completion panel above the input box. Commands, skills, prompt templates and MCP prompts share one list, filtered as the person types. Each row is a name, a one-line description, a skill's `argument-hint` when it has one, and a tag: command, skill, template, the extension's name, or the MCP server's name. Tab completes and Enter runs. Typing `@` opens a file search panel, and choosing a file inserts its path as text. The panel draws from fixtures in `src/completions.rs` (forty entries over every tag kind; eight file paths): the stream has no command list, so both are made up. At most eight rows show with the focused row kept on screen and a scroll hint (`1–8 of 40 · ↓ 32 more`); a long description is cut with an ellipsis keeping the tag, and matched letters read bold.
+
+| Case | How to reach it |
+|---|---|
+| `slash` | `cargo run --release -- fixtures/idle.jsonl --static --completions slash`: `/` with an empty filter, eight of forty rows with a scroll hint |
+| `slash-filtered` | `cargo run --release -- fixtures/idle.jsonl --static --completions slash-filtered`: the input reads `/re`, only matching entries, matched letters bold |
+| `slash-hint` | `cargo run --release -- fixtures/idle.jsonl --static --completions slash-hint`: the `review` skill focused with its `<path>` hint, and the overlong `login` description cut with … |
+| `at` | `cargo run --release -- fixtures/idle.jsonl --static --completions at`: the input reads `@test`, two file matches |
+| `at-empty` | `cargo run --release -- fixtures/idle.jsonl --static --completions at-empty`: the input reads `@zzz`, a `no files match` row |
+| `narrow-slash`, `narrow-at` | the same panels; run in a 100x40 terminal for the existing narrow layout |
+
+Live keys: typing `/` or `@` at the start of the input opens the panel. While it is open: ↑/↓ move, Tab completes and keeps the panel open, Enter on a `/` row completes it and runs it at once (`/context` and `/model` open their views, anything else sends), Enter on an `@` row inserts its path as text, Esc closes.

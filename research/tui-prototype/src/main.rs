@@ -3,12 +3,14 @@
 //! drawing side by side, the input parser in `input.rs`, a few tests.
 
 mod cases;
+mod completions;
 mod home;
-mod overlays;
 mod input;
 mod lua;
 mod model_picker;
+mod overlays;
 mod paged;
+mod panel;
 
 use crossterm::{execute, terminal};
 use input::{Ev, Key, Mouse};
@@ -2208,6 +2210,8 @@ struct Ui {
     ctx_view: bool,
     /// the model picker is swapped into the conversation area
     picker: Option<model_picker::State>,
+    /// the `/` or `@` completion panel above the input box
+    completions: Option<completions::State>,
     /// the view's own scroll, rows from its top
     vscroll: usize,
     /// the rail design: 0 list, 1 cards, 2 tabs (`--rail`, or the A/B/C chips)
@@ -2242,7 +2246,7 @@ impl Ui {
         (!open.is_empty()).then(|| open[self.shown % open.len()])
     }
     fn nothing_open(&self, f: &Fold) -> bool {
-        self.search.is_none() && self.qsel.is_none() && !self.ctx_view && self.top(f).is_none()
+        self.search.is_none() && self.qsel.is_none() && !self.ctx_view && self.completions.is_none() && self.top(f).is_none()
     }
     /// Starts a fresh form state when the form on top changes.
     fn sync_form(&mut self, f: &Fold) {
@@ -2615,6 +2619,10 @@ fn bottom(f: &Fold, w: usize, tick: u64, now: i64, v: &View, narrow: bool, ui: &
             ]));
         }
         out.push(row(vec![sp("      ⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to drop", dim())]));
+    }
+    // the `/` and `@` completion panels sit above the input box, over the conversation's bottom
+    if let Some(c) = ui.completions.as_ref() {
+        out.extend(completions::view(c, &ui.input, w));
     }
     // search floats over the conversation, so the input box keeps its place and its draft
     let mut ib = match ui.top(f) {
@@ -3092,7 +3100,7 @@ struct Audit {
 }
 
 /// Every surface that declares cases; `--help` and `check/` are built from them.
-const SURFACES: &[cases::Surface] = &[home::SURFACE, overlays::SURFACE, model_picker::SURFACE];
+const SURFACES: &[cases::Surface] = &[home::SURFACE, overlays::SURFACE, model_picker::SURFACE, completions::SURFACE];
 
 // ============================================================ main
 struct Args {
@@ -3131,6 +3139,8 @@ struct Args {
     panel_share: f64,
     /// `--picker CASE`: start with the model picker open
     picker: Option<String>,
+    /// `--completions CASE`: start with the completion panel open
+    completions: Option<String>,
 }
 fn args() -> Args {
     let mut a = Args {
@@ -3161,6 +3171,7 @@ fn args() -> Args {
         rail_share: 15.0,
         panel_share: 21.0,
         picker: None,
+        completions: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
@@ -3206,8 +3217,9 @@ fn args() -> Args {
                 }
             }
             "--picker" => a.picker = it.next(),
+            "--completions" => a.completions = it.next(),
             "-h" | "--help" => {
-                print!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home CASE] [--overlay CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}", cases::help(SURFACES));
+                print!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home CASE] [--overlay CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}", cases::help(SURFACES));
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -3395,13 +3407,18 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     let mut prev_buf: Option<Buffer> = None;
     let mut frames: u64 = 0;
 
-    let mut ui = Ui::default();
-    ui.rail = a.rail;
-    ui.density = a.density.min(2);
-    ui.rail_share = a.rail_share.clamp(1.0, 90.0);
-    ui.panel_share = a.panel_share.clamp(1.0, 90.0);
+    let mut ui = Ui {
+        // `--completions CASE` starts with its query already typed
+        input: a.completions.as_deref().map_or_else(String::new, completions::input_for),
+        rail: a.rail,
+        density: a.density.min(2),
+        rail_share: a.rail_share.clamp(1.0, 90.0),
+        panel_share: a.panel_share.clamp(1.0, 90.0),
+        picker: a.picker.as_deref().map(model_picker::for_case),
+        completions: a.completions.as_deref().map(completions::for_case),
+        ..Default::default()
+    };
     model_picker::set_still(a.static_);
-    ui.picker = a.picker.as_deref().map(model_picker::for_case);
     let mut rd = input::Reader::new()?;
     let mut cmds = match &a.commands {
         Some(p) => Some(std::fs::OpenOptions::new().create(true).append(true).open(p)?),
@@ -3724,28 +3741,18 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     buf.set_string(x0 + pw - 1, y, "▌", fg(SEL));
                     hits.insert(0, (y, x0, x0 + pw, Act::End));
                 }
-                // search floats over the conversation's top-right corner, as an editor's find box does
-                if let Some(s) = search.filter(|_| vrows.is_none() && view_h >= 3) {
+                // search floats over the conversation's top-right corner, as an editor's find box does.
+                // The box reuses the padded panel frame, so text never touches its edges.
+                if let Some(s) = search.filter(|_| vrows.is_none() && view_h >= 5) {
                     let bw = SBOX_W.min(cw.saturating_sub(2));
                     let x0 = rail_w + 1 + (cw - bw) as u16;
-                    for x in x0..x0 + bw as u16 {
-                        for (y, ch) in [(0, "▄"), (1, " "), (2, "▀")] {
-                            let under = buf[(x, y)].bg;
-                            let c = &mut buf[(x, y)];
-                            c.reset();
-                            c.set_symbol(ch);
-                            if y == 1 {
-                                c.set_bg(BI);
-                            } else {
-                                c.set_fg(BI).set_bg(under);
-                            }
-                        }
+                    for (y, r) in panel::frame(None, vec![row(search_box(s))], None, bw).into_iter().enumerate() {
+                        paint(buf, x0, y as u16, bw as u16, &r);
                     }
-                    buf.set_line(x0, 1, &Line::from(tint(fit(&search_box(s), bw), BI)), bw as u16);
                 }
                 // the copy's confirmation: the top-right corner, below the search box when it is open
                 if let Some(m) = copied.filter(|_| vrows.is_none()) {
-                    let y = if search.is_some() && view_h >= 3 { 3 } else { 0 };
+                    let y = if search.is_some() && view_h >= 5 { 5 } else { 0 };
                     let s = vec![sp(format!(" {m} "), fg(CYAN))];
                     let mw = width(&s).min(cw);
                     if y < view_h && mw > 0 {
@@ -3794,16 +3801,18 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 // the left edge while the rail is hidden. On hover or while dragging the
                 // whole column tints and the grip goes bright in the accent colour.
                 // Hidden, the dead margin column beside the handle is cleared too.
+                // The rail-edge grip stops where the bottom stack starts: the input box,
+                // approvals and completion panels paint their own first cell there.
                 let rail_hid = ui.rail != 2 && rail_w == 1;
                 let rail_hx = if rail_hid { 0 } else { rail_w };
                 let rail_gap_hot = ptr.is_some_and(|(x, _)| x == rail_hx) && ui.rail != 2 && rail_w > 0;
                 let panel_gap_hot = ptr.is_some_and(|(x, _)| x == rail_w + conv_w) && panel_w > 0;
-                for (gx, active, clear_next) in [(rail_hx, ui.resize == Some(0) || rail_gap_hot, rail_hid), (rail_w + conv_w, ui.resize == Some(1) || panel_gap_hot, false)] {
+                for (gx, active, clear_next, y_end) in [(rail_hx, ui.resize == Some(0) || rail_gap_hot, rail_hid, view_h.min(rows as usize) as u16), (rail_w + conv_w, ui.resize == Some(1) || panel_gap_hot, false, rows)] {
                     if gx >= cols || (gx == rail_w && (rail_w == 0 || ui.rail == 2)) || (gx == rail_w + conv_w && panel_w == 0) {
                         continue;
                     }
                     let mid = rows / 2;
-                    for y in 0..rows {
+                    for y in 0..y_end {
                         let grip_row = y >= mid.saturating_sub(1) && y <= mid + 1;
                         let (sym, st) = match (grip_row, active) {
                             (true, true) => ("⋮", fg(BLUE).add_modifier(Modifier::BOLD)),
@@ -4147,6 +4156,10 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     if model_picker::on_key(&mut ui, k, m) {
                         continue;
                     }
+                    // the `/` and `@` panels take their keys while open
+                    if completions::on_key(&mut ui, k, m) {
+                        continue;
+                    }
                     // Esc leaves a swapped view, back to where the conversation was
                     if k == Key::Esc && ui.ctx_view {
                         ui.ctx_view = false;
@@ -4284,10 +4297,17 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                 let i = ui.qsel.unwrap();
                                 queue_drop(f, &mut ui, &mut cmds, ts, i);
                             }
-                            // the one slash command the prototype has: there is no slash command panel yet
+                            // the slash commands the prototype runs locally: their views
+                            // open at once, anything else sends as usual
                             Key::Enter if ui.qsel.is_none() && ui.input.trim() == "/context" => {
                                 ui.input.clear();
                                 ui.ctx_view = true;
+                                ui.vscroll = 0;
+                            }
+                            Key::Enter if ui.qsel.is_none() && ui.input.trim() == "/model" => {
+                                ui.input.clear();
+                                ui.ctx_view = false;
+                                ui.picker = Some(model_picker::for_case("list"));
                                 ui.vscroll = 0;
                             }
                             Key::Enter => enter(f, &mut ui, &mut cmds, ts),
@@ -4303,7 +4323,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     let over_panel = x >= rail_w + conv_w && rail_w + conv_w < cols && panel_cache.is_some();
                     let over_rail = rail_w > 0 && ui.rail != 2 && x < rail_w;
                     let in_conv = !over_panel && (y as usize) < view_h;
-                    let in_sbox = ui.search.is_some() && y < 3 && (x as usize) + SBOX_W + 2 > (rail_w + conv_w) as usize;
+                    let in_sbox = ui.search.is_some() && y < 5 && (x as usize) + SBOX_W + 2 > (rail_w + conv_w) as usize;
                     // the resize handles: the rail's right edge and the panel's left edge,
                     // the one-column gaps beside them; hidden, the rail's 1-column handle
                     // at the screen's left edge
@@ -4408,6 +4428,11 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         Mouse::Other | Mouse::Move => {}
                     }
                 }
+            }
+            // typing `/` or `@` at the input's start opens the panel; anything else closes it
+            {
+                let top_open = ui.top(f).is_some();
+                completions::sync(&mut ui, top_open);
             }
             let Some(act) = click else { continue };
             changed = true;
@@ -4602,8 +4627,9 @@ mod tests {
             all,
             [
                 "--home empty, sessions, hover-workspace, hover-worktree, hover-model, hover-thinking, worktree-on, worktree-off, picker-recent, picker-typed",
-                "--overlay keymap, keymap-narrow, quit, delete, history, notice, close-mouse",
+                "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, notice, close-mouse",
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only",
+                "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",
             ]
         );
         let h = cases::help(SURFACES);

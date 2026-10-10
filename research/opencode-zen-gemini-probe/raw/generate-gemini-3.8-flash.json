@@ -1,0 +1,50 @@
+{
+ "url": "https://opencode.ai/zen/v1/models/gemini-3.8-flash:generateContent",
+ "status": 200,
+ "request_headers": [
+  "authorization",
+  "content-type",
+  "user-agent",
+  "x-goog-api-key",
+  "x-opencode-session"
+ ],
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Reply with the single word: ok"
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 16
+  }
+ },
+ "response_headers": {
+  "Content-Type": "application/json"
+ },
+ "body": {
+  "createTime": "2026-10-09T22:31:20.062606Z",
+  "responseId": "OGvJao7pA8fqsbwP-vHxIA",
+  "modelVersion": "gemini-3.8-flash",
+  "candidates": [
+   {
+    "finishReason": "MAX_TOKENS"
+   }
+  ],
+  "usageMetadata": {
+   "promptTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 7
+    }
+   ],
+   "promptTokenCount": 7,
+   "thoughtsTokenCount": 12,
+   "totalTokenCount": 19
+  }
+ }
+}

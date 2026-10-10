@@ -139,6 +139,11 @@ impl App {
     /// without home, where no card is numbered. `None` for every other
     /// key.
     pub(super) fn rail_key(&mut self, key: &Key) -> Option<Effect> {
+        // A running `tty` job's view owns Alt+R and Alt+digits: they type
+        // into the job ahead of the rail.
+        if matches!(key, Key::AltR | Key::AltDigit(_)) && self.item_job_target().is_some() {
+            return None;
+        }
         if *key == Key::AltR {
             let Some(layout) = self.chrome.layout() else {
                 return Some(Effect::None);

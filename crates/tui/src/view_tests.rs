@@ -846,6 +846,7 @@ fn tool_group_ledger_open_with_a_call_open() {
             crate::app::Target::Group(_)
             | crate::app::Target::Thought(_)
             | crate::app::Target::Login
+            | crate::app::Target::Image(_)
             | crate::app::Target::Note(_)
             | crate::app::Target::Orphans(_)
             | crate::app::Target::Copy { .. } => None,
@@ -858,6 +859,41 @@ fn tool_group_ledger_open_with_a_call_open() {
         "tool_group_ledger_open_with_a_call_open",
         sized(&mut app, 60, 16)
     );
+}
+
+#[test]
+fn ledger_with_an_image_line() {
+    use serde_json::json;
+    // A call whose result carried an image draws its one line under
+    // its ledger row once the ledger opens (`docs/tui.md`, "Images").
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "look at this"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    app.on_line(at(
+        "tool_call_requested",
+        Some("a_1"),
+        0,
+        json!({"name": "read", "arguments": {"path": "shot.png"}}),
+    ));
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_1"),
+        1_000,
+        json!({"status": "completed", "content": [
+            {"type": "text", "text": "saved"},
+            {"type": "image", "path": "artifacts/shot.png",
+                "mime_type": "image/png", "width": 1280, "height": 800},
+        ]}),
+    ));
+    app.on_line(at(
+        "turn_completed",
+        None,
+        2_000,
+        json!({"outcome": "completed"}),
+    ));
+    app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+    insta::assert_snapshot!("ledger_with_an_image_line", sized(&mut app, 80, 12));
 }
 
 #[test]
@@ -1436,7 +1472,7 @@ fn ledger_rows_are_targets_over_their_rows() {
             Target::Group(_) => 'g',
             Target::Thought(_) => 't',
             Target::Call(_) => 'c',
-            Target::Login | Target::Note(_) | Target::Orphans(_) => 'o',
+            Target::Login | Target::Image(_) | Target::Note(_) | Target::Orphans(_) => 'o',
             Target::Copy { .. } => 'y',
         })
         .collect();

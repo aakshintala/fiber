@@ -355,7 +355,11 @@ raised in its workflow.
 
 Every `apt-get` step sets a 5-minute `timeout-minutes` and passes the workflow's
 `APT_OPTS` (three retries, 20-second HTTP and HTTPS timeouts), so a silent mirror
-fails the step, not the job.
+fails the step, not the job. A mirror that trickles bytes never goes silent, so
+the "Install zsh and fish" steps run `scripts/install-shells`: each download
+attempt (`apt-get update` and `apt-get install --download-only`) is bounded at
+90 s and retried once after 5 s, and the install from the downloaded archives is
+not bounded, because killing dpkg mid-unpack leaves the dpkg lock held.
 
 ## Waiting on CI
 

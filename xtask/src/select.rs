@@ -103,7 +103,7 @@ const SHARD_TIMEOUT_MAX_MINUTES: u64 = 360;
 /// Crates whose tests read a first-party package under `providers/` or
 /// `extensions/` (`docs/ci.md`, "Selection"); sorted. Checked against the
 /// sources by `package_reader_mismatches`.
-const PACKAGE_READERS: &[&str] = &["config", "extensions", "main", "xtask"];
+const PACKAGE_READERS: &[&str] = &["cli", "config", "extensions", "main", "xtask"];
 /// The package whose tests are the binary-level tests (`docs/ci.md`,
 /// "Selection"): the `fiber` binary.
 const BINARY_TESTS: &str = "main";

@@ -3,8 +3,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
+use std::fs::File;
 use std::io::{Read, Write};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -12,7 +13,7 @@ use contract::clock::Wake;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, TempDir};
 
-use super::{Nudge, open, output_so_far, wait_first_output, write_chunks};
+use super::{Nudge, lock_writer, open, output_so_far, wait_first_output, write_chunks};
 use crate::shell::output::{Shared, lock, note_eof};
 
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -290,4 +291,108 @@ fn a_cancel_while_waiting_for_room_returns_what_was_written() {
     assert!(clock.await_parked(due, DEADLINE));
     cancel.cancel();
     assert_eq!(rx.recv_timeout(DEADLINE).unwrap().unwrap(), 2);
+}
+
+/// A scratch file standing in for the primary.
+fn scratch(dir: &TempDir) -> Arc<Mutex<File>> {
+    Arc::new(Mutex::new(File::create(dir.path().join("w")).unwrap()))
+}
+
+/// Runs `lock_writer` on its own thread, so a wait that never ends fails
+/// at `DEADLINE` and does not hang the run. True once the lock is taken.
+fn locking(
+    writer: Arc<Mutex<File>>,
+    clock: Arc<FakeClock>,
+    cancel: CancelToken,
+) -> mpsc::Receiver<bool> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = tx.send(lock_writer(&writer, clock.as_ref(), &cancel).is_some());
+    });
+    rx
+}
+
+#[test]
+fn a_free_lock_is_taken_at_once() {
+    let dir = TempDir::new("fiber-tty-lock");
+    let writer = scratch(&dir);
+    let clock = FakeClock::new();
+    assert!(lock_writer(&writer, clock.as_ref(), &CancelToken::new()).is_some());
+}
+
+#[test]
+fn a_cancel_before_the_lock_is_waited_on_takes_nothing() {
+    let dir = TempDir::new("fiber-tty-lock");
+    let writer = scratch(&dir);
+    let _held = writer.lock().unwrap();
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    // With no park this returns here; a wait would block on the clock.
+    let (tx, rx) = mpsc::channel();
+    let clock = FakeClock::new();
+    let moved = Arc::clone(&writer);
+    thread::spawn(move || {
+        let _sent = tx.send(lock_writer(&moved, clock.as_ref(), &cancel).is_some());
+    });
+    assert!(!rx.recv_timeout(DEADLINE).expect("the lock wait to return"));
+}
+
+#[test]
+fn a_held_lock_plus_a_cancel_that_fires_takes_nothing() {
+    let dir = TempDir::new("fiber-tty-lock");
+    let writer = scratch(&dir);
+    let _held = writer.lock().unwrap();
+    let clock = FakeClock::new();
+    let due = clock.origin() + Duration::from_millis(10);
+    let cancel = CancelToken::new();
+    let rx = locking(Arc::clone(&writer), Arc::clone(&clock), cancel.clone());
+    assert!(
+        clock.await_parked(due, DEADLINE),
+        "the lock wait did not park"
+    );
+    assert!(rx.try_recv().is_err());
+    cancel.cancel();
+    assert!(!rx.recv_timeout(DEADLINE).expect("the lock wait to end"));
+}
+
+#[test]
+fn a_lock_released_before_the_cancel_is_taken() {
+    let dir = TempDir::new("fiber-tty-lock");
+    let writer = scratch(&dir);
+    let held = writer.lock().unwrap();
+    let clock = FakeClock::new();
+    let due = clock.origin() + Duration::from_millis(10);
+    let rx = locking(Arc::clone(&writer), Arc::clone(&clock), CancelToken::new());
+    assert!(
+        clock.await_parked(due, DEADLINE),
+        "the lock wait did not park"
+    );
+    assert!(rx.try_recv().is_err());
+    drop(held);
+    clock.advance(Duration::from_millis(10));
+    assert!(rx.recv_timeout(DEADLINE).expect("the lock wait to end"));
+}
+
+#[test]
+fn a_poisoned_lock_is_recovered() {
+    let dir = TempDir::new("fiber-tty-lock");
+    let writer = scratch(&dir);
+    let poisoned = Arc::clone(&writer);
+    let _joined = thread::spawn(move || {
+        let _held = poisoned.lock().unwrap();
+        panic!("poison the writer");
+    })
+    .join();
+    let clock = FakeClock::new();
+    assert!(lock_writer(&writer, clock.as_ref(), &CancelToken::new()).is_some());
+}
+
+#[test]
+fn a_cancelled_input_write_reports_nothing_written() {
+    let terminal = open().unwrap();
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let clock = FakeClock::new();
+    let written = (terminal.input.0)(b"typed\n", clock.as_ref(), &cancel).unwrap();
+    assert_eq!(written, 0);
 }

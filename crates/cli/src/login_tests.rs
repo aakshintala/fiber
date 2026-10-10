@@ -183,6 +183,8 @@ impl Setup {
                 stdin: &mut Cursor::new(typed.to_owned()),
                 err: &mut err,
                 keys,
+                device: false,
+                clock: fakes::clock::FakeClock::new(),
             },
         );
         (result, String::from_utf8(err).unwrap())
@@ -721,7 +723,12 @@ fn login_of_an_unknown_provider_is_a_usage_failure() {
     // in a child with an empty Fiber home and no stdin, so neither the
     // owner's home nor a terminal can change the outcome.
     if std::env::var_os(CHILD).is_some() {
-        std::process::exit(run_login(Some("no-such-provider-for-the-test"), None));
+        std::process::exit(run_login(
+            Some("no-such-provider-for-the-test"),
+            None,
+            false,
+            fakes::clock::FakeClock::new(),
+        ));
     }
     let home = fakes::TempDir::new("fiber-login-child");
     let name = module_path!().split_once("::").unwrap().1;

@@ -836,6 +836,18 @@ fn opencode_providers_name_the_opencode_extension() {
 }
 
 #[test]
+fn a_bare_model_id_nobody_has_is_no_model_pointing_at_fiber_models() {
+    let setup = Setup::new();
+    let run = setup.fiber(&["ask", "--model", "nope", "hi"], None);
+    assert_pre_session(&run, 1, "no_model");
+    let message = run.last()["payload"]["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("`nope`") && message.contains("fiber models"),
+        "{message}"
+    );
+}
+
+#[test]
 fn a_provider_no_first_party_package_serves_names_no_extension() {
     let setup = Setup::new();
     let run = setup.fiber(&["ask", "--model", "nobody-serves/x", "hi"], None);
@@ -1010,7 +1022,7 @@ Sessions:
 
 Fiber itself:
   approve [--yes]                           Show what this repository ships and approve it
-  login [<name>] [--as <label>]             Store a provider's key or an extension's secret
+  login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
   completion <shell>                        Print a completion script for bash, zsh or fish
   help [<command>]                          Print this menu, or a command's help

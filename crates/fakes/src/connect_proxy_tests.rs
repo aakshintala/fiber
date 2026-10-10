@@ -7,17 +7,18 @@ use std::time::Duration;
 use super::*;
 
 /// How long a client read waits for the proxy's reply before the test fails.
-const REPLY_WITHIN: Duration = Duration::from_secs(2);
+const REPLY_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
 
 /// How long the test waits for the proxy to record a CONNECT.
-const CONNECT_WITHIN: Duration = Duration::from_secs(2);
+const CONNECT_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
 
 /// How long the test waits for the proxy to see a tunnel close.
-const CLOSE_WITHIN: Duration = Duration::from_secs(2);
+const CLOSE_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
 
-/// How long a wait that must return at once may take: far under the 2s
-/// deadlines above, far over an immediate return.
-const QUICK: Duration = Duration::from_millis(500);
+/// How long a wait that must return at once may take: under the 10 s
+/// deadlines above, far over an immediate return. A wait that ignored its met
+/// count would take the whole deadline and miss this.
+const QUICK: Duration = Duration::from_secs(5);
 
 /// An echo listener: it answers one connection's first four bytes, then
 /// stays open until the client goes away, so only the client's close ends

@@ -20,6 +20,10 @@ use serde_json::{Map, Value, json};
 use crate::host::sha256_hex;
 use crate::{Error, LuaExtension};
 
+mod login;
+
+pub use login::{LoggedIn, LoginMethod, StoredLogin};
+
 /// How long before its expiry a token is refreshed.
 pub const REFRESH_BEFORE: Duration = Duration::from_secs(5 * 60);
 
@@ -472,56 +476,66 @@ impl LuaProvider {
     fn fetch_token(&self, pair: &CredentialPair) -> Result<Token, Error> {
         let inner: Result<Token, Error> = (|| {
             let returned = self.extension.provider_credential(&self.name, pair)?;
-            let token = returned
-                .get("token")
-                .and_then(Value::as_str)
-                .filter(|t| !t.is_empty())
-                .ok_or_else(|| self.bad_return("credential", "no `token`".into()))?;
-            let expires = returned
-                .get("expires_at")
-                .and_then(Value::as_f64)
-                .and_then(|s| Duration::try_from_secs_f64(s).ok())
-                .and_then(|s| UNIX_EPOCH.checked_add(s))
-                .ok_or_else(|| {
-                    self.bad_return(
-                        "credential",
-                        "no `expires_at` in seconds since the Unix epoch".into(),
-                    )
-                })?;
-            // A token that is already expired, or whose expiry is this instant,
-            // was never usable. Returning it would send a request that the
-            // vendor will reject (`docs/model-routing.md`, "Credentials").
-            if expires <= self.extension.clock().wall() {
-                return Err(
-                    self.bad_return("credential", "a token that has already expired".into())
-                );
-            }
-            // A numeric `headers` key cannot be seen here: `to_json` turns
-            // `{[42] = "v"}` into `{"42": "v"}` and `{[1] = "v"}` into
-            // an array, so `returned` refuses those before conversion, and
-            // this refuses the shapes that survive it (`docs/extensions.md`,
-            // "What writing a provider looks like").
-            let headers = parse_credential_headers(returned.get("headers"))
-                .map_err(|why| self.bad_return("credential", why.to_owned()))?;
-            Ok(Token {
-                secret: Secret::new(token.to_owned()),
-                expires,
-                headers,
-            })
+            self.check_token(&returned)
         })();
-        // A failed refresh has its own code, not `credential_failed`.
-        inner.map_err(|e| {
-            if matches!(
-                e,
-                Error::RefreshRejected { .. }
-                    | Error::RefreshUnreachable { .. }
-                    | Error::Unattended { .. }
-            ) {
-                e
-            } else {
-                Error::Credential(Box::new(e))
-            }
+        inner.map_err(Self::refresh_error)
+    }
+
+    /// Checks a `credential()` return the way every token entry does: a
+    /// non-empty `token`, an `expires_at` in the future on the extension
+    /// clock, and a `headers` table of names to values
+    /// (`docs/extensions.md`, "What writing a provider looks like").
+    fn check_token(&self, returned: &Value) -> Result<Token, Error> {
+        let token = returned
+            .get("token")
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| self.bad_return("credential", "no `token`".into()))?;
+        let expires = returned
+            .get("expires_at")
+            .and_then(Value::as_f64)
+            .and_then(|s| Duration::try_from_secs_f64(s).ok())
+            .and_then(|s| UNIX_EPOCH.checked_add(s))
+            .ok_or_else(|| {
+                self.bad_return(
+                    "credential",
+                    "no `expires_at` in seconds since the Unix epoch".into(),
+                )
+            })?;
+        // A token that is already expired, or whose expiry is this instant,
+        // was never usable. Returning it would send a request that the
+        // vendor will reject (`docs/model-routing.md`, "Credentials").
+        if expires <= self.extension.clock().wall() {
+            return Err(self.bad_return("credential", "a token that has already expired".into()));
+        }
+        // A numeric `headers` key cannot be seen here: `to_json` turns
+        // `{[42] = "v"}` into `{"42": "v"}` and `{[1] = "v"}` into
+        // an array, so `returned` refuses those before conversion, and
+        // this refuses the shapes that survive it (`docs/extensions.md`,
+        // "What writing a provider looks like").
+        let headers = parse_credential_headers(returned.get("headers"))
+            .map_err(|why| self.bad_return("credential", why.to_owned()))?;
+        Ok(Token {
+            secret: Secret::new(token.to_owned()),
+            expires,
+            headers,
         })
+    }
+
+    /// Maps a token failure: a failed refresh keeps its own code, not
+    /// `credential_failed` (`docs/model-routing.md`, "Keys, tokens and
+    /// OAuth").
+    fn refresh_error(e: Error) -> Error {
+        if matches!(
+            e,
+            Error::RefreshRejected { .. }
+                | Error::RefreshUnreachable { .. }
+                | Error::Unattended { .. }
+        ) {
+            e
+        } else {
+            Error::Credential(Box::new(e))
+        }
     }
 
     pub(crate) fn call(&self, function: &'static str, arg: Value) -> Result<Value, Error> {

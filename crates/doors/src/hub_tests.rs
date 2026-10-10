@@ -77,6 +77,45 @@ fn serve_once(listener: UnixListener, line: &[u8]) {
     stream.flush().unwrap();
 }
 
+/// Accepts two connections, drops both silent, then reports.
+fn drop_twice(listener: UnixListener, dropped_tx: mpsc::Sender<()>) {
+    for _ in 0..2 {
+        let (closed, _) = listener.accept().unwrap();
+        drop(closed);
+    }
+    dropped_tx.send(()).unwrap_or(());
+}
+
+/// A `start` that binds the old hub on its first call and a new hub on
+/// its second, counting calls in `calls` and reporting the old hub's
+/// exit on `exited_tx`. The old hub accepts one connection, drops it
+/// silent, then exits, unlinking its socket before the client sees EOF,
+/// so the retry finds no hub. The new hub speaks `hub_hello`.
+fn restarting_start(
+    socket: PathBuf,
+    calls: Arc<AtomicUsize>,
+    exited_tx: mpsc::Sender<()>,
+) -> impl FnMut() -> io::Result<()> {
+    move || {
+        if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            let socket = socket.clone();
+            let exited_tx = exited_tx.clone();
+            let listener = UnixListener::bind(&socket)?;
+            thread::spawn(move || {
+                let (closed, _) = listener.accept().unwrap();
+                fs::remove_file(&socket).unwrap();
+                drop(listener);
+                drop(closed);
+                exited_tx.send(()).unwrap_or(());
+            });
+            return Ok(());
+        }
+        let listener = UnixListener::bind(&socket)?;
+        thread::spawn(move || serve_once(listener, &hello_line()));
+        Ok(())
+    }
+}
+
 #[test]
 fn an_existing_hub_is_used_and_the_starter_rests() {
     let temp = Temp::new();
@@ -188,6 +227,44 @@ fn eof_before_hello_retries_the_whole_connect_once() {
     assert!(
         served_rx.recv_timeout(DEADLINE).is_ok(),
         "waited {DEADLINE:?} for the server to serve both connections"
+    );
+}
+
+#[test]
+fn a_hub_that_exited_before_the_retry_is_started_again() {
+    let temp = Temp::new();
+    let socket = temp.run().join("hub");
+    let (exited_tx, exited_rx) = mpsc::channel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let hub = run_connect(
+        temp.dir.clone(),
+        restarting_start(socket, Arc::clone(&calls), exited_tx),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert_eq!(hub.1.kind, "hub_hello");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(
+        exited_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the old hub to exit"
+    );
+}
+
+#[test]
+fn the_retry_after_a_dropped_handshake_waits_one_poll() {
+    let temp = Temp::new();
+    let listener = UnixListener::bind(temp.run().join("hub")).unwrap();
+    let (dropped_tx, dropped_rx) = mpsc::channel();
+    thread::spawn(move || drop_twice(listener, dropped_tx));
+    let clock = fakes::clock::FakeClock::new();
+    let error = run_connect(temp.dir.clone(), || Ok(()), Arc::clone(&clock))
+        .expect_err("two silent connections fail the connect");
+    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    // One poll between the attempts, and none after the final failure.
+    assert_eq!(clock.now(), clock.origin() + CONNECT_POLL);
+    assert!(
+        dropped_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the server to drop both connections"
     );
 }
 
@@ -496,6 +573,45 @@ fn connect_until_eof_race_retries_once() {
 }
 
 #[test]
+fn connect_until_a_hub_that_exited_before_the_retry_is_started_again() {
+    let temp = Temp::new();
+    let socket = temp.run().join("hub");
+    let (exited_tx, exited_rx) = mpsc::channel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let hub = run_connect_until(
+        temp.dir.clone(),
+        restarting_start(socket, Arc::clone(&calls), exited_tx),
+        fakes::clock::FakeClock::new(),
+        DEADLINE,
+    )
+    .unwrap();
+    assert_eq!(hub.1.kind, "hub_hello");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(
+        exited_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the old hub to exit"
+    );
+}
+
+#[test]
+fn connect_until_the_retry_after_a_dropped_handshake_waits_one_poll() {
+    let temp = Temp::new();
+    let listener = UnixListener::bind(temp.run().join("hub")).unwrap();
+    let (dropped_tx, dropped_rx) = mpsc::channel();
+    thread::spawn(move || drop_twice(listener, dropped_tx));
+    let clock = fakes::clock::FakeClock::new();
+    let error = run_connect_until(temp.dir.clone(), || Ok(()), Arc::clone(&clock), DEADLINE)
+        .expect_err("two silent connections fail the connect");
+    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    // One poll between the attempts, and none after the final failure.
+    assert_eq!(clock.now(), clock.origin() + CONNECT_POLL);
+    assert!(
+        dropped_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the server to drop both connections"
+    );
+}
+
+#[test]
 fn connect_until_first_line_that_is_not_hello_is_an_error() {
     for line in [
         br#"{"kind":"command_accepted","ts":1,"schema_version":1,"payload":{}}"#.to_vec(),
@@ -616,6 +732,24 @@ fn run_connect_within(home: PathBuf, hello_within: Duration) -> io::Result<Hub> 
         .expect("connect_within answers before its deadline")
 }
 
+fn run_connect_within_with_start(
+    home: PathBuf,
+    mut start: impl FnMut() -> io::Result<()> + Send + 'static,
+) -> io::Result<Hub> {
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-connect-within".to_owned())
+        .spawn(move || {
+            let clock = fakes::clock::FakeClock::new();
+            let hub = connect_within(&home, &mut start, &*clock, DEADLINE);
+            done_tx.send(hub).unwrap_or(());
+        })
+        .unwrap();
+    done_rx
+        .recv_timeout(DEADLINE)
+        .expect("connect_within answers before its deadline")
+}
+
 #[test]
 fn a_hub_that_accepts_and_never_speaks_times_out_naming_the_socket() {
     let temp = Temp::new();
@@ -665,6 +799,25 @@ fn a_hello_then_close_still_connects() {
     thread::spawn(move || serve_once(listener, &hello_line()));
     let hub = run_connect_within(temp.dir.clone(), DEADLINE).unwrap();
     assert_eq!(hub.1.kind, "hub_hello");
+}
+
+#[test]
+fn connect_within_a_hub_that_exited_before_the_retry_is_started_again() {
+    let temp = Temp::new();
+    let socket = temp.run().join("hub");
+    let (exited_tx, exited_rx) = mpsc::channel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let hub = run_connect_within_with_start(
+        temp.dir.clone(),
+        restarting_start(socket, Arc::clone(&calls), exited_tx),
+    )
+    .unwrap();
+    assert_eq!(hub.1.kind, "hub_hello");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(
+        exited_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the old hub to exit"
+    );
 }
 
 #[test]

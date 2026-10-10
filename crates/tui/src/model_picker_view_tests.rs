@@ -255,3 +255,47 @@ fn the_picker_hides_the_cursor() {
         assert!(crate::view::cursor(&app, area).is_some());
     }
 }
+
+#[test]
+fn model_picker_marking() {
+    use ratatui::style::Modifier;
+
+    let mut app = scoped_home(&["acme/m1", "zeta/z2"]);
+    app.on_models(Ok(catalogue()));
+    // Type the command rather than Ctrl+L: the checklist opens from it.
+    for ch in "/scoped-models".chars() {
+        assert_eq!(app.on_key(Key::Char(ch), now()), Effect::None);
+    }
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.model_picker_open());
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let text = crate::view::text(&buf);
+    // Each row draws its mark; there are no level chips here.
+    assert!(text.contains("[x] m1"), "{text}");
+    assert!(text.contains("[ ] m2"), "{text}");
+    assert!(!text.contains("[low]"), "{text}");
+    assert!(
+        text.contains("Space mark · Enter save · Esc back"),
+        "{text}"
+    );
+    // A marked row draws bold, as a chosen multi-select option does;
+    // an unmarked row draws plain.
+    for (y, line) in text.lines().enumerate() {
+        let row = u16::try_from(y).unwrap_or(u16::MAX);
+        if line.contains("[x]") {
+            assert!(
+                (0..area.width).any(|x| buf[(x, row)].modifier.contains(Modifier::BOLD)),
+                "no bold on {line:?}"
+            );
+        }
+        if line.contains("[ ]") {
+            assert!(
+                (0..area.width).all(|x| !buf[(x, row)].modifier.contains(Modifier::BOLD)),
+                "bold on {line:?}"
+            );
+        }
+    }
+    insta::assert_snapshot!("model_picker_marking", text);
+}

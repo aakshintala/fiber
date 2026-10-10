@@ -251,11 +251,19 @@ fn login_and_logout_take_as_and_logout_takes_all() {
         panic!("login --as");
     };
     assert_eq!(login.label.as_deref(), Some("work"));
+    assert!(!login.device);
+    let Invocation::Run(Some(Commands::Login(login))) =
+        parse_from(["fiber", "login", "codex", "--device"])
+    else {
+        panic!("login --device");
+    };
+    assert!(login.device);
     let Invocation::Run(Some(Commands::Login(login))) = parse_from(["fiber", "login", "acme"])
     else {
         panic!("login");
     };
     assert_eq!(login.label, None);
+    assert!(!login.device);
     for (args, label, all) in [
         (
             &["fiber", "logout", "acme", "--as", "work"][..],
@@ -682,7 +690,7 @@ fn the_menu_lists_login_and_logout_under_fiber_itself() {
         .find(|group| group.starts_with("Fiber itself:"))
         .unwrap();
     for line in [
-        "  login [<name>] [--as <label>]             Store a provider's key or an extension's secret",
+        "  login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret",
         "  logout <provider> [--as <label> | --all]  Delete a provider's stored key",
     ] {
         assert!(itself.lines().any(|l| l == line), "{line}\n{itself}");
@@ -780,7 +788,7 @@ fn the_menu_lists_completion_under_fiber_itself() {
         [
             "Fiber itself:",
             "  approve [--yes]                           Show what this repository ships and approve it",
-            "  login [<name>] [--as <label>]             Store a provider's key or an extension's secret",
+            "  login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret",
             "  logout <provider> [--as <label> | --all]  Delete a provider's stored key",
             "  completion <shell>                        Print a completion script for bash, zsh or fish",
             "  help [<command>]                          Print this menu, or a command's help",
