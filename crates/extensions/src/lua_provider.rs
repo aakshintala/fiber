@@ -8,7 +8,9 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+#[cfg(test)]
+use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -61,9 +63,34 @@ pub struct LuaProvider {
     /// that label's token, never the previous one (`docs/model-routing.md`,
     /// "Keys, tokens and OAuth").
     token: Mutex<BTreeMap<CredentialPair, TokenState>>,
+    /// Changed at every fetch completion, beside [`LuaProvider::token`]: a
+    /// caller with no usable token waits on this while another fetch runs,
+    /// and wakes when its generation moves.
+    fetched: Condvar,
     /// Completed call values, bounded per pair, plus the values currently
     /// handed to running calls (`docs/errors.md`, "The shape").
     used: Mutex<BTreeMap<CredentialPair, UsedState>>,
+    /// A test's signal just before a caller waits on [`LuaProvider::fetched`].
+    #[cfg(test)]
+    waiting: Mutex<Option<mpsc::Sender<()>>>,
+    /// A test's hold on a caller after it wakes and before it looks again.
+    #[cfg(test)]
+    woke: Mutex<Option<WokeHook>>,
+}
+
+/// A test's hold on a woken caller: `arrived` fires after the wake, and the
+/// caller waits for `release` before it looks at the cache again.
+#[cfg(test)]
+struct WokeHook {
+    arrived: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+impl WokeHook {
+    fn for_tests(arrived: mpsc::Sender<()>, release: mpsc::Receiver<()>) -> Self {
+        Self { arrived, release }
+    }
 }
 
 /// A token `credential()` returned, with the headers it returned with it: a
@@ -133,7 +160,14 @@ impl Drop for UsedGuard {
 #[derive(Default)]
 struct TokenState {
     current: Option<Token>,
+    /// A fetch for this pair is running, in the foreground or the
+    /// background: no `credential()` call runs while [`LuaProvider::token`]
+    /// is locked, so this flag, never the lock, is what a second caller
+    /// waits on.
     refreshing: bool,
+    /// Bumped at every fetch completion, success or failure, so a waiter
+    /// wakes for exactly the fetch it waited on.
+    generation: u64,
 }
 
 fn parse_credential_headers(
@@ -169,7 +203,12 @@ impl LuaProvider {
             name: name.into(),
             models: Mutex::default(),
             token: Mutex::default(),
+            fetched: Condvar::new(),
             used: Mutex::default(),
+            #[cfg(test)]
+            waiting: Mutex::default(),
+            #[cfg(test)]
+            woke: Mutex::default(),
         })
     }
 
@@ -356,34 +395,94 @@ impl LuaProvider {
     /// (`docs/model-routing.md`, "Keys, tokens and OAuth").
     fn current(self: &Arc<Self>, pair: &CredentialPair) -> Result<Token, Error> {
         let mut tokens = lock(&self.token);
-        let entry = tokens.entry(pair.clone()).or_default();
-        if let Some(current) = &entry.current
-            && let Ok(left) = current
-                .expires
-                .duration_since(self.extension.clock().wall())
-            && !left.is_zero()
-        {
-            let current = current.clone();
-            let due = left <= REFRESH_BEFORE;
-            if due && !entry.refreshing {
-                entry.refreshing = true;
-                let this = Arc::clone(self);
-                let pair = pair.clone();
-                thread::spawn(move || {
-                    let fresh = this.fetch_token(&pair);
-                    let mut tokens = lock(&this.token);
-                    let entry = tokens.entry(pair).or_default();
-                    entry.refreshing = false;
-                    if let Ok(fresh) = fresh {
-                        entry.current = Some(fresh);
-                    }
-                });
+        // Whether this call already waited on another fetch: a woken waiter
+        // whose fetch failed fetches for itself at once, and never waits
+        // again, so it never receives another caller's error.
+        let mut waited = false;
+        loop {
+            let entry = tokens.entry(pair.clone()).or_default();
+            if let Some(current) = &entry.current
+                && let Ok(left) = current
+                    .expires
+                    .duration_since(self.extension.clock().wall())
+                && !left.is_zero()
+            {
+                let current = current.clone();
+                let due = left <= REFRESH_BEFORE;
+                if due && !entry.refreshing {
+                    entry.refreshing = true;
+                    let this = Arc::clone(self);
+                    let pair = pair.clone();
+                    thread::spawn(move || this.refresh_token(pair));
+                }
+                return Ok(current);
             }
-            return Ok(current);
+            if entry.refreshing && !waited {
+                // Another fetch is running: wait for exactly that one. Its
+                // completion bumps the generation on success and on failure,
+                // and wakes every waiter.
+                let generation = entry.generation;
+                #[cfg(test)]
+                if let Some(waiting) = lock(&self.waiting).as_ref() {
+                    let _sent = waiting.send(());
+                }
+                tokens = self
+                    .fetched
+                    .wait_while(tokens, |tokens| {
+                        tokens
+                            .get(pair)
+                            .is_some_and(|entry| entry.generation == generation)
+                    })
+                    .unwrap_or_else(PoisonError::into_inner);
+                // The lock is released across the hold below, so a third
+                // caller can start its own fetch while this one is held.
+                drop(tokens);
+                #[cfg(test)]
+                if let Some(hook) = lock(&self.woke).take() {
+                    let _sent = hook.arrived.send(());
+                    let _released = hook.release.recv_timeout(fakes::MUST_SUCCEED_WITHIN);
+                }
+                tokens = lock(&self.token);
+                waited = true;
+                continue;
+            }
+            entry.refreshing = true;
+            break;
         }
-        let fresh = self.fetch_token(pair)?;
-        entry.current = Some(fresh.clone());
-        Ok(fresh)
+        // The fetch runs without the lock, so the cache stays readable
+        // while it is held.
+        drop(tokens);
+        let fresh = self.fetch_token(pair);
+        self.finish_fetch(pair, fresh)
+    }
+
+    /// Runs `credential()` for `pair` on a background refresh: a failure
+    /// keeps the old token, and clears the flag and wakes the waiters as a
+    /// foreground fetch does.
+    fn refresh_token(self: &Arc<Self>, pair: CredentialPair) {
+        let fresh = self.fetch_token(&pair);
+        let _finished = self.finish_fetch(&pair, fresh);
+    }
+
+    /// Stores a fetch's success, clears its flag, bumps its generation and
+    /// wakes every waiter, on success and on failure. Returns the fetch's
+    /// own result: a waiter that woken to a failure fetches for itself, and
+    /// never receives this error.
+    fn finish_fetch(
+        &self,
+        pair: &CredentialPair,
+        fresh: Result<Token, Error>,
+    ) -> Result<Token, Error> {
+        let mut tokens = lock(&self.token);
+        let entry = tokens.entry(pair.clone()).or_default();
+        entry.refreshing = false;
+        entry.generation = entry.generation.wrapping_add(1);
+        if let Ok(fresh) = &fresh {
+            entry.current = Some(fresh.clone());
+        }
+        drop(tokens);
+        self.fetched.notify_all();
+        fresh
     }
 
     /// The token `token()` returns; a failure as the signing seam carries it.
