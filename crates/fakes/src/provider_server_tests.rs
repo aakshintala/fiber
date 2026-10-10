@@ -168,6 +168,11 @@ fn hold_from_answers_earlier_requests_and_holds_the_rest_until_release() {
 }
 
 #[test]
+fn the_default_hold_outlasts_every_test_wait() {
+    assert!(HELD_LIMIT >= crate::deadline::WAITS);
+}
+
+#[test]
 fn a_held_reply_nobody_releases_becomes_a_500_at_its_deadline() {
     let server = ProviderServer::start([Response::stream(b"one")]).unwrap();
     server.hold_from(1, Duration::from_millis(200));

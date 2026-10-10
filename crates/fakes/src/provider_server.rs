@@ -152,8 +152,10 @@ impl Request {
 /// more.
 const DEFAULT_BODY_LIMIT: usize = 64;
 
-/// How long [`ProviderServer::hold`] keeps a response for its release.
-const HELD_LIMIT: Duration = Duration::from_secs(10);
+/// How long [`ProviderServer::hold`] keeps a response for its release: the
+/// whole test budget, so a test's own deadline (`WAITS` inside `BUDGET`)
+/// fails it before the fake answers a 500 the test never asked for.
+const HELD_LIMIT: Duration = crate::deadline::BUDGET;
 
 /// Answers one request from its content: the recorded request, so an answer
 /// can depend on the request's body or on an earlier request's.
@@ -359,6 +361,11 @@ impl ProviderServer {
     /// Holds every response until [`ProviderServer::release`]. A request is
     /// still recorded first, so [`ProviderServer::await_requests`] sees it
     /// while the client waits for the body.
+    ///
+    /// The default limit is `BUDGET`, longer than any wait (`WAITS`) a
+    /// test makes, so the test's own deadline fails a hold nobody releases
+    /// and the limit never fires first on a loaded machine. A test that
+    /// relies on the 500 passes its own limit to [`ProviderServer::hold_from`].
     pub fn hold(&self) {
         self.hold_from(1, HELD_LIMIT);
     }
