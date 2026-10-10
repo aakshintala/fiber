@@ -173,14 +173,13 @@ pub(crate) const MATCHING_PATTERN_VAR: &str = "FIBER_WATCHDOG_PATTERN";
 pub(crate) const MATCHING_WATCHDOG_SCRIPT: &str = r#"[ -n "$FIBER_WATCHDOG_PATTERN" ] || exit 2; read -r line || for p in $(pgrep -f -- "$FIBER_WATCHDOG_PATTERN"); do [ "$p" -gt 1 ] || continue; kill -s KILL -- "-$p"; kill -s KILL "$p"; done"#;
 
 /// `text` as an extended regular expression matching itself, for `pgrep -f`.
-/// For a text of two or more characters led by a plain one, such as a
-/// path, the pattern's spelling does not match its own command line, so a
-/// listing pgrep or a watchdog sweep never lists a peer's pgrep: a leading
-/// plain character becomes a bracket expression (`/tmp/x` is `[/]tmp/x`).
-/// debt: a one-character text (`a` is `[a]`) or a text led by a
-/// metacharacter and followed by plain characters (`.abc` is `\.abc`) still
-/// matches its own spelling; no caller passes one, and the first to must
-/// break the self-match another way.
+/// A leading plain character becomes a bracket expression (`/tmp/x` is
+/// `[/]tmp/x`), so the pattern's spelling in a pgrep's command line does not
+/// match that command line, and a listing pgrep or a watchdog sweep does not
+/// list a peer's pgrep.
+/// debt: only for the path-shaped texts callers pass (a plain run after the
+/// first character); `a`, `a]` and `.abc` still match their own spelling.
+/// The first caller to pass one breaks the self-match another way.
 ///
 /// # Panics
 ///
