@@ -283,9 +283,22 @@ impl Sessions {
     /// Folds a `session_status` into the rows: an id already listed keeps
     /// its position and its key, a recent row moves into the feed, and a
     /// new id goes after the rows already there. A status means the
-    /// session is live, so it clears `left`: a resumed session.
+    /// session is live, so it clears `left`: a resumed session. A status
+    /// is a late copy, and changes nothing, when it began before the one the
+    /// row holds, or in the same millisecond while the row waits and it does
+    /// not (the feed and the `full` subscription each deliver every status,
+    /// by separate writers, and a tool call and its approval can share a
+    /// millisecond).
     pub(crate) fn status(&mut self, row: Row) {
         if let Some(existing) = self.feed.iter_mut().find(|feed| feed.id == row.id) {
+            if let (Some(held), Some(new)) = (existing.status.as_ref(), row.status.as_ref())
+                && (new.since < held.since
+                    || (new.since == held.since
+                        && matches!(held.state, SessionState::Waiting { .. })
+                        && !matches!(new.state, SessionState::Waiting { .. })))
+            {
+                return;
+            }
             let key = existing.key;
             *existing = row;
             existing.key = key;

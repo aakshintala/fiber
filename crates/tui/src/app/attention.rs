@@ -25,9 +25,9 @@ pub(super) struct State {
 #[derive(Debug)]
 enum Latest {
     /// A session waiting on the person, and whether its feed row has been
-    /// observed since the line arrived: the hub writes `attention` lines on
-    /// a different path from the feed, so the line can arrive before the
-    /// row.
+    /// observed waiting: the hub writes `attention` lines on a different
+    /// path from the feed, so the line can arrive before the row, or while
+    /// the row still shows an earlier state.
     Waiting { session: SessionId, seen: bool },
     /// A session whose turn finished.
     Finished,
@@ -56,7 +56,7 @@ impl App {
                         .home
                         .as_ref()
                         .and_then(|home| home.sessions.row(&line.session))
-                        .is_some();
+                        .is_some_and(|row| row.left.is_none() && row.state == HomeState::Waiting);
                     Latest::Waiting {
                         session: line.session,
                         seen,
@@ -99,10 +99,10 @@ impl App {
 
     /// Folds the feed rows into the latest waiting `attention` line
     /// (`docs/tui.md`, "Getting the person's attention"): the first row
-    /// observed for the session marks it seen, and once seen, a row that
-    /// is gone, left, or no longer waiting clears the title, so it never
-    /// returns when the id waits again without a new line. A session with
-    /// no row yet still waits. Runs after every hub line, which is where
+    /// observed waiting for the session marks it seen, and once seen, a row
+    /// that is gone, left, or no longer waiting clears the title, so it
+    /// never returns when the id waits again without a new line. A session
+    /// with no row yet, or a row not yet waiting, still awaits its status. Runs after every hub line, which is where
     /// every row change folds in.
     pub(super) fn reconcile_attention(&mut self) {
         let session = match &self.attention.latest {
@@ -129,10 +129,14 @@ impl App {
             }
             return;
         }
-        if let Some(Latest::Waiting { seen, .. }) = self.attention.latest.as_mut() {
-            *seen = true;
-        }
-        if !waiting {
+        if waiting {
+            if let Some(Latest::Waiting { seen, .. }) = self.attention.latest.as_mut() {
+                *seen = true;
+            }
+        } else if matches!(
+            &self.attention.latest,
+            Some(Latest::Waiting { seen: true, .. })
+        ) {
             self.attention.latest = None;
         }
     }
