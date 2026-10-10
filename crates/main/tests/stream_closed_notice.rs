@@ -298,19 +298,22 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
     drop(file);
     assert_eq!(fs::read(&events).unwrap(), whole);
     // Enter opens the focused list row through the normal open path:
-    // the hub gets a new `subscribe` for the session. Home's list shows
-    // the name too, and the notices float over home as over the
-    // conversation, so the name alone is already satisfied on home and
-    // the release below could run before the reopened `subscribe`
-    // reaches the session (#1903). The earlier Ctrl+C cleared a
-    // non-empty draft, which disarms the quit hint, so every home frame
-    // carries the foot's hint and no conversation frame does: the name
-    // without it proves the replayed conversation drew, which the hub
-    // only replays over the accepted `subscribe`.
+    // the hub gets a new `subscribe` for the session. Home also shows the
+    // name, and the notices float over it. The earlier Ctrl+C disarmed
+    // the quit hint, so home's `chips and sessions` foot tells home from
+    // the conversation (#1903). Before Enter nothing is reopened: the
+    // wait below must not be met by home, or `release_one` could run
+    // before the reopened `subscribe` reaches the session.
+    let reopened_shown =
+        |screen: &Grid| shows(screen, "zebraflight") && !shows(screen, "chips and sessions");
+    let held = run.screen();
+    assert!(
+        shows(&held, "chips and sessions") && !reopened_shown(&held),
+        "home does not meet the reopen wait: {}",
+        held.contents
+    );
     run.write(b"\r");
-    let reopened = run.wait_screen("the reopened conversation", |screen| {
-        shows(screen, "zebraflight") && !shows(screen, "chips and sessions")
-    });
+    let reopened = run.wait_screen("the reopened conversation", reopened_shown);
     assert_eq!(
         occurrences(&reopened, "stream_closed"),
         1,
