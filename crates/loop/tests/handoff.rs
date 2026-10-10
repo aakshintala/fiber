@@ -18,18 +18,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use contract::events::{Control, TextCompleted, TurnOutcome};
-use contract::inbox::{Ack, Answer, Delivery};
-use contract::provider::{Finish, Input, ReplyAction};
+use contract::ThinkingLevel;
+use contract::events::{CacheLifetime, Control, TextCompleted, TurnOutcome};
+use contract::inbox::{Ack, Answer, Delivery, Rejection};
+use contract::provider::{Finish, Input, Provider, ReplyAction};
 use contract::shapes::Failure;
 use contract::{Envelope, ErrorCode};
-use fakes::Scripted;
-use r#loop::{HandoffSettings, Retry, rebuild};
+use fakes::{Scripted, ScriptedProvider};
+use r#loop::{HandoffSettings, Hosted, Prepare, Prepared, Retry, Switchable, rebuild};
 use serde_json::json;
 
 use support::{
     DEADLINE, MODEL, Session, TestTool, assert_no_stored_attempt, attempt_numbers, calls_reply,
-    delivery, handoff, ignore, kinds, reasoning_reply, tool_call_reply, with_tokens,
+    delivery, handoff, ignore, kinds, model, reasoning_reply, tool_call_reply, with_tokens,
 };
 
 /// The trigger in these tests.
@@ -2664,4 +2665,188 @@ fn a_tool_may_hand_off_in_the_step_after_an_automatic_handoff() {
     let next = &session.requests()[4].conversation;
     assert_eq!(next.len(), 3);
     assert_eq!(next[2], user("Tool note."));
+}
+
+#[test]
+fn a_skill_written_before_a_handoff_expands_after_it() {
+    let mut session = session(
+        vec![
+            said("Hi.", 100),
+            said("Still here.", 100),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        settings(),
+    );
+    // Turn 1 writes the opening message.
+    let (outcome, first) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
+
+    // Written after the opening, the skill is unknown to the maintained
+    // set: the prompt is sent as written.
+    let dir = session.workspace.join(".agents/skills/late");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: late\ndescription: Runs late.\n---\nRuns late.\n",
+    )
+    .unwrap();
+    let (outcome, second) = run(&mut session, "/late 1");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&second, &[&["turn_started"], STEP, REPLY, ENDED]);
+    assert_eq!(
+        of_kind(&second, "turn_started")[0].payload["input"][0]["content"][0]["text"],
+        "/late 1"
+    );
+
+    // A person's handoff rewrites the opening message, which refreshes
+    // the set: only that refresh tells the two turns apart.
+    session.inbox.send(handoff("c_h", None)).unwrap();
+    let outcome = session.turn();
+    let handed = session.lines();
+    assert_kinds(&handed, &[&["turn_started"], STEP, HANDED_OFF, ENDED]);
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+
+    // Now the same prompt expands.
+    let (outcome, third) = run(&mut session, "/late 1");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&third, &[&["turn_started"], STEP, REPLY, ENDED]);
+    assert_eq!(
+        of_kind(&third, "turn_started")[0].payload["input"][0]["content"][0]["text"],
+        "Runs late.\n\n1"
+    );
+}
+
+/// The model a switch moves to, and the window it declares: small enough
+/// that one skill's listing line passes 10% of it.
+const SWITCHED_MODEL: &str = "fake/model-2";
+const SWITCHED_WINDOW: u64 = 100;
+
+/// A `Prepare` switching to `reference` with `window` as its context
+/// window, keeping the session's other choices.
+fn prepare_with_window(provider: Arc<ScriptedProvider>, reference: &str, window: u64) -> Prepare {
+    let reference = reference.to_owned();
+    Arc::new(
+        move |args: &contract::commands::ModelArgs,
+              _label: Option<&str>,
+              chosen: Option<ThinkingLevel>| {
+            let thinking = match &args.thinking {
+                Some(level) => Some(level.parse::<ThinkingLevel>().map_err(|_| Rejection {
+                    code: ErrorCode::InvalidArguments,
+                    message: format!("unknown thinking level `{level}`"),
+                })?),
+                None => chosen,
+            };
+            let kept = thinking.or(chosen);
+            Ok(Prepared {
+                provider: Arc::clone(&provider) as Arc<dyn Provider>,
+                model: r#loop::Model {
+                    reference: reference.clone(),
+                    cost: None,
+                    subscription: false,
+                },
+                thinking: kept,
+                chosen: kept,
+                credential: Some("work".into()),
+                cache_lifetime: CacheLifetime::OneHour,
+                context_window: window,
+                addendum: None,
+                handoff: HandoffSettings::default(),
+                reviewer: Err(contract::shapes::Failure {
+                    code: ErrorCode::NoModel,
+                    message: r#loop::NO_MODEL_MESSAGE.into(),
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+                web_search: Hosted::Keep,
+                notice: None,
+                applied: None,
+                credential_files: Vec::new(),
+            })
+        },
+    )
+}
+
+#[test]
+fn a_handoff_after_a_model_switch_sizes_notices_by_the_new_window() {
+    // One skill with a long description: its listing line passes 10% of
+    // the switched window, but not of the session's wide start window.
+    let mut session = Session::windowed(
+        vec![Scripted::text("Hi.")],
+        Vec::new(),
+        fakes::CONTEXT_WINDOW,
+    )
+    .handoff(settings());
+    let dir = session.workspace.join(".agents/skills/big");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!(
+            "---\nname: big\ndescription: {}\n---\nBody.\n",
+            "x".repeat(200)
+        ),
+    )
+    .unwrap();
+
+    let (outcome, first) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
+    assert!(
+        of_kind(&first, "notice").is_empty(),
+        "the wide window fits the listing"
+    );
+
+    // A model switch before the handoff moves the window the size
+    // notices use: the handoff's fresh opening message is sized by the
+    // new window, not the set's startup snapshot.
+    let next = Arc::new(ScriptedProvider::new(vec![
+        Scripted::text("Again."),
+        Scripted::text("The note."),
+    ]));
+    let looped = session.looped.take().unwrap().switcher(
+        prepare_with_window(Arc::clone(&next), SWITCHED_MODEL, SWITCHED_WINDOW),
+        Switchable { chosen: None },
+    );
+    session.looped = Some(looped);
+    session.inbox.send(model(SWITCHED_MODEL, None)).unwrap();
+    let (outcome, switched) = run(&mut session, "again");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &switched,
+        &[
+            &["model_changed", "preamble_built", "turn_started"],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
+
+    session.inbox.send(handoff("c_h", None)).unwrap();
+    let outcome = session.turn();
+    let handed = session.lines();
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &handed,
+        &[
+            &["turn_started"],
+            STEP,
+            &[
+                "handoff_started",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "handoff_completed",
+                "opening_message",
+                "notice",
+            ],
+            ENDED,
+        ],
+    );
+    let notices = of_kind(&handed, "notice");
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].payload["code"], "skills_large");
 }
