@@ -347,14 +347,31 @@ fn model_levels(focus: usize) -> (usize, usize) {
 }
 
 impl State {
+    /// After the visible rows change the focus stays when still on screen
+    /// and otherwise moves to the first visible row; the chip never survives.
+    fn keep_focus(&mut self) {
+        let v = visible(self);
+        if !v.contains(&self.focus) {
+            if let Some(&first) = v.first() {
+                self.focus = first;
+            }
+        }
+        self.chip = None;
+    }
     pub fn focus_up(&mut self) {
         let v = visible(self);
+        if v.is_empty() {
+            return;
+        }
         let i = v.iter().position(|&x| x == self.focus).unwrap_or(0);
         self.focus = v[i.saturating_sub(1)];
         self.chip = None;
     }
     pub fn focus_down(&mut self) {
         let v = visible(self);
+        if v.is_empty() {
+            return;
+        }
         let i = v.iter().position(|&x| x == self.focus).unwrap_or(0);
         self.focus = v[(i + 1).min(v.len().saturating_sub(1))];
         self.chip = None;
@@ -377,9 +394,11 @@ impl State {
         self.session_only = Some(self.focus);
     }
     pub fn toggle_show_all(&mut self) {
-        if !self.scoped.is_empty() {
-            self.show_all = !self.show_all;
+        if self.scoped.is_empty() {
+            return;
         }
+        self.show_all = !self.show_all;
+        self.keep_focus();
     }
     pub fn refresh_all(&mut self) {
         self.refreshing = (0..fixture().len()).collect();
@@ -587,6 +606,23 @@ pub fn on_key(ui: &mut Ui, k: Key, m: Mods) -> bool {
         }
         return false;
     }
+    // Esc clears a typed query first and only closes on the second press.
+    if k == Key::Esc && ui.picker.as_ref().is_some_and(|p| !p.query.is_empty()) {
+        if let Some(p) = ui.picker.as_mut() {
+            p.query.clear();
+            p.keep_focus();
+        }
+        return true;
+    }
+    // Enter with no matching row keeps the picker open instead of choosing.
+    if k == Key::Enter
+        && !m.ctrl
+        && !m.alt
+        && !m.sup
+        && ui.picker.as_ref().is_some_and(|p| visible(p).is_empty())
+    {
+        return true;
+    }
     // closing keys first, so no borrow of the picker is live
     if k == Key::Esc || k == Key::Enter || (k == Key::Char('l') && m.ctrl) {
         ui.picker = None;
@@ -601,9 +637,19 @@ pub fn on_key(ui: &mut Ui, k: Key, m: Mods) -> bool {
         Key::Down if !m.alt && !m.ctrl => p.focus_down(),
         Key::Left => p.chip_left(),
         Key::Right => p.chip_right(),
-        Key::Char('s') if plain => p.mark_session_only(),
-        Key::Char('a') if plain => p.toggle_show_all(),
-        Key::Char('r') if plain => p.refresh_all(),
+        Key::Backspace if plain => {
+            p.query.pop();
+            p.keep_focus();
+        }
+        // Every bare letter filters; the old bare-letter keys moved to
+        // Ctrl+S (session only), Tab (show all) and Ctrl+R (refresh).
+        Key::Char('s') if m.ctrl && !m.alt && !m.sup => p.mark_session_only(),
+        Key::Tab if !m.ctrl && !m.alt && !m.sup => p.toggle_show_all(),
+        Key::Char('r') if m.ctrl && !m.alt && !m.sup => p.refresh_all(),
+        Key::Char(c) if plain => {
+            p.query.push(c);
+            p.keep_focus();
+        }
         _ => return false,
     }
     true
@@ -804,6 +850,128 @@ mod tests {
         // Nothing matches: the screen is empty.
         all.query = "zzz".into();
         assert!(visible(&all).is_empty());
+    }
+
+    #[test]
+    fn typing_filters_and_never_reaches_the_draft() {
+        let mut ui = Ui::default();
+        ui.input = "hello".into();
+        ui.picker = Some(for_case("list"));
+        assert!(on_key(&mut ui, Key::Char('s'), Mods::default()));
+        assert!(on_key(&mut ui, Key::Char('o'), Mods::default()));
+        let p = ui.picker.as_ref().unwrap();
+        assert_eq!(p.query, "so");
+        assert_eq!(ui.input, "hello");
+        assert!(visible(p).len() < 12);
+    }
+
+    #[test]
+    fn bare_s_a_r_extend_the_query() {
+        let mut ui = Ui::default();
+        ui.picker = Some(for_case("list"));
+        for c in ['s', 'a', 'r'] {
+            assert!(on_key(&mut ui, Key::Char(c), Mods::default()));
+        }
+        let p = ui.picker.as_ref().unwrap();
+        assert_eq!(p.query, "sar");
+        assert_eq!(p.session_only, None);
+        assert!(!p.show_all);
+        assert!(p.refreshing.is_empty());
+    }
+
+    #[test]
+    fn backspace_edits_the_query() {
+        let mut ui = Ui::default();
+        ui.picker = Some(for_case("list"));
+        for c in ['s', 'o'] {
+            on_key(&mut ui, Key::Char(c), Mods::default());
+        }
+        assert!(on_key(&mut ui, Key::Backspace, Mods::default()));
+        assert_eq!(ui.picker.as_ref().unwrap().query, "s");
+        assert!(ui.picker.is_some());
+        on_key(&mut ui, Key::Backspace, Mods::default());
+        assert_eq!(ui.picker.as_ref().unwrap().query, "");
+        assert!(ui.picker.is_some());
+    }
+
+    #[test]
+    fn esc_clears_before_closing() {
+        let mut ui = Ui::default();
+        let mut p = for_case("list");
+        p.query = "so".into();
+        ui.picker = Some(p);
+        assert!(on_key(&mut ui, Key::Esc, Mods::default()));
+        let p = ui.picker.as_ref().expect("first Esc closed the picker");
+        assert_eq!(p.query, "");
+        assert!(on_key(&mut ui, Key::Esc, Mods::default()));
+        assert!(ui.picker.is_none());
+    }
+
+    #[test]
+    fn enter_with_no_matches_stays_open() {
+        let mut ui = Ui::default();
+        let mut p = for_case("list");
+        p.query = "zzz".into();
+        ui.picker = Some(p);
+        assert!(on_key(&mut ui, Key::Enter, Mods::default()));
+        assert!(ui.picker.is_some());
+        // With matches Enter still closes.
+        let mut live = Ui::default();
+        live.picker = Some(for_case("list"));
+        assert!(on_key(&mut live, Key::Enter, Mods::default()));
+        assert!(live.picker.is_none());
+    }
+
+    #[test]
+    fn session_showall_refresh_work_with_a_query() {
+        let mut ui = Ui::default();
+        let mut p = for_case("scoped");
+        p.query = "so".into();
+        ui.picker = Some(p);
+        let ctrl = Mods { ctrl: true, ..Default::default() };
+        assert!(on_key(&mut ui, Key::Char('s'), ctrl));
+        assert_eq!(ui.picker.as_ref().unwrap().session_only, Some(0));
+        assert!(on_key(&mut ui, Key::Tab, Mods::default()));
+        assert!(ui.picker.as_ref().unwrap().show_all);
+        assert_eq!(ui.picker.as_ref().unwrap().query, "so");
+        assert!(on_key(&mut ui, Key::Char('r'), ctrl));
+        assert_eq!(ui.picker.as_ref().unwrap().refreshing, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn filtering_keeps_a_visible_focus_and_moves_a_hidden_one() {
+        let mut ui = Ui::default();
+        let mut p = for_case("list");
+        p.focus = 5;
+        p.chip = Some(1);
+        ui.picker = Some(p);
+        for c in ['m', 'i', 'n', 'i'] {
+            on_key(&mut ui, Key::Char(c), Mods::default());
+        }
+        let p = ui.picker.as_ref().unwrap();
+        assert_eq!((p.focus, p.chip), (5, None));
+        // A hidden focus jumps to the first visible row.
+        let mut hidden = Ui::default();
+        hidden.picker = Some(for_case("list"));
+        for c in ['m', 'i', 'n', 'i'] {
+            on_key(&mut hidden, Key::Char(c), Mods::default());
+        }
+        let p = hidden.picker.as_ref().unwrap();
+        assert_eq!((p.focus, p.chip), (5, None));
+    }
+
+    #[test]
+    fn movement_on_empty_selection_does_nothing() {
+        let mut ui = Ui::default();
+        let mut p = for_case("list");
+        p.query = "zzz".into();
+        let focus = p.focus;
+        ui.picker = Some(p);
+        on_key(&mut ui, Key::Up, Mods::default());
+        on_key(&mut ui, Key::Down, Mods::default());
+        let p = ui.picker.as_ref().unwrap();
+        assert_eq!((p.focus, p.chip), (focus, None));
+        assert!(visible(p).is_empty());
     }
 
     #[test]
