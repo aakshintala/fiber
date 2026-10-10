@@ -1,8 +1,10 @@
 ---
 source: crates/tui/src/model_picker_view_tests.rs
+assertion_line: 171
 expression: "screen(&app, 80, 24)"
 ---
 Models                                                                         ✕
+Type to search █
 ↻ refresh  scoped_models: 2 of 4 · Tab shows all
 acme
 m1 · deep, review   low [high]
@@ -24,5 +26,4 @@ z2 · chat   low [high]
 
 
 
-
-Enter set as default · s this session only · ↑↓ move · ←→ level · PageUp PageDow
+↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refresh ·

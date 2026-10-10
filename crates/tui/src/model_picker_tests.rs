@@ -514,23 +514,25 @@ fn frame_row_clicks_select_without_choosing() {
         ..ModelPicker::default()
     };
     picker.open(Mode::Choose, None);
-    // Frame rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1` with
-    // its roles cell, 3 the `zeta` heading, 4 `zeta/z3`.
+    // Frame rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
+    // 3 `acme/m1` with its roles cell, 4 the `zeta` heading, 5 `zeta/z3`.
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     // A heading selects nothing.
-    picker.select_frame_row(1);
+    picker.select_frame_row(2);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
-    // The buttons row selects nothing either.
+    // The filter and the buttons rows select nothing either.
     picker.select_frame_row(0);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    picker.select_frame_row(1);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     // A model row is a selection stop.
-    picker.select_frame_row(4);
+    picker.select_frame_row(5);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(4));
     // The refresh button asks `Every`; the scope line toggles.
-    let _ = picker.click_cell(0, 0);
+    let _ = picker.click_cell(1, 0);
     assert_eq!(picker.want, Some(crate::catalogue::Refresh::Every));
     assert!(picker.open.as_ref().is_some_and(|open| !open.show_all));
-    let _ = picker.click_cell(0, 1);
+    let _ = picker.click_cell(1, 1);
     assert!(picker.open.as_ref().is_some_and(|open| open.show_all));
 }
 
@@ -548,7 +550,7 @@ fn the_first_chip_target_follows_the_roles_cell() {
     picker.open(Mode::Choose, None);
 
     let frame = picker.frame(24, None).unwrap();
-    assert_eq!(frame.rows[2][2].1, Some(crate::swapped::Spot::Cell(2, 2)));
+    assert_eq!(frame.rows[3][2].1, Some(crate::swapped::Spot::Cell(3, 2)));
 }
 
 #[test]
@@ -563,7 +565,7 @@ fn each_chip_target_advances_one_cell() {
     picker.open(Mode::Choose, None);
 
     let frame = picker.frame(24, None).unwrap();
-    assert_eq!(frame.rows[2][2].1, Some(crate::swapped::Spot::Cell(2, 2)));
+    assert_eq!(frame.rows[3][2].1, Some(crate::swapped::Spot::Cell(3, 2)));
 }
 
 /// A choice of `reference` at `level`, picked out or not.
@@ -708,24 +710,25 @@ fn clicks_choose_at_the_row_and_chip() {
         ..ModelPicker::default()
     };
     picker.open(Mode::Choose, None);
-    // Frame rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1` with
-    // its roles cell, 3 the `zeta` heading, 4 `zeta/z3`.
+    // Frame rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
+    // 3 `acme/m1` with its roles cell, 4 the `zeta` heading, 5 `zeta/z3`.
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     // A heading chooses nothing.
-    assert_eq!(picker.click_cell(1, 0), None);
+    assert_eq!(picker.click_cell(2, 0), None);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
-    // The buttons choose nothing either.
+    // The filter and the buttons choose nothing either.
     assert_eq!(picker.click_cell(0, 0), None);
+    assert_eq!(picker.click_cell(1, 0), None);
     // A name cell chooses its row at its chip: untouched, so only the
     // model is saved.
-    let choice = picker.click_cell(4, 0).expect("a choice");
+    let choice = picker.click_cell(5, 0).expect("a choice");
     assert_eq!(choice.reference, "zeta/z3");
     assert!(!choice.level_chosen);
     assert!(choice.save_model);
     assert!(!choice.session_only);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(4));
     // A roles cell selects its row without choosing.
-    assert_eq!(picker.click_cell(2, 1), None);
+    assert_eq!(picker.click_cell(3, 1), None);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     assert!(
         picker
@@ -735,7 +738,7 @@ fn clicks_choose_at_the_row_and_chip() {
     );
     // A chip chooses its row at that level: `acme/m1` declares `low`
     // then `high`, past its roles cell.
-    let choice = picker.click_cell(2, 3).expect("a choice");
+    let choice = picker.click_cell(3, 3).expect("a choice");
     assert_eq!(choice.reference, "acme/m1");
     assert_eq!(choice.level.as_deref(), Some("high"));
     assert!(choice.level_chosen);
@@ -744,7 +747,7 @@ fn clicks_choose_at_the_row_and_chip() {
     assert_eq!(open.chips.first().copied().flatten(), Some(1));
     assert!(open.touched.first().copied().unwrap_or(false));
     // The first cell past the last chip only selects the row.
-    assert_eq!(picker.click_cell(2, 4), None);
+    assert_eq!(picker.click_cell(3, 4), None);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     // A row past the frame chooses nothing.
     assert_eq!(picker.click_cell(40, 0), None);

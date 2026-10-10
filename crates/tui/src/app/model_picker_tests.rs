@@ -764,7 +764,7 @@ fn clicks_on_refresh_and_the_scope_line_act_as_their_keys() {
     // The refresh button asks `Every`.
     assert_eq!(
         app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
-            0, 0
+            1, 0
         ))),
         Effect::None
     );
@@ -772,7 +772,7 @@ fn clicks_on_refresh_and_the_scope_line_act_as_their_keys() {
     // The scope line toggles "show all", staying open either way.
     assert_eq!(
         app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
-            0, 1
+            1, 1
         ))),
         Effect::None
     );
@@ -784,7 +784,7 @@ fn clicks_on_refresh_and_the_scope_line_act_as_their_keys() {
     );
     assert_eq!(
         app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
-            0, 1
+            1, 1
         ))),
         Effect::None
     );
@@ -1212,11 +1212,11 @@ fn with_no_seam_the_switch_says_it_is_not_saved() {
 fn a_chip_click_chooses_that_level() {
     let (mut app, seam) = choosing_app();
     open(&mut app);
-    // Frame rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1` with
-    // two chips past its name cell.
+    // Frame rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
+    // 3 `acme/m1` with two chips past its name cell.
     let line = sent(
         app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
-            2, 2,
+            3, 2,
         ))),
     );
     assert_eq!(
@@ -1234,11 +1234,11 @@ fn a_chip_click_chooses_that_level() {
 fn a_click_on_the_preselected_chip_saves_the_level() {
     let (mut app, seam) = choosing_app();
     open(&mut app);
-    // `acme/m1` preselects `high` at cell (2, 2): clicking it chooses the
+    // `acme/m1` preselects `high` at cell (3, 2): clicking it chooses the
     // level, saving `models."acme/m1".thinking`.
     let line = sent(
         app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
-            2, 2,
+            3, 2,
         ))),
     );
     let id = line["id"].as_str().expect("an id").to_owned();
@@ -1258,7 +1258,7 @@ fn a_name_click_chooses_its_chip_saving_model_only() {
     // model is saved.
     let line = sent(
         app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
-            2, 0,
+            3, 0,
         ))),
     );
     assert_eq!(
@@ -1454,11 +1454,11 @@ fn a_refresh_that_drops_the_selected_model_moves_the_selection_onto_the_shown_ro
     // Index 0 now hides the unscoped `other/u`: the selection moves to
     // the first shown row, `acme/m2`.
     assert_eq!(selected(&app).as_deref(), Some("acme/m2"));
-    // The frame highlights that same row: the buttons, the heading,
-    // then `m2`.
+    // The frame highlights that same row: the filter, the buttons, the
+    // heading, then `m2`.
     let frame = app.model_picker_frame(24).expect("open");
-    assert_eq!(frame.rows[2][0].0, "m2   ".to_owned());
-    assert_eq!(frame.list.selected(), 2);
+    assert_eq!(frame.rows[3][0].0, "m2   ".to_owned());
+    assert_eq!(frame.list.selected(), 3);
     // Enter takes the highlighted row, not the hidden model.
     let line = sent(app.on_key(Key::Enter, now()));
     assert_eq!(line["args"], json!({"model": "acme/m2"}));
@@ -1471,8 +1471,8 @@ fn choosing_with_a_hidden_selection_takes_the_highlighted_row() {
     // highlights the first shown row.
     app.model_picker.open.as_mut().expect("open").selected = 0;
     let frame = app.model_picker_frame(24).expect("open");
-    assert_eq!(frame.rows[2][0].0, "m2   ".to_owned());
-    assert_eq!(frame.list.selected(), 2);
+    assert_eq!(frame.rows[3][0].0, "m2   ".to_owned());
+    assert_eq!(frame.list.selected(), 3);
     // `s` takes the highlighted row for this session only, leaving
     // nothing to save.
     let line = sent(ctrl_s(&mut app));
@@ -1481,13 +1481,13 @@ fn choosing_with_a_hidden_selection_takes_the_highlighted_row() {
 }
 
 #[test]
-fn the_footer_reads_enter_set_as_default_s_this_session_only() {
+fn the_footer_names_the_picker_keys() {
     let (mut app, _) = choosing_app();
     open(&mut app);
     assert_eq!(
         app.model_picker_frame(24).map(|frame| frame.footer),
         Some(
-            "Enter set as default · s this session only · ↑↓ move · ←→ level · PageUp PageDown page · Tab scope · Ctrl+R refresh · Esc close"
+            "↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refresh · esc close"
                 .to_owned()
         )
     );
@@ -2046,7 +2046,7 @@ fn bare_thinking_opens_the_picker_on_the_current_models_chips() {
     assert_eq!(
         app.model_picker_frame(24).map(|frame| frame.footer),
         Some(
-            "Enter set as default · s this session only · ↑↓ move · ←→ level · PageUp PageDown page · Tab scope · Ctrl+R refresh · Esc close"
+            "↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refresh · esc close"
                 .to_owned()
         )
     );
@@ -2169,7 +2169,7 @@ fn thinking_low_updates_a_pending_home_choice_and_the_next_start() {
     // pending model into the next start.
     open(&mut app);
     let frame = app.model_picker_frame(24).expect("picker frame");
-    let chip_cells = frame.rows[2]
+    let chip_cells = frame.rows[3]
         .iter()
         .map(|(text, _, _)| text.as_str())
         .collect::<Vec<_>>();

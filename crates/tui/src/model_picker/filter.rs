@@ -33,6 +33,43 @@ pub(crate) fn matches(entry: &ModelEntry, query: &str) -> bool {
     })
 }
 
+/// One flag per char of `id`: each word that is an in-order subsequence
+/// of the id, matched greedily from the left, marks the chars it took.
+/// A word that matches nowhere contributes no partial hits; the flags
+/// union across words.
+pub(crate) fn id_hits(id: &str, query: &str) -> Vec<bool> {
+    let chars: Vec<char> = id.chars().collect();
+    let mut hits = vec![false; chars.len()];
+    for word in query.split_whitespace() {
+        let mut take: Vec<usize> = Vec::new();
+        let mut at = 0;
+        let mut matched = true;
+        for wanted in word.chars() {
+            let mut found = false;
+            while let Some(got) = chars.get(at) {
+                at += 1;
+                if folds(*got, wanted) {
+                    take.push(at - 1);
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                matched = false;
+                break;
+            }
+        }
+        if matched {
+            for index in take {
+                if let Some(hit) = hits.get_mut(index) {
+                    *hit = true;
+                }
+            }
+        }
+    }
+    hits
+}
+
 #[cfg(test)]
 #[path = "filter_tests.rs"]
 mod tests;

@@ -77,17 +77,22 @@ pub(crate) struct Open {
     pub(crate) query: String,
 }
 
-/// One frame row: the buttons, a provider heading, or a model by
-/// catalogue index. Clicks map back through it, so headings are never
-/// stops.
+/// One frame row: the filter, the buttons, a provider heading, a model
+/// by catalogue index, or the empty-filter line. Clicks map back through
+/// it, so the filter, headings and the empty line are never stops.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RowAt {
-    /// The refresh button and the scope line.
+    /// The filter query, first in every choosing frame.
+    Filter,
+    /// The refresh button, the count while a query is typed, and the
+    /// scope line.
     Buttons,
     /// A provider's heading, naming it.
     Heading(String),
     /// A model, by catalogue index.
     Model(usize),
+    /// The typed query matches no model: one dim line, no sections.
+    NoMatch,
 }
 
 /// The model picker: what it lists, and what it waits on.
@@ -628,7 +633,8 @@ impl ModelPicker {
     /// the scope line toggles it, a roles cell selects its row, a name
     /// cell chooses its row at its chip, and a chip chooses its row at
     /// that level. Choosing from a click always saves: Ctrl+S is the only
-    /// path to a session-only choice.
+    /// path to a session-only choice. The filter and the empty line take
+    /// no click.
     pub(crate) fn click_cell(&mut self, row: usize, cell: usize) -> Option<Choice> {
         let (layout, _) = self.layout()?;
         match layout.get(row) {
@@ -640,7 +646,7 @@ impl ModelPicker {
                 }
                 None
             }
-            Some(RowAt::Heading(_)) | None => None,
+            Some(RowAt::Filter | RowAt::Heading(_) | RowAt::NoMatch) | None => None,
             Some(RowAt::Model(index)) => {
                 let index = *index;
                 // The checklist has no chips to choose: the mark cell
@@ -709,11 +715,17 @@ impl ModelPicker {
             ),
             None => "Models".to_owned(),
         };
-        let rows = layout
-            .iter()
-            .enumerate()
-            .map(|(at, row)| self.cells(at, row, scope.as_deref()))
-            .collect::<Vec<_>>();
+        let rows = {
+            let shown = layout
+                .iter()
+                .filter(|row| matches!(row, RowAt::Model(_)))
+                .count();
+            layout
+                .iter()
+                .enumerate()
+                .map(|(at, row)| self.cells(at, row, scope.as_deref(), shown))
+                .collect::<Vec<_>>()
+        };
         let mut frame = Frame {
             title,
             rows,
@@ -724,8 +736,10 @@ impl ModelPicker {
                 // The checklist marks rows and saves the list: no model
                 // or level is chosen here.
                 Mode::Scope => "Space mark · Enter save · Esc back".to_owned(),
-                Mode::Choose | Mode::Thinking => "Enter set as default · s this session only · ↑↓ move · ←→ level · PageUp PageDown page · Tab scope · Ctrl+R refresh · Esc close"
-                    .to_owned(),
+                Mode::Choose | Mode::Thinking => {
+                    "↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refresh · esc close"
+                        .to_owned()
+                }
             },
         };
         // The selection may sit off the scoped rows after a read
@@ -741,9 +755,10 @@ impl ModelPicker {
         Some(frame)
     }
 
-    /// The frame's rows with the scope line: the buttons, then each
-    /// scoped provider's heading with its models in catalogue order.
-    /// `None` while the picker is closed.
+    /// The frame's rows with the scope line: the filter, the buttons,
+    /// then each scoped provider's heading with its models in catalogue
+    /// order, or the empty-filter line when the query hides every row.
+    /// The checklist draws no filter. `None` while the picker is closed.
     fn layout(&self) -> Option<(Vec<RowAt>, Option<String>)> {
         let open = self.open.as_ref()?;
         let (rows, scope) = shown_in(
@@ -754,7 +769,19 @@ impl ModelPicker {
             open.target.as_ref(),
             &open.query,
         );
-        let mut layout = vec![RowAt::Buttons];
+        // The checklist takes no filter: its frame starts at the buttons
+        // with no filter row, so no row number shifts there.
+        let mut layout = if open.mode == Mode::Scope {
+            vec![RowAt::Buttons]
+        } else {
+            vec![RowAt::Filter, RowAt::Buttons]
+        };
+        // A typed query hiding every installed model shows one dim line
+        // and no provider sections.
+        if !open.query.is_empty() && rows.is_empty() && !self.catalogue.models.is_empty() {
+            layout.push(RowAt::NoMatch);
+            return Some((layout, scope));
+        }
         let mut provider: Option<&str> = None;
         for index in rows {
             let Some(entry) = self.catalogue.models.get(index) else {
@@ -769,24 +796,52 @@ impl ModelPicker {
         Some((layout, scope))
     }
 
-    /// One frame row's cells: the buttons with their targets, a heading,
-    /// or a model's name, roles and chips, each with its own target and
-    /// the row's chip in brackets.
+    /// One frame row's cells: the filter, the buttons with their targets
+    /// and the typed count, a heading, the empty-filter line, or a model's
+    /// name, roles and chips, each with its own target and the row's chip
+    /// in brackets. A matched id splits into hit runs; otherwise the id
+    /// draws as today's single cell.
     fn cells(
         &self,
         at: usize,
         row: &RowAt,
         scope: Option<&str>,
+        shown: usize,
     ) -> Vec<(String, Option<Spot>, Ink)> {
         match row {
+            RowAt::Filter => {
+                if self.query().is_empty() {
+                    vec![
+                        ("Type to search ".to_owned(), None, Ink::Muted),
+                        ("█".to_owned(), None, Ink::Muted),
+                    ]
+                } else {
+                    vec![
+                        ("› ".to_owned(), None, Ink::Muted),
+                        (self.query().to_owned(), None, Ink::Heading),
+                        ("█".to_owned(), None, Ink::Muted),
+                    ]
+                }
+            }
             RowAt::Buttons => {
-                let mut cells = vec![("↻ refresh".to_owned(), Some(Spot::Cell(at, 0)), Ink::Plain)];
+                let mut cells =
+                    vec![("↻ refresh".to_owned(), Some(Spot::Cell(at, 0)), Ink::Plain)];
+                // While a query is typed the count names the shown rows
+                // of every installed model.
+                if !self.query().is_empty() {
+                    cells.push((
+                        format!("  {shown} of {} models", self.catalogue.models.len()),
+                        None,
+                        Ink::Muted,
+                    ));
+                }
                 if let Some(line) = scope {
                     cells.push((format!("  {line}"), Some(Spot::Cell(at, 1)), Ink::Plain));
                 }
                 cells
             }
             RowAt::Heading(provider) => vec![(provider.clone(), None, Ink::Heading)],
+            RowAt::NoMatch => vec![("No models match".to_owned(), None, Ink::Muted)],
             RowAt::Model(index) => {
                 if self.is_scope() {
                     let Some(entry) = self.catalogue.models.get(*index) else {
@@ -801,15 +856,10 @@ impl ModelPicker {
                     .open
                     .as_ref()
                     .and_then(|open| open.chips.get(*index).copied().flatten());
-                let mut cells = vec![(
-                    if entry.roles.is_empty() {
-                        format!("{}   ", entry.id)
-                    } else {
-                        entry.id.clone()
-                    },
-                    Some(Spot::Cell(at, 0)),
-                    Ink::Plain,
-                )];
+                // A matched id splits into hit runs; otherwise the id
+                // draws as today's single cell, pad included.
+                let hits = filter::id_hits(&entry.id, self.query());
+                let mut cells = id_cells(&entry.id, &hits, at, entry.roles.is_empty());
                 let mut cell = 1;
                 if !entry.roles.is_empty() {
                     cells.push((
@@ -892,6 +942,55 @@ impl ModelPicker {
         }
         Vec::new()
     }
+}
+
+/// The id cell's runs: one cell per hit-flag run, matched runs drawn
+/// underlined and bold, the rest plain. Every run shares the name cell's
+/// target, so a click on any run chooses the row. The three-space pad of
+/// a role-less row joins the last run's text when that run is plain, and
+/// stands as its own plain run otherwise, so the texts always
+/// concatenate to the unfiltered id cell's text.
+fn id_cells(
+    id: &str,
+    hits: &[bool],
+    at: usize,
+    pad: bool,
+) -> Vec<(String, Option<Spot>, Ink)> {
+    let spot = Some(Spot::Cell(at, 0));
+    if !hits.iter().any(|hit| *hit) {
+        let mut text = id.to_owned();
+        if pad {
+            text.push_str("   ");
+        }
+        return vec![(text, spot, Ink::Plain)];
+    }
+    let mut runs: Vec<(String, Ink)> = Vec::new();
+    for (got, hit) in id.chars().zip(hits.iter().copied()) {
+        let ink = if hit { Ink::Match } else { Ink::Plain };
+        let same = runs.last().is_some_and(|(_, last)| *last == ink);
+        if same {
+            if let Some((text, _)) = runs.last_mut() {
+                text.push(got);
+            }
+        } else {
+            runs.push((got.to_string(), ink));
+        }
+    }
+    let mut cells: Vec<(String, Option<Spot>, Ink)> = runs
+        .into_iter()
+        .map(|(text, ink)| (text, spot, ink))
+        .collect();
+    if pad {
+        let plain_last = cells.last().is_some_and(|(_, _, ink)| *ink == Ink::Plain);
+        if plain_last {
+            if let Some((text, _, _)) = cells.last_mut() {
+                text.push_str("   ");
+            }
+        } else {
+            cells.push(("   ".to_owned(), spot, Ink::Plain));
+        }
+    }
+    cells
 }
 
 /// What a choice writes through the configuration seam, in order: the

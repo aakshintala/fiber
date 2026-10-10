@@ -2,7 +2,7 @@
 //! in order but not necessarily next to each other and ignoring case, the
 //! model's provider, id or display name.
 
-use super::matches;
+use super::{id_hits, matches};
 use crate::catalogue::ModelEntry;
 
 fn entry(provider: &str, id: &str, name: Option<&str>) -> ModelEntry {
@@ -104,3 +104,49 @@ fn non_ascii_case_folds() {
     assert!(matches(&entry, "é"));
 }
 
+
+#[test]
+fn hits_mark_the_greedy_leftmost_run() {
+    // g0 p1 t2 -3 6(4) -5 s6 o7 l8 -9 m10 i11 n12 i13: 'm' sits at 10.
+    assert_eq!(
+        id_hits("gpt-6-sol-mini", "mini"),
+        vec![
+            false, false, false, false, false, false, false, false, false, false, true, true,
+            true, true
+        ]
+    );
+}
+
+#[test]
+fn a_word_matching_only_the_provider_adds_no_hits() {
+    assert_eq!(id_hits("zzz", "oai"), vec![false, false, false]);
+}
+
+#[test]
+fn a_failed_word_contributes_no_partial_hits() {
+    // "g" matches, then "x" runs past the end: nothing is marked.
+    assert_eq!(id_hits("gpt", "gx"), vec![false, false, false]);
+}
+
+#[test]
+fn hits_union_across_words() {
+    assert_eq!(
+        id_hits("gpt-6-sol-mini", "gpt mini"),
+        vec![
+            true, true, true, false, false, false, false, false, false, false, true, true,
+            true, true
+        ]
+    );
+}
+
+#[test]
+fn hits_mark_the_first_and_last_char() {
+    assert_eq!(id_hits("abc", "ac"), vec![true, false, true]);
+}
+
+#[test]
+fn expanding_lowercase_keeps_hits_on_the_ids_chars() {
+    // 'İ' lowercases to two chars: the flags still align to the id's
+    // three chars.
+    assert_eq!(id_hits("aİb", "a b"), vec![true, false, true]);
+}
