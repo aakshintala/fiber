@@ -15,11 +15,16 @@ fn project() -> ProjectKey {
 }
 
 fn session(repo: &Repo) -> SessionOffer {
-    SessionOffer::new(&repo.home(), &project(), &repo.root())
+    SessionOffer::new(
+        &repo.home(),
+        &project(),
+        &repo.root(),
+        fakes::clock::FakeClock::new(),
+    )
 }
 
 fn store(repo: &Repo) -> Store {
-    Store::new(&repo.home(), &project())
+    Store::new(&repo.home(), &project(), fakes::clock::FakeClock::new())
 }
 
 fn unapproved(repo: &Repo) -> Vec<Unapproved> {
@@ -213,4 +218,18 @@ fn a_failure_to_record_names_the_item() {
         "{}",
         failure.message
     );
+}
+
+/// The `Debug` names the offer and every field it prints: a body replaced
+/// with an empty `Ok` (the surviving mutant) prints none of them.
+#[test]
+fn session_offer_debug_names_the_type_and_its_fields() {
+    let repo = Repo::bare();
+    let text = format!("{:?}", session(&repo));
+    assert!(text.contains("SessionOffer"), "{text}");
+    assert!(text.contains("home"), "{text}");
+    assert!(text.contains("store"), "{text}");
+    assert!(text.contains("workspace"), "{text}");
+    // The clock is skipped: `Arc<dyn Clock>` has no `Debug`.
+    assert!(!text.contains("clock"), "{text}");
 }

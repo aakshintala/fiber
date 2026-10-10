@@ -13,7 +13,7 @@ use contract::inbox::{Ack, Delivery, Rejection};
 use contract::shapes::True;
 use contract::{ErrorCode, RequestId};
 
-use super::hub::{Hub, Shared};
+use super::hub::{Hub, MAX_PENDING_DELIVERIES, Shared};
 use crate::host;
 
 /// Reads `kind` with its `spec` table, as JSON, into the [`Interaction`] a
@@ -179,10 +179,6 @@ fn check_labels(labels: &[&str], kind: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(test)]
-#[path = "asks_tests.rs"]
-mod tests;
-
 /// An open `host.ask`: what was asked and whose parked call waits for the
 /// answer. Plain data: leaving the registry neither sends nor answers.
 pub(super) struct PendingAsk {
@@ -211,8 +207,15 @@ impl Shared {
                 Err(failed) => Some(failed.0),
             },
             None => {
-                self.buffer.push(delivery);
-                None
+                self.buffer.push_back(delivery);
+                // At most the cap is held: the evicted delivery returns
+                // unsent, for the caller to drop after the hub lock is
+                // released.
+                if self.buffer.len() > MAX_PENDING_DELIVERIES {
+                    self.buffer.pop_front()
+                } else {
+                    None
+                }
             }
         }
     }
@@ -310,3 +313,7 @@ impl Hub {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "asks_tests.rs"]
+mod tests;

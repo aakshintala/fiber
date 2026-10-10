@@ -5,13 +5,16 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::sync::mpsc;
 
 use config::RepositoryExtension;
+use contract::clock::Clock;
 use contract::events::OfferedKind;
 use serde_json::{Value, json};
 
 use crate::Error;
+use crate::git::GIT_DEADLINE;
+use crate::host::exec;
 use crate::install::io as io_error;
 
 /// One file an approval pins.
@@ -50,8 +53,9 @@ pub struct RepoItem {
 }
 
 /// Everything the workspace's `.fiber/` declares, in offer order: extensions,
-/// then hooks, then MCP servers, each by name.
-pub fn declared_items(workspace: &Path) -> Result<Vec<RepoItem>, Error> {
+/// then hooks, then MCP servers, each by name. The file list runs through
+/// `git`, stopped at the git deadline on `clock`.
+pub fn declared_items(workspace: &Path, clock: &dyn Clock) -> Result<Vec<RepoItem>, Error> {
     let declared = config::declared(workspace)?;
     let root = workspace.canonicalize().map_err(io_error(workspace))?;
     let mut items = Vec::new();
@@ -61,7 +65,7 @@ pub fn declared_items(workspace: &Path) -> Result<Vec<RepoItem>, Error> {
         config::dir_name(&config::full_name("hooks"))
     );
     for ext in &declared.extensions {
-        items.push(extension(&root, ext)?);
+        items.push(extension(&root, ext, clock)?);
     }
     for (name, entry) in &declared.hooks {
         items.push(entry_item(
@@ -94,7 +98,7 @@ fn required(entry: &Value) -> bool {
         .unwrap_or(false)
 }
 
-fn extension(root: &Path, ext: &RepositoryExtension) -> Result<RepoItem, Error> {
+fn extension(root: &Path, ext: &RepositoryExtension, clock: &dyn Clock) -> Result<RepoItem, Error> {
     let bad = |why| Error::BadRepositoryPath {
         path: ext.path.clone(),
         why,
@@ -118,7 +122,7 @@ fn extension(root: &Path, ext: &RepositoryExtension) -> Result<RepoItem, Error> 
     let name = manifest.name;
     let mut files = BTreeMap::new();
     let mut outside = Vec::new();
-    for rel in git_files(&name, &dir)? {
+    for rel in git_files(&name, &dir, clock)? {
         let candidate = dir.join(&rel);
         match resolve(root, &name, &candidate)? {
             Found::Inside(path) => {
@@ -259,26 +263,55 @@ pub(super) fn spawn_error(dir: &Path, e: io::Error) -> Error {
 }
 
 /// The files of a package: tracked, plus untracked and not ignored, as
-/// paths under `dir`.
-fn git_files(name: &str, dir: &Path) -> Result<Vec<String>, Error> {
+/// paths under `dir`. `git` stays in Fiber's process group, so terminal
+/// prompts still work, and is stopped at the git deadline on `clock`.
+fn git_files(name: &str, dir: &Path, clock: &dyn Clock) -> Result<Vec<String>, Error> {
     let fail = |why: String| Error::Pin {
         item: name.to_owned(),
         why,
     };
-    let out = Command::new("git")
-        .args(["-c", "core.fsmonitor=false", "-C"])
-        .arg(dir)
-        .args([
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| spawn_error(dir, e))?;
-    if !out.status.success() {
+    let req = exec::ExecRequest {
+        program: "git".into(),
+        args: vec![
+            "-c".to_owned(),
+            "core.fsmonitor=false".to_owned(),
+            "ls-files".to_owned(),
+            "-z".to_owned(),
+            "--cached".to_owned(),
+            "--others".to_owned(),
+            "--exclude-standard".to_owned(),
+        ],
+        // The directory itself, already canonicalized above: `Command`
+        // hands it to the kernel without turning it into text, so a
+        // workspace path that is not UTF-8 still reaches `git` intact.
+        cwd: dir.to_path_buf(),
+        // The file list is not capped today.
+        cap: usize::MAX,
+        // In Fiber's process group, so terminal prompts still work as they
+        // do today.
+        own_group: false,
+        #[cfg(test)]
+        stdout_read: None,
+    };
+    let deadline = clock.now().checked_add(GIT_DEADLINE).unwrap_or(clock.now());
+    // Never cancelled except by the call's own end: the sender drops when
+    // this returns.
+    let (_cancel, cancel) = mpsc::channel::<()>();
+    let out = match exec::run(&req, clock, Some(deadline), cancel) {
+        Err(failed) => match failed.source {
+            Some(source) => return Err(spawn_error(dir, source)),
+            // After the spawn: a reader thread that could not start.
+            None => return Err(fail(failed.message)),
+        },
+        Ok(ran) if ran.timed_out => {
+            return Err(fail(format!(
+                "`git ls-files` did not finish within {} s, so it was stopped",
+                GIT_DEADLINE.as_secs()
+            )));
+        }
+        Ok(ran) => ran,
+    };
+    if out.exit_code != Some(0) {
         return Err(fail(format!(
             "{} is not in a git repository, so its files cannot be listed: {}",
             dir.display(),

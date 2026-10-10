@@ -1,7 +1,7 @@
 //! Binary-level tests of the look (`docs/tui.md`, "Look"): the real
-//! binary under a pseudo-terminal at 160x48, parsing the SGR stream for
-//! the input box's striped surface in truecolour, at 256 colours, with no
-//! colour, and inside tmux.
+//! binary under a pseudo-terminal at 160x48, asserting the `vt100` grid
+//! the shared driver rebuilds: the input box's striped surface in
+//! truecolour, at 256 colours, with no colour, and inside tmux.
 
 #![allow(
     clippy::unwrap_used,
@@ -15,75 +15,111 @@ mod support;
 
 use std::fs;
 use std::io::Write;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
 use std::time::Duration;
 
 use fakes::clock::FakeClock;
 use support::Deadline;
 use support::Setup;
-use support::pty::{Colour, Reader, Run, Screen, contains, sgr_params};
+use support::pty::{
+    Colour, FINISHED_TITLE, Grid, HOME_TITLE, MOTION, Reader, Run, Shared, Writer, contains,
+    exact_end, query_replies, sgr_params,
+};
 
-#[test]
-fn the_screen_moves_and_writes() {
-    let mut screen = Screen::new(10, 6);
-    screen.feed(b"\x1b[2;3Hab");
-    assert_eq!(screen.cell(2, 1).symbol.as_str(), "a");
-    assert_eq!(screen.cell(3, 1).symbol.as_str(), "b");
+/// Feeds `bytes` into an attached run's terminal side and returns the
+/// grid once the bytes are published: the raw wait proves the reader
+/// took them, and the publish snapshots the grid before waking the
+/// test.
+fn feed(run: &mut Run, terminal: &mut fs::File, bytes: &[u8]) -> Grid {
+    let from = run.output().len();
+    terminal.write_all(bytes).unwrap();
+    run.wait_bytes(from, bytes, "the fed bytes");
+    run.screen()
+}
+
+/// An attached run with no child over a sized pty, with the terminal
+/// side the test writes to.
+fn grid_run(cols: u16, rows: u16) -> (Run, fs::File) {
+    let (main, terminal) = pair_sized(cols, rows);
+    (Run::attach(main, cols, rows, Deadline::start()), terminal)
 }
 
 #[test]
-fn the_screen_reads_combined_sgr() {
-    let mut screen = Screen::new(10, 4);
-    screen.feed("\x1b[38;2;26;26;34;49m▄".as_bytes());
-    let edge = screen.cell(0, 0);
+fn the_grid_moves_and_writes() {
+    let (mut run, mut terminal) = grid_run(10, 6);
+    let grid = feed(&mut run, &mut terminal, b"\x1b[2;3Hab");
+    assert_eq!(grid.cell(2, 1).symbol.as_str(), "a");
+    assert_eq!(grid.cell(3, 1).symbol.as_str(), "b");
+}
+
+#[test]
+fn the_grid_reads_combined_sgr() {
+    let (mut run, mut terminal) = grid_run(10, 4);
+    let grid = feed(
+        &mut run,
+        &mut terminal,
+        "\x1b[38;2;26;26;34;49m▄".as_bytes(),
+    );
+    let edge = grid.cell(0, 0);
     assert_eq!(edge.symbol.as_str(), "▄");
     assert_eq!(edge.fg, Colour::Rgb(26, 26, 34));
     assert_eq!(edge.bg, Colour::Default);
-    screen.feed("\x1b[38;5;75;48;5;234m▌".as_bytes());
-    let stripe = screen.cell(1, 0);
+    let grid = feed(
+        &mut run,
+        &mut terminal,
+        "\x1b[38;5;75;48;5;234m▌".as_bytes(),
+    );
+    let stripe = grid.cell(1, 0);
     assert_eq!(stripe.symbol.as_str(), "▌");
     assert_eq!(stripe.fg, Colour::Indexed(75));
     assert_eq!(stripe.bg, Colour::Indexed(234));
-    screen.feed(b"\x1b[0m ");
-    let reset = screen.cell(2, 0);
+    let grid = feed(&mut run, &mut terminal, b"\x1b[0m ");
+    let reset = grid.cell(2, 0);
     assert_eq!(reset.bg, Colour::Default);
     assert_eq!(reset.fg, Colour::Default);
     assert!(!reset.dim);
-    screen.feed(b"\x1b[m ");
-    assert_eq!(screen.cell(3, 0).bg, Colour::Default);
-    screen.feed(b"\x1b[2m ");
-    assert!(screen.cell(4, 0).dim);
-    screen.feed(b"\x1b[22m ");
-    assert!(!screen.cell(5, 0).dim);
+    let grid = feed(&mut run, &mut terminal, b"\x1b[m ");
+    assert_eq!(grid.cell(3, 0).bg, Colour::Default);
+    let grid = feed(&mut run, &mut terminal, b"\x1b[2m ");
+    assert!(grid.cell(4, 0).dim);
+    let grid = feed(&mut run, &mut terminal, b"\x1b[22m ");
+    assert!(!grid.cell(5, 0).dim);
 }
 
 #[test]
-fn the_screen_skips_other_sequences() {
-    let mut screen = Screen::new(10, 4);
-    screen.feed(b"\x1b[?25l");
-    screen.feed(b"\x1b[>1u");
+fn the_grid_skips_other_sequences() {
+    let (mut run, mut terminal) = grid_run(10, 4);
     // A bare bell writes no cell: the finished turn rings one where
     // no desktop notification goes (`docs/tui.md`, "Getting the
     // person's attention").
-    screen.feed(b"\x07");
-    screen.feed("\x1b]9;Fiber: x\x07".as_bytes());
-    screen.feed(b"\x1b]0;t\x1b\\");
-    screen.feed("\x1bP…\x1b\\".as_bytes());
+    for bytes in [
+        b"\x1b[?25l".as_slice(),
+        b"\x1b[>1u".as_slice(),
+        b"\x07".as_slice(),
+        "\x1b]9;Fiber: x\x07".as_bytes(),
+        b"\x1b]0;t\x1b\\".as_slice(),
+        "\x1bP…\x1b\\".as_bytes(),
+    ] {
+        feed(&mut run, &mut terminal, bytes);
+    }
+    let grid = run.screen();
     for y in 0..4 {
         for x in 0..10 {
-            assert_eq!(screen.cell(x, y).symbol.as_str(), " ", "({x}, {y})");
+            assert_eq!(grid.cell(x, y).symbol.as_str(), " ", "({x}, {y})");
         }
     }
 }
 
 #[test]
 fn erase_display_fills_with_the_pen_background() {
-    let mut screen = Screen::new(4, 3);
-    screen.feed(b"ab");
-    screen.feed(b"\x1b[48;5;234m\x1b[2J");
+    let (mut run, mut terminal) = grid_run(4, 3);
+    feed(&mut run, &mut terminal, b"ab");
+    let grid = feed(&mut run, &mut terminal, b"\x1b[48;5;234m\x1b[2J");
     for y in 0..3 {
         for x in 0..4 {
-            assert_eq!(screen.cell(x, y).symbol.as_str(), " ", "({x}, {y})");
-            assert_eq!(screen.cell(x, y).bg, Colour::Indexed(234), "({x}, {y})");
+            assert_eq!(grid.cell(x, y).symbol.as_str(), " ", "({x}, {y})");
+            assert_eq!(grid.cell(x, y).bg, Colour::Indexed(234), "({x}, {y})");
         }
     }
 }
@@ -98,41 +134,80 @@ fn sgr_params_lists_every_sequence() {
 
 #[test]
 fn a_sequence_split_across_feeds_completes() {
-    let mut screen = Screen::new(10, 6);
-    screen.feed(b"\x1b[2;");
-    screen.feed(b"3Ha");
-    assert_eq!(screen.cell(2, 1).symbol.as_str(), "a");
-    let mut split = Screen::new(10, 6);
-    split.feed(&[0xE2]);
-    split.feed(&[0x96, 0x8C]);
-    assert_eq!(split.cell(0, 0).symbol.as_str(), "▌");
+    let (mut run, mut terminal) = grid_run(10, 6);
+    let from = run.output().len();
+    terminal.write_all(b"\x1b[2;").unwrap();
+    run.wait_bytes(from, b"\x1b[2;", "the split sequence's first half");
+    let grid = feed(&mut run, &mut terminal, b"3Ha");
+    assert_eq!(grid.cell(2, 1).symbol.as_str(), "a");
 }
 
 #[test]
-fn a_wide_char_misplaces_only_its_own_cell() {
-    let mut screen = Screen::new(10, 4);
-    screen.feed("\x1b[1;1H漢\x1b[1;3Hx".as_bytes());
-    assert_eq!(screen.cell(0, 0).symbol.as_str(), "漢");
-    assert_eq!(screen.cell(2, 0).symbol.as_str(), "x");
+fn a_character_split_across_feeds_completes() {
+    // A fresh grid, as above: the cursor from an earlier write would
+    // take the completed char elsewhere.
+    let (mut run, mut terminal) = grid_run(10, 6);
+    let from = run.output().len();
+    terminal.write_all(&[0xE2]).unwrap();
+    run.wait_bytes(from, &[0xE2], "the split character's first byte");
+    let grid = feed(&mut run, &mut terminal, &[0x96, 0x8C]);
+    assert_eq!(grid.cell(0, 0).symbol.as_str(), "▌");
+}
+
+/// `vt100` gives a wide char two cells: the char and a blank
+/// continuation, so `x` lands at column 2.
+#[test]
+fn a_wide_char_takes_two_cells() {
+    let (mut run, mut terminal) = grid_run(10, 4);
+    let grid = feed(&mut run, &mut terminal, "\x1b[1;1H漢\x1b[1;3Hx".as_bytes());
+    assert_eq!(grid.cell(0, 0).symbol.as_str(), "漢");
+    assert_eq!(grid.cell(1, 0).symbol.as_str(), " ");
+    assert_eq!(grid.cell(2, 0).symbol.as_str(), "x");
 }
 
 /// A pty pair with no child: the master the reader drains, and the
 /// terminal side the test holds open and writes to.
 fn pair() -> (fs::File, fs::File) {
-    let terminal = support::pty::open(80, 24);
+    pair_sized(80, 24)
+}
+
+/// [`pair`], sized `cols` by `rows`.
+fn pair_sized(cols: u16, rows: u16) -> (fs::File, fs::File) {
+    let terminal = support::pty::open(cols, rows);
     (fs::File::from(terminal.main), terminal.terminal)
+}
+
+/// Whether any screen row holds `needle` in consecutive cells.
+fn shows(screen: &Grid, needle: &str) -> bool {
+    (0..48).any(|y| {
+        let row: String = (0..160).map(|x| screen.cell(x, y).symbol).collect();
+        row.contains(needle)
+    })
+}
+
+/// Drains `master` into `shared` through `writer`: the reader test's
+/// own state, so it can read the output without a run.
+fn drained(
+    master: fs::File,
+    shared: Arc<Mutex<Shared>>,
+    writer: Writer,
+    deadline: Deadline,
+) -> (Reader, mpsc::Receiver<()>) {
+    Reader::start(master, shared, writer, deadline)
 }
 
 #[test]
 fn a_reader_stops_while_the_terminal_side_stays_open() {
     let deadline = Deadline::start();
     let (main, mut terminal) = pair();
-    let (reader, output, wakes) = Reader::start(main, deadline);
+    let shared = Arc::new(Mutex::new(Shared::new(80, 24)));
+    let writer: Writer = Arc::new(Mutex::new(main.try_clone().unwrap()));
+    let (reader, wakes) = drained(main, Arc::clone(&shared), writer, deadline);
     // A retained terminal side holds end of file off: the reader answers
     // the stop pipe instead.
     terminal.write_all(b"ab").unwrap();
     wakes.recv_timeout(deadline.left()).unwrap();
-    assert!(contains(&output.lock().unwrap(), b"ab"));
+    assert!(contains(&shared.lock().unwrap().output(), b"ab"));
     // Still draining: only the stop signal ends it.
     assert!(!reader.ended(Duration::ZERO));
     assert!(reader.stop());
@@ -145,7 +220,9 @@ fn a_reader_past_its_deadline_ends() {
     clock.advance(support::WAITS + Duration::from_secs(1));
     assert!(deadline.left().is_zero());
     let (main, terminal) = pair();
-    let (reader, _, _) = Reader::start(main, deadline);
+    let shared = Arc::new(Mutex::new(Shared::new(80, 24)));
+    let writer: Writer = Arc::new(Mutex::new(main.try_clone().unwrap()));
+    let (reader, _) = drained(main, shared, writer, deadline);
     // The terminal side stays open and nothing is ever written: only the
     // poll timeout ends the thread, before any stop signal.
     assert!(reader.ended(Duration::from_secs(10)));
@@ -157,17 +234,216 @@ fn a_reader_past_its_deadline_ends() {
 fn a_reader_ends_at_end_of_file() {
     let deadline = Deadline::start();
     let (main, terminal) = pair();
-    let (reader, _, _) = Reader::start(main, deadline);
+    let shared = Arc::new(Mutex::new(Shared::new(80, 24)));
+    let writer: Writer = Arc::new(Mutex::new(main.try_clone().unwrap()));
+    let (reader, _) = drained(main, shared, writer, deadline);
     drop(terminal);
     // End of file ends the thread, before any stop signal.
     assert!(reader.ended(Duration::from_secs(10)));
     assert!(reader.stop());
 }
 
+#[test]
+fn exact_end_matches_only_at_or_after_from() {
+    assert_eq!(exact_end(b"xxabyy", 2, b"ab"), Some(4));
+    assert_eq!(exact_end(b"xxabyy", 3, b"ab"), None);
+    assert_eq!(exact_end(b"xxab", 0, b"ab"), Some(4));
+    assert_eq!(exact_end(b"ab", 2, b"ab"), None);
+    assert_eq!(exact_end(b"ab", 3, b"ab"), None);
+}
+
+#[test]
+fn query_replies_answers_in_stream_order_and_keeps_its_tail() {
+    // Two queries in one chunk are answered in stream order.
+    let mut pending = b"\x1b[c\x1b[?u".to_vec();
+    assert_eq!(query_replies(&mut pending), b"\x1b[?0c\x1b[?1u");
+    assert!(pending.is_empty());
+    // A query split across two reads is answered once whole.
+    let mut pending = b"\x1b]11;".to_vec();
+    assert!(query_replies(&mut pending).is_empty());
+    pending.extend_from_slice(b"?\x1b\\");
+    assert_eq!(
+        query_replies(&mut pending),
+        b"\x1b]11;rgb:0000/0000/0000\x1b\\"
+    );
+    assert!(pending.is_empty());
+    // A 16-byte non-query tail is kept whole for the next read, and a
+    // 17-byte one is cut to its last 16.
+    let mut pending = vec![b'x'; 16];
+    assert!(query_replies(&mut pending).is_empty());
+    assert_eq!(pending.len(), 16);
+    let mut pending = vec![b'x'; 17];
+    assert!(query_replies(&mut pending).is_empty());
+    assert_eq!(pending, vec![b'x'; 16]);
+}
+
+#[test]
+fn a_pending_resize_lands_before_its_chunk_parses() {
+    let (mut run, mut terminal) = grid_run(120, 32);
+    run.resize(40, 10);
+    // Fifty cells at 40 columns wrap onto two rows; at 120 they would
+    // sit on one. The cursor tells which size parsed the chunk.
+    let from = run.output().len();
+    terminal.write_all(&[b'x'; 50]).unwrap();
+    run.wait_bytes(from, &[b'x'; 50], "the fifty cells");
+    let grid = run.screen();
+    assert_eq!(grid.rows.len(), 10);
+    assert_eq!(grid.cursor, (1, 10));
+}
+
+/// A chunk is published only after its replies are written: the pause
+/// point is the `Writer` lock, which the test owns (`docs/testing.md`,
+/// "Waits and timeouts").
+#[test]
+fn a_query_is_not_published_before_its_reply_is_written() {
+    let deadline = Deadline::start();
+    let (main, mut terminal) = pair_sized(80, 24);
+    let run = Run::attach(main, 80, 24, deadline);
+    // Slave reads return without a newline only outside canonical
+    // mode. Echo stays on so the reader sees the query, and ECHOCTL
+    // goes off so the echo is raw bytes.
+    let mut attrs = rustix::termios::tcgetattr(&terminal).unwrap();
+    attrs
+        .local_modes
+        .remove(rustix::termios::LocalModes::ICANON | rustix::termios::LocalModes::ECHOCTL);
+    rustix::termios::tcsetattr(&terminal, rustix::termios::OptionalActions::Now, &attrs).unwrap();
+    // The test owns the pause point: the reader's reply write blocks
+    // on it.
+    let held = run.writer();
+    let guard = held.lock().unwrap();
+    terminal.write_all(b"\x1b[?u").unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut run = run;
+        let end = run.wait_bytes(0, b"\x1b[?u", "the query");
+        done.send((run, end)).unwrap();
+    });
+    // The wait has no probe interval of its own, waking per chunk, so
+    // 100 ms bounds the proof that it has not answered yet.
+    assert!(
+        finished.recv_timeout(Duration::from_millis(100)).is_err(),
+        "the query waited for its reply"
+    );
+    drop(guard);
+    let (run, _) = finished
+        .recv_timeout(deadline.left())
+        .expect("the run back after the release");
+    // The reply was on the master before the query was published.
+    let reply = support::bounded(deadline, "the reply on the master", move || {
+        use std::io::Read;
+        let mut reply = [0u8; 5];
+        terminal.read_exact(&mut reply).unwrap();
+        reply
+    });
+    assert_eq!(&reply, b"\x1b[?1u");
+    drop(run);
+}
+
+#[test]
+#[should_panic(expected = "the terminal ended")]
+fn a_failed_reply_never_publishes_its_query() {
+    let deadline = Deadline::start();
+    let (main, mut terminal) = pair_sized(80, 24);
+    let mut run = Run::attach(main, 80, 24, deadline);
+    // A read-only file, so the reply write fails: the chunk is never
+    // published and the wait fails on the terminal ending.
+    *run.writer().lock().unwrap() = fs::File::open("/dev/null").unwrap();
+    terminal.write_all(b"\x1b[?u").unwrap();
+    run.wait_bytes(0, b"\x1b[?u", "the query");
+}
+
+#[test]
+fn grid_cell_reads_the_last_cell() {
+    let (run, _terminal) = grid_run(10, 6);
+    assert_eq!(run.screen().cell(9, 5).symbol.as_str(), " ");
+}
+
+#[test]
+#[should_panic]
+fn grid_cell_past_the_edges_panics() {
+    let (run, _terminal) = grid_run(10, 6);
+    let _ = run.screen().cell(10, 0);
+}
+
+/// The journey's waits finish when the finished title arrives before the
+/// completed paint: no wait depends on the order of the two markers
+/// (see #1775).
+#[test]
+fn the_finished_title_before_the_completed_paint_still_finishes_the_turn() {
+    let deadline = Deadline::start();
+    let (main, mut terminal) = pair_sized(160, 48);
+    let mut run = Run::attach(main, 160, 48, deadline);
+    terminal.write_all(FINISHED_TITLE).unwrap();
+    terminal
+        .write_all("\x1b[1;1HHel\x1b[2;1H▣ completed".as_bytes())
+        .unwrap();
+    drop(terminal);
+    run.turn_finished(0);
+}
+
+/// The same waits finish when the pair arrives in the other order.
+#[test]
+fn the_completed_paint_before_the_finished_title_still_finishes_the_turn() {
+    let deadline = Deadline::start();
+    let (main, mut terminal) = pair_sized(160, 48);
+    let mut run = Run::attach(main, 160, 48, deadline);
+    terminal
+        .write_all("\x1b[1;1HHel\x1b[2;1H\u{25a3} completed".as_bytes())
+        .unwrap();
+    terminal.write_all(FINISHED_TITLE).unwrap();
+    drop(terminal);
+    run.turn_finished(0);
+}
+
+/// Whether the grid shows a finished turn with everything `one_turn`'s
+/// assertions read: the `completed` status, the prompt row at the box's
+/// left, the box rows uniform, and the reply's `Hel` on its card's
+/// tint. A partial redraw can't satisfy it: a `vt100` cell takes its
+/// pen with its symbol, so these are every property the assertions
+/// read.
+fn turn_drawn(grid: &Grid) -> bool {
+    if !grid.contents.contains("completed") {
+        return false;
+    }
+    let stripe = grid.cell(BOX_LEFT, INPUT_ROW).symbol;
+    if stripe != "▌" && stripe != " " {
+        return false;
+    }
+    if grid.cell(BOX_LEFT + 1, INPUT_ROW).symbol != " " {
+        return false;
+    }
+    if grid.cell(BOX_LEFT + 2, INPUT_ROW).symbol != ">" {
+        return false;
+    }
+    for y in [EDGE_TOP, INPUT_ROW, EDGE_BOTTOM] {
+        let first = grid.cell(BOX_LEFT, y);
+        for x in BOX_LEFT..BOX_RIGHT {
+            let cell = grid.cell(x, y);
+            if cell.bg != first.bg {
+                return false;
+            }
+            if y != INPUT_ROW && (cell.symbol != first.symbol || cell.fg != first.fg) {
+                return false;
+            }
+        }
+    }
+    (0..48).any(|y| {
+        (0..157).any(|x| {
+            grid.cell(x, y).symbol == "H"
+                && grid.cell(x + 1, y).symbol == "e"
+                && grid.cell(x + 2, y).symbol == "l"
+                && (0..3).all(|dx| {
+                    let cell = grid.cell(x + dx, y);
+                    cell.fg == Colour::Default && !cell.dim && cell.bg == grid.cell(x + 3, y).bg
+                })
+        })
+    })
+}
+
 /// One turn at 160x48 with `env`: the scripted provider answers "Hello.",
 /// the journey types a prompt, sees the answer and quits. Returns the
-/// SGR stream read into a screen, and the whole output.
-fn one_turn(env: &[(&str, &str)]) -> (Screen, Vec<u8>) {
+/// drawn grid and the whole output.
+fn one_turn(env: &[(&str, &str)]) -> (Grid, Vec<u8>) {
     let setup = Setup::new();
     support::write_json(
         &setup.workspace().join("s.json"),
@@ -177,14 +453,14 @@ fn one_turn(env: &[(&str, &str)]) -> (Screen, Vec<u8>) {
         &setup.home().join("config.json"),
         &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
     );
-    let mut run = Run::spawn(&setup, 160, 48, env);
-    run.read_until(">");
+    let mut run = Run::spawn(&setup, 160, 48, &[], env);
+    // The end of the first frame proves the input reader runs before
+    // the prompt goes out; the drawn turn proves the quit lands
+    // anywhere, since quitting is taken in any state.
+    run.ready();
     run.write(b"say hi\r");
-    run.read_until("Hel");
-    run.read_until("completed");
+    let screen = run.wait_screen("the drawn turn", turn_drawn);
     let output = run.output();
-    let mut screen = Screen::new(160, 48);
-    screen.feed(&output);
     run.write(b"\x03\x03\r");
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
@@ -194,7 +470,7 @@ fn one_turn(env: &[(&str, &str)]) -> (Screen, Vec<u8>) {
 /// The bottom-most row holding `>` at `x` with `x >= 2`, a space before
 /// it and a stripe or a space before that: the input box's prompt row.
 /// Returns the stripe's cell.
-fn input_row(screen: &Screen) -> (u16, u16) {
+fn input_row(screen: &Grid) -> (u16, u16) {
     for y in (0..48).rev() {
         for x in 2..160 {
             if screen.cell(x, y).symbol.as_str() != ">" {
@@ -203,7 +479,7 @@ fn input_row(screen: &Screen) -> (u16, u16) {
             if screen.cell(x - 1, y).symbol.as_str() != " " {
                 continue;
             }
-            let stripe = screen.cell(x - 2, y).symbol.as_str();
+            let stripe = screen.cell(x - 2, y).symbol;
             if stripe == "▌" || stripe == " " {
                 return (x - 2, y);
             }
@@ -272,9 +548,7 @@ fn truecolour_draws_the_input_box_as_a_striped_surface() {
     let mut reply = false;
     for y in 0..48 {
         for x in 0..158 {
-            let word: String = (0..3)
-                .map(|dx| screen.cell(x + dx, y).symbol.as_str())
-                .collect();
+            let word: String = (0..3).map(|dx| screen.cell(x + dx, y).symbol).collect();
             if word == "Hel" {
                 for dx in 0..3 {
                     let cell = screen.cell(x + dx, y);
@@ -375,12 +649,10 @@ enum SettledScreen {
 }
 
 /// Whether the screen has every property its layout assertion uses.
-fn settled(screen: &Screen, layout: SettledScreen) -> bool {
+fn settled(screen: &Grid, layout: SettledScreen) -> bool {
     let reply = (0..48).find_map(|y| {
         (0..157).find_map(|x| {
-            let word: String = (0..3)
-                .map(|dx| screen.cell(x + dx, y).symbol.as_str())
-                .collect();
+            let word: String = (0..3).map(|dx| screen.cell(x + dx, y).symbol).collect();
             (word == "Hel").then_some((x, y))
         })
     });
@@ -456,12 +728,15 @@ fn started_run() -> (Setup, Run) {
         &setup.home().join("config.json"),
         &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
     );
-    let mut run = Run::spawn(&setup, 160, 48, &TRUECOLOUR);
-    run.read_until(">");
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    // The end of the first frame proves the input reader runs before
+    // the prompt goes out; the reply stays drawn, so the grid check
+    // before the finished title is order-free.
+    run.ready();
+    let from = run.output().len();
     run.write(b"say hi\r");
-    run.read_until("Hel");
-    run.read_until("completed");
-    run.read_until("finished");
+    run.wait_screen("the reply", |screen| shows(screen, "Hel"));
+    run.turn_finished(from);
     (setup, run)
 }
 
@@ -474,7 +749,7 @@ fn quit(mut run: Run) {
 #[test]
 fn one_session_has_no_header_row_and_a_blank_column_each_side() {
     let (_setup, mut run) = started_run();
-    let screen = run.screen_until(160, 48, "the conversation", |s| {
+    let screen = run.wait_screen("the conversation", |s| {
         settled(s, SettledScreen::Conversation)
     });
     assert!(
@@ -487,8 +762,11 @@ fn one_session_has_no_header_row_and_a_blank_column_each_side() {
 #[test]
 fn hovering_the_panel_edge_tints_its_column_and_brightens_the_grip() {
     let (_setup, mut run) = started_run();
+    // The motion enable proves the terminal takes mouse reports; the
+    // finished turn the starter waited proves the session is idle.
+    run.wait_bytes(0, MOTION, "mouse motion enabled");
     run.write(b"\x1b[<35;127;21M");
-    let screen = run.screen_until(160, 48, "the active panel edge", |s| {
+    let screen = run.wait_screen("the active panel edge", |s| {
         settled(s, SettledScreen::ActivePanelEdge)
     });
     assert!(
@@ -496,7 +774,7 @@ fn hovering_the_panel_edge_tints_its_column_and_brightens_the_grip() {
         "incomplete active panel edge"
     );
     run.write(b"\x1b[<35;61;21M");
-    let screen = run.screen_until(160, 48, "the idle panel edge", |s| {
+    let screen = run.wait_screen("the idle panel edge", |s| {
         settled(s, SettledScreen::IdlePanelEdge)
     });
     assert!(
@@ -509,22 +787,34 @@ fn hovering_the_panel_edge_tints_its_column_and_brightens_the_grip() {
 #[test]
 fn two_sessions_show_the_rail_on_panel_and_hiding_it_leaves_the_grip() {
     let (_setup, mut run) = started_run();
+    // The finished turn the starter waited proves the session is idle
+    // before the home key goes out.
+    let home_from = run.output().len();
     run.write(b"\x0e");
-    let screen = run.screen_until(160, 48, "home", |s| settled(s, SettledScreen::Home));
+    let screen = run.wait_screen("home", |s| settled(s, SettledScreen::Home));
     assert!(
         settled(&screen, SettledScreen::Home),
         "incomplete home screen"
     );
+    // The home title from before the home key proves the home drew
+    // before the next prompt goes out.
+    run.wait_bytes(home_from, HOME_TITLE, "the home title");
+    let from = run.output().len();
     run.write(b"again\r");
-    run.read_until("Hel");
-    run.read_until("finished");
-    let screen = run.screen_until(160, 48, "the rail", |s| settled(s, SettledScreen::Rail));
+    // The reply stays drawn, so the grid check before the finished
+    // title is order-free; the rail holds the reply card.
+    run.wait_screen("the reply", |screen| shows(screen, "Hel"));
+    run.turn_finished(from);
+    let screen = run.wait_screen("the rail", |s| settled(s, SettledScreen::Rail));
     assert!(
         settled(&screen, SettledScreen::Rail),
         "incomplete rail screen"
     );
+    // The finished title from before the second prompt proves the turn
+    // closed before the rail key goes out.
+    run.wait_bytes(from, FINISHED_TITLE, "the finished second turn");
     run.write(b"\x1br");
-    let screen = run.screen_until(160, 48, "the grip", |s| settled(s, SettledScreen::Grip));
+    let screen = run.wait_screen("the grip", |s| settled(s, SettledScreen::Grip));
     assert!(
         settled(&screen, SettledScreen::Grip),
         "incomplete grip screen"

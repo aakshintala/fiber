@@ -115,6 +115,55 @@ fn measure_open_draws_after_every_k_lines_and_once_at_the_end() {
 }
 
 #[test]
+fn measure_open_batch_boundaries_neither_add_nor_drop_frames() {
+    // The jig folds in batches of up to HUB_BATCH lines, as the loop
+    // does; crossing a batch boundary draws no frame of its own. 4095,
+    // 4096 and 4097 straddle the first boundary.
+    for (lines, frames) in [(4095, 1), (4096, 1), (4097, 1)] {
+        let clock = fakes::clock::FakeClock::new();
+        let stages = crate::measure_open(&events(lines), 60, 12, usize::MAX, clock)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(stages.frames, frames, "for {lines} lines ending at once");
+    }
+    for (lines, frames) in [(4095, 1), (4096, 1), (4097, 2)] {
+        let clock = fakes::clock::FakeClock::new();
+        let stages = crate::measure_open(&events(lines), 60, 12, 4096, clock)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(stages.frames, frames, "for {lines} lines every 4096");
+    }
+    // 4095 lines hold 63 full sixties and a partial frame, 4096 hold
+    // 64 full ones, 4097 add the final frame.
+    for (lines, frames) in [(4095, 64), (4096, 64), (4097, 65)] {
+        let clock = fakes::clock::FakeClock::new();
+        let stages = crate::measure_open(&events(lines), 60, 12, 64, clock)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(stages.frames, frames, "for {lines} lines every 64");
+    }
+}
+
+#[test]
+fn measure_open_batches_end_on_frame_boundaries_past_hub_batch() {
+    // Fixed-size batches cross the frame boundary when `frame_every`
+    // exceeds HUB_BATCH without dividing it: 10,000 lines at every
+    // 5,000 land two frames on their boundaries, with the last periodic
+    // frame covering the end. A `frame_every` of 4,097 just past the
+    // loop's batch holds two full frames and the final one; 8,192 lines
+    // at every 8,191 hold the one periodic frame and the final one.
+    // Fixed-size batches of 4,096 draw off-boundary instead: 2, 2 and 1
+    // frames for the three cases below.
+    for (lines, frame_every, frames) in [(10_000, 5_000, 2), (10_000, 4_097, 3), (8_192, 8_191, 2)]
+    {
+        let clock = fakes::clock::FakeClock::new();
+        let stages = crate::measure_open(&events(lines), 60, 12, frame_every, clock)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(
+            stages.frames, frames,
+            "for {lines} lines every {frame_every}"
+        );
+    }
+}
+
+#[test]
 fn measure_open_skips_blank_lines_without_counting_them() {
     let clock = fakes::clock::FakeClock::new();
     let stages = crate::measure_open(
@@ -173,6 +222,19 @@ fn measure_open_times_each_stage_on_a_ticking_clock() {
         crate::measure_open(&events(2), 60, 12, 1, clock).unwrap_or_else(|error| panic!("{error}"));
     assert_ne!(frozen.parse, Duration::from_millis(2));
     assert!(frozen.frame_time.is_zero());
+}
+
+#[test]
+fn measure_open_folds_a_frame_interval_in_one_batch() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    // Five lines with no periodic frame fold in one batch: the fold
+    // holds one batch's two clock reads, one millisecond. Folding one
+    // line at a time would hold one millisecond per line, five.
+    let stages = crate::measure_open(&events(5), 60, 12, usize::MAX, TickClock::clock(origin))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(stages.frames, 1);
+    assert_eq!(stages.parse, Duration::from_millis(5));
+    assert_eq!(stages.fold, Duration::from_millis(1));
 }
 
 #[test]

@@ -110,6 +110,11 @@ bounded retry, such as `doors::hub::connect` retrying the hub's socket on the
 injected clock, runs on the real clock when a binary-level test drives it
 against a real process.
 
+A timeout the kernel keeps for each socket call, such as a connect or read
+timeout, reads no clock in Fiber. It is tested by injecting a short limit
+and waiting for the call's result with a deadline, and one test pins the
+production values. Deadlines Fiber keeps itself stay on the injected clock.
+
 ### Screens
 
 The terminal UI is tested by feeding a sequence of events to its drawing code
@@ -125,21 +130,38 @@ show: raw mode, resize, the terminal restored on exit, and two journeys that
 cross features: from a prompt through an approval, a resize and a quit, and
 from a turn through a quit, a resume and a new answer.
 
-A test that drives a pseudo-terminal feeds the bytes it reads into a
-`vt100` parser, which rebuilds the screen as a grid, and asserts on that
-grid: its text, its rows, the cursor position, and the alternate-screen and
+The binary-level tests in `crates/main/tests` that assert on the terminal
+UI's screen use one driver, `crates/main/tests/support/pty.rs`. It feeds
+the bytes it reads into a `vt100` parser, which rebuilds the screen as a
+grid, and the test asserts on that grid: its text, its rows, each cell's
+colours and attributes, the cursor position, and the alternate-screen and
 hidden-cursor flags. Each wait is a predicate over the grid with one named
-deadline; a wait the terminal ends before failing shows the last grid. The
-harness pins the size to 120 by 32 and `TERM` to `xterm-256color`, and
-answers the binary's capability queries for a fixed dark terminal. Bytes
-that never reach the cells, such as the OSC 9 desktop notification, are
-asserted on the raw output instead.
+deadline; a wait the terminal ends before failing shows the last grid.
+The terminal is 120 by 32 unless a test picks the size its layout needs
+(the look tests use 160 by 48). The driver pins `TERM` to
+`xterm-256color` and answers the binary's capability queries for a fixed
+dark terminal.
 
-A test that drives a pseudo-terminal reads it on a thread from the first frame
-to end of file, and takes the markers it waits for over a channel, as `watch`
-in `crates/tui/src/pty_watch.rs` does. A reader that stops after a
-marker lets the terminal's output queue fill, so the code under test blocks
-writing a frame and the test hangs on a wait it caused itself.
+Bytes that never reach the cells, such as the window title, the OSC 9
+desktop notification, a bell and the mode-enable sequences, are waited
+for on the raw output instead. Such a wait searches from an offset the
+test took before the input that causes the bytes, never from an earlier
+match, so it does not depend on the order in which two markers arrive.
+
+A screen predicate checks every cell property its assertions read, so a
+partial redraw can't satisfy it. A test sends input only after output the
+terminal already emits once it is ready for that input, such as the
+mode-enable sequences or the end of the first frame, never after a grid
+match alone. That signal is existing output: the shipped binary gets no
+test-only switch ("Levels").
+
+The driver reads the terminal on a thread from the first frame to end of
+file, and takes the markers it waits for over a channel, as `watch` in
+`crates/tui/src/pty_watch.rs` does. A reader that stops after a marker
+lets the terminal's output queue fill, so the code under test blocks
+writing a frame and the test hangs on a wait it caused itself. On quit
+the driver reaps the binary, then reads to end of file, so every byte
+written before the exit is read.
 
 ### Invariants
 
