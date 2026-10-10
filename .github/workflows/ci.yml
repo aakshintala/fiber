@@ -226,9 +226,7 @@ jobs:
       - name: Install zsh and fish
         if: runner.os == 'Linux'
         timeout-minutes: 5
-        run: |
-          # shellcheck disable=SC2086 # APT_OPTS is a list of options
-          sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
+        run: scripts/install-shells
       - name: Install fish
         if: runner.os == 'macOS'
         run: brew install fish
@@ -299,9 +297,7 @@ jobs:
       # and fish (crates/main/tests/completion.rs).
       - name: Install zsh and fish
         timeout-minutes: 5
-        run: |
-          # shellcheck disable=SC2086 # APT_OPTS is a list of options
-          sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
+        run: scripts/install-shells
       - name: cargo mutants --in-diff
         run: |
           git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"

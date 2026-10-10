@@ -19,11 +19,9 @@ use std::time::Duration;
 use fakes::{ProviderServer, Request, Response, fingerprint};
 
 /// The deadline on each wait: connecting, writing the whole request, and
-/// reading the whole reply. A stall fails naming the wait. A test makes at
-/// most 3 exchanges of 3 waits (18 s). An `await_requests` test adds one 5 s
-/// wait. Twice 23 s is under nextest's 120 s (`docs/testing.md`, "Waits and
-/// timeouts").
-const DEADLINE: Duration = Duration::from_secs(2);
+/// reading the whole reply. A stall fails naming the wait (`docs/testing.md`,
+/// "Waits and timeouts").
+const DEADLINE: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 fn addr(server: &ProviderServer) -> SocketAddr {
     server.url().trim_start_matches("http://").parse().unwrap()
@@ -298,7 +296,7 @@ fn a_malformed_chunked_body_gets_a_400_naming_why_and_is_recorded() {
 }
 
 /// `await_requests` on a helper, so a mutant that waits out its 30 s `within`
-/// fails this 5 s wait instead of hanging the test.
+/// fails this wait instead of hanging the test.
 fn await_requests_within(server: &Arc<ProviderServer>, count: usize) -> bool {
     let (tx, rx) = mpsc::channel();
     let server = Arc::clone(server);
@@ -307,7 +305,7 @@ fn await_requests_within(server: &Arc<ProviderServer>, count: usize) -> bool {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         },
     );
-    rx.recv_timeout(Duration::from_secs(5))
+    rx.recv_timeout(DEADLINE)
         .expect("waited for await_requests")
 }
 

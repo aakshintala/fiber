@@ -311,6 +311,13 @@ is added to it by the ticket that builds it.
 Tests that need live credentials are opt-in by environment variable and never
 run in CI.
 
+A live test asserts the outcome, the fields under test, and the order of the
+kinds it relies on (the turn's start first, its `text_completed` before its
+`turn_completed`, `turn_completed` last), not the complete ordered list "Event
+streams" requires: a real model's stream varies in its deltas and reasoning
+events. The complete list is pinned by the same scenario against the fake
+provider.
+
 An eval measures the model plus Fiber's prompting as a pass rate over many
 runs. It is a development instrument for prompts and tool definitions. No eval
 gates a merge or a release.
@@ -406,8 +413,13 @@ Every wait has a deadline on the wall clock, also in a test that drives a fake
 clock: fake time passes only when the test advances it. On expiry the test
 fails with an assertion naming what it waited for. Calling code that blocks is a wait too, so the test runs
 it on a thread and receives its result with a deadline. A fake's own sleep or poll
-loop is a wait too, with a deadline on the wall clock. nextest's per-test timeout is at least twice the sum of the
-test's own deadlines, so a hang reports which wait expired, not a harness kill.
+loop is a wait too, with a deadline on the wall clock. A fake that holds until
+the test releases it blocks on a channel whose sender the test owns, and needs
+no deadline of its own: the test sends to release it, and the test ending or
+panicking drops the sender, which releases it too. The test's own deadline on
+the fake's signal names the failure. nextest's per-test timeout is at least twice the test's longest
+single deadline plus its normal run time, so a hang, which fails at the first wait
+that expires, reports that wait, not a harness kill.
 
 A wait that takes several lines has one deadline for the whole wait, never one
 per line, and needs no clock: a scoped thread reads the lines and sends them
