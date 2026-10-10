@@ -114,6 +114,53 @@ fn type_draft(app: &mut App, text: &str) {
 }
 
 #[test]
+fn the_cursor_marks_the_last_fitting_row_and_sheds_below_it() {
+    // A three-line draft at 80 columns: the caret sits on the last
+    // draft row. Drawn below the floor, one row taller it marks the
+    // bottom row; one row shorter the row is past the area and nothing
+    // draws, without panicking (`docs/tui.md`, "The input box").
+    for (height, drawn) in [(6, true), (5, false)] {
+        let mut app = home(80, height);
+        type_draft(&mut app, "a\nb\nc");
+        let area = Rect::new(0, 0, 80, height);
+        let mut buf = Buffer::empty(area);
+        home_only(&app, area, &mut buf);
+        let at: Vec<(u16, u16)> = (0..height)
+            .flat_map(|y| (0..80).map(move |x| (x, y)))
+            .filter(|(x, y)| buf[(*x, *y)].symbol() == "█")
+            .collect();
+        if drawn {
+            assert_eq!(at, vec![(3, 5)], "height {height}");
+        } else {
+            assert!(at.is_empty(), "height {height}: {at:?}");
+        }
+    }
+}
+
+#[test]
+fn draft_rows_clip_at_the_areas_bottom_row() {
+    // Eight draft rows at 80 by 10: the box shows rows 0 to 5, so the
+    // row on the bottom row draws and the rows past it never reach the
+    // buffer, without panicking (`docs/tui.md`, "The input box").
+    let mut app = home(80, 10);
+    type_draft(&mut app, "a\nb\nc\nd\ne\nf\ng\nh");
+    let area = Rect::new(0, 0, 80, 10);
+    let mut buf = Buffer::empty(area);
+    home_only(&app, area, &mut buf);
+    let text: String = (0..10)
+        .map(|y| {
+            (0..80)
+                .map(|x| buf[(x, y)].symbol().to_owned())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("  f"), "{text}");
+    assert!(!text.contains("  g"), "{text}");
+    assert!(!text.contains("  h"), "{text}");
+}
+
+#[test]
 fn home_first_frame_80x24() {
     insta::assert_snapshot!("home_first_frame_80x24", screen(&home(80, 24), 80, 24));
 }

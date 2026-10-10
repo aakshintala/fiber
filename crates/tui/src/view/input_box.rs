@@ -74,9 +74,8 @@ pub(super) fn draw(
         let (x, y) = caret_cell(area, below, &rows, cursor_row, cursor_col);
         // The cursor is a drawn dim `█` (`docs/tui.md`, "The input box").
         // The terminal's own cursor stays where `super::cursor` puts it.
-        if y >= area.y {
-            buf.set_stringn(x, y, "█", 1, style(Role::Muted));
-        }
+        // The row always sits inside the area: the caret's row shows.
+        buf.set_stringn(x, y, "█", 1, style(Role::Muted));
     }
     token_targets(app, area, below, (top, rows.len()), targets);
     if let Some(completions) = app.completions() {
@@ -193,13 +192,14 @@ fn draw_editing_hint(
     let caret = caret_cell(area, below, rows, cursor_row, cursor_col);
     // The hint is a fixed literal of one-cell characters, drawn
     // right-aligned only over free cells: past the draft's text, never
-    // over the caret, inside the area (`docs/tui.md`, "Steering").
+    // over the caret (`docs/tui.md`, "Steering"). Cells past the box
+    // clip in the buffer write.
     let mut x = area
         .right()
         .saturating_sub(to_u16(format::width(EDITING_HINT)));
     for ch in EDITING_HINT.chars() {
         let wide = to_u16(format::width(&ch.to_string()));
-        if x >= end && (x, y) != caret && x < area.right() {
+        if x >= end && (x, y) != caret {
             buf.set_stringn(x, y, ch.to_string(), usize::from(wide), style(Role::Muted));
         }
         x = x.saturating_add(wide.max(1));

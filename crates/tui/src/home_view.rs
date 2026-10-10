@@ -285,7 +285,9 @@ pub(super) fn render(
         let x = placed
             .x
             .saturating_add(col.min(placed.width.saturating_sub(1)));
-        if y >= area.y && y < area.bottom() {
+        // The draft sits below the area's top row by construction, so
+        // only the bottom needs the guard.
+        if y < area.bottom() {
             buf.set_stringn(x, y, "█", 1, style(Role::Muted));
         }
     }

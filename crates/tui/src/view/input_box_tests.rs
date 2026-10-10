@@ -8,7 +8,7 @@ use ratatui::layout::Rect;
 
 use super::draw;
 use crate::app::App;
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::theme::Role;
 use contract::clock::Clock;
 
@@ -142,6 +142,180 @@ fn the_cursor_hides_with_search_open() {
     // (`docs/tui.md`, "The input box").
     for cell in buf.content.iter() {
         assert_ne!(cell.symbol(), "█");
+    }
+}
+
+/// One session envelope for the box's keyboard tests.
+fn session_line(session: &str, kind: &str, payload: serde_json::Value) -> crate::link::Line {
+    crate::link::Line::Session(contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+/// The box draws no cursor while each state below holds the keyboard:
+/// every other gate stays true, so flipping any `&&` in the cursor
+/// test to `||` would show it (`docs/tui.md`, "The input box",
+/// "Keys").
+#[test]
+fn the_cursor_hides_where_the_box_loses_the_keyboard() {
+    // Below the floor the box never draws through the screen: drawn
+    // directly, no cursor shows.
+    let mut floored = App::new(PathBuf::from("/w"));
+    floored.set_home(crate::home::Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        ..Default::default()
+    });
+    floored.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    floored.set_size(30, 8);
+    assert!(floored.chrome().floor_line().is_some());
+    let area = Rect::new(0, 0, 30, 8);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = 8;
+    draw(&floored, area, &mut bottom, &mut buf, &mut Vec::new());
+    assert!(buf.content.iter().all(|cell| cell.symbol() != "█"));
+    // An open approval panel takes the keys: drawn directly, the box
+    // keeps its draft but shows no cursor.
+    let mut panel = typed(60, 12, "hi");
+    panel.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"],
+            "reversible": true, "step": "review"}),
+    ));
+    assert!(panel.panel().is_some());
+    assert!(panel.focused().is_none());
+    let area = Rect::new(0, 0, 60, 12);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = 12;
+    draw(&panel, area, &mut bottom, &mut buf, &mut Vec::new());
+    assert!(buf.content.iter().all(|cell| cell.symbol() != "█"));
+    // The model picker, the key map screen, the usage view, the
+    // repository offer and a focused stop each take the keyboard.
+    let mut picker = typed(60, 12, "hi");
+    picker.on_key(Key::CtrlL, fakes::clock::FakeClock::new().now());
+    assert!(picker.model_picker_open());
+    assert!(picker.focused().is_none());
+    assert!(!super::cursor_shown(&picker));
+    let mut keys = typed(60, 12, "hi");
+    keys.open_keys();
+    assert!(keys.keys_screen_open());
+    assert!(keys.focused().is_none());
+    assert!(!super::cursor_shown(&keys));
+    let mut usage = App::new(PathBuf::from("/w"));
+    usage.set_size(60, 12);
+    usage.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    usage.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "turn_started",
+        serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    ));
+    usage.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "usage_recorded",
+        serde_json::json!({"generation_id": "g_1", "model": "a/b",
+            "tokens": {"input": 12, "cache_read": 3,
+                "cache_write": {"5m": 4}, "output": 5},
+            "input_bytes": 0, "cost": 0.25}),
+    ));
+    usage.on_edit(Edit::Paste("/usage".to_owned()));
+    usage.on_key(Key::Enter, fakes::clock::FakeClock::new().now());
+    assert!(usage.session_view_open());
+    assert!(usage.focused().is_none());
+    assert!(!super::cursor_shown(&usage));
+    let mut offer = typed(60, 12, "hi");
+    offer.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "repository_code_offered",
+        serde_json::json!({"request_id": "r_1", "items": [
+            {"kind": "mcp_server", "name": "a", "hash": "h",
+                "required": false, "summary": "MCP server: a"}]}),
+    ));
+    assert!(offer.offer_open());
+    assert!(offer.focused().is_none());
+    assert!(!super::cursor_shown(&offer));
+    // A focused stop takes the keyboard with everything else open.
+    let mut focused = typed(60, 12, "hi");
+    focused.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "turn_started",
+        serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    ));
+    focused.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "text_completed",
+        serde_json::json!({"text": "reply"}),
+    ));
+    focused.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "turn_completed",
+        serde_json::json!({"outcome": "completed"}),
+    ));
+    focused.on_key(Key::BackTab, fakes::clock::FakeClock::new().now());
+    assert!(focused.focused().is_some());
+    assert!(!super::cursor_shown(&focused));
+}
+
+#[test]
+fn only_the_first_draft_row_takes_the_prompt_style() {
+    // Exactly one operand of the prompt test is false in each case:
+    // past the first draft row in a scrolled box, and past the first
+    // shown row in a box at the top (`docs/tui.md`, "The input box").
+    fn typed_lines(width: u16, height: u16, lines: &[&str]) -> App {
+        let mut app = App::new(PathBuf::from("/w"));
+        app.set_size(width, height);
+        app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+        let now = fakes::clock::FakeClock::new().now();
+        for (at, line) in lines.iter().enumerate() {
+            if at > 0 {
+                app.on_edit(Edit::ShiftEnter);
+            }
+            for ch in line.chars() {
+                app.on_key(Key::Char(ch), now);
+            }
+        }
+        app
+    }
+    // Six rows in a four-row box: the first shown row is the third
+    // draft row, past the prompt, and keeps the default foreground.
+    let app = typed_lines(60, 12, &["l1", "l2", "l3", "l4", "l5", "l6"]);
+    let area = Rect::new(0, 0, 60, 12);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    for x in [2, 3] {
+        assert_eq!(buf[(x, 7)].symbol(), " ", "cell {x}");
+        assert_eq!(buf[(x, 7)].fg, ratatui::style::Color::Reset, "cell {x}");
+    }
+    // Two rows at the top: the second shown row is past the prompt.
+    let app = typed_lines(60, 12, &["hi", "there"]);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    for x in [2, 3] {
+        assert_eq!(buf[(x, 10)].symbol(), " ", "cell {x}");
+        assert_eq!(buf[(x, 10)].fg, ratatui::style::Color::Reset, "cell {x}");
+    }
+}
+
+#[test]
+fn edges_at_the_areas_top_row_draw() {
+    // Squeezed to one row of room, each edge takes the top row: the
+    // row guards keep rows at the area's top.
+    let app = typed(60, 12, "hi");
+    let area = Rect::new(0, 0, 60, 12);
+    for (bottom, edge) in [(1, "▀"), (3, "▄")] {
+        let mut buf = Buffer::empty(area);
+        let mut bottom = bottom;
+        draw(&app, area, &mut bottom, &mut buf, &mut Vec::new());
+        assert_eq!(buf[(0, 0)].symbol(), edge, "bottom {bottom}");
     }
 }
 

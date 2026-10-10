@@ -21,6 +21,9 @@ const INDENT: &str = "  ";
 /// A droppable row's `✕` with its two-space gap (`docs/tui.md`,
 /// "Steering").
 const CROSS: &str = "  ✕";
+/// The indent, the mark and its gap in cells: the row's text starts
+/// past them (`docs/tui.md`, "Steering").
+const PREFIX_CELLS: usize = 4;
 
 /// Draws the steering queue on the rows above `bottom`: the heading, one
 /// row each with the row's `✕` after its text, and the footer, all dim
@@ -53,10 +56,9 @@ pub(super) fn draw(
         };
         *bottom = y;
         // The `✕` draws only while it and the row fit, so the drop
-        // target never covers text: the indent, the mark with its gap,
-        // the text, and the `✕` with its gap.
+        // target never covers text.
         let crossed = row.droppable
-            && format::width(INDENT) + 2 + format::width(&row.text) + format::width(CROSS)
+            && PREFIX_CELLS + format::width(&row.text) + format::width(CROSS)
                 <= usize::from(area.width);
         let end = paint_row(buf, area, y, &row.text, row.selected, crossed);
         targets.push(Target {

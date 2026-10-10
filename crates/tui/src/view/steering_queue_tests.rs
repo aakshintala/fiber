@@ -169,6 +169,29 @@ fn the_queue_has_no_stripe() {
 }
 
 #[test]
+fn a_cross_at_the_exact_fit_draws_and_a_column_less_clips() {
+    // "use the parser" is 14 cells: at 21 columns the row with its
+    // `✕` fits exactly, and at 20 the text clips one cell short while
+    // the `✕` still draws. A wider prefix reserve would drop the `✕`
+    // in both (`docs/tui.md`, "Steering").
+    for (width, text) in [(21, "use the parser"), (20, "use the parse")] {
+        let app = queued(width, 12);
+        let area = Rect::new(0, 0, width, 12);
+        let mut buf = Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buf, None);
+        let cross = targets
+            .iter()
+            .find(|target| matches!(target.id, TargetId::DropSteering(_)))
+            .expect("a drop target");
+        assert_eq!((cross.rect.x, cross.rect.width), (width - 1, 1));
+        let row: String = (0..width)
+            .map(|x| buf[(x, cross.rect.y)].symbol().to_owned())
+            .collect();
+        assert!(row.trim_end().ends_with(&format!("{text}  ✕")), "{row:?}");
+    }
+}
+
+#[test]
 fn a_row_shows_its_cross_after_its_text() {
     for width in [30, 80] {
         let app = queued(width, 12);
@@ -268,6 +291,21 @@ fn a_wide_glyph_is_never_split() {
         let mut buf = Buffer::empty(area);
         crate::view::render(&app, area, &mut buf, None);
     }
+}
+
+#[test]
+fn rows_draw_at_the_areas_top_row() {
+    // With one row of room the footer takes it: the row guard keeps
+    // the row at the area's top, and rows above it shed.
+    let app = queued(60, 12);
+    let area = Rect::new(0, 0, 60, 12);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = 1;
+    let mut targets = Vec::new();
+    super::draw(&app, area, &mut bottom, &mut buf, &mut targets);
+    let row: String = (0..60).map(|x| buf[(x, 0)].symbol().to_owned()).collect();
+    assert!(row.contains("click a row to edit"), "{row:?}");
+    assert_eq!(bottom, 0);
 }
 
 #[test]
@@ -468,4 +506,78 @@ fn the_hint_never_covers_the_draft_or_the_caret() {
     // out of the hint.
     assert_eq!(cursor_row, shown.len() - 1);
     assert_eq!(buf[(text_x + cursor_col, y)].symbol(), "█");
+}
+
+#[test]
+fn the_hint_starts_at_the_drafts_end() {
+    use crate::keys::Edit;
+
+    // Three steps left: the caret sits three cells back while the
+    // draft's end stays put, so the cell exactly at the end takes the
+    // hint while the caret keeps the cursor.
+    let mut app = queued(60, 12);
+    app.select_steering(0);
+    for _ in 0..3 {
+        app.on_edit(Edit::Left);
+    }
+    let buf = buffer(&app, 60, 12);
+    let y = (0..12)
+        .find(|y| {
+            (0..60)
+                .map(|x| buf[(x, *y)].symbol().to_owned())
+                .collect::<String>()
+                .contains("esc sto")
+        })
+        .expect("the hint row");
+    assert_eq!(buf[(15, y)].symbol(), "█");
+    // The cell exactly at the draft's end takes the hint; one past it
+    // takes the next character.
+    for (x, ch) in [(18, "e"), (19, "s")] {
+        assert_eq!(buf[(x, y)].symbol(), ch);
+        assert_eq!(
+            buf[(x, y)].style().fg,
+            Role::Muted.color().into(),
+            "the cell at the draft's end"
+        );
+    }
+}
+
+#[test]
+fn the_hint_clips_at_a_narrow_right_edge() {
+    use crate::keys::Key;
+    use contract::clock::Clock;
+
+    // Twenty columns with the first row selected and shortened to
+    // "use": the hint's cells past the draft draw to the last column,
+    // and the cells at and past the edge never draw, without panicking.
+    let mut app = queued(20, 12);
+    app.select_steering(0);
+    assert!(app.steering_selected().is_some());
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..11 {
+        app.on_key(Key::Backspace, now);
+    }
+    assert_eq!(app.input().expand(), "use");
+    let buf = buffer(&app, 20, 12);
+    let y = (0..12)
+        .find(|y| {
+            (0..20)
+                .map(|x| buf[(x, *y)].symbol().to_owned())
+                .collect::<String>()
+                .contains("a queued mes")
+        })
+        .expect("the hint row");
+    // The draft's last character and the caret keep their cells: the
+    // hint starts past both, at the edge of the text.
+    assert_eq!(buf[(6, y)].symbol(), "e");
+    assert_eq!(buf[(7, y)].symbol(), "█");
+    for (i, ch) in "a queued mes".chars().enumerate() {
+        let x = 8 + u16::try_from(i).unwrap_or(u16::MAX);
+        assert_eq!(buf[(x, y)].symbol(), ch.to_string().as_str(), "cell {x}");
+        assert_eq!(
+            buf[(x, y)].style().fg,
+            Role::Muted.color().into(),
+            "cell {x}"
+        );
+    }
 }
