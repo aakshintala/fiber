@@ -185,7 +185,7 @@ fn one_turn(env: &[(&str, &str)]) -> (Screen, Vec<u8>) {
         &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, env);
-    run.read_until(">");
+    run.read_until("›");
     run.write(b"say hi\r");
     run.read_until("Hel");
     run.read_until("completed");
@@ -209,7 +209,7 @@ fn one_turn(env: &[(&str, &str)]) -> (Screen, Vec<u8>) {
 fn input_row(screen: &Screen) -> (u16, u16) {
     for y in (0..48).rev() {
         for x in 2..160 {
-            if screen.cell(x, y).symbol.as_str() != ">" {
+            if screen.cell(x, y).symbol.as_str() != "›" {
                 continue;
             }
             if screen.cell(x - 1, y).symbol.as_str() != " " {
@@ -469,7 +469,7 @@ fn started_run() -> (Setup, Run) {
         &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, &TRUECOLOUR);
-    run.read_until(">");
+    run.read_until("›");
     run.write(b"say hi\r");
     run.read_until("Hel");
     run.read_until("completed");
@@ -559,5 +559,5 @@ fn inside_tmux_no_stripe_draws_and_its_cell_keeps_the_tint() {
     let stripe = screen.cell(BOX_LEFT, INPUT_ROW);
     assert_eq!(stripe.symbol.as_str(), " ");
     assert_eq!(stripe.bg, SURFACE_RGB);
-    assert_eq!(screen.cell(BOX_LEFT + 2, INPUT_ROW).symbol.as_str(), ">");
+    assert_eq!(screen.cell(BOX_LEFT + 2, INPUT_ROW).symbol.as_str(), "›");
 }
