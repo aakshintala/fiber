@@ -64,6 +64,12 @@ before the session existed or inside it. Stdout is unchanged. A CI log, or a
 person who ran it by hand, sees why it failed without parsing the event
 stream.
 
+A subcommand other than `ask`, such as `fiber extension`, `fiber login` or
+`fiber approve`, reports a failure as one sentence on stderr, `fiber: ` and the
+message, and exits with its code's status ("Before a session exists"). It
+prints no `fiber_exited` line and no code: the code belongs to the crate's
+error, and that crate's tests check it.
+
 ### Before a session exists
 
 A failure before `fiber_started` has no session and no log. `fiber ask`
