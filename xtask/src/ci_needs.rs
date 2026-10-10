@@ -9,7 +9,12 @@ pub(crate) const WORKFLOW: &str = ".github/workflows/ci.yml";
 /// The doc that names the report jobs, relative to the working directory.
 pub(crate) const CI_DOC: &str = "docs/ci.md";
 /// Jobs that report and gate nothing; named in docs/ci.md, "The merge gate".
-pub(crate) const REPORT_JOBS: [&str; 3] = ["backstop_report", "bench_comment", "cache_prune"];
+pub(crate) const REPORT_JOBS: [&str; 4] = [
+    "backstop_report",
+    "bench_comment",
+    "cache_prune",
+    "flake_report",
+];
 
 /// The sentence that declares the report jobs in `docs/ci.md`.
 const PREFIX: &str = "except the jobs that report and gate nothing:";
