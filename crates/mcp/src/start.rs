@@ -182,17 +182,15 @@ pub fn start(
             Opened::Up(slot, declared, listed) => {
                 slots.push(Arc::clone(&slot));
                 sources.extend(listed);
-                tools.extend(declared.into_iter().map(|tool| {
-                    let info = info(&tool);
-                    let registered_by = tool.registered_by.clone();
-                    let tool: Arc<dyn Tool> = Arc::new(tool.tool);
-                    (registered_by, tool, info)
-                }));
+                tools.extend(declared);
             }
-            Opened::Down(failure) => failed.push(failure),
-            Opened::RequiredDown(failure) => {
-                if required_failed.is_none() {
-                    required_failed = Some(failure);
+            Opened::Down { failure, required } => {
+                if required {
+                    if required_failed.is_none() {
+                        required_failed = Some(failure);
+                    }
+                } else {
+                    failed.push(failure);
                 }
             }
         }
@@ -217,12 +215,7 @@ pub fn start(
             &link,
             spec.call_timeout,
         ));
-        tools.extend(declare(&spec, &cached.tools, &link).into_iter().map(|tool| {
-            let info = info(&tool);
-            let registered_by = tool.registered_by.clone();
-            let tool: Arc<dyn Tool> = Arc::new(tool.tool);
-            (registered_by, tool, info)
-        }));
+        tools.extend(declare(&spec, &cached.tools, &link));
     }
     tools.sort_by(|left, right| left.1.definition().name.cmp(&right.1.definition().name));
     let (pairs, infos): (Vec<_>, Vec<_>) = tools
@@ -239,15 +232,11 @@ pub fn start(
     }
 }
 
-pub(crate) struct Declared {
-    tool: McpTool,
-    registered_by: String,
-}
+pub(crate) type Declaration = (String, Arc<dyn Tool>, ToolInfo);
 
 pub(crate) enum Opened {
-    Up(Arc<Slot>, Vec<Declared>, Vec<PromptSource>),
-    Down(McpServerFailed),
-    RequiredDown(McpServerFailed),
+    Up(Arc<Slot>, Vec<Declaration>, Vec<PromptSource>),
+    Down { failure: McpServerFailed, required: bool },
 }
 
 pub(crate) fn open(
@@ -272,9 +261,15 @@ pub(crate) fn open(
         Ok(open) => open,
         Err(error) => {
             return if required {
-                Opened::RequiredDown(not_started(&name, &error, timeout, true))
+                Opened::Down {
+                    failure: not_started(&name, &error, timeout, true),
+                    required: true,
+                }
             } else {
-                Opened::Down(not_started(&name, &error, timeout, false))
+                Opened::Down {
+                    failure: not_started(&name, &error, timeout, false),
+                    required: false,
+                }
             };
         }
     };
@@ -331,15 +326,15 @@ pub(crate) fn kept(spec: &ServerSpec, tool: &str) -> bool {
     !spec.disabled.iter().any(|name| name == tool)
 }
 
-pub(crate) fn info(declared: &Declared) -> ToolInfo {
-    let definition = declared.tool.definition();
+pub(crate) fn info(server: &str, tool: &McpTool) -> ToolInfo {
+    let definition = tool.definition();
     let bytes = u64::try_from(serde_json::to_vec(&definition).unwrap_or_default().len())
         .unwrap_or(u64::MAX);
     ToolInfo {
         name: definition.name,
         source: ToolSource::Mcp {
-            server: declared.registered_by.clone(),
-            tool: declared.tool.tool_name().to_owned(),
+            server: server.to_owned(),
+            tool: tool.tool_name().to_owned(),
         },
         state: ToolState::Full,
         bytes,
@@ -350,26 +345,30 @@ pub(crate) fn info(declared: &Declared) -> ToolInfo {
 /// Declares `tools` (a live list or a cached one) through the tool seam:
 /// `enabled`/`disabled` filtering and the person's hint overrides apply to
 /// either, so changing those keys needs no cache miss.
-pub(crate) fn declare(spec: &ServerSpec, tools: &[ListedTool], link: &Weak<Slot>) -> Vec<Declared> {
+pub(crate) fn declare(
+    spec: &ServerSpec,
+    tools: &[ListedTool],
+    link: &Weak<Slot>,
+) -> Vec<Declaration> {
     let mut declared = Vec::new();
     for tool in tools {
         if !kept(spec, &tool.name) {
             continue;
         }
         let hints = spec.hints.get(&tool.name).cloned().unwrap_or_else(|| tool.hints());
-        let hints = &hints;
-        declared.push(Declared {
-            registered_by: spec.name.clone(),
-            tool: McpTool::declare(
-                &spec.name,
-                &tool.name,
-                tool.description.clone(),
-                tool.schema.clone(),
-                hints,
-                spec.call_timeout,
-                link.clone(),
-            ),
-        });
+        let made = McpTool::declare(
+            &spec.name,
+            &tool.name,
+            tool.description.clone(),
+            tool.schema.clone(),
+            &hints,
+            spec.call_timeout,
+            link.clone(),
+        );
+        let registered = spec.name.clone();
+        let details = info(&spec.name, &made);
+        let made: Arc<dyn Tool> = Arc::new(made);
+        declared.push((registered, made, details));
     }
     declared
 }
