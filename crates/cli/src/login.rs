@@ -557,6 +557,7 @@ pub(crate) fn login(
 /// own data declares, described without its secret.
 fn declared_source(config: &Config, provider: &ProviderData) -> Option<String> {
     let source = config
+        .credentials()
         .credential_sources(&provider.name)
         .into_iter()
         .next()

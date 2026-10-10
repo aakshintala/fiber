@@ -243,7 +243,8 @@ impl LuaProvider {
     pub fn has_credential(&self, config: &Config, data: &ProviderData) -> bool {
         self.registers("credential").unwrap_or(false)
             || config
-                .credential(data, &config.credential_label(data))
+                .credentials()
+                .credential(data, &config.credentials().credential_label(data))
                 .is_ok()
     }
 

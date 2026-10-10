@@ -10,8 +10,7 @@ use std::thread;
 
 use common::{PROJECT, Setup, key};
 use config::{
-    Layer, Scope, get_global, remove_extension_settings, replace_global, set,
-    set_global_if_unset,
+    Layer, Scope, get_global, remove_extension_settings, replace_global, set, set_global_if_unset,
 };
 use contract::ErrorCode;
 use serde_json::json;
@@ -21,8 +20,24 @@ const ACME: &str = "github.com/acme/fiber-acme";
 #[test]
 fn a_write_creates_the_global_file_sorted_with_a_two_space_indent() {
     let setup = Setup::new();
-    set(&setup.home(), &setup.workspace(), &key(), Layer::Global, "model", json!("openai/gpt-5.6")).unwrap();
-    set(&setup.home(), &setup.workspace(), &key(), Layer::Global, "handoff.tokens", json!(200000)).unwrap();
+    set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Global,
+        "model",
+        json!("openai/gpt-5.6"),
+    )
+    .unwrap();
+    set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Global,
+        "handoff.tokens",
+        json!(200000),
+    )
+    .unwrap();
     assert_eq!(
         fs::read_to_string(setup.global()).unwrap(),
         "{\n  \"handoff\": {\n    \"tokens\": 200000\n  },\n  \"model\": \"openai/gpt-5.6\"\n}\n"
@@ -36,7 +51,15 @@ fn a_write_keeps_every_key_it_does_not_touch() {
         &setup.global(),
         r#"{"zeta": [3, 1], "handoff": {"nudge": false}, "alpha": {"keep": "me"}}"#,
     );
-    set(&setup.home(), &setup.workspace(), &key(), Layer::Global, "handoff.tokens", json!(5)).unwrap();
+    set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Global,
+        "handoff.tokens",
+        json!(5),
+    )
+    .unwrap();
     assert_eq!(
         fs::read_to_string(setup.global()).unwrap(),
         concat!(
@@ -75,7 +98,15 @@ fn a_written_value_is_what_the_next_read_sees() {
 fn a_write_of_the_wrong_type_is_refused_and_changes_nothing() {
     let setup = Setup::new();
     setup.write(&setup.global(), r#"{"model": "a/b"}"#);
-    let e = set(&setup.home(), &setup.workspace(), &key(), Layer::Global, "handoff.tokens", json!("many")).unwrap_err();
+    let e = set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Global,
+        "handoff.tokens",
+        json!("many"),
+    )
+    .unwrap_err();
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);
     assert_eq!(
         e.to_string(),
@@ -94,7 +125,15 @@ fn a_write_of_the_wrong_type_is_refused_and_changes_nothing() {
 fn a_write_to_a_file_that_is_not_json_is_refused_and_leaves_it() {
     let setup = Setup::new();
     setup.write(&setup.global(), "{\"model\": \"a/b\",}");
-    let e = set(&setup.home(), &setup.workspace(), &key(), Layer::Global, "model", json!("c/d")).unwrap_err();
+    let e = set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Global,
+        "model",
+        json!("c/d"),
+    )
+    .unwrap_err();
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);
     assert_eq!(
         fs::read_to_string(setup.global()).unwrap(),
@@ -106,15 +145,23 @@ fn a_write_to_a_file_that_is_not_json_is_refused_and_leaves_it() {
 fn a_write_to_a_key_that_is_not_dotted_is_a_usage_error() {
     let setup = Setup::new();
     assert_eq!(
-        set(&setup.home(), &setup.workspace(), &key(), Layer::Global, "a..b", json!(1))
-            .unwrap_err()
-            .code(),
+        set(
+            &setup.home(),
+            &setup.workspace(),
+            &key(),
+            Layer::Global,
+            "a..b",
+            json!(1)
+        )
+        .unwrap_err()
+        .code(),
         ErrorCode::Usage
     );
     let mut config = setup.load(&[]).unwrap();
     assert_eq!(
         config
-            .set_extension_setting(ACME, Scope::Machine, "", json!(1))
+            .extensions_mut()
+            .set(ACME, Scope::Machine, "", json!(1))
             .unwrap_err()
             .code(),
         ErrorCode::Usage
@@ -127,10 +174,12 @@ fn an_extension_setting_is_written_to_the_scope_it_names() {
     let setup = Setup::new();
     let mut config = setup.load(&[]).unwrap();
     config
-        .set_extension_setting(ACME, Scope::Machine, "region", json!("eu"))
+        .extensions_mut()
+        .set(ACME, Scope::Machine, "region", json!("eu"))
         .unwrap();
     config
-        .set_extension_setting(ACME, Scope::Project, "model", json!("m"))
+        .extensions_mut()
+        .set(ACME, Scope::Project, "model", json!("m"))
         .unwrap();
     assert_eq!(
         fs::read_to_string(setup.home().join("config/github.com-acme-fiber-acme.json")).unwrap(),
@@ -148,9 +197,9 @@ fn an_extension_setting_is_written_to_the_scope_it_names() {
         "{\n  \"model\": \"m\"\n}\n"
     );
     let expected = json!({"model": "m", "region": "eu"});
-    assert_eq!(config.extension_settings(ACME, &[]).unwrap().0, expected);
+    assert_eq!(config.extensions().merged(ACME, &[]).unwrap().0, expected);
     let reloaded = setup.load(&[]).unwrap();
-    assert_eq!(reloaded.extension_settings(ACME, &[]).unwrap().0, expected);
+    assert_eq!(reloaded.extensions().merged(ACME, &[]).unwrap().0, expected);
     assert!(
         !setup.global().exists(),
         "an extension never rewrites config.json"
@@ -163,12 +212,13 @@ fn another_session_sees_a_setting_only_at_its_next_reload() {
     let mut writer = setup.load(&[]).unwrap();
     let other = setup.load(&[]).unwrap();
     writer
-        .set_extension_setting(ACME, Scope::Machine, "region", json!("eu"))
+        .extensions_mut()
+        .set(ACME, Scope::Machine, "region", json!("eu"))
         .unwrap();
-    assert_eq!(other.extension_settings(ACME, &[]).unwrap().0, json!({}));
+    assert_eq!(other.extensions().merged(ACME, &[]).unwrap().0, json!({}));
     let reloaded = setup.load(&[]).unwrap();
     assert_eq!(
-        reloaded.extension_settings(ACME, &[]).unwrap().0,
+        reloaded.extensions().merged(ACME, &[]).unwrap().0,
         json!({"region": "eu"})
     );
 }
@@ -181,7 +231,7 @@ fn a_setting_written_on_disk_after_loading_is_not_seen_until_reload() {
         &setup.home().join("config/github.com-acme-fiber-acme.json"),
         r#"{"a": 1}"#,
     );
-    assert_eq!(config.extension_settings(ACME, &[]).unwrap().0, json!({}));
+    assert_eq!(config.extensions().merged(ACME, &[]).unwrap().0, json!({}));
 }
 
 #[test]
@@ -193,10 +243,11 @@ fn a_write_keeps_the_extension_s_other_settings_in_the_session() {
     );
     let mut config = setup.load(&[]).unwrap();
     config
-        .set_extension_setting(ACME, Scope::Machine, "b", json!(2))
+        .extensions_mut()
+        .set(ACME, Scope::Machine, "b", json!(2))
         .unwrap();
     assert_eq!(
-        config.extension_settings(ACME, &[]).unwrap().0,
+        config.extensions().merged(ACME, &[]).unwrap().0,
         json!({"a": 1, "b": 2})
     );
 }
@@ -262,11 +313,27 @@ fn a_write_of_an_object_key_checks_the_object_and_what_it_holds() {
             json!({"credentials": {"work": {"command": []}}}),
         ),
     ] {
-        let e = set(&setup.home(), &setup.workspace(), &common::key(), Layer::Global, key, value).unwrap_err();
+        let e = set(
+            &setup.home(),
+            &setup.workspace(),
+            &common::key(),
+            Layer::Global,
+            key,
+            value,
+        )
+        .unwrap_err();
         assert_eq!(e.code(), ErrorCode::ConfigInvalid, "{key}");
         assert!(!setup.global().exists(), "{key}");
     }
-    set(&setup.home(), &setup.workspace(), &key(), Layer::Global, "handoff", json!({"tokens": 5})).unwrap();
+    set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Global,
+        "handoff",
+        json!({"tokens": 5}),
+    )
+    .unwrap();
     assert_eq!(
         setup
             .load(&[])
@@ -283,19 +350,22 @@ fn a_session_s_own_write_does_not_bring_in_another_session_s() {
     let setup = Setup::new();
     let mut a = setup.load(&[]).unwrap();
     let mut b = setup.load(&[]).unwrap();
-    b.set_extension_setting(ACME, Scope::Machine, "region", json!("eu"))
+    b.extensions_mut()
+        .set(ACME, Scope::Machine, "region", json!("eu"))
         .unwrap();
-    a.set_extension_setting(ACME, Scope::Machine, "model", json!("m"))
+    a.extensions_mut()
+        .set(ACME, Scope::Machine, "model", json!("m"))
         .unwrap();
     assert_eq!(
-        a.extension_settings(ACME, &[]).unwrap().0,
+        a.extensions().merged(ACME, &[]).unwrap().0,
         json!({"model": "m"})
     );
     assert_eq!(
         setup
             .load(&[])
             .unwrap()
-            .extension_settings(ACME, &[])
+            .extensions()
+            .merged(ACME, &[])
             .unwrap()
             .0,
         json!({"model": "m", "region": "eu"})
@@ -310,16 +380,18 @@ fn a_write_over_settings_this_session_read_as_invalid_fails_before_touching_disk
     let mut config = setup.load(&[]).unwrap();
     setup.write(&file, r#"{"a": 1}"#);
     let e = config
-        .set_extension_setting(ACME, Scope::Machine, "b", json!(2))
+        .extensions_mut()
+        .set(ACME, Scope::Machine, "b", json!(2))
         .unwrap_err();
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);
     assert_eq!(fs::read_to_string(&file).unwrap(), r#"{"a": 1}"#);
     let mut reloaded = setup.load(&[]).unwrap();
     reloaded
-        .set_extension_setting(ACME, Scope::Machine, "b", json!(2))
+        .extensions_mut()
+        .set(ACME, Scope::Machine, "b", json!(2))
         .unwrap();
     assert_eq!(
-        reloaded.extension_settings(ACME, &[]).unwrap().0,
+        reloaded.extensions().merged(ACME, &[]).unwrap().0,
         json!({"a": 1, "b": 2})
     );
 }

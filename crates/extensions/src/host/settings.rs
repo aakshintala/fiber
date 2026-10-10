@@ -53,7 +53,8 @@ pub(crate) fn install(
             match session
                 .config
                 .borrow()
-                .extension_setting(&session.extension, &repo, &key)
+                .extensions()
+                .get(&session.extension, &repo, &key)
             {
                 Ok(Some(value)) => Ok(mlua::MultiValue::from_vec(vec![to_lua(lua, &value)?])),
                 Ok(None) => Ok(mlua::MultiValue::from_vec(vec![LuaValue::Nil])),
@@ -112,7 +113,7 @@ pub(crate) fn install(
                         );
                     }
                 };
-                match session.config.borrow_mut().set_extension_setting(
+                match session.config.borrow_mut().extensions_mut().set(
                     &session.extension,
                     scope,
                     &key,

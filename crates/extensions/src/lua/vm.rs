@@ -116,7 +116,7 @@ impl Vm {
         let failure_state = failures.state.clone();
         let workspace = session
             .as_ref()
-            .map(|session| session.config.workspace().to_path_buf())
+            .map(|session| session.config.extensions().workspace().to_path_buf())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         let entry = Rc::new(Cell::new(true));
         let tools =

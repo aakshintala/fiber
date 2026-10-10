@@ -2019,7 +2019,12 @@ fn the_current_label_needs_no_source() {
         .into_iter()
         .collect();
     let switching = assembled(&fixture.home, config(&fixture, &[]), credentials, &[]);
-    assert!(config(&fixture, &[]).labels(&fake_data()).is_empty());
+    assert!(
+        config(&fixture, &[])
+            .credentials()
+            .labels(&fake_data())
+            .is_empty()
+    );
     let made = prepared_with(&switching, &args("fake/n"), Some("recorded"), None);
     assert_eq!(made.credential, Some("recorded".to_owned()));
     let rejection = rejected_with(&switching, &args("fake/n"), Some("nope"), None);

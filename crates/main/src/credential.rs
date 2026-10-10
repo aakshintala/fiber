@@ -33,7 +33,7 @@ impl<'a> Labels<'a> {
             .asked
             .or(self.recorded)
             .map(str::to_owned)
-            .unwrap_or_else(|| config.credential_label(provider)))
+            .unwrap_or_else(|| config.credentials().credential_label(provider)))
     }
 }
 
@@ -48,13 +48,13 @@ impl<'a> From<Option<&'a str>> for Labels<'a> {
 }
 
 /// `credential_missing` for `label` on `provider`, listing `labels`
-/// (`Config::listed`, "none" when empty).
+/// (`config::Credentials::listed`, "none" when empty).
 pub(crate) fn no_label(provider: &str, label: &str, labels: &[String]) -> Failure {
     failed(
         contract::ErrorCode::CredentialMissing,
         format!(
             "`{provider}` has no credential label `{label}`. The labels for `{provider}` are: {}",
-            Config::listed(labels)
+            config::Credentials::listed(labels)
         ),
     )
 }
@@ -67,8 +67,12 @@ pub(crate) fn session_credential(
     provider: &ProviderData,
     recorded: Option<&str>,
 ) -> Result<(String, Secret), Failure> {
-    let label = recorded.map_or_else(|| config.credential_label(provider), str::to_owned);
+    let label = recorded.map_or_else(
+        || config.credentials().credential_label(provider),
+        str::to_owned,
+    );
     let key = config
+        .credentials()
         .credential(provider, &label)
         .map_err(|e| failed(e.code(), e))?;
     Ok((label, key))
@@ -86,6 +90,7 @@ pub(crate) fn switch_credential(
     run: config::Runner<'_>,
 ) -> Result<config::Read, Failure> {
     config
+        .credentials()
         .credential_with(provider, label, run)
         .map_err(|e| failed(e.code(), e))
 }

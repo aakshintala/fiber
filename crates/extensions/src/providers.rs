@@ -470,7 +470,7 @@ impl Providers {
                         Option<(String, placeholders::Source)>,
                         ConfigError,
                     > {
-                        match config.extension_setting(&extension, &[], name)? {
+                        match config.extensions().get(&extension, &[], name)? {
                             Some(Value::String(value)) if !value.is_empty() => {
                                 Ok(Some((value, placeholders::Source::Setting)))
                             }

@@ -429,6 +429,10 @@ fn the_person_s_own_file_may_be_a_symbolic_link() {
 #[test]
 fn config_debug_shows_no_run_flag_value() {
     let setup = Setup::new();
+    setup.write(
+        &setup.home().join("config/github.com-acme-fiber-acme.json"),
+        r#"{"token": "SECRET-7e8f"}"#,
+    );
     let config = setup
         .load(&[
             "api_key=SECRET-1a2b",
@@ -439,6 +443,7 @@ fn config_debug_shows_no_run_flag_value() {
     let debug = format!("{config:?}");
     assert!(!debug.contains("SECRET"), "{debug}");
     assert!(debug.contains("Run"), "{debug}");
+    assert!(debug.contains("github.com-acme-fiber-acme.json"), "{debug}");
 }
 
 #[test]

@@ -69,7 +69,7 @@ fn discovery_and_the_session_share_one_run_of_the_command() {
     // The session's own read.
     let key = within(move || {
         let data = discovered.data("acme");
-        config.credential(&data, "default").unwrap()
+        config.credentials().credential(&data, "default").unwrap()
     });
     assert_eq!(key.expose(), "key");
     assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 1);

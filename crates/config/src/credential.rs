@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex};
 use contract::Secret;
 use serde_json::{Map, Value};
 
-use crate::Config;
 use crate::error::ConfigError;
 use crate::extension::ProviderData;
 use crate::secret::{CredentialSource, credential_labels, read_credential};
@@ -65,14 +64,36 @@ impl CommandRuns {
 /// Resolves a `file` source's path to the file that is read.
 type Canonical<'a> = &'a dyn Fn(&Path) -> io::Result<PathBuf>;
 
-impl Config {
+/// One provider subtree's credentials: the merged
+/// `providers` the configuration was loaded with, in Fiber home.
+/// Nothing here is read again until the next load. A clone shares the
+/// command runs, so a command that gave a key runs once per process,
+/// however often or through whichever clone it is read.
+#[derive(Clone)]
+pub struct Credentials {
+    home: PathBuf,
+    /// The merged `providers` subtree at load.
+    providers: Value,
+    /// What each `command` credential source printed, by stored
+    /// credential name and label; shared by every clone.
+    commands: CommandRuns,
+}
+
+impl Credentials {
+    pub(crate) fn new(home: PathBuf, providers: Value, commands: CommandRuns) -> Self {
+        Self {
+            home,
+            providers,
+            commands,
+        }
+    }
+
     /// The label a session of this provider uses when nothing else names
     /// one: `providers."<name>".credential` from the global or per-project
     /// layer, else `default`.
     pub fn credential_label(&self, provider: &ProviderData) -> String {
-        self.merged(None)
-            .get("providers")
-            .and_then(|p| p.get(&provider.name))
+        self.providers
+            .get(&provider.name)
             .and_then(|p| p.get("credential"))
             .and_then(|v| v.as_str())
             .unwrap_or(DEFAULT_LABEL)
@@ -94,7 +115,7 @@ impl Config {
             .map(|read| read.secret)
     }
 
-    /// As [`Config::credential`], running a `command` source through `run`,
+    /// As [`Credentials::credential`], running a `command` source through `run`,
     /// which gets the built command: program, arguments, stdin and stderr
     /// null, stdout piped. A `file` source is canonicalised and read through
     /// its canonical path, which [`Read::file`] names, so the bytes read and
@@ -131,8 +152,7 @@ impl Config {
                     why: format!("credentials/{stored}/{label} is empty"),
                 });
         }
-        let merged = self.merged(None);
-        let from_config = sources_in(&merged, name)
+        let from_config = sources_in(&self.providers, name)
             .into_iter()
             .find(|(configured, _)| configured == label)
             .map(|(_, source)| source);
@@ -202,7 +222,7 @@ impl Config {
             .into_iter()
             .collect();
         labels.extend(
-            sources_in(&self.merged(None), &provider.name)
+            sources_in(&self.providers, &provider.name)
                 .into_iter()
                 .map(|(label, _)| label),
         );
@@ -218,7 +238,7 @@ impl Config {
     /// A wrongly typed value is already a load error, so this skips
     /// nothing it has read itself.
     pub fn credential_sources(&self, provider: &str) -> Vec<(String, CredentialSource)> {
-        sources_in(&self.merged(None), provider)
+        sources_in(&self.providers, provider)
     }
 
     /// The labels listed in a missing-label error: `none` when there are
@@ -232,24 +252,19 @@ impl Config {
     }
 }
 
-impl Config {
+impl Credentials {
     /// The path of every `file` credential source configuration declares,
     /// as written: each `providers."<name>".credentials."<label>"` that
-    /// [`Config::credential`] would read, and each of `providers`' own
+    /// [`Credentials::credential`] would read, and each of `providers`' own
     /// sources. Each appears once. The credential deny protects them
     /// (`docs/permissions.md`, "Credentials").
     pub fn credential_files<'a>(
         &self,
         providers: impl IntoIterator<Item = &'a ProviderData>,
     ) -> Vec<PathBuf> {
-        let merged = self.merged(None);
-        let names = merged
-            .get("providers")
-            .and_then(Value::as_object)
-            .into_iter()
-            .flat_map(Map::keys);
+        let names = self.providers.as_object().into_iter().flat_map(Map::keys);
         let labelled = names
-            .flat_map(|name| sources_in(&merged, name))
+            .flat_map(|name| sources_in(&self.providers, name))
             .map(|(_, declared)| declared);
         let own = providers.into_iter().filter_map(|p| p.credential.clone());
         let files: BTreeSet<PathBuf> = labelled
@@ -265,11 +280,10 @@ impl Config {
 }
 
 /// Every `(label, source)` pair `providers."<name>".credentials`
-/// declares in `merged`, in label order.
-fn sources_in(merged: &Value, name: &str) -> Vec<(String, CredentialSource)> {
-    merged
-        .get("providers")
-        .and_then(|p| p.get(name))
+/// declares in the merged `providers` subtree, in label order.
+fn sources_in(providers: &Value, name: &str) -> Vec<(String, CredentialSource)> {
+    providers
+        .get(name)
         .and_then(|p| p.get("credentials"))
         .and_then(Value::as_object)
         .into_iter()

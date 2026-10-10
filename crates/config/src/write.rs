@@ -295,8 +295,7 @@ fn layer_file(
     layer: Layer,
 ) -> Result<(PathBuf, Source), ConfigError> {
     let source = layer.source(home, workspace, project);
-    let (Source::Global(file) | Source::Repository(file) | Source::Project(file)) = &source
-    else {
+    let (Source::Global(file) | Source::Repository(file) | Source::Project(file)) = &source else {
         unreachable!("a layer's source always names a file")
     };
     let file = file.clone();
