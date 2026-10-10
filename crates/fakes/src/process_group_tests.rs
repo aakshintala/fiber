@@ -770,6 +770,52 @@ fn try_matching_exits_is_ok_when_nothing_matches() {
 }
 
 #[test]
+fn listed_exit_waits_for_a_process_started_after_the_first_listing() {
+    let mut child = held();
+    let pid = child.id();
+    let stdin = child.stdin.take().unwrap();
+    let (second_listed, second) = mpsc::channel::<()>();
+    let (answered, answer) = mpsc::channel();
+    thread::spawn(move || {
+        let mut calls = 0;
+        let result = listed_exit(
+            move || {
+                calls += 1;
+                if calls == 1 {
+                    Ok(vec![])
+                } else if calls == 2 {
+                    match second_listed.send(()) {
+                        Ok(()) | Err(_) => {}
+                    }
+                    Ok(vec![pid])
+                } else {
+                    Ok(vec![])
+                }
+            },
+            DEADLINE,
+        );
+        match answered.send(result) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    // The child started after the first listing: it is released only
+    // once the second listing has seen it, forcing the interleaving.
+    assert!(
+        Deadline::after(DEADLINE).recv(&second).is_ok(),
+        "waited {DEADLINE:?} for the second listing to see the late process"
+    );
+    drop(stdin);
+    reaped(child, "the held child to exit once its stdin closed");
+    match Deadline::after(DEADLINE).recv(&answer) {
+        Ok(result) => assert!(
+            result.is_ok(),
+            "waited {DEADLINE:?} for the late process to exit: {result:?}"
+        ),
+        Err(_) => panic!("waited {DEADLINE:?} for listed_exit to answer"),
+    }
+}
+
+#[test]
 fn listed_exit_is_false_when_the_second_listing_still_matches() {
     let mut child = held();
     let pid = child.id();
