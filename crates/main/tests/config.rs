@@ -172,5 +172,14 @@ fn set_then_get_reviewer_context_round_trips_both_layers_without_the_repo() {
         "## Notes that hold everywhere\n\nOur org is acme.\n\n\
          ## Notes for this project\n\nNever touch infra/prod.\n"
     );
-    assert_eq!(get.stderr, "");
+    // A repository may not set the person's notes, so reading them prints
+    // the repository file's notice as one line on stderr.
+    let file = fs::canonicalize(setup.root.path().join("w/.fiber/config.json")).unwrap();
+    assert_eq!(
+        get.stderr,
+        format!(
+            "{}: ignored `reviewer.context`, which a repository may not set.\n",
+            file.display()
+        )
+    );
 }
