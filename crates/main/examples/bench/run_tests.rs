@@ -276,6 +276,35 @@ fn output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging() {
 }
 
 #[test]
+fn timed_output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging() {
+    let dir = TempDir::new("fiber-bench-timed-held");
+    let marker = dir.path().to_string_lossy().into_owned();
+    let watchdog = Watchdog::matching(&marker);
+    let escaped = dir.path().join("escaped");
+    // As above, the leader waits for the descendant's marker before
+    // exiting, so `Proc::stop` cannot catch the holder while it is still
+    // in the group. The wall-clock limit fails the test naming "timed
+    // output held open" if the call joins a reader blocked on the open
+    // pipe instead of returning at its deadline.
+    let script = format!(
+        "perl -MPOSIX -e 'POSIX::setsid(); open my $f, \">>\", $ARGV[1] or die $!; print $f \"x\\n\"; close $f; sleep 3600' '{}' '{}' & while [ ! -e '{}' ]; do sleep 0.05; done",
+        dir.path().display(),
+        escaped.display(),
+        escaped.display(),
+    );
+    let err = fakes::within("timed output held open", WALL, move || {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &script]);
+        super::timed_to_end(&mut command, &System, Duration::from_secs(5), "the holder")
+    })
+    .unwrap_err();
+    assert!(err.starts_with("timed out waiting for the holder"), "{err}");
+    fakes::kill_matching(&marker).unwrap();
+    assert!(fakes::matching_exits(&marker, READY));
+    watchdog.stand_down(READY);
+}
+
+#[test]
 fn a_stop_that_needs_a_second_sigkill_errs_after_the_group_empties() {
     let dir = TempDir::new("fiber-bench-stop");
     let ready = Ready::new(dir.path());

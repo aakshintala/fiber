@@ -7,7 +7,6 @@
 //! `fiber resume <id>` to the session's last reply on screen.
 
 use std::fs;
-use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -149,14 +148,8 @@ fn read_log_bytes(home: &Home, id: &str) -> Result<u64, String> {
         .map_err(|err| format!("reading {}: {err}", path.display()))
 }
 
-/// How long the untimed warm attach keeps waiting past its deadline, for
-/// one round's diagnosis: the wait stays signal-driven, and the note
-/// carries the true time either way.
-const OVERTIME: Duration = Duration::from_secs(120);
-
-/// One attach, untimed: warming whatever the timed ones share. Past its
-/// deadline it keeps waiting up to [`OVERTIME`] and notes the true time to
-/// the tail, or that it never appeared; the deadline still fails the run.
+/// One attach, untimed: warming whatever the timed ones share. The wait's
+/// error already carries the screen captured at the deadline.
 fn attach_once(
     ctx: &Ctx<'_>,
     home: &Home,
@@ -166,27 +159,8 @@ fn attach_once(
     let terminal = Terminal::spawn(home, &["resume", id], ctx.path.as_deref(), ctx.clock)?;
     let started = terminal.proc.spawned;
     let shown = terminal.wait_for(ctx.clock, started + READY, ATTACH_TAIL);
-    if shown.is_err() {
-        let again = terminal.wait_for(ctx.clock, ctx.clock.now() + OVERTIME, ATTACH_TAIL);
-        let ms = ctx
-            .clock
-            .now()
-            .saturating_duration_since(started)
-            .as_secs_f64()
-            * 1000.0;
-        notes.push(overtime_note(ms, again.is_ok()));
-    }
     idle::quit(ctx, terminal, notes, HubExit::Keep)?;
     shown
-}
-
-/// The overtime note: the true time to the tail, or that it never appeared.
-pub(crate) fn overtime_note(ms: f64, found: bool) -> String {
-    if found {
-        format!("{ATTACH_TAIL} on screen after {ms:.1} ms of overtime")
-    } else {
-        format!("{ATTACH_TAIL} never appeared within {ms:.1} ms of overtime")
-    }
 }
 
 /// One timed attach: the log's size just before the spawn, then spawn to the

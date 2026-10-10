@@ -261,68 +261,55 @@ pub(crate) fn timed_to_end(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    thread::scope(|scope| {
-        let mut proc = Proc::spawn(command, clock)?;
-        let (eof_tx, eof_rx) = mpsc::channel();
-        let mut stdout = proc
-            .child
-            .stdout
-            .take()
-            .ok_or_else(|| format!("{what} has no stdout"))?;
-        scope.spawn(move || {
-            let mut bytes = Vec::new();
-            match stdout.read_to_end(&mut bytes) {
-                Ok(_) | Err(_) => {}
-            }
-            let eof = clock.now();
-            match eof_tx.send((String::from_utf8_lossy(&bytes).into_owned(), eof)) {
-                Ok(()) | Err(_) => {}
-            }
-        });
-        let stderr = read_on_thread(proc.child.stderr.take(), what)?;
-        let measured = eof_once(&mut proc, eof_rx, clock, within, what);
-        // Signals reach the group in real time, whatever clock times the run.
-        let stopped = proc.stop(&System);
-        // The deadline is the cause when the run timed out; a failed cleanup
-        // follows it rather than replacing it.
-        let (status, stdout, took) = match measured {
-            Ok(measured) => measured,
-            Err(timed_out) => {
-                return Err(match stopped {
-                    Ok(()) => timed_out,
-                    Err(cleanup) => format!("{timed_out}; {cleanup}"),
-                });
-            }
-        };
-        stopped?;
-        let stderr = stderr
-            .recv_timeout(STOP)
-            .map_err(|_| format!("the output of {what} stayed open"))?;
-        Ok((
-            Finished {
-                status,
-                stdout,
-                stderr,
-            },
-            took,
-        ))
-    })
+    let mut proc = Proc::spawn(command, clock)?;
+    // Both pipes are drained from the start, so a full pipe never stalls
+    // the child. The reader threads are detached, and every receive below
+    // is bounded, so the call returns even when a process outside the
+    // group holds a pipe open.
+    let stdout = read_on_thread(proc.child.stdout.take(), what)?;
+    let stderr = read_on_thread(proc.child.stderr.take(), what)?;
+    let measured = eof_once(&mut proc, stdout, clock, within, what);
+    // Signals reach the group in real time, whatever clock times the run.
+    let stopped = proc.stop(&System);
+    // The deadline is the cause when the run timed out; a failed cleanup
+    // follows it rather than replacing it.
+    let (status, stdout, took) = match measured {
+        Ok(measured) => measured,
+        Err(timed_out) => {
+            return Err(match stopped {
+                Ok(()) => timed_out,
+                Err(cleanup) => format!("{timed_out}; {cleanup}"),
+            });
+        }
+    };
+    stopped?;
+    let stderr = stderr
+        .recv_timeout(STOP)
+        .map_err(|_| format!("the output of {what} stayed open"))?;
+    Ok((
+        Finished {
+            status,
+            stdout,
+            stderr,
+        },
+        took,
+    ))
 }
 
 /// The stdout text with its closing time, the exit status and the
 /// spawn-to-EOF duration: EOF ends the timing, the exit only ends the run.
 fn eof_once(
     proc: &mut Proc,
-    eof: mpsc::Receiver<(String, Instant)>,
+    eof: mpsc::Receiver<String>,
     clock: &dyn Clock,
     within: Duration,
     what: &str,
 ) -> Result<(ExitStatus, String, Duration), String> {
     let wait = left(clock, proc.spawned + within, what)?;
-    let (stdout, eof) = eof
+    let stdout = eof
         .recv_timeout(wait)
         .map_err(|_| format!("timed out waiting for {what}"))?;
-    let took = eof.saturating_duration_since(proc.spawned);
+    let took = clock.now().saturating_duration_since(proc.spawned);
     // The exit poll only runs after EOF was read.
     proc.exits(clock, within)?;
     match proc
