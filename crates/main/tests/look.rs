@@ -20,7 +20,7 @@ use std::time::Duration;
 use fakes::clock::FakeClock;
 use support::Deadline;
 use support::Setup;
-use support::pty::{Colour, Reader, Run, Screen, sgr_params};
+use support::pty::{Colour, Reader, Run, Screen, contains, sgr_params};
 
 #[test]
 fn the_screen_moves_and_writes() {
@@ -121,13 +121,6 @@ fn a_wide_char_misplaces_only_its_own_cell() {
 fn pair() -> (fs::File, fs::File) {
     let terminal = support::pty::open(80, 24);
     (fs::File::from(terminal.main), terminal.terminal)
-}
-
-/// Whether `haystack` holds `needle` as bytes.
-fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
 }
 
 #[test]

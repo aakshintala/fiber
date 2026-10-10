@@ -462,6 +462,14 @@ fn until_gone(deadline: Deadline, socket: &Path, what: &str) {
     }
 }
 
+/// Whether `haystack` holds `needle` as bytes.
+pub(crate) fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.len() >= needle.len()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+}
+
 /// Where `needle` ends in `haystack` at or after `from`: an exact byte
 /// match, unless `needle` holds a space and starts with a non-escape
 /// byte, when each single space may instead be spaces, cursor moves and

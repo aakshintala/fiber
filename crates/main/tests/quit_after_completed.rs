@@ -12,14 +12,25 @@
 mod support;
 
 use support::Setup;
-use support::pty::Run;
+use support::pty::{Run, Screen, contains};
 
-/// Whether `haystack` holds `needle` as bytes.
-fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack.len() >= needle.len()
-        && haystack
-            .windows(needle.len())
-            .any(|window| window == needle)
+/// The harness pins the terminal to 120 by 32 (`docs/testing.md`,
+/// "Screens").
+const COLS: u16 = 120;
+const ROWS: u16 = 32;
+
+/// Whether the screen shows the turn's `completed` status: nine
+/// consecutive cells spelling it on one row.
+fn completed(screen: &Screen) -> bool {
+    const WORD: &[u8] = b"completed";
+    (0..ROWS).any(|y| {
+        (0..COLS - u16::try_from(WORD.len()).unwrap() + 1).any(|x| {
+            WORD.iter().enumerate().all(|(dx, byte)| {
+                let cell = screen.cell(x + u16::try_from(dx).unwrap(), y);
+                cell.symbol.len() == 1 && cell.symbol.as_bytes()[0] == *byte
+            })
+        })
+    })
 }
 
 #[test]
@@ -35,8 +46,8 @@ fn quitting_right_after_completed_exits_and_restores_the_terminal() {
     );
     let mut run = Run::spawn(
         &setup,
-        160,
-        48,
+        COLS,
+        ROWS,
         &[
             ("TERM", "xterm-256color"),
             ("COLORTERM", "truecolor"),
@@ -46,7 +57,7 @@ fn quitting_right_after_completed_exits_and_restores_the_terminal() {
     run.read_until(">");
     run.write(b"say hi\r");
     run.read_until("Hel");
-    run.read_until("completed");
+    run.screen_until(COLS, ROWS, "the completed turn", completed);
     let stalled_at = run.output().len();
     run.stall();
     run.write(b"\x03\x03\r");
