@@ -1,11 +1,11 @@
-//! The shared pseudo-terminal harness for the binary-level look tests
+//! The one pseudo-terminal driver for the binary-level screen tests
 //! (`docs/tui.md`, "Look"; `docs/testing.md`, "Screens"): the real
 //! binary on a sized pty, a reader draining the master from the first
-//! frame, one-deadline waits over a channel, and a screen model reading
-//! the SGR stream.
+//! frame to end of file, one-deadline waits over a channel, and a screen
+//! model rebuilding the `vt100` grid.
 //!
-//! debt: a single pty driver; move terminal.rs onto this module once see
-//! #1608, see #1557 and see #1537 merge.
+//! `terminal.rs`, `look.rs`, `quit_after_completed.rs` and
+//! `model_picker_keys.rs` all drive the binary through this module.
 
 #![allow(
     clippy::unwrap_used,
@@ -17,6 +17,7 @@
 
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{self, ErrorKind};
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
@@ -30,12 +31,40 @@ use fakes::Watchdog;
 use rustix::event::{PollFd, PollFlags, Timespec};
 use rustix::pty;
 
-use super::{Deadline, Setup, bounded, expired, kill_group_detached};
+use super::{Deadline, Setup, expired, kill_group_detached, kill_pid};
 
-/// The reader draining a pty master: it appends every chunk to the shared
-/// output and wakes the test once per chunk, from the spawn until it is
-/// stopped or the master ends, so the terminal's output queue never fills
-/// while the test runs (`docs/testing.md`, "Screens").
+/// The driver's default terminal size: a test may pick the size its
+/// layout needs (the look tests use 160 by 48).
+pub(crate) const COLS: u16 = 120;
+pub(crate) const ROWS: u16 = 32;
+
+/// Kitty's key-flags push: the loop writes it once its key parser is in
+/// kitty mode (`crates/tui/src/event_loop.rs`), so input after it is
+/// never encoded before the parser can take it.
+pub(crate) const KITTY_PUSH: &[u8] = b"\x1b[>1u";
+/// Mouse-motion enable: the terminal writes it with the other
+/// mode-enable sequences, which never reach the cells.
+pub(crate) const MOTION: &[u8] = b"\x1b[?1003h";
+/// The start of an OSC 2 window-title write: the first frame's proof.
+pub(crate) const TITLE: &[u8] = b"\x1b]2;";
+/// The home title, written when no session is open.
+pub(crate) const HOME_TITLE: &[u8] = b"\x1b]2;fiber\x07";
+/// The start of a waiting title: the chrome title shows the waiting
+/// glyph with the session's name (`! <name> · fiber`,
+/// `crates/tui/src/home.rs`, `crates/tui/src/app/chrome.rs`), drawn from
+/// the session state the terminal already holds, so no hub attention
+/// line has to arrive first.
+pub(crate) const WAITING_TITLE: &[u8] = b"\x1b]2;! ";
+/// The title the terminal shows once a turn finishes
+/// (`crates/tui/src/app/attention.rs`, `crates/tui/src/osc.rs`):
+/// session-side state reaching the terminal outside the cells.
+pub(crate) const FINISHED_TITLE: &[u8] = "\x1b]2;\u{2713} fiber \u{b7} finished\x07".as_bytes();
+
+/// The reader draining a pty master: for each chunk it answers the
+/// binary's capability queries, publishes the chunk to the shared state,
+/// and wakes the test once, from the spawn until it is stopped or the
+/// master ends, so the terminal's output queue never fills while the
+/// test runs (`docs/testing.md`, "Screens").
 pub(crate) struct Reader {
     stop: std::io::PipeWriter,
     done: mpsc::Receiver<()>,
@@ -43,23 +72,24 @@ pub(crate) struct Reader {
 }
 
 impl Reader {
-    /// Drains `master` on a thread, appending every chunk and waking the
-    /// test once per chunk. The thread ends on end of file or a read
-    /// error, on the stop pipe becoming readable, or when the poll times
-    /// out at the deadline: it never ticks, and every thread this harness
-    /// spawns ends by the test's deadline.
+    /// Drains `master` on a thread, sharing `shared` with the test and
+    /// answering queries through `writer`, and returns the reader with
+    /// one wake per chunk appended. The thread ends on end of file, a
+    /// read error, a failed reply write, the stop pipe, or the poll
+    /// timing out at the deadline: it never ticks, and every thread this
+    /// harness spawns ends by the test's deadline.
     pub(crate) fn start(
         master: fs::File,
+        shared: Arc<Mutex<Shared>>,
+        writer: Writer,
         deadline: Deadline,
-    ) -> (Self, Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>) {
+    ) -> (Self, mpsc::Receiver<()>) {
         let (stop_read, stop_write) = std::io::pipe().unwrap();
         let (wake, wakes) = mpsc::channel();
         let (done, finished) = mpsc::channel();
-        let output = Arc::new(Mutex::new(Vec::new()));
-        let appended = Arc::clone(&output);
         let master = OwnedFd::from(master);
         thread::Builder::new()
-            .spawn(move || Self::drain(master, stop_read, appended, wake, done, deadline))
+            .spawn(move || Self::drain(master, stop_read, shared, writer, wake, done, deadline))
             .unwrap();
         (
             Self {
@@ -67,43 +97,41 @@ impl Reader {
                 done: finished,
                 deadline,
             },
-            output,
             wakes,
         )
     }
 
-    /// Drains `master` on a thread, appending to the shared `output`
-    /// instead of a new buffer, and dropping its wakes: nothing reads
-    /// them after `wait` restores the drain. The thread ends as in
-    /// [`Reader::start`].
+    /// Drains `master` on a thread as in [`Reader::start`], sharing the
+    /// run's state instead of a new one and dropping its wakes: nothing
+    /// reads them after `wait` restores the drain.
     pub(crate) fn start_on(
         master: fs::File,
-        output: Arc<Mutex<Vec<u8>>>,
+        shared: Arc<Mutex<Shared>>,
+        writer: Writer,
         deadline: Deadline,
     ) -> Self {
-        let (stop_read, stop_write) = std::io::pipe().unwrap();
-        let (wake, wakes) = mpsc::channel();
+        let (reader, wakes) = Self::start(master, shared, writer, deadline);
         drop(wakes);
-        let (done, finished) = mpsc::channel();
-        let appended = Arc::clone(&output);
-        let master = OwnedFd::from(master);
-        thread::Builder::new()
-            .spawn(move || Self::drain(master, stop_read, appended, wake, done, deadline))
-            .unwrap();
-        Self {
-            stop: stop_write,
-            done: finished,
-            deadline,
-        }
+        reader
     }
 
     /// Polls the master and the stop pipe with the deadline's remaining
-    /// time as the timeout, appending master chunks, until end of file, a
-    /// read error, the stop pipe, or the deadline.
+    /// time as the timeout. For each chunk the thread takes the `Shared`
+    /// lock and, in order: computes the chunk's query replies, writes
+    /// them through the shared writer, and only then publishes the
+    /// chunk. A waiter therefore never sees a query whose reply was not
+    /// written: either the reply is on the master and the chunk is
+    /// published, or the chunk is never published and every wait fails
+    /// on the terminal ending. Lock order is always `Shared` then
+    /// `Writer`; `Run::write` takes only `Writer`, so neither path
+    /// deadlocks. Nothing in this critical section panics: an expired
+    /// reply write is an error that ends the reader, so `Shared` is
+    /// never poisoned and waiters are always woken.
     fn drain(
         master: OwnedFd,
         stop: std::io::PipeReader,
-        output: Arc<Mutex<Vec<u8>>>,
+        shared: Arc<Mutex<Shared>>,
+        writer: Writer,
         wake: mpsc::Sender<()>,
         done: mpsc::Sender<()>,
         deadline: Deadline,
@@ -128,13 +156,38 @@ impl Reader {
                     if !fds[0].revents().is_empty() {
                         let mut chunk = [0u8; 4096];
                         match rustix::io::read(&master, &mut chunk) {
-                            Ok(0) => break,
-                            Ok(n) => {
-                                output.lock().unwrap().extend_from_slice(&chunk[..n]);
+                            Ok(0) => {
+                                end(&shared);
                                 wake.send(()).unwrap_or(());
+                                break;
+                            }
+                            Ok(n) => {
+                                let published = {
+                                    let mut guard = shared.lock().unwrap();
+                                    let replies = guard.replies(&chunk[..n]);
+                                    // A chunk is published only after its
+                                    // replies are written: no replies, or
+                                    // the write went through.
+                                    let written = replies.is_empty()
+                                        || write_within(&writer, &replies, deadline).is_ok();
+                                    if written {
+                                        guard.publish(&chunk[..n]);
+                                    } else {
+                                        guard.ended = true;
+                                    }
+                                    written
+                                };
+                                wake.send(()).unwrap_or(());
+                                if !published {
+                                    break;
+                                }
                             }
                             Err(err) if err == rustix::io::Errno::INTR => {}
-                            Err(_) => break,
+                            Err(_) => {
+                                end(&shared);
+                                wake.send(()).unwrap_or(());
+                                break;
+                            }
                         }
                     }
                 }
@@ -169,6 +222,12 @@ impl Reader {
         self.stop.write_all(b"x").unwrap_or(());
         self.done.recv_timeout(self.deadline.cleanup()).is_ok()
     }
+}
+
+/// Marks the shared state ended and leaves its content as it was: end of
+/// file or a read error ends the drain without publishing anything.
+fn end(shared: &Mutex<Shared>) {
+    shared.lock().unwrap().ended = true;
 }
 
 /// A pseudo-terminal: the main side the reader drains, and the terminal
@@ -208,7 +267,7 @@ pub(crate) fn open(cols: u16, rows: u16) -> Terminal {
 
 impl Terminal {
     /// The terminal side as standard IO.
-    fn stdio(&self) -> Stdio {
+    pub(crate) fn stdio(&self) -> Stdio {
         Stdio::from(self.terminal.try_clone().unwrap())
     }
 }
@@ -236,6 +295,222 @@ impl Drop for KillGroup {
     }
 }
 
+/// A colour a grid cell holds: the terminal's default, a 256-palette
+/// entry, or a truecolour triple.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Colour {
+    /// Unpainted: SGR 39 or 49, how a terminal shows its default.
+    Default,
+    /// SGR `38;5;n` or `48;5;n`.
+    Indexed(u8),
+    /// SGR `38;2;r;g;b` or `48;2;r;g;b`.
+    Rgb(u8, u8, u8),
+}
+
+impl From<vt100::Color> for Colour {
+    fn from(color: vt100::Color) -> Self {
+        match color {
+            vt100::Color::Default => Self::Default,
+            vt100::Color::Idx(entry) => Self::Indexed(entry),
+            vt100::Color::Rgb(red, green, blue) => Self::Rgb(red, green, blue),
+        }
+    }
+}
+
+/// One grid cell: its symbol with the pen that wrote it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Cell {
+    pub(crate) symbol: String,
+    pub(crate) fg: Colour,
+    pub(crate) bg: Colour,
+    pub(crate) dim: bool,
+    pub(crate) bold: bool,
+}
+
+impl Cell {
+    /// The `vt100` cell as a [`Cell`]: a cell with no content reads as a
+    /// blank cell, which is how a terminal shows unwritten cells.
+    fn of(cell: &vt100::Cell) -> Self {
+        let contents = cell.contents();
+        Self {
+            symbol: if contents.is_empty() {
+                " ".to_owned()
+            } else {
+                contents.to_owned()
+            },
+            fg: cell.fgcolor().into(),
+            bg: cell.bgcolor().into(),
+            dim: cell.dim(),
+            bold: cell.bold(),
+        }
+    }
+}
+
+/// The screen rebuilt from the output so far: its text and rows, each
+/// cell's colours and attributes, the cursor position, and the
+/// alternate-screen and hidden-cursor flags.
+#[derive(Clone, Debug)]
+pub(crate) struct Grid {
+    pub(crate) contents: String,
+    pub(crate) rows: Vec<String>,
+    /// The cursor as (row, column).
+    pub(crate) cursor: (u16, u16),
+    pub(crate) alternate_screen: bool,
+    pub(crate) hide_cursor: bool,
+    screen: vt100::Screen,
+}
+
+impl Grid {
+    /// One snapshot of the parser's screen.
+    fn of(parser: &vt100::Parser) -> Self {
+        let screen = parser.screen();
+        let (_, cols) = screen.size();
+        Self {
+            contents: screen.contents(),
+            rows: screen.rows(0, cols).collect(),
+            cursor: screen.cursor_position(),
+            alternate_screen: screen.alternate_screen(),
+            hide_cursor: screen.hide_cursor(),
+            screen: screen.clone(),
+        }
+    }
+
+    /// The cell at column `x`, row `y`. Panics past the grid's edges.
+    pub(crate) fn cell(&self, x: u16, y: u16) -> Cell {
+        match self.screen.cell(y, x) {
+            Some(found) => Cell::of(found),
+            None => panic!("cell ({x}, {y}) is past the grid's edges"),
+        }
+    }
+}
+
+/// What the reader shares with the test: every byte read from the master
+/// since spawn, the parser and grid rebuilt from it, the tail of a query
+/// still arriving, a resize the next chunk has not applied yet, and
+/// whether the reader reached the end.
+pub(crate) struct Shared {
+    output: Vec<u8>,
+    parser: vt100::Parser,
+    grid: Grid,
+    queries: Vec<u8>,
+    pending_size: Option<(u16, u16)>,
+    ended: bool,
+}
+
+impl Shared {
+    /// A blank `cols` by `rows` screen with no output.
+    pub(crate) fn new(cols: u16, rows: u16) -> Self {
+        let parser = vt100::Parser::new(rows, cols, 0);
+        let grid = Grid::of(&parser);
+        Self {
+            output: Vec::new(),
+            parser,
+            grid,
+            queries: Vec::new(),
+            pending_size: None,
+            ended: false,
+        }
+    }
+
+    /// The chunk's query replies, in stream order. Only the query tail
+    /// is updated: the chunk itself is published after its replies are
+    /// written.
+    pub(crate) fn replies(&mut self, bytes: &[u8]) -> Vec<u8> {
+        self.queries.extend_from_slice(bytes);
+        query_replies(&mut self.queries)
+    }
+
+    /// Publishes the chunk whose replies are already written: a pending
+    /// resize lands before the chunk's bytes parse, so the first frame
+    /// after a resize draws at the new size; then the chunk is appended
+    /// and the grid is snapshotted.
+    pub(crate) fn publish(&mut self, bytes: &[u8]) {
+        if let Some((cols, rows)) = self.pending_size.take() {
+            self.parser.screen_mut().set_size(rows, cols);
+        }
+        self.parser.process(bytes);
+        self.output.extend_from_slice(bytes);
+        self.grid = Grid::of(&self.parser);
+    }
+
+    /// Every byte published so far.
+    pub(crate) fn output(&self) -> Vec<u8> {
+        self.output.clone()
+    }
+}
+
+/// The one master writer: the reader's reply writes and `Run::write`
+/// both write through it, so a reply and typed input never interleave.
+pub(crate) type Writer = Arc<Mutex<fs::File>>;
+
+/// Writes all of `bytes` through `writer` and flushes, on a thread taking
+/// what remains of `deadline.left()`: expiry is a `TimedOut` error, and
+/// the thread is never joined. It never panics, so the reader can hold
+/// the `Shared` lock across it.
+pub(crate) fn write_within(writer: &Writer, bytes: &[u8], deadline: Deadline) -> io::Result<()> {
+    let writer = Arc::clone(writer);
+    let bytes = bytes.to_vec();
+    let (done, finished) = mpsc::channel();
+    thread::Builder::new()
+        .spawn(move || {
+            use std::io::Write;
+            let result = (|| {
+                let mut guard = writer.lock().unwrap();
+                guard.write_all(&bytes)?;
+                guard.flush()
+            })();
+            done.send(result).unwrap_or(());
+        })
+        .map_err(io::Error::other)?;
+    match finished.recv_timeout(deadline.left()) {
+        Ok(result) => result,
+        Err(_) => Err(io::Error::new(
+            ErrorKind::TimedOut,
+            "waited until the deadline for the terminal write",
+        )),
+    }
+}
+
+/// A capability query Fiber emits (`crates/tui/src/term.rs`,
+/// `crates/tui/src/appearance.rs`) and the harness's reply: kitty's
+/// disambiguate flags, a bare device-attributes answer, and a black
+/// background with a dark theme report, so the grid is a fixed dark
+/// xterm whose Esc key arrives as `CSI 27 u`. Before any report the
+/// appearance is dark (`crates/tui/src/appearance.rs`).
+const CAPABILITIES: [(&[u8], &[u8]); 4] = [
+    (b"\x1b[?u", b"\x1b[?1u"),
+    (b"\x1b[c", b"\x1b[?0c"),
+    (b"\x1b]11;?\x1b\\", b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
+    (b"\x1b[?996n", b"\x1b[?997;1n"),
+];
+
+/// How many trailing bytes the query tail keeps for a query split across
+/// two reads: longer than the longest query above.
+const PENDING_KEEP: usize = 16;
+
+/// The replies for every whole query in `pending`, in stream order,
+/// dropping the bytes through each answered query and keeping the tail
+/// for a query still arriving.
+pub(crate) fn query_replies(pending: &mut Vec<u8>) -> Vec<u8> {
+    let mut replies = Vec::new();
+    loop {
+        let mut first: Option<(usize, usize)> = None;
+        for (at, (query, _)) in CAPABILITIES.iter().enumerate() {
+            if let Some(pos) = pending.windows(query.len()).position(|w| w == *query)
+                && first.is_none_or(|(best, _)| pos < best)
+            {
+                first = Some((pos, at));
+            }
+        }
+        let Some((pos, at)) = first else { break };
+        replies.extend_from_slice(CAPABILITIES[at].1);
+        pending.drain(..pos + CAPABILITIES[at].0.len());
+    }
+    let drop = pending.len().saturating_sub(PENDING_KEEP);
+    pending.drain(..drop);
+    replies
+}
+
 /// The terminal under test: its child, the pty master with its reader
 /// draining it from the first frame to end of file, and one wake per
 /// chunk appended. A reader drains the master except between `stall`
@@ -247,14 +522,14 @@ pub(crate) struct Run {
     /// The hub's socket, removed when the hub exits.
     hub_socket: PathBuf,
     watchdog: Option<Watchdog>,
-    sessions: Watchdog,
-    main: fs::File,
+    sessions: Option<Watchdog>,
+    shared: Arc<Mutex<Shared>>,
+    writer: Writer,
     reader: Option<Reader>,
     /// One wake per chunk appended.
     wakes: mpsc::Receiver<()>,
-    output: Arc<Mutex<Vec<u8>>>,
-    /// Where the last `read_until` match ended.
-    seen: usize,
+    cols: u16,
+    rows: u16,
     deadline: Deadline,
 }
 
@@ -266,11 +541,21 @@ pub(crate) struct Exited {
 }
 
 impl Run {
-    /// Spawns `fiber` with no arguments on a `cols` by `rows` pty:
-    /// standard input, output and error all on the terminal side, as on a
-    /// real terminal. Each run starts from a cleared environment with only
-    /// `PATH`, `HOME`, `FIBER_HOME` and its own variables.
-    pub(crate) fn spawn(setup: &Setup, cols: u16, rows: u16, env: &[(&str, &str)]) -> Self {
+    /// Spawns `fiber` with `args` on a `cols` by `rows` pty: standard
+    /// input, output and error all on the terminal side, as on a real
+    /// terminal. Each run starts from a cleared environment with only
+    /// `PATH`, `HOME`, `FIBER_HOME` and `TERM=xterm-256color`, then
+    /// applies `env` in order, so the grid is a fixed dark xterm: the
+    /// binary never reads the ambient terminal's kind or theme. The
+    /// slave is dropped after the spawn, and the master is CLOEXEC, so
+    /// no hub `fiber` starts holds it open.
+    pub(crate) fn spawn(
+        setup: &Setup,
+        cols: u16,
+        rows: u16,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> Self {
         let terminal = open(cols, rows);
         let sessions = Watchdog::matching(setup.workspace().to_str().unwrap());
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
@@ -279,102 +564,183 @@ impl Run {
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", setup.root.path())
-            .env("FIBER_HOME", setup.home());
+            .env("FIBER_HOME", setup.home())
+            .env("TERM", "xterm-256color");
         for (key, value) in env {
             command.env(key, value);
         }
+        command.args(args);
         command
             .stdin(terminal.stdio())
             .stdout(terminal.stdio())
             .stderr(terminal.stdio());
         let (child, watchdog) = spawn_watched(&mut command);
+        drop(terminal.terminal);
         let deadline = setup.deadline;
         let main = fs::File::from(terminal.main);
-        let (reader, output, wakes) = Reader::start(main.try_clone().unwrap(), deadline);
+        let shared = Arc::new(Mutex::new(Shared::new(cols, rows)));
+        let writer: Writer = Arc::new(Mutex::new(main.try_clone().unwrap()));
+        let (reader, wakes) =
+            Reader::start(main, Arc::clone(&shared), Arc::clone(&writer), deadline);
         Self {
             child: Some(child),
             hub_socket: setup.home().join("run").join("hub"),
             watchdog: Some(watchdog),
-            sessions,
-            main,
+            sessions: Some(sessions),
+            shared,
+            writer,
             reader: Some(reader),
             wakes,
-            output,
-            seen: 0,
+            cols,
+            rows,
             deadline,
         }
     }
 
-    /// Types bytes into the terminal, on a thread bounded by the test's
-    /// [`Deadline`].
+    /// A run with no child over an already-open `master`, for harness
+    /// tests feeding output by hand: the reader drains from the first
+    /// chunk to end of file, as in [`Run::spawn`].
+    pub(crate) fn attach(master: fs::File, cols: u16, rows: u16, deadline: Deadline) -> Self {
+        let shared = Arc::new(Mutex::new(Shared::new(cols, rows)));
+        let writer: Writer = Arc::new(Mutex::new(master.try_clone().unwrap()));
+        let (reader, wakes) =
+            Reader::start(master, Arc::clone(&shared), Arc::clone(&writer), deadline);
+        Self {
+            child: None,
+            hub_socket: PathBuf::new(),
+            watchdog: None,
+            sessions: None,
+            shared,
+            writer,
+            reader: Some(reader),
+            wakes,
+            cols,
+            rows,
+            deadline,
+        }
+    }
+
+    /// Types bytes into the terminal through the one shared writer, so a
+    /// reply and typed input never interleave. It panics naming the
+    /// typing on failure, holding no lock.
     pub(crate) fn write(&mut self, bytes: &[u8]) {
-        let mut main = self.main.try_clone().unwrap();
-        let bytes = bytes.to_vec();
-        bounded(self.deadline, "typing on the terminal", move || {
-            use std::io::Write;
-            main.write_all(&bytes)?;
-            main.flush()
-        })
-        .unwrap();
+        write_within(&self.writer, bytes, self.deadline).expect("typing on the terminal");
+    }
+
+    /// The shared writer: harness tests own its lock as the pause point
+    /// proving a chunk is published only after its replies are written
+    /// (`docs/testing.md`, "Waits and timeouts").
+    pub(crate) fn writer(&self) -> Writer {
+        Arc::clone(&self.writer)
     }
 
     /// The output so far.
     pub(crate) fn output(&self) -> Vec<u8> {
-        self.output.lock().unwrap().clone()
+        self.shared.lock().unwrap().output()
     }
 
-    /// Reads until the output after the last match holds `needle`, under
-    /// the test's one deadline for the whole wait, however much other
-    /// output arrives. On expiry the panic names what it waited for and
-    /// shows the output, so a stall says how far the journey got. A needle
-    /// with a space matches its words in order with only a terminal
-    /// frame's gap between them: spaces, cursor moves (`\x1b[<r>;<c>H`)
-    /// and SGR (`\x1b[...m`); unchanged cells are never rewritten, so a
-    /// space can arrive as a cursor move rather than a byte, and a style
-    /// change can split words with SGR. The wait runs on the test thread:
-    /// each wake takes only what remains of the deadline.
-    pub(crate) fn read_until(&mut self, needle: &str) {
+    /// The grid rebuilt from the output so far.
+    pub(crate) fn screen(&self) -> Grid {
+        self.shared.lock().unwrap().grid.clone()
+    }
+
+    /// Waits under one named deadline for the whole wait until the grid
+    /// matches, however many frames arrive, and returns the matching
+    /// grid. When the terminal ends first the panic names the wait and
+    /// shows the last grid, so a stall says how far the journey got.
+    pub(crate) fn wait_screen(&mut self, what: &str, mut done: impl FnMut(&Grid) -> bool) -> Grid {
         loop {
-            if let Some(end) = phrase_end(&self.output(), self.seen, needle) {
-                self.seen = end;
-                return;
+            let (grid, ended) = {
+                let shared = self.shared.lock().unwrap();
+                (shared.grid.clone(), shared.ended)
+            };
+            if done(&grid) {
+                return grid;
             }
-            let left = self.deadline.left();
-            if left.is_zero() || self.wakes.recv_timeout(left).is_err() {
+            if ended {
                 panic!(
-                    "waited until the deadline for {needle:?}; output: {:?}",
+                    "the terminal ended while waiting for {what}; screen:\n{}",
+                    grid.contents
+                );
+            }
+            if self.wakes.recv_timeout(self.deadline.left()).is_err() {
+                panic!(
+                    "waited until the deadline for {what}; screen:\n{}",
+                    self.screen().contents
+                );
+            }
+        }
+    }
+
+    /// Waits under the run's one deadline until the output at or after
+    /// `from` holds `needle` as exact bytes, and returns where the match
+    /// ends. The search starts at the caller's offset, never at an
+    /// earlier match, so two markers arriving in either order both
+    /// finish. Bytes that never reach the cells, such as the window
+    /// title, the OSC 9 desktop notification, a bell and the
+    /// mode-enable sequences, are waited for here instead of on the
+    /// grid.
+    pub(crate) fn wait_bytes(&mut self, from: usize, needle: &[u8], what: &str) -> usize {
+        assert!(!needle.is_empty(), "a byte wait names its bytes");
+        loop {
+            let (output, ended) = {
+                let shared = self.shared.lock().unwrap();
+                (shared.output.clone(), shared.ended)
+            };
+            if let Some(end) = exact_end(&output, from, needle) {
+                return end;
+            }
+            if ended {
+                panic!("the terminal ended while waiting for {what}");
+            }
+            if self.wakes.recv_timeout(self.deadline.left()).is_err() {
+                panic!(
+                    "waited until the deadline for {what}; output: {:?}",
                     String::from_utf8_lossy(&self.output())
                 );
             }
         }
     }
 
-    /// Feeds the whole output so far into a fresh `Screen` on each wake
-    /// until `done` holds, under the run's one deadline, panicking with
-    /// `what` and the output on expiry. On success sets `seen` to the
-    /// output's length, so a later `read_until` matches only newer output.
-    pub(crate) fn screen_until(
-        &mut self,
-        cols: u16,
-        rows: u16,
-        what: &str,
-        done: impl Fn(&Screen) -> bool,
-    ) -> Screen {
-        loop {
-            let output = self.output();
-            let mut screen = Screen::new(cols, rows);
-            screen.feed(&output);
-            if done(&screen) {
-                self.seen = output.len();
-                return screen;
-            }
-            let left = self.deadline.left();
-            if left.is_zero() || self.wakes.recv_timeout(left).is_err() {
-                panic!(
-                    "waited until the deadline for {what}; output: {:?}",
-                    String::from_utf8_lossy(&output)
-                );
-            }
+    /// The end of the first frame: the first OSC 2 title.
+    /// `event_loop::run` draws the first frame, writes the title, then
+    /// starts the input reader and the resize thread
+    /// (`crates/tui/src/event_loop.rs`), so input after it is never too
+    /// early for its receiver.
+    pub(crate) fn ready(&mut self) -> usize {
+        self.wait_bytes(0, TITLE, "the end of the first frame")
+    }
+
+    /// The turn that started after offset `from` finished, whichever
+    /// order its two markers arrive in: the `completed` paint on the
+    /// grid, and the finished title on the raw output at or after
+    /// `from`. Each wait searches from its own start, never from the
+    /// other's match, so the pair is order-free (see #1775).
+    pub(crate) fn turn_finished(&mut self, from: usize) {
+        self.wait_screen("the completed turn", |grid| {
+            grid.contents.contains("completed")
+        });
+        self.wait_bytes(from, FINISHED_TITLE, "the finished title");
+    }
+
+    /// Resizes the terminal to `cols` by `rows`: the size is recorded
+    /// before the signal, so the next chunk the reader takes parses at
+    /// the new size. A run with no child signals nothing.
+    pub(crate) fn resize(&mut self, cols: u16, rows: u16) {
+        self.shared.lock().unwrap().pending_size = Some((cols, rows));
+        (self.cols, self.rows) = (cols, rows);
+        rustix::termios::tcsetwinsize(
+            &*self.writer.lock().unwrap(),
+            rustix::termios::Winsize {
+                ws_col: cols,
+                ws_row: rows,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            },
+        )
+        .unwrap();
+        if let Some(child) = self.child.as_ref() {
+            kill_pid(self.deadline, child.id(), "WINCH").unwrap();
         }
     }
 
@@ -382,8 +748,8 @@ impl Run {
     /// terminal until `wait`: every byte `fiber` writes from then on is
     /// undrained. A reader still running after the stop would prove
     /// nothing, so the stop is an assert naming the reader. A second
-    /// call finds no reader and does nothing. After it, `read_until`
-    /// and `screen_until` are not called: with no reader draining, their
+    /// call finds no reader and does nothing. After it, `wait_screen`
+    /// and `wait_bytes` are not called: with no reader draining, their
     /// wakes never arrive and they wait until the deadline.
     pub(crate) fn stall(&mut self) {
         if let Some(reader) = self.reader.take() {
@@ -391,18 +757,22 @@ impl Run {
         }
     }
 
-    /// Restores the drain when stalled, waits for the child to exit
-    /// and reaps it, then waits for the reader to end at end of file
-    /// before stopping it, so every queued byte is read: stopping
-    /// through the stop pipe while the master may still hold bytes
-    /// drops them. Then stands the watchdog down and waits for the hub
-    /// to idle out and remove its socket. Returns the exit and every
-    /// byte read from the master since spawn.
+    /// Restores the drain when stalled, keeping the shared state (the
+    /// parser, the query tail) and the writer. Then waits for the child
+    /// to exit and reaps it, checks its group empties, waits for the
+    /// reader to end at end of file so every queued byte is read, stands
+    /// the watchdog down and waits for the hub to idle out and remove
+    /// its socket. Returns the exit and every byte read from the master
+    /// since spawn.
     pub(crate) fn wait(mut self) -> Exited {
         if self.reader.is_none() {
-            let main = self.main.try_clone().unwrap();
-            let output = Arc::clone(&self.output);
-            self.reader = Some(Reader::start_on(main, output, self.deadline));
+            let main = self.writer.lock().unwrap().try_clone().unwrap();
+            self.reader = Some(Reader::start_on(
+                main,
+                Arc::clone(&self.shared),
+                Arc::clone(&self.writer),
+                self.deadline,
+            ));
         }
         let child = self.child.take().unwrap();
         let group = child.id();
@@ -435,18 +805,28 @@ impl Run {
         until_gone(self.deadline, &self.hub_socket, "the hub to idle out");
         Exited {
             status: output.status,
-            terminal: self.output.lock().unwrap().clone(),
+            terminal: self.shared.lock().unwrap().output(),
         }
     }
 }
 
 impl Drop for Run {
-    /// Stops the reader without waiting past the deadline: a panic
-    /// mid-test stops the reader as well as killing the group through the
-    /// watchdogs.
+    /// Stops the reader without waiting past the deadline, then kills the
+    /// child's group and reaps the child on a detached thread, so a
+    /// panic mid-test leaves nothing behind. A run with no child reaps
+    /// nothing; the watchdogs kill the hub and its sessions as ever.
     fn drop(&mut self) {
         if let Some(reader) = self.reader.take() {
             reader.stop();
+        }
+        if let Some(mut child) = self.child.take() {
+            kill_group_detached(child.id(), "KILL");
+            let reaped = thread::Builder::new().spawn(move || match child.wait() {
+                Ok(_) | Err(_) => {}
+            });
+            match reaped {
+                Ok(_) | Err(_) => {}
+            }
         }
     }
 }
@@ -470,52 +850,11 @@ pub(crate) fn contains(haystack: &[u8], needle: &[u8]) -> bool {
             .any(|window| window == needle)
 }
 
-/// Where `needle` ends in `haystack` at or after `from`: an exact byte
-/// match, unless `needle` holds a space and starts with a non-escape
-/// byte, when each single space may instead be spaces, cursor moves and
-/// SGR in any mix, and nothing else.
-pub(crate) fn phrase_end(haystack: &[u8], from: usize, needle: &str) -> Option<usize> {
-    let wanted = needle.as_bytes();
-    if wanted.is_empty() {
+/// Where `needle` ends in `haystack` at or after `from`, as exact bytes.
+pub(crate) fn exact_end(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
         return Some(from.min(haystack.len()));
     }
-    if !needle.contains(' ') || wanted[0] == 0x1b {
-        return exact_end(haystack, from, wanted);
-    }
-    let words: Vec<&[u8]> = needle.split_whitespace().map(str::as_bytes).collect();
-    if words.len() < 2 {
-        return exact_end(haystack, from, wanted);
-    }
-    let mut cursor = from;
-    while cursor + words[0].len() <= haystack.len() {
-        let at = haystack[cursor..]
-            .windows(words[0].len())
-            .position(|window| window == words[0])?;
-        let mut pos = cursor + at + words[0].len();
-        let mut matched = true;
-        for word in &words[1..] {
-            let Some(gap) = frame_gap_end(haystack, pos) else {
-                matched = false;
-                break;
-            };
-            pos = gap;
-            if haystack[pos..].starts_with(word) {
-                pos += word.len();
-            } else {
-                matched = false;
-                break;
-            }
-        }
-        if matched {
-            return Some(pos);
-        }
-        cursor += at + 1;
-    }
-    None
-}
-
-/// Where `needle` ends in `haystack` at or after `from`, as exact bytes.
-fn exact_end(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
     if from > haystack.len() {
         return None;
     }
@@ -523,386 +862,6 @@ fn exact_end(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
         .windows(needle.len())
         .position(|window| window == needle)
         .map(|at| from + at + needle.len())
-}
-
-/// Where the terminal frame's gap starting at `pos` ends: one or more
-/// spaces, cursor moves and SGR sequences, and nothing else.
-fn frame_gap_end(haystack: &[u8], mut pos: usize) -> Option<usize> {
-    let start = pos;
-    loop {
-        if haystack.get(pos) == Some(&b' ') {
-            pos += 1;
-        } else if let Some(end) = cursor_move_end(haystack, pos).or_else(|| sgr_end(haystack, pos))
-        {
-            pos = end;
-        } else {
-            break;
-        }
-    }
-    (pos > start).then_some(pos)
-}
-
-/// Where the cursor move at `pos` ends: `\x1b[<row>;<col>H`.
-fn cursor_move_end(haystack: &[u8], pos: usize) -> Option<usize> {
-    if haystack.get(pos) != Some(&0x1b) || haystack.get(pos + 1) != Some(&b'[') {
-        return None;
-    }
-    let mut end = pos + 2;
-    let row = end;
-    while haystack.get(end).is_some_and(|byte| byte.is_ascii_digit()) {
-        end += 1;
-    }
-    if end == row || haystack.get(end) != Some(&b';') {
-        return None;
-    }
-    end += 1;
-    let col = end;
-    while haystack.get(end).is_some_and(|byte| byte.is_ascii_digit()) {
-        end += 1;
-    }
-    if end == col || haystack.get(end) != Some(&b'H') {
-        return None;
-    }
-    Some(end + 1)
-}
-
-/// Where the SGR sequence at `pos` ends: `\x1b[...m`.
-fn sgr_end(haystack: &[u8], pos: usize) -> Option<usize> {
-    if haystack.get(pos) != Some(&0x1b) || haystack.get(pos + 1) != Some(&b'[') {
-        return None;
-    }
-    let mut end = pos + 2;
-    while haystack
-        .get(end)
-        .is_some_and(|byte| byte.is_ascii_digit() || *byte == b';')
-    {
-        end += 1;
-    }
-    (haystack.get(end) == Some(&b'm')).then_some(end + 1)
-}
-
-/// A colour a screen cell holds: the terminal's default, a 256-palette
-/// entry, or a truecolour triple.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Colour {
-    /// Unpainted: SGR 39 or 49, how a terminal shows its default.
-    Default,
-    /// SGR `38;5;n` or `48;5;n`.
-    Indexed(u8),
-    /// SGR `38;2;r;g;b` or `48;2;r;g;b`.
-    Rgb(u8, u8, u8),
-}
-
-/// One screen cell: its symbol with the pen that wrote it. Unwritten
-/// cells are a space on [`Colour::Default`], which is how a terminal
-/// shows SGR 49.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Cell {
-    pub(crate) symbol: String,
-    pub(crate) fg: Colour,
-    pub(crate) bg: Colour,
-    pub(crate) dim: bool,
-    pub(crate) bold: bool,
-}
-
-/// The pen writing cells: the SGR state.
-#[derive(Debug, Clone, Copy)]
-struct Pen {
-    fg: Colour,
-    bg: Colour,
-    bold: bool,
-    dim: bool,
-}
-
-impl Default for Pen {
-    /// SGR 0: every role the terminal's default colour.
-    fn default() -> Self {
-        Self {
-            fg: Colour::Default,
-            bg: Colour::Default,
-            bold: false,
-            dim: false,
-        }
-    }
-}
-
-/// A test-model screen reading the SGR stream: cursor addressing, the
-/// pen, and erase display. It writes every UTF-8 char into one cell and
-/// drops a char past the last column or row, with no autowrap: a
-/// test-model limit, not a terminal. It holds for the cells the runs
-/// assert (ASCII, `▌ ▐ ▄ ▀`, spaces), and ratatui's crossterm backend
-/// re-addresses the cursor before any cell that does not follow the last
-/// one it wrote, so a wide char misplaces only its own second cell, never
-/// a later one.
-pub(crate) struct Screen {
-    cols: u16,
-    rows: u16,
-    cells: Vec<Cell>,
-    cursor: (u16, u16),
-    pen: Pen,
-    /// An unfinished escape sequence or UTF-8 char at the last feed's
-    /// end, completed by the next feed.
-    pending: Vec<u8>,
-}
-
-impl Screen {
-    /// A blank `cols` by `rows` screen.
-    pub(crate) fn new(cols: u16, rows: u16) -> Self {
-        let blank = Cell {
-            symbol: " ".to_owned(),
-            fg: Colour::Default,
-            bg: Colour::Default,
-            dim: false,
-            bold: false,
-        };
-        Self {
-            cols,
-            rows,
-            cells: vec![blank; usize::from(cols).saturating_mul(usize::from(rows))],
-            cursor: (0, 0),
-            pen: Pen::default(),
-            pending: Vec::new(),
-        }
-    }
-
-    /// The cell at `x`, `y`.
-    pub(crate) fn cell(&self, x: u16, y: u16) -> &Cell {
-        &self.cells[usize::from(y)
-            .saturating_mul(usize::from(self.cols))
-            .saturating_add(usize::from(x))]
-    }
-
-    /// Reads `bytes` onto the screen.
-    pub(crate) fn feed(&mut self, bytes: &[u8]) {
-        self.pending.extend_from_slice(bytes);
-        let mut buf = std::mem::take(&mut self.pending);
-        let mut i = 0;
-        while i < buf.len() {
-            let next = match buf[i] {
-                0x1b => self.escape(&buf, i),
-                b'\r' => {
-                    self.cursor.0 = 0;
-                    Some(i + 1)
-                }
-                b'\n' => {
-                    self.cursor.1 = self.cursor.1.saturating_add(1);
-                    Some(i + 1)
-                }
-                // Control bytes are never content: the attention bell
-                // rings one (`docs/tui.md`, "Getting the person's
-                // attention"), and no cell holds it.
-                0x00..=0x08 | 0x0b | 0x0c | 0x0e..=0x1f | 0x7f => Some(i + 1),
-                _ => self.utf8(&buf, i),
-            };
-            match next {
-                Some(at) => i = at,
-                None => break,
-            }
-        }
-        self.pending = buf.split_off(i);
-    }
-
-    /// Writes `ch` at the cursor with the pen and moves one column.
-    fn put(&mut self, ch: char) {
-        let (cols, rows) = (usize::from(self.cols), usize::from(self.rows));
-        if usize::from(self.cursor.0) < cols && usize::from(self.cursor.1) < rows {
-            self.cells[usize::from(self.cursor.1)
-                .saturating_mul(cols)
-                .saturating_add(usize::from(self.cursor.0))] = Cell {
-                symbol: ch.to_string(),
-                fg: self.pen.fg,
-                bg: self.pen.bg,
-                dim: self.pen.dim,
-                bold: self.pen.bold,
-            };
-        }
-        self.cursor.0 = self.cursor.0.saturating_add(1);
-    }
-
-    /// Consumes the escape sequence at `i`: `Some` past it, or `None`
-    /// when it is unfinished and a later feed completes it.
-    fn escape(&mut self, buf: &[u8], i: usize) -> Option<usize> {
-        match buf.get(i + 1)? {
-            b'[' => self.csi(buf, i),
-            // OSC to BEL or ESC backslash.
-            b']' => {
-                let mut j = i + 2;
-                loop {
-                    match buf.get(j) {
-                        None => return None,
-                        Some(0x07) => return Some(j + 1),
-                        Some(0x1b) if buf.get(j + 1) == Some(&b'\\') => {
-                            return Some(j + 2);
-                        }
-                        Some(_) => j += 1,
-                    }
-                }
-            }
-            // DCS to ESC backslash.
-            b'P' => {
-                let mut j = i + 2;
-                loop {
-                    match buf.get(j) {
-                        None => return None,
-                        Some(0x1b) if buf.get(j + 1) == Some(&b'\\') => {
-                            return Some(j + 2);
-                        }
-                        Some(_) => j += 1,
-                    }
-                }
-            }
-            // Any other ESC x is both bytes.
-            _ => Some(i + 2),
-        }
-    }
-
-    /// Consumes the CSI sequence at `i`: cursor addressing, the pen, and
-    /// erase display update the model, and every other sequence is
-    /// skipped. `Some` past it, or `None` when it is unfinished.
-    fn csi(&mut self, buf: &[u8], i: usize) -> Option<usize> {
-        let mut j = i + 2;
-        while buf.get(j).is_some_and(|byte| (0x20..=0x3F).contains(byte)) {
-            j += 1;
-        }
-        let final_byte = *buf.get(j)?;
-        if !(0x40..=0x7E).contains(&final_byte) {
-            return Some(j + 1);
-        }
-        match final_byte {
-            b'm' => self.sgr(&buf[i + 2..j]),
-            b'H' => {
-                let moves: Vec<&[u8]> = buf[i + 2..j].split(|byte| *byte == b';').collect();
-                let row = moves.first().map_or(1, |digits| param(digits));
-                let col = moves.get(1).map_or(1, |digits| param(digits));
-                self.cursor = (col.saturating_sub(1), row.saturating_sub(1));
-            }
-            b'J' if buf[i + 2..j] == *b"2" => {
-                let blank = Cell {
-                    symbol: " ".to_owned(),
-                    fg: self.pen.fg,
-                    bg: self.pen.bg,
-                    dim: false,
-                    bold: false,
-                };
-                for cell in &mut self.cells {
-                    *cell = blank.clone();
-                }
-            }
-            _ => {}
-        }
-        Some(j + 1)
-    }
-
-    /// Updates the pen from one SGR parameter list: empty or 0 resets; 1
-    /// and 2 set bold and dim; 22 clears both; 39 and 49 take the default;
-    /// 38 and 48 take an indexed or RGB colour; 58 with its
-    /// sub-parameters and 59 are consumed and ignored; anything else is
-    /// ignored.
-    fn sgr(&mut self, params: &[u8]) {
-        let nums: Vec<u16> = if params.is_empty() {
-            vec![0]
-        } else {
-            params
-                .split(|byte| *byte == b';')
-                .map(|digits| {
-                    std::str::from_utf8(digits)
-                        .unwrap_or("")
-                        .parse()
-                        .unwrap_or(0)
-                })
-                .collect()
-        };
-        let mut i = 0;
-        while i < nums.len() {
-            let step = match nums[i] {
-                0 => {
-                    self.pen = Pen::default();
-                    1
-                }
-                1 => {
-                    self.pen.bold = true;
-                    1
-                }
-                2 => {
-                    self.pen.dim = true;
-                    1
-                }
-                22 => {
-                    self.pen.bold = false;
-                    self.pen.dim = false;
-                    1
-                }
-                39 => {
-                    self.pen.fg = Colour::Default;
-                    1
-                }
-                49 => {
-                    self.pen.bg = Colour::Default;
-                    1
-                }
-                59 => 1,
-                38 | 48 | 58 => {
-                    let extended = nums[i];
-                    let (colour, len) = match nums.get(i + 1) {
-                        Some(5) => (nums.get(i + 2).map(|n| Colour::Indexed(sat(*n))), 3),
-                        Some(2) => (
-                            match (nums.get(i + 2), nums.get(i + 3), nums.get(i + 4)) {
-                                (Some(r), Some(g), Some(b)) => {
-                                    Some(Colour::Rgb(sat(*r), sat(*g), sat(*b)))
-                                }
-                                _ => None,
-                            },
-                            5,
-                        ),
-                        _ => (None, 1),
-                    };
-                    match (extended, colour) {
-                        (38, Some(colour)) => self.pen.fg = colour,
-                        (48, Some(colour)) => self.pen.bg = colour,
-                        _ => {}
-                    }
-                    len
-                }
-                _ => 1,
-            };
-            i += step;
-        }
-    }
-
-    /// Writes the UTF-8 char at `i` with the pen: `Some` past it, or
-    /// `None` when its bytes are split across feeds. One char takes one
-    /// cell, however wide the terminal draws it.
-    fn utf8(&mut self, buf: &[u8], i: usize) -> Option<usize> {
-        let end = (i + 4).min(buf.len());
-        match std::str::from_utf8(&buf[i..end]) {
-            Ok(text) => {
-                let ch = text.chars().next().unwrap();
-                self.put(ch);
-                Some(i + ch.len_utf8())
-            }
-            Err(err) if err.valid_up_to() > 0 => {
-                let text = std::str::from_utf8(&buf[i..i + err.valid_up_to()]).unwrap();
-                let ch = text.chars().next().unwrap();
-                self.put(ch);
-                Some(i + ch.len_utf8())
-            }
-            Err(err) if err.error_len().is_some() => Some(i + 1),
-            Err(_) => None,
-        }
-    }
-}
-
-/// One SGR parameter: digits, else the default 1.
-fn param(digits: &[u8]) -> u16 {
-    std::str::from_utf8(digits)
-        .unwrap_or("")
-        .parse()
-        .unwrap_or(1)
-}
-
-/// A palette entry: SGR sends bytes.
-fn sat(entry: u16) -> u8 {
-    u8::try_from(entry).unwrap_or(u8::MAX)
 }
 
 /// Every SGR parameter list in `bytes`, in order: `\x1b[m` is `[0]`.

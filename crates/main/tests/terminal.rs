@@ -17,447 +17,142 @@ mod support;
 
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{Read, Write};
-use std::os::fd::OwnedFd;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, mpsc};
+use std::process::Stdio;
+use std::sync::mpsc;
 use std::thread;
 
-use fakes::{ProviderServer, Response, Watchdog};
-use rustix::pty;
+use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::Deadline;
+use support::pty::{KITTY_PUSH, TITLE, WAITING_TITLE};
 
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
+/// Installs a provider `fake` with model `m` on `openai-responses` at the
+/// fake server, makes `fake/m` the configured model, and idles the hub
+/// out a second after its last client leaves, so no hub lingers.
+fn provider(setup: &support::Setup, server: &ProviderServer) {
+    provider_with(setup, &json!({}), server);
 }
 
-impl Setup {
-    fn new() -> Self {
-        Self::within(Deadline::start())
-    }
+/// [`provider`], with the fake model declaring `input`
+/// `["text", "image"]`, so a pasted image is sent as an image part.
+fn provider_with_images(setup: &support::Setup, server: &ProviderServer) {
+    provider_with(setup, &json!({"input": ["text", "image"]}), server);
+}
 
-    fn within(deadline: Deadline) -> Self {
-        let root = fakes::TempDir::new("ft");
-        fs::create_dir_all(root.path().join("h")).unwrap();
-        fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { deadline, root }
-    }
+fn provider_with(setup: &support::Setup, model_extra: &Value, server: &ProviderServer) {
+    provider_full(setup, model_extra, server, None);
+}
 
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
+/// [`provider_with`], with the fake model declaring thinking levels and
+/// the panel pinned to `panel_width` percent of the screen
+/// (`docs/tui.md`, "Layout").
+fn provider_with_panel(setup: &support::Setup, server: &ProviderServer, panel_width: f64) {
+    provider_full(
+        setup,
+        &json!({"thinking_levels": ["low", "high"], "thinking_default": "high"}),
+        server,
+        Some(panel_width),
+    );
+}
 
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
+fn provider_full(
+    setup: &support::Setup,
+    model_extra: &Value,
+    server: &ProviderServer,
+    panel_width: Option<f64>,
+) {
+    let source = setup.root.path().join("src");
+    write(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+    );
+    let mut model = json!({"id": "m", "protocol": "openai-responses",
+        "base_url": format!("{}/v1", server.url()), "context_window": 100000});
+    for (key, value) in model_extra.as_object().unwrap() {
+        model[key] = value.clone();
     }
-
-    /// Installs a provider `fake` with model `m` on `openai-responses` at the
-    /// fake server, makes `fake/m` the configured model, and idles the hub
-    /// out a second after its last client leaves, so no hub lingers.
-    fn provider(&self, server: &ProviderServer) {
-        self.provider_with(&json!({}), server);
+    write(
+        &source.join("providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": [model]
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    let mut config = json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}});
+    if let Some(width) = panel_width {
+        config["tui"] = json!({"panel": {"width": width}});
     }
+    write(&setup.home().join("config.json"), &config);
+}
 
-    /// [`Setup::provider`], with the fake model declaring `input`
-    /// `["text", "image"]`, so a pasted image is sent as an image part.
-    fn provider_with_images(&self, server: &ProviderServer) {
-        self.provider_with(&json!({"input": ["text", "image"]}), server);
-    }
+/// The project's sessions directory, through the canonical workspace,
+/// as the project key names it.
+fn sessions(setup: &support::Setup) -> PathBuf {
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
+    let key = workspace.to_string_lossy().replace('/', "-");
+    setup.home().join("projects").join(key).join("sessions")
+}
 
-    fn provider_with(&self, model_extra: &Value, server: &ProviderServer) {
-        self.provider_full(model_extra, server, None);
-    }
-
-    /// [`Setup::provider_with`], with the fake model declaring thinking
-    /// levels and the panel pinned to `panel_width` percent of the
-    /// screen (`docs/tui.md`, "Layout").
-    fn provider_with_panel(&self, server: &ProviderServer, panel_width: f64) {
-        self.provider_full(
-            &json!({"thinking_levels": ["low", "high"], "thinking_default": "high"}),
-            server,
-            Some(panel_width),
-        );
-    }
-
-    fn provider_full(
-        &self,
-        model_extra: &Value,
-        server: &ProviderServer,
-        panel_width: Option<f64>,
-    ) {
-        let source = self.root.path().join("src");
-        write(
-            &source.join("extension.json"),
-            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-        );
-        let mut model = json!({"id": "m", "protocol": "openai-responses",
-            "base_url": format!("{}/v1", server.url()), "context_window": 100000});
-        for (key, value) in model_extra.as_object().unwrap() {
-            model[key] = value.clone();
-        }
-        write(
-            &source.join("providers/fake.json"),
-            &json!({
-                "name": "fake",
-                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [model]
-            }),
-        );
-        extensions::plan(
-            &self.home(),
-            &extensions::Request::Path(source),
-            "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
+/// The one session in [`sessions`].
+fn only_session(setup: &support::Setup) -> String {
+    let mut ids: Vec<String> = fs::read_dir(sessions(setup))
         .unwrap()
-        .commit()
-        .unwrap();
-        let mut config = json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}});
-        if let Some(width) = panel_width {
-            config["tui"] = json!({"panel": {"width": width}});
-        }
-        write(&self.home().join("config.json"), &config);
-    }
-
-    /// The project's sessions directory, through the canonical workspace,
-    /// as the project key names it.
-    fn sessions(&self) -> PathBuf {
-        let workspace = fs::canonicalize(self.workspace()).unwrap();
-        let key = workspace.to_string_lossy().replace('/', "-");
-        self.home().join("projects").join(key).join("sessions")
-    }
-
-    /// The one session in [`Setup::sessions`].
-    fn only_session(&self) -> String {
-        let mut ids: Vec<String> = fs::read_dir(self.sessions())
-            .unwrap()
-            .flatten()
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(ids.len(), 1, "one session");
-        ids.pop().unwrap()
-    }
-
-    /// Runs `fiber` with `args` headless in its own process group,
-    /// waiting under the test's [`Deadline`]. A watchdog beside it kills
-    /// that group if this process dies first.
-    fn fiber(&self, args: &[&str]) -> std::process::Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
-        command
-            .args(args)
-            .current_dir(self.workspace())
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", self.root.path())
-            .env("FIBER_HOME", self.home())
-            .env("FIBER_TEST_FAKE_KEY", "sk-test")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let (child, watchdog) = spawn_watched(&mut command);
-        let group = child.id();
-        let guard = KillGroup(group);
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
-            Ok(output) => output.unwrap(),
-            Err(_) => support::expired(
-                self.deadline,
-                group,
-                &finished,
-                &format!("`fiber {}` to exit", args.join(" ")),
-            ),
-        };
-        assert!(
-            fakes::group_empties(group, self.deadline.left()),
-            "`fiber` left a process in its group behind"
-        );
-        std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
-        output
-    }
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(ids.len(), 1, "one session");
+    ids.pop().unwrap()
 }
 
-/// A pseudo-terminal. The main side stays open while the run uses
-/// the terminal side.
-struct Terminal {
-    main: OwnedFd,
-    terminal: fs::File,
+/// Runs `fiber` with `args` headless in its own process group, waiting
+/// under the test's [`Deadline`]. A watchdog beside it kills that group
+/// if this process dies first.
+fn ask(setup: &support::Setup, args: &[&str]) -> std::process::Output {
+    let mut command = setup.fiber(args);
+    command.current_dir(setup.workspace());
+    support::run_to_exit(
+        setup.deadline,
+        &format!("`fiber {}`", args.join(" ")),
+        command,
+    )
 }
 
-impl Terminal {
-    /// A 120x32 terminal.
-    fn open() -> Self {
-        Self::sized(120, 32)
-    }
-
-    /// A `cols` by `rows` terminal, as `open` is 120 by 32.
-    fn sized(cols: u16, rows: u16) -> Self {
-        let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY).unwrap();
-        // Not inherited: a hub `fiber` starts would hold the master open.
-        rustix::io::fcntl_setfd(&main, rustix::io::FdFlags::CLOEXEC).unwrap();
-        pty::grantpt(&main).unwrap();
-        pty::unlockpt(&main).unwrap();
-        let name = pty::ptsname(&main, Vec::new()).unwrap();
-        let path = PathBuf::from(OsStr::from_bytes(name.as_bytes()));
-        let terminal = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .unwrap();
-        rustix::termios::tcsetwinsize(
-            &terminal,
-            rustix::termios::Winsize {
-                ws_col: cols,
-                ws_row: rows,
-                ws_xpixel: 0,
-                ws_ypixel: 0,
-            },
-        )
-        .unwrap();
-        Self { main, terminal }
-    }
-
-    fn stdin(&self) -> Stdio {
-        Stdio::from(self.terminal.try_clone().unwrap())
-    }
+/// Spawns `fiber` with `args` on a `cols` by `rows` terminal through the
+/// shared driver, with `env` after the fake key in the child's
+/// environment, so every run keeps today's key.
+fn terminal(
+    setup: &support::Setup,
+    cols: u16,
+    rows: u16,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> support::pty::Run {
+    let mut full = vec![("FIBER_TEST_FAKE_KEY", "sk-test")];
+    full.extend(env.iter().copied());
+    support::pty::Run::spawn(setup, cols, rows, args, &full)
 }
 
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group. Dropping the watchdog kills the group; standing it down exits
-/// quietly once the child is reaped and the group is empty.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
+/// A setup on `deadline`, with `h` and `w` under its root, as
+/// [`support::Setup::new`] makes them: the no-tty runs name their own
+/// deadline.
+fn setup_within(deadline: Deadline) -> support::Setup {
+    let root = fakes::TempDir::new("ft");
+    fs::create_dir_all(root.path().join("h")).unwrap();
+    fs::create_dir_all(root.path().join("w")).unwrap();
+    support::Setup { root, deadline }
 }
-
-/// Kills process group `group` on drop.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
-}
-
-/// The terminal under test: its child, the pty master, and one reader
-/// thread appending every master chunk to the output, waking a waiter
-/// after each.
-/// Sessions the hub starts run in their own process groups, guarded by
-/// a matching watchdog on the workspace; the hub idles out on its own.
-struct Run {
-    child: Child,
-    /// The hub's socket, removed when the hub exits.
-    hub_socket: PathBuf,
-    watchdog: Watchdog,
-    #[allow(dead_code, reason = "held until the end to kill sessions on drop")]
-    sessions: Watchdog,
-    main: fs::File,
-    /// One wake per chunk appended; held by one waiter at a time.
-    wakes: Arc<Mutex<mpsc::Receiver<()>>>,
-    output: Arc<Mutex<Vec<u8>>>,
-    /// The screen grid rebuilt from the output so far, and whether the
-    /// reader reached end of file.
-    screen: Arc<Mutex<Shared>>,
-    /// A resize the reader has not applied to its parser yet, as
-    /// (columns, rows).
-    pending_size: Arc<Mutex<Option<(u16, u16)>>>,
-    deadline: Deadline,
-}
-
-impl Run {
-    /// Spawns `fiber` with no arguments on a pty: standard input, output
-    /// and error all on the terminal side, as on a real terminal.
-    fn terminal(setup: &Setup) -> Self {
-        Self::terminal_full(setup, &[], &[])
-    }
-
-    /// Spawns `fiber` as [`terminal`] does, with `env` added to the
-    /// child's environment.
-    fn terminal_with(setup: &Setup, env: &[(&str, &str)]) -> Self {
-        Self::terminal_full(setup, env, &[])
-    }
-
-    /// Spawns `fiber` as [`terminal`] does, with `args` after the binary.
-    fn terminal_args(setup: &Setup, args: &[&str]) -> Self {
-        Self::terminal_full(setup, &[], args)
-    }
-
-    /// Spawns `fiber` as `terminal` does, with `env` added to the
-    /// child's environment and `args` after the binary.
-    fn terminal_full(setup: &Setup, env: &[(&str, &str)], args: &[&str]) -> Self {
-        Self::terminal_full_sized(setup, env, args, 120, 32)
-    }
-
-    /// Spawns `fiber` as `terminal_full` does, on a `cols` by `rows`
-    /// terminal.
-    fn terminal_full_sized(
-        setup: &Setup,
-        env: &[(&str, &str)],
-        args: &[&str],
-        cols: u16,
-        rows: u16,
-    ) -> Self {
-        let terminal = Terminal::sized(cols, rows);
-        let sessions = Watchdog::matching(setup.workspace().to_str().unwrap());
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
-        command
-            .current_dir(setup.workspace())
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", setup.root.path())
-            .env("FIBER_HOME", setup.home())
-            .env("FIBER_TEST_FAKE_KEY", "sk-test")
-            // The grid the harness rebuilds is a fixed dark xterm: the
-            // binary must not read the ambient terminal's kind or theme.
-            .env("TERM", "xterm-256color");
-        for (key, value) in env {
-            command.env(key, value);
-        }
-        command.args(args);
-        command
-            .stdin(terminal.stdin())
-            .stdout(terminal.stdin())
-            .stderr(terminal.stdin());
-        let (child, watchdog) = spawn_watched(&mut command);
-        let main = fs::File::from(terminal.main);
-        let (tx, rx) = mpsc::channel();
-        let output = Arc::new(Mutex::new(Vec::new()));
-        let screen = Arc::new(Mutex::new(Shared::default()));
-        let pending_size = Arc::new(Mutex::new(None));
-        {
-            let appended = Arc::clone(&output);
-            let screen = Arc::clone(&screen);
-            let pending_size = Arc::clone(&pending_size);
-            let mut reader = main.try_clone().unwrap();
-            let mut writer = main.try_clone().unwrap();
-            thread::Builder::new()
-                .name("terminal-read".to_owned())
-                .spawn(move || {
-                    // One parser for the whole run: styles, the cursor and
-                    // the alternate screen carry across reads, so a query
-                    // split across two chunks is still answered.
-                    let mut parser = vt100::Parser::new(rows, cols, 0);
-                    let mut pending: Vec<u8> = Vec::new();
-                    let mut buf = [0u8; 4096];
-                    loop {
-                        match reader.read(&mut buf) {
-                            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
-                            Ok(0) | Err(_) => break,
-                            Ok(n) => {
-                                let Some(bytes) = buf.get(..n) else { break };
-                                let replies =
-                                    ingest(&mut parser, &pending_size, &mut pending, bytes);
-                                // A write that fails means the terminal is
-                                // gone: end quietly, as at end of file.
-                                if !replies.is_empty() && writer.write_all(&replies).is_err() {
-                                    break;
-                                }
-                                appended.lock().unwrap().extend_from_slice(bytes);
-                                screen.lock().unwrap().grid = snapshot(&parser);
-                                tx.send(()).unwrap_or(());
-                            }
-                        }
-                    }
-                    screen.lock().unwrap().ended = true;
-                    tx.send(()).unwrap_or(());
-                })
-                .unwrap();
-        }
-        Self {
-            child,
-            hub_socket: setup.home().join("run").join("hub"),
-            watchdog,
-            sessions,
-            main,
-            wakes: Arc::new(Mutex::new(rx)),
-            output,
-            screen,
-            pending_size,
-            deadline: setup.deadline,
-        }
-    }
-}
-
-/// The rebuilt screen the grid waits read: text without styling, the
-/// cursor, and the flags the restore assertions need.
-#[derive(Clone, Debug, Default)]
-struct Grid {
-    contents: String,
-    rows: Vec<String>,
-    cursor: (u16, u16),
-
-    alternate_screen: bool,
-
-    hide_cursor: bool,
-}
-
-/// What the reader shares with the test: the latest grid, and whether
-/// the reader reached end of file.
-#[derive(Clone, Debug, Default)]
-struct Shared {
-    grid: Grid,
-    ended: bool,
-}
-
-/// Feeds one master chunk through the parser: a pending resize lands
-/// before the chunk's bytes parse, so the first frame after a resize
-/// draws at the new size; capability queries are answered from the same
-/// bytes. Returns the replies for the child.
-fn ingest(
-    parser: &mut vt100::Parser,
-    pending_size: &Mutex<Option<(u16, u16)>>,
-    pending: &mut Vec<u8>,
-    bytes: &[u8],
-) -> Vec<u8> {
-    if let Some((cols, rows)) = pending_size.lock().unwrap().take() {
-        parser.screen_mut().set_size(rows, cols);
-    }
-    pending.extend_from_slice(bytes);
-    let replies = query_replies(pending);
-    parser.process(bytes);
-    replies
-}
-
-/// One snapshot of the parser's screen.
-fn snapshot(parser: &vt100::Parser) -> Grid {
-    let screen = parser.screen();
-    let (_, cols) = screen.size();
-    Grid {
-        contents: screen.contents(),
-        rows: screen.rows(0, cols).collect(),
-        cursor: screen.cursor_position(),
-        alternate_screen: screen.alternate_screen(),
-        hide_cursor: screen.hide_cursor(),
-    }
-}
-
-/// A capability query Fiber emits (`crates/tui/src/term.rs`,
-/// `crates/tui/src/appearance.rs`) and the harness's reply: kitty's
-/// disambiguate flags, a bare device-attributes answer, and a black
-/// background with a dark theme report, so the grid is a fixed dark
-/// xterm whose Esc key arrives as `CSI 27 u`.
-const CAPABILITIES: [(&[u8], &[u8]); 4] = [
-    (b"\x1b[?u", b"\x1b[?1u"),
-    (b"\x1b[c", b"\x1b[?0c"),
-    (b"\x1b]11;?\x1b\\", b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
-    (b"\x1b[?996n", b"\x1b[?997;1n"),
-];
-
-/// How many trailing bytes `pending` keeps for a query split across two
-/// reads: longer than the longest query above.
-const PENDING_KEEP: usize = 16;
 
 /// Whether the grid shows a working line with its elapsed count:
 /// "Working" plus a digit right after its space. The count needs
@@ -480,164 +175,6 @@ fn working_elapsed_needs_the_count() {
     assert!(!working_elapsed("Working · esc to interrupt"));
     assert!(!working_elapsed("Working"));
     assert!(!working_elapsed("idle"));
-}
-
-/// The replies for every whole query in `pending`, in stream order,
-/// dropping the bytes through each answered query and keeping the tail
-/// for a query still arriving.
-fn query_replies(pending: &mut Vec<u8>) -> Vec<u8> {
-    let mut replies = Vec::new();
-    loop {
-        let mut first: Option<(usize, usize)> = None;
-        for (at, (query, _)) in CAPABILITIES.iter().enumerate() {
-            if let Some(pos) = pending.windows(query.len()).position(|w| w == *query)
-                && first.is_none_or(|(best, _)| pos < best)
-            {
-                first = Some((pos, at));
-            }
-        }
-        let Some((pos, at)) = first else { break };
-        replies.extend_from_slice(CAPABILITIES[at].1);
-        pending.drain(..pos + CAPABILITIES[at].0.len());
-    }
-    let drop = pending.len().saturating_sub(PENDING_KEEP);
-    pending.drain(..drop);
-    replies
-}
-
-#[test]
-fn ingest_applies_a_pending_resize_before_its_chunk_parses() {
-    let mut parser = vt100::Parser::new(32, 120, 0);
-    let pending_size = Mutex::new(Some((40u16, 10u16)));
-    let mut pending = Vec::new();
-    // Fifty cells at 40 columns wrap onto two rows; at 120 they would
-    // sit on one. The cursor tells which size parsed the chunk.
-    ingest(&mut parser, &pending_size, &mut pending, &[b'x'; 50]);
-    assert_eq!(parser.screen().size(), (10, 40));
-    assert_eq!(parser.screen().cursor_position(), (1, 10));
-    // No pending resize: the size stays.
-    ingest(&mut parser, &pending_size, &mut pending, b"x");
-    assert_eq!(parser.screen().size(), (10, 40));
-    // A whole query is answered from the same bytes.
-    let replies = ingest(&mut parser, &pending_size, &mut pending, b"\x1b[?u");
-    assert_eq!(replies, b"\x1b[?1u");
-}
-
-impl Run {
-    /// The grid rebuilt from the output so far.
-    fn screen(&self) -> Grid {
-        self.screen.lock().unwrap().grid.clone()
-    }
-
-    /// The grid's rows, top to bottom, without newlines.
-    fn screen_rows(&self) -> Vec<String> {
-        self.screen().rows
-    }
-
-    /// Waits under one named deadline for the whole wait until the grid
-    /// matches, however many frames arrive. When the terminal ends first
-    /// the panic shows the last grid, so a stall says how far the journey
-    /// got.
-    fn wait_screen(&self, what: &str, mut matches: impl FnMut(&Grid) -> bool) {
-        let wakes = self.wakes.lock().unwrap();
-        loop {
-            let shared = self.screen.lock().unwrap().clone();
-            if matches(&shared.grid) {
-                return;
-            }
-            if shared.ended {
-                panic!(
-                    "waited until the deadline for {what}; the terminal ended; screen:\n{}",
-                    shared.grid.contents
-                );
-            }
-            if wakes.recv_timeout(self.deadline.left()).is_err() {
-                let contents = self.screen.lock().unwrap().grid.contents.clone();
-                panic!("waited until the deadline for {what}; screen:\n{contents}");
-            }
-        }
-    }
-
-    /// Resizes the terminal to `cols` by `rows`: the parser follows, so
-    /// the grid the waits read draws at the new size.
-    #[allow(dead_code, reason = "the resize journey uses it from a later task on")]
-    fn resize(&mut self, cols: u16, rows: u16) {
-        rustix::termios::tcsetwinsize(
-            &self.main,
-            rustix::termios::Winsize {
-                ws_col: cols,
-                ws_row: rows,
-                ws_xpixel: 0,
-                ws_ypixel: 0,
-            },
-        )
-        .unwrap();
-        *self.pending_size.lock().unwrap() = Some((cols, rows));
-        support::kill_pid(self.deadline, self.child.id(), "WINCH").unwrap();
-    }
-
-    /// Types bytes into the terminal, on a thread bounded by the test's
-    /// [`Deadline`].
-    fn write(&mut self, bytes: &[u8]) {
-        let mut main = self.main.try_clone().unwrap();
-        let bytes = bytes.to_vec();
-        support::bounded(self.deadline, "typing on the terminal", move || {
-            main.write_all(&bytes)?;
-            main.flush()
-        })
-        .unwrap();
-    }
-
-    /// Reads until the raw output holds `needle` as exact bytes, under
-    /// one named deadline for the whole wait: an OSC 9 notification never
-    /// reaches the cells, so the grid cannot see it.
-    fn read_bytes_until(&self, needle: &[u8], what: &str) {
-        assert!(!needle.is_empty(), "a byte wait names its bytes");
-        let wakes = self.wakes.lock().unwrap();
-        loop {
-            {
-                let output = self.output.lock().unwrap();
-                if output.len() >= needle.len()
-                    && output.windows(needle.len()).any(|window| window == needle)
-                {
-                    return;
-                }
-            }
-            if wakes.recv_timeout(self.deadline.left()).is_err() {
-                panic!("waited until the deadline for {what}");
-            }
-        }
-    }
-
-    /// Waits for the child to exit, reaps it, and returns its output, then
-    /// for the hub to idle out and remove its socket: a hub whose home is
-    /// deleted under it never exits. Dropping `self` kills the hub's
-    /// sessions through the matching watchdog.
-    fn wait(self) -> std::process::Output {
-        // The reader thread holds only a dup of the master; dropping it
-        // here does not close the child's terminal.
-        let group = self.child.id();
-        let guard = KillGroup(group);
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || done.send(self.child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
-            Ok(output) => output.unwrap(),
-            Err(_) => support::expired(self.deadline, group, &finished, "`fiber` to exit"),
-        };
-        assert!(
-            fakes::group_empties(group, self.deadline.left()),
-            "`fiber` left a process in its group behind"
-        );
-        std::mem::forget(guard);
-        self.watchdog.stand_down(self.deadline.cleanup());
-        until_socket(
-            self.deadline,
-            &self.hub_socket,
-            false,
-            "the hub to idle out",
-        );
-        output
-    }
 }
 
 /// Waits under the test's [`Deadline`] until `socket` exists or not, as
@@ -707,22 +244,24 @@ fn stalled() -> Response {
 
 #[test]
 fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     let server = ProviderServer::start([hello(), stalled()]).unwrap();
-    setup.provider(&server);
-    let mut run = Run::terminal(&setup);
-    // The first frame draws the input line.
+    provider(&setup, &server);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    // The first frame draws the input line; its title proves the input
+    // reader runs before the prompt goes out.
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
     // The loop pushes kitty's flags only after it processes the harness's
     // reply, so this also keeps the responder's pty write ahead of input.
-    run.read_bytes_until(b"\x1b[>1u", "kitty keyboard flags pushed");
+    run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
     // Enter goes out once the hub connects.
+    let from = run.output().len();
     run.write(b"say hi\r");
-    // The reply streams in two deltas; the turn's close says it finished.
+    // The reply streams in two deltas; the turn's close says it finished,
+    // whichever order the paint and the finished title arrive in.
     run.wait_screen("the first delta", |grid| grid.contents.contains("Hel"));
-    run.wait_screen("the finished turn", |grid| {
-        grid.contents.contains("completed")
-    });
+    run.turn_finished(from);
     // The second prompt starts a stalled turn; Esc interrupts it. The
     // elapsed count proves `turn_started` folded, which opens the turn:
     // Esc goes out as `cancel` only while the turn is busy, so an Esc on
@@ -754,17 +293,21 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
 /// terminal supports one.
 #[test]
 fn a_finished_turn_sends_an_osc_9_notification() {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
-    setup.provider(&server);
-    let mut run = Run::terminal_with(&setup, &[("TERM_PROGRAM", "ghostty")]);
+    provider(&setup, &server);
+    let mut run = terminal(&setup, 120, 32, &[], &[("TERM_PROGRAM", "ghostty")]);
+    // The first frame's title proves the input reader runs before the
+    // prompt goes out; quitting is taken in any state, so the resume
+    // wait below proves the quit.
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
     run.write(b"say hi\r");
     // The reply streams in two deltas; the turn's close says it finished.
     run.wait_screen("the first delta", |grid| grid.contents.contains("Hel"));
     // The notification never reaches the cells, so this one wait stays on
     // the raw bytes.
-    run.read_bytes_until(b"\x1b]9;Fiber: ", "the OSC 9 notification");
+    run.wait_bytes(0, b"\x1b]9;Fiber: ", "the OSC 9 notification");
     run.write(b"\x03\x03\r");
     run.wait_screen("the primary screen with the resume line", |grid| {
         !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
@@ -794,9 +337,9 @@ fn calls_echo_hi() -> Response {
 
 #[test]
 fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     let server = ProviderServer::start([calls_echo_hi(), hello()]).unwrap();
-    setup.provider(&server);
+    provider(&setup, &server);
     // A standing ask for this exact command: with the terminal connected
     // the loop asks a person (`docs/permissions.md`, "Headless").
     fs::write(
@@ -807,8 +350,10 @@ fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
         ),
     )
     .unwrap();
-    let mut run = Run::terminal(&setup);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    let asking = run.output().len();
     run.write(b"run it\r");
     run.wait_screen("the approval panel", |grid| {
         grid.contents.contains("asked by a global rule: echo hi")
@@ -817,7 +362,9 @@ fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
         grid.contents.contains("allow once")
     });
     // Enter on the first choice allows once; the call runs and the turn
-    // finishes with the answer.
+    // finishes with the answer. The waiting title from before the prompt
+    // proves the turn waits on a person before the choice goes out.
+    run.wait_bytes(asking, WAITING_TITLE, "the waiting turn");
     run.write(b"\r");
     // The reply streams in two deltas; the turn's close says it finished.
     run.wait_screen("the first delta", |grid| grid.contents.contains("Hel"));
@@ -864,7 +411,7 @@ fn ask_then_echo_hi_script() -> Value {
 
 #[test]
 fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     // The built-in `scripted` provider answers from a script in the
     // workspace, named as an ordinary model (`docs/model-routing.md`,
     // "The scripted provider"): one step carries both tool calls.
@@ -892,10 +439,13 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
         ),
     )
     .unwrap();
-    let mut run = Run::terminal_full_sized(&setup, &[], &[], 160, 48);
+    let mut run = terminal(&setup, 160, 48, &[], &[]);
     // A 160x48 grid, as the ticket's screen: every frame draws at the
-    // ticket's width.
+    // ticket's width. The first frame's title proves the input reader
+    // runs before the prompt goes out; the approval choices prove the
+    // quit below lands on the drawn view.
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
     run.write(b"run it\r");
     // The collapsed group line counts the call's parsed form, before the
     // shell's approval panel opens below it.
@@ -967,16 +517,17 @@ fn streaming_ask_stalls() -> Response {
 
 #[test]
 fn a_streaming_ask_shows_its_raw_arguments_until_requested() {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     let server = ProviderServer::start([streaming_ask_stalls()]).unwrap();
-    setup.provider(&server);
-    let mut run = Run::terminal_full_sized(&setup, &[], &[], 160, 48);
+    provider(&setup, &server);
+    let mut run = terminal(&setup, 160, 48, &[], &[]);
     // A 160x48 grid, as the ticket's screen: every frame draws at the
     // ticket's width.
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
     // The loop pushes kitty's flags only after it processes the harness's
     // reply, so this also keeps the responder's pty write ahead of input.
-    run.read_bytes_until(b"\x1b[>1u", "kitty keyboard flags pushed");
+    run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
     run.write(b"run it\r");
     // The call is still streaming its arguments, so the group line shows
     // the raw text; the scripted test above shows it gone once requested.
@@ -1001,19 +552,21 @@ fn a_streaming_ask_shows_its_raw_arguments_until_requested() {
 
 #[test]
 fn a_repository_offer_swaps_in_and_approve_lets_the_turn_run() {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
-    setup.provider(&server);
+    provider(&setup, &server);
     // The workspace's repository declares one MCP server nobody approved.
     write(
         &setup.workspace().join(".fiber/config.json"),
         &json!({"mcp": {"servers": {"db": {"command": "/bin/echo"}}}}),
     );
-    let mut run = Run::terminal(&setup);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
     run.write(b"say hi\r");
     // The offer names the TUI files it installs; the grid reassembles
-    // the line however the terminal wraps it.
+    // the line however the terminal wraps it. The drawn offer is the
+    // terminal's own view, so its keys follow the grid.
     run.wait_screen("the repository offer", |grid| {
         grid.contents.contains("installed")
     });
@@ -1040,17 +593,17 @@ fn a_repository_offer_swaps_in_and_approve_lets_the_turn_run() {
 
 #[test]
 fn resize_redraws_the_grid_at_the_new_size() {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
-    setup.provider(&server);
-    let mut run = Run::terminal(&setup);
+    provider(&setup, &server);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
     // The footer's last word proves the last row drew before the resize.
     run.wait_screen("the footer", |grid| grid.contents.contains("quit"));
     run.resize(40, 10);
-    // The redrawn home at 40 by 10: the input line sits on row 4 with
-    // the drawn cursor over its first placeholder cell and the native
-    // cursor parked on it, and the footer hint closes row 9.
+    // The redrawn home at 40 by 10: the input line sits on row 4
+    // with the cursor parked on it, and the footer hint closes row 9.
     // Only a redraw at the new size lays the frame out this way.
     run.wait_screen("the redrawn grid at the new size", |grid| {
         grid.rows.len() == 10
@@ -1063,7 +616,12 @@ fn resize_redraws_the_grid_at_the_new_size() {
     });
     // The hub `fiber` started is up before the quit, so `wait` sees it
     // idle out rather than start after the home is gone.
-    until_socket(setup.deadline, &run.hub_socket, true, "the hub to start");
+    until_socket(
+        setup.deadline,
+        &setup.hub_socket(),
+        true,
+        "the hub to start",
+    );
     run.write(b"\x03\x03");
     // No session runs, so no resume line follows: the restored primary
     // screen is the assertion.
@@ -1083,8 +641,8 @@ fn without_a_tty_bare_fiber_names_ask() {
 #[test]
 fn a_tty_on_standard_input_alone_is_not_enough() {
     let deadline = Deadline::start();
-    let terminal = Terminal::open();
-    assert_names_ask(deadline, terminal.stdin(), "standard output", &[]);
+    let terminal = support::pty::open(120, 32);
+    assert_names_ask(deadline, terminal.stdio(), "standard output", &[]);
 }
 
 #[test]
@@ -1092,21 +650,22 @@ fn resume_and_continue_without_a_tty_name_ask() {
     let deadline = Deadline::start();
     for args in [&["resume", "s_1"][..], &["resume"][..], &["continue"][..]] {
         assert_names_ask(deadline, Stdio::piped(), "standard input and output", args);
-        let terminal = Terminal::open();
-        assert_names_ask(deadline, terminal.stdin(), "standard output", args);
+        let terminal = support::pty::open(120, 32);
+        assert_names_ask(deadline, terminal.stdio(), "standard output", args);
     }
 }
 
 #[test]
 fn resume_opens_the_session_a_prefix_names() {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     let server = ProviderServer::start([reply("Hello.")]).unwrap();
-    setup.provider(&server);
-    let asked = setup.fiber(&["ask", "say hi"]);
+    provider(&setup, &server);
+    let asked = ask(&setup, &["ask", "say hi"]);
     assert_eq!(asked.status.code(), Some(0));
-    let id = setup.only_session();
-    let mut run = Run::terminal_args(&setup, &["resume", &id[..4]]);
+    let id = only_session(&setup);
+    let mut run = terminal(&setup, 120, 32, &["resume", &id[..4]], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
     run.wait_screen("the earlier reply", |grid| grid.contents.contains("Hello."));
     run.write(b"\x03\x03\r");
     run.wait_screen("the restored primary screen", |grid| {
@@ -1118,13 +677,14 @@ fn resume_opens_the_session_a_prefix_names() {
 
 #[test]
 fn continue_opens_the_latest_session() {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     let server = ProviderServer::start([reply("First."), reply("Second.")]).unwrap();
-    setup.provider(&server);
-    assert_eq!(setup.fiber(&["ask", "first"]).status.code(), Some(0));
-    assert_eq!(setup.fiber(&["ask", "second"]).status.code(), Some(0));
-    let mut run = Run::terminal_args(&setup, &["continue"]);
+    provider(&setup, &server);
+    assert_eq!(ask(&setup, &["ask", "first"]).status.code(), Some(0));
+    assert_eq!(ask(&setup, &["ask", "second"]).status.code(), Some(0));
+    let mut run = terminal(&setup, 120, 32, &["continue"], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
     run.wait_screen("the latest reply", |grid| grid.contents.contains("Second."));
     run.write(b"\x03\x03\r");
     run.wait_screen("the restored primary screen", |grid| {
@@ -1136,13 +696,14 @@ fn continue_opens_the_latest_session() {
 
 #[test]
 fn resume_without_an_id_opens_home_at_the_session_list() {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     let server = ProviderServer::start([reply("Hello.")]).unwrap();
-    setup.provider(&server);
-    let asked = setup.fiber(&["ask", "say hi"]);
+    provider(&setup, &server);
+    let asked = ask(&setup, &["ask", "say hi"]);
     assert_eq!(asked.status.code(), Some(0));
-    let mut run = Run::terminal_args(&setup, &["resume"]);
+    let mut run = terminal(&setup, 120, 32, &["resume"], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
     // The exited session is listed by its first prompt.
     run.wait_screen("the session list", |grid| grid.contents.contains("say hi"));
     // The list is focused, so Enter opens the row: the reply shows.
@@ -1158,8 +719,8 @@ fn resume_without_an_id_opens_home_at_the_session_list() {
 
 #[test]
 fn continue_with_no_session_is_a_usage_error() {
-    let setup = Setup::new();
-    let run = Run::terminal_args(&setup, &["continue"]);
+    let setup = support::Setup::new();
+    let mut run = terminal(&setup, 120, 32, &["continue"], &[]);
     run.wait_screen("the usage error", |grid| {
         grid.contents
             .contains("No session in this project to continue")
@@ -1170,8 +731,8 @@ fn continue_with_no_session_is_a_usage_error() {
 
 #[test]
 fn resume_with_an_unknown_prefix_fails_before_any_frame() {
-    let setup = Setup::new();
-    let run = Run::terminal_args(&setup, &["resume", "s_zzz"]);
+    let setup = support::Setup::new();
+    let mut run = terminal(&setup, 120, 32, &["resume", "s_zzz"], &[]);
     run.wait_screen("the usage error", |grid| {
         grid.contents.contains("no session at")
     });
@@ -1184,38 +745,18 @@ fn resume_with_an_unknown_prefix_fails_before_any_frame() {
 /// Without a tty the binary never draws, so these keep their
 /// byte/stderr/exit assertions: there is no screen to assert on.
 fn assert_names_ask(deadline: Deadline, stdin: Stdio, missing: &str, args: &[&str]) {
-    let setup = Setup::within(deadline);
-    let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+    let setup = setup_within(deadline);
+    let mut command = setup.fiber(args);
     command
-        .args(args)
         .current_dir(setup.workspace())
-        .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .env("HOME", setup.root.path())
-        .env("FIBER_HOME", setup.home())
         .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let (child, watchdog) = spawn_watched(&mut command);
-    let group = child.id();
-    let guard = KillGroup(group);
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match finished.recv_timeout(setup.deadline.left()) {
-        Ok(output) => output.unwrap(),
-        Err(_) => support::expired(
-            setup.deadline,
-            group,
-            &finished,
-            &format!("`fiber` to exit, no tty on {missing}"),
-        ),
-    };
-    assert!(
-        fakes::group_empties(group, setup.deadline.left()),
-        "waited until the deadline for the process group to empty"
+    let output = support::run_to_exit(
+        setup.deadline,
+        &format!("`fiber {}`", args.join(" ")),
+        command,
     );
-    std::mem::forget(guard);
-    watchdog.stand_down(setup.deadline.cleanup());
     assert_eq!(output.status.code(), Some(2), "no tty on {missing}");
     assert!(output.stdout.is_empty());
     assert_eq!(
@@ -1242,7 +783,7 @@ const PIXEL: [u8; 69] = [
 
 /// Waits under the setup's deadline for exactly one `artifacts/i_*.png`
 /// under the session directory, equal byte for byte to [`PIXEL`].
-fn stored_pixel(setup: &Setup) {
+fn stored_pixel(setup: &support::Setup) {
     let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
     loop {
         let mut found = Vec::new();
@@ -1269,9 +810,9 @@ fn stored_pixel(setup: &Setup) {
 
 #[test]
 fn ctrl_v_pastes_an_image_that_the_session_stores() {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
-    setup.provider_with_images(&server);
+    provider_with_images(&setup, &server);
     // A fake clipboard program first on the child's PATH, printing the
     // pixel in its real program's form.
     let bin = setup.root.path().join("bin");
@@ -1295,8 +836,9 @@ fn ctrl_v_pastes_an_image_that_the_session_stores() {
     if !cfg!(target_os = "macos") {
         env.push(("WAYLAND_DISPLAY", "fiber-test"));
     }
-    let mut run = Run::terminal_with(&setup, &env);
+    let mut run = terminal(&setup, 120, 32, &[], &env);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
     run.write(&[0x16]);
     run.wait_screen("the pasted image", |grid| {
         grid.contents.contains("[Image #1]")
@@ -1318,14 +860,15 @@ fn ctrl_v_pastes_an_image_that_the_session_stores() {
 
 #[test]
 fn resume_draws_the_reply_then_its_closed_turn() {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     let server = ProviderServer::start([reply("marker reply")]).unwrap();
-    setup.provider(&server);
-    let asked = setup.fiber(&["ask", "say hi"]);
+    provider(&setup, &server);
+    let asked = ask(&setup, &["ask", "say hi"]);
     assert_eq!(asked.status.code(), Some(0));
-    let id = setup.only_session();
-    let mut run = Run::terminal_args(&setup, &["resume", &id[..4]]);
+    let id = only_session(&setup);
+    let mut run = terminal(&setup, 120, 32, &["resume", &id[..4]], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
     // The turn ended before the attach: the reply draws, then the turn's
     // close, which folds only once `turn_completed` arrives.
     run.wait_screen("the reply", |grid| grid.contents.contains("marker reply"));
@@ -1537,15 +1080,16 @@ fn session_card_rows_are_cut_with_an_ellipsis() {
 /// 160-by-48 screen and asserts the Session card's exact rows: a row
 /// too long for the card is cut with `…`, a row that fits is whole.
 fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     let server = ProviderServer::start([reply("Hello.")]).unwrap();
     // Thinking levels declared, the default in force, so the card shows
     // the `model fake/m thinking high` row; the reply's fixed usage
     // gives the card its spend, context and speed rows.
-    setup.provider_with_panel(&server, share);
+    provider_with_panel(&setup, &server, share);
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
-    let mut run = Run::terminal_full_sized(&setup, &[], &[], 160, 48);
+    let mut run = terminal(&setup, 160, 48, &[], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
     run.write(b"say hi\r");
     // The reply streams in two deltas; the turn's close says it finished.
     // The updated status (with the turn's usage) can arrive before or
@@ -1570,7 +1114,7 @@ fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
     });
     // The card below is the conversation screen before quitting: the
     // primary screen after it holds the resume lines, not the card.
-    let card = Screen::from_rows(run.screen_rows(), 160);
+    let card = Screen::from_rows(run.screen().rows, 160);
     run.write(b"\x03\x03\r");
     run.wait_screen("the primary screen with the resume line", |grid| {
         !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
@@ -1582,12 +1126,12 @@ fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
 
 #[test]
 fn journey_prompt_answer_approval_resize_quit() {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     // Three responses, each held until the test sees its request and lets
     // it go: the answer, the tool call, and the answer after the call.
     let server = ProviderServer::start([reply("Hello."), calls_echo_hi(), reply("Done.")]).unwrap();
     server.hold();
-    setup.provider(&server);
+    provider(&setup, &server);
     // A standing ask for this exact command: with the terminal connected
     // the loop asks a person (`docs/permissions.md`, "Headless").
     fs::write(
@@ -1598,10 +1142,12 @@ fn journey_prompt_answer_approval_resize_quit() {
         ),
     )
     .unwrap();
-    let mut run = Run::terminal(&setup);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
     // Prompt one: the test releases the answer once the server holds its
     // request, never on a timer.
+    let first_from = run.output().len();
     run.write(b"say hi\r");
     assert!(
         server.await_requests(1, setup.deadline.left()),
@@ -1611,7 +1157,11 @@ fn journey_prompt_answer_approval_resize_quit() {
     run.wait_screen("the answer", |grid| {
         grid.alternate_screen && grid.contents.contains("Hello.")
     });
+    // The finished first turn proves the session is idle before the
+    // second prompt goes out.
+    run.turn_finished(first_from);
     // Prompt two ends in a tool call the rule asks about.
+    let asking = run.output().len();
     run.write(b"run it\r");
     assert!(
         server.await_requests(2, setup.deadline.left()),
@@ -1625,7 +1175,11 @@ fn journey_prompt_answer_approval_resize_quit() {
         grid.contents.contains("allow once")
     });
     // Enter on the first choice allows once; the call runs, the loop sends
-    // its output, and the server holds that follow-up request too.
+    // its output, and the server holds that follow-up request too. The
+    // waiting title from before the second prompt proves the turn waits
+    // on a person before the choice goes out.
+    run.wait_bytes(asking, WAITING_TITLE, "the waiting turn");
+    let allowed = run.output().len();
     run.write(b"\r");
     assert!(
         server.await_requests(3, setup.deadline.left()),
@@ -1633,10 +1187,12 @@ fn journey_prompt_answer_approval_resize_quit() {
     );
     server.release_one();
     // The conversation grid before quitting: the call's answer on the
-    // alternate screen.
+    // alternate screen. The finished second turn proves the session is
+    // idle before the resize goes out.
     run.wait_screen("the answer after the call", |grid| {
         grid.alternate_screen && grid.contents.contains("Done.")
     });
+    run.turn_finished(allowed);
     // A resize mid-session: 116 columns keep the panel (its 30-column
     // floor beside the 84-column conversation minimum), so the grid
     // follows to the new size with the conversation still on it.
@@ -1664,16 +1220,18 @@ fn journey_prompt_answer_approval_resize_quit() {
 
 #[test]
 fn journey_quit_resume_answer_again() {
-    let setup = Setup::new();
+    let setup = support::Setup::new();
     // Two responses, each held until the test sees its request and lets
     // it go: the first session's answer, then the resumed session's.
     let server = ProviderServer::start([reply("First."), reply("Second.")]).unwrap();
     server.hold();
-    setup.provider(&server);
+    provider(&setup, &server);
     // One turn, then quit: the conversation grid holds the answer before
     // the terminal is restored.
-    let mut run = Run::terminal(&setup);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    let first_from = run.output().len();
     run.write(b"first\r");
     assert!(
         server.await_requests(1, setup.deadline.left()),
@@ -1685,7 +1243,10 @@ fn journey_quit_resume_answer_again() {
     });
     // `/close` stops the session on screen: quitting with it live would
     // leave it running with no terminal, and no list to resume from.
-    let id = setup.only_session();
+    // The finished turn proves the session is idle before the close
+    // goes out.
+    run.turn_finished(first_from);
+    let id = only_session(&setup);
     run.write(b"/close\r");
     until_socket(
         setup.deadline,
@@ -1703,13 +1264,19 @@ fn journey_quit_resume_answer_again() {
     assert_eq!(output.status.code(), Some(0));
     // Resume lists the exited session by its first prompt; Enter opens
     // the row, with the earlier turn on screen.
-    let mut run = Run::terminal_args(&setup, &["resume"]);
+    let mut run = terminal(&setup, 120, 32, &["resume"], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
     run.wait_screen("the session list", |grid| grid.contents.contains("first"));
+    // The drawn list is the terminal's own view, so Enter follows the
+    // grid; the attached session's title proves the open before the
+    // next prompt goes out.
+    let attached = run.output().len();
     run.write(b"\r");
     run.wait_screen("the earlier turn", |grid| {
         grid.alternate_screen && grid.contents.contains("First.")
     });
+    run.wait_bytes(attached, TITLE, "the attached session's title");
     // A new prompt on the resumed session is answered.
     run.write(b"second\r");
     assert!(
