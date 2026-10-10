@@ -835,6 +835,7 @@ mod tests {
             ("opusz", hay(0, 0), false),
             ("oPuS", hay(0, 0), true),
             ("opus claude", hay(0, 0), true),
+            ("\topus\t", hay(0, 0), true),
         ];
         for (q, h, want) in table {
             assert_eq!(matches(q, &h), want, "query {q:?} over {h:?}");
@@ -849,6 +850,7 @@ mod tests {
         assert_eq!(id_hits("OPUS", "claude-opus-5-5"), vec![7, 8, 9, 10]);
         assert_eq!(id_hits("anthropic", "claude-opus-5-5"), Vec::<usize>::new());
         assert_eq!(id_hits("opus anthropic", "claude-opus-5-5"), vec![7, 8, 9, 10]);
+        assert_eq!(id_hits("opusz", "claude-opus-5-5"), Vec::<usize>::new());
         assert_eq!(id_hits("so", "gpt-6-sol"), vec![6, 7]);
     }
 
@@ -962,16 +964,18 @@ mod tests {
 
     #[test]
     fn filtering_keeps_a_visible_focus_and_moves_a_hidden_one() {
+        // gpt-6-sol-mini matches `mini` but is not its first hit: a visible
+        // focus off the head stays put while the chip clears.
         let mut ui = Ui::default();
         let mut p = for_case("list");
-        p.focus = 5;
+        p.focus = 8;
         p.chip = Some(1);
         ui.picker = Some(p);
         for c in ['m', 'i', 'n', 'i'] {
             on_key(&mut ui, Key::Char(c), Mods::default());
         }
         let p = ui.picker.as_ref().unwrap();
-        assert_eq!((p.focus, p.chip), (5, None));
+        assert_eq!((p.focus, p.chip), (8, None));
         // A hidden focus jumps to the first visible row.
         let mut hidden = Ui { picker: Some(for_case("list")), ..Ui::default() };
         for c in ['m', 'i', 'n', 'i'] {
