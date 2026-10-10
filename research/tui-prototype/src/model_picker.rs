@@ -542,7 +542,7 @@ fn footer() -> Row {
         ("↑↓", "move"),
         ("←→", "levels"),
         ("enter", "choose"),
-        ("tab", "show all"),
+        ("tab", "all"),
         ("ctrl+s", "session"),
         ("ctrl+r", "refresh"),
         ("esc", "close"),
@@ -741,7 +741,7 @@ mod tests {
 
     #[test]
     fn the_picker_is_a_centred_panel_with_a_bar_and_legend() {
-        let rows = view(&for_case("list"), 120);
+        let rows = view(&for_case("list"), 100);
         let t = text(&rows);
         assert!(t.contains("\u{2584}"), "no top edge");
         assert!(t.contains("\u{2580}"), "no bottom edge");
@@ -751,7 +751,7 @@ mod tests {
         let edge = t.split('\n').find(|l| l.contains("\u{2584}")).unwrap();
         let run = edge.chars().filter(|&c| c == '\u{2584}').count();
         assert!(edge.starts_with(' '), "panel flush left");
-        assert!(run < 120, "panel fills the area");
+        assert!(run < 100, "panel fills the area");
         // The focused model rides a full-width accent bar inside blank margins.
         let picked = rows.iter().find(|r| matches!(r.act, Some(Act::Pick(0)))).unwrap();
         assert_eq!(picked.spans[0].style.bg, None, "no margin");
@@ -774,7 +774,7 @@ mod tests {
         let pi = b.iter().position(|r| plain(r).contains("openai-codex")).unwrap();
         assert!(plain(&b[pi - 1]).trim().is_empty(), "no blank before the section");
         // The foot is a bold-key legend.
-        assert!(t.contains("\u{2191}\u{2193} move · \u{2190}\u{2192} levels · enter choose · tab show all · ctrl+s session · ctrl+r refresh · esc close"));
+        assert!(t.contains("\u{2191}\u{2193} move · \u{2190}\u{2192} levels · enter choose · tab all · ctrl+s session · ctrl+r refresh · esc close"));
     }
 
     #[test]
