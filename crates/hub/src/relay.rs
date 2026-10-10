@@ -406,8 +406,13 @@ pub(crate) fn route(
         (kept, opening)
     };
     #[cfg(test)]
-    if let Some(before_open) = lock(&hub.before_open).take() {
-        before_open();
+    {
+        // Taken out first: the pause below blocks, and must not hold
+        // the hub lock while parked, so a test can re-arm it meanwhile.
+        let before_open = lock(&hub.before_open).take();
+        if let Some(before_open) = before_open {
+            before_open();
+        }
     }
     if from.is_none() {
         crate::retire::enqueue_new(&order, session, id, &stripped);

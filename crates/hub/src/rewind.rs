@@ -163,6 +163,15 @@ pub(crate) fn follow(
         let mut held = lock(relays);
         crate::rejoin::Opening::mark(&mut held, relays, &next.0)
     };
+    #[cfg(test)]
+    {
+        // Taken out first: the pause below blocks, and must not hold
+        // the hub lock while parked, so a test can re-arm it meanwhile.
+        let before_open = lock(&hub.before_open).take();
+        if let Some(before_open) = before_open {
+            before_open();
+        }
+    }
     // Under one lock hold: the client may have relayed the new session,
     // still unsubscribed, while the old relay waited for EOF. `transfer`
     // keeps the level and carries it onto that relay, or reports that no

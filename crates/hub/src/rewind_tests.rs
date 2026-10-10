@@ -18,7 +18,8 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use contract::CommandId;
+use serde_json::{Map, Value, json};
 
 use super::*;
 use crate::Started;
@@ -30,6 +31,10 @@ use crate::fake::{FakeStarter, Handshake};
 /// One named deadline per wait: every start and acknowledgement lands
 /// before it.
 const DEADLINE: Duration = Duration::from_secs(10);
+
+/// How long each open-race step waits: every pause and join carries it,
+/// so a stalled opener fails the test instead of hanging the suite.
+const OPEN_DEADLINE: Duration = Duration::from_secs(5);
 
 struct Temp {
     dir: PathBuf,
@@ -788,4 +793,366 @@ fn follow_transfers_the_kept_level_onto_an_unsubscribed_relay() {
         vec![minted],
         "the relay thread drops its acknowledgement"
     );
+}
+
+/// A pre-bound session socket for the open race: counts the connections
+/// it accepted, answers every command `command_accepted`, and records
+/// every line per connection, in accept order. Stays bound until
+/// `close`: closing it earlier would read as EOF on the relay threads.
+struct OpenSession {
+    socket: PathBuf,
+    accepts: Arc<Mutex<usize>>,
+    received: Arc<Mutex<Vec<Vec<String>>>>,
+    closed: Arc<Mutex<bool>>,
+    accept: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+impl OpenSession {
+    fn bind(home: &std::path::Path, id: &str) -> Self {
+        fs::create_dir_all(home.join("run")).unwrap();
+        let socket = home.join("run").join(id);
+        let accepts = Arc::new(Mutex::new(0));
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let closed = Arc::new(Mutex::new(false));
+        let listener = UnixListener::bind(&socket).unwrap();
+        let accept = {
+            let accepts = Arc::clone(&accepts);
+            let received = Arc::clone(&received);
+            let closed = Arc::clone(&closed);
+            thread::Builder::new()
+                .name("open-session".to_owned())
+                .spawn(move || {
+                    let mut index = 0;
+                    while let Ok((stream, _)) = listener.accept() {
+                        if *lock(&closed) {
+                            return;
+                        }
+                        *lock(&accepts) += 1;
+                        lock(&received).push(Vec::new());
+                        let received = Arc::clone(&received);
+                        thread::Builder::new()
+                            .name("open-session-conn".to_owned())
+                            .spawn(move || serve_open(stream, index, &received))
+                            .unwrap();
+                        index += 1;
+                    }
+                })
+                .unwrap()
+        };
+        Self {
+            socket,
+            accepts,
+            received,
+            closed,
+            accept: Mutex::new(Some(accept)),
+        }
+    }
+
+    fn accepts(&self) -> usize {
+        *lock(&self.accepts)
+    }
+
+    /// Stops accepting: the probe connection wakes the accept loop, which
+    /// sees the flag before counting it. Served connections stay open.
+    fn close(&self) {
+        *lock(&self.closed) = true;
+        drop(UnixStream::connect(&self.socket));
+        if let Some(accept) = lock(&self.accept).take() {
+            accept.join().unwrap_or(());
+        }
+    }
+}
+
+/// Serves one open-race connection: records every line, answers each
+/// `command_accepted` under its own id, and holds the socket open.
+fn serve_open(stream: UnixStream, index: usize, received: &Arc<Mutex<Vec<Vec<String>>>>) {
+    let mut write = stream.try_clone().unwrap();
+    let mut read = BufReader::new(stream);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match read.read_line(&mut line) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {
+                lock(received)[index].push(line.clone());
+                let id = serde_json::from_str::<Value>(&line)
+                    .ok()
+                    .and_then(|line| line.get("id").cloned())
+                    .unwrap_or(Value::Null);
+                let ack = json!({
+                    "kind": "command_accepted", "ts": 1, "schema_version": 1,
+                    "payload": {"command_id": id},
+                });
+                let mut bytes = serde_json::to_vec(&ack).unwrap();
+                bytes.push(b'\n');
+                if write
+                    .write_all(&bytes)
+                    .and_then(|()| write.flush())
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// The race setup both open tests share: the connection holds the level
+/// on the old session, and returns its writer and relays.
+fn open_race(
+    level: &Map<String, Value>,
+    old: &str,
+) -> (Arc<Mutex<UnixStream>>, Arc<Mutex<crate::relay::Relays>>) {
+    let relays: Arc<Mutex<crate::relay::Relays>> =
+        Arc::new(Mutex::new(crate::relay::Relays::default()));
+    lock(&relays)
+        .subscribed
+        .push((old.to_owned(), level.clone()));
+    let (write, _read) = UnixStream::pair().unwrap();
+    (Arc::new(Mutex::new(write)), relays)
+}
+
+/// Arms the one-shot open pause on `hub`: the opener reaching it signals
+/// `paused` and waits for `release` before connecting.
+fn arm_before_open(hub: &Arc<Hub>) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    let (paused_tx, paused) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    *lock(&hub.before_open) = Some(Box::new(move || {
+        paused_tx.send(()).unwrap_or(());
+        release.recv().unwrap_or(());
+    }));
+    (paused, release_tx)
+}
+
+#[test]
+fn route_paused_in_before_open_shares_one_relay_with_follow() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let old = id(1);
+    let next = id(2);
+    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    let session = OpenSession::bind(&temp.dir, &next);
+    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let (writer, relays) = open_race(&level, &old);
+    // The client command pauses after its opening, before its connect;
+    // the redirect pauses in the re-armed hook once it too is about to
+    // open, still having published nothing.
+    let (paused_first, release_first) = arm_before_open(&hub);
+    let (route_done_tx, route_done) = mpsc::channel();
+    thread::Builder::new()
+        .name("race-route".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            let writer = Arc::clone(&writer);
+            let relays = Arc::clone(&relays);
+            let next = next.clone();
+            move || {
+                let stripped = json!({"id": "c_cmd", "command": "tools", "args": {}})
+                    .as_object()
+                    .unwrap()
+                    .clone();
+                crate::relay::route(
+                    &CommandId("c_cmd".to_owned()),
+                    &next,
+                    stripped,
+                    &hub,
+                    &writer,
+                    &relays,
+                    None,
+                    false,
+                );
+                route_done_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    assert!(
+        paused_first.recv_timeout(OPEN_DEADLINE).is_ok(),
+        "route paused after its opening"
+    );
+    let (paused_second, release_second) = arm_before_open(&hub);
+    let (follow_done_tx, follow_done) = mpsc::channel();
+    thread::Builder::new()
+        .name("race-follow".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            let writer = Arc::clone(&writer);
+            let relays = Arc::clone(&relays);
+            let old = old.clone();
+            move || {
+                follow(&hub, &writer, &relays, &old);
+                follow_done_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    // Without the gate both openers wait past their checks, each about
+    // to publish; with it follow queues behind route on the gate instead
+    // of pausing, and the wait below times out.
+    if paused_second.recv_timeout(OPEN_DEADLINE).is_err() {
+        drop(release_first);
+        assert!(
+            route_done.recv_timeout(OPEN_DEADLINE).is_ok(),
+            "route finished"
+        );
+        assert!(
+            paused_second.recv_timeout(OPEN_DEADLINE).is_ok(),
+            "follow paused after route published"
+        );
+        drop(release_second);
+        assert!(
+            follow_done.recv_timeout(OPEN_DEADLINE).is_ok(),
+            "follow took the existing relay"
+        );
+    } else {
+        drop(release_second);
+        assert!(
+            follow_done.recv_timeout(OPEN_DEADLINE).is_ok(),
+            "follow finished"
+        );
+        drop(release_first);
+        assert!(
+            route_done.recv_timeout(OPEN_DEADLINE).is_ok(),
+            "route finished"
+        );
+    }
+    let held = lock(&relays);
+    let live = held
+        .entries
+        .iter()
+        .filter(|entry| entry.session == next && entry.retiring.is_none())
+        .count();
+    assert_eq!(live, 1, "one relay for the session, not one per opener");
+    assert_eq!(held.entries.len(), 1, "nothing else published");
+    assert_eq!(session.accepts(), 1, "the session saw one connection");
+    assert_eq!(
+        held.subscription(&next),
+        Some(level),
+        "the kept level reached the relay"
+    );
+    let received = lock(&session.received);
+    assert_eq!(received.len(), 1, "one connection carried every line");
+    assert!(
+        received[0]
+            .iter()
+            .any(|line| line.contains("\"subscribe\"")),
+        "the transfer's subscribe reached it: {:?}",
+        received[0]
+    );
+    session.close();
+}
+
+#[test]
+fn follow_paused_in_before_open_shares_one_relay_with_route() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let old = id(1);
+    let next = id(2);
+    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    let session = OpenSession::bind(&temp.dir, &next);
+    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let (writer, relays) = open_race(&level, &old);
+    // The redirect pauses after its opening; the client command runs on
+    // another thread meanwhile, and pauses in the re-armed hook once it
+    // too has passed its check without publishing.
+    let (paused_first, release_first) = arm_before_open(&hub);
+    let (follow_done_tx, follow_done) = mpsc::channel();
+    thread::Builder::new()
+        .name("race-follow".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            let writer = Arc::clone(&writer);
+            let relays = Arc::clone(&relays);
+            let old = old.clone();
+            move || {
+                follow(&hub, &writer, &relays, &old);
+                follow_done_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    assert!(
+        paused_first.recv_timeout(OPEN_DEADLINE).is_ok(),
+        "follow paused after its opening"
+    );
+    let (paused_second, release_second) = arm_before_open(&hub);
+    let (route_done_tx, route_done) = mpsc::channel();
+    thread::Builder::new()
+        .name("race-route".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            let writer = Arc::clone(&writer);
+            let relays = Arc::clone(&relays);
+            let next = next.clone();
+            move || {
+                let stripped = json!({"id": "c_cmd", "command": "tools", "args": {}})
+                    .as_object()
+                    .unwrap()
+                    .clone();
+                crate::relay::route(
+                    &CommandId("c_cmd".to_owned()),
+                    &next,
+                    stripped,
+                    &hub,
+                    &writer,
+                    &relays,
+                    None,
+                    false,
+                );
+                route_done_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    // Without the gate both openers wait past their checks, each about
+    // to publish; with it route queues behind follow on the gate instead
+    // of pausing, and the wait below times out.
+    if paused_second.recv_timeout(OPEN_DEADLINE).is_err() {
+        drop(release_first);
+        assert!(
+            follow_done.recv_timeout(OPEN_DEADLINE).is_ok(),
+            "follow finished"
+        );
+        assert!(
+            route_done.recv_timeout(OPEN_DEADLINE).is_ok(),
+            "route took the existing relay"
+        );
+    } else {
+        drop(release_first);
+        assert!(
+            follow_done.recv_timeout(OPEN_DEADLINE).is_ok(),
+            "follow finished"
+        );
+        drop(release_second);
+        assert!(
+            route_done.recv_timeout(OPEN_DEADLINE).is_ok(),
+            "route finished"
+        );
+    }
+    let held = lock(&relays);
+    let live = held
+        .entries
+        .iter()
+        .filter(|entry| entry.session == next && entry.retiring.is_none())
+        .count();
+    assert_eq!(live, 1, "one relay for the session, not one per opener");
+    assert_eq!(held.entries.len(), 1, "nothing else published");
+    assert_eq!(session.accepts(), 1, "the session saw one connection");
+    assert_eq!(
+        held.subscription(&next),
+        Some(level),
+        "the kept level reached the relay"
+    );
+    let received = lock(&session.received);
+    let commands = received
+        .iter()
+        .flatten()
+        .filter(|line| line.contains("\"c_cmd\""))
+        .count();
+    assert_eq!(commands, 1, "the client command reached the session once");
+    session.close();
 }
