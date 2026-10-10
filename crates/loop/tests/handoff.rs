@@ -31,7 +31,7 @@ use serde_json::json;
 use support::{
     DEADLINE, ENDED, MODEL, OPENING, REPLY, STEP, Session, TestTool, assert_kinds,
     assert_no_stored_attempt, attempt_numbers, calls_reply, delivery, handoff, ignore, kinds,
-    model, reasoning_reply, tool_call_reply, with_tokens,
+    model, of_kind, reasoning_reply, tool_call_reply, with_tokens,
 };
 
 /// The trigger in these tests.
@@ -133,9 +133,6 @@ const FAILED_AFTER_TEXT: &[&str] = &[
     "assistant_message_completed",
     "handoff_completed",
 ];
-fn of_kind<'a>(lines: &'a [Envelope], kind: &str) -> Vec<&'a Envelope> {
-    lines.iter().filter(|line| line.kind == kind).collect()
-}
 
 fn user(text: &str) -> Input {
     Input::User {

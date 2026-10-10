@@ -38,8 +38,8 @@ use r#loop::{Error, Loop};
 use serde_json::{Map, Value, json};
 
 use support::{
-    DEADLINE, Gate, OPENING, STEP, Session, Tap, TestTool, assert_kinds, calls_reply, delivery,
-    kinds,
+    DEADLINE, Gate, OPENING, STEP, Session, Tap, TestTool, answer_value, assert_kinds, calls_reply,
+    delivery, kinds,
 };
 
 /// The idle delay every test but the no-timeout one sets.
@@ -323,12 +323,6 @@ fn send_reply(
     rx
 }
 
-/// Sends `answer` to `request` and returns how the command was answered.
-fn answer(session: &Session, request: &str, answer: Value) -> contract::inbox::Answer {
-    let rx = send_reply(session, request, answer);
-    rx.recv_timeout(DEADLINE).expect("the reply is answered")
-}
-
 /// A reply that fits `questions()`.
 fn main_branch() -> Value {
     json!({"answers": [{"labels": ["main"]}]})
@@ -465,7 +459,7 @@ fn a_rejected_reply_does_not_move_the_idle_deadline() {
     let mark = clock
         .mark_parked(at, DEADLINE)
         .expect("the step waits again");
-    let answered = answer(&session, &request, json!({"confirmed": true}));
+    let answered = answer_value(&session, &request, json!({"confirmed": true}));
     assert_eq!(answered.unwrap_err().code, ErrorCode::InvalidArguments);
     assert!(
         clock.await_parked_since(&mark, Some(at), DEADLINE),
@@ -509,11 +503,11 @@ fn waits_past_the_idle_delay(later: &'static str) {
         "past the idle delay the step still waits with no deadline"
     );
     // A stale reply is answered from the step's wait, after the advance.
-    let stale = answer(&session, "r_nope", main_branch());
+    let stale = answer_value(&session, "r_nope", main_branch());
     assert_eq!(stale.unwrap_err().code, ErrorCode::StaleRequest);
     still_running(&finished);
     no_resolution(&tap);
-    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+    assert_eq!(answer_value(&session, &request, main_branch()), Ok(None));
 
     assert_eq!(
         finish(&mut session, &finished),
@@ -823,7 +817,7 @@ fn without_an_idle_delay_a_form_waits_a_day_for_its_answer() {
     );
     still_running(&finished);
     no_resolution(&tap);
-    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+    assert_eq!(answer_value(&session, &request, main_branch()), Ok(None));
 
     assert_eq!(
         finish(&mut session, &finished),
@@ -865,12 +859,12 @@ fn an_ask_that_does_not_suspend_keeps_the_session_past_the_idle_delay() {
         clock.await_parked_since(&mark, None, DEADLINE),
         "past the idle delay the step still waits with no deadline"
     );
-    let stale = answer(&session, "r_nope", main_branch());
+    let stale = answer_value(&session, "r_nope", main_branch());
     assert_eq!(stale.unwrap_err().code, ErrorCode::StaleRequest);
     still_running(&finished);
     no_resolution(&tap);
     let request = request_id(&requested);
-    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+    assert_eq!(answer_value(&session, &request, main_branch()), Ok(None));
     assert_eq!(
         finish(&mut session, &finished),
         Some(TurnOutcome::Completed)
@@ -957,7 +951,7 @@ fn a_reply_after_a_shutdown_answers_the_form_raised_again() {
     let raised = tap.wait_for("interaction_requested");
     assert_eq!(raised.payload, requested.payload, "the same request");
     let request = request_id(&raised);
-    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+    assert_eq!(answer_value(&session, &request, main_branch()), Ok(None));
     assert_eq!(
         finish(&mut session, &finished),
         Some(TurnOutcome::Completed)
@@ -1099,7 +1093,7 @@ fn a_reply_after_the_form_is_raised_again_answers_it() {
     let raised = tap.wait_for("interaction_requested");
     assert_eq!(raised.payload, requested.payload);
     let request = request_id(&raised);
-    assert_eq!(answer(&session, &request, main_branch()), Ok(None));
+    assert_eq!(answer_value(&session, &request, main_branch()), Ok(None));
 
     assert_eq!(
         finish(&mut session, &finished),

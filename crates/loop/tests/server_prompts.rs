@@ -20,13 +20,13 @@ use contract::clock::Clock;
 use contract::clock::Wake;
 use contract::events::TurnOutcome;
 use contract::events::{CommandInfo, McpServerFailed, McpServerReady, ServerFailure};
-use contract::inbox::{Ack, Answer, Delivery, Rejection};
+use contract::inbox::{Ack, Answer, Delivery};
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Failure};
 use contract::tool::{Cancel, Output, ServerRecord};
 use fakes::Scripted;
 
-use support::{Session, kinds, message};
+use support::{Session, accepted, kinds, message, rejected};
 
 fn capture() -> (Ack, mpsc::Receiver<Answer>) {
     let (tx, rx) = mpsc::channel();
@@ -35,17 +35,6 @@ fn capture() -> (Ack, mpsc::Receiver<Answer>) {
 
 fn take(rx: &mpsc::Receiver<Answer>) -> Answer {
     rx.try_recv().expect("the command was answered")
-}
-
-fn accepted() -> Answer {
-    Ok(None)
-}
-
-fn rejected(code: ErrorCode, message: &str) -> Answer {
-    Err(Rejection {
-        code,
-        message: message.to_owned(),
-    })
 }
 
 fn plain() -> Vec<&'static str> {

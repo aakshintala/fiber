@@ -18,7 +18,7 @@ use std::thread;
 
 use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{Decision, TurnOutcome};
-use contract::inbox::{Ack, Answer, Delivery, Rejection};
+use contract::inbox::{Ack, Answer, Delivery};
 use contract::provider::{Input, ToolDefinition};
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
@@ -27,7 +27,10 @@ use contract::{CommandId, Envelope, ErrorCode, RequestId};
 use fakes::Scripted;
 use serde_json::{Map, Value, json};
 
-use support::{Session, TestTool, calls_reply, kinds, message, on_request};
+use support::{
+    Session, TestTool, accepted, allow, calls_reply, kinds, message, on_request, paris, rejected,
+    reply_to, shell,
+};
 
 const BUSY: &str = "A turn is running; send `steer` to add to it.";
 const CLOSING: &str = "The session is closing and takes no new turn.";
@@ -42,17 +45,6 @@ fn capture() -> (Ack, mpsc::Receiver<Answer>) {
 
 fn take(rx: &mpsc::Receiver<Answer>) -> Answer {
     rx.try_recv().expect("the command was answered")
-}
-
-fn accepted() -> Answer {
-    Ok(None)
-}
-
-fn rejected(code: ErrorCode, message: &str) -> Answer {
-    Err(Rejection {
-        code,
-        message: message.to_owned(),
-    })
 }
 
 /// A prompt whose acknowledgement records whether `turn_started` was already
@@ -76,18 +68,6 @@ fn steer_with(text: &str, ack: Ack) -> Delivery {
 
 fn drop_of(text: &str, ack: Ack) -> Delivery {
     Delivery::SteerDrop(CommandId(format!("c_{text}")), ack)
-}
-
-fn reply_to(request_id: RequestId, answer: ReplyAnswer, ack: Ack) -> Delivery {
-    Delivery::Reply(Reply { request_id, answer }, ack)
-}
-
-fn allow() -> ReplyAnswer {
-    ReplyAnswer::Approval {
-        decision: Decision::Allow,
-        feedback: None,
-        remember: None,
-    }
 }
 
 fn allow_with_feedback() -> ReplyAnswer {
@@ -397,12 +377,6 @@ fn applied_then_dropped() -> Vec<String> {
     .collect()
 }
 
-fn shell(subject: &str) -> Arc<TestTool> {
-    let mut tool = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
-    tool.subject = Some(subject.to_owned());
-    Arc::new(tool)
-}
-
 fn standing_ask() -> StandingRules {
     StandingRules {
         global: vec![Rule {
@@ -414,10 +388,6 @@ fn standing_ask() -> StandingRules {
         }],
         project: Vec::new(),
     }
-}
-
-fn paris() -> Value {
-    json!({"city": "Paris"})
 }
 
 /// `run` until it returns. The session keeps its inbox sender, so the loop
@@ -831,7 +801,7 @@ fn a_drop_after_steering_applied_is_stale() {
 
 #[test]
 fn a_steer_held_during_an_approval_can_be_dropped() {
-    let tool = shell("npm publish");
+    let tool = shell(Some("npm publish"), None);
     let mut session = ask_session(Arc::clone(&tool));
     let inbox = session.inbox.clone();
     let (steer_ack, steer_answers) = capture();
@@ -888,7 +858,7 @@ fn a_drop_of_a_steer_taken_at_the_end_of_a_turn_applies_nothing() {
 
 #[test]
 fn a_reply_to_the_pending_request_is_accepted_and_resolves_it() {
-    let tool = shell("npm publish");
+    let tool = shell(Some("npm publish"), None);
     let mut session = ask_session(Arc::clone(&tool));
     let inbox = session.inbox.clone();
     let (stale_ack, stale_answers) = capture();
@@ -923,7 +893,7 @@ fn a_reply_to_the_pending_request_is_accepted_and_resolves_it() {
 
 #[test]
 fn a_reply_that_does_not_fit_is_rejected_and_a_fitting_one_still_resolves() {
-    let tool = shell("npm publish");
+    let tool = shell(Some("npm publish"), None);
     let mut session = ask_session(Arc::clone(&tool));
     let inbox = session.inbox.clone();
     let (bad_ack, bad_answers) = capture();
@@ -1060,7 +1030,7 @@ fn close_mid_turn_lets_the_turn_finish_and_a_later_prompt_is_closing() {
 
 #[test]
 fn close_during_an_approval_denies_it_by_cancel() {
-    let tool = shell("npm publish");
+    let tool = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", paris()), ("shell", paris())]),
@@ -1119,7 +1089,7 @@ fn close_during_an_approval_denies_it_by_cancel() {
 /// (`docs/invocation.md`, "Shutdown").
 #[test]
 fn a_shutdown_that_closes_the_inbox_during_a_standing_ask_leaves_the_request_pending() {
-    let tool = shell("npm publish");
+    let tool = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", paris()), ("shell", paris())]),

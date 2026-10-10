@@ -23,12 +23,11 @@ use contract::commands::{Reply, ReplyAnswer};
 use contract::events::Decision;
 use contract::inbox::{Ack, Delivery};
 use contract::rules::{Rule, RuleDecision, StandingRules};
-use contract::shapes::Effect;
 use contract::tool::Tool;
 use contract::{CommandId, RequestId};
 use fakes::Scripted;
 
-use support::{DEADLINE, Session, TestTool, calls_reply, delivery, ignore, kinds};
+use support::{DEADLINE, Session, calls_reply, delivery, ignore, kinds, shell};
 
 fn arm(session: &mut Session, after: Option<Duration>) {
     session.looped = Some(session.looped.take().unwrap().idle_exit(after));
@@ -286,12 +285,6 @@ fn no_deadline_never_expires() {
     );
 }
 
-fn shell(subject: &str) -> Arc<TestTool> {
-    let mut tool = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
-    tool.subject = Some(subject.to_owned());
-    Arc::new(tool)
-}
-
 fn standing() -> StandingRules {
     StandingRules {
         global: vec![Rule {
@@ -306,7 +299,7 @@ fn standing() -> StandingRules {
 }
 
 fn asking() -> Session {
-    let tool = shell("npm publish");
+    let tool = shell(Some("npm publish"), None);
     let session = Session::with_tools(
         vec![
             calls_reply("", &[("shell", serde_json::json!({"city": "Paris"}))]),

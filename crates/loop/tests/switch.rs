@@ -25,7 +25,8 @@ use fakes::{Scripted, ScriptedProvider};
 use r#loop::{HandoffSettings, Hosted, Model, NO_SWITCH, Prepare, Prepared, Reviewer, Switchable};
 
 use support::{
-    DEADLINE, ENDED, MODEL, OPENING, REPLY, STEP, Session, assert_kinds, delivery, kinds, model,
+    DEADLINE, ENDED, MODEL, OPENING, REPLY, STEP, Session, allow, assert_kinds, delivery, kinds,
+    model, of_kind,
 };
 
 const NEW_MODEL: &str = "fake/model-2";
@@ -110,10 +111,6 @@ fn run(session: &mut Session, prompt: &str) -> (Option<TurnOutcome>, Vec<Envelop
     session.inbox.send(delivery(prompt)).unwrap();
     let outcome = session.turn();
     (outcome, session.lines())
-}
-
-fn of_kind<'a>(lines: &'a [Envelope], kind: &str) -> Vec<&'a Envelope> {
-    lines.iter().filter(|line| line.kind == kind).collect()
 }
 
 const REASONING_REPLY: &[&str] = &[
@@ -382,7 +379,6 @@ fn after_close_prepare_is_not_called() {
 }
 
 use contract::RequestId;
-use contract::events::Decision;
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::Effect;
 use support::{TestTool, calls_reply, on_request, reasoning_reply};
@@ -403,14 +399,6 @@ fn ask_rule() -> StandingRules {
             session_id: None,
         }],
         project: Vec::new(),
-    }
-}
-
-fn allow_answer() -> contract::commands::ReplyAnswer {
-    contract::commands::ReplyAnswer::Approval {
-        decision: Decision::Allow,
-        feedback: None,
-        remember: None,
     }
 }
 
@@ -445,7 +433,7 @@ fn during_an_approval_wait_is_accepted_and_applied_after_the_turn() {
                 .send(Delivery::Reply(
                     contract::commands::Reply {
                         request_id: id,
-                        answer: allow_answer(),
+                        answer: allow(),
                     },
                     support::ignore(),
                 ))
@@ -547,7 +535,7 @@ fn an_idle_deadline_in_an_approval_wait_writes_no_model_changed() {
             .send(Delivery::Reply(
                 contract::commands::Reply {
                     request_id: RequestId("r_absent".into()),
-                    answer: allow_answer(),
+                    answer: allow(),
                 },
                 support::ignore(),
             ))
@@ -1636,7 +1624,7 @@ fn resume_interleaving_holds_arrival_order() {
         .send(Delivery::Reply(
             contract::commands::Reply {
                 request_id: RequestId("r_9".into()),
-                answer: allow_answer(),
+                answer: allow(),
             },
             support::ignore(),
         ))
@@ -2222,7 +2210,7 @@ fn credential_during_an_approval_wait_is_accepted_and_applied_after_the_turn() {
                 .send(Delivery::Reply(
                     contract::commands::Reply {
                         request_id: id,
-                        answer: allow_answer(),
+                        answer: allow(),
                     },
                     support::ignore(),
                 ))
@@ -2491,7 +2479,7 @@ fn run_deferred_switch_case(
         .send(Delivery::Reply(
             contract::commands::Reply {
                 request_id: RequestId("r_9".into()),
-                answer: allow_answer(),
+                answer: allow(),
             },
             support::ignore(),
         ))

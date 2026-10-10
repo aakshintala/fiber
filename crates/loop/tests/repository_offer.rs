@@ -32,7 +32,7 @@ use fakes::Scripted;
 use log::Watcher;
 use serde_json::Value;
 
-use support::{DEADLINE, Session, delivery, ignore, read_until, steer};
+use support::{DEADLINE, Session, delivery, deny, ignore, read_until, steer};
 
 /// A fake repository: a fixed list of unapproved items, every call recorded.
 #[derive(Default)]
@@ -1140,14 +1140,6 @@ fn reply_on(
     rx
 }
 
-fn deny() -> ReplyAnswer {
-    ReplyAnswer::Approval {
-        decision: Decision::Deny,
-        feedback: None,
-        remember: None,
-    }
-}
-
 fn finished_ok(finished: &mpsc::Receiver<Result<(), r#loop::Error>>) {
     ended(finished).unwrap();
 }
@@ -1372,7 +1364,7 @@ fn an_offer_comes_before_a_suspended_approval_and_both_are_answered_in_order() {
     assert!(answered(&reply).is_ok());
     let (watcher, lines) = until_kind(watcher, "permission_requested");
     assert_eq!(lines.last().unwrap().payload["request_id"], "r_9");
-    let reply = reply_on(&inbox, "r_9", deny());
+    let reply = reply_on(&inbox, "r_9", deny(None));
     assert!(answered(&reply).is_ok());
     let (_, _) = until_kind(watcher, "turn_completed");
     inbox.send(Delivery::Close(ignore())).unwrap();
@@ -1404,7 +1396,7 @@ fn an_approvals_reply_sent_while_the_offer_waits_answers_it_after() {
     let finished = run_on(looped);
     let (watcher, lines) = until_kind(watcher, "repository_code_offered");
     let offer = request_of(lines.last().unwrap());
-    let approval = reply_on(&inbox, "r_9", deny());
+    let approval = reply_on(&inbox, "r_9", deny(None));
     let reply = reply_on(&inbox, offer.0.as_str(), decisions(&[Approve]));
     assert!(answered(&reply).is_ok());
     let (_, _) = until_kind(watcher, "turn_completed");
@@ -1467,7 +1459,7 @@ fn an_idle_exit_on_the_offer_keeps_the_suspended_approval_for_the_next_resume() 
     let reply = reply_on(&inbox, offer.0.as_str(), decisions(&[Approve]));
     assert!(answered(&reply).is_ok());
     let (watcher, _) = until_kind(watcher, "permission_requested");
-    let reply = reply_on(&inbox, "r_9", deny());
+    let reply = reply_on(&inbox, "r_9", deny(None));
     assert!(answered(&reply).is_ok());
     let (_, lines) = until_kind(watcher, "turn_completed");
     assert_eq!(lines.last().unwrap().turn_id, Some(TurnId("t_1".into())));
@@ -1524,7 +1516,7 @@ fn a_failed_offer_step_keeps_the_suspended_approval_and_a_repaired_resume_finish
         let finished = run_on(looped);
         let watcher = if answerable {
             let (watcher, _) = until_kind(watcher, "permission_requested");
-            let reply = reply_on(&inbox, "r_9", deny());
+            let reply = reply_on(&inbox, "r_9", deny(None));
             assert!(answered(&reply).is_ok());
             watcher
         } else {
@@ -1672,7 +1664,7 @@ fn an_answer_to_the_offer_sent_before_it_is_raised_again_is_taken_first() {
     assert_eq!(raised.len(), 1);
     assert_eq!(raised[0].payload["request_id"], "r_old");
     assert!(lines.iter().any(|l| l.kind == "repository_code_resolved"));
-    let reply = reply_on(&inbox, "r_9", deny());
+    let reply = reply_on(&inbox, "r_9", deny(None));
     assert!(answered(&reply).is_ok());
     let (_, _) = until_kind(watcher, "turn_completed");
     inbox.send(Delivery::Close(ignore())).unwrap();

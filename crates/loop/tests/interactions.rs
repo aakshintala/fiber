@@ -38,8 +38,8 @@ use r#loop::{Error, HandoffSettings, Loop, Model, Prepared, Switchable};
 use serde_json::{Map, Value, json};
 
 use support::{
-    DEADLINE, Gate, OPENING, STEP, Script, Session, Tap, TestTool, assert_kinds, calls_reply,
-    delivery, kinds, message, steer,
+    DEADLINE, Gate, OPENING, STEP, Script, Session, Tap, TestTool, answer, assert_kinds,
+    calls_reply, delivery, kinds, message, of_kind, steer,
 };
 
 /// Builds one ask, given the asking call's own id.
@@ -192,28 +192,6 @@ fn acked() -> (Ack, mpsc::Receiver<contract::inbox::Answer>) {
     (ack, rx)
 }
 
-fn reply(
-    request: &str,
-    answer: ReplyAnswer,
-) -> (Delivery, mpsc::Receiver<contract::inbox::Answer>) {
-    let (ack, rx) = acked();
-    let delivery = Delivery::Reply(
-        Reply {
-            request_id: RequestId(request.into()),
-            answer,
-        },
-        ack,
-    );
-    (delivery, rx)
-}
-
-/// Sends `answer` to `request` and returns how the command was answered.
-fn answer(session: &Session, request: &str, answer: ReplyAnswer) -> contract::inbox::Answer {
-    let (delivery, rx) = reply(request, answer);
-    session.inbox.send(delivery).unwrap();
-    rx.recv_timeout(DEADLINE).expect("the reply is answered")
-}
-
 fn yes() -> ReplyAnswer {
     ReplyAnswer::Confirmed { confirmed: true }
 }
@@ -233,10 +211,6 @@ fn told(answers: &mpsc::Receiver<Answered>) -> Answered {
     answers
         .recv_timeout(DEADLINE)
         .expect("the tool got its answer")
-}
-
-fn of_kind<'a>(lines: &'a [Envelope], kind: &str) -> Vec<&'a Envelope> {
-    lines.iter().filter(|line| line.kind == kind).collect()
 }
 
 /// Asserts a resolved line is Fiber's decline.

@@ -30,7 +30,10 @@ use fakes::Scripted;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use support::{Gate, Script, Session, Tap, TestTool, calls_reply, delivery, kinds};
+use support::{
+    Gate, Script, Session, Tap, TestTool, calls_reply, completed, delivery, kinds, paris,
+    text_first,
+};
 
 /// A session whose first reply makes `calls` and whose second says "Done.",
 /// with `tools` registered. Runs one turn and returns its lines.
@@ -46,10 +49,6 @@ fn turn(tools: Vec<Arc<dyn Tool>>, calls: &[(&str, Value)]) -> (Session, Vec<Env
     (session, lines)
 }
 
-fn paris() -> Value {
-    json!({"city": "Paris"})
-}
-
 /// The durable lines about tool calls, as `kind name-or-status`.
 fn calls(lines: &[Envelope]) -> Vec<String> {
     lines
@@ -57,17 +56,6 @@ fn calls(lines: &[Envelope]) -> Vec<String> {
         .filter(|l| l.kind.starts_with("tool_call_") && l.seq.is_some())
         .map(|l| l.kind.clone())
         .collect()
-}
-
-fn completed(lines: &[Envelope]) -> Vec<&Envelope> {
-    lines
-        .iter()
-        .filter(|l| l.kind == "tool_call_completed")
-        .collect()
-}
-
-fn text(line: &Envelope) -> &str {
-    line.payload["content"][0]["text"].as_str().unwrap()
 }
 
 #[test]
@@ -93,7 +81,7 @@ fn a_reads_call_runs_and_its_result_goes_to_the_model() {
     );
     let done = completed(&lines)[0];
     assert_eq!(done.payload["status"], "completed");
-    assert_eq!(text(done), "Sunny.");
+    assert_eq!(text_first(done), "Sunny.");
     assert_eq!(tool.ran(), [paris().as_object().unwrap().clone()]);
 
     let requests = session.requests();
@@ -167,7 +155,7 @@ fn an_unknown_tool_is_told_which_names_exist() {
     let done = completed(&lines)[0];
     assert_eq!(done.payload["error"]["code"], "unknown_tool");
     assert_eq!(
-        text(done),
+        text_first(done),
         "No tool is named `get_wether`. The tools are `get_time`, `get_weather`."
     );
 }
@@ -190,13 +178,13 @@ fn bad_arguments_fail_invalid_arguments_and_never_start() {
         assert_eq!(line.payload["error"]["code"], "invalid_arguments");
     }
     assert_eq!(
-        text(done[0]),
+        text_first(done[0]),
         "The arguments do not match the tool's schema:\n\
          `/city`: missing\n\
          `/country`: not allowed\n\
          `/days`: expected integer, got a boolean"
     );
-    assert!(text(done[1]).contains("not a JSON object"));
+    assert!(text_first(done[1]).contains("not a JSON object"));
 }
 
 #[test]
@@ -252,7 +240,7 @@ fn an_effects_function_that_errors_fails_tool_error_and_never_runs() {
     );
     let done = completed(&lines)[0];
     assert_eq!(done.payload["error"]["code"], "tool_error");
-    assert_eq!(text(done), "The effects function broke.");
+    assert_eq!(text_first(done), "The effects function broke.");
     assert!(tool.ran().is_empty());
 }
 
@@ -420,7 +408,7 @@ fn a_cut_off_reply_runs_none_of_its_calls_and_the_turn_continues() {
     for line in done {
         assert_eq!(line.payload["status"], "failed");
         assert_eq!(line.payload["error"]["code"], "output_truncated");
-        assert!(text(line).contains("may be incomplete"));
+        assert!(text_first(line).contains("may be incomplete"));
     }
     let part = lines.iter().find(|l| l.kind == "text_completed").unwrap();
     assert_eq!(part.payload["text"], "Let me");
@@ -531,7 +519,7 @@ fn a_result_over_its_bound_keeps_the_start_and_moves_the_rest_to_an_artifact() {
     assert_eq!(done.payload["artifact"], artifact.as_str());
     let path = session.dir.join(&artifact);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), full);
-    let kept = text(done);
+    let kept = text_first(done);
     let (head, notice) = kept.split_once('\n').unwrap();
     assert_eq!(head, &full[..16 * 1024]);
     assert_eq!(
@@ -549,7 +537,7 @@ fn a_result_over_its_bound_keeps_the_start_and_moves_the_rest_to_an_artifact() {
 fn a_tool_can_keep_both_ends_with_the_notice_between() {
     let (tool, full) = long(100, Bound { start: 10, end: 20 });
     let (_, lines) = turn(vec![tool], &[("cat", paris())]);
-    let kept: Vec<&str> = text(completed(&lines)[0]).split('\n').collect();
+    let kept: Vec<&str> = text_first(completed(&lines)[0]).split('\n').collect();
     assert_eq!(kept.len(), 3);
     assert_eq!(kept[0], &full[..10]);
     assert!(kept[1].starts_with("[70 bytes cut."), "{}", kept[1]);
@@ -561,7 +549,7 @@ fn a_result_at_its_bound_is_not_cut() {
     let (tool, full) = long(30, Bound { start: 10, end: 20 });
     let (_, lines) = turn(vec![tool], &[("cat", paris())]);
     let done = completed(&lines)[0];
-    assert_eq!(text(done), full);
+    assert_eq!(text_first(done), full);
     assert_eq!(done.payload.get("artifact"), None);
 }
 
@@ -1165,7 +1153,7 @@ fn a_hosted_search_is_logged_in_three_lines_and_never_reviewed_or_run() {
     assert_eq!(three[1].payload["effects"], json!(["network"]));
     assert_eq!(three[1].payload["reversible"], true);
     assert_eq!(three[2].payload["status"], "completed");
-    assert_eq!(text(&three[2]), "https://blog.rust-lang.org/");
+    assert_eq!(text_first(&three[2]), "https://blog.rust-lang.org/");
     assert_eq!(three[2].payload["provider_item"], search_result_block());
     let all = kinds(&lines);
     assert!(!all.contains(&"permission_requested"), "{all:?}");

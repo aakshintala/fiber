@@ -19,7 +19,8 @@ use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{Decision, TurnOutcome};
 
 use support::{
-    DEADLINE, Gate, Script, Session, Tap, TestTool, delivery, kinds, steer, tool_call_reply,
+    DEADLINE, Gate, Script, Session, Tap, TestTool, completed, delivery, kinds, paris, shell,
+    steer, text_all, tool_call_reply,
 };
 
 #[test]
@@ -138,18 +139,7 @@ fn a_cancel_landing_between_steps_sends_no_request() {
 use contract::events::{Event, Progress};
 use contract::inbox::{Ack, Delivery};
 use contract::rules::{Rule, RuleDecision, StandingRules};
-use contract::shapes::{Effect, Failure};
-
-fn paris() -> serde_json::Value {
-    serde_json::json!({"city": "Paris"})
-}
-
-/// A tool whose calls execute with `subject`.
-fn shell(subject: &str) -> Arc<TestTool> {
-    let mut tool = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
-    tool.subject = Some(subject.to_owned());
-    Arc::new(tool)
-}
+use contract::shapes::Failure;
 
 fn standing(tool: &str, decision: RuleDecision, prefix: &str) -> StandingRules {
     StandingRules {
@@ -164,24 +154,6 @@ fn standing(tool: &str, decision: RuleDecision, prefix: &str) -> StandingRules {
     }
 }
 
-/// The `tool_call_completed` lines, in request order.
-fn completed(lines: &[contract::Envelope]) -> Vec<&contract::Envelope> {
-    lines
-        .iter()
-        .filter(|l| l.kind == "tool_call_completed")
-        .collect()
-}
-
-/// The text of a completed call's content.
-fn text(line: &contract::Envelope) -> String {
-    line.payload["content"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|part| part["text"].as_str().unwrap())
-        .collect()
-}
-
 #[test]
 fn a_running_call_completes_cancelled_and_a_denied_call_behind_it_does_too() {
     let mut slow = TestTool::reads("slow", "Slow done.");
@@ -193,7 +165,7 @@ fn a_running_call_completes_cancelled_and_a_denied_call_behind_it_does_too() {
         Script::WaitCancel,
     ];
     let slow = Arc::new(slow);
-    let blocked = shell("npm publish");
+    let blocked = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             support::calls_reply("", &[("slow", paris()), ("shell", paris())]),
@@ -248,7 +220,7 @@ fn a_running_call_completes_cancelled_and_a_denied_call_behind_it_does_too() {
     assert_eq!(done.len(), 2);
     // The running call carries its tool's own content, with no error.
     assert_eq!(done[0].payload["status"], "cancelled");
-    assert_eq!(text(done[0]), "Slow done.");
+    assert_eq!(text_all(done[0]), "Slow done.");
     assert!(
         done[0]
             .payload
@@ -331,7 +303,7 @@ fn a_call_returning_an_error_after_cancel_keeps_failed() {
 
 #[test]
 fn a_pending_approval_is_denied_by_cancel_and_later_calls_never_start() {
-    let ask = shell("npm publish");
+    let ask = shell(Some("npm publish"), None);
     let later = Arc::new(TestTool::reads("later", "Later."));
     let mut session = Session::with_tools(
         vec![
@@ -406,7 +378,7 @@ fn a_pending_approval_is_denied_by_cancel_and_later_calls_never_start() {
     assert_eq!(done[0].payload["status"], "cancelled");
     // The call after it never started: cancelled, with no permission lines.
     assert_eq!(done[1].payload["status"], "cancelled");
-    assert_eq!(text(done[1]), "Cancelled before it ran.");
+    assert_eq!(text_all(done[1]), "Cancelled before it ran.");
     assert!(
         lines
             .iter()
@@ -421,7 +393,7 @@ fn a_pending_approval_is_denied_by_cancel_and_later_calls_never_start() {
 
 #[test]
 fn a_cancelled_review_completes_cancelled() {
-    let tool = shell("rm -rf /tmp/vital");
+    let tool = shell(Some("rm -rf /tmp/vital"), None);
     let mut session = Session::with_tools(
         vec![support::calls_reply("", &[("shell", paris())])],
         None,
@@ -492,7 +464,7 @@ fn a_cancelled_review_completes_cancelled() {
 #[test]
 fn an_approved_call_cancelled_while_a_later_call_waits_never_starts() {
     let fast = Arc::new(TestTool::reads("fast", "Fast done."));
-    let ask = shell("npm publish");
+    let ask = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![support::calls_reply(
             "",
@@ -550,7 +522,7 @@ fn an_approved_call_cancelled_while_a_later_call_waits_never_starts() {
     let done = completed(&lines);
     assert_eq!(done.len(), 2);
     assert!(done.iter().all(|l| l.payload["status"] == "cancelled"));
-    assert_eq!(text(done[0]), "Cancelled before it ran.");
+    assert_eq!(text_all(done[0]), "Cancelled before it ran.");
     // The waiting call keeps its deny-by-cancel line.
     let resolved: Vec<&contract::Envelope> = lines
         .iter()
@@ -563,7 +535,7 @@ fn an_approved_call_cancelled_while_a_later_call_waits_never_starts() {
 
 #[test]
 fn a_reply_queued_ahead_of_the_cancel_wake_is_rejected() {
-    let ask = shell("npm publish");
+    let ask = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![support::calls_reply("", &[("shell", paris())])],
         None,
@@ -713,7 +685,7 @@ fn a_cancel_after_a_failed_reply_leaves_the_turn_failed() {
 
 #[test]
 fn a_stale_cancel_wake_does_not_end_a_later_approval() {
-    let ask = shell("npm publish");
+    let ask = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             support::calls_reply("", &[("shell", paris())]),
@@ -794,7 +766,7 @@ fn a_stale_cancel_wake_does_not_end_a_later_approval() {
 
 #[test]
 fn kept_steering_starts_the_next_turn_without_waiting() {
-    let ask = shell("npm publish");
+    let ask = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             support::calls_reply("", &[("shell", paris())]),
@@ -884,7 +856,7 @@ fn kept_steering_starts_the_next_turn_without_waiting() {
 
 #[test]
 fn a_reply_after_turn_completed_is_stale_and_logs_nothing() {
-    let ask = shell("npm publish");
+    let ask = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![support::calls_reply("", &[("shell", paris())])],
         None,
@@ -964,7 +936,7 @@ fn a_reply_after_turn_completed_is_stale_and_logs_nothing() {
 
 #[test]
 fn a_kept_steer_with_a_clean_inbox_starts_the_next_turn_without_blocking() {
-    let ask = shell("npm publish");
+    let ask = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             support::calls_reply("", &[("shell", paris())]),
@@ -1073,7 +1045,7 @@ fn a_shutdown_mid_stream_ends_the_turn_interrupted_and_starts_no_other() {
 
 #[test]
 fn a_shutdown_during_an_approval_wait_leaves_the_request_pending() {
-    let ask = shell("npm publish");
+    let ask = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             support::calls_reply("", &[("shell", paris())]),
@@ -1142,7 +1114,7 @@ fn allow_then(
 
 #[test]
 fn a_reply_taken_before_the_shutdown_stands_and_the_call_never_runs() {
-    let ask = shell("npm publish");
+    let ask = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             support::calls_reply("", &[("shell", paris())]),
@@ -1184,7 +1156,7 @@ fn a_reply_taken_before_the_shutdown_stands_and_the_call_never_runs() {
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["status"], "cancelled");
-    assert_eq!(text(done[0]), "");
+    assert_eq!(text_all(done[0]), "");
     assert_eq!(done[0].payload.get("artifact"), None);
     assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
     assert!(ask.ran.lock().unwrap().is_empty());
@@ -1201,7 +1173,7 @@ fn a_reply_taken_before_the_shutdown_stands_and_the_call_never_runs() {
 
 #[test]
 fn a_reply_taken_before_a_cancel_keeps_its_text() {
-    let ask = shell("npm publish");
+    let ask = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             support::calls_reply("", &[("shell", paris())]),
@@ -1236,7 +1208,7 @@ fn a_reply_taken_before_a_cancel_keeps_its_text() {
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["status"], "cancelled");
-    assert_eq!(text(done[0]), "Cancelled before it ran.");
+    assert_eq!(text_all(done[0]), "Cancelled before it ran.");
     assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
     assert!(ask.ran.lock().unwrap().is_empty());
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
@@ -1244,7 +1216,7 @@ fn a_reply_taken_before_a_cancel_keeps_its_text() {
 
 #[test]
 fn a_reply_sent_after_the_shutdown_is_never_applied() {
-    let ask = shell("npm publish");
+    let ask = shell(Some("npm publish"), None);
     let mut session = Session::with_tools(
         vec![
             support::calls_reply("", &[("shell", paris())]),

@@ -19,19 +19,20 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::Wake;
+use contract::commands::ReplyAnswer;
 use contract::emit::Emit;
 use contract::events::{
-    CacheLifetime, Event, ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
-    TurnOutcome,
+    CacheLifetime, Decision, Event, ReasoningCompleted, TextDelta, ToolCallArgumentsDelta,
+    ToolCallRequested, TurnOutcome,
 };
-use contract::inbox::{Ack, Delivery, Message};
+use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
 use contract::provider::{
     CallError, Delta, ModelCall, ModelRequest, Provider, Reply, ReplyAction, ToolDefinition,
 };
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
-use contract::{CommandId, Envelope, RequestId, SessionId};
+use contract::{CommandId, Envelope, ErrorCode, RequestId, SessionId};
 use fakes::clock::FakeClock;
 use fakes::{BlockingProvider, Scripted, ScriptedProvider, reply};
 use log::{Log, Watcher};
@@ -1619,6 +1620,128 @@ pub(crate) const ENDED: &[&str] = &["turn_completed"];
 /// subset.
 pub(crate) fn assert_kinds(lines: &[Envelope], parts: &[&[&str]]) {
     assert_eq!(kinds(lines), parts.concat());
+}
+
+/// The `{"city": "Paris"}` arguments every weather-tool test calls with.
+pub(crate) fn paris() -> Value {
+    json!({"city": "Paris"})
+}
+
+/// The `tool_call_completed` lines, in request order.
+pub(crate) fn completed(lines: &[Envelope]) -> Vec<&Envelope> {
+    lines
+        .iter()
+        .filter(|line| line.kind == "tool_call_completed")
+        .collect()
+}
+
+/// The first `tool_call_completed` line.
+pub(crate) fn completed_first(lines: &[Envelope]) -> &Envelope {
+    lines
+        .iter()
+        .find(|line| line.kind == "tool_call_completed")
+        .unwrap()
+}
+
+/// The first text part of a completed call's content.
+pub(crate) fn text_first(line: &Envelope) -> &str {
+    line.payload["content"][0]["text"].as_str().unwrap()
+}
+
+/// The text of a completed call's content, every part joined.
+pub(crate) fn text_all(line: &Envelope) -> String {
+    line.payload["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|part| part["text"].as_str().unwrap())
+        .collect()
+}
+
+/// A tool whose calls declare `executes`, with `subject` and `prefix` as
+/// its tool reads them.
+pub(crate) fn shell(subject: Option<&str>, prefix: Option<&str>) -> Arc<TestTool> {
+    let mut tool = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
+    tool.subject = subject.map(str::to_owned);
+    tool.prefix = prefix.map(str::to_owned);
+    Arc::new(tool)
+}
+
+/// An approval that allows the call.
+pub(crate) fn allow() -> ReplyAnswer {
+    ReplyAnswer::Approval {
+        decision: Decision::Allow,
+        feedback: None,
+        remember: None,
+    }
+}
+
+/// An approval that denies the call, with `feedback` as its reason.
+pub(crate) fn deny(feedback: Option<&str>) -> ReplyAnswer {
+    ReplyAnswer::Approval {
+        decision: Decision::Deny,
+        feedback: feedback.map(str::to_owned),
+        remember: None,
+    }
+}
+
+/// A reply to `request_id` carrying `answer`, acknowledged by `ack`.
+pub(crate) fn reply_to(request_id: RequestId, answer: ReplyAnswer, ack: Ack) -> Delivery {
+    Delivery::Reply(contract::commands::Reply { request_id, answer }, ack)
+}
+
+/// A reply to `request_id` carrying `answer`, whose acknowledgement is
+/// dropped unread.
+pub(crate) fn reply_delivery(request_id: RequestId, answer: ReplyAnswer) -> Delivery {
+    Delivery::Reply(contract::commands::Reply { request_id, answer }, ignore())
+}
+
+/// Sends `answer` to `request` and returns how the command was answered,
+/// waiting one [`DEADLINE`] instead of hanging.
+pub(crate) fn answer(session: &Session, request: &str, answer: ReplyAnswer) -> Answer {
+    let (tx, rx) = mpsc::channel();
+    let ack = Ack(Box::new(move |answer| {
+        let _sent = tx.send(answer);
+    }));
+    session
+        .inbox
+        .send(Delivery::Reply(
+            contract::commands::Reply {
+                request_id: RequestId(request.into()),
+                answer,
+            },
+            ack,
+        ))
+        .unwrap();
+    rx.recv_timeout(DEADLINE).expect("the reply is answered")
+}
+
+/// Sends the JSON `answer` to `request` and returns how the command was
+/// answered, waiting one [`DEADLINE`] instead of hanging.
+pub(crate) fn answer_value(session: &Session, request: &str, value: Value) -> Answer {
+    answer(
+        session,
+        request,
+        serde_json::from_value::<ReplyAnswer>(value).unwrap(),
+    )
+}
+
+/// The lines of `kind`, in order.
+pub(crate) fn of_kind<'a>(lines: &'a [Envelope], kind: &str) -> Vec<&'a Envelope> {
+    lines.iter().filter(|line| line.kind == kind).collect()
+}
+
+/// A command answer that accepts with no result.
+pub(crate) fn accepted() -> Answer {
+    Ok(None)
+}
+
+/// A command answer that rejects with `code` and `message`.
+pub(crate) fn rejected(code: ErrorCode, message: &str) -> Answer {
+    Err(Rejection {
+        code,
+        message: message.to_owned(),
+    })
 }
 
 /// One attempt number per `assistant_message_started`, in order. A start

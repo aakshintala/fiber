@@ -28,7 +28,7 @@ use fakes::alloc::{Counting, large_blocks_during};
 use fakes::{Scripted, within};
 use serde_json::json;
 
-use support::{Session, TestTool, calls_reply, delivery};
+use support::{Session, TestTool, calls_reply, completed_first, delivery};
 
 #[global_allocator]
 static ALLOC: Counting = Counting;
@@ -78,17 +78,10 @@ fn turn(tool: TestTool, hooks: Option<Arc<dyn Hooks>>) -> (Session, Vec<Envelope
     (session, lines, peak)
 }
 
-fn completed(lines: &[Envelope]) -> &Envelope {
-    lines
-        .iter()
-        .find(|line| line.kind == "tool_call_completed")
-        .unwrap()
-}
-
 /// Checks the completion carries the 16 KiB cut of `full` with its notice,
 /// and the artifact holds `full` byte for byte.
 fn assert_cut(session: &Session, lines: &[Envelope], full: &str) {
-    let done = completed(lines);
+    let done = completed_first(lines);
     let id = done.action_id.clone().unwrap().0;
     let artifact = format!("artifacts/{id}.txt");
     assert_eq!(done.payload["artifact"], artifact.as_str());
