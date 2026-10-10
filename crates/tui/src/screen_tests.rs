@@ -223,4 +223,13 @@ fn every_frame_is_wrapped_in_synchronized_output() {
     let before = bytes();
     draw(&mut screen, &mut app);
     assert_eq!(bytes(), before);
+    // Dropping the screen closes the block: the cursor ratatui's own drop
+    // would restore goes out inside one last pair, so no bare write is
+    // left after the terminal is restored.
+    drop(screen);
+    assert_eq!(markers(&bytes()), [true, false, true, false, true, false]);
+    assert!(
+        bytes().ends_with(b"\x1b[?2026l"),
+        "the stream ends with the block closed"
+    );
 }

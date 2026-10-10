@@ -158,6 +158,18 @@ impl<B: Backend> Screen<B> {
     }
 }
 
+impl<B: Backend> Drop for Screen<B> {
+    /// Shows the cursor through the terminal before it drops, closing
+    /// the synchronized-output block: ratatui's `Drop for Terminal`
+    /// restores a hidden cursor with a bare write, outside any block
+    /// and after the terminal is restored. Best effort: the terminal is
+    /// already restored on the way out.
+    fn drop(&mut self) {
+        self.terminal.show_cursor().unwrap_or(());
+        self.terminal.backend_mut().flush().unwrap_or(());
+    }
+}
+
 /// A blank frame on the theme's text and background colours, so text drawn
 /// with no colour of its own takes the theme's (`docs/tui.md`, "Themes").
 fn themed(area: Rect) -> Buffer {
