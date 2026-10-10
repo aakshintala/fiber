@@ -180,7 +180,7 @@ fn a_line_written_between_registration_and_the_read_arrives_once() {
     .unwrap();
     log.append(&started(), None, None).unwrap();
     log.append(&step(), None, None).unwrap();
-    let armed = log.arm(true);
+    let armed = log.arm(true, |_, _| {});
     let between = log.append(&step(), None, None).unwrap();
     let ephemeral = log.append(&delta(), None, None).unwrap();
     let watcher = log.finish(armed);

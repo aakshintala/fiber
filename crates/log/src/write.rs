@@ -220,7 +220,7 @@ impl Log {
     /// A watcher that receives every event appended from now on. On a log
     /// stopped by a failed write, one that returns the failure at once.
     pub fn watch(&self) -> Watcher {
-        let armed = self.arm(false);
+        let armed = self.arm(false, |_, _| {});
         Watcher::new(armed.queue, armed.offsets, armed.next)
     }
 
@@ -232,7 +232,7 @@ impl Log {
     /// them, then the failure once, then nothing; later pages are read as
     /// the watcher reaches them.
     pub fn watch_all(&self) -> Watcher {
-        let armed = self.arm(true);
+        let armed = self.arm(true, |_, _| {});
         self.finish(armed)
     }
 
@@ -243,47 +243,20 @@ impl Log {
     /// that `append` takes, so no later line can be queued before an older
     /// snapshot.
     pub fn watch_all_seeded(&self) -> Watcher {
-        let armed = {
-            let mut inner = self.lock();
-            let queue = Arc::new(Queue::default());
-            if let Some(cause) = &inner.failed {
-                queue.fail(&inner.session_id.0, cause);
-            }
-            inner.watchers.retain(|w| w.strong_count() > 0);
-            inner.watchers.push(Arc::downgrade(&queue));
-            let mut seeds: Vec<Envelope> = Vec::new();
-            if let Some(line) = inner.latest.get("session_status") {
-                seeds.push(line.clone());
-            }
-            if let Some(line) = inner.latest.get("steering_queue") {
-                seeds.push(line.clone());
-            }
-            let mut ui_keys: Vec<&String> = inner
-                .latest
-                .keys()
-                .filter(|k| k.starts_with("extension_ui:"))
-                .collect();
-            ui_keys.sort();
-            for key in ui_keys {
-                if let Some(line) = inner.latest.get(key) {
-                    seeds.push(line.clone());
-                }
-            }
-            for line in &seeds {
+        let armed = self.arm(true, |inner, queue| {
+            for line in inner.kept_seed() {
                 queue.push_kept(line);
             }
-            Armed {
-                queue,
-                offsets: Arc::clone(&inner.offsets),
-                next: 0,
-            }
-        };
+        });
         self.finish(armed)
     }
 
-    /// Registers a queue. `from_start` is [`Log::watch_all`]: the watcher
-    /// begins at `seq` 0. [`Log::watch`] begins at the next line.
-    fn arm(&self, from_start: bool) -> Armed {
+    /// Registers a queue and runs `seed` under the one log lock that
+    /// `append` takes, after the queue is registered (and after `fail` on
+    /// a stopped log), so no later line can be queued before an older
+    /// snapshot. `from_start` is [`Log::watch_all`]: the watcher begins at
+    /// `seq` 0. [`Log::watch`] begins at the next line.
+    fn arm(&self, from_start: bool, seed: impl FnOnce(&Inner, &Queue)) -> Armed {
         let mut inner = self.lock();
         let queue = Arc::new(Queue::default());
         if let Some(cause) = &inner.failed {
@@ -293,6 +266,7 @@ impl Log {
         // idle keeps nothing.
         inner.watchers.retain(|w| w.strong_count() > 0);
         inner.watchers.push(Arc::downgrade(&queue));
+        seed(&inner, &queue);
         Armed {
             queue,
             offsets: Arc::clone(&inner.offsets),
@@ -483,6 +457,21 @@ impl Inner {
             queue.fail(&self.session_id.0, &cause);
         }
         self.failed = Some(cause);
+    }
+
+    /// The kept ephemeral lines, seeded first on a full subscriber: the
+    /// kept `session_status`, then `steering_queue`, then every
+    /// `extension_ui:` key in `BTreeMap` order (already sorted, so no
+    /// explicit sort).
+    fn kept_seed(&self) -> impl Iterator<Item = &Envelope> {
+        let status = self.latest.get("session_status");
+        let steering = self.latest.get("steering_queue");
+        let ui = self
+            .latest
+            .iter()
+            .filter(|(key, _)| key.starts_with("extension_ui:"))
+            .map(|(_, line)| line);
+        status.into_iter().chain(steering).chain(ui)
     }
 }
 
