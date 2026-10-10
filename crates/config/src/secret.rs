@@ -59,24 +59,32 @@ fn secret_path(home: &Path, name: &str) -> Result<PathBuf, ConfigError> {
     Ok(dir.join(name))
 }
 
+fn read_at(path: &Path) -> Result<Option<Secret>, ConfigError> {
+    if !plain(path, false)? {
+        return Ok(None);
+    }
+    match fs::read_to_string(path) {
+        Ok(value) => Ok(Some(Secret::new(value))),
+        Err(source) => Err(ConfigError::Io { file: path.to_path_buf(), source }),
+    }
+}
+
+fn store_at(path: &Path, secret: &Secret) -> Result<(), ConfigError> {
+    write_atomic(path, secret.expose().as_bytes(), 0o600)
+}
+
 /// Reads `credentials/<name>` (`host.secret(name)`). `None` when there is no
 /// such file; a symbolic link there is refused.
 pub fn read_secret(home: &Path, name: &str) -> Result<Option<Secret>, ConfigError> {
     let path = secret_path(home, name)?;
-    if !plain(&path, false)? {
-        return Ok(None);
-    }
-    match fs::read_to_string(&path) {
-        Ok(value) => Ok(Some(Secret::new(value))),
-        Err(source) => Err(ConfigError::Io { file: path, source }),
-    }
+    read_at(&path)
 }
 
 /// Stores `credentials/<name>` (`fiber login <name>`), mode 0600, creating
 /// `credentials/` mode 0700.
 pub fn store_secret(home: &Path, name: &str, secret: &Secret) -> Result<(), ConfigError> {
     let path = secret_path(home, name)?;
-    write_atomic(&path, secret.expose().as_bytes(), 0o600)
+    store_at(&path, secret)
 }
 
 /// Reads `credentials/<name>/<label>`. `None` when there is no such file; a
@@ -87,13 +95,7 @@ pub fn read_credential(
     label: &str,
 ) -> Result<Option<Secret>, ConfigError> {
     let path = credential_path(home, name, label)?;
-    if !plain(&path, false)? {
-        return Ok(None);
-    }
-    match fs::read_to_string(&path) {
-        Ok(value) => Ok(Some(Secret::new(value))),
-        Err(source) => Err(ConfigError::Io { file: path, source }),
-    }
+    read_at(&path)
 }
 
 /// Stores `credentials/<name>/<label>` (`fiber login`), mode 0600, creating
@@ -105,7 +107,7 @@ pub fn store_credential(
     secret: &Secret,
 ) -> Result<(), ConfigError> {
     let path = credential_path(home, name, label)?;
-    write_atomic(&path, secret.expose().as_bytes(), 0o600)
+    store_at(&path, secret)
 }
 
 /// Deletes `credentials/<name>/<label>` (`fiber logout`) under the label's
