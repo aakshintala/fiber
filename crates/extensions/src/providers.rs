@@ -3,8 +3,6 @@
 //! "Choosing the model").
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -252,32 +250,19 @@ impl Providers {
             .unwrap_or((typed, None))
     }
 
-    /// Reads every extension in `extensions/` in Fiber home. One written for
+    /// Reads every healthy extension in `extensions/` in Fiber home, in
+    /// directory order. A damaged directory is skipped, as
+    /// `docs/extensions.md`, "Installing", says: a directory with no
+    /// `.fiber.json` record holds no installed extension. One written for
     /// another extension API is left out, with a notice naming it and both
     /// numbers.
     pub fn load(home: &Path) -> Result<(Self, Vec<Notice>), Error> {
-        let root = home.join("extensions");
-        let entries = match fs::read_dir(&root) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok((Self::default(), Vec::new())),
-            Err(source) => return Err(Error::Io { path: root, source }),
-        };
-        let mut dirs = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|source| Error::Io {
-                path: root.clone(),
-                source,
-            })?;
-            // A name starting with `.` is an install in progress.
-            if !entry.file_name().to_string_lossy().starts_with('.') {
-                dirs.push(entry.path());
-            }
-        }
-        dirs.sort();
+        let entries = crate::installed::read_entries(home)?;
         let mut providers = Self::default();
         let mut notices = Vec::new();
-        for dir in dirs {
-            let manifest = config::read_manifest(&dir)?;
+        for entry in entries.found {
+            let dir = entry.dir;
+            let manifest = entry.manifest;
             if manifest.api != API {
                 notices.push(Notice {
                     code: ErrorCode::ExtensionIncompatible,

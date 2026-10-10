@@ -36,7 +36,7 @@ pub(crate) fn install(
     tag: &Table,
     entry: Rc<Cell<bool>>,
 ) -> mlua::Result<()> {
-    let in_entry = lua.create_function(move |_, ()| Ok(entry.get()))?;
+    let in_entry = crate::host::failure::in_entry(lua, &entry)?;
     let check = lua.create_function(|_, (kind, spec): (LuaValue, LuaValue)| {
         // `true`, or `false` with the string the Lua half raises, so
         // `pcall` catches a string, never a table.

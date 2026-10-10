@@ -8,6 +8,7 @@
     reason = "test code; a failure is the test's"
 )]
 
+use crate::test_support::write_record;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
@@ -29,6 +30,7 @@ fn rig() -> (extensions::Providers, config::Config) {
         r#"{"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}"#,
     )
     .unwrap();
+    write_record(&extension);
     std::fs::write(
         extension.join("providers/fake.json"),
         r#"{"name": "fake", "models": [

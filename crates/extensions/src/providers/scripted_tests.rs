@@ -3,6 +3,7 @@
 
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
+use crate::test_support::write_record;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -47,6 +48,7 @@ fn install_scripted_provider(home: &Path, ext: &str, ids: &[&str]) {
         json!({ "name": "scripted", "models": models }).to_string(),
     )
     .unwrap();
+    write_record(&dir);
 }
 
 fn install_provider(home: &Path, name: &str, ids: &[&str]) {
@@ -57,6 +59,7 @@ fn install_provider(home: &Path, name: &str, ids: &[&str]) {
         json!({ "name": name, "version": "v1.0.0", "fiber": "0.1.0", "api": 1 }).to_string(),
     )
     .unwrap();
+    write_record(&dir);
     let models: Vec<_> = ids
         .iter()
         .map(|id| json!({ "id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1", "context_window": 1000 }))
@@ -66,6 +69,32 @@ fn install_provider(home: &Path, name: &str, ids: &[&str]) {
         json!({ "name": name, "models": models }).to_string(),
     )
     .unwrap();
+}
+
+#[test]
+fn a_damaged_directory_s_providers_are_left_out() {
+    let root = fakes::TempDir::new("fiber-damaged-providers");
+    let home = root.path().join("home");
+    install_provider(&home, "healthy", &["m"]);
+    // Damaged: a manifest and provider data but no install record, so it
+    // holds no installed extension (`docs/extensions.md`, "Installing").
+    let dir = home.join("extensions").join("broken");
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({ "name": "broken", "version": "v1.0.0", "fiber": "0.1.0", "api": 1 }).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("providers").join("broken.json"),
+        json!({ "name": "broken", "models": [{ "id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1", "context_window": 1000 }] }).to_string(),
+    )
+    .unwrap();
+    let (providers, notices) = Providers::load(&home).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(providers.names().collect::<Vec<_>>(), ["healthy"]);
+    assert!(providers.get("broken").is_none());
+    assert!(providers.resolve("healthy/m").is_ok());
 }
 
 #[test]

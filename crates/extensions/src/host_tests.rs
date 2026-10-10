@@ -45,6 +45,16 @@ fn eval(lua: &Lua, code: &str) -> Value {
 }
 
 #[test]
+fn an_empty_table_encodes_as_an_object_but_returns_as_a_list() {
+    let lua = lua();
+    // `json.encode` keeps the empty table's object shape, while a callback
+    // returning the same table through the host boundary reads it as a list.
+    let encoded: String = lua.load("return json.encode({})").eval().unwrap();
+    assert_eq!(encoded, "{}");
+    assert_eq!(eval(&lua, "return {}"), serde_json::json!([]));
+}
+
+#[test]
 fn a_table_is_an_array_only_when_its_keys_are_one_to_its_size() {
     let lua = lua();
     assert_eq!(eval(&lua, "return {}"), serde_json::json!([]));

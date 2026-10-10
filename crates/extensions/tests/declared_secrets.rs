@@ -8,6 +8,7 @@
 
 mod common;
 
+use common::write_record;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
@@ -151,6 +152,7 @@ fn placed(setup: &Setup, dir: &str, api: u64, secrets: &[&str]) -> PathBuf {
         &json!({ "name": dir, "version": "v1.0.0", "fiber": "0.1.0", "api": api, "secrets": secrets })
             .to_string(),
     );
+    write_record(&path);
     path
 }
 

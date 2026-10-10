@@ -3,10 +3,12 @@
 //! (OAuth's unattended calls and refresh) is also recorded in a per-VM slot,
 //! which the callback boundary reads when the same error escapes.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use contract::ErrorCode;
-use mlua::{Function, Lua, MultiValue, Table, Value as LuaValue};
+use mlua::{FromLuaMulti, Function, Lua, MultiValue, Table, Value as LuaValue};
 
 /// How a recorded failure maps if it escapes its callback.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -156,6 +158,44 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<FailureLib> {
         rethrow_panic,
         state,
     })
+}
+
+/// How a raw host function fails: `Arg` is an error in the calling code,
+/// raised as the string; `Failed` is a coded failure, raised as the
+/// `{ code, message }` table. Exactly what `raw_string` and `raw_failure`
+/// return, so every message stays as it is.
+pub(crate) enum Raise {
+    Arg(String),
+    Failed(ErrorCode, String),
+}
+
+/// Registers `name` on `table`: `handler` returns its value on success, a
+/// `Raise` on failure, and the Lua half raises the string or the table at
+/// the call site, so even `coroutine.resume` catches it there. `boundary`
+/// is the callback mapping of an OAuth call whose uncaught failure is
+/// special, as in `wrap_with_boundary`.
+pub(crate) fn register<A: FromLuaMulti>(
+    lua: &Lua,
+    table: &Table,
+    name: &str,
+    failure: &Function,
+    boundary: Option<&str>,
+    handler: impl Fn(&Lua, A) -> Result<MultiValue, Raise> + 'static,
+) -> mlua::Result<()> {
+    let raw = lua.create_function(move |lua, args: A| match handler(lua, args) {
+        Ok(values) => Ok(values),
+        Err(Raise::Arg(message)) => raw_string(lua, message),
+        Err(Raise::Failed(code, message)) => raw_failure(lua, &code, message),
+    })?;
+    table.set(name, wrap_with_boundary(lua, raw, failure, boundary)?)
+}
+
+/// Whether the entry script still runs: one constructor for every host
+/// call and registration guard that reads it, so they all see the same
+/// flag.
+pub(crate) fn in_entry(lua: &Lua, entry: &Rc<Cell<bool>>) -> mlua::Result<Function> {
+    let entry = Rc::clone(entry);
+    lua.create_function(move |_, ()| Ok(entry.get()))
 }
 
 /// Wraps a raw host function that returns its value on success,

@@ -29,7 +29,6 @@ use super::{ENTRY, GRACE, Target, expired};
 
 pub(super) use super::declared::CallbackTimeouts;
 pub(crate) use super::declared::{DeclaredHooks, HookPhase};
-use super::errors::again;
 
 /// How many deliveries ending before any inbox are kept, newest first:
 /// an extension that ends more runs before any sender still delivers its
@@ -39,7 +38,7 @@ pub(super) const MAX_PENDING_DELIVERIES: usize = 1024;
 /// How many ephemeral events emitted before any emitter are kept, newest
 /// first, flushed in call order on the first emitter.
 pub(super) const MAX_PENDING_EVENTS: usize = 1024;
-pub(super) use super::errors::{not_registered, stopped, timed_out};
+pub(super) use super::errors::{StopReason, not_registered, stopped, timed_out};
 
 pub(crate) struct Hub {
     shared: Mutex<Shared>,
@@ -355,12 +354,12 @@ impl Hub {
 
     /// Records the extension's drop under the same lock that routes
     /// deliveries: anything routed after this is dropped.
-    pub(crate) fn dispose(&self, name: &str) {
+    pub(crate) fn dispose(&self, _name: &str) {
         let unsent = {
             let mut shared = self.lock();
             shared.disposed = true;
             if !matches!(shared.phase, Phase::Stopped(_)) {
-                shared.stop(stopped(name))
+                shared.stop(StopReason::Stopped)
             } else {
                 Vec::new()
             }
@@ -531,8 +530,8 @@ pub(super) enum Phase {
     Registering { abandon_at: Option<Instant> },
     /// The entry script returned and registered these callbacks.
     Ready(CallbackTimeouts),
-    /// Final. Every call gets this error.
-    Stopped(Error),
+    /// Final. Every call gets this reason's error.
+    Stopped(StopReason),
 }
 
 pub(super) enum Progress {
@@ -688,7 +687,7 @@ impl Shared {
             // process exits, and a credential lock its VM holds with it; Rust
             // cannot stop a thread. Cap abandoned VMs per session if leaked
             // threads or locks show (docs/performance.md).
-            unsent = self.stop(Error::Abandoned {
+            unsent = self.stop(StopReason::Abandoned {
                 extension: name.to_owned(),
                 callback: ENTRY.to_owned(),
             });
@@ -699,7 +698,7 @@ impl Shared {
             Phase::Idle => Gate::Stopped(stopped(name)),
             Phase::Registering { abandon_at } => Gate::Wait(*abandon_at),
             Phase::Ready(timeouts) => Gate::Ready(timeouts),
-            Phase::Stopped(e) => Gate::Stopped(again(name, e)),
+            Phase::Stopped(reason) => Gate::Stopped(reason.error(name)),
         };
         (gate, unsent)
     }
@@ -716,8 +715,8 @@ impl Shared {
         now: Instant,
     ) -> (Next, Vec<Delivery>) {
         // Stopped is final for every waiter, one holding a result included.
-        if let Phase::Stopped(e) = &self.phase {
-            let e = again(name, e);
+        if let Phase::Stopped(reason) = &self.phase {
+            let e = reason.error(name);
             self.forget(id);
             return (Next::Return(Err(e)), Vec::new());
         }
@@ -761,7 +760,7 @@ impl Shared {
             return (Next::Return(Err(timed_out(name, target, timeout))), unsent);
         }
         // debt: as in `gate`, the abandoned thread leaks until the process exits.
-        unsent = self.stop(stopped(name));
+        unsent = self.stop(StopReason::Stopped);
         (
             Next::Return(Err(Error::Abandoned {
                 extension: name.to_owned(),
@@ -784,13 +783,13 @@ impl Shared {
         }
     }
 
-    /// Stops the extension with `e`. The replies no thread will take are
+    /// Stops the extension with `reason`. The replies no thread will take are
     /// dropped, which releases a credential lock in one. Admitted exec runs
     /// stop without the Lua thread: their sender's drop reaches the run.
     /// Every held ask is declined by `fiber` in the same critical section;
     /// returns what could not be sent, for the caller to drop afterwards.
-    pub(super) fn stop(&mut self, e: Error) -> Vec<Delivery> {
-        self.phase = Phase::Stopped(e);
+    pub(super) fn stop(&mut self, reason: StopReason) -> Vec<Delivery> {
+        self.phase = Phase::Stopped(reason);
         self.replies.clear();
         self.execs.values_mut().for_each(|admit| admit.stop_take());
         // stop_declines_every_held_ask: one `Resolved` per held ask.

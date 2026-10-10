@@ -3,6 +3,7 @@
 
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
+use crate::test_support::write_record;
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -348,6 +349,7 @@ fn install(home: &Path, extension: &str, name: &str, models: &serde_json::Value)
         json!({"name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&dir);
     fs::write(
         dir.join("providers").join(format!("{name}.json")),
         json!({"name": name, "models": models}).to_string(),
@@ -522,6 +524,7 @@ fn install_host(home: &Path, extension: &str, name: &str, placeholders: serde_js
         json!({"name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&dir);
     fs::write(
         dir.join("providers").join(format!("{name}.json")),
         json!({

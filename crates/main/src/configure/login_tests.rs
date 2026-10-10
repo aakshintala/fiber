@@ -1,6 +1,7 @@
 //! `/login` through the seam: the rows it lists and the keys it stores
 //! (`docs/tui.md`, "Logging in").
 
+use crate::test_support::write_record;
 use std::fs;
 use std::path::PathBuf;
 
@@ -33,6 +34,7 @@ impl Setup {
             json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
         )
         .unwrap();
+        write_record(&dir);
         fs::write(
             dir.join("providers").join(format!("{name}.json")),
             json!({
@@ -57,6 +59,7 @@ impl Setup {
             .to_string(),
         )
         .unwrap();
+        write_record(&dir);
     }
 }
 
@@ -338,13 +341,15 @@ mod browser {
     }
 
     fn install_codex(home: &Path, server: &OauthServer, port: u16) {
+        let dest = home.join("extensions").join("codex");
         copy_package(
-            &home.join("extensions").join("codex"),
+            &dest,
             &[
                 ("https://auth.openai.com", &server.url()),
                 ("local PORT = 1455", &format!("local PORT = {port}")),
             ],
         );
+        super::write_record(&dest);
     }
 
     #[test]

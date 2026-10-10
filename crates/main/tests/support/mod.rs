@@ -30,6 +30,23 @@ use serde_json::{Value, json};
 pub(crate) mod package;
 pub(crate) mod pty;
 
+/// Writes a healthy extension install record beside its manifest.
+pub(crate) fn write_record(dir: &Path) {
+    let text = fs::read_to_string(dir.join("extension.json")).unwrap();
+    let manifest: Value = serde_json::from_str(&text).unwrap();
+    let name = manifest.get("name").and_then(|n| n.as_str()).unwrap();
+    let version = manifest
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("v0.0.0");
+    fs::write(
+        dir.join(".fiber.json"),
+        json!({"name": name, "version": version, "requested": true, "source": {"path": "/p"}})
+            .to_string(),
+    )
+    .unwrap();
+}
+
 /// nextest kills a test at 120 s (`.config/nextest.toml`): a test's
 /// deadlines sum to half of that.
 pub(crate) const BUDGET: Duration = Duration::from_secs(60);

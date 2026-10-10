@@ -30,6 +30,8 @@ mod resolve;
 mod search;
 #[cfg(test)]
 mod stall;
+#[cfg(test)]
+mod test_support;
 
 use std::io;
 use std::path::PathBuf;

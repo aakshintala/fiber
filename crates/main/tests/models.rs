@@ -20,6 +20,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+use support::write_record;
 
 use std::os::unix::process::CommandExt;
 
@@ -94,6 +95,7 @@ impl Setup {
             json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
         )
         .unwrap();
+        write_record(&dir);
         fs::write(
             dir.join("providers").join("acme.json"),
             json!({
@@ -448,12 +450,9 @@ fn models_lists_a_thousand_openrouter_models_within_the_memory_cap() {
 fn models_lists_every_first_party_model_and_drops_none() {
     let setup = Setup::new();
     for package in ["anthropic", "gemini", "muse", "openai", "opencode"] {
-        support::package::copy_package(
-            package,
-            &setup.home().join("extensions").join(package),
-            "",
-            "",
-        );
+        let dest = setup.home().join("extensions").join(package);
+        support::package::copy_package(package, &dest, "", "");
+        write_record(&dest);
     }
     let run = setup.fiber(&["models", "--json"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);

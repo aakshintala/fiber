@@ -236,7 +236,7 @@ fn a_running_call_past_its_grace_abandons_the_vm() {
     assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
     assert!(matches!(
         shared.phase,
-        Phase::Stopped(Error::Stopped { .. })
+        Phase::Stopped(hub::StopReason::Stopped)
     ));
 }
 
@@ -245,26 +245,25 @@ fn a_running_call_past_its_grace_abandons_the_vm() {
 #[test]
 fn every_waiter_on_a_stopped_extension_gets_the_stored_error() {
     let stored = [
-        Error::Lua {
+        hub::StopReason::Lua {
             extension: "ext".to_owned(),
             message: "init.lua:1: bad".to_owned(),
         },
-        Error::Timeout {
+        hub::StopReason::Timeout {
             extension: "ext".to_owned(),
             callback: "init.lua".to_owned(),
             timeout_ms: 2000,
         },
-        Error::Io {
+        hub::StopReason::Io {
             path: "/gone".into(),
-            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+            kind: std::io::ErrorKind::NotFound,
+            message: std::io::Error::from(std::io::ErrorKind::NotFound).to_string(),
         },
-        Error::Stopped {
-            extension: "ext".to_owned(),
-        },
+        hub::StopReason::Stopped,
     ];
-    for error in stored {
-        let text = error.to_string();
-        let mut shared = in_phase(Phase::Stopped(error));
+    for reason in stored {
+        let text = reason.error("ext").to_string();
+        let mut shared = in_phase(Phase::Stopped(reason));
         let at = now();
         for _ in 0..2 {
             let id = shared.push(command("x"), Value::Null, at);
@@ -293,7 +292,7 @@ fn a_finished_call_returns_its_result() {
 #[test]
 fn a_finished_call_on_a_stopped_extension_gets_the_stopped_error() {
     let at = now();
-    let mut shared = in_phase(Phase::Stopped(hub::stopped("ext")));
+    let mut shared = in_phase(Phase::Stopped(hub::StopReason::Stopped));
     let id = shared.push(command("x"), Value::Null, at);
     shared.finish(id, Ok(Value::String("done".to_owned())));
     let err = returned(shared.judge("ext", id, &command("x"), at, at)).unwrap_err();
@@ -375,7 +374,7 @@ fn dropping_the_extension_stops_it() {
     drop(ext);
     assert!(matches!(
         hub.lock().phase,
-        Phase::Stopped(Error::Stopped { .. })
+        Phase::Stopped(hub::StopReason::Stopped)
     ));
 }
 
@@ -431,7 +430,7 @@ fn until(hub: &Hub, check: impl Fn(&Shared) -> bool) -> bool {
 }
 
 fn stop(hub: &Hub) {
-    hub.lock().phase = Phase::Stopped(hub::stopped("ext"));
+    hub.lock().phase = Phase::Stopped(hub::StopReason::Stopped);
     hub.notify();
 }
 
@@ -714,7 +713,7 @@ fn held_lock(tag: &str) -> (fakes::TempDir, config::CredentialFile, host::Reply)
 fn a_lock_reply_for_a_stopped_extension_is_dropped_and_releases_the_lock() {
     let (_home, file, reply) = held_lock("deliver-stopped");
     let hub = Hub::new(FakeClock::new());
-    hub.lock().phase = Phase::Stopped(hub::stopped("ext"));
+    hub.lock().phase = Phase::Stopped(hub::StopReason::Stopped);
     assert!(file.try_lock().unwrap().is_none());
     hub.deliver(7, reply);
     assert!(hub.lock().replies.is_empty());
@@ -729,7 +728,7 @@ fn a_lock_reply_queued_when_the_extension_stops_is_dropped_and_releases_the_lock
     hub.deliver(7, reply);
     assert_eq!(hub.lock().replies.len(), 1);
     assert!(file.try_lock().unwrap().is_none());
-    hub.lock().stop(hub::stopped("ext"));
+    hub.lock().stop(hub::StopReason::Stopped);
     assert!(hub.lock().replies.is_empty());
     assert!(file.try_lock().unwrap().is_some());
 }

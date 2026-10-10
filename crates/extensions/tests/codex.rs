@@ -12,6 +12,7 @@
 
 mod common;
 
+use common::write_record;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex, mpsc};
@@ -26,6 +27,7 @@ use extensions::{
     Browser, CredentialPair, Error, LoggedIn, LoginMethod, LuaExtension, LuaProvider,
     login_provider,
 };
+
 use fakes::OauthReply;
 use fakes::OauthServer;
 use fakes::clock::FakeClock;
@@ -72,14 +74,16 @@ impl Env {
     /// Installs the package copy pointing at `server`, with its callback
     /// port rewritten to `port`.
     fn install(&self, server: &OauthServer, port: u16) {
+        let dest = self.home().join("extensions").join("codex");
         copy_package(
-            &self.home().join("extensions").join("codex"),
+            &dest,
             "codex",
             &[
                 ("https://auth.openai.com", &server.url()),
                 ("local PORT = 1455", &format!("local PORT = {port}")),
             ],
         );
+        write_record(&dest);
     }
 
     fn providers(&self) -> extensions::Providers {

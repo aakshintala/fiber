@@ -3,6 +3,7 @@
 
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
+use crate::test_support::write_record;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -36,6 +37,7 @@ fn install_acme(home: &std::path::Path) {
         json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&dir);
     std::fs::write(
         dir.join("providers/acme.json"),
         json!({
@@ -131,6 +133,7 @@ fn the_session_label_and_shared_credential_name_reach_credential() {
         json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&src);
     std::fs::write(
         src.join("init.lua"),
         "fiber.provider(\"acme\", { credential = { timeout = 60000, run = function(who)\

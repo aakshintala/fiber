@@ -489,7 +489,7 @@ fn stop_declines_every_held_ask_once() {
         for _ in 0..held {
             let _ = take_interaction(&rx);
         }
-        let unsent = hub.lock().stop(crate::Error::Abandoned {
+        let unsent = hub.lock().stop(super::super::hub::StopReason::Abandoned {
             extension: "ext".into(),
             callback: "go".into(),
         });

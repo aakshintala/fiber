@@ -344,6 +344,34 @@ function oauth.refresh(fn)
 end
 "#;
 
+/// A Lua string as UTF-8: anything else is the caller's error.
+fn utf8_string(value: &LuaValue, message: &str) -> Result<String, crate::host::failure::Raise> {
+    if let LuaValue::String(text) = value
+        && let Ok(text) = text.to_str()
+    {
+        return Ok(text.to_owned());
+    }
+    Err(crate::host::failure::Raise::Arg(message.to_owned()))
+}
+
+/// A Lua string as UTF-8, or `None` when it is no string at all: the caller
+/// names the combined error.
+fn utf8_opt(
+    value: &LuaValue,
+    message: &str,
+) -> Result<Option<String>, crate::host::failure::Raise> {
+    if matches!(value, LuaValue::Nil) {
+        return Ok(None);
+    }
+    // A non-string is not `None`: the combined error names both.
+    if let LuaValue::String(text) = value
+        && let Ok(text) = text.to_str()
+    {
+        return Ok(Some(text.to_owned()));
+    }
+    Err(crate::host::failure::Raise::Arg(message.to_owned()))
+}
+
 /// Sets `host.oauth`. `entry` is true while the entry script runs.
 /// `failure` raises a table; `note_failure` preserves refresh's outer mapping.
 pub(crate) fn install(
@@ -357,83 +385,56 @@ pub(crate) fn install(
 ) -> mlua::Result<()> {
     let oauth = lua.create_table()?;
     let open_browser = Arc::clone(&browser);
-    let open_raw = lua.create_function(move |lua, url: LuaValue| {
-        let LuaValue::String(url) = &url else {
-            return crate::host::failure::raw_string(
-                lua,
-                "host.oauth.open: url must be a string".to_owned(),
-            );
-        };
-        let Ok(url) = url.to_str() else {
-            return crate::host::failure::raw_string(
-                lua,
-                "host.oauth.open: url must be a string".to_owned(),
-            );
-        };
+    let open = move |_lua: &mlua::Lua, url: LuaValue| {
+        let url = utf8_string(&url, "host.oauth.open: url must be a string")?;
         if !open_browser.attended() {
-            return crate::host::failure::raw_failure(
-                lua,
-                &contract::ErrorCode::AuthenticationFailed,
+            return Err(crate::host::failure::Raise::Failed(
+                contract::ErrorCode::AuthenticationFailed,
                 "host.oauth.open needs a person to log in, and nobody is attached".to_owned(),
-            );
+            ));
         }
         open_browser.open(&url);
         Ok(mlua::MultiValue::new())
-    })?;
+    };
     let show_browser = Arc::clone(&browser);
-    let show_raw = lua.create_function(move |lua, (url, code): (LuaValue, LuaValue)| {
+    let show = move |_lua: &mlua::Lua, (url, code): (LuaValue, LuaValue)| {
         // `show` runs on the thread like `open`: it shows the code and
         // opens nothing, so it never yields (`docs/extensions.md`, "Host
         // calls").
-        let (LuaValue::String(url), LuaValue::String(code)) = (&url, &code) else {
-            return crate::host::failure::raw_string(
-                lua,
+        let (Some(url), Some(code)) = (
+            utf8_opt(&url, "host.oauth.show: `url` and `code` must be strings")?,
+            utf8_opt(&code, "host.oauth.show: `url` and `code` must be strings")?,
+        ) else {
+            return Err(crate::host::failure::Raise::Arg(
                 "host.oauth.show: `url` and `code` must be strings".to_owned(),
-            );
-        };
-        let (Ok(url), Ok(code)) = (url.to_str(), code.to_str()) else {
-            return crate::host::failure::raw_string(
-                lua,
-                "host.oauth.show: `url` and `code` must be strings".to_owned(),
-            );
+            ));
         };
         if !show_browser.attended() {
-            return crate::host::failure::raw_failure(
-                lua,
-                &contract::ErrorCode::AuthenticationFailed,
+            return Err(crate::host::failure::Raise::Failed(
+                contract::ErrorCode::AuthenticationFailed,
                 "host.oauth.show needs a person to log in, and nobody is attached".to_owned(),
-            );
+            ));
         }
         show_browser.show(&url, &code);
         Ok(mlua::MultiValue::new())
-    })?;
-    oauth.set(
-        "show",
-        crate::host::failure::wrap_with_boundary(lua, show_raw, &failure, Some("unattended:show"))?,
-    )?;
-    oauth.set(
-        "open",
-        crate::host::failure::wrap_with_boundary(lua, open_raw, &failure, Some("unattended:open"))?,
-    )?;
-    let pkce_raw = lua.create_function(|lua, ()| {
-        let verifier = match verifier() {
-            Ok(verifier) => verifier,
-            Err(message) => {
-                return crate::host::failure::raw_failure(
-                    lua,
-                    &contract::ErrorCode::IoFailed,
-                    message,
-                );
-            }
-        };
-        let pair = lua.create_table()?;
-        pair.set("challenge", challenge(&verifier))?;
-        pair.set("verifier", verifier)?;
+    };
+    crate::host::failure::register(lua, &oauth, "show", &failure, Some("unattended:show"), show)?;
+    crate::host::failure::register(lua, &oauth, "open", &failure, Some("unattended:open"), open)?;
+    crate::host::failure::register(lua, &oauth, "pkce", &failure, None, |lua, ()| {
+        let verifier = verifier().map_err(|message| {
+            crate::host::failure::Raise::Failed(contract::ErrorCode::IoFailed, message)
+        })?;
+        let pair = lua
+            .create_table()
+            .map_err(|e| crate::host::failure::Raise::Arg(e.to_string()))?;
+        pair.set("challenge", challenge(&verifier))
+            .map_err(|e| crate::host::failure::Raise::Arg(e.to_string()))?;
+        pair.set("verifier", verifier)
+            .map_err(|e| crate::host::failure::Raise::Arg(e.to_string()))?;
         Ok(mlua::MultiValue::from_vec(vec![mlua::Value::Table(pair)]))
     })?;
-    oauth.set("pkce", crate::host::failure::wrap(lua, pkce_raw, &failure)?)?;
     host.set("oauth", oauth)?;
-    let in_entry = lua.create_function(move |_, ()| Ok(entry.get()))?;
+    let in_entry = crate::host::failure::in_entry(lua, &entry)?;
     let attended = lua.create_function(move |_, ()| Ok(browser.attended()))?;
     lua.load(LUA).set_name("=host.oauth").call::<()>((
         host.clone(),
