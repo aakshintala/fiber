@@ -1525,6 +1525,7 @@ fn bracket_files() -> BTreeMap<&'static str, &'static [u8]> {
 /// Every pattern matches, so no skipped-directory notice follows. Each
 /// case below runs through here under its own name, so a mutant changing
 /// one case fails fast under that name instead of hiding in a loop.
+#[track_caller]
 fn bracket_search_matches_grep(args: &[&str]) {
     let files = bracket_files();
     matches_like_grep(&files, args, None, &[], Some(b""), false);
