@@ -31,12 +31,11 @@ const NO_OTHER_PATH: [&str; 1] = ["session_only"];
 /// The cells of each row of `docs/tui.md`'s "Bindings" table, header and
 /// rule left out, with the code marks dropped.
 fn doc_rows() -> Vec<Vec<String>> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/tui.md");
-    let doc = std::fs::read_to_string(path).unwrap_or_else(|err| panic!("{path}: {err}"));
+    let doc = include_str!("../../../docs/tui.md");
     let section = doc
         .split("\n### Bindings\n")
         .nth(1)
-        .unwrap_or_else(|| panic!("no Bindings section in {path}"));
+        .unwrap_or_else(|| panic!("no Bindings section in docs/tui.md"));
     let table: Vec<&str> = section
         .lines()
         .skip_while(|line| !line.starts_with('|'))

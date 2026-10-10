@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::iter::Peekable;
 use std::path::Path;
 
 use proc_macro2::{TokenStream, TokenTree};
@@ -78,16 +79,20 @@ const RUN_ALL_ROOTS: [&str; 4] = [
 /// that crate: Markdown anywhere, and every file outside the crate
 /// (`docs/ci.md`, "Selection").
 const COMPILED_IN: &[(&str, &str)] = &[
+    ("docs/ci.md", "xtask"),
     ("docs/errors.md", "contract"),
     ("docs/events.md", "contract"),
     ("docs/invocation.md", "contract"),
     ("docs/tui.md", "contract"),
+    ("docs/tui.md", "tui"),
     ("crates/loop/prompt/messages.md", "loop"),
     ("crates/loop/prompt/opening.md", "loop"),
     ("crates/loop/prompt/reviewer.md", "loop"),
     ("crates/loop/prompt/system.md", "loop"),
     ("docs/skills/cache-warming/SKILL.md", "loop"),
     ("docs/skills/using-fiber/SKILL.md", "loop"),
+    ("docs/skills/cache-warming/SKILL.md", "main"),
+    ("docs/skills/using-fiber/SKILL.md", "main"),
     ("crates/tools/prompt/guidelines.md", "tools"),
 ];
 /// `docs/ci.md`: the most mutants one shard tests, measured from CI runs.
@@ -292,6 +297,285 @@ pub(crate) fn package_reader_mismatches(
     failures.extend(listed.difference(&found).map(|krate| {
         format!("{krate}: listed as reading a first-party package, but no source reads one")
     }));
+    Ok(failures)
+}
+
+/// Whether `text`, the inside of a string literal, names a repository
+/// path: one of its `/`-separated segments is exactly `docs` or `prompt`.
+/// A partial segment never counts: `"mydocs/x"` and `"docs.md"` are not
+/// repository paths, while `"../docs/ci.md"` is.
+fn is_repo_path(text: &str) -> bool {
+    text.split('/')
+        .any(|segment| segment == "docs" || segment == "prompt")
+}
+
+/// Whether `tokens` root a path at the manifest directory: they hold
+/// the literal `CARGO_MANIFEST_DIR`, such as through `env!` inside
+/// `Path::new`. A join onto any other base, such as a temporary
+/// directory, is not a read of the repository.
+fn is_manifest_rooted(tokens: &[TokenTree]) -> bool {
+    tokens.iter().any(|tree| match tree {
+        TokenTree::Literal(lit) => {
+            string_literal(&lit.to_string()).as_deref() == Some("CARGO_MANIFEST_DIR")
+        }
+        TokenTree::Group(group) => {
+            is_manifest_rooted(&group.stream().into_iter().collect::<Vec<_>>())
+        }
+        TokenTree::Ident(_) | TokenTree::Punct(_) => false,
+    })
+}
+
+/// Whether `ch` ends the path expression a `join` builds on: the
+/// receiver runs back to the nearest one of these, so a manifest
+/// literal past it belongs to another expression. Bare brackets never
+/// appear (every bracketed span is a Group), so only these count; `=>`
+/// ends at its `=`.
+fn is_receiver_boundary(ch: char) -> bool {
+    matches!(ch, ';' | '=' | ',')
+}
+
+/// Whether `tokens` hold an identifier bound to the manifest directory
+/// by an earlier `let`.
+fn holds_bound(tokens: &[TokenTree], bound: &BTreeSet<String>) -> bool {
+    tokens.iter().any(|tree| match tree {
+        TokenTree::Ident(ident) => bound.contains(ident.to_string().as_str()),
+        TokenTree::Group(group) => {
+            holds_bound(&group.stream().into_iter().collect::<Vec<_>>(), bound)
+        }
+        TokenTree::Punct(_) | TokenTree::Literal(_) => false,
+    })
+}
+
+/// Walk a group's tokens with the bindings scoped to it: bindings made
+/// inside do not leak out, and an inner `let` never changes the outer
+/// set. The one place groups enter a fresh scope.
+fn all_literals(stream: TokenStream, out: &mut Vec<String>) {
+    for tree in stream {
+        match tree {
+            TokenTree::Literal(lit) => {
+                if let Some(text) = string_literal(&lit.to_string()) {
+                    out.push(text);
+                }
+            }
+            TokenTree::Group(group) => all_literals(group.stream(), out),
+            TokenTree::Ident(_) | TokenTree::Punct(_) => {}
+        }
+    }
+}
+
+/// Failures where a crate's Rust source reads a repository file at run
+/// time instead of compiling it in, one line each; empty when every read
+/// is compiled in (`docs/ci.md`, "Selection"). A file has a run-time
+/// read when its tokens hold, literals only, never comments:
+///
+/// - `read_to_string`, `read` or `open` directly given a string literal
+///   naming a repository path;
+/// - `concat!` holding the literal `CARGO_MANIFEST_DIR` and a literal
+///   naming a repository path;
+/// - `join` given a literal naming a repository path, on a base rooted
+///   at the manifest directory: the receiver holds the literal, or
+///   holds an identifier an earlier `let` bound to the manifest
+///   directory (or to another bound identifier).
+///
+/// A literal nested inside another call is a computed path, not a named
+/// one: `read_to_string(home.join("docs/README.md"))` reads a temporary
+/// directory, as does a `join` onto any base but a manifest-rooted one.
+/// `providers/` and `extensions/` reads are detected
+/// by `package_reader_mismatches` with `PACKAGE_READERS`, so this check
+/// looks only at `docs` and `prompt` segments, agreeing with that list
+/// without duplicating it. For crate `xtask` only test files count (their
+/// `rel` ends `_tests.rs` or starts `tests/`), because its commands read
+/// docs as tools. Err on a file that does not tokenise.
+pub(crate) fn runtime_read_mismatches(
+    files: &[RustFile],
+    members: &Members,
+) -> Result<Vec<String>, String> {
+    /// If `stream` holds a plain binding next (`mut`, a name, an
+    /// optional `: <type>`, `=`), rebind the name to its value through
+    /// the terminating `;`: insert it when the value holds the manifest
+    /// literal or a bound name, remove it otherwise. Walk the value
+    /// either way. Anything else stays in the stream for the caller.
+    fn bind(
+        stream: &mut Peekable<std::vec::IntoIter<TokenTree>>,
+        bound: &mut BTreeSet<String>,
+        found: &mut BTreeSet<String>,
+    ) {
+        if matches!(stream.peek(), Some(TokenTree::Ident(name)) if name == "mut")
+            && stream.next().is_none()
+        {
+            return;
+        }
+        let name = match stream.peek() {
+            Some(TokenTree::Ident(name)) => name.to_string(),
+            Some(TokenTree::Group(_) | TokenTree::Punct(_) | TokenTree::Literal(_)) | None => {
+                return;
+            }
+        };
+        if stream.next().is_none() {
+            return;
+        }
+        if matches!(stream.peek(), Some(TokenTree::Punct(p)) if p.as_char() == ':') {
+            if stream.next().is_none() {
+                return;
+            }
+            loop {
+                match stream.peek() {
+                    None => return,
+                    Some(TokenTree::Punct(p)) if p.as_char() == '=' => break,
+                    Some(TokenTree::Punct(p)) if p.as_char() == ';' => return,
+                    Some(
+                        TokenTree::Group(_)
+                        | TokenTree::Ident(_)
+                        | TokenTree::Punct(_)
+                        | TokenTree::Literal(_),
+                    ) => {}
+                }
+                if stream.next().is_none() {
+                    return;
+                }
+            }
+        }
+        if !matches!(stream.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '=') {
+            return;
+        }
+        if stream.next().is_none() {
+            return;
+        }
+        let mut rhs = Vec::new();
+        for tree in stream.by_ref() {
+            if let TokenTree::Punct(punct) = &tree
+                && punct.as_char() == ';'
+            {
+                break;
+            }
+            rhs.push(tree);
+        }
+        if is_manifest_rooted(&rhs) || holds_bound(&rhs, bound) {
+            bound.insert(name);
+        } else {
+            bound.remove(name.as_str());
+        }
+        walk(rhs, bound, found);
+    }
+    /// Walk a group's tokens with the bindings scoped to it: bindings
+    /// made inside do not leak out, and an inner `let` never changes
+    /// the outer set. The one place groups enter a fresh scope.
+    fn walk_group(
+        group: &proc_macro2::Group,
+        bound: &mut BTreeSet<String>,
+        found: &mut BTreeSet<String>,
+    ) {
+        let tokens: Vec<TokenTree> = group.stream().into_iter().collect();
+        walk(tokens, &mut bound.clone(), found);
+    }
+    fn walk(tokens: Vec<TokenTree>, bound: &mut BTreeSet<String>, found: &mut BTreeSet<String>) {
+        let mut stream = tokens.into_iter().peekable();
+        // The current expression back to its nearest boundary: the
+        // receiver a `join` builds on.
+        let mut preceding: Vec<TokenTree> = Vec::new();
+        loop {
+            let Some(tree) = stream.next() else {
+                break;
+            };
+            match tree {
+                TokenTree::Punct(punct) if is_receiver_boundary(punct.as_char()) => {
+                    preceding.clear();
+                }
+                TokenTree::Ident(ident) if ident == "let" => {
+                    bind(&mut stream, bound, found);
+                    preceding.clear();
+                }
+                TokenTree::Ident(ident)
+                    if ident == "read_to_string" || ident == "read" || ident == "open" =>
+                {
+                    if matches!(stream.peek(), Some(TokenTree::Group(_)))
+                        && let Some(TokenTree::Group(group)) = stream.next()
+                    {
+                        for tree in group.stream() {
+                            if let TokenTree::Literal(lit) = tree
+                                && let Some(text) = string_literal(&lit.to_string())
+                                && is_repo_path(&text)
+                            {
+                                found.insert(text);
+                            }
+                        }
+                        walk_group(&group, &mut *bound, found);
+                        preceding.push(TokenTree::Group(group));
+                    }
+                    preceding.push(TokenTree::Ident(ident));
+                }
+                TokenTree::Ident(ident) if ident == "concat" => {
+                    if matches!(stream.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '!')
+                        && stream.next().is_some()
+                        && matches!(stream.peek(), Some(TokenTree::Group(_)))
+                        && let Some(TokenTree::Group(group)) = stream.next()
+                    {
+                        let mut literals = Vec::new();
+                        all_literals(group.stream(), &mut literals);
+                        if literals
+                            .iter()
+                            .any(|literal| literal == "CARGO_MANIFEST_DIR")
+                        {
+                            found.extend(
+                                literals.into_iter().filter(|literal| is_repo_path(literal)),
+                            );
+                        }
+                        walk_group(&group, &mut *bound, found);
+                        preceding.push(TokenTree::Group(group));
+                    }
+                    preceding.push(TokenTree::Ident(ident));
+                }
+                TokenTree::Ident(ident) if ident == "join" => {
+                    if matches!(stream.peek(), Some(TokenTree::Group(_)))
+                        && let Some(TokenTree::Group(group)) = stream.next()
+                    {
+                        if is_manifest_rooted(&preceding) || holds_bound(&preceding, bound) {
+                            for tree in group.stream() {
+                                if let TokenTree::Literal(lit) = tree
+                                    && let Some(text) = string_literal(&lit.to_string())
+                                    && is_repo_path(&text)
+                                {
+                                    found.insert(text);
+                                }
+                            }
+                        }
+                        walk_group(&group, &mut *bound, found);
+                        preceding.push(TokenTree::Group(group));
+                    }
+                    preceding.push(TokenTree::Ident(ident));
+                }
+                TokenTree::Group(group) => {
+                    walk_group(&group, &mut *bound, found);
+                    preceding.push(TokenTree::Group(group));
+                }
+                TokenTree::Ident(ident) => preceding.push(TokenTree::Ident(ident)),
+                TokenTree::Punct(punct) => preceding.push(TokenTree::Punct(punct)),
+                TokenTree::Literal(lit) => preceding.push(TokenTree::Literal(lit)),
+            }
+        }
+    }
+    let mut failures = Vec::new();
+    for f in files {
+        if !members.contains_key(&f.krate) {
+            continue;
+        }
+        if f.krate == "xtask" && !(f.rel.ends_with("_tests.rs") || f.rel.starts_with("tests/")) {
+            continue;
+        }
+        let source: TokenStream = f
+            .source
+            .parse()
+            .map_err(|e| format!("{}: does not tokenise as Rust: {e}", f.path))?;
+        let mut bound = BTreeSet::new();
+        let mut found = BTreeSet::new();
+        walk(source.into_iter().collect(), &mut bound, &mut found);
+        failures.extend(found.into_iter().map(|literal| {
+            format!(
+                "{}: reads {literal} at run time; compile it in with include_str!",
+                f.path
+            )
+        }));
+    }
     Ok(failures)
 }
 
