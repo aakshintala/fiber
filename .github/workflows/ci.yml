@@ -246,16 +246,19 @@ jobs:
         run: echo CACHE_ON_FAILURE=true >> "$GITHUB_ENV"
       - name: scripts/check, the per-platform checks
         # The ci profile retries a failed binary-level test once
-        # (docs/ci.md, "On every pull request that changes code"). Only
-        # this step sets it: the hub_service step below stays on the
-        # default profile and never retries.
+        # (docs/ci.md, "On every pull request that changes code"). This step
+        # and the hub_service step below both set it. Each run writes
+        # target/nextest/ci/junit.xml, so each run's list is recorded right
+        # after the run that produced it.
         env:
           NEXTEST_PROFILE: ci
         run: scripts/check --base "$BASE" --platform-only
       # The tests that passed after a retry, one per line, for the
-      # flake_report job (docs/testing.md, "Flaky tests"). Missing or
-      # empty JUnit XML records nothing; the artifact is uploaded only
-      # when the file is non-empty.
+      # flake_report job (docs/testing.md, "Flaky tests"). This records the
+      # scripts/check run above; the hub_service run below overwrites the
+      # JUnit XML, so its list is appended after it. Missing or empty JUnit
+      # XML records nothing; the artifact is uploaded only when the file is
+      # non-empty.
       - name: Record tests that passed on retry
         id: flaky
         if: always()
@@ -268,19 +271,17 @@ jobs:
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Upload the tests that passed on retry
-        if: always() && steps.flaky.outputs.found == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: flaky-tests-${{ matrix.runner }}
-          path: ${{ runner.temp }}/flaky-tests-${{ matrix.runner }}.txt
-          if-no-files-found: ignore
       # The hub's login service against systemd's user instance
       # (crates/main/tests/hub_service.rs). The runner has no user instance
       # until lingering is enabled for its user.
       - name: The hub's login service under systemd
         if: matrix.runner == 'ubuntu-24.04'
         timeout-minutes: 5
+        # The ci profile retries a failed binary-level test once, as above.
+        # This run overwrites target/nextest/ci/junit.xml, so the step below
+        # appends its list to the same file.
+        env:
+          NEXTEST_PROFILE: ci
         run: |
           sudo loginctl enable-linger "$USER"
           XDG_RUNTIME_DIR="/run/user/$(id -u)"
@@ -298,6 +299,28 @@ jobs:
             exit 1
           fi
           cargo nextest run -p main --test hub_service --run-ignored only
+      # The hub_service run's tests that passed after a retry, appended to
+      # the same list for the flake_report job. Linux x86_64 only, like the
+      # step above.
+      - name: Record hub_service tests that passed on retry
+        id: flaky_hub
+        if: always() && matrix.runner == 'ubuntu-24.04'
+        env:
+          LIST: ${{ runner.temp }}/flaky-tests-${{ matrix.runner }}.txt
+        run: |
+          scripts/flaky-tests target/nextest/ci/junit.xml >> "$LIST"
+          if [ -s "$LIST" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload the tests that passed on retry
+        if: always() && (steps.flaky.outputs.found == 'true' || steps.flaky_hub.outputs.found == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: flaky-tests-${{ matrix.runner }}
+          path: ${{ runner.temp }}/flaky-tests-${{ matrix.runner }}.txt
+          if-no-files-found: ignore
 
   mutants:
     name: Mutants (shard ${{ matrix.shard }})
@@ -682,12 +705,22 @@ jobs:
             [ -f "$file" ] || continue
             runner=${file#"$dir"/flaky-tests-}
             runner=${runner%.txt}
-            while IFS= read -r name || [ -n "$name" ]; do
-              [ -n "$name" ] || continue
+            while IFS= read -r line || [ -n "$line" ]; do
+              [ -n "$line" ] || continue
+              # The test, then a TAB, then its first failure; a line with no
+              # tab has empty detail. Quoted throughout: data only, never eval.
+              name=${line%%$'\t'*}
+              case "$line" in
+                *$'\t'*) detail=${line#*$'\t'} ;;
+                *) detail="" ;;
+              esac
               title="Flaky test: $name"
               body="The test \`$name\` passed after a retry on $runner: $RUN_URL."
               if [ -n "$PR" ]; then
                 body="$body (see #$PR)"
+              fi
+              if [ -n "$detail" ]; then
+                body="$body"$'\n```\n'"$detail"$'\n```'
               fi
               number=$(gh issue list --state open --search "in:title \"$title\"" --json number,title \
                 -q "map(select(.title == \"$title\")) | .[0].number // empty")
