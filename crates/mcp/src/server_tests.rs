@@ -1077,3 +1077,74 @@ fn is_gone_turns_true_once_the_server_exits() {
     await_gone(&shared);
     assert!(opened.server.is_gone());
 }
+
+#[test]
+fn a_server_that_stops_reading_stdin_ends_every_call_gone() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "big"}]));
+    let fixture = fakes::mcp_fixture().display().to_string();
+    let dir = setup.dir.path().display().to_string();
+    let script = "if [ -e \"$2/started\" ]; then exit 1; fi\ntouch \"$2/started\"\ni=0; while [ $i -lt 3 ] && IFS= read -r line; do printf '%s\\n' \"$line\"; i=$((i+1)); done | \"$1\" \"$2\"\nread -r _ < \"$2/hold\"\n";
+    let hold = setup.dir.path().join("hold");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&hold)
+        .status()
+        .expect("mkfifo runs");
+    assert!(status.success(), "mkfifo creates hold");
+    let mut spec = setup.spec("fx");
+    spec.command = "/bin/bash".to_owned();
+    spec.args = vec![
+        "-c".to_owned(),
+        script.to_owned(),
+        "wedged".to_owned(),
+        fixture,
+        dir,
+    ];
+    let started = setup.start(vec![spec]);
+    assert!(started.failed.is_empty());
+    let tool = setup.tool(&started, "mcp__fx__big");
+    let pad = "x".repeat(128 * 1024);
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("pad".to_owned(), serde_json::Value::from(pad));
+    let arguments = std::sync::Arc::new(arguments);
+    let calls = super::WRITE_QUEUE + 2;
+    let (done, results) = mpsc::channel();
+    for _ in 0..calls {
+        let done = done.clone();
+        let tool = std::sync::Arc::clone(&tool);
+        let arguments = std::sync::Arc::clone(&arguments);
+        std::thread::spawn(move || {
+            let output = tool.run(
+                &arguments,
+                &fakes::CancelToken::new(),
+                &fakes::Recorder::default(),
+            );
+            done.send(output).expect("collected");
+        });
+    }
+    drop(done);
+    let outputs = fakes::within("every wedged call to end", WITHIN, move || {
+        results.into_iter().collect::<Vec<_>>()
+    });
+    assert_eq!(outputs.len(), calls);
+    for output in &outputs {
+        assert_eq!(
+            output.error.as_ref().map(|error| &error.code),
+            Some(&contract::ErrorCode::McpServerUnavailable),
+            "every call ends unavailable",
+        );
+    }
+    let died = outputs
+        .iter()
+        .flat_map(|output| output.servers.iter())
+        .filter(|record| {
+            matches!(
+                record,
+                contract::tool::ServerRecord::Failed(failed)
+                    if failed.reason == contract::events::ServerFailure::Died
+            )
+        })
+        .count();
+    assert_eq!(died, 1, "exactly one death is recorded");
+    setup.stop(started.servers);
+}

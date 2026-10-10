@@ -13,7 +13,7 @@ fn a_call_line_keeps_the_top_level_name_last_when_arguments_hold_a_name() {
         encode_request(
             3,
             "tools/call",
-            Some(&json!({"name": "echo", "arguments": {"name": "inner"}})),
+            &json!({"name": "echo", "arguments": {"name": "inner"}}),
         ),
         r#"{"id":3,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"name":"inner"},"name":"echo"}}"#,
     );
@@ -22,17 +22,14 @@ fn a_call_line_keeps_the_top_level_name_last_when_arguments_hold_a_name() {
 #[test]
 fn a_request_and_a_notification_round_trip_through_decode() {
     assert_eq!(
-        decode_line(&encode_request(3, "tools/call", Some(&json!({"name": "echo"})))),
+        decode_line(&encode_request(3, "tools/call", &json!({"name": "echo"}))),
         Incoming::ServerRequest(super::ServerRequest {
             id: json!(3),
             method: "tools/call".to_owned(),
         }),
     );
     assert_eq!(
-        decode_line(&encode_notification(
-            "notifications/cancelled",
-            Some(&json!({"requestId": 3})),
-        )),
+        decode_line(&encode_notification("notifications/cancelled", &json!({"requestId": 3}))),
         Incoming::Ignored,
     );
 }

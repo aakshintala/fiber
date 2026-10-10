@@ -1,9 +1,11 @@
 //! The stdio wire for MCP servers: request bytes written to a child's stdin
 //! and response lines read from its stdout (`docs/mcp.md`, "Starting servers").
+//! A full writer queue means the server stopped reading: it counts as gone.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{ChildStdin, ChildStdout};
 use std::sync::{Weak, mpsc};
+use std::sync::mpsc::SyncSender;
 
 use crate::rpc::{Incoming, decode_line, encode_error, encode_result};
 use crate::wait::Shared;
@@ -27,15 +29,21 @@ pub(crate) fn write_stdin(stdin: Option<ChildStdin>, incoming: mpsc::Receiver<Ve
     }
 }
 
+/// Queues `line` for the writer thread without blocking. A full queue
+/// means the server stopped reading while calls keep coming: it counts as
+/// gone, waking every waiter. A disconnected queue means the writer left.
+pub(crate) fn queue(writer: &SyncSender<Vec<u8>>, line: Vec<u8>, shared: &Shared) {
+    match writer.try_send(line) {
+        Ok(()) => {}
+        Err(_) => shared.gone(),
+    }
+}
+
 /// Reads response lines and routes them: responses to their id's slot,
 /// `ping` answered `{}`, any other server method answered `-32601`. A line
 /// that is not a JSON object is ignored. Past [`MAX_LINE`] bytes on one
 /// line, or EOF, the server counts as gone.
-pub(crate) fn read_stdout(
-    stdout: ChildStdout,
-    shared: &Shared,
-    writer: &Weak<mpsc::Sender<Vec<u8>>>,
-) {
+pub(crate) fn read_stdout(stdout: ChildStdout, shared: &Shared, writer: &Weak<SyncSender<Vec<u8>>>) {
     let mut reader = BufReader::new(stdout);
     loop {
         match read_line(&mut reader) {
@@ -49,9 +57,7 @@ pub(crate) fn read_stdout(
                         _ => encode_error(&request.id, -32601, "Method not found"),
                     };
                     if let Some(writer) = writer.upgrade() {
-                        match writer.send(answer.into_bytes()) {
-                            Ok(()) | Err(_) => {}
-                        }
+                        queue(&writer, answer.into_bytes(), shared);
                     }
                 }
                 Incoming::Ignored => {}

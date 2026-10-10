@@ -66,22 +66,59 @@ pub(crate) struct Named<'a> {
     pub name: &'a str,
 }
 
-/// Encodes a request: `{"jsonrpc":"2.0","id":<id>,"method":<method>,
-/// "params":<params>}`, defaulting absent params to `{}`.
-pub(crate) fn encode_request(id: u64, method: &str, params: Option<&Value>) -> String {
-    let params = params.cloned().unwrap_or(Value::Object(Default::default()));
-    serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string()
+/// One request line. Fields are in sorted key order, so the bytes stay
+/// fixed; `Named` keeps the top-level `name` last when the arguments hold
+/// a `name` key.
+#[derive(serde::Serialize)]
+struct Request<'a, P: serde::Serialize + ?Sized> {
+    id: u64,
+    jsonrpc: &'static str,
+    method: &'a str,
+    params: &'a P,
 }
 
-/// Encodes a notification: `{"jsonrpc":"2.0","method":<method>}`, with
-/// `params` when present.
-pub(crate) fn encode_notification(method: &str, params: Option<&Value>) -> String {
-    match params {
-        Some(params) => {
-            serde_json::json!({"jsonrpc": "2.0", "method": method, "params": params}).to_string()
-        }
-        None => serde_json::json!({"jsonrpc": "2.0", "method": method}).to_string(),
-    }
+/// One notification line, in sorted key order.
+#[derive(serde::Serialize)]
+struct Notification<'a, P: serde::Serialize + ?Sized> {
+    jsonrpc: &'static str,
+    method: &'a str,
+    params: &'a P,
+}
+
+/// Encodes a request: `{"id":<id>,"jsonrpc":"2.0","method":<method>,
+/// "params":<params>}`.
+///
+/// Serialising cannot fail for the params the callers actually pass,
+/// because every map key is a string. Those params are `Named` (a
+/// `Map<String, Value>` and a `&str`), the `json!` `Value`s for
+/// `initialize`, the list pages and `notifications/initialized`, and
+/// `{"requestId": <u64>}` for `notifications/cancelled`.
+pub(crate) fn encode_request<P: serde::Serialize + ?Sized>(
+    id: u64,
+    method: &str,
+    params: &P,
+) -> String {
+    serde_json::to_string(&Request {
+        id,
+        jsonrpc: "2.0",
+        method,
+        params,
+    })
+    .unwrap_or_default()
+}
+
+/// Encodes a notification: `{"jsonrpc":"2.0","method":<method>,
+/// "params":<params>}`.
+pub(crate) fn encode_notification<P: serde::Serialize + ?Sized>(
+    method: &str,
+    params: &P,
+) -> String {
+    serde_json::to_string(&Notification {
+        jsonrpc: "2.0",
+        method,
+        params,
+    })
+    .unwrap_or_default()
 }
 
 /// Encodes a successful answer to a server request, echoing its id.

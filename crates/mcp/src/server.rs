@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 use contract::tool::Cancel;
 use rustix::process::Signal;
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::cache::Cached;
@@ -31,6 +32,11 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 /// The grace between closing stdin and killing the child: the shell's
 /// `GRACE` (`crates/tools/src/shell/command.rs`).
 const GRACE: Duration = Duration::from_millis(800);
+
+/// How many request lines wait for the writer thread. Picked, not
+/// measured: no doc sets a number. A full queue means the server is
+/// wedged, so it counts as gone.
+const WRITE_QUEUE: usize = 64;
 
 /// Why [`Server::start`] failed: the session records it as
 /// `mcp_server_failed` and leaves the server out.
@@ -126,7 +132,7 @@ struct Inner {
     /// and it drops the pipe. The reader holds only a [`Weak`] to it, so
     /// closing here really closes: a strong clone in the reader would keep
     /// the channel open and EOF would never arrive during the grace.
-    writer: Mutex<Option<std::sync::Arc<mpsc::Sender<Vec<u8>>>>>,
+    writer: Mutex<Option<std::sync::Arc<mpsc::SyncSender<Vec<u8>>>>>,
     /// The child, until [`Server::stop`] or [`Drop`] takes, kills and reaps
     /// it exactly once.
     child: Mutex<Option<Child>>,
@@ -178,7 +184,7 @@ impl Server {
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let shared = Arc::new(Shared::default());
-        let (writer, incoming) = mpsc::channel();
+        let (writer, incoming) = mpsc::sync_channel(WRITE_QUEUE);
         thread::spawn(move || crate::pipes::write_stdin(stdin, incoming));
         let writer = Arc::new(writer);
         let reading = Arc::clone(&shared);
@@ -301,8 +307,7 @@ impl Server {
     ) -> Result<Value, CallError> {
         let inner = &self.inner;
         let deadline = deadline(inner.clock.as_ref(), timeout);
-        let params = serde_json::to_value(params).unwrap_or(Value::Null);
-        self.request(method, &params, deadline, cancel)
+        self.request(method, params, deadline, cancel)
     }
 
     /// Whether the server's output ended (it exited).
@@ -332,10 +337,10 @@ impl Server {
     }
 
     /// Sends one request and waits for its response.
-    fn request(
+    fn request<P: Serialize + ?Sized>(
         &self,
         method: &str,
-        params: &Value,
+        params: &P,
         deadline: Instant,
         cancel: &dyn Cancel,
 ) -> Result<Value, CallError> {
@@ -344,7 +349,7 @@ impl Server {
         inner.shared.insert(id);
         // The slot is removed on every exit path below, so a late response
         // finds no slot and is discarded.
-        let line = encode_request(id, method, Some(params));
+        let line = encode_request(id, method, params);
         inner.send(line);
         let bridge = CancelBridge::arm(&inner.shared);
         cancel.subscribe(Arc::downgrade(&(Arc::clone(&bridge) as Arc<dyn Wake>)));
@@ -359,7 +364,7 @@ impl Server {
             if view.cancelled {
                 inner.send(encode_notification(
                     "notifications/cancelled",
-                    Some(&serde_json::json!({"requestId": id})),
+                    &serde_json::json!({"requestId": id}),
                 ));
                 break Err(CallError::Cancelled);
             }
@@ -384,8 +389,8 @@ impl Server {
     }
 
     /// Sends a notification: no id, no answer.
-    fn notify(&self, method: &str, params: &Value) {
-        self.inner.send(encode_notification(method, Some(params)));
+    fn notify<P: Serialize + ?Sized>(&self, method: &str, params: &P) {
+        self.inner.send(encode_notification(method, params));
     }
 
     /// Closes stdin by dropping the writer's sender.
@@ -431,11 +436,7 @@ impl Inner {
     /// Waits until the server's output ends or [`GRACE`] passes on the
     /// clock.
     fn wait_gone(&self) {
-        let until = self
-            .clock
-            .now()
-            .checked_add(GRACE)
-            .unwrap_or(self.clock.now());
+        let until = deadline(self.clock.as_ref(), GRACE);
         loop {
             let (gone, seq) = {
                 let state = lock(&self.shared.inner);
@@ -448,13 +449,10 @@ impl Inner {
         }
     }
 
-    /// Sends `line` to the writer thread. A failed send means the thread
-    /// is gone, and the pending wait ends through `gone`.
+    /// Sends `line` to the writer thread through the bounded queue.
     fn send(&self, line: String) {
         if let Some(writer) = lock(&self.writer).as_ref() {
-            match writer.send(line.into_bytes()) {
-                Ok(()) | Err(_) => {}
-            }
+            crate::pipes::queue(writer, line.into_bytes(), &self.shared);
         }
     }
 }

@@ -171,3 +171,30 @@ impl std::io::BufRead for DataThenErr {
         self.done = true;
     }
 }
+
+#[test]
+fn a_queued_line_leaves_the_server_live() {
+    let (writer, incoming) = std::sync::mpsc::sync_channel(1);
+    let shared = super::super::wait::Shared::default();
+    super::queue(&writer, b"hi".to_vec(), &shared);
+    assert_eq!(incoming.try_recv().expect("the line arrives"), b"hi");
+    assert!(!crate::registry::lock(&shared.inner).gone, "gone stays false");
+}
+
+#[test]
+fn a_full_queue_marks_the_server_gone() {
+    let (writer, _incoming) = std::sync::mpsc::sync_channel(1);
+    let shared = super::super::wait::Shared::default();
+    writer.try_send(b"waiting".to_vec()).expect("one line waits");
+    super::queue(&writer, b"next".to_vec(), &shared);
+    assert!(crate::registry::lock(&shared.inner).gone, "gone turns true");
+}
+
+#[test]
+fn a_queue_with_no_writer_marks_the_server_gone() {
+    let (writer, incoming) = std::sync::mpsc::sync_channel(1);
+    drop(incoming);
+    let shared = super::super::wait::Shared::default();
+    super::queue(&writer, b"hi".to_vec(), &shared);
+    assert!(crate::registry::lock(&shared.inner).gone, "gone turns true");
+}
