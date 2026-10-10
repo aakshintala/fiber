@@ -316,6 +316,80 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
 /// Records a finished callback's result, or parks it on its host call. A
 /// finished timer firing ends the firing instead: its result goes nowhere,
 /// and an `every` that was not cancelled fires again.
+///
+/// What a request arm admits for the single park below: `Callback`, `Lock`,
+/// `Sleep` and every immediate reply drop the admission lock first and park
+/// once, so the park lives in one place. Arms that already parked and
+/// started their work return from `settle` directly.
+struct Admitted {
+    cancel: Option<Sender<()>>,
+    wake: Option<Instant>,
+}
+
+/// Parks the callback and marks it parked: the admission lock when the arm
+/// still holds it, a fresh `hub.lock()` once the arm dropped it. Parked
+/// before the spawn, under the admission lock, so a reply arriving from a
+/// spawn that answers in-process never lands on an unparked id.
+#[allow(clippy::too_many_arguments, reason = "one park for every arm")]
+fn park(
+    parked: &mut Vec<Parked>,
+    shared: &mut Shared,
+    id: u64,
+    thread: Thread,
+    target: Target,
+    deadline: Option<Instant>,
+    timeout: Duration,
+    wake: Option<Instant>,
+    cancel: Option<Sender<()>>,
+    ask: Option<contract::RequestId>,
+) {
+    parked.push(Parked {
+        id,
+        thread,
+        target: target.clone(),
+        deadline,
+        timeout,
+        wake,
+        _cancel: cancel,
+        ask,
+    });
+    if let Some(progress) = shared.calls.get_mut(&id) {
+        *progress = Progress::Started {
+            deadline,
+            parked: true,
+        };
+    }
+}
+
+/// Ends a spawn that failed after the park: drops exactly the callback
+/// just parked, so nothing later resumes it, and fails the call as the
+/// step's own I/O error. An exec spawn failure also clears its admission,
+/// so a cancelled call never waits on a run that never started.
+fn spawn_failed(
+    hub: &Arc<Hub>,
+    parked: &mut Vec<Parked>,
+    mut shared: std::sync::MutexGuard<'_, Shared>,
+    id: u64,
+    dir: &std::path::Path,
+    source: std::io::Error,
+    exec: bool,
+) {
+    // The spawn failed after the park: drop exactly the callback just
+    // parked, so nothing later resumes it.
+    take_parked(parked, id);
+    if exec {
+        shared.finish_exec(id);
+    }
+    drop(shared);
+    hub.finish(
+        id,
+        Err(Error::Io {
+            path: dir.to_owned(),
+            source,
+        }),
+    );
+}
+
 fn settle(
     start: &Start,
     hub: &Arc<Hub>,
@@ -359,7 +433,7 @@ fn settle(
         let hub = Arc::clone(hub);
         Arc::new(move |reply| hub.deliver(id, reply))
     };
-    let (cancel, wake) = match request {
+    let admitted = match request {
         Request::Ask(interaction) => {
             if !shared.answerable || shared.sealed || shared.disposed {
                 // nobody_to_answer_returns_declined_at_once: as headless
@@ -380,28 +454,27 @@ fn settle(
                 let unsent = shared.raise(id, requested);
                 // Parked before anything can answer: the answer resumes
                 // only from the loop's ack, after the drain.
-                parked.push(Parked {
+                park(
+                    parked,
+                    &mut shared,
                     id,
                     thread,
-                    target: target.clone(),
+                    target.clone(),
                     deadline,
                     timeout,
-                    wake: None,
-                    _cancel: None,
-                    ask: Some(request_id),
-                });
-                if let Some(progress) = shared.calls.get_mut(&id) {
-                    *progress = Progress::Started {
-                        deadline,
-                        parked: true,
-                    };
-                }
+                    None,
+                    None,
+                    Some(request_id),
+                );
                 hub.notify();
                 drop(shared);
                 drop(unsent);
                 return;
             }
-            (None, None)
+            Admitted {
+                cancel: None,
+                wake: None,
+            }
         }
         Request::Drive(request) => {
             match driver {
@@ -414,22 +487,18 @@ fn settle(
                     // returns, and a reply for an unparked id is dropped.
                     // No off-thread wait to cancel: the parked deadline
                     // bounds the call, and a late answer is dropped.
-                    parked.push(Parked {
+                    park(
+                        parked,
+                        &mut shared,
                         id,
                         thread,
-                        target: target.clone(),
+                        target.clone(),
                         deadline,
                         timeout,
-                        wake: None,
-                        _cancel: None,
-                        ask: None,
-                    });
-                    if let Some(progress) = shared.calls.get_mut(&id) {
-                        *progress = Progress::Started {
-                            deadline,
-                            parked: true,
-                        };
-                    }
+                        None,
+                        None,
+                        None,
+                    );
                     let answered = Arc::clone(hub);
                     let extension = name.to_owned();
                     let command = request.command;
@@ -453,17 +522,8 @@ fn settle(
                                 driver.drive(&extension, &command, args, ack);
                             });
                     if let Err(source) = spawned {
-                        // The spawn failed after the park: drop exactly the
-                        // callback just parked, so nothing later resumes it.
-                        take_parked(parked, id);
-                        drop(shared);
-                        return hub.finish(
-                            id,
-                            Err(Error::Io {
-                                path: dir.to_owned(),
-                                source,
-                            }),
-                        );
+                        spawn_failed(hub, parked, shared, id, dir, source, false);
+                        return;
                     }
                     drop(shared);
                     hub.notify();
@@ -477,7 +537,10 @@ fn settle(
                         contract::ErrorCode::Closing,
                         "host.drive: the session is closing".to_owned(),
                     ))));
-                    (None, None)
+                    Admitted {
+                        cancel: None,
+                        wake: None,
+                    }
                 }
             }
         }
@@ -486,41 +549,33 @@ fn settle(
                 drop(shared);
                 deliver(Reply::Http(script.http(request.case_value())));
             } else {
-                parked.push(Parked {
+                park(
+                    parked,
+                    &mut shared,
                     id,
                     thread,
-                    target: target.clone(),
+                    target.clone(),
                     deadline,
                     timeout,
-                    wake: None,
-                    _cancel: None,
-                    ask: None,
-                });
-                if let Some(progress) = shared.calls.get_mut(&id) {
-                    *progress = Progress::Started {
-                        deadline,
-                        parked: true,
-                    };
-                }
+                    None,
+                    None,
+                    None,
+                );
                 let spawned = thread::Builder::new()
                     .name(format!("http {name}"))
                     .spawn(move || deliver(Reply::Http(host::perform(&request))));
                 if let Err(source) = spawned {
-                    take_parked(parked, id);
-                    drop(shared);
-                    return hub.finish(
-                        id,
-                        Err(Error::Io {
-                            path: dir.to_owned(),
-                            source,
-                        }),
-                    );
+                    spawn_failed(hub, parked, shared, id, dir, source, false);
+                    return;
                 }
                 drop(shared);
                 hub.notify();
                 return;
             }
-            (None, None)
+            Admitted {
+                cancel: None,
+                wake: None,
+            }
         }
         Request::Callback { port, path } => {
             // The listener starts under the admission lock, so no cancel
@@ -537,7 +592,7 @@ fn settle(
                     None
                 }
             };
-            (cancel, None)
+            Admitted { cancel, wake: None }
         }
         Request::Exec(request) => {
             let hub_exec = Arc::clone(hub);
@@ -564,27 +619,26 @@ fn settle(
                     ran
                 });
                 deliver(Reply::Exec(result));
-                (None, None)
+                Admitted {
+                    cancel: None,
+                    wake: None,
+                }
             } else {
                 // The stop sender stays in the hub, so the stop reaches the
                 // run without the Lua thread, and the run's end clears it.
                 let cancel_rx = shared.register_exec(id);
-                parked.push(Parked {
+                park(
+                    parked,
+                    &mut shared,
                     id,
                     thread,
-                    target: target.clone(),
+                    target.clone(),
                     deadline,
                     timeout,
-                    wake: None,
-                    _cancel: None,
-                    ask: None,
-                });
-                if let Some(progress) = shared.calls.get_mut(&id) {
-                    *progress = Progress::Started {
-                        deadline,
-                        parked: true,
-                    };
-                }
+                    None,
+                    None,
+                    None,
+                );
                 let clock = hub.clock_handle();
                 let spawned =
                     thread::Builder::new()
@@ -609,16 +663,8 @@ fn settle(
                             });
                         });
                 if let Err(source) = spawned {
-                    take_parked(parked, id);
-                    shared.finish_exec(id);
-                    drop(shared);
-                    return hub.finish(
-                        id,
-                        Err(Error::Io {
-                            path: dir.to_owned(),
-                            source,
-                        }),
-                    );
+                    spawn_failed(hub, parked, shared, id, dir, source, true);
+                    return;
                 }
                 drop(shared);
                 hub.notify();
@@ -703,30 +749,33 @@ fn settle(
                     None
                 }
             };
-            (cancel, None)
+            Admitted {
+                cancel,
+                wake: None,
+            }
         }
         Request::Sleep(d) => {
             drop(shared);
             // Past the end of time is no sleep.
-            (None, hub.clock().now().checked_add(d))
+            Admitted {
+                cancel: None,
+                wake: hub.clock().now().checked_add(d),
+            }
         }
     };
-    parked.push(Parked {
+    let Admitted { cancel, wake } = admitted;
+    park(
+        parked,
+        &mut hub.lock(),
         id,
         thread,
         target,
         deadline,
         timeout,
         wake,
-        _cancel: cancel,
-        ask: None,
-    });
-    if let Some(progress) = hub.lock().calls.get_mut(&id) {
-        *progress = Progress::Started {
-            deadline,
-            parked: true,
-        };
-    }
+        cancel,
+        None,
+    );
     hub.notify();
 }
 
