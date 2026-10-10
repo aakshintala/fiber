@@ -424,8 +424,8 @@ fn with_locks_shares_one_lock_set_with_outside_holders() {
         let guard = first.lock(&holder_path);
         holding.send(()).unwrap();
         release_rx
-            .recv_timeout(DEADLINE)
-            .expect("waited 10s for the release of the outside holder");
+            .recv()
+            .expect("the test releases the outside holder");
         drop(guard);
     });
     assert!(

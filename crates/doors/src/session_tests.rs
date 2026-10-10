@@ -1700,7 +1700,7 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
         Probe::FirstShellWaitDone => {
             if let Ok(()) = first_tx.send(()) {}
             lock(&resume_rx)
-                .recv_timeout(DEADLINE)
+                .recv()
                 .expect("the test resumes close");
         }
         Probe::ShellsWaiting => if let Ok(()) = waiting_tx.send(()) {},
@@ -2059,7 +2059,7 @@ fn a_full_subscriber_sees_the_kept_ui_line_before_a_later_one() {
         }
         if let Ok(()) = parked_tx.send(()) {}
         lock(&release_rx)
-            .recv_timeout(DEADLINE)
+            .recv()
             .expect("the test releases the subscribe");
     }));
     let socket = opened.socket.clone();

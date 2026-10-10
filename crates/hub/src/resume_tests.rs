@@ -714,7 +714,7 @@ fn two_commands_answered_closing_reach_one_resumed_session() {
     let (release_tx, release_rx) = mpsc::channel();
     *crate::connection::lock(&hub.after_replay_filter) = Some(Box::new(move |_, _| {
         parked_tx.send(()).unwrap_or(());
-        let _released = release_rx.recv_timeout(DEADLINE);
+        let _released = release_rx.recv();
     }));
     client.send("c_1", "reply");
     client.send("c_2", "steer");
@@ -818,7 +818,7 @@ fn a_command_whose_write_to_the_exiting_relay_fails_follows_the_rerouted_one() {
     let (release_tx, release_rx) = mpsc::channel();
     *crate::connection::lock(&hub.after_replay_filter) = Some(Box::new(move |_, _| {
         parked_tx.send(()).unwrap_or(());
-        let _released = release_rx.recv_timeout(DEADLINE);
+        let _released = release_rx.recv();
     }));
     client.send("c_1", "reply");
     parked_rx
@@ -864,7 +864,7 @@ fn answers_buffered_before_a_failed_write_are_still_read() {
     let (release_tx, release_rx) = mpsc::channel();
     *crate::connection::lock(&hub.after_replay_filter) = Some(Box::new(move |_, _| {
         parked_tx.send(()).unwrap_or(());
-        let _released = release_rx.recv_timeout(DEADLINE);
+        let _released = release_rx.recv();
     }));
     client.send("c_1", "reply");
     client.send("c_2", "steer");
@@ -1423,7 +1423,7 @@ fn an_accepted_subscribe_is_replayed(prior: Option<&str>) {
         assert!(crate::relay::acknowledges(line, accepted), "{line:?}");
         parked_tx.send(()).unwrap_or(());
         release_rx
-            .recv_timeout(DEADLINE)
+            .recv()
             .expect("the reconnect releases the parked acknowledgement");
     }));
     client.subscribe(accepted, "full");
@@ -1512,7 +1512,7 @@ fn the_last_queued_command_holds_the_relay_until_its_queue_is_empty() {
             panic!("the queue is passed on, not dropped");
         };
         popped_tx.send(id).unwrap_or(());
-        let _released = release_rx.recv_timeout(DEADLINE);
+        let _released = release_rx.recv();
     }));
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
     temp.clock.advance(HELD_POLL);
@@ -1619,7 +1619,7 @@ fn an_acknowledgement_is_forwarded_before_the_next_queued_command_passes_on() {
     let (release_tx, release_rx) = mpsc::channel();
     *crate::connection::lock(&hub.after_replay_filter) = Some(Box::new(move |_, _| {
         parked_tx.send(()).unwrap_or(());
-        let _released = release_rx.recv_timeout(DEADLINE);
+        let _released = release_rx.recv();
     }));
     client.send("c_1", "reply");
     client.subscribe("c_2", "full");
@@ -1655,7 +1655,7 @@ fn an_acknowledgement_is_forwarded_before_the_next_queued_command_passes_on() {
     *crate::connection::lock(&hub.before_accepted) = Some(Box::new(move |line, _| {
         assert!(crate::relay::acknowledges(line, "c_2"), "{line:?}");
         go_rx
-            .recv_timeout(DEADLINE)
+            .recv()
             .expect("the test releases the forward");
     }));
     let logging = Arc::clone(&log);

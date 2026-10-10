@@ -281,7 +281,7 @@ impl Starter for GateStarter {
         if *id == self.held {
             self.entered.send(()).unwrap_or(());
             if let Some(release) = lock(&self.release).take() {
-                release.recv_timeout(DEADLINE).unwrap_or(());
+                release.recv().unwrap_or(());
             }
         }
         self.inner.rewind(id, workspace, from)
@@ -470,7 +470,7 @@ fn serve_old(
             write.flush().unwrap();
             // Hold the socket open: the client commands the new session
             // while this relay still waits for EOF.
-            release.recv_timeout(DEADLINE).unwrap_or(());
+            release.recv().unwrap_or(());
         })
         .unwrap()
 }

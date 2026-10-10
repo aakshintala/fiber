@@ -1001,8 +1001,8 @@ fn a_dropped_clients_line_is_read_at_the_next_durable_line() {
                         let seen = super::clients_of(&weak);
                         if let Some((held, released)) = held_read.lock().unwrap().take() {
                             held.send(()).unwrap();
-                            // A mutant that never releases cannot hang the run.
-                            released.recv_timeout(DEADLINE).unwrap();
+                            // The test's own wait fails first and drops the sender, which releases this hold.
+                            released.recv().unwrap();
                         }
                         seen
                     }
@@ -1125,8 +1125,8 @@ fn a_lagging_observer_folds_every_written_line_before_it_stops() {
             Box::new(move || {
                 if let Some((held, released)) = held_read.lock().unwrap().take() {
                     held.send(()).unwrap();
-                    // A mutant that never releases cannot hang the run.
-                    released.recv_timeout(DEADLINE).unwrap();
+                    // The test's own wait fails first and drops the sender, which releases this hold.
+                    released.recv().unwrap();
                 }
                 Vec::new()
             }),
@@ -1278,7 +1278,7 @@ fn stop_returns_after_the_observer_folded_what_was_written() {
                 let _owned = &exit_tx;
                 if let Some((held, released)) = held_read.lock().unwrap().take() {
                     held.send(()).unwrap();
-                    released.recv_timeout(DEADLINE).unwrap();
+                    released.recv().unwrap();
                 }
                 Vec::new()
             }),

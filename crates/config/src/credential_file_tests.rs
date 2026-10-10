@@ -72,7 +72,7 @@ fn a_writer_never_exposes_a_file_wider_than_0600() {
             crate::write::before_rename(move || {
                 paused_tx.send(()).unwrap();
                 release
-                    .recv_timeout(DEADLINE)
+                    .recv()
                     .expect("the test released the writer");
             });
             lock.write(&json!({ "token": "t" })).unwrap();

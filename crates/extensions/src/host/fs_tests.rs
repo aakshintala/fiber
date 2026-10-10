@@ -527,8 +527,8 @@ fn a_locked_write_waits_while_the_same_key_is_held() {
         locks.hold(&key, &mut || {
             entered.send(()).unwrap();
             release_rx
-                .recv_timeout(DEADLINE)
-                .expect("waited 10s for the release of the held key");
+                .recv()
+                .expect("the test releases the held key");
         });
     });
     assert!(

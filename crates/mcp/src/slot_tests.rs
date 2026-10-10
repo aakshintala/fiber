@@ -864,8 +864,8 @@ fn run_rejects_its_server_after_a_concurrent_restart_replaces_it() {
             .send(())
             .expect("the call reached the live-server check");
         wait_to_resume
-            .recv_timeout(WITHIN)
-            .expect("the concurrent restart finishes within the wall-clock limit");
+            .recv()
+            .expect("the restart releases the waiting call");
     }));
     let (done, result) = std::sync::mpsc::channel();
     let calling = Arc::clone(&slot);

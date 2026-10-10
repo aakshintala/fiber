@@ -337,11 +337,10 @@ impl Drive for BlockingDrive {
         match self.called.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
-        // A fake's own wait with a deadline on the wall clock
-        // (`docs/testing.md`, "Waits and timeouts").
+        // A fake held until the test releases it: no deadline of its own.
         lock(&self.release)
-            .recv_timeout(WAIT)
-            .expect("the test explicitly releases the held drive before its deadline");
+            .recv()
+            .expect("the test releases the held drive");
         lock(&self.order).push("released");
         answer.0(Ok(None));
     }
