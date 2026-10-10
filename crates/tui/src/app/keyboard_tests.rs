@@ -738,17 +738,16 @@ fn the_key_map_shows_the_person_lines_and_pages_them() {
     keyed(&mut app, &[("send", json!(["ctrl+s", "alt+s"]))]);
     assert_eq!(app.on_key(Key::F1, now()), Effect::None);
     assert!(screen(&app).contains("Ctrl+S, ⌥S"));
-    let total: usize = crate::keymap::lines(app.keys())
-        .iter()
-        .map(|line| crate::view::rows(ratatui::text::Line::raw(line.as_str()), app.column_width()))
-        .sum();
-    let height = app.conversation_height();
     for _ in 0..80 {
         assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
     }
-    assert_eq!(
-        app.keymap_top(),
-        Some(total.saturating_sub(height)),
-        "pages the person's lines"
+    // Paged past the end, the last binding is focused and drawn.
+    let map = app.keymap().expect("open");
+    let total = map.visible(app.keys()).len();
+    assert_eq!(map.focus(), total - 1);
+    assert!(
+        screen(&app).contains("Open the key map"),
+        "{}",
+        screen(&app)
     );
 }

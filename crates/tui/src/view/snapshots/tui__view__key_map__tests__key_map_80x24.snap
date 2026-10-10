@@ -1,7 +1,7 @@
 ---
-source: crates/tui/src/view_tests.rs
-assertion_line: 1139
-expression: "sized(&mut app, 80, 24)"
+source: crates/tui/src/view/key_map_tests.rs
+assertion_line: 66
+expression: "screen(&app, 80, 24)"
 ---
 
 

@@ -9,6 +9,14 @@ use ratatui::style::{Color, Modifier};
 
 use crate::theme::{ROLES, Rgb, Role, Shade, Theme};
 
+/// Black text on a light bar: the overlay selection bar's text and the
+/// key map's chosen tab (`docs/tui.md`, "Look", "Overlays"). The paint
+/// pass resolves it by depth, like every literal colour.
+pub(crate) const BAR_TEXT: Color = Color::Rgb(0, 0, 0);
+/// The key map's chosen tab background: white behind black text
+/// (`docs/tui.md`, "Bindings").
+pub(crate) const TAB_BAR: Color = Color::Rgb(255, 255, 255);
+
 /// The theme `tui.theme` names (`docs/configuration.md`, "Keys").
 #[derive(Debug, Default)]
 pub enum ThemeSetting {
