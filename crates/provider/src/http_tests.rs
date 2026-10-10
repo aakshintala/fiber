@@ -207,31 +207,30 @@ type Posted = (
     crate::redact::Secrets,
 );
 
-/// Runs one `post_with` with a fresh [`Secrets`] on its own thread and
-/// returns its outcome with the secrets it reported. Calling code that
-/// blocks is a wait too (`docs/testing.md`, "Waits and timeouts"): on
-/// expiry the test fails naming the call. A signer the test inspects
-/// afterwards is held as an `Arc` and passed as a clone.
-fn posted(
+/// One `post_signed` over `route` on its own thread under [`CALL_WITHIN`],
+/// its body read to a `String` on success: without the wait a held call
+/// outlives the test, which fails naming the call. `cancel` stays alive in
+/// the caller while the test reads the server's side.
+fn called(
     url: String,
     headers: &[(String, String)],
     body: &'static [u8],
     signer: Option<std::sync::Arc<dyn contract::signing::Signer>>,
+    route: super::Route,
     cancel: &std::sync::Arc<super::Cancel>,
-    proxy: Option<ureq::Proxy>,
 ) -> Posted {
     let headers = headers.to_vec();
     let cancel = std::sync::Arc::clone(cancel);
     fakes::within(&format!("the call to {url}"), CALL_WITHIN, move || {
         let mut secrets = crate::redact::Secrets::default();
-        let sent = super::post_with(
+        let sent = super::post_signed(
             &url,
             &headers,
             body,
             signer.as_deref(),
+            &route,
             &cancel,
             &mut secrets,
-            proxy,
         );
         let outcome = match sent {
             Ok((mut stream, flag)) => {
@@ -245,6 +244,29 @@ fn posted(
         };
         (outcome, secrets)
     })
+}
+
+/// Runs one `post_signed` with a fresh [`Secrets`] on its own thread and
+/// returns its outcome with the secrets it reported. Calling code that
+/// blocks is a wait too (`docs/testing.md`, "Waits and timeouts"): on
+/// expiry the test fails naming the call. A signer the test inspects
+/// afterwards is held as an `Arc` and passed as a clone.
+fn posted(
+    url: String,
+    headers: &[(String, String)],
+    body: &'static [u8],
+    signer: Option<std::sync::Arc<dyn contract::signing::Signer>>,
+    cancel: &std::sync::Arc<super::Cancel>,
+    proxy: Option<ureq::Proxy>,
+) -> Posted {
+    let route = super::Route {
+        via: match proxy {
+            None => super::Via::Direct,
+            Some(proxy) => super::Via::Through(proxy),
+        },
+        limits: net::LIMITS,
+    };
+    called(url, headers, body, signer, route, cancel)
 }
 
 #[test]
@@ -267,14 +289,18 @@ fn cancelling_a_call_mid_stream_closes_the_socket_without_a_proxy() {
     thread::spawn(move || {
         // An explicit direct connection, so the test holds without a proxy
         // whatever the developer's shell names: `post` would read it.
-        let result = super::post_with(
+        let route = super::Route {
+            via: super::Via::Direct,
+            limits: net::LIMITS,
+        };
+        let result = super::post_signed(
             &url,
             &[],
             b"{}",
             None,
+            &route,
             &worker,
             &mut crate::redact::Secrets::default(),
-            None,
         )
         .map(|_| ());
         match done.send(result) {
@@ -389,14 +415,18 @@ fn tls_runs_end_to_end_inside_the_tunnel() {
     let (done, finished) = mpsc::channel();
     let through = proxy_through(&proxy);
     thread::spawn(move || {
-        let result = super::post_with(
+        let route = super::Route {
+            via: super::Via::Through(through),
+            limits: net::LIMITS,
+        };
+        let result = super::post_signed(
             &format!("https://127.0.0.1:{port}/"),
             &[],
             b"{}",
             None,
+            &route,
             &std::sync::Arc::default(),
             &mut crate::redact::Secrets::default(),
-            Some(through),
         )
         .map(|_| ());
         match done.send(result) {
@@ -439,14 +469,18 @@ fn cancelling_a_call_mid_stream_through_the_proxy_closes_the_tunnel() {
     let worker = std::sync::Arc::clone(&cancel);
     let through = proxy_through(&proxy);
     thread::spawn(move || {
-        let result = super::post_with(
+        let route = super::Route {
+            via: super::Via::Through(through),
+            limits: net::LIMITS,
+        };
+        let result = super::post_signed(
             &url,
             &[],
             b"{}",
             None,
+            &route,
             &worker,
             &mut crate::redact::Secrets::default(),
-            Some(through),
         )
         .map(|_| ());
         match done.send(result) {
@@ -566,12 +600,20 @@ const PROXY_CHILD_SERVER: &str = "FIBER_TEST_PROXY_SERVER";
 fn proxy_child_main() {
     let url = std::env::var(PROXY_CHILD_SERVER).unwrap();
     let direct = std::env::var_os(PROXY_DIRECT_CHILD).is_some();
+    let route = super::Route {
+        via: if direct {
+            super::Via::Direct
+        } else {
+            super::Via::Environment
+        },
+        limits: net::LIMITS,
+    };
     let (mut body, _) = super::post_signed(
         &format!("{url}/v1"),
         &[],
         b"{}",
         None,
-        direct,
+        &route,
         &std::sync::Arc::default(),
         &mut crate::redact::Secrets::default(),
     )
@@ -740,7 +782,7 @@ fn a_signer_without_credentials_reports_none() {
 const USAGE_LIMIT_BODY: &str = r#"{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"plus","resets_at":1791396000}}"#;
 const USAGE_DATE: &str = "Wed, 07 Oct 2026 16:00:00 GMT";
 
-/// The status failure one `post_with` against `server` returns.
+/// The status failure one `post_signed` against `server` returns.
 fn failed_status(server: &fakes::ProviderServer) -> crate::Error {
     let (sent, _) = posted(
         format!("{}/v1", server.url()),
@@ -848,4 +890,167 @@ fn a_usage_limit_without_a_usable_date_sets_no_wait() {
         };
         assert_eq!(retry_after, None, "{body}");
     }
+}
+
+/// The socket limits the stall tests run under: one second per address
+/// to connect, 200 ms without a byte. A silent peer fails fast, while a
+/// body that keeps arriving reads on.
+fn stall_limits() -> net::Limits {
+    net::Limits::new(
+        std::time::Duration::from_secs(1),
+        std::time::Duration::from_millis(200),
+    )
+    .unwrap()
+}
+
+/// One `post_signed` over a direct route with `limits`, sharing [`called`]:
+/// the short limits keep a held call inside [`CALL_WITHIN`].
+fn posted_limited(
+    url: String,
+    limits: net::Limits,
+    cancel: &std::sync::Arc<super::Cancel>,
+) -> Result<(String, Option<bool>), crate::Error> {
+    let route = super::Route {
+        via: super::Via::Direct,
+        limits,
+    };
+    called(url, &[], b"{}", None, route, cancel).0
+}
+
+#[test]
+fn a_held_server_fails_the_call_as_a_dropped_connection() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    server.hold();
+    let result = posted_limited(
+        format!("{}/v1", server.url()),
+        stall_limits(),
+        &std::sync::Arc::default(),
+    )
+    .map(|_| ());
+    assert!(
+        matches!(result, Err(crate::Error::Connection(_))),
+        "a held server fails the call as a dropped connection: {result:?}"
+    );
+}
+
+#[test]
+fn a_stream_stalled_mid_body_fails_the_read_and_closes_the_socket() {
+    let server =
+        fakes::ProviderServer::start([fakes::Response::stall(200, "data: {}\n\n", 100_000)
+            .header("content-type", "text/event-stream")])
+        .unwrap();
+    let cancel: std::sync::Arc<super::Cancel> = std::sync::Arc::default();
+    let result =
+        posted_limited(format!("{}/v1", server.url()), stall_limits(), &cancel).map(|_| ());
+    assert!(
+        matches!(result, Err(crate::Error::Connection(_))),
+        "a stalled stream fails the read: {result:?}"
+    );
+    assert!(
+        server.await_closed(1, REQUEST_WITHIN),
+        "the server saw the socket close while the call's cancel is still alive"
+    );
+}
+
+#[test]
+fn a_stalled_error_body_is_a_dropped_connection_not_a_status() {
+    let server = fakes::ProviderServer::start([fakes::Response::stall(500, "{", 1000)]).unwrap();
+    let result = posted_limited(
+        format!("{}/v1", server.url()),
+        stall_limits(),
+        &std::sync::Arc::default(),
+    )
+    .map(|_| ());
+    let Err(crate::Error::Stalled { should_retry, .. }) = &result else {
+        panic!("a stalled 500 is a dropped connection, not a status: {result:?}");
+    };
+    assert_eq!(*should_retry, None);
+    assert_eq!(
+        result.unwrap_err().code(),
+        contract::ErrorCode::ConnectionFailed
+    );
+}
+
+#[test]
+fn a_stalled_error_body_keeps_a_no_retry_veto() {
+    let server = fakes::ProviderServer::start([
+        fakes::Response::stall(500, "{", 1000).header("x-should-retry", "false")
+    ])
+    .unwrap();
+    let result = posted_limited(
+        format!("{}/v1", server.url()),
+        stall_limits(),
+        &std::sync::Arc::default(),
+    )
+    .map(|_| ());
+    let Err(err) = &result else {
+        panic!("a stalled 500 with x-should-retry: false was not a stalled failure");
+    };
+    let crate::Error::Stalled { should_retry, .. } = err else {
+        panic!("a stalled 500 with x-should-retry: false was not stalled: {err:?}");
+    };
+    assert_eq!(*should_retry, Some(false));
+    assert_eq!(err.code(), contract::ErrorCode::ConnectionFailed);
+    assert_eq!(err.should_retry(), Some(false));
+    assert!(
+        err.failure("test", &crate::redact::Secrets::default())
+            .provider
+            .is_none()
+    );
+}
+
+#[test]
+fn an_overlong_error_body_is_still_a_status_with_no_body() {
+    // Over ureq's 10 MB `read_to_string` limit: the read fails with a
+    // non-timeout error, so the status keeps its code with an empty body.
+    let server = fakes::ProviderServer::start([fakes::Response::status(
+        500,
+        vec![b'x'; 10 * 1024 * 1024 + 1],
+    )])
+    .unwrap();
+    let Err(crate::Error::Status { status, body, .. }) = posted_limited(
+        format!("{}/v1", server.url()),
+        stall_limits(),
+        &std::sync::Arc::default(),
+    )
+    .map(|_| ()) else {
+        panic!("an overlong 500 was not a status failure");
+    };
+    assert_eq!(status, 500);
+    assert_eq!(body, "", "a body ureq refuses to read stays empty");
+}
+
+#[test]
+fn an_endpoint_runs_under_the_production_limits_by_default() {
+    assert_eq!(
+        crate::Endpoint::default().limits,
+        net::LIMITS,
+        "the default endpoint carries the production limits"
+    );
+}
+
+#[test]
+fn a_route_follows_its_endpoint_proxy_and_limits() {
+    let direct = crate::Endpoint {
+        direct: true,
+        limits: stall_limits(),
+        ..crate::Endpoint::default()
+    };
+    let route = super::Route::of(&direct);
+    assert!(
+        matches!(route.via, super::Via::Direct),
+        "a direct endpoint connects directly"
+    );
+    assert_eq!(route.limits, stall_limits());
+    let named = crate::Endpoint {
+        direct: false,
+        limits: stall_limits(),
+        ..crate::Endpoint::default()
+    };
+    let route = super::Route::of(&named);
+    assert!(
+        matches!(route.via, super::Via::Environment),
+        "an indirect endpoint reads the environment's proxy"
+    );
+    assert_eq!(route.limits, stall_limits());
 }

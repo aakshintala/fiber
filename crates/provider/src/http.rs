@@ -84,45 +84,62 @@ impl net::Keep for Cancel {
     }
 }
 
+/// Where one call goes, and under which socket limits: the proxy choice
+/// and the limits travel together, so no call gains an eighth argument.
+#[derive(Debug)]
+pub(crate) struct Route {
+    /// How the call reaches its server.
+    pub(crate) via: Via,
+    /// The socket limits the call runs under.
+    pub(crate) limits: net::Limits,
+}
+
+/// How one call reaches its server: the environment's proxy, no proxy,
+/// or one named proxy value.
+#[derive(Debug, Clone)]
+pub(crate) enum Via {
+    /// The proxy the environment names, as ureq reads it.
+    Environment,
+    /// No proxy, whatever the environment names.
+    Direct,
+    /// One named proxy value.
+    #[allow(
+        dead_code,
+        reason = "only tests name an explicit proxy; production reads the environment"
+    )]
+    Through(ureq::Proxy),
+}
+
+impl Route {
+    /// The route for `endpoint`: direct when it says so, else the
+    /// environment's proxy, carrying its limits.
+    pub(crate) fn of(endpoint: &crate::Endpoint) -> Self {
+        Self {
+            via: if endpoint.direct {
+                Via::Direct
+            } else {
+                Via::Environment
+            },
+            limits: endpoint.limits,
+        }
+    }
+}
+
 /// POSTs `body` to `url` with the headers `signer` adds for this request,
 /// and returns the response body to read with the response's
 /// `x-should-retry` header, which also governs a failure the body reports
-/// later; or the failure a non-2xx status reports.
+/// later; or the failure a non-2xx status reports. `route` chooses the
+/// proxy and the socket limits: `Via::Environment` reads
+/// `ureq::Proxy::try_from_env()` at the call, so tests pass an explicit
+/// [`Via::Through`] value instead.
 pub(crate) fn post_signed(
     url: &str,
     headers: &[(String, String)],
     body: &[u8],
     signer: Option<&dyn Signer>,
-    direct: bool,
+    route: &Route,
     cancel: &Arc<Cancel>,
     secrets: &mut Secrets,
-) -> Result<(impl Read + use<>, Option<bool>), Error> {
-    post_with(
-        url,
-        headers,
-        body,
-        signer,
-        cancel,
-        secrets,
-        if direct {
-            None
-        } else {
-            ureq::Proxy::try_from_env()
-        },
-    )
-}
-
-/// [`post_signed`], with the proxy chosen by the caller: `None` connects
-/// directly, `Some` tunnels through it. `post_signed` passes what the
-/// environment names, so tests pass an explicit value instead.
-fn post_with(
-    url: &str,
-    headers: &[(String, String)],
-    body: &[u8],
-    signer: Option<&dyn Signer>,
-    cancel: &Arc<Cancel>,
-    secrets: &mut Secrets,
-    proxy: Option<ureq::Proxy>,
 ) -> Result<(impl Read + use<>, Option<bool>), Error> {
     // A call cancelled before it starts never resolves or connects.
     if cancel.is_cancelled() {
@@ -154,6 +171,11 @@ fn post_with(
         secrets.add_header(name, value);
     }
     // One agent per call, so its connector keeps this call's socket.
+    let proxy = match &route.via {
+        Via::Environment => ureq::Proxy::try_from_env(),
+        Via::Direct => None,
+        Via::Through(proxy) => Some(proxy.clone()),
+    };
     let agent = net::agent(
         net::config()
             .proxy(proxy)
@@ -162,7 +184,7 @@ fn post_with(
             .build(),
         Arc::<Cancel>::clone(cancel),
         DefaultResolver::default(),
-        net::LIMITS,
+        route.limits,
     );
     let mut request = agent.post(url);
     for (name, value) in headers.iter().chain(&signed) {
@@ -192,7 +214,23 @@ fn post_with(
             .get("date")
             .and_then(|v| v.to_str().ok())
             .map(|v| v.trim().to_owned());
-        let body = response.into_body().read_to_string().unwrap_or_default();
+        // A stalled error body is a dropped connection, retried as one,
+        // keeping the `x-should-retry` header's effect: a timeout becomes
+        // `Stalled`, carrying the veto when the headers sent one. Any
+        // other read failure keeps today's empty body and the status's
+        // code.
+        let body = match response.into_body().read_to_string() {
+            Ok(body) => body,
+            Err(error) => {
+                if net::timed_out(&error) {
+                    return Err(Error::Stalled {
+                        message: error.to_string(),
+                        should_retry,
+                    });
+                }
+                String::new()
+            }
+        };
         let retry_after = retry_after.or_else(|| {
             if has_retry_after {
                 None

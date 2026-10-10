@@ -79,7 +79,7 @@ impl Messages {
             body,
             provider: endpoint.provider.clone(),
             signer: endpoint.signer.clone(),
-            direct: endpoint.direct,
+            route: http::Route::of(endpoint),
             cancel: Arc::default(),
             secrets: endpoint.secrets(),
         }
@@ -115,7 +115,7 @@ pub struct Call {
     input_size: InputSize,
     provider: String,
     signer: Option<Arc<dyn contract::signing::Signer>>,
-    direct: bool,
+    route: http::Route,
     cancel: Arc<Cancel>,
     secrets: Secrets,
 }
@@ -129,7 +129,7 @@ impl Call {
             &self.headers,
             &self.body,
             self.signer.as_deref(),
-            self.direct,
+            &self.route,
             &self.cancel,
             &mut secrets,
         )
@@ -145,7 +145,7 @@ impl ModelCall for Call {
             &self.headers,
             &self.body,
             self.signer.as_deref(),
-            self.direct,
+            &self.route,
             &self.cancel,
             &mut secrets,
         ) {

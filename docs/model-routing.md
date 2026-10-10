@@ -858,6 +858,13 @@ Fiber retries these failures:
 - a failure with no HTTP status, such as a dropped connection
 - a stream that ends before its protocol's terminal event
 
+A model call gives each address its host resolves to 15 seconds to
+connect, and fails when it waits 300 seconds for any byte to arrive or be
+sent, from the request through the end of the stream, the wait for the
+response's headers included. Reasoning models can stay silent for minutes,
+so the idle limit is long. Either failure is `connection_failed` and is
+retried like a dropped connection. Neither is a configuration key.
+
 A response header `x-should-retry` overrides the status: `true` retries the
 failure, `false` does not. Fiber never retries quota or billing errors, or an
 `unknown_stop_reason`, whatever the header says.

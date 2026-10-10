@@ -107,6 +107,7 @@ pub(crate) fn connect(
         extra_body: model.model.extra_body.clone(),
         text_only: !model.model.input.iter().any(|kind| kind == "image"),
         direct: false,
+        limits: net::LIMITS,
     };
     let cache_key_header = model
         .model
