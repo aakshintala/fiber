@@ -299,7 +299,10 @@ impl Runner {
         let (child, listing) =
             support::group::spawn(&mut command).map_err(|source| match source {
                 support::group::Error::Spawn(error) => error,
-                source => io::Error::other(source.to_string()),
+                support::group::Error::Refused(id) => {
+                    io::Error::other(format!("refusing to list process group {id}"))
+                }
+                support::group::Error::Signal { source, .. } => source,
             })?;
         self.shared.set_pgid(child.id());
         Ok((child, listing))

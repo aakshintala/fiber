@@ -33,7 +33,9 @@ fn send(pgid: u32, signal: Signal) {
     SENT.lock()
         .unwrap_or_else(PoisonError::into_inner)
         .push((pgid, signal));
-    let _ = support::group::signal(pgid, signal);
+    match support::group::signal(pgid, signal) {
+        Ok(()) | Err(_) => {}
+    }
 }
 
 /// Whether `pgid` is still listed. Test-only.
@@ -107,7 +109,7 @@ pub(crate) fn serial_shared() -> RwLockReadGuard<'static, ()> {
 /// Test-only. No caller while no jobs test kills every group; kept with
 /// the seam so that test can run alone when it returns.
 #[cfg(test)]
-#[allow(dead_code)]
+#[allow(dead_code, reason = "kept with the seam for a future whole-list kill test")]
 pub(crate) fn serial_exclusive() -> RwLockWriteGuard<'static, ()> {
     SERIAL.write().unwrap_or_else(PoisonError::into_inner)
 }
