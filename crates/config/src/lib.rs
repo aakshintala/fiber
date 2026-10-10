@@ -263,36 +263,14 @@ impl Config {
 
     /// Every layer merged, lowest first. With a model, each layer's
     /// `models."<model>"` wins over the same keys at that layer's top level
-    /// ("Per model").
+    /// ("Per model"). Each key combines as its row says
+    /// (`docs/configuration.md`, "Layers"): a union key holds every
+    /// layer's names, a credential entry is replaced whole, and any other
+    /// value replaces the one below it, an object key by key.
     pub fn merged(&self, model: Option<&str>) -> Value {
         let mut merged = Value::Object(Map::new());
         for (_, layer) in &self.layers {
-            let upper = view(layer, model);
-            // Each entry under a provider's `credentials` replaces the one
-            // below it as a whole (docs/configuration.md, "Layers").
-            for (name, provider) in upper
-                .get("providers")
-                .and_then(Value::as_object)
-                .into_iter()
-                .flatten()
-            {
-                for label in provider
-                    .get("credentials")
-                    .and_then(Value::as_object)
-                    .into_iter()
-                    .flat_map(Map::keys)
-                {
-                    if let Some(below) = merged
-                        .get_mut("providers")
-                        .and_then(|p| p.get_mut(name))
-                        .and_then(|p| p.get_mut("credentials"))
-                        .and_then(Value::as_object_mut)
-                    {
-                        below.remove(label);
-                    }
-                }
-            }
-            path::merge(&mut merged, &upper);
+            lay(&mut merged, &view(layer, model), &mut Vec::new());
         }
         merged
     }
@@ -332,12 +310,21 @@ impl Config {
         let Some(key) = path::parse(key) else {
             return Vec::new();
         };
-        let mut names: Vec<String> = Vec::new();
-        for (_, layer) in &self.layers {
-            let items = path::get(layer, &key).and_then(Value::as_array);
+        self.unioned(&key)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    /// Every name in the list at `key` with the lowest layer listing it,
+    /// lowest layer first, each name once at its first appearance.
+    pub(crate) fn unioned(&self, key: &[String]) -> Vec<(String, Source)> {
+        let mut names: Vec<(String, Source)> = Vec::new();
+        for (source, layer) in &self.layers {
+            let items = path::get(layer, key).and_then(Value::as_array);
             for name in items.into_iter().flatten().filter_map(Value::as_str) {
-                if !names.iter().any(|seen| seen == name) {
-                    names.push(name.to_owned());
+                if !names.iter().any(|(seen, _)| seen == name) {
+                    names.push((name.to_owned(), source.clone()));
                 }
             }
         }
@@ -590,6 +577,59 @@ fn snapshot_settings(
         }
     }
     Ok(())
+}
+
+/// Lays `upper` over `merged` as one row's merge kind says: a union key
+/// gains every new name, a credential entry replaces the one below as a
+/// whole, and any other value replaces the one below it, an object key
+/// by key.
+fn lay(merged: &mut Value, upper: &Value, path: &mut Vec<String>) {
+    if let Some(row) = keys::leaf(path) {
+        match row.merge {
+            keys::Merge::Union => {
+                let mut names: Vec<Value> = path::get(merged, path)
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                for name in upper
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                {
+                    if !names.iter().any(|seen| seen == name) {
+                        names.push(Value::String(name.to_owned()));
+                    }
+                }
+                path::set(merged, path, Value::Array(names));
+                return;
+            }
+            keys::Merge::EntryReplace => {
+                path::set(merged, path, upper.clone());
+                return;
+            }
+            keys::Merge::Replace => {}
+        }
+    }
+    match upper {
+        Value::Object(map) if map.is_empty() => {
+            // An emptied object still names its path: the layers below
+            // kept nothing under it, but it is set, not dropped.
+            if path::get(merged, path).is_none() {
+                path::set(merged, path, Value::Object(Map::new()));
+            }
+        }
+        Value::Object(map) => {
+            for (name, value) in map {
+                path.push(name.clone());
+                lay(merged, value, path);
+                path.pop();
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            path::set(merged, path, upper.clone())
+        }
+    }
 }
 
 /// A layer with its `models."<model>"` laid over its top level.

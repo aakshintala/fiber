@@ -101,9 +101,12 @@ fn credential_sources_show_kind_and_program_only() {
     let rows = setup.load(&[]).unwrap().settings();
     let global = Source::Global(setup.global());
     for (key, shown) in [
-        ("providers.openai.credentials.work", "command op"),
-        ("providers.openai.credentials.home", "env OPENAI_KEY"),
-        ("providers.openai.credentials.box", "file /keys/openai"),
+        ("providers.openai.credentials.work", "the command op"),
+        (
+            "providers.openai.credentials.home",
+            "the environment variable OPENAI_KEY",
+        ),
+        ("providers.openai.credentials.box", "the file /keys/openai"),
     ] {
         assert_eq!(
             row(&rows, key).value,

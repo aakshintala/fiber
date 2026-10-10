@@ -148,11 +148,26 @@ impl WriteScope {
     }
 }
 
+/// How a key's layers combine (`docs/configuration.md`, "Layers"). One
+/// value, so a key has exactly one rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Merge {
+    /// Any other value replaces the one below it; two objects merge key
+    /// by key.
+    Replace,
+    /// Every layer's names apply, lowest first, each once.
+    Union,
+    /// Each entry replaces the one below it as a whole: it does not merge
+    /// key by key.
+    EntryReplace,
+}
+
 /// One row of "Keys". `*` in a path stands for one name, such as a role's.
 pub(crate) struct Key {
     path: &'static str,
     pub(crate) kind: Kind,
     pub(crate) scope: WriteScope,
+    pub(crate) merge: Merge,
     /// The built-in default, as JSON text.
     pub(crate) default: Option<&'static str>,
 }
@@ -162,6 +177,7 @@ const fn key(path: &'static str, kind: Kind, repo: bool, default: Option<&'stati
         path,
         kind,
         scope: WriteScope::Any { repo },
+        merge: Merge::Replace,
         default,
     }
 }
@@ -172,6 +188,7 @@ const fn repo_only(path: &'static str, kind: Kind) -> Key {
         path,
         kind,
         scope: WriteScope::RepoOnly,
+        merge: Merge::Replace,
         default: None,
     }
 }
@@ -182,6 +199,7 @@ const fn global_only(path: &'static str, kind: Kind, default: Option<&'static st
         path,
         kind,
         scope: WriteScope::GlobalOnly,
+        merge: Merge::Replace,
         default,
     }
 }
@@ -193,6 +211,31 @@ const fn person_files(path: &'static str, kind: Kind) -> Key {
         path,
         kind,
         scope: WriteScope::PersonFiles,
+        merge: Merge::Replace,
+        default: None,
+    }
+}
+
+/// A key whose layers all apply: every layer's names, lowest first, each
+/// once (`docs/configuration.md`, "Layers").
+const fn unioned(path: &'static str, kind: Kind, default: Option<&'static str>) -> Key {
+    Key {
+        path,
+        kind,
+        scope: WriteScope::Any { repo: false },
+        merge: Merge::Union,
+        default,
+    }
+}
+
+/// A key whose entries each replace the one below as a whole: a
+/// provider's `credentials` (`docs/configuration.md`, "Layers").
+const fn entry_replaced(path: &'static str, kind: Kind) -> Key {
+    Key {
+        path,
+        kind,
+        scope: WriteScope::Any { repo: false },
+        merge: Merge::EntryReplace,
         default: None,
     }
 }
@@ -247,7 +290,7 @@ pub(crate) const KEYS: &[Key] = &[
     key("shell.read_only.*.flags", StrList, NO, None),
     key("budget.usd", Number, NO, None),
     key("quota.notice_at", Number, YES, Some("80")),
-    key("skills.disabled", StrList, NO, Some("[]")),
+    unioned("skills.disabled", StrList, Some("[]")),
     key("mcp.servers.*.command", Str, YES, None),
     key("mcp.servers.*.args", StrList, YES, None),
     key("mcp.servers.*.env", StrMap, YES, None),
@@ -268,7 +311,7 @@ pub(crate) const KEYS: &[Key] = &[
     key("extensions.*.hook_timeout_ms", Count, NO, None),
     key("hooks.order.*", StrList, NO, None),
     key("providers.*.credential", Str, NO, None),
-    key("providers.*.credentials.*", Credential, NO, None),
+    entry_replaced("providers.*.credentials.*", Credential),
     key(
         "tui.panel.cards",
         StrList,

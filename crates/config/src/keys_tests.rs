@@ -42,7 +42,10 @@ fn each_write_scope_answers_whether_a_repository_sets_it() {
     );
     // `GlobalOnly` and `PersonFiles` are ignored: a repository may not set them either.
     for (text, key) in [
-        (r#"{"diagnostics": {"level": "debug"}}"#, "diagnostics.level"),
+        (
+            r#"{"diagnostics": {"level": "debug"}}"#,
+            "diagnostics.level",
+        ),
         (r#"{"reviewer": {"context": "x"}}"#, "reviewer.context"),
     ] {
         let (_, notices) = checked(text);

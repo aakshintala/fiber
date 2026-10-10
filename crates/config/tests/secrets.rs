@@ -16,6 +16,38 @@ use contract::ErrorCode;
 const VALUE: &str = "sk-live-7f3a9c0d1e2b";
 
 #[test]
+fn describe_names_each_source_without_its_secret() {
+    for (source, text) in [
+        (
+            CredentialSource::Env("ACME_KEY".into()),
+            "the environment variable ACME_KEY",
+        ),
+        (
+            CredentialSource::File("/keys/acme".into()),
+            "the file /keys/acme",
+        ),
+        (
+            CredentialSource::Command(vec!["op".into(), "read".into(), "op://acme".into()]),
+            "the command op",
+        ),
+        (CredentialSource::Command(Vec::new()), "an empty command"),
+    ] {
+        assert_eq!(source.describe(), text);
+    }
+    let command = CredentialSource::Command(vec!["op".into(), "read".into(), "op://acme".into()]);
+    assert!(
+        !command.describe().contains("read"),
+        "{}",
+        command.describe()
+    );
+    assert!(
+        !command.describe().contains("op://acme"),
+        "{}",
+        command.describe()
+    );
+}
+
+#[test]
 fn a_stored_secret_is_a_0600_file_in_a_0700_credentials_directory() {
     let setup = Setup::new();
     store_secret(&setup.home(), "acme.api_key", &Secret::new(VALUE.into())).unwrap();

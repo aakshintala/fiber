@@ -8,7 +8,6 @@ use serde_json::Value;
 
 use crate::keys::{self, WriteScope};
 use crate::path::{display, get};
-use crate::secret::CredentialSource;
 use crate::{Config, Layer, Source};
 
 /// A key's effective value as `/settings` shows it.
@@ -37,9 +36,6 @@ pub struct SettingInfo {
     pub scope: WriteScope,
 }
 
-/// The list key whose layers all apply ("Layers").
-const UNION: &str = "skills.disabled";
-
 impl Config {
     /// Every key "Keys" names with no `*` in its path, and every instance
     /// of a `*` key some layer sets, sorted by key. A credential source
@@ -59,8 +55,12 @@ impl Config {
             .into_iter()
             .filter_map(|(key, segments)| {
                 let row = keys::leaf(&segments)?;
-                let value = self.setting(&key, &segments);
-                Some(SettingInfo { key, value, scope: row.scope })
+                let value = self.setting(&segments);
+                Some(SettingInfo {
+                    key,
+                    value,
+                    scope: row.scope,
+                })
             })
             .collect()
     }
@@ -76,29 +76,23 @@ impl Config {
     }
 
     /// One key's value as `/settings` shows it.
-    fn setting(&self, key: &str, segments: &[String]) -> SettingValue {
-        if key == UNION {
-            let mut names: Vec<(String, Source)> = Vec::new();
-            for (source, layer) in &self.layers {
-                let items = get(layer, segments).and_then(Value::as_array);
-                for name in items.into_iter().flatten().filter_map(Value::as_str) {
-                    if !names.iter().any(|(seen, _)| seen == name) {
-                        names.push((name.to_owned(), source.clone()));
-                    }
-                }
-            }
+    fn setting(&self, segments: &[String]) -> SettingValue {
+        if keys::leaf(segments).is_some_and(|row| row.merge == keys::Merge::Union) {
+            let names = self.unioned(segments);
             if !names.is_empty() {
                 return SettingValue::Union(names);
             }
         }
-        let Some((value, source)) = self.get(key, None) else {
+        let Some((value, from)) = self.get(&display(segments), None) else {
             return SettingValue::Unset;
         };
         match segments {
             [providers, _, credentials, _]
                 if providers == "providers" && credentials == "credentials" =>
             {
-                SettingValue::Redacted(described(&value), source)
+                let shown = crate::credential::source(&value)
+                    .map_or_else(|| "unreadable".to_owned(), |declared| declared.describe());
+                SettingValue::Redacted(shown, from)
             }
             [mcp, servers, _, env] if mcp == "mcp" && servers == "servers" && env == "env" => {
                 let names: Vec<&str> = value
@@ -106,23 +100,10 @@ impl Config {
                     .into_iter()
                     .flat_map(|map| map.keys().map(String::as_str))
                     .collect();
-                SettingValue::Redacted(format!("names {}", names.join(", ")), source)
+                SettingValue::Redacted(format!("names {}", names.join(", ")), from)
             }
-            _ => SettingValue::Value(value, source),
+            _ => SettingValue::Value(value, from),
         }
-    }
-}
-
-/// A credential source without its secret: its kind, and a command by its
-/// program alone, since its arguments may hold a key.
-fn described(value: &Value) -> String {
-    match serde_json::from_value::<CredentialSource>(value.clone()) {
-        Ok(CredentialSource::Env(name)) => format!("env {name}"),
-        Ok(CredentialSource::File(file)) => format!("file {}", file.display()),
-        Ok(CredentialSource::Command(argv)) => {
-            format!("command {}", argv.first().map_or("", String::as_str))
-        }
-        Err(_) => "unreadable".to_owned(),
     }
 }
 

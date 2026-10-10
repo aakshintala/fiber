@@ -30,6 +30,22 @@ pub enum CredentialSource {
     Command(Vec<String>),
 }
 
+impl CredentialSource {
+    /// What `fiber logout` and `/settings` show for a source: its kind,
+    /// and a command by its program alone, since its arguments may hold a
+    /// key.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Env(name) => format!("the environment variable {name}"),
+            Self::File(path) => format!("the file {}", path.display()),
+            Self::Command(argv) => match argv.first() {
+                Some(program) => format!("the command {program}"),
+                None => "an empty command".to_owned(),
+            },
+        }
+    }
+}
+
 // A command's arguments can hold a key, so only the program prints
 // (`docs/code-quality.md`, "Errors").
 impl fmt::Debug for CredentialSource {
@@ -65,7 +81,10 @@ fn read_at(path: &Path) -> Result<Option<Secret>, ConfigError> {
     }
     match fs::read_to_string(path) {
         Ok(value) => Ok(Some(Secret::new(value))),
-        Err(source) => Err(ConfigError::Io { file: path.to_path_buf(), source }),
+        Err(source) => Err(ConfigError::Io {
+            file: path.to_path_buf(),
+            source,
+        }),
     }
 }
 

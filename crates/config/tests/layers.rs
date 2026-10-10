@@ -461,6 +461,47 @@ fn a_session_exits_after_thirty_idle_minutes_unless_configured() {
 }
 
 #[test]
+fn get_of_a_union_key_is_every_layers_names() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"skills": {"disabled": ["a"]}}"#);
+    setup.write(&setup.project(), r#"{"skills": {"disabled": ["b", "a"]}}"#);
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    assert_eq!(
+        config.get("skills.disabled", None),
+        Some((json!(["a", "b"]), Source::Project(setup.project())))
+    );
+    assert_eq!(config.merged(None)["skills"]["disabled"], json!(["a", "b"]));
+    assert_eq!(config.union_list("skills.disabled"), ["a", "b"]);
+}
+
+#[test]
+fn an_object_value_merges_key_by_key_but_a_credential_entry_replaces_whole() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"mcp": {"servers": {"x": {"env": {"A": "1"}}}},
+            "providers": {"p": {"credentials": {"work": {"file": "/k"}}}}}"#,
+    );
+    setup.write(
+        &setup.project(),
+        r#"{"mcp": {"servers": {"x": {"env": {"B": "2"}}}},
+            "providers": {"p": {"credentials": {"work": {"env": "KEY"}}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    let merged = config.merged(None);
+    assert_eq!(
+        merged["mcp"]["servers"]["x"]["env"],
+        json!({"A": "1", "B": "2"})
+    );
+    assert_eq!(
+        merged["providers"]["p"]["credentials"]["work"],
+        json!({"env": "KEY"})
+    );
+}
+
+#[test]
 fn a_credential_label_replaces_the_one_below_it_as_a_whole() {
     let setup = Setup::new();
     setup.write(

@@ -132,10 +132,10 @@ impl Config {
                 });
         }
         let merged = self.merged(None);
-        let configured = configured(&merged, name);
-        let from_config = configured
-            .and_then(|labels| labels.get(label))
-            .and_then(source);
+        let from_config = sources_in(&merged, name)
+            .into_iter()
+            .find(|(configured, _)| configured == label)
+            .map(|(_, source)| source);
         let own = (label == DEFAULT_LABEL)
             .then(|| provider.credential.clone())
             .flatten();
@@ -202,14 +202,23 @@ impl Config {
             .into_iter()
             .collect();
         labels.extend(
-            configured(&self.merged(None), &provider.name)
+            sources_in(&self.merged(None), &provider.name)
                 .into_iter()
-                .flat_map(|labels| labels.keys().cloned()),
+                .map(|(label, _)| label),
         );
         if provider.credential.is_some() {
             labels.insert(DEFAULT_LABEL.into());
         }
         labels.into_iter().collect()
+    }
+
+    /// Every `(label, source)` pair `providers."<name>".credentials`
+    /// configures, in label order, skipping a value that does not
+    /// deserialise as a source (`serde_json::Map` iterates in key order).
+    /// A wrongly typed value is already a load error, so this skips
+    /// nothing it has read itself.
+    pub fn credential_sources(&self, provider: &str) -> Vec<(String, CredentialSource)> {
+        sources_in(&self.merged(None), provider)
     }
 
     /// The labels listed in a missing-label error: `none` when there are
@@ -240,9 +249,8 @@ impl Config {
             .into_iter()
             .flat_map(Map::keys);
         let labelled = names
-            .filter_map(|name| configured(&merged, name))
-            .flat_map(Map::values)
-            .filter_map(source);
+            .flat_map(|name| sources_in(&merged, name))
+            .map(|(_, declared)| declared);
         let own = providers.into_iter().filter_map(|p| p.credential.clone());
         let files: BTreeSet<PathBuf> = labelled
             .chain(own)
@@ -256,18 +264,23 @@ impl Config {
     }
 }
 
-/// The labels `providers."<name>".credentials` configures in `merged`.
-fn configured<'a>(merged: &'a Value, name: &str) -> Option<&'a Map<String, Value>> {
+/// Every `(label, source)` pair `providers."<name>".credentials`
+/// declares in `merged`, in label order.
+fn sources_in(merged: &Value, name: &str) -> Vec<(String, CredentialSource)> {
     merged
         .get("providers")
         .and_then(|p| p.get(name))
         .and_then(|p| p.get("credentials"))
         .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|labels| labels.iter())
+        .filter_map(|(label, value)| source(value).map(|declared| (label.clone(), declared)))
+        .collect()
 }
 
 /// The source a configured label's `value` declares; `None` when it is
 /// not one.
-fn source(value: &Value) -> Option<CredentialSource> {
+pub(crate) fn source(value: &Value) -> Option<CredentialSource> {
     serde_json::from_value(value.clone()).ok()
 }
 
