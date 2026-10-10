@@ -341,7 +341,8 @@ impl Ctx<'_, '_> {
         let commit = self.origin.clone(repo, &tag, history, &clone, self.clock)?;
         let changes = old
             .filter(|_| history)
-            .map(|old| self.origin.changes(&clone, old, dir, self.clock));
+            .map(|old| self.origin.changes(&clone, old, dir, self.clock))
+            .transpose()?;
         remove(&clone.join(".git"))?;
         let record = Record {
             name: name.into(),

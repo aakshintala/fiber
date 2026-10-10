@@ -61,11 +61,21 @@ fn git_marker_end(name: &str) -> Option<usize> {
 fn timeout(command: &str) -> Error {
     Error::Git {
         command: command.into(),
-        why: format!(
-            "did not finish within {} s, so it was stopped",
-            GIT_DEADLINE.as_secs()
-        ),
+        why: timeout_why(),
     }
+}
+
+/// Why a call stopped at its deadline names the deadline's seconds.
+fn timeout_why() -> String {
+    format!(
+        "did not finish within {} s, so it was stopped",
+        GIT_DEADLINE.as_secs()
+    )
+}
+
+/// Whether `err` is a `git` call stopped at its deadline.
+fn is_timeout(err: &Error) -> bool {
+    matches!(err, Error::Git { why, .. } if *why == timeout_why())
 }
 
 /// Whether `ls-remote`'s stderr means the repository is not there.
@@ -118,9 +128,6 @@ impl Origin {
         let (_cancel, cancel) = mpsc::channel::<()>();
         let command = args.join(" ");
         match exec::run(&req, clock, Some(deadline), cancel) {
-            Err(stalled) if stalled.ran.as_ref().is_some_and(|ran| ran.timed_out) => {
-                Err(timeout(&command))
-            }
             Err(failed) => Err(match failed.source {
                 Some(source) if source.kind() == std::io::ErrorKind::NotFound => Error::GitMissing,
                 Some(source) => Error::Git {
@@ -191,15 +198,29 @@ impl Origin {
             .to_owned())
     }
 
-    /// What changed in `dir` of the clone since commit `old`.
-    pub(crate) fn changes(&self, clone: &Path, old: &str, dir: &str, clock: &dyn Clock) -> String {
+    /// What changed in `dir` of the clone since commit `old`. A call stopped
+    /// at its deadline fails the update: an update never commits a change
+    /// list the call did not finish reading.
+    pub(crate) fn changes(
+        &self,
+        clone: &Path,
+        old: &str,
+        dir: &str,
+        clock: &dyn Clock,
+    ) -> Result<String, Error> {
         let dir = if dir.is_empty() { "." } else { dir };
-        self.run(
+        match self.run(
             &["diff", "--stat", old, "HEAD", "--", dir],
             Some(clone),
             clock,
-        )
-        .unwrap_or_else(|_| "The installed commit is not in the repository.\n".into())
+        ) {
+            Ok(out) => Ok(out),
+            // The deadline stopped the call, so there is no change list to
+            // commit; anything else still reads as an installed commit the
+            // repository no longer holds.
+            Err(err) if is_timeout(&err) => Err(err),
+            Err(_) => Ok("The installed commit is not in the repository.\n".into()),
+        }
     }
 }
 
