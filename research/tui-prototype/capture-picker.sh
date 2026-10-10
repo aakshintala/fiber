@@ -12,7 +12,7 @@ if [ ! -x "$BIN" ]; then
   CARGO_BUILD_JOBS=3 cargo build --release
 fi
 mkdir -p "$OUT/sgr"
-for c in list levels scoped scoped-all refreshing session-only; do
+for c in list levels scoped scoped-all refreshing session-only filtered filtered-empty; do
   tmux kill-session -t pick1629 2>/dev/null || true
   # shellcheck disable=SC2086
   tmux new-session -d -x 160 -y 48 -s pick1629 "$BIN $FIX --static --picker $c"

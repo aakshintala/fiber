@@ -4716,7 +4716,7 @@ mod tests {
             [
                 "--home empty, sessions, live-only, past-only, selected, live, hover-workspace, hover-worktree, hover-model, hover-thinking, worktree-on, worktree-off, picker-recent, picker-typed",
                 "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, notice, close-mouse",
-                "--picker list, levels, scoped, scoped-all, refreshing, session-only",
+                "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",
             ]
         );

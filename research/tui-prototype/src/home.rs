@@ -966,13 +966,21 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
         }
         return Step::Stay;
     }
-    // The model picker records its choice on Enter, then closes.
+    // The model picker records its choice on Enter, then closes. With no
+    // matching row Enter keeps the picker open and records nothing.
     if c.ui.picker.is_some() {
         if k == Key::Enter && !m.ctrl && !m.alt && !m.sup {
-            let (model, level) =
-                crate::model_picker::chosen(c.ui.picker.as_ref().unwrap());
-            c.model = model;
-            c.level = level;
+            let empty = c
+                .ui
+                .picker
+                .as_ref()
+                .is_some_and(|p| crate::model_picker::visible(p).is_empty());
+            if !empty {
+                let (model, level) =
+                    crate::model_picker::chosen(c.ui.picker.as_ref().unwrap());
+                c.model = model;
+                c.level = level;
+            }
         }
         crate::model_picker::on_key(&mut c.ui, k, m);
         return Step::Stay;
@@ -1188,6 +1196,20 @@ fn run_live(term: &mut Term) -> io::Result<Done> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enter_with_no_matches_records_nothing() {
+        let mut c = base();
+        let (model, level) = (c.model, c.level);
+        c.ui.input = "draft".into();
+        let mut p = crate::model_picker::for_case("list");
+        p.query = "zzz".into();
+        c.ui.picker = Some(p);
+        on_key(&mut c, Key::Enter, Mods::default());
+        assert!(c.ui.picker.is_some(), "empty Enter closed the picker");
+        assert_eq!(c.ui.input, "draft");
+        assert_eq!((c.model, c.level), (model, level));
+    }
 
     #[test]
     fn every_case_parses_and_unknown_does_not() {
