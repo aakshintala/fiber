@@ -122,9 +122,10 @@ pub struct OpenStages {
 /// start, `end_batch` after its last line, then a frame after every
 /// `frame_every` lines and once at the end. A batch never crosses the
 /// frame boundary its frame draws on, and never holds more than the
-/// loop's batch, so it holds at most `frame_every` or `HUB_BATCH` lines,
-/// whichever holds fewer. `usize::MAX` draws the single final frame,
-/// though batches still end every `HUB_BATCH` lines. An unreadable line
+/// loop's batch, so it holds at most the lines left to the next frame
+/// boundary or `HUB_BATCH`, whichever holds fewer. `usize::MAX` draws
+/// the single final frame, though batches still end every `HUB_BATCH`
+/// lines. An unreadable line
 /// is an error naming its number, as [`draw`] names it. Only the bench
 /// calls this; the shipped event loop never does.
 pub fn measure_open(
@@ -148,8 +149,7 @@ pub fn measure_open(
     // A batch never crosses a frame boundary, and the loop never folds
     // more than HUB_BATCH lines before a frame; a `frame_every` of zero
     // frames every line, so its batches hold one.
-    let batch_size = frame_every.clamp(1, HUB_BATCH);
-    let mut pending: Vec<Envelope> = Vec::with_capacity(batch_size);
+    let mut pending: Vec<Envelope> = Vec::with_capacity(frame_every.clamp(1, HUB_BATCH));
     for (at, line) in events.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
@@ -164,7 +164,11 @@ pub fn measure_open(
             app.attach(envelope.session_id.clone());
         }
         pending.push(envelope);
-        if pending.len() >= batch_size {
+        // The batch ends at the frame boundary or the loop's batch,
+        // whichever comes first: fixed-size batches would cross the
+        // boundary when `frame_every` exceeds and outruns HUB_BATCH.
+        let limit = HUB_BATCH.min(frame_every.saturating_sub(since_frame).max(1));
+        if pending.len() >= limit {
             fold_batch(
                 &mut app,
                 &mut screen,
