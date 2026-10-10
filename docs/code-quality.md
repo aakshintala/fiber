@@ -11,7 +11,10 @@ crates may be used is `docs/dependencies.md`, and who implements and reviews
 a change is `docs/workflow.md`.
 
 Code under `research/` is throwaway. It is not a member of the Cargo
-workspace, and neither the gate nor the `CI` check builds, lints or tests it.
+workspace, and neither the gate nor the `CI` check builds or tests it. The one
+exception is `research/tui-prototype`, the look reference for the terminal UI,
+which `scripts/check` formats and lints when a diff touches it (`docs/ci.md`,
+"On every pull request that changes code").
 
 ## Tools enforce the rules
 

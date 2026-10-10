@@ -33,7 +33,14 @@ pub(crate) struct Surface {
 }
 
 pub(crate) fn docs<T>(cases: &[Case<T>]) -> Vec<Doc> {
-    cases.iter().map(|c| Doc { name: c.name, help: c.help, check: c.check }).collect()
+    cases
+        .iter()
+        .map(|c| Doc {
+            name: c.name,
+            help: c.help,
+            check: c.check,
+        })
+        .collect()
 }
 
 /// The case called `name`, built.
@@ -71,8 +78,18 @@ pub(crate) fn check_md(s: &Surface) -> String {
 mod tests {
     use super::*;
 
-    const CASES: &[Case<u8>] = &[Case { name: "a", help: "first", check: "see a", build: || 7 }];
-    const DEMO: Surface = Surface { flag: "--demo", file: "demo", title: "Demo", docs: || docs(CASES) };
+    const CASES: &[Case<u8>] = &[Case {
+        name: "a",
+        help: "first",
+        check: "see a",
+        build: || 7,
+    }];
+    const DEMO: Surface = Surface {
+        flag: "--demo",
+        file: "demo",
+        title: "Demo",
+        docs: || docs(CASES),
+    };
 
     #[test]
     fn help_check_and_lookup_come_from_the_slice() {
@@ -80,6 +97,9 @@ mod tests {
         assert_eq!(lookup(CASES, "a"), Some(7));
         assert_eq!(lookup(CASES, "b"), None);
         assert_eq!(help(&[DEMO]), "\n--demo CASE:\n  a                first\n");
-        assert_eq!(check_md(&DEMO), "# Demo\n\nOne run per case: `--demo CASE`.\n\n- a: see a\n");
+        assert_eq!(
+            check_md(&DEMO),
+            "# Demo\n\nOne run per case: `--demo CASE`.\n\n- a: see a\n"
+        );
     }
 }

@@ -6,10 +6,12 @@
 //! overlay owns the keyboard while it is up, so the fixture replay never
 //! draws under it.
 
-use crate::cases::{Case, Surface};
 use super::input::{Ev, Key};
 use super::{Args, Term};
-use super::{bold, dim, fg, fit, lift, paint, panel, row, slab, sp, t, wrap, wrap_rows, BI, CYAN, ORANGE};
+use super::{
+    BI, CYAN, ORANGE, bold, dim, fg, fit, lift, paint, panel, row, slab, sp, t, wrap, wrap_rows,
+};
+use crate::cases::{Case, Surface};
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 use std::io::{self, Write};
@@ -17,19 +19,114 @@ use unicode_width::UnicodeWidthStr;
 
 /// Every `--overlay` case, named in README.md.
 const CASES: &[Case<Look>] = &[
-    Case { name: "keymap", help: "the key map, All tab, empty search", check: "the key map should dock at the bottom full width with ▄ ▀ edges and the ▌ stripe; `Key map` bold accent with a dim ✕, a muted purpose and `34 actions, 24 with other paths`; the All tab inverse with the rest muted; a muted search line with an empty query; group, action and keys columns starting together on three fixed columns with other paths dim in the keys; the first row `›` on a full-width accent bar; a `↓` arrow in the gutter whenever rows hide below (as in keymap-narrow); the foot a bold-key legend naming no body pair; nothing clipped.", build: || Look { kind: Kind::Keymap, narrow: false, tab: None, query: "" } },
-    Case { name: "keymap-tab", help: "the key map, Session tab", check: "the Session tab inverse with only Session rows under it, the first `›` on the accent bar; no arrow, everything fits; same columns and legend.", build: || Look { kind: Kind::Keymap, narrow: false, tab: Some("Session"), query: "" } },
-    Case { name: "keymap-search", help: "the key map, narrowed by a query", check: "`session` typed after the muted search line narrows the rows to the five bindings naming a session, across groups; the first `›` on the accent bar; no arrow; same columns and legend.", build: || Look { kind: Kind::Keymap, narrow: false, tab: None, query: "session" } },
-    Case { name: "keymap-narrow", help: "the key map, narrowed, scrolled", check: "the same panel at 100 columns, rows wrapped, opened scrolled, with an `↑ N more · ↓ M more` indicator on its last line; the three columns keep their starts.", build: || Look { kind: Kind::Keymap, narrow: true, tab: None, query: "" } },
-    Case { name: "quit", help: "the quit question", check: "the question should read `2 sessions working` muted under a bold accent `Quit`; `enter` marked `›` with its key bold on a full-width accent bar and no `· default`; the foot sits left with the body and names no choice.", build: || Look { kind: Kind::Quit, narrow: false, tab: None, query: "" } },
-    Case { name: "delete", help: "the delete question", check: "the question should name `docs: rail spec` and its spend, and what `--cascade` would add, under a bold accent title; padding all round; the foot a bold-key legend naming no body pair.", build: || Look { kind: Kind::Delete, narrow: false, tab: None, query: "" } },
-    Case { name: "history", help: "the prompt-history panel", check: "the typed `back` should read bold after `›`, every hit in the three matches marked, the first row `›` on a full-width accent bar; centred with padding; the foot a bold-key legend naming no body pair.", build: || Look { kind: Kind::History, narrow: false, tab: None, query: "" } },
-    Case { name: "notice", help: "a notice shown in full", check: "the whole `key_clash` text should read wrapped to the panel, padded and striped, nothing clipped; the foot a bold-key legend naming no body pair.", build: || Look { kind: Kind::Notice, narrow: false, tab: None, query: "" } },
-    Case { name: "close-mouse", help: "how an overlay closes by mouse", check: "the ✕ should read lighter than its neighbours, the foot should read `click ✕ or outside to close` left-aligned, and a dim dotted outline should mark the click-outside target.", build: || Look { kind: Kind::CloseMouse, narrow: false, tab: None, query: "" } },
+    Case {
+        name: "keymap",
+        help: "the key map, All tab, empty search",
+        check: "the key map should dock at the bottom full width with ▄ ▀ edges and the ▌ stripe; `Key map` bold accent with a dim ✕, a muted purpose and `34 actions, 24 with other paths`; the All tab inverse with the rest muted; a muted search line with an empty query; group, action and keys columns starting together on three fixed columns with other paths dim in the keys; the first row `›` on a full-width accent bar; a `↓` arrow in the gutter whenever rows hide below (as in keymap-narrow); the foot a bold-key legend naming no body pair; nothing clipped.",
+        build: || Look {
+            kind: Kind::Keymap,
+            narrow: false,
+            tab: None,
+            query: "",
+        },
+    },
+    Case {
+        name: "keymap-tab",
+        help: "the key map, Session tab",
+        check: "the Session tab inverse with only Session rows under it, the first `›` on the accent bar; no arrow, everything fits; same columns and legend.",
+        build: || Look {
+            kind: Kind::Keymap,
+            narrow: false,
+            tab: Some("Session"),
+            query: "",
+        },
+    },
+    Case {
+        name: "keymap-search",
+        help: "the key map, narrowed by a query",
+        check: "`session` typed after the muted search line narrows the rows to the five bindings naming a session, across groups; the first `›` on the accent bar; no arrow; same columns and legend.",
+        build: || Look {
+            kind: Kind::Keymap,
+            narrow: false,
+            tab: None,
+            query: "session",
+        },
+    },
+    Case {
+        name: "keymap-narrow",
+        help: "the key map, narrowed, scrolled",
+        check: "the same panel at 100 columns, rows wrapped, opened scrolled, with an `↑ N more · ↓ M more` indicator on its last line; the three columns keep their starts.",
+        build: || Look {
+            kind: Kind::Keymap,
+            narrow: true,
+            tab: None,
+            query: "",
+        },
+    },
+    Case {
+        name: "quit",
+        help: "the quit question",
+        check: "the question should read `2 sessions working` muted under a bold accent `Quit`; `enter` marked `›` with its key bold on a full-width accent bar and no `· default`; the foot sits left with the body and names no choice.",
+        build: || Look {
+            kind: Kind::Quit,
+            narrow: false,
+            tab: None,
+            query: "",
+        },
+    },
+    Case {
+        name: "delete",
+        help: "the delete question",
+        check: "the question should name `docs: rail spec` and its spend, and what `--cascade` would add, under a bold accent title; padding all round; the foot a bold-key legend naming no body pair.",
+        build: || Look {
+            kind: Kind::Delete,
+            narrow: false,
+            tab: None,
+            query: "",
+        },
+    },
+    Case {
+        name: "history",
+        help: "the prompt-history panel",
+        check: "the typed `back` should read bold after `›`, every hit in the three matches marked, the first row `›` on a full-width accent bar; centred with padding; the foot a bold-key legend naming no body pair.",
+        build: || Look {
+            kind: Kind::History,
+            narrow: false,
+            tab: None,
+            query: "",
+        },
+    },
+    Case {
+        name: "notice",
+        help: "a notice shown in full",
+        check: "the whole `key_clash` text should read wrapped to the panel, padded and striped, nothing clipped; the foot a bold-key legend naming no body pair.",
+        build: || Look {
+            kind: Kind::Notice,
+            narrow: false,
+            tab: None,
+            query: "",
+        },
+    },
+    Case {
+        name: "close-mouse",
+        help: "how an overlay closes by mouse",
+        check: "the ✕ should read lighter than its neighbours, the foot should read `click ✕ or outside to close` left-aligned, and a dim dotted outline should mark the click-outside target.",
+        build: || Look {
+            kind: Kind::CloseMouse,
+            narrow: false,
+            tab: None,
+            query: "",
+        },
+    },
 ];
 
 /// `--overlay`, for `--help` and `check/overlays.md`.
-pub(crate) const SURFACE: Surface = Surface { flag: "--overlay", file: "overlays", title: "Overlays (#1630)", docs: || crate::cases::docs(CASES) };
+pub(crate) const SURFACE: Surface = Surface {
+    flag: "--overlay",
+    file: "overlays",
+    title: "Overlays (#1630)",
+    docs: || crate::cases::docs(CASES),
+};
 
 /// The scrolled keymap case opens past its first screenful.
 const NARROW_SCROLL: usize = 10;
@@ -46,9 +143,27 @@ struct Binding {
 
 /// Every row of docs/tui.md's Bindings table, grouped by area, in area order.
 const BINDINGS: &[Binding] = &[
-    Binding { area: "Session", action: "Start a new session", key: "Ctrl+N", other: "/new", when: "" },
-    Binding { area: "Session", action: "Go home", key: "⌥0", other: "/home", when: "" },
-    Binding { area: "Session", action: "Switch to the session of rail card N", key: "⌥1 to ⌥9", other: "click the card", when: "" },
+    Binding {
+        area: "Session",
+        action: "Start a new session",
+        key: "Ctrl+N",
+        other: "/new",
+        when: "",
+    },
+    Binding {
+        area: "Session",
+        action: "Go home",
+        key: "⌥0",
+        other: "/home",
+        when: "",
+    },
+    Binding {
+        area: "Session",
+        action: "Switch to the session of rail card N",
+        key: "⌥1 to ⌥9",
+        other: "click the card",
+        when: "",
+    },
     Binding {
         area: "Session",
         action: "Close what is on top; interrupt the turn when nothing is open",
@@ -63,8 +178,20 @@ const BINDINGS: &[Binding] = &[
         other: "/quit",
         when: "twice within about a second on an empty box",
     },
-    Binding { area: "Input", action: "Send a prompt, or a steering message during a turn", key: "Enter", other: "", when: "" },
-    Binding { area: "Input", action: "Insert a line break", key: "Shift+Enter", other: "Ctrl+J", when: "" },
+    Binding {
+        area: "Input",
+        action: "Send a prompt, or a steering message during a turn",
+        key: "Enter",
+        other: "",
+        when: "",
+    },
+    Binding {
+        area: "Input",
+        action: "Insert a line break",
+        key: "Shift+Enter",
+        other: "Ctrl+J",
+        when: "",
+    },
     Binding {
         area: "Input",
         action: "Recall an earlier prompt from the project of the session on screen",
@@ -72,9 +199,27 @@ const BINDINGS: &[Binding] = &[
         other: "",
         when: "in an empty box",
     },
-    Binding { area: "Input", action: "Search those prompts", key: "Ctrl+R", other: "", when: "" },
-    Binding { area: "Input", action: "Move by word", key: "⌥← ⌥→, Ctrl+← Ctrl+→", other: "", when: "" },
-    Binding { area: "Input", action: "Delete a word", key: "⌥Backspace", other: "", when: "" },
+    Binding {
+        area: "Input",
+        action: "Search those prompts",
+        key: "Ctrl+R",
+        other: "",
+        when: "",
+    },
+    Binding {
+        area: "Input",
+        action: "Move by word",
+        key: "⌥← ⌥→, Ctrl+← Ctrl+→",
+        other: "",
+        when: "",
+    },
+    Binding {
+        area: "Input",
+        action: "Delete a word",
+        key: "⌥Backspace",
+        other: "",
+        when: "",
+    },
     Binding {
         area: "Input",
         action: "Start or end of the line",
@@ -82,8 +227,20 @@ const BINDINGS: &[Binding] = &[
         other: "",
         when: "where the terminal passes them",
     },
-    Binding { area: "Input", action: "Open the draft, or a pasted token, in `$VISUAL` or `$EDITOR`", key: "Ctrl+G", other: "click the token", when: "" },
-    Binding { area: "Input", action: "Paste an image", key: "Ctrl+V", other: "", when: "" },
+    Binding {
+        area: "Input",
+        action: "Open the draft, or a pasted token, in `$VISUAL` or `$EDITOR`",
+        key: "Ctrl+G",
+        other: "click the token",
+        when: "",
+    },
+    Binding {
+        area: "Input",
+        action: "Paste an image",
+        key: "Ctrl+V",
+        other: "",
+        when: "",
+    },
     Binding {
         area: "Conversation",
         action: "Move focus from the input box into the conversation",
@@ -91,9 +248,27 @@ const BINDINGS: &[Binding] = &[
         other: "click an item",
         when: "",
     },
-    Binding { area: "Conversation", action: "Move focus to the next or previous item", key: "↓ ↑, j k", other: "click an item", when: "" },
-    Binding { area: "Conversation", action: "Open the focused item", key: "Enter", other: "click it", when: "" },
-    Binding { area: "Conversation", action: "Copy the focused item", key: "y", other: "select it", when: "" },
+    Binding {
+        area: "Conversation",
+        action: "Move focus to the next or previous item",
+        key: "↓ ↑, j k",
+        other: "click an item",
+        when: "",
+    },
+    Binding {
+        area: "Conversation",
+        action: "Open the focused item",
+        key: "Enter",
+        other: "click it",
+        when: "",
+    },
+    Binding {
+        area: "Conversation",
+        action: "Copy the focused item",
+        key: "y",
+        other: "select it",
+        when: "",
+    },
     Binding {
         area: "Conversation",
         action: "Move focus to the panel, the rail, then the conversation",
@@ -101,7 +276,13 @@ const BINDINGS: &[Binding] = &[
         other: "click the area",
         when: "",
     },
-    Binding { area: "Conversation", action: "Open or close the ledgers", key: "Ctrl+O", other: "click a group's line", when: "" },
+    Binding {
+        area: "Conversation",
+        action: "Open or close the ledgers",
+        key: "Ctrl+O",
+        other: "click a group's line",
+        when: "",
+    },
     Binding {
         area: "Conversation",
         action: "Delete the selected exited session in the session list",
@@ -109,10 +290,34 @@ const BINDINGS: &[Binding] = &[
         other: "click the row's ✕",
         when: "on its row",
     },
-    Binding { area: "Panels", action: "Show or hide the panel", key: "⌥P", other: "/panel", when: "" },
-    Binding { area: "Panels", action: "Show or hide the rail", key: "⌥R", other: "drag its edge", when: "" },
-    Binding { area: "Search", action: "Search", key: "Ctrl+F; Cmd+F", other: "", when: "where forwarded" },
-    Binding { area: "Search", action: "Open the search results", key: "Ctrl+F", other: "click the match count", when: "with search open" },
+    Binding {
+        area: "Panels",
+        action: "Show or hide the panel",
+        key: "⌥P",
+        other: "/panel",
+        when: "",
+    },
+    Binding {
+        area: "Panels",
+        action: "Show or hide the rail",
+        key: "⌥R",
+        other: "drag its edge",
+        when: "",
+    },
+    Binding {
+        area: "Search",
+        action: "Search",
+        key: "Ctrl+F; Cmd+F",
+        other: "",
+        when: "where forwarded",
+    },
+    Binding {
+        area: "Search",
+        action: "Open the search results",
+        key: "Ctrl+F",
+        other: "click the match count",
+        when: "with search open",
+    },
     Binding {
         area: "Search",
         action: "Next or previous match",
@@ -120,10 +325,34 @@ const BINDINGS: &[Binding] = &[
         other: "",
         when: "with search open",
     },
-    Binding { area: "Search", action: "Jump to the end", key: "End", other: "click \"↓ New messages below\"", when: "" },
-    Binding { area: "Steering", action: "Select a queued steering message", key: "⌥↑ ⌥↓", other: "its mouse target", when: "" },
-    Binding { area: "Steering", action: "Amend it", key: "Enter", other: "its mouse target", when: "" },
-    Binding { area: "Steering", action: "Drop it", key: "⌥X", other: "its mouse target", when: "" },
+    Binding {
+        area: "Search",
+        action: "Jump to the end",
+        key: "End",
+        other: "click \"↓ New messages below\"",
+        when: "",
+    },
+    Binding {
+        area: "Steering",
+        action: "Select a queued steering message",
+        key: "⌥↑ ⌥↓",
+        other: "its mouse target",
+        when: "",
+    },
+    Binding {
+        area: "Steering",
+        action: "Amend it",
+        key: "Enter",
+        other: "its mouse target",
+        when: "",
+    },
+    Binding {
+        area: "Steering",
+        action: "Drop it",
+        key: "⌥X",
+        other: "its mouse target",
+        when: "",
+    },
     Binding {
         area: "Requests",
         action: "Reopen a request put aside, or move to the next, the oldest first, switching to its session",
@@ -131,13 +360,40 @@ const BINDINGS: &[Binding] = &[
         other: "/approvals; click the badge or a waiting card",
         when: "",
     },
-    Binding { area: "Model", action: "Open the model picker", key: "Ctrl+L", other: "/model", when: "" },
-    Binding { area: "Model", action: "Choose in the model picker for this session only", key: "Ctrl+S", other: "", when: "" },
-    Binding { area: "Model", action: "Open the key map", key: "F1", other: "/? or /help", when: "" },
+    Binding {
+        area: "Model",
+        action: "Open the model picker",
+        key: "Ctrl+L",
+        other: "/model",
+        when: "",
+    },
+    Binding {
+        area: "Model",
+        action: "Choose in the model picker for this session only",
+        key: "Ctrl+S",
+        other: "",
+        when: "",
+    },
+    Binding {
+        area: "Model",
+        action: "Open the key map",
+        key: "F1",
+        other: "/? or /help",
+        when: "",
+    },
 ];
 
 /// The key map's group tabs, in area order after All.
-const ALL_AREAS: &[&str] = &["Session", "Input", "Conversation", "Panels", "Search", "Steering", "Requests", "Model"];
+const ALL_AREAS: &[&str] = &[
+    "Session",
+    "Input",
+    "Conversation",
+    "Panels",
+    "Search",
+    "Steering",
+    "Requests",
+    "Model",
+];
 /// The keys column never squeezes under this, in cells.
 const MIN_KW: usize = 20;
 
@@ -208,13 +464,28 @@ fn visible(tab: Option<&str>, query: &str) -> Vec<&'static Binding> {
 /// chars is padding by cells. The selected row reads bold throughout, like
 /// every focused choice.
 fn binding_row(b: &Binding, selected: bool, gw: usize, aw: usize, kw: usize) -> Vec<super::Row> {
-    let gutter = if selected { vec![sp("› ", bold())] } else { vec![sp("  ", Style::new())] };
+    let gutter = if selected {
+        vec![sp("› ", bold())]
+    } else {
+        vec![sp("  ", Style::new())]
+    };
     let a = wrap(desc_spans(b), aw.max(1), vec![], vec![]);
     let k = wrap(keys_spans(b), kw.max(1), vec![], vec![]);
     let mut out = vec![];
     for i in 0..a.len().max(k.len()) {
-        let mut s = if i == 0 { gutter.clone() } else { vec![sp("  ", Style::new())] };
-        s.push(sp(if i == 0 { format!("{:<gw$}", b.area) } else { " ".repeat(gw) }, dim()));
+        let mut s = if i == 0 {
+            gutter.clone()
+        } else {
+            vec![sp("  ", Style::new())]
+        };
+        s.push(sp(
+            if i == 0 {
+                format!("{:<gw$}", b.area)
+            } else {
+                " ".repeat(gw)
+            },
+            dim(),
+        ));
         s.push(sp("  ", Style::new()));
         s.extend(fit(a.get(i).map(|v| v.as_slice()).unwrap_or(&[]), aw));
         s.push(sp("  ", Style::new()));
@@ -238,7 +509,11 @@ fn binding_row(b: &Binding, selected: bool, gw: usize, aw: usize, kw: usize) -> 
 /// from the visible rows, computed once.
 fn bind_rows(vis: &[&Binding], select_first: bool, inner: usize) -> Vec<super::Row> {
     let gw = vis.iter().map(|b| b.area.width()).max().unwrap_or(0);
-    let longest_a = vis.iter().map(|b| super::width(&desc_spans(b))).max().unwrap_or(0);
+    let longest_a = vis
+        .iter()
+        .map(|b| super::width(&desc_spans(b)))
+        .max()
+        .unwrap_or(0);
     let aw = longest_a.min(inner.saturating_sub(2 + gw + 2 + 2 + MIN_KW));
     let kw = inner.saturating_sub(2 + gw + 2 + aw + 2);
     vis.iter()
@@ -250,7 +525,10 @@ fn bind_rows(vis: &[&Binding], select_first: bool, inner: usize) -> Vec<super::R
 /// A row of group tabs: the selected one inverse, the rest muted.
 fn tabs_row(selected: Option<&str>, inner: usize) -> super::Row {
     let mut spans = vec![];
-    for (i, g) in std::iter::once("All").chain(ALL_AREAS.iter().copied()).enumerate() {
+    for (i, g) in std::iter::once("All")
+        .chain(ALL_AREAS.iter().copied())
+        .enumerate()
+    {
         if i > 0 {
             spans.push(sp("  ", Style::new()));
         }
@@ -288,8 +566,14 @@ fn keymap_panel(c: &Look, cols: usize, rows: usize) -> Vec<super::Row> {
     let mut chrome = vec![
         row(vec![]),
         panel::title_row("Key map", Some(sp("✕", dim()))),
-        row(vec![sp("Every binding by area, with its other paths.", dim())]),
-        row(vec![sp(format!("{} actions, {} with other paths", BINDINGS.len(), others), dim())]),
+        row(vec![sp(
+            "Every binding by area, with its other paths.",
+            dim(),
+        )]),
+        row(vec![sp(
+            format!("{} actions, {} with other paths", BINDINGS.len(), others),
+            dim(),
+        )]),
         row(vec![]),
         tabs_row(c.tab, inner),
         search_row(c.query, inner),
@@ -300,19 +584,32 @@ fn keymap_panel(c: &Look, cols: usize, rows: usize) -> Vec<super::Row> {
     // scroll indicator's line in the narrowed view, so no edge is touched.
     let suffix = if c.narrow { 4 } else { 3 };
     let cap = rows.saturating_sub(chrome.len() + suffix + 2);
-    let off = if c.narrow { clamp_scroll(NARROW_SCROLL, total, cap) } else { 0 };
+    let off = if c.narrow {
+        clamp_scroll(NARROW_SCROLL, total, cap)
+    } else {
+        0
+    };
     let rest = total.saturating_sub(off + cap);
     let mut shown: Vec<super::Row> = body.drain(off..).take(cap).collect();
     // More below: an arrow in the gutter of the last shown line.
-    if total > off + shown.len() && let Some(last) = shown.last_mut().filter(|r| r.bg.is_none()) {
+    if total > off + shown.len()
+        && let Some(last) = shown.last_mut().filter(|r| r.bg.is_none())
+    {
         last.spans[0] = sp("↓ ", dim());
     }
     chrome.append(&mut shown);
     if c.narrow && rest > 0 {
-        chrome.push(row(vec![sp(format!("↑ {off} more · ↓ {rest} more"), dim())]));
+        chrome.push(row(vec![sp(
+            format!("↑ {off} more · ↓ {rest} more"),
+            dim(),
+        )]));
     }
     chrome.push(row(vec![]));
-    chrome.push(panel::footer_legend(&[("↑↓", "move"), ("←→", "tabs"), ("esc", "closes")]));
+    chrome.push(panel::footer_legend(&[
+        ("↑↓", "move"),
+        ("←→", "tabs"),
+        ("esc", "closes"),
+    ]));
     chrome.push(row(vec![]));
     panel::slab_rows(chrome, cols)
 }
@@ -322,7 +619,13 @@ fn keymap_panel(c: &Look, cols: usize, rows: usize) -> Vec<super::Row> {
 fn quit_body(inner: usize) -> Vec<super::Row> {
     let key_w = panel::key_width(&["enter", "c", "esc"]);
     let mut out = vec![row(vec![sp("2 sessions working", dim())]), row(vec![])];
-    out.extend(panel::bar(panel::choice_row(true, "enter", "leave them running", key_w, inner)));
+    out.extend(panel::bar(panel::choice_row(
+        true,
+        "enter",
+        "leave them running",
+        key_w,
+        inner,
+    )));
     out.extend(panel::choice_row(false, "c", "close all", key_w, inner));
     out.extend(panel::choice_row(false, "esc", "stay", key_w, inner));
     out
@@ -339,12 +642,20 @@ fn delete_body(inner: usize) -> Vec<super::Row> {
     );
     out.push(row(vec![]));
     out.extend(wrap_rows(
-        vec![sp("It deletes the session through the hub, after asking.", Style::new())],
+        vec![sp(
+            "It deletes the session through the hub, after asking.",
+            Style::new(),
+        )],
         inner,
         vec![],
         vec![],
     ));
-    out.extend(wrap_rows(vec![sp("--cascade would add no other session.", dim())], inner, vec![], vec![]));
+    out.extend(wrap_rows(
+        vec![sp("--cascade would add no other session.", dim())],
+        inner,
+        vec![],
+        vec![],
+    ));
     out
 }
 
@@ -352,7 +663,10 @@ fn delete_body(inner: usize) -> Vec<super::Row> {
 const QUERY: &str = "back";
 /// Prompt history, newest first: the prompt and where it was recalled from.
 const PROMPTS: &[(&str, &str)] = &[
-    ("how do I backfill embeddings for old sessions?", "this session"),
+    (
+        "how do I backfill embeddings for old sessions?",
+        "this session",
+    ),
     ("back up the state file before the migration", "project"),
     ("roll back the handoff note", "project"),
 ];
@@ -386,7 +700,10 @@ fn hl(text: &str, q: &str, base: Style, mark: Style) -> Vec<Span<'static>> {
 fn history_body(inner: usize) -> Vec<super::Row> {
     let mut out = vec![
         row(vec![sp("› ", fg(CYAN)), sp(QUERY, bold()), sp("█", dim())]),
-        row(vec![sp(format!("{} matches · newest first", PROMPTS.len()), dim())]),
+        row(vec![sp(
+            format!("{} matches · newest first", PROMPTS.len()),
+            dim(),
+        )]),
     ];
     for (i, (prompt, from)) in PROMPTS.iter().enumerate() {
         // The focused match reads bold throughout, like every focused choice.
@@ -401,7 +718,10 @@ fn history_body(inner: usize) -> Vec<super::Row> {
         } else {
             (vec![sp("  ", Style::new())], vec![sp("  ", Style::new())])
         };
-        let lines: Vec<super::Row> = wrap(spans, inner, first, rest).into_iter().map(row).collect();
+        let lines: Vec<super::Row> = wrap(spans, inner, first, rest)
+            .into_iter()
+            .map(row)
+            .collect();
         if i == 0 {
             out.extend(panel::bar(lines));
         } else {
@@ -428,20 +748,53 @@ fn close_mouse_body(inner: usize) -> Vec<super::Row> {
 /// except the quit question, whose body already lists every key.
 fn small_content(kind: Kind, inner: usize) -> (&'static str, Vec<super::Row>, super::Row) {
     match kind {
-        Kind::Quit => ("Quit", quit_body(inner), panel::footer_row("click a choice · they keep running meanwhile")),
-        Kind::Delete => ("Delete session", delete_body(inner), panel::footer_legend(&[("enter", "deletes"), ("esc", "keeps it")])),
-        Kind::History => ("Prompt history", history_body(inner), panel::footer_legend(&[("enter", "recalls"), ("esc", "closes")])),
-        Kind::Notice => ("Notice · key_clash", notice_body(inner), panel::footer_legend(&[("esc", "closes")])),
-        Kind::CloseMouse => ("Key map", close_mouse_body(inner), row(fit(&[sp("click ✕ or outside", bold()), sp(" to close", dim())], inner))),
+        Kind::Quit => (
+            "Quit",
+            quit_body(inner),
+            panel::footer_row("click a choice · they keep running meanwhile"),
+        ),
+        Kind::Delete => (
+            "Delete session",
+            delete_body(inner),
+            panel::footer_legend(&[("enter", "deletes"), ("esc", "keeps it")]),
+        ),
+        Kind::History => (
+            "Prompt history",
+            history_body(inner),
+            panel::footer_legend(&[("enter", "recalls"), ("esc", "closes")]),
+        ),
+        Kind::Notice => (
+            "Notice · key_clash",
+            notice_body(inner),
+            panel::footer_legend(&[("esc", "closes")]),
+        ),
+        Kind::CloseMouse => (
+            "Key map",
+            close_mouse_body(inner),
+            row(fit(
+                &[sp("click ✕ or outside", bold()), sp(" to close", dim())],
+                inner,
+            )),
+        ),
         Kind::Keymap => unreachable!("the key map docks"),
     }
 }
 
 /// A centred panel with a bold accent title, a ✕ at its right end, and its
 /// foot line aligned left with the body.
-fn overlay(title: &str, body: Vec<super::Row>, foot: super::Row, w: usize, hover_x: bool) -> Vec<super::Row> {
+fn overlay(
+    title: &str,
+    body: Vec<super::Row>,
+    foot: super::Row,
+    w: usize,
+    hover_x: bool,
+) -> Vec<super::Row> {
     // The ✕ reads dim, and lighter under the pointer, as `--hover` tints it.
-    let x = if hover_x { sp("✕", dim().bg(lift(BI))) } else { sp("✕", dim()) };
+    let x = if hover_x {
+        sp("✕", dim().bg(lift(BI)))
+    } else {
+        sp("✕", dim())
+    };
     panel::frame(Some(panel::title_row(title, Some(x))), body, Some(foot), w)
 }
 
@@ -479,12 +832,30 @@ pub(crate) fn backdrop(cols: usize, rows: usize) -> Vec<super::Row> {
     let blank = || row(vec![]);
     let mut out: Vec<super::Row> = (0..rows).map(|_| blank()).collect();
     if rows > 9 {
-        out[1] = row(fit(&[t(), sp("how do I backfill embeddings for old sessions?", dim())], cols));
+        out[1] = row(fit(
+            &[
+                t(),
+                sp("how do I backfill embeddings for old sessions?", dim()),
+            ],
+            cols,
+        ));
         out[2] = row(fit(&[t(), sp("you 14:20", dim())], cols));
-        out[4] = row(fit(&[sp("● Edited 2 files, ran 3 commands · 12s ▾", dim())], cols));
-        out[5] = row(fit(&[sp("      1 ✓ read   lock.rs · 41 lines", dim())], cols));
-        out[6] = row(fit(&[sp("      2 ✓ shell  cargo test · exit 0 · 41 lines", dim())], cols));
-        out[8] = row(fit(&[sp("● Searched 2 patterns, thought once · 9s ▸", dim())], cols));
+        out[4] = row(fit(
+            &[sp("● Edited 2 files, ran 3 commands · 12s ▾", dim())],
+            cols,
+        ));
+        out[5] = row(fit(
+            &[sp("      1 ✓ read   lock.rs · 41 lines", dim())],
+            cols,
+        ));
+        out[6] = row(fit(
+            &[sp("      2 ✓ shell  cargo test · exit 0 · 41 lines", dim())],
+            cols,
+        ));
+        out[8] = row(fit(
+            &[sp("● Searched 2 patterns, thought once · 9s ▸", dim())],
+            cols,
+        ));
     }
     if rows > 5 {
         out[rows - 4] = row(fit(
@@ -542,7 +913,10 @@ fn frame(c: &Look, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
             screen[y0 + k] = vec![Placed {
                 x: 0,
                 w: cols as u16,
-                row: super::Row { spans: fit(&r.spans, cols), ..r },
+                row: super::Row {
+                    spans: fit(&r.spans, cols),
+                    ..r
+                },
             }];
         }
         return screen;
@@ -622,7 +996,10 @@ pub(crate) fn run_overlay(a: &Args, term: &mut Term) -> io::Result<String> {
     let Some(c) = crate::cases::lookup(CASES, &name) else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("unknown --overlay case {name:?}; one of: {}", crate::cases::names(CASES)),
+            format!(
+                "unknown --overlay case {name:?}; one of: {}",
+                crate::cases::names(CASES)
+            ),
         ));
     };
     draw(term, &c)?;
@@ -660,7 +1037,13 @@ mod tests {
             .into_iter()
             .map(|ps| {
                 ps.iter()
-                    .map(|p| p.row.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+                    .map(|p| {
+                        p.row
+                            .spans
+                            .iter()
+                            .map(|s| s.content.as_ref())
+                            .collect::<String>()
+                    })
                     .collect::<Vec<_>>()
                     .join("")
             })
@@ -685,7 +1068,11 @@ mod tests {
 
     #[test]
     fn every_case_parses_and_unknown_does_not() {
-        assert!(CASES.iter().all(|c| crate::cases::lookup(CASES, c.name).is_some()));
+        assert!(
+            CASES
+                .iter()
+                .all(|c| crate::cases::lookup(CASES, c.name).is_some())
+        );
         assert_eq!(CASES.len(), 9);
         assert!(parse("nope").is_none());
     }
@@ -708,8 +1095,14 @@ mod tests {
         }
         // Action ids are not shown: every underscore id stays out.
         for id in [
-            "rail_row_n", "close_or_interrupt", "clear_then_quit", "focus_next_prev",
-            "toggle_ledgers", "next_request", "select_steering", "key_map",
+            "rail_row_n",
+            "close_or_interrupt",
+            "clear_then_quit",
+            "focus_next_prev",
+            "toggle_ledgers",
+            "next_request",
+            "select_steering",
+            "key_map",
         ] {
             assert!(!t.contains(id), "id leaks: {id}");
         }
@@ -727,7 +1120,17 @@ mod tests {
         assert!(t.contains("Key map"));
         assert!(t.contains("Every binding by area, with its other paths."));
         assert!(t.contains("34 actions, 24 with other paths"));
-        for tab in ["All", "Session", "Input", "Conversation", "Panels", "Search", "Steering", "Requests", "Model"] {
+        for tab in [
+            "All",
+            "Session",
+            "Input",
+            "Conversation",
+            "Panels",
+            "Search",
+            "Steering",
+            "Requests",
+            "Model",
+        ] {
             assert!(t.contains(tab), "missing tab {tab}");
         }
         assert!(t.contains("Type to search shortcuts"));
@@ -743,7 +1146,11 @@ mod tests {
         let vis = visible(None, "");
         let inner = panel::inner_w(160);
         let gw = vis.iter().map(|b| b.area.width()).max().unwrap();
-        let longest_a = vis.iter().map(|b| crate::width(&desc_spans(b))).max().unwrap();
+        let longest_a = vis
+            .iter()
+            .map(|b| crate::width(&desc_spans(b)))
+            .max()
+            .unwrap();
         let aw = longest_a.min(inner - (2 + gw + 2 + 2 + MIN_KW));
         let kw = inner - (2 + gw + 2 + aw + 2);
         // Gutter, group and the action's first word sit fixed on every row.
@@ -778,9 +1185,10 @@ mod tests {
         }
         // Wrapped lines hang under their own column, narrow included.
         let narrow = bind_rows(&vis, true, panel::inner_w(90));
-        let second = narrow.iter().find(|r| {
-            crate::plain(r).contains("switching to its")
-        }).unwrap();
+        let second = narrow
+            .iter()
+            .find(|r| crate::plain(r).contains("switching to its"))
+            .unwrap();
         assert_eq!(&second.spans[0].content, "  ");
         assert_eq!(second.spans[1].content.width(), gw);
         assert_eq!(&second.spans[2].content, "  ");
@@ -791,10 +1199,19 @@ mod tests {
         let c = parse("keymap").unwrap();
         let buf = buffer(&c, 160, 48);
         let t = text(&c, 160, 48);
-        let y = t.split('\n').position(|l| l.contains("Start a new session")).unwrap();
-        assert!(buf[(5, y as u16)].bg == crate::BLUE, "no bar on the selected row");
+        let y = t
+            .split('\n')
+            .position(|l| l.contains("Start a new session"))
+            .unwrap();
+        assert!(
+            buf[(5, y as u16)].bg == crate::BLUE,
+            "no bar on the selected row"
+        );
         // Everything fits at this height, so no gutter arrow.
-        assert!(!t.contains("\u{258c}  \u{2193} "), "arrow with nothing below");
+        assert!(
+            !t.contains("\u{258c}  \u{2193} "),
+            "arrow with nothing below"
+        );
     }
 
     #[test]
@@ -802,11 +1219,23 @@ mod tests {
         let c = parse("keymap-tab").unwrap();
         let t = text(&c, 160, 48);
         assert!(t.contains("Clear the draft, then quit"));
-        assert!(!t.contains("Copy the focused item"), "another group's row leaks");
-        assert!(!t.contains("\u{258c}  \u{2193} "), "arrow with nothing below");
+        assert!(
+            !t.contains("Copy the focused item"),
+            "another group's row leaks"
+        );
+        assert!(
+            !t.contains("\u{258c}  \u{2193} "),
+            "arrow with nothing below"
+        );
         let buf = buffer(&c, 160, 48);
-        let y = t.split('\n').position(|l| l.contains("Start a new session")).unwrap();
-        assert!(buf[(5, y as u16)].bg == crate::BLUE, "no bar on the tab's first row");
+        let y = t
+            .split('\n')
+            .position(|l| l.contains("Start a new session"))
+            .unwrap();
+        assert!(
+            buf[(5, y as u16)].bg == crate::BLUE,
+            "no bar on the tab's first row"
+        );
     }
 
     #[test]
@@ -825,9 +1254,15 @@ mod tests {
                 assert!(t.contains(w), "missing {w}");
             }
         }
-        assert!(!t.contains("Copy the focused item"), "a ruled-out row leaks");
+        assert!(
+            !t.contains("Copy the focused item"),
+            "a ruled-out row leaks"
+        );
         assert!(t.contains("session"), "the query is not shown");
-        assert!(!t.contains("\u{258c}  \u{2193} "), "arrow with nothing below");
+        assert!(
+            !t.contains("\u{258c}  \u{2193} "),
+            "arrow with nothing below"
+        );
     }
 
     #[test]
@@ -902,20 +1337,32 @@ mod tests {
             let (_, panel) = panel_rows(&look, cols, rows);
             let t = panel
                 .iter()
-                .map(|r| r.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+                .map(|r| {
+                    r.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             let lines: Vec<&str> = t.split('\n').collect();
             // The first and last interior rows are blank in every case.
             assert!(lines[1].trim().is_empty(), "{}: no top pad", c.name);
-            assert!(lines[lines.len() - 2].trim().is_empty(), "{}: no bottom pad", c.name);
+            assert!(
+                lines[lines.len() - 2].trim().is_empty(),
+                "{}: no bottom pad",
+                c.name
+            );
         }
     }
 
     #[test]
     fn the_docked_panel_clamps_to_the_viewport() {
         // Overflowing content fills the viewport exactly, never more.
-        assert_eq!(keymap_panel(&parse("keymap-narrow").unwrap(), 100, 40).len(), 40);
+        assert_eq!(
+            keymap_panel(&parse("keymap-narrow").unwrap(), 100, 40).len(),
+            40
+        );
         assert_eq!(keymap_panel(&parse("keymap").unwrap(), 160, 30).len(), 30);
         // Fitting content fills the viewport exactly with room to spare nowhere.
         assert_eq!(keymap_panel(&parse("keymap").unwrap(), 160, 48).len(), 48);
@@ -941,10 +1388,18 @@ mod tests {
         assert!(!foot.contains("enter"), "foot repeats a choice");
         assert!(!foot.contains("esc"), "foot repeats a choice");
         let buf = buffer(&c, 160, 48);
-        let y = t.split('\n').position(|l| l.contains("leave them running")).unwrap();
-        assert!((0..160).any(|x| buf[(x, y as u16)].bg == crate::BLUE), "no bar on enter");
+        let y = t
+            .split('\n')
+            .position(|l| l.contains("leave them running"))
+            .unwrap();
+        assert!(
+            (0..160).any(|x| buf[(x, y as u16)].bg == crate::BLUE),
+            "no bar on enter"
+        );
         // Only the default rides the bar.
-        let barred = (0..48).filter(|&y| (0..160).any(|x| buf[(x, y)].bg == crate::BLUE)).count();
+        let barred = (0..48)
+            .filter(|&y| (0..160).any(|x| buf[(x, y)].bg == crate::BLUE))
+            .count();
         assert_eq!(barred, 1, "more than enter is barred");
     }
 
@@ -954,13 +1409,27 @@ mod tests {
         // Quit: the default's description, bold on its bar.
         let c = parse("quit").unwrap();
         let (buf, t) = (buffer(&c, 160, 48), text(&c, 160, 48));
-        let y = t.split('\n').position(|l| l.contains("leave them running")).unwrap() as u16;
-        assert!((0..160).any(|x| buf[(x, y)].symbol() == "l" && buf[(x, y)].modifier.contains(Modifier::BOLD)));
+        let y = t
+            .split('\n')
+            .position(|l| l.contains("leave them running"))
+            .unwrap() as u16;
+        assert!(
+            (0..160)
+                .any(|x| buf[(x, y)].symbol() == "l"
+                    && buf[(x, y)].modifier.contains(Modifier::BOLD))
+        );
         // Key map: the selected binding's action, bold on its bar.
         let c = parse("keymap").unwrap();
         let (buf, t) = (buffer(&c, 160, 48), text(&c, 160, 48));
-        let y = t.split('\n').position(|l| l.contains("Start a new session")).unwrap() as u16;
-        assert!((0..160).any(|x| buf[(x, y)].symbol() == "S" && buf[(x, y)].modifier.contains(Modifier::BOLD)));
+        let y = t
+            .split('\n')
+            .position(|l| l.contains("Start a new session"))
+            .unwrap() as u16;
+        assert!(
+            (0..160)
+                .any(|x| buf[(x, y)].symbol() == "S"
+                    && buf[(x, y)].modifier.contains(Modifier::BOLD))
+        );
         // History: the first match's source, bold; the rest stay plain dim.
         let c = parse("history").unwrap();
         let (buf, t) = (buffer(&c, 160, 48), text(&c, 160, 48));
@@ -973,7 +1442,9 @@ mod tests {
         let dot = first.find('·').unwrap();
         let col = first[..dot].chars().count() + 2;
         assert!(
-            buf[(col as u16, y as u16)].modifier.contains(Modifier::BOLD),
+            buf[(col as u16, y as u16)]
+                .modifier
+                .contains(Modifier::BOLD),
             "first source not bold"
         );
     }
@@ -1041,7 +1512,10 @@ mod tests {
                 let c = crate::cases::lookup(CASES, name).unwrap();
                 for ps in frame(&c, cols, rows) {
                     for p in &ps {
-                        assert!(crate::width(&p.row.spans) <= cols, "{name} overflows at {cols}x{rows}");
+                        assert!(
+                            crate::width(&p.row.spans) <= cols,
+                            "{name} overflows at {cols}x{rows}"
+                        );
                     }
                 }
             }

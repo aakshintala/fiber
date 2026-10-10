@@ -16,12 +16,12 @@ mod panel;
 
 use crossterm::{execute, terminal};
 use input::{Ev, Key, Mouse};
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::Terminal;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{self, BufWriter, Write};
@@ -147,7 +147,10 @@ struct Row {
     lua: Option<std::rc::Rc<lua::LuaSrc>>,
 }
 fn row(spans: Vec<Span<'static>>) -> Row {
-    Row { spans, ..Default::default() }
+    Row {
+        spans,
+        ..Default::default()
+    }
 }
 /// A row whose spans carry their own click targets.
 fn hot_row(parts: Vec<(Span<'static>, Option<Act>)>) -> Row {
@@ -160,13 +163,21 @@ fn hot_row(parts: Vec<(Span<'static>, Option<Act>)>) -> Row {
         x += w;
         spans.push(s);
     }
-    Row { spans, hot, ..Default::default() }
+    Row {
+        spans,
+        hot,
+        ..Default::default()
+    }
 }
 /// Puts spans in front of a row, moving its click targets with it.
 fn prefixed(r: Row, pre: Vec<Span<'static>>) -> Row {
     let dx = width(&pre) as u16;
     let hot = r.hot.iter().map(|&(a, b, k)| (a + dx, b + dx, k)).collect();
-    Row { spans: [pre, r.spans].concat(), hot, ..r }
+    Row {
+        spans: [pre, r.spans].concat(),
+        hot,
+        ..r
+    }
 }
 fn plain(r: &Row) -> String {
     r.spans.iter().map(|s| s.content.as_ref()).collect()
@@ -217,28 +228,50 @@ fn fit(spans: &[Span<'static>], w: usize) -> Vec<Span<'static>> {
 }
 /// Gives spans with no background of their own the row's background.
 fn tint(spans: Vec<Span<'static>>, bg: Color) -> Vec<Span<'static>> {
-    spans.into_iter().map(|s| if s.style.bg.is_none() { Span::styled(s.content, s.style.bg(bg)) } else { s }).collect()
+    spans
+        .into_iter()
+        .map(|s| {
+            if s.style.bg.is_none() {
+                Span::styled(s.content, s.style.bg(bg))
+            } else {
+                s
+            }
+        })
+        .collect()
 }
 fn edge(ch: &str, inner: Color, outer: Option<Color>, w: usize) -> Row {
     let mut s = fg(inner);
     if let Some(o) = outer {
         s = s.bg(o);
     }
-    Row { spans: vec![sp(ch.repeat(w), s)], bg: outer, ..Default::default() }
+    Row {
+        spans: vec![sp(ch.repeat(w), s)],
+        bg: outer,
+        ..Default::default()
+    }
 }
 /// A surface: a tinted block with half-block edges and no border.
 fn slab(rows: Vec<Row>, bg: Color, outer: Option<Color>, w: usize) -> Vec<Row> {
     let mut out = vec![edge("▄", bg, outer, w)];
     for r in rows {
         let inner_bg = r.bg.unwrap_or(bg);
-        out.push(Row { spans: tint(tint(fit(&r.spans, w), inner_bg), bg), bg: Some(bg), ..r });
+        out.push(Row {
+            spans: tint(tint(fit(&r.spans, w), inner_bg), bg),
+            bg: Some(bg),
+            ..r
+        });
     }
     out.push(edge("▀", bg, outer, w));
     out
 }
 
 /// Greedy word wrap over styled spans. `first` and `rest` prefix each line.
-fn wrap(spans: Vec<Span<'static>>, w: usize, first: Vec<Span<'static>>, rest: Vec<Span<'static>>) -> Vec<Vec<Span<'static>>> {
+fn wrap(
+    spans: Vec<Span<'static>>,
+    w: usize,
+    first: Vec<Span<'static>>,
+    rest: Vec<Span<'static>>,
+) -> Vec<Vec<Span<'static>>> {
     let mut toks: Vec<Span<'static>> = vec![];
     for s in spans {
         let mut cur = String::new();
@@ -277,9 +310,23 @@ fn wrap(spans: Vec<Span<'static>>, w: usize, first: Vec<Span<'static>>, rest: Ve
     out
 }
 /// `wrap`, keeping which rows continue a line, so a copy can unwrap them.
-fn wrap_rows(spans: Vec<Span<'static>>, w: usize, first: Vec<Span<'static>>, rest: Vec<Span<'static>>) -> Vec<Row> {
+fn wrap_rows(
+    spans: Vec<Span<'static>>,
+    w: usize,
+    first: Vec<Span<'static>>,
+    rest: Vec<Span<'static>>,
+) -> Vec<Row> {
     let pre = width(&rest) as u16;
-    wrap(spans, w, first, rest).into_iter().enumerate().map(|(i, s)| Row { spans: s, cont: i > 0, pre: if i > 0 { pre } else { 0 }, ..Default::default() }).collect()
+    wrap(spans, w, first, rest)
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| Row {
+            spans: s,
+            cont: i > 0,
+            pre: if i > 0 { pre } else { 0 },
+            ..Default::default()
+        })
+        .collect()
 }
 /// Inline markdown: `code` in cyan, **bold** bold.
 fn inline(text: &str, base: Style) -> Vec<Span<'static>> {
@@ -307,18 +354,30 @@ fn inline(text: &str, base: Style) -> Vec<Span<'static>> {
             out.push(sp(&rest[..i], base));
         }
         let inner = &after[..j];
-        out.push(sp(inner, if code { base.patch(fg(CYAN)) } else { base.add_modifier(Modifier::BOLD) }));
+        out.push(sp(
+            inner,
+            if code {
+                base.patch(fg(CYAN))
+            } else {
+                base.add_modifier(Modifier::BOLD)
+            },
+        ));
         rest = &after[j + close.len()..];
     }
     out
 }
 fn para(text: &str, w: usize, base: Style) -> Vec<Row> {
-    text.split('\n').flat_map(|p| wrap_rows(inline(p, base), w, vec![], vec![])).collect()
+    text.split('\n')
+        .flat_map(|p| wrap_rows(inline(p, base), w, vec![], vec![]))
+        .collect()
 }
 
 // ============================================================ markdown in replies
 fn highlight(line: &str) -> Vec<Span<'static>> {
-    const KW: &[&str] = &["pub", "fn", "let", "mut", "while", "if", "return", "use", "impl", "for", "in", "match", "struct", "const", "as", "Ok", "Err", "Some", "None"];
+    const KW: &[&str] = &[
+        "pub", "fn", "let", "mut", "while", "if", "return", "use", "impl", "for", "in", "match",
+        "struct", "const", "as", "Ok", "Err", "Some", "None",
+    ];
     let mut out = vec![];
     let b = line.as_bytes();
     let mut i = 0;
@@ -364,7 +423,13 @@ fn highlight(line: &str) -> Vec<Span<'static>> {
     out
 }
 fn code_block(code: &[&str], lang: &str, w: usize) -> Vec<Row> {
-    let mut rows = vec![row(vec![sp(" ", Style::new()), sp(lang, dim()), sp("\t", Style::new()), sp("click to copy", dim()), sp(" ", Style::new())])];
+    let mut rows = vec![row(vec![
+        sp(" ", Style::new()),
+        sp(lang, dim()),
+        sp("\t", Style::new()),
+        sp("click to copy", dim()),
+        sp(" ", Style::new()),
+    ])];
     for (n, c) in code.iter().enumerate() {
         let mut s = vec![sp(format!("{:>4}  ", n + 1), fg(SEL))];
         s.extend(highlight(c));
@@ -380,20 +445,56 @@ fn table(lines: &[&str]) -> Vec<Row> {
     let cells: Vec<Vec<String>> = lines
         .iter()
         .filter(|l| !l.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')))
-        .map(|l| l.trim().trim_matches('|').split('|').map(|c| c.trim().to_string()).collect())
+        .map(|l| {
+            l.trim()
+                .trim_matches('|')
+                .split('|')
+                .map(|c| c.trim().to_string())
+                .collect()
+        })
         .collect();
     let cols = cells[0].len();
-    let wd: Vec<usize> = (0..cols).map(|k| cells.iter().map(|r| r.get(k).map_or(0, |c| c.width())).max().unwrap_or(0)).collect();
-    let num: Vec<bool> = (0..cols)
-        .map(|k| cells.len() > 1 && cells[1..].iter().all(|r| r.get(k).is_some_and(|c| !c.is_empty() && c.chars().all(|ch| ch.is_ascii_digit() || ",.%+−-".contains(ch)))))
+    let wd: Vec<usize> = (0..cols)
+        .map(|k| {
+            cells
+                .iter()
+                .map(|r| r.get(k).map_or(0, |c| c.width()))
+                .max()
+                .unwrap_or(0)
+        })
         .collect();
-    let cell = |t: &str, k: usize| if num[k] { format!("{t:>w$}", w = wd[k]) } else { format!("{t:<w$}", w = wd[k]) };
+    let num: Vec<bool> = (0..cols)
+        .map(|k| {
+            cells.len() > 1
+                && cells[1..].iter().all(|r| {
+                    r.get(k).is_some_and(|c| {
+                        !c.is_empty()
+                            && c.chars()
+                                .all(|ch| ch.is_ascii_digit() || ",.%+−-".contains(ch))
+                    })
+                })
+        })
+        .collect();
+    let cell = |t: &str, k: usize| {
+        if num[k] {
+            format!("{t:>w$}", w = wd[k])
+        } else {
+            format!("{t:<w$}", w = wd[k])
+        }
+    };
     let mut out = vec![];
     for (i, r) in cells.iter().enumerate() {
         let st = if i == 0 { bold() } else { Style::new() };
-        out.push(row(r.iter().enumerate().flat_map(|(k, c)| [sp(cell(c, k), st), sp("   ", Style::new())]).collect()));
+        out.push(row(r
+            .iter()
+            .enumerate()
+            .flat_map(|(k, c)| [sp(cell(c, k), st), sp("   ", Style::new())])
+            .collect()));
         if i == 0 {
-            out.push(row(wd.iter().flat_map(|n| [sp("─".repeat(*n), fg(SEL)), sp("   ", Style::new())]).collect()));
+            out.push(row(wd
+                .iter()
+                .flat_map(|n| [sp("─".repeat(*n), fg(SEL)), sp("   ", Style::new())])
+                .collect()));
         }
     }
     out
@@ -420,9 +521,17 @@ fn md(text: &str, w: usize) -> Vec<Row> {
             out.extend(table(&lines[s..i]));
             continue;
         } else if l.starts_with('#') {
-            out.push(row(vec![sp(l.trim_start_matches('#').trim(), fg(HD).add_modifier(Modifier::BOLD))]));
+            out.push(row(vec![sp(
+                l.trim_start_matches('#').trim(),
+                fg(HD).add_modifier(Modifier::BOLD),
+            )]));
         } else if let Some(b) = l.strip_prefix("- ").or_else(|| l.strip_prefix("* ")) {
-            out.extend(wrap_rows(inline(b, Style::new()), w, vec![sp("• ", fg(BLUE))], vec![sp("  ", Style::new())]));
+            out.extend(wrap_rows(
+                inline(b, Style::new()),
+                w,
+                vec![sp("• ", fg(BLUE))],
+                vec![sp("  ", Style::new())],
+            ));
         } else if l.trim().is_empty() {
             out.push(Row::default());
         } else {
@@ -464,6 +573,8 @@ struct Reason {
     end: Option<i64>,
     step: usize,
 }
+// boxing the call would churn every match site in a throwaway prototype
+#[allow(clippy::large_enum_variant)]
 enum Item {
     R(Reason),
     C(Call),
@@ -503,7 +614,15 @@ struct Pending {
     what: Asking,
 }
 enum Asking {
-    Approval { tool: String, args: Value, effects: Vec<String>, reversible: bool, paths: Vec<String>, step: String, req: Box<Value> },
+    Approval {
+        tool: String,
+        args: Value,
+        effects: Vec<String>,
+        reversible: bool,
+        paths: Vec<String>,
+        step: String,
+        req: Box<Value>,
+    },
     Form(Vec<Value>),
 }
 #[derive(Default)]
@@ -575,12 +694,21 @@ struct Fold {
 }
 
 fn heading(text: &str, last: bool) -> Option<String> {
-    let mut hs = text.split("**").skip(1).step_by(2).filter(|h| !h.contains('\n'));
+    let mut hs = text
+        .split("**")
+        .skip(1)
+        .step_by(2)
+        .filter(|h| !h.contains('\n'));
     if last { hs.last() } else { hs.next() }.map(str::to_string)
 }
 fn kind_of(c: &Call) -> &'static str {
     match c.name.as_str() {
-        "shell" => match c.args["command"].as_str().unwrap_or("").split_whitespace().next() {
+        "shell" => match c.args["command"]
+            .as_str()
+            .unwrap_or("")
+            .split_whitespace()
+            .next()
+        {
             Some("grep" | "rg") => "search",
             Some("find" | "ls" | "fd") => "list",
             _ => "shell",
@@ -596,9 +724,17 @@ fn kind_of(c: &Call) -> &'static str {
 }
 fn target(c: &Call) -> String {
     if let Some(q) = c.args["questions"].as_array() {
-        return q.iter().filter_map(|q| q["header"].as_str()).collect::<Vec<_>>().join(", ");
+        return q
+            .iter()
+            .filter_map(|q| q["header"].as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
     }
-    ["path", "command", "description"].iter().find_map(|k| c.args[k].as_str()).unwrap_or("").to_string()
+    ["path", "command", "description"]
+        .iter()
+        .find_map(|k| c.args[k].as_str())
+        .unwrap_or("")
+        .to_string()
 }
 fn dur(ms: i64) -> String {
     let s = (ms.max(0) + 500) / 1000;
@@ -641,14 +777,12 @@ impl Fold {
     }
     /// A call's tool and arguments, from this session's turns or a delegate's relayed lines.
     fn call_of(&self, sid: &str, aid: &str) -> (String, Value) {
-        if sid == self.session_id {
-            if let Some(&(ti, bi, ii)) = self.at.get(aid) {
-                if let Block::Group(g) = &self.turns[ti].blocks[bi] {
-                    if let Item::C(c) = &g.items[ii] {
-                        return (c.name.clone(), c.args.clone());
-                    }
-                }
-            }
+        if sid == self.session_id
+            && let Some(&(ti, bi, ii)) = self.at.get(aid)
+            && let Block::Group(g) = &self.turns[ti].blocks[bi]
+            && let Item::C(c) = &g.items[ii]
+        {
+            return (c.name.clone(), c.args.clone());
         }
         self.dcalls.get(aid).cloned().unwrap_or_default()
     }
@@ -668,19 +802,28 @@ impl Fold {
         if sid == self.session_id {
             return "main".into();
         }
-        self.jobs.iter().find(|j| j.sid.as_deref() == Some(sid)).map_or(sid.to_string(), |j| format!("◆ {} ({sid})", j.desc))
+        self.jobs
+            .iter()
+            .find(|j| j.sid.as_deref() == Some(sid))
+            .map_or(sid.to_string(), |j| format!("◆ {} ({sid})", j.desc))
     }
     /// The open tool group of the current turn, started if the last block is not one.
     fn group(&mut self, ts: i64) -> (usize, usize) {
         let ti = self.turns.len() - 1;
         let t = &mut self.turns[ti];
         // an MCP line lands where it happened but does not end the group, as in the mock
-        if let Some(bi) = t.blocks.iter().rposition(|b| !matches!(b, Block::Mcp(_))) {
-            if matches!(t.blocks[bi], Block::Group(_)) {
-                return (ti, bi);
-            }
+        if let Some(bi) = t.blocks.iter().rposition(|b| !matches!(b, Block::Mcp(_)))
+            && matches!(t.blocks[bi], Block::Group(_))
+        {
+            return (ti, bi);
         }
-        t.blocks.push(Block::Group(Group { items: vec![], steps: 0, step_closed: true, open: false, last_ts: ts }));
+        t.blocks.push(Block::Group(Group {
+            items: vec![],
+            steps: 0,
+            step_closed: true,
+            open: false,
+            last_ts: ts,
+        }));
         (ti, t.blocks.len() - 1)
     }
     fn group_at(turns: &mut [Turn], ti: usize, bi: usize) -> &mut Group {
@@ -703,17 +846,42 @@ impl Fold {
             "permission_requested" | "interaction_requested" => {
                 let rid = p["request_id"].as_str().unwrap_or("").to_string();
                 // a tool call is the approval's envelope action; a form names its calls in `action_ids`
-                let caid = if kind == "permission_requested" { aid.clone() } else { p["action_ids"][0].as_str().unwrap_or("").to_string() };
+                let caid = if kind == "permission_requested" {
+                    aid.clone()
+                } else {
+                    p["action_ids"][0].as_str().unwrap_or("").to_string()
+                };
                 let what = if kind == "permission_requested" {
                     let (tool, args) = self.call_of(sid, &caid);
-                    let strs = |k: &str| p[k].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
-                    Asking::Approval { tool, args, effects: strs("effects"), reversible: p["reversible"].as_bool().unwrap_or(false), paths: strs("paths"), step: p["step"].as_str().unwrap_or("").into(), req: Box::new(p.clone()) }
+                    let strs = |k: &str| {
+                        p[k].as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    };
+                    Asking::Approval {
+                        tool,
+                        args,
+                        effects: strs("effects"),
+                        reversible: p["reversible"].as_bool().unwrap_or(false),
+                        paths: strs("paths"),
+                        step: p["step"].as_str().unwrap_or("").into(),
+                        req: Box::new(p.clone()),
+                    }
                 } else {
                     let fields = p["fields"].as_array().cloned().unwrap_or_default();
-                    self.forms.insert(rid.clone(), (caid.clone(), fields.clone()));
+                    self.forms
+                        .insert(rid.clone(), (caid.clone(), fields.clone()));
                     Asking::Form(fields)
                 };
-                self.pending.push(Pending { rid, sid: sid.into(), aid: caid, what });
+                self.pending.push(Pending {
+                    rid,
+                    sid: sid.into(),
+                    aid: caid,
+                    what,
+                });
             }
             "permission_resolved" | "interaction_resolved" => {
                 let rid = p["request_id"].as_str().unwrap_or("");
@@ -724,15 +892,28 @@ impl Fold {
         if sid != self.session_id {
             // a delegate's own lines, relayed: the Delegates card counts its calls
             if kind == "tool_call_requested" {
-                self.dcalls.insert(aid.clone(), (p["name"].as_str().unwrap_or("").into(), p["arguments"].clone()));
+                self.dcalls.insert(
+                    aid.clone(),
+                    (
+                        p["name"].as_str().unwrap_or("").into(),
+                        p["arguments"].clone(),
+                    ),
+                );
             }
             if let Some(j) = self.jobs.iter_mut().find(|j| j.sid.as_deref() == Some(sid)) {
                 if kind == "tool_call_completed" {
                     j.calls += 1;
                 }
                 if kind == "tool_call_requested" {
-                    let t = ["path", "command"].iter().find_map(|k| p["arguments"][k].as_str()).unwrap_or("");
-                    j.last = format!("{} {}", p["name"].as_str().unwrap_or(""), t.rsplit('/').next().unwrap_or(""));
+                    let t = ["path", "command"]
+                        .iter()
+                        .find_map(|k| p["arguments"][k].as_str())
+                        .unwrap_or("");
+                    j.last = format!(
+                        "{} {}",
+                        p["name"].as_str().unwrap_or(""),
+                        t.rsplit('/').next().unwrap_or("")
+                    );
                 }
             }
             return;
@@ -743,18 +924,40 @@ impl Fold {
             "opening_message" => {
                 let g = &p["environment"]["git"];
                 self.branch = g["branch"].as_str().unwrap_or("").into();
-                self.instr_chars = p["instruction_files"].as_array().into_iter().flatten().map(|i| i["content"].as_str().map_or(0, str::len)).sum();
-                self.skills_chars = p["skills"].as_array().filter(|a| !a.is_empty()).map_or(0, |a| Value::from(a.clone()).to_string().len());
+                self.instr_chars = p["instruction_files"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|i| i["content"].as_str().map_or(0, str::len))
+                    .sum();
+                self.skills_chars = p["skills"]
+                    .as_array()
+                    .filter(|a| !a.is_empty())
+                    .map_or(0, |a| Value::from(a.clone()).to_string().len());
             }
             "preamble_built" | "model_changed" => {
-                let src = if kind == "model_changed" { &p["after"] } else { p };
-                self.model = src["model"].as_str().unwrap_or("").rsplit('/').next().unwrap_or("").into();
+                let src = if kind == "model_changed" {
+                    &p["after"]
+                } else {
+                    p
+                };
+                self.model = src["model"]
+                    .as_str()
+                    .unwrap_or("")
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("")
+                    .into();
                 self.effort = src["effort"].as_str().unwrap_or("").into();
                 self.thinking = src["thinking"].as_str().unwrap_or("").into();
                 if let Some(t) = p["tools"].as_array() {
                     self.tools = t.len();
                     // deferred tools are not in context until loaded
-                    self.tooldef_chars = t.iter().filter(|d| d["deferred"] != true).map(|d| d["definition"].to_string().len()).sum();
+                    self.tooldef_chars = t
+                        .iter()
+                        .filter(|d| d["deferred"] != true)
+                        .map(|d| d["definition"].to_string().len())
+                        .sum();
                 }
                 if let Some(sp) = p["system_prompt"].as_str() {
                     self.sys_chars = sp.len();
@@ -762,15 +965,38 @@ impl Fold {
             }
             "mode_changed" => self.mode = p["after"].as_str().unwrap_or("").into(),
             "turn_started" => {
-                let text = p["input"].as_array().into_iter().flatten().filter(|i| i["type"] == "message").filter_map(|i| i["content"][0]["text"].as_str()).collect::<Vec<_>>().join("\n\n");
-                self.turns.push(Turn { prompt: text, ts, ..Default::default() });
+                let text = p["input"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|i| i["type"] == "message")
+                    .filter_map(|i| i["content"][0]["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                self.turns.push(Turn {
+                    prompt: text,
+                    ts,
+                    ..Default::default()
+                });
                 self.running = true;
                 self.turn_start = ts;
             }
             "turn_completed" => {
                 let outcome = p["outcome"].as_str().unwrap_or("completed");
-                let Some(t) = self.turns.last_mut() else { return };
-                let n: usize = t.calls_before + t.blocks.iter().map(|b| if let Block::Group(g) = b { g.items.iter().filter(|i| matches!(i, Item::C(_))).count() } else { 0 }).sum::<usize>();
+                let Some(t) = self.turns.last_mut() else {
+                    return;
+                };
+                let n: usize = t.calls_before
+                    + t.blocks
+                        .iter()
+                        .map(|b| {
+                            if let Block::Group(g) = b {
+                                g.items.iter().filter(|i| matches!(i, Item::C(_))).count()
+                            } else {
+                                0
+                            }
+                        })
+                        .sum::<usize>();
                 let s = format!("{outcome} · {} · {n} tool calls", dur(ts - t.ts));
                 t.blocks.push(Block::Done(s));
                 self.running = false;
@@ -779,7 +1005,13 @@ impl Fold {
                 self.pending.retain(|x| x.sid != me);
             }
             "interaction_resolved" => {
-                let Some((caid, fields)) = self.forms.get(p["request_id"].as_str().unwrap_or("")).cloned() else { return };
+                let Some((caid, fields)) = self
+                    .forms
+                    .get(p["request_id"].as_str().unwrap_or(""))
+                    .cloned()
+                else {
+                    return;
+                };
                 let declined = p["declined"].as_bool() == Some(true);
                 let rows = if declined {
                     vec![]
@@ -793,7 +1025,13 @@ impl Fold {
                             if x["skipped"].as_bool() == Some(true) || x.is_null() {
                                 return (h, "skipped".into(), true);
                             }
-                            let mut v: Vec<String> = x["labels"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+                            let mut v: Vec<String> = x["labels"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(Value::as_str)
+                                .map(str::to_string)
+                                .collect();
                             if let Some(t) = x["text"].as_str() {
                                 v.push(format!("“{t}”"));
                             }
@@ -802,10 +1040,10 @@ impl Fold {
                         .collect()
                 };
                 let note = p["note"].as_str().map(str::to_string);
-                if let Some(&(ti, bi, ii)) = self.at.get(&caid) {
-                    if let Item::C(c) = &mut Self::group_at(&mut self.turns, ti, bi).items[ii] {
-                        c.asked = Some(if declined { "declined" } else { "answered" });
-                    }
+                if let Some(&(ti, bi, ii)) = self.at.get(&caid)
+                    && let Item::C(c) = &mut Self::group_at(&mut self.turns, ti, bi).items[ii]
+                {
+                    c.asked = Some(if declined { "declined" } else { "answered" });
                 }
                 if let Some(t) = self.turn() {
                     t.blocks.push(Block::Answer(rows, note, ts, declined));
@@ -819,7 +1057,12 @@ impl Fold {
                     g.step_closed = false;
                 }
                 let step = g.steps;
-                g.items.push(Item::R(Reason { text: String::new(), start: ts, end: None, step }));
+                g.items.push(Item::R(Reason {
+                    text: String::new(),
+                    start: ts,
+                    end: None,
+                    step,
+                }));
                 g.last_ts = ts;
                 self.at.insert(aid, (ti, bi, g.items.len() - 1));
             }
@@ -841,35 +1084,42 @@ impl Fold {
                 // every model call opens with this line, so it is the step boundary;
                 // whether it is a piece of text that ends the group is known only once text arrives
                 self.text_start.insert(aid, ts);
-                if let Some(Turn { blocks, .. }) = self.turns.last_mut() {
-                    if let Some(Block::Group(g)) = blocks.iter_mut().rev().find(|b| !matches!(b, Block::Mcp(_))) {
-                        g.step_closed = true;
-                    }
+                if let Some(Turn { blocks, .. }) = self.turns.last_mut()
+                    && let Some(Block::Group(g)) = blocks
+                        .iter_mut()
+                        .rev()
+                        .find(|b| !matches!(b, Block::Mcp(_)))
+                {
+                    g.step_closed = true;
                 }
             }
             "assistant_message_delta" | "assistant_message_completed" => {
                 let text = p["text"].as_str().unwrap_or("");
                 // the handoff note belongs to the band, not the card
                 let noting = self.band().is_some_and(|h| h.outcome.is_none());
-                if !self.at.contains_key(&aid) && !text.is_empty() && !self.turns.is_empty() && !noting {
+                if !self.at.contains_key(&aid)
+                    && !text.is_empty()
+                    && !self.turns.is_empty()
+                    && !noting
+                {
                     let ti = self.turns.len() - 1;
                     let t = &mut self.turns[ti];
                     t.blocks.push(Block::Text(String::new()));
                     self.at.insert(aid.clone(), (ti, t.blocks.len() - 1, 0));
                 }
-                if let Some(&(ti, bi, _)) = self.at.get(&aid) {
-                    if let Block::Text(t) = &mut self.turns[ti].blocks[bi] {
-                        if kind.ends_with("delta") {
-                            t.push_str(text);
-                        } else {
-                            *t = text.into();
-                        }
+                if let Some(&(ti, bi, _)) = self.at.get(&aid)
+                    && let Block::Text(t) = &mut self.turns[ti].blocks[bi]
+                {
+                    if kind.ends_with("delta") {
+                        t.push_str(text);
+                    } else {
+                        *t = text.into();
                     }
                 }
-                if kind.ends_with("completed") {
-                    if let Some(s) = self.text_start.get(&aid) {
-                        self.text_dur.insert(aid, ts - s);
-                    }
+                if kind.ends_with("completed")
+                    && let Some(s) = self.text_start.get(&aid)
+                {
+                    self.text_dur.insert(aid, ts - s);
                 }
             }
             "tool_call_requested" => {
@@ -898,7 +1148,9 @@ impl Fold {
                 self.at.insert(aid, (ti, bi, g.items.len() - 1));
             }
             "tool_call_started" | "tool_call_completed" => {
-                let Some(&(ti, bi, ii)) = self.at.get(&aid) else { return };
+                let Some(&(ti, bi, ii)) = self.at.get(&aid) else {
+                    return;
+                };
                 let g = Self::group_at(&mut self.turns, ti, bi);
                 g.last_ts = ts;
                 let Item::C(c) = &mut g.items[ii] else { return };
@@ -917,11 +1169,17 @@ impl Fold {
                 c.lines = c.content.lines().count();
                 c.exit = p["process"]["exit_code"].as_i64();
                 if let Some(er) = p["error"].as_object() {
-                    c.err = Some((er["code"].as_str().unwrap_or("").into(), er["message"].as_str().unwrap_or("").into()));
+                    c.err = Some((
+                        er["code"].as_str().unwrap_or("").into(),
+                        er["message"].as_str().unwrap_or("").into(),
+                    ));
                 }
                 for ch in p["changes"].as_array().into_iter().flatten() {
                     let path = ch["path"].as_str().unwrap_or("").to_string();
-                    let (a, r) = (ch["added"].as_i64().unwrap_or(0), ch["removed"].as_i64().unwrap_or(0));
+                    let (a, r) = (
+                        ch["added"].as_i64().unwrap_or(0),
+                        ch["removed"].as_i64().unwrap_or(0),
+                    );
                     c.changes.push((path.clone(), a, r));
                     let f = self.files.entry(path).or_default();
                     f.0 += a;
@@ -930,8 +1188,14 @@ impl Fold {
             }
             "usage_recorded" => {
                 let t = &p["tokens"];
-                let cw: u64 = t["cache_write"].as_object().map_or(0, |m| m.values().filter_map(Value::as_u64).sum());
-                let (i, r, o) = (t["input"].as_u64().unwrap_or(0), t["cache_read"].as_u64().unwrap_or(0), t["output"].as_u64().unwrap_or(0));
+                let cw: u64 = t["cache_write"]
+                    .as_object()
+                    .map_or(0, |m| m.values().filter_map(Value::as_u64).sum());
+                let (i, r, o) = (
+                    t["input"].as_u64().unwrap_or(0),
+                    t["cache_read"].as_u64().unwrap_or(0),
+                    t["output"].as_u64().unwrap_or(0),
+                );
                 self.input += i;
                 self.cache_read += r;
                 self.cache_write += cw;
@@ -939,28 +1203,47 @@ impl Fold {
                 self.ctx = i + r + cw + o;
                 self.cost += p["cost"].as_f64().unwrap_or(0.0);
                 let ctx = self.ctx;
-                if let Some(h) = self.band().filter(|h| h.outcome.as_deref() == Some("completed")) {
+                if let Some(h) = self
+                    .band()
+                    .filter(|h| h.outcome.as_deref() == Some("completed"))
+                {
                     h.after = Some(ctx);
                     self.ho = None;
                 }
-                if !aid.is_empty() {
-                    if let Some(d) = self.text_dur.get(&aid) {
-                        self.text_ms += d;
-                        self.text_out += o;
-                    }
+                if !aid.is_empty()
+                    && let Some(d) = self.text_dur.get(&aid)
+                {
+                    self.text_ms += d;
+                    self.text_out += o;
                 }
             }
             "handoff_started" => {
-                let Some(t) = self.turns.last_mut() else { return };
-                t.blocks.push(Block::Handoff(Handoff { trigger: p["trigger"].as_str().unwrap_or("").into(), before: 0, after: None, ts, outcome: None }));
+                let Some(t) = self.turns.last_mut() else {
+                    return;
+                };
+                t.blocks.push(Block::Handoff(Handoff {
+                    trigger: p["trigger"].as_str().unwrap_or("").into(),
+                    before: 0,
+                    after: None,
+                    ts,
+                    outcome: None,
+                }));
                 let bi = t.blocks.len() - 1;
                 self.ho = Some((self.turns.len() - 1, bi));
             }
             "handoff_completed" => {
                 // a tool-started handoff writes no handoff_started
                 if !self.band().is_some_and(|h| h.outcome.is_none()) {
-                    let Some(t) = self.turns.last_mut() else { return };
-                    t.blocks.push(Block::Handoff(Handoff { trigger: "tool".into(), before: 0, after: None, ts, outcome: None }));
+                    let Some(t) = self.turns.last_mut() else {
+                        return;
+                    };
+                    t.blocks.push(Block::Handoff(Handoff {
+                        trigger: "tool".into(),
+                        before: 0,
+                        after: None,
+                        ts,
+                        outcome: None,
+                    }));
                     let bi = t.blocks.len() - 1;
                     self.ho = Some((self.turns.len() - 1, bi));
                 }
@@ -977,13 +1260,33 @@ impl Fold {
             }
             "steering_applied" => {
                 if let Some(t) = self.turn() {
-                    t.blocks.push(Block::Steer(p["content"][0]["text"].as_str().unwrap_or("").into(), ts));
+                    t.blocks.push(Block::Steer(
+                        p["content"][0]["text"].as_str().unwrap_or("").into(),
+                        ts,
+                    ));
                 }
             }
-            "steering_queue" => self.queue = p["messages"].as_array().into_iter().flatten().map(|m| (m["command_id"].as_str().unwrap_or("").to_string(), m["content"][0]["text"].as_str().unwrap_or("").to_string())).collect(),
-            "notice" => self.notices.push((p["code"].as_str().unwrap_or("").into(), p["message"].as_str().unwrap_or("").into(), false)),
+            "steering_queue" => {
+                self.queue = p["messages"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|m| {
+                        (
+                            m["command_id"].as_str().unwrap_or("").to_string(),
+                            m["content"][0]["text"].as_str().unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect()
+            }
+            "notice" => self.notices.push((
+                p["code"].as_str().unwrap_or("").into(),
+                p["message"].as_str().unwrap_or("").into(),
+                false,
+            )),
             "mcp_server_failed" => {
-                self.mcp_down.push(p["server"].as_str().unwrap_or("").into());
+                self.mcp_down
+                    .push(p["server"].as_str().unwrap_or("").into());
                 let m = p["error"]["message"].as_str().unwrap_or("").to_string();
                 if let Some(t) = self.turn() {
                     t.blocks.push(Block::Mcp(m));
@@ -1000,12 +1303,20 @@ impl Fold {
                 last: String::new(),
             }),
             "delegate_started" => {
-                if let Some(j) = self.jobs.iter_mut().find(|j| j.id == p["job_id"].as_str().unwrap_or("")) {
+                if let Some(j) = self
+                    .jobs
+                    .iter_mut()
+                    .find(|j| j.id == p["job_id"].as_str().unwrap_or(""))
+                {
                     j.sid = p["delegate_session_id"].as_str().map(str::to_string);
                 }
             }
             "job_completed" => {
-                if let Some(j) = self.jobs.iter_mut().find(|j| j.id == p["job_id"].as_str().unwrap_or("")) {
+                if let Some(j) = self
+                    .jobs
+                    .iter_mut()
+                    .find(|j| j.id == p["job_id"].as_str().unwrap_or(""))
+                {
                     j.running = false;
                     j.end = ts;
                 }
@@ -1033,7 +1344,13 @@ struct View {
 /// A thought's text, opened under its line, dim.
 fn thought_rows(text: &str, w: usize, ind: usize) -> Vec<Row> {
     let pad = || vec![sp(" ".repeat(ind), Style::new())];
-    text.split('\n').flat_map(|p| wrap_rows(vec![sp(p, dim())], w, pad(), pad())).map(|r| Row { pre: ind as u16, ..r }).collect()
+    text.split('\n')
+        .flat_map(|p| wrap_rows(vec![sp(p, dim())], w, pad(), pad()))
+        .map(|r| Row {
+            pre: ind as u16,
+            ..r
+        })
+        .collect()
 }
 /// A call's result, opened under its ledger row: its error, or its output clipped to 20 lines.
 fn call_rows(c: &Call) -> Vec<Row> {
@@ -1044,8 +1361,16 @@ fn call_rows(c: &Call) -> Vec<Row> {
         None => c.content.replace('\t', "    "),
     };
     let lines: Vec<&str> = text.lines().collect();
-    let r = |s: Span<'static>| Row { spans: vec![sp("        ", Style::new()), s], pre: 8, ..Default::default() };
-    let mut out: Vec<Row> = lines.iter().take(MAX).map(|l| r(sp(l.to_string(), Style::new()))).collect();
+    let r = |s: Span<'static>| Row {
+        spans: vec![sp("        ", Style::new()), s],
+        pre: 8,
+        ..Default::default()
+    };
+    let mut out: Vec<Row> = lines
+        .iter()
+        .take(MAX)
+        .map(|l| r(sp(l.to_string(), Style::new())))
+        .collect();
     if lines.len() > MAX {
         out.push(r(sp(format!("… {} more lines", lines.len() - MAX), dim())));
     }
@@ -1070,14 +1395,27 @@ fn result_spans(c: &Call) -> Vec<Span<'static>> {
         }
         St::Completed => {}
     }
-    let (a, r) = c.changes.iter().fold((0, 0), |(a, r), x| (a + x.1, r + x.2));
+    let (a, r) = c
+        .changes
+        .iter()
+        .fold((0, 0), |(a, r), x| (a + x.1, r + x.2));
     match kind_of(c) {
         "read" => vec![sp(format!("{} lines", c.lines), dim())],
         "search" => vec![sp(format!("{} matches", c.lines), dim())],
         "list" => vec![sp(format!("{} paths", c.lines), dim())],
-        "edit" | "write" if !c.changes.is_empty() => vec![sp(format!("+{a}"), fg(BLUE)), sp(" ", Style::new()), sp(format!("−{r}"), fg(RED))],
-        "shell" if c.exit.is_some() => vec![sp(format!("exit {} · {} lines", c.exit.unwrap(), c.lines), dim())],
-        _ => vec![sp(c.content.lines().next().unwrap_or("done").to_string(), dim())],
+        "edit" | "write" if !c.changes.is_empty() => vec![
+            sp(format!("+{a}"), fg(BLUE)),
+            sp(" ", Style::new()),
+            sp(format!("−{r}"), fg(RED)),
+        ],
+        "shell" if c.exit.is_some() => vec![sp(
+            format!("exit {} · {} lines", c.exit.unwrap(), c.lines),
+            dim(),
+        )],
+        _ => vec![sp(
+            c.content.lines().next().unwrap_or("done").to_string(),
+            dim(),
+        )],
     }
 }
 
@@ -1094,7 +1432,11 @@ fn summary(g: &Group) -> Vec<Span<'static>> {
         ("ask", "asked", "question", "questions"),
         ("other", "called", "tool", "tools"),
     ];
-    let calls: Vec<&Call> = g.items.iter().filter_map(|i| if let Item::C(c) = i { Some(c) } else { None }).collect();
+    let calls: Vec<&Call> = g
+        .items
+        .iter()
+        .filter_map(|i| if let Item::C(c) = i { Some(c) } else { None })
+        .collect();
     let mut parts: Vec<String> = vec![];
     let d = dim();
     let mut out: Vec<Span<'static>> = vec![];
@@ -1104,7 +1446,9 @@ fn summary(g: &Group) -> Vec<Span<'static>> {
             continue;
         }
         let n = if k == "ask" {
-            cs.iter().map(|c| c.args["questions"].as_array().map_or(1, Vec::len)).sum()
+            cs.iter()
+                .map(|c| c.args["questions"].as_array().map_or(1, Vec::len))
+                .sum()
         } else if matches!(k, "read" | "edit" | "write") {
             let mut t: Vec<String> = cs.iter().map(|c| target(c)).collect();
             t.sort();
@@ -1122,7 +1466,11 @@ fn summary(g: &Group) -> Vec<Span<'static>> {
         parts.push(s.clone());
         out.push(sp(s, d));
         if k == "edit" {
-            let (a, r) = cs.iter().filter(|c| c.st == St::Completed).flat_map(|c| &c.changes).fold((0, 0), |(a, r), x| (a + x.1, r + x.2));
+            let (a, r) = cs
+                .iter()
+                .filter(|c| c.st == St::Completed)
+                .flat_map(|c| &c.changes)
+                .fold((0, 0), |(a, r), x| (a + x.1, r + x.2));
             if a + r > 0 {
                 out.push(sp(" ", d));
                 out.push(sp(format!("+{a}"), dfg(BLUE)));
@@ -1133,7 +1481,11 @@ fn summary(g: &Group) -> Vec<Span<'static>> {
     }
     let thoughts = g.items.iter().filter(|i| matches!(i, Item::R(_))).count();
     if thoughts > 0 {
-        let t = if thoughts == 1 { "thought once".to_string() } else { format!("thought {thoughts} times") };
+        let t = if thoughts == 1 {
+            "thought once".to_string()
+        } else {
+            format!("thought {thoughts} times")
+        };
         if out.is_empty() {
             out.push(sp(t[..1].to_uppercase() + &t[1..], d));
         } else {
@@ -1144,23 +1496,55 @@ fn summary(g: &Group) -> Vec<Span<'static>> {
 }
 
 fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
-    let calls: Vec<&Call> = g.items.iter().filter_map(|i| if let Item::C(c) = i { Some(c) } else { None }).collect();
-    let live_r = g.items.iter().find_map(|i| if let Item::R(r) = i { r.end.is_none().then_some(r) } else { None });
-    let Act::Group(ti, bi) = gid else { unreachable!() };
+    let calls: Vec<&Call> = g
+        .items
+        .iter()
+        .filter_map(|i| if let Item::C(c) = i { Some(c) } else { None })
+        .collect();
+    let live_r = g.items.iter().find_map(|i| {
+        if let Item::R(r) = i {
+            r.end.is_none().then_some(r)
+        } else {
+            None
+        }
+    });
+    let Act::Group(ti, bi) = gid else {
+        unreachable!()
+    };
     // thinking with no tool call before the next reply is one line; a click shows its text
     if calls.is_empty() {
         return g
             .items
             .iter()
             .enumerate()
-            .filter_map(|(ii, i)| if let Item::R(r) = i { Some((ii, r)) } else { None })
-            .flat_map(|(ii, r)| {
-                let t = if r.end.is_none() {
-                    format!("Thinking{}", heading(&r.text, true).map(|h| format!(": {h}")).unwrap_or_default())
+            .filter_map(|(ii, i)| {
+                if let Item::R(r) = i {
+                    Some((ii, r))
                 } else {
-                    format!("+ Thought{} · {}", heading(&r.text, false).map(|h| format!(": {h}")).unwrap_or_default(), dur(r.end.unwrap() - r.start))
+                    None
+                }
+            })
+            .flat_map(|(ii, r)| {
+                let t = match r.end {
+                    Some(end) => format!(
+                        "+ Thought{} · {}",
+                        heading(&r.text, false)
+                            .map(|h| format!(": {h}"))
+                            .unwrap_or_default(),
+                        dur(end - r.start)
+                    ),
+                    None => format!(
+                        "Thinking{}",
+                        heading(&r.text, true)
+                            .map(|h| format!(": {h}"))
+                            .unwrap_or_default()
+                    ),
                 };
-                let mut out = vec![Row { spans: vec![sp(t, dim().add_modifier(Modifier::ITALIC))], act: Some(Act::Item(ti, bi, ii)), ..Default::default() }];
+                let mut out = vec![Row {
+                    spans: vec![sp(t, dim().add_modifier(Modifier::ITALIC))],
+                    act: Some(Act::Item(ti, bi, ii)),
+                    ..Default::default()
+                }];
                 if v.exp.contains(&(ti, bi, ii)) {
                     out.extend(thought_rows(&r.text, w, 2));
                 }
@@ -1168,7 +1552,11 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
             })
             .collect();
     }
-    let running: Vec<String> = calls.iter().filter(|c| matches!(c.st, St::Running | St::Pending)).map(|c| target(c)).collect();
+    let running: Vec<String> = calls
+        .iter()
+        .filter(|c| matches!(c.st, St::Running | St::Pending))
+        .map(|c| target(c))
+        .collect();
     let start = g.items.iter().map(|i| match i {
         Item::R(r) => r.start,
         Item::C(c) => c.start,
@@ -1180,7 +1568,15 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
         head.push(sp(format!(" · {}", running.join(", ")), dim()));
     }
     if let Some(r) = live_r {
-        head.push(sp(format!(" · Thinking{}", heading(&r.text, true).map(|h| format!(": {h}")).unwrap_or_default()), dim().add_modifier(Modifier::ITALIC)));
+        head.push(sp(
+            format!(
+                " · Thinking{}",
+                heading(&r.text, true)
+                    .map(|h| format!(": {h}"))
+                    .unwrap_or_default()
+            ),
+            dim().add_modifier(Modifier::ITALIC),
+        ));
     }
     // the ledger: one row per call, split by step, the step's thinking first
     let mut ledger: Vec<Row> = vec![];
@@ -1191,21 +1587,49 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
             Item::R(r) => r.step,
             Item::C(c) => c.step,
         };
-        let gutter = if step != last_step { format!("{step:>5} ") } else { "      ".into() };
+        let gutter = if step != last_step {
+            format!("{step:>5} ")
+        } else {
+            "      ".into()
+        };
         last_step = step;
         match it {
             Item::R(r) => {
-                let t = if r.end.is_none() {
-                    format!("○ Thinking{}", heading(&r.text, true).map(|h| format!(": {h}")).unwrap_or_default())
-                } else {
-                    format!("+ Thought{} · {}", heading(&r.text, false).map(|h| format!(": {h}")).unwrap_or_default(), dur(r.end.unwrap() - r.start))
+                let t = match r.end {
+                    Some(end) => format!(
+                        "+ Thought{} · {}",
+                        heading(&r.text, false)
+                            .map(|h| format!(": {h}"))
+                            .unwrap_or_default(),
+                        dur(end - r.start)
+                    ),
+                    None => format!(
+                        "○ Thinking{}",
+                        heading(&r.text, true)
+                            .map(|h| format!(": {h}"))
+                            .unwrap_or_default()
+                    ),
                 };
-                ledger.push(Row { act: Some(key), ..row(vec![sp(gutter, dim()), sp(t, dim().add_modifier(Modifier::ITALIC))]) });
+                ledger.push(Row {
+                    act: Some(key),
+                    ..row(vec![
+                        sp(gutter, dim()),
+                        sp(t, dim().add_modifier(Modifier::ITALIC)),
+                    ])
+                });
                 if open {
                     ledger.extend(thought_rows(&r.text, w, 8));
                 }
             }
-            Item::C(c) if let Some(rows) = v.lua.as_ref().filter(|x| x.tool == c.name).and_then(|x| x.rows(c, &gutter, w)) => ledger.extend(rows),
+            Item::C(c)
+                if let Some(rows) = v
+                    .lua
+                    .as_ref()
+                    .filter(|x| x.tool == c.name)
+                    .and_then(|x| x.rows(c, &gutter, w)) =>
+            {
+                ledger.extend(rows)
+            }
             Item::C(c) => {
                 let glyph = match c.st {
                     St::Running | St::Pending => sp("○", fg(ORANGE)),
@@ -1219,9 +1643,19 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
                 if t.width() > tw {
                     t = t.chars().take(tw.saturating_sub(1)).collect::<String>() + "…";
                 }
-                let mut s = vec![sp(gutter, dim()), glyph, sp(" ", Style::new()), sp(format!("{:<9}", kind_of(c)), fg(CYAN)), sp(format!("{t:<tw$}"), Style::new()), sp("  ", Style::new())];
+                let mut s = vec![
+                    sp(gutter, dim()),
+                    glyph,
+                    sp(" ", Style::new()),
+                    sp(format!("{:<9}", kind_of(c)), fg(CYAN)),
+                    sp(format!("{t:<tw$}"), Style::new()),
+                    sp("  ", Style::new()),
+                ];
                 s.extend(res);
-                ledger.push(Row { act: Some(key), ..row(s) });
+                ledger.push(Row {
+                    act: Some(key),
+                    ..row(s)
+                });
                 if open {
                     ledger.extend(call_rows(c));
                 }
@@ -1229,12 +1663,29 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
         }
     }
     // a search match inside the ledger opens it, as does a call waiting on the person
-    let hit = !v.q.is_empty() && ledger.iter().any(|r| plain(r).to_lowercase().contains(&v.q));
+    let hit = !v.q.is_empty()
+        && ledger
+            .iter()
+            .any(|r| plain(r).to_lowercase().contains(&v.q));
     let open = v.all_open || g.open || hit || v.force == Some(gid);
     // one row whatever runs: wrapping to two rows and back as calls start and finish
     // moved everything around it, so what is in flight is cut to fit; the duration and toggle stay right
-    head.extend([t(), sp(format!("{} {}", dur(g.last_ts - first), if open { "▾" } else { "▸" }), dim())]);
-    let mut out = vec![Row { spans: fit(&head, w), act: Some(gid), ..Default::default() }];
+    head.extend([
+        t(),
+        sp(
+            format!(
+                "{} {}",
+                dur(g.last_ts - first),
+                if open { "▾" } else { "▸" }
+            ),
+            dim(),
+        ),
+    ]);
+    let mut out = vec![Row {
+        spans: fit(&head, w),
+        act: Some(gid),
+        ..Default::default()
+    }];
     if open {
         out.extend(ledger);
     }
@@ -1244,11 +1695,16 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
 fn bubble(text: &str, ts: i64, w: usize) -> Vec<Row> {
     let maxw = w * 72 / 100;
     let tl = (maxw - 4).min(text.width());
-    let body = wrap(inline(text, Style::new()), tl + 1, vec![sp(" ", Style::new())], vec![sp(" ", Style::new())]);
+    let body = wrap(
+        inline(text, Style::new()),
+        tl + 1,
+        vec![sp(" ", Style::new())],
+        vec![sp(" ", Style::new())],
+    );
     let bw = body.iter().map(|l| width(l)).max().unwrap_or(0) + 3;
     let pad = w.saturating_sub(bw);
     let mut out = vec![];
-    let e =|ch: &str| {
+    let e = |ch: &str| {
         let mut r = edge(ch, BU, None, bw);
         r.spans.insert(0, sp(" ".repeat(pad), Style::new()));
         r
@@ -1260,11 +1716,19 @@ fn bubble(text: &str, ts: i64, w: usize) -> Vec<Row> {
         inner.push(sp(" ", Style::new()));
         inner.push(sp("▐", fg(BLUE)));
         s.extend(tint(inner, BU));
-        out.push(Row { spans: s, cont: i > 0, pre: pad as u16 + 1, ..Default::default() });
+        out.push(Row {
+            spans: s,
+            cont: i > 0,
+            pre: pad as u16 + 1,
+            ..Default::default()
+        });
     }
     out.push(e("▀"));
     let who = format!("you {}", clock(ts));
-    out.push(row(vec![sp(" ".repeat(w.saturating_sub(who.width() + 1)), Style::new()), sp(who, dim())]));
+    out.push(row(vec![
+        sp(" ".repeat(w.saturating_sub(who.width() + 1)), Style::new()),
+        sp(who, dim()),
+    ]));
     out
 }
 
@@ -1279,15 +1743,29 @@ fn band_rows(h: &Handoff, w: usize) -> Vec<Row> {
     };
     let size = match h.outcome.as_deref() {
         None => sp("writing the note…", dim()),
-        Some("completed") => sp(format!("{} → {}", k(h.before), h.after.map_or("…".into(), k)), bold()),
+        Some("completed") => sp(
+            format!("{} → {}", k(h.before), h.after.map_or("…".into(), k)),
+            bold(),
+        ),
         Some(o) => sp(format!("{o} · the context is unchanged"), fg(ORANGE)),
     };
-    let s = vec![sp(" ⇄ ", fg(PURPLE)), sp("handoff", fg(PURPLE).add_modifier(Modifier::BOLD)), sp(format!(" · {why}"), dim()), t(), size, sp(format!(" · {} ", clock(h.ts)), dim())];
+    let s = vec![
+        sp(" ⇄ ", fg(PURPLE)),
+        sp("handoff", fg(PURPLE).add_modifier(Modifier::BOLD)),
+        sp(format!(" · {why}"), dim()),
+        t(),
+        size,
+        sp(format!(" · {} ", clock(h.ts)), dim()),
+    ];
     slab(vec![row(s)], BH, None, w)
 }
 
 fn conversation(f: &Fold, w: usize, v: &View) -> Vec<Row> {
-    f.turns.iter().enumerate().flat_map(|(ti, t)| turn_rows(ti, t, w, v, true, true)).collect()
+    f.turns
+        .iter()
+        .enumerate()
+        .flat_map(|(ti, t)| turn_rows(ti, t, w, v, true, true))
+        .collect()
 }
 
 /// One turn's rows. `head`: the turn starts here, so the gap, the bubble and the card's top
@@ -1309,28 +1787,53 @@ fn turn_rows(ti: usize, t: &Turn, w: usize, v: &View, head: bool, tail: bool) ->
                     segs.push((Some(h), vec![]));
                     continue;
                 }
-                Block::Text(s) => md(s, iw).into_iter().map(|r| Row { link: true, ..r }).collect(),
+                Block::Text(s) => md(s, iw)
+                    .into_iter()
+                    .map(|r| Row { link: true, ..r })
+                    .collect(),
                 Block::Group(g) => group_lines(g, Act::Group(ti, bi), iw, v),
                 Block::Steer(s, ts) => {
                     let lab = format!(" · {} ", clock(*ts));
-                    let mut r = vec![row(vec![sp("steer", fg(ORANGE).add_modifier(Modifier::BOLD)), sp(lab.clone(), dim()), sp("─".repeat(iw.saturating_sub(5 + lab.width())), fg(SEL))])];
+                    let mut r = vec![row(vec![
+                        sp("steer", fg(ORANGE).add_modifier(Modifier::BOLD)),
+                        sp(lab.clone(), dim()),
+                        sp("─".repeat(iw.saturating_sub(5 + lab.width())), fg(SEL)),
+                    ])];
                     r.extend(para(s, iw, bold()));
                     r
                 }
-                Block::Mcp(m) => wrap_rows(vec![sp(m.clone(), dim())], iw, vec![sp("⚠ ", fg(ORANGE))], vec![sp("  ", Style::new())]),
+                Block::Mcp(m) => wrap_rows(
+                    vec![sp(m.clone(), dim())],
+                    iw,
+                    vec![sp("⚠ ", fg(ORANGE))],
+                    vec![sp("  ", Style::new())],
+                ),
                 Block::Done(s) => vec![row(vec![sp(format!("▣ {s}"), dim())])],
                 Block::Answer(rows, note, ts, declined) => {
                     // the person's words, so a labelled rule like a steer, not a dim tool row
                     let lab = format!(" · {} ", clock(*ts));
-                    let mut r = vec![row(vec![sp("you answered", fg(BLUE).add_modifier(Modifier::BOLD)), sp(lab.clone(), dim()), sp("─".repeat(iw.saturating_sub(12 + lab.width())), fg(SEL))])];
+                    let mut r = vec![row(vec![
+                        sp("you answered", fg(BLUE).add_modifier(Modifier::BOLD)),
+                        sp(lab.clone(), dim()),
+                        sp("─".repeat(iw.saturating_sub(12 + lab.width())), fg(SEL)),
+                    ])];
                     if *declined {
-                        r.push(row(vec![sp("declined: the turn ended so you could answer in your own words", dim())]));
+                        r.push(row(vec![sp(
+                            "declined: the turn ended so you could answer in your own words",
+                            dim(),
+                        )]));
                     }
                     for (h, a, skipped) in rows {
-                        r.push(row(vec![sp(format!("{h:<13}"), fg(BLUE)), sp(a.clone(), if *skipped { dim() } else { bold() })]));
+                        r.push(row(vec![
+                            sp(format!("{h:<13}"), fg(BLUE)),
+                            sp(a.clone(), if *skipped { dim() } else { bold() }),
+                        ]));
                     }
                     if let Some(n) = note {
-                        r.push(row(vec![sp(format!("{:<13}", "note"), fg(BLUE)), sp(format!("“{n}”"), bold())]));
+                        r.push(row(vec![
+                            sp(format!("{:<13}", "note"), fg(BLUE)),
+                            sp(format!("“{n}”"), bold()),
+                        ]));
                     }
                     r
                 }
@@ -1365,17 +1868,31 @@ fn turn_rows(ti: usize, t: &Turn, w: usize, v: &View, head: bool, tail: bool) ->
                 .map(|r| {
                     let mut s = vec![sp(" ", Style::new())];
                     let body = fit(&r.spans, iw);
-                    s.extend(if let Some(bg) = r.bg { tint(body, bg) } else { body });
+                    s.extend(if let Some(bg) = r.bg {
+                        tint(body, bg)
+                    } else {
+                        body
+                    });
                     s.push(sp(" ", Style::new()));
                     let hot = r.hot.iter().map(|&(a, b, k)| (a + 1, b + 1, k)).collect();
-                    Row { spans: s, bg: None, pre: r.pre + 1, hot, ..r }
+                    Row {
+                        spans: s,
+                        bg: None,
+                        pre: r.pre + 1,
+                        hot,
+                        ..r
+                    }
                 })
                 .collect();
             let mut card = slab(rows, BW, None, w);
             if !tail && k + 1 == n {
                 card.pop();
             }
-            out.extend(if head || k > 0 || t.after_band || t.fresh { card } else { card.split_off(1) });
+            out.extend(if head || k > 0 || t.after_band || t.fresh {
+                card
+            } else {
+                card.split_off(1)
+            });
         }
     }
     out
@@ -1387,7 +1904,11 @@ fn bar(frac: f64, w: usize, c: Color) -> Vec<Span<'static>> {
     vec![sp("▆".repeat(f), fg(c)), sp("▆".repeat(w - f), fg(SEL))]
 }
 fn k(n: u64) -> String {
-    if n >= 10_000 { format!("{}k", n / 1000) } else { format!("{:.1}k", n as f64 / 1000.0) }
+    if n >= 10_000 {
+        format!("{}k", n / 1000)
+    } else {
+        format!("{:.1}k", n as f64 / 1000.0)
+    }
 }
 const HANDOFF_AT: u64 = 400_000; // not in the stream: see README, findings
 const WINDOW: u64 = 1_000_000; // not in the stream either
@@ -1409,35 +1930,103 @@ fn left_cut(p: &str, w: usize) -> String {
         return format!("…{}", &p[i..]);
     }
     let cs: Vec<char> = p.chars().collect();
-    format!("…{}", cs[cs.len().saturating_sub(w.saturating_sub(1))..].iter().collect::<String>())
+    format!(
+        "…{}",
+        cs[cs.len().saturating_sub(w.saturating_sub(1))..]
+            .iter()
+            .collect::<String>()
+    )
 }
 fn cards(f: &Fold, now: i64, keys: &str, pw: usize) -> (Vec<Card>, Vec<Vec<Span<'static>>>) {
     let mut c = vec![];
     let mut short = vec![];
-    let hit = if f.input + f.cache_read + f.cache_write > 0 { 100 * f.cache_read / (f.input + f.cache_read + f.cache_write) } else { 0 };
-    let tps = if f.text_ms > 0 { f.text_out * 1000 / f.text_ms as u64 } else { 0 };
-    let mode = if f.mode.is_empty() { "?".to_string() } else { f.mode.clone() };
+    let hit = (100 * f.cache_read)
+        .checked_div(f.input + f.cache_read + f.cache_write)
+        .unwrap_or(0);
+    let tps = if f.text_ms > 0 {
+        f.text_out * 1000 / f.text_ms as u64
+    } else {
+        0
+    };
+    let mode = if f.mode.is_empty() {
+        "?".to_string()
+    } else {
+        f.mode.clone()
+    };
     let down = f.mcp_down.first().map(|s| format!("✗ {s} down"));
     c.push(Card {
         title: vec![sp(f.cwd.clone(), bold()), t(), sp(mode.clone(), fg(ORANGE))],
         lines: vec![
             vec![sp("git ", dim()), sp(f.branch.clone(), fg(PURPLE))],
-            vec![sp(f.model.clone(), fg(BLUE)), t(), sp(f.effort.clone(), fg(ORANGE)), sp(if f.thinking.is_empty() { "" } else { " ∴" }, dim())],
-            [bar(f.ctx as f64 / HANDOFF_AT as f64, 17, CYAN), vec![sp("│", fg(ORANGE)), t(), sp(k(f.ctx), Style::new())]].concat(),
-            vec![sp(format!("handoff {}", k(HANDOFF_AT)), dim()), t(), sp(format!("{}% of {}M", f.ctx * 100 / WINDOW, WINDOW / 1_000_000), dim())],
-            vec![sp("in ", dim()), sp(k(f.input), Style::new()), sp(" out ", dim()), sp(k(f.output), Style::new()), t(), sp("cache ", dim()), sp(format!("{hit}%"), Style::new())],
-            vec![sp(format!("${:.2}", f.cost), Style::new()), sp(format!(" · {tps} tok/s · {} turns", f.turns.len()), dim())],
-            vec![sp("tools ", dim()), sp(f.tools.to_string(), Style::new()), t(), sp(down.clone().unwrap_or_default(), fg(RED))],
+            vec![
+                sp(f.model.clone(), fg(BLUE)),
+                t(),
+                sp(f.effort.clone(), fg(ORANGE)),
+                sp(if f.thinking.is_empty() { "" } else { " ∴" }, dim()),
+            ],
+            [
+                bar(f.ctx as f64 / HANDOFF_AT as f64, 17, CYAN),
+                vec![sp("│", fg(ORANGE)), t(), sp(k(f.ctx), Style::new())],
+            ]
+            .concat(),
+            vec![
+                sp(format!("handoff {}", k(HANDOFF_AT)), dim()),
+                t(),
+                sp(
+                    format!("{}% of {}M", f.ctx * 100 / WINDOW, WINDOW / 1_000_000),
+                    dim(),
+                ),
+            ],
+            vec![
+                sp("in ", dim()),
+                sp(k(f.input), Style::new()),
+                sp(" out ", dim()),
+                sp(k(f.output), Style::new()),
+                t(),
+                sp("cache ", dim()),
+                sp(format!("{hit}%"), Style::new()),
+            ],
+            vec![
+                sp(format!("${:.2}", f.cost), Style::new()),
+                sp(format!(" · {tps} tok/s · {} turns", f.turns.len()), dim()),
+            ],
+            vec![
+                sp("tools ", dim()),
+                sp(f.tools.to_string(), Style::new()),
+                t(),
+                sp(down.clone().unwrap_or_default(), fg(RED)),
+            ],
             vec![sp("keys ", dim()), t(), sp(keys.to_string(), Style::new())],
         ],
         cap: 0,
     });
-    short.push(vec![sp(f.cwd.clone(), Style::new()), sp(" git ", dim()), sp(f.branch.clone(), fg(PURPLE))]);
-    short.push(vec![sp(f.model.clone(), fg(BLUE)), sp(format!(" {}", f.effort), fg(ORANGE))]);
+    short.push(vec![
+        sp(f.cwd.clone(), Style::new()),
+        sp(" git ", dim()),
+        sp(f.branch.clone(), fg(PURPLE)),
+    ]);
+    short.push(vec![
+        sp(f.model.clone(), fg(BLUE)),
+        sp(format!(" {}", f.effort), fg(ORANGE)),
+    ]);
     short.push(vec![sp(mode, fg(ORANGE))]);
-    short.push([vec![sp("ctx ", dim())], bar(f.ctx as f64 / HANDOFF_AT as f64, 8, CYAN), vec![sp(format!(" {}", k(f.ctx)), Style::new())]].concat());
-    short.push(vec![sp(format!("${:.2}", f.cost), Style::new()), sp(" cache ", dim()), sp(format!("{hit}%"), Style::new())]);
-    short.push(vec![sp(format!("tools {} ", f.tools), dim()), sp(down.unwrap_or_default(), fg(RED))]);
+    short.push(
+        [
+            vec![sp("ctx ", dim())],
+            bar(f.ctx as f64 / HANDOFF_AT as f64, 8, CYAN),
+            vec![sp(format!(" {}", k(f.ctx)), Style::new())],
+        ]
+        .concat(),
+    );
+    short.push(vec![
+        sp(format!("${:.2}", f.cost), Style::new()),
+        sp(" cache ", dim()),
+        sp(format!("{hit}%"), Style::new()),
+    ]);
+    short.push(vec![
+        sp(format!("tools {} ", f.tools), dim()),
+        sp(down.unwrap_or_default(), fg(RED)),
+    ]);
 
     let mut fl: Vec<(&String, &(i64, i64))> = f.files.iter().collect();
     fl.sort_by_key(|(_, (a, r))| -(a + r));
@@ -1446,34 +2035,103 @@ fn cards(f: &Fold, now: i64, keys: &str, pw: usize) -> (Vec<Card>, Vec<Vec<Span<
         .iter()
         .take(5)
         .map(|(p, (a, r))| {
-            let counts = vec![sp(format!("+{a}"), fg(BLUE)), sp(format!(" {:>3}", format!("−{r}")), fg(RED))];
+            let counts = vec![
+                sp(format!("+{a}"), fg(BLUE)),
+                sp(format!(" {:>3}", format!("−{r}")), fg(RED)),
+            ];
             let room = (pw).saturating_sub(5 + width(&counts) + 1);
             [vec![sp(left_cut(p, room), Style::new()), t()], counts].concat()
         })
         .collect();
-    let more = if fl.len() > 5 { format!("… {} more", fl.len() - 5) } else { String::new() };
-    lines.push(vec![sp(more, dim()), t(), sp(format!("+{ta}"), fg(BLUE)), sp(format!(" −{tr}"), fg(RED))]);
-    c.push(Card { title: vec![sp("Changed files", bold()), t(), sp(fl.len().to_string(), dim())], lines, cap: 0 });
-    short.push(vec![sp("± ", dim()), sp(format!("{} files ", fl.len()), Style::new()), sp(format!("+{ta}"), fg(BLUE)), sp(format!(" −{tr}"), fg(RED))]);
+    let more = if fl.len() > 5 {
+        format!("… {} more", fl.len() - 5)
+    } else {
+        String::new()
+    };
+    lines.push(vec![
+        sp(more, dim()),
+        t(),
+        sp(format!("+{ta}"), fg(BLUE)),
+        sp(format!(" −{tr}"), fg(RED)),
+    ]);
+    c.push(Card {
+        title: vec![
+            sp("Changed files", bold()),
+            t(),
+            sp(fl.len().to_string(), dim()),
+        ],
+        lines,
+        cap: 0,
+    });
+    short.push(vec![
+        sp("± ", dim()),
+        sp(format!("{} files ", fl.len()), Style::new()),
+        sp(format!("+{ta}"), fg(BLUE)),
+        sp(format!(" −{tr}"), fg(RED)),
+    ]);
 
     let dels: Vec<&Job> = f.jobs.iter().filter(|j| j.sid.is_some()).collect();
     let drun = dels.iter().filter(|j| j.running).count();
     let lines = dels
         .iter()
         .flat_map(|j| {
-            let (g, gc) = if j.running { ("●", ORANGE) } else { ("✓", BLUE) };
+            let (g, gc) = if j.running {
+                ("●", ORANGE)
+            } else {
+                ("✓", BLUE)
+            };
             let el = dur(if j.running { now } else { j.end } - j.start);
-            let what = if j.running && !j.last.is_empty() { j.last.clone() } else { if j.running { "running" } else { "done" }.into() };
-            [vec![sp(g, fg(gc)), sp(format!(" {}", j.desc), Style::new())], vec![sp(format!("  {} calls · {el} · {what}", j.calls), dim())]]
+            let what = if j.running && !j.last.is_empty() {
+                j.last.clone()
+            } else {
+                if j.running { "running" } else { "done" }.into()
+            };
+            [
+                vec![sp(g, fg(gc)), sp(format!(" {}", j.desc), Style::new())],
+                vec![sp(format!("  {} calls · {el} · {what}", j.calls), dim())],
+            ]
         })
         .collect();
-    c.push(Card { title: vec![sp("Delegates", bold()), t(), sp(format!("{drun} running"), if drun > 0 { fg(ORANGE) } else { dim() })], lines, cap: 6 });
-    short.push(vec![sp("◆ ", fg(PURPLE)), sp(format!("{drun} delegates"), Style::new())]);
+    c.push(Card {
+        title: vec![
+            sp("Delegates", bold()),
+            t(),
+            sp(
+                format!("{drun} running"),
+                if drun > 0 { fg(ORANGE) } else { dim() },
+            ),
+        ],
+        lines,
+        cap: 6,
+    });
+    short.push(vec![
+        sp("◆ ", fg(PURPLE)),
+        sp(format!("{drun} delegates"), Style::new()),
+    ]);
 
-    let jrun = f.jobs.iter().filter(|j| j.sid.is_none() && j.running).count();
-    c.push(Card { title: vec![sp("Jobs", bold()), t(), sp(format!("{jrun} running"), if jrun > 0 { fg(ORANGE) } else { dim() }), sp(" ▸", dim())], lines: vec![], cap: 0 });
+    let jrun = f
+        .jobs
+        .iter()
+        .filter(|j| j.sid.is_none() && j.running)
+        .count();
+    c.push(Card {
+        title: vec![
+            sp("Jobs", bold()),
+            t(),
+            sp(
+                format!("{jrun} running"),
+                if jrun > 0 { fg(ORANGE) } else { dim() },
+            ),
+            sp(" ▸", dim()),
+        ],
+        lines: vec![],
+        cap: 0,
+    });
     if jrun > 0 {
-        short.push(vec![sp("⚙ ", fg(ORANGE)), sp(format!("{jrun} job"), Style::new())]);
+        short.push(vec![
+            sp("⚙ ", fg(ORANGE)),
+            sp(format!("{jrun} job"), Style::new()),
+        ]);
     }
     c.push(Card {
         title: vec![sp("Quota", bold()), t(), sp("extension", dim())],
@@ -1485,7 +2143,12 @@ fn cards(f: &Fold, now: i64, keys: &str, pw: usize) -> (Vec<Card>, Vec<Vec<Span<
         ],
         cap: 0,
     });
-    short.push(vec![sp("Q ", dim()), sp("claude 65%", Style::new()), sp(" · ", dim()), sp("cursor 1%", fg(RED))]);
+    short.push(vec![
+        sp("Q ", dim()),
+        sp("claude 65%", Style::new()),
+        sp(" · ", dim()),
+        sp("cursor 1%", fg(RED)),
+    ]);
     (c, short)
 }
 fn panel_rows(f: &Fold, now: i64, keys: &str, pw: usize, waiting: usize) -> Vec<Row> {
@@ -1494,10 +2157,24 @@ fn panel_rows(f: &Fold, now: i64, keys: &str, pw: usize, waiting: usize) -> Vec<
     // waiting sessions off screen (the rail is hidden) join the Session card when it
     // is drawn, and clicking the line brings the rail back
     for (ci, card) in cards(f, now, keys, pw).0.into_iter().enumerate() {
-        let mut rows = vec![row([vec![sp("  ", Style::new())], fit(&card.title, w - 3), vec![sp(" ", Style::new())]].concat())];
-        let body: Vec<_> = if card.cap > 0 { card.lines.into_iter().take(card.cap).collect() } else { card.lines };
+        let mut rows = vec![row([
+            vec![sp("  ", Style::new())],
+            fit(&card.title, w - 3),
+            vec![sp(" ", Style::new())],
+        ]
+        .concat())];
+        let body: Vec<_> = if card.cap > 0 {
+            card.lines.into_iter().take(card.cap).collect()
+        } else {
+            card.lines
+        };
         for (li, l) in body.into_iter().enumerate() {
-            let mut r = row([vec![sp("  ", Style::new())], fit(&l, w - 3), vec![sp(" ", Style::new())]].concat());
+            let mut r = row([
+                vec![sp("  ", Style::new())],
+                fit(&l, w - 3),
+                vec![sp(" ", Style::new())],
+            ]
+            .concat());
             // the Session card's context bar and the line under it open the context breakdown
             if ci == 0 && (li == 2 || li == 3) {
                 r.act = Some(Act::Context);
@@ -1505,8 +2182,22 @@ fn panel_rows(f: &Fold, now: i64, keys: &str, pw: usize, waiting: usize) -> Vec<
             rows.push(r);
         }
         if ci == 0 && waiting > 0 {
-            let line = [vec![sp("  ! ", fg(ORANGE).add_modifier(Modifier::BOLD))], fit(&[sp(format!("{waiting} waiting · rail hidden · show"), fg(ORANGE))], w - 7)].concat();
-            rows.push(Row { spans: line, act: Some(Act::RailToggle), ..Default::default() });
+            let line = [
+                vec![sp("  ! ", fg(ORANGE).add_modifier(Modifier::BOLD))],
+                fit(
+                    &[sp(
+                        format!("{waiting} waiting · rail hidden · show"),
+                        fg(ORANGE),
+                    )],
+                    w - 7,
+                ),
+            ]
+            .concat();
+            rows.push(Row {
+                spans: line,
+                act: Some(Act::RailToggle),
+                ..Default::default()
+            });
         }
         out.extend(slab(rows, BC, Some(BP), w));
         out.push(Row::default());
@@ -1520,7 +2211,11 @@ fn status_rows(f: &Fold, now: i64, w: usize, keys: &str, rail_note: Option<Strin
         rows[0].push(sp(n, fg(ORANGE)));
     }
     let mut ctx_at: Option<(usize, u16, u16)> = None;
-    for (k, it) in cards(f, now, keys, PANEL as usize).1.into_iter().enumerate() {
+    for (k, it) in cards(f, now, keys, PANEL as usize)
+        .1
+        .into_iter()
+        .enumerate()
+    {
         let cur = rows.last().unwrap();
         if cur.len() > 1 && width(cur) + 5 + width(&it) > w - 1 {
             if rows.len() == 2 {
@@ -1542,7 +2237,16 @@ fn status_rows(f: &Fold, now: i64, w: usize, keys: &str, rail_note: Option<Strin
     }
     rows.into_iter()
         .enumerate()
-        .map(|(i, s)| Row { spans: s, bg: Some(BP), hot: ctx_at.filter(|c| c.0 == i).map(|c| (c.1, c.2, Act::Context)).into_iter().collect(), ..Default::default() })
+        .map(|(i, s)| Row {
+            spans: s,
+            bg: Some(BP),
+            hot: ctx_at
+                .filter(|c| c.0 == i)
+                .map(|c| (c.1, c.2, Act::Context))
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        })
         .collect()
 }
 
@@ -1583,22 +2287,139 @@ fn fake_sessions(f: &Fold, now: i64) -> Vec<Fake> {
     let (st0, wait0) = match f.pending.first() {
         None => (SState::Working, String::new()),
         Some(p) => match &p.what {
-            Asking::Approval { tool, args, .. } => (SState::NeedsInput, format!("approval: {tool} {}", primary(args))),
-            Asking::Form(qs) => (SState::NeedsInput, format!("question: {} question{}", qs.len(), if qs.len() == 1 { "" } else { "s" })),
+            Asking::Approval { tool, args, .. } => (
+                SState::NeedsInput,
+                format!("approval: {tool} {}", primary(args)),
+            ),
+            Asking::Form(qs) => (
+                SState::NeedsInput,
+                format!(
+                    "question: {} question{}",
+                    qs.len(),
+                    if qs.len() == 1 { "" } else { "s" }
+                ),
+            ),
         },
     };
-    let ws0: &'static str = Box::leak(f.cwd.rsplit('/').next().unwrap_or("fiber").to_string().into_boxed_str());
+    let ws0: &'static str = Box::leak(
+        f.cwd
+            .rsplit('/')
+            .next()
+            .unwrap_or("fiber")
+            .to_string()
+            .into_boxed_str(),
+    );
     let branch0: &'static str = Box::leak(f.branch.clone().into_boxed_str());
-    let model0 = if f.model.is_empty() { "opus-5-5 · high".into() } else { format!("{} · {}", short_model(&f.model), f.effort) };
+    let model0 = if f.model.is_empty() {
+        "opus-5-5 · high".into()
+    } else {
+        format!("{} · {}", short_model(&f.model), f.effort)
+    };
     vec![
-        Fake { name: "fix flaky lock test", project: "fiber", wait: wait0, model: model0, branch: branch0, ws: ws0, spend: format!("${:.2}", f.cost), dollars: f.cost, ctx: (f.ctx * 100 / WINDOW.max(1)) as u8, age: rail_age((now - f.turn_start).max(0)), st: st0 },
-        Fake { name: "docs: rail spec", project: "fiber", wait: String::new(), model: "opus-5-5 · high".into(), branch: "docs/rail-692", ws: "fiber", spend: "$0.42".into(), dollars: 0.42, ctx: 27, age: "9m".into(), st: SState::Working },
-        Fake { name: "review #688", project: "fiber", wait: "approval: shell cargo publish --dry-run".into(), model: "gpt-6.1-sol · medium".into(), branch: "review-688", ws: "fiber", spend: "$1.10".into(), dollars: 1.10, ctx: 64, age: "22m".into(), st: SState::NeedsInput },
-        Fake { name: "bump ratatui", project: "fiber", wait: "question: 2 of 3 answered".into(), model: "gpt-6.1-sol · low".into(), branch: "deps/ratatui-0.30", ws: "fiber", spend: "$0.08".into(), dollars: 0.08, ctx: 41, age: "4m".into(), st: SState::NeedsInput },
-        Fake { name: "lsp probe", project: "fiber", wait: String::new(), model: "grok-4.7-high · low".into(), branch: "spike/lsp", ws: "fiber", spend: "$0.05".into(), dollars: 0.05, ctx: 78, age: "1h".into(), st: SState::Crashed },
-        Fake { name: "migrate every provider adapter to the new streaming contract", project: "pi-rig", wait: String::new(), model: "grok-4.7-high · max".into(), branch: "migrate/streaming", ws: "pi-rig", spend: "$2.31".into(), dollars: 2.31, ctx: 91, age: "31m".into(), st: SState::Working },
-        Fake { name: "backfill embeddings", project: "pi-rig", wait: String::new(), model: "grok-4.7-high · high".into(), branch: "backfill/embed", ws: "pi-rig", spend: "$0.87".into(), dollars: 0.87, ctx: 55, age: "12m".into(), st: SState::Retrying },
-        Fake { name: "rewrite onboarding tour", project: "beacon", wait: String::new(), model: "opus-5-5 · medium".into(), branch: "tour/rewrite", ws: "beacon", spend: "$0.35".into(), dollars: 0.35, ctx: 12, age: "47m".into(), st: SState::Ready },
+        Fake {
+            name: "fix flaky lock test",
+            project: "fiber",
+            wait: wait0,
+            model: model0,
+            branch: branch0,
+            ws: ws0,
+            spend: format!("${:.2}", f.cost),
+            dollars: f.cost,
+            ctx: (f.ctx * 100 / WINDOW.max(1)) as u8,
+            age: rail_age((now - f.turn_start).max(0)),
+            st: st0,
+        },
+        Fake {
+            name: "docs: rail spec",
+            project: "fiber",
+            wait: String::new(),
+            model: "opus-5-5 · high".into(),
+            branch: "docs/rail-692",
+            ws: "fiber",
+            spend: "$0.42".into(),
+            dollars: 0.42,
+            ctx: 27,
+            age: "9m".into(),
+            st: SState::Working,
+        },
+        Fake {
+            name: "review #688",
+            project: "fiber",
+            wait: "approval: shell cargo publish --dry-run".into(),
+            model: "gpt-6.1-sol · medium".into(),
+            branch: "review-688",
+            ws: "fiber",
+            spend: "$1.10".into(),
+            dollars: 1.10,
+            ctx: 64,
+            age: "22m".into(),
+            st: SState::NeedsInput,
+        },
+        Fake {
+            name: "bump ratatui",
+            project: "fiber",
+            wait: "question: 2 of 3 answered".into(),
+            model: "gpt-6.1-sol · low".into(),
+            branch: "deps/ratatui-0.30",
+            ws: "fiber",
+            spend: "$0.08".into(),
+            dollars: 0.08,
+            ctx: 41,
+            age: "4m".into(),
+            st: SState::NeedsInput,
+        },
+        Fake {
+            name: "lsp probe",
+            project: "fiber",
+            wait: String::new(),
+            model: "grok-4.7-high · low".into(),
+            branch: "spike/lsp",
+            ws: "fiber",
+            spend: "$0.05".into(),
+            dollars: 0.05,
+            ctx: 78,
+            age: "1h".into(),
+            st: SState::Crashed,
+        },
+        Fake {
+            name: "migrate every provider adapter to the new streaming contract",
+            project: "pi-rig",
+            wait: String::new(),
+            model: "grok-4.7-high · max".into(),
+            branch: "migrate/streaming",
+            ws: "pi-rig",
+            spend: "$2.31".into(),
+            dollars: 2.31,
+            ctx: 91,
+            age: "31m".into(),
+            st: SState::Working,
+        },
+        Fake {
+            name: "backfill embeddings",
+            project: "pi-rig",
+            wait: String::new(),
+            model: "grok-4.7-high · high".into(),
+            branch: "backfill/embed",
+            ws: "pi-rig",
+            spend: "$0.87".into(),
+            dollars: 0.87,
+            ctx: 55,
+            age: "12m".into(),
+            st: SState::Retrying,
+        },
+        Fake {
+            name: "rewrite onboarding tour",
+            project: "beacon",
+            wait: String::new(),
+            model: "opus-5-5 · medium".into(),
+            branch: "tour/rewrite",
+            ws: "beacon",
+            spend: "$0.35".into(),
+            dollars: 0.35,
+            ctx: 12,
+            age: "47m".into(),
+            st: SState::Ready,
+        },
     ]
 }
 /// Shortens a model id to its last segment, so the card's model row stays short.
@@ -1631,7 +2452,11 @@ fn wait_glyph(tick: u64, reduced: bool) -> Style {
     if reduced {
         return fg(ORANGE).add_modifier(Modifier::BOLD);
     }
-    if tick / 4 % 2 == 0 { fg(ORANGE).add_modifier(Modifier::BOLD) } else { fg(CYAN) }
+    if (tick / 4).is_multiple_of(2) {
+        fg(ORANGE).add_modifier(Modifier::BOLD)
+    } else {
+        fg(CYAN)
+    }
 }
 /// A session's state glyph, as on the rail and home's list: working `●`
 /// under reduced motion in the accent, waiting `!` attention, died `✗`
@@ -1696,7 +2521,13 @@ fn rail_stripe(s: &Fake, tick: u64, reduced: bool) -> Span<'static> {
 }
 /// The context bar's colour: normal under 60%, warning 60–85%, danger above.
 fn rail_ctx_color(pct: u8) -> Color {
-    if pct > 85 { RED } else if pct >= 60 { ORANGE } else { BLUE }
+    if pct > 85 {
+        RED
+    } else if pct >= 60 {
+        ORANGE
+    } else {
+        BLUE
+    }
 }
 /// Cuts a name to `max` characters, ending in … so truncation shows.
 fn cut(s: &str, max: usize) -> String {
@@ -1707,7 +2538,15 @@ fn cut(s: &str, max: usize) -> String {
     cs[..max.saturating_sub(1)].iter().collect::<String>() + "…"
 }
 /// One row of the list (A): `1 ● name…`, the on-screen session on a tint with a stripe.
-fn rail_row_a(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: bool, w: usize) -> Vec<Row> {
+fn rail_row_a(
+    s: &Fake,
+    n: usize,
+    i: usize,
+    on: bool,
+    tick: u64,
+    reduced: bool,
+    w: usize,
+) -> Vec<Row> {
     let stripe = if on {
         sp("▌", fg(BLUE))
     } else if reduced && s.st == SState::NeedsInput {
@@ -1715,26 +2554,51 @@ fn rail_row_a(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: bool, 
     } else {
         sp(" ", Style::new())
     };
-    let line = vec![stripe, sp(format!("{n} "), dim()), rail_glyph(s, tick, reduced), sp(" ", Style::new()), sp(s.name.to_string(), Style::new())];
+    let line = vec![
+        stripe,
+        sp(format!("{n} "), dim()),
+        rail_glyph(s, tick, reduced),
+        sp(" ", Style::new()),
+        sp(s.name.to_string(), Style::new()),
+    ];
     let bg = on.then_some(SEL);
     let spans = match bg {
         Some(c) => tint(fit(&line, w), c),
         None => fit(&line, w),
     };
-    let mut out = vec![Row { spans, bg, act: Some(Act::Rail(i)), ..Default::default() }];
+    let mut out = vec![Row {
+        spans,
+        bg,
+        act: Some(Act::Rail(i)),
+        ..Default::default()
+    }];
     if s.st == SState::NeedsInput && !s.wait.is_empty() {
         let ws = match bg {
-            Some(c) => tint(fit(&[sp("  ", Style::new()), sp(s.wait.clone(), dim())], w), c),
+            Some(c) => tint(
+                fit(&[sp("  ", Style::new()), sp(s.wait.clone(), dim())], w),
+                c,
+            ),
             None => fit(&[sp("  ", Style::new()), sp(s.wait.clone(), dim())], w),
         };
-        out.push(Row { spans: ws, bg, act: Some(Act::Rail(i)), ..Default::default() });
+        out.push(Row {
+            spans: ws,
+            bg,
+            act: Some(Act::Rail(i)),
+            ..Default::default()
+        });
     }
     out
 }
 /// Fits card content rows to the inner width (2 cells of right margin, matching the
 /// stripe + space on the left), gives them the card's tint, and optionally wraps them
 /// in ▄/▀ edges. Hot regions span the whole card width.
-fn rail_card_rows(inner: Vec<Vec<Span<'static>>>, i: usize, bg: Color, w: usize, edged: bool) -> Vec<Row> {
+fn rail_card_rows(
+    inner: Vec<Vec<Span<'static>>>,
+    i: usize,
+    bg: Color,
+    w: usize,
+    edged: bool,
+) -> Vec<Row> {
     let iw = w.saturating_sub(2);
     let hot = vec![(0, w as u16, Act::Rail(i))];
     let rows: Vec<Row> = inner
@@ -1742,10 +2606,20 @@ fn rail_card_rows(inner: Vec<Vec<Span<'static>>>, i: usize, bg: Color, w: usize,
         .map(|spans| {
             let mut fitted = fit(&spans, iw);
             fitted.push(sp("  ", Style::new()));
-            Row { spans: fitted, bg: Some(bg), hot: hot.clone(), act: Some(Act::Rail(i)), ..Default::default() }
+            Row {
+                spans: fitted,
+                bg: Some(bg),
+                hot: hot.clone(),
+                act: Some(Act::Rail(i)),
+                ..Default::default()
+            }
         })
         .collect();
-    if edged { slab(rows, bg, Some(BP), w) } else { rows }
+    if edged {
+        slab(rows, bg, Some(BP), w)
+    } else {
+        rows
+    }
 }
 /// Row 1 shared by the compact cards: number, glyph (state colour, pulsing when
 /// needing input), bold name, elapsed right-aligned. No state word; the glyph, stripe
@@ -1756,7 +2630,7 @@ fn rail_dense_top(s: &Fake, n: usize, tick: u64, reduced: bool, iw: usize) -> Ve
         sp(format!("{n} "), dim()),
         rail_glyph(s, tick, reduced),
         sp(" ", Style::new()),
-        sp(cut(&s.name, iw.saturating_sub(5)), bold()),
+        sp(cut(s.name, iw.saturating_sub(5)), bold()),
         t(),
         rail_age_or_dismiss(s),
     ]
@@ -1786,27 +2660,55 @@ fn rail_age_or_dismiss(s: &Fake) -> Span<'static> {
 /// move; clicking elsewhere still moves the marker. `x1` is the ✕ cell's right edge.
 fn rail_dismiss_hot(rows: &mut [Row], r1: usize, i: usize, w: usize, x1: u16) {
     rows[r1].act = None;
-    rows[r1].hot = vec![(x1.saturating_sub(1), x1, Act::RailDismiss(i)), (0, w as u16, Act::Rail(i))];
+    rows[r1].hot = vec![
+        (x1.saturating_sub(1), x1, Act::RailDismiss(i)),
+        (0, w as u16, Act::Rail(i)),
+    ];
 }
 /// The spend row: spend, a bar filling the rest, and the percentage; without the bar
 /// spend and percentage only.
-fn rail_spend_row(s: &Fake, tick: u64, reduced: bool, iw: usize, barred: bool) -> Vec<Span<'static>> {
+fn rail_spend_row(
+    s: &Fake,
+    tick: u64,
+    reduced: bool,
+    iw: usize,
+    barred: bool,
+) -> Vec<Span<'static>> {
     let stripe = rail_stripe(s, tick, reduced);
     let pad = sp("  ", Style::new());
     if !barred {
-        return vec![stripe, pad, sp(s.spend.clone(), Style::new()), t(), sp(format!("{}%", s.ctx), dim())];
+        return vec![
+            stripe,
+            pad,
+            sp(s.spend.clone(), Style::new()),
+            t(),
+            sp(format!("{}%", s.ctx), dim()),
+        ];
     }
     let pre = vec![stripe, pad, sp(format!("{} ", s.spend), Style::new())];
     let suf = vec![sp(format!("  {}%", s.ctx), dim())];
     let barw = iw.saturating_sub(width(&pre) + width(&suf));
-    [pre, bar(s.ctx as f64 / 100.0, barw, rail_ctx_color(s.ctx)), suf].concat()
+    [
+        pre,
+        bar(s.ctx as f64 / 100.0, barw, rail_ctx_color(s.ctx)),
+        suf,
+    ]
+    .concat()
 }
 /// One rich card of the cards (B): a tinted surface with half-block edges, grouped under
 /// project headers by the caller. Row 1 is number, glyph, state word and elapsed;
 /// row 2 the name; row 3 the model, or what it waits on while waiting; row 4 the
 /// workspace and branch; row 5 spend, a context bar filling the rest, and the
 /// percentage. Below RAIL_COMPACT columns row 3 and the bar go, keeping the percentage.
-fn rail_card_b(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: bool, w: usize) -> Vec<Row> {
+fn rail_card_b(
+    s: &Fake,
+    n: usize,
+    i: usize,
+    on: bool,
+    tick: u64,
+    reduced: bool,
+    w: usize,
+) -> Vec<Row> {
     // a right inner margin equal to the left (the stripe + space), so right-aligned
     // items and cut names end 2 cells short of the card's edge: rows are fitted to
     // the inner width, then given their 2 trailing cells
@@ -1814,21 +2716,53 @@ fn rail_card_b(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: bool,
     let stripe = || rail_stripe(s, tick, reduced);
     let pad = || sp("  ", Style::new());
     let r1 = rail_word_top(s, n, tick, reduced);
-    let r2 = vec![stripe(), pad(), sp(cut(&s.name, iw.saturating_sub(3)), bold())];
+    let r2 = vec![
+        stripe(),
+        pad(),
+        sp(cut(s.name, iw.saturating_sub(3)), bold()),
+    ];
     let r3 = if s.st == SState::NeedsInput {
-        vec![stripe(), pad(), sp(cut(&s.wait, iw.saturating_sub(3)), fg(ORANGE))]
+        vec![
+            stripe(),
+            pad(),
+            sp(cut(&s.wait, iw.saturating_sub(3)), fg(ORANGE)),
+        ]
     } else {
-        vec![stripe(), pad(), sp(cut(&s.model, iw.saturating_sub(3)), dim())]
+        vec![
+            stripe(),
+            pad(),
+            sp(cut(&s.model, iw.saturating_sub(3)), dim()),
+        ]
     };
-    let r4 = vec![stripe(), pad(), sp(format!("⌂ {}  ", s.ws), Style::new()), sp("⎇ ", dim()), sp(cut(s.branch, iw.saturating_sub(6 + s.ws.width() + 4)), fg(BLUE))];
+    let r4 = vec![
+        stripe(),
+        pad(),
+        sp(format!("⌂ {}  ", s.ws), Style::new()),
+        sp("⎇ ", dim()),
+        sp(
+            cut(s.branch, iw.saturating_sub(6 + s.ws.width() + 4)),
+            fg(BLUE),
+        ),
+    ];
     let pct = format!("{}%", s.ctx);
     let r5 = if w < RAIL_COMPACT {
-        vec![stripe(), pad(), sp(s.spend.clone(), Style::new()), t(), sp(pct, dim())]
+        vec![
+            stripe(),
+            pad(),
+            sp(s.spend.clone(), Style::new()),
+            t(),
+            sp(pct, dim()),
+        ]
     } else {
         let pre = vec![stripe(), pad(), sp(format!("{}   ", s.spend), Style::new())];
         let suf = vec![sp(format!("  {pct}"), dim())];
         let barw = iw.saturating_sub(width(&pre) + width(&suf));
-        [pre, bar(s.ctx as f64 / 100.0, barw, rail_ctx_color(s.ctx)), suf].concat()
+        [
+            pre,
+            bar(s.ctx as f64 / 100.0, barw, rail_ctx_color(s.ctx)),
+            suf,
+        ]
+        .concat()
     };
     let mut inner = vec![r1, r2];
     if w >= RAIL_COMPACT {
@@ -1857,7 +2791,15 @@ fn rail_branch_row(s: &Fake, tick: u64, reduced: bool, iw: usize) -> Vec<Span<'s
 }
 /// The medium card: 4 content rows with ▄/▀ edges. Below RAIL_COMPACT the bar goes,
 /// keeping spend and percentage.
-fn rail_card_medium(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: bool, w: usize) -> Vec<Row> {
+fn rail_card_medium(
+    s: &Fake,
+    n: usize,
+    i: usize,
+    on: bool,
+    tick: u64,
+    reduced: bool,
+    w: usize,
+) -> Vec<Row> {
     let inner = rail_medium_inner(s, n, tick, reduced, w.saturating_sub(2), w);
     let mut rows = rail_card_rows(inner, i, rail_card_bg(s, on), w, true);
     if s.st == SState::Crashed {
@@ -1867,14 +2809,34 @@ fn rail_card_medium(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: 
 }
 /// The 4 content rows medium shares with three's lower rows: word-top, name, wait reason or branch,
 /// spend/bar/percentage (bar dropped below RAIL_COMPACT). `iw` is the content width.
-fn rail_medium_inner(s: &Fake, n: usize, tick: u64, reduced: bool, iw: usize, w: usize) -> Vec<Vec<Span<'static>>> {
-    let r2 = vec![rail_stripe(s, tick, reduced), sp("  ", Style::new()), sp(cut(&s.name, iw.saturating_sub(3)), bold())];
+fn rail_medium_inner(
+    s: &Fake,
+    n: usize,
+    tick: u64,
+    reduced: bool,
+    iw: usize,
+    w: usize,
+) -> Vec<Vec<Span<'static>>> {
+    let r2 = vec![
+        rail_stripe(s, tick, reduced),
+        sp("  ", Style::new()),
+        sp(cut(s.name, iw.saturating_sub(3)), bold()),
+    ];
     let r3 = if s.st == SState::NeedsInput {
-        vec![rail_stripe(s, tick, reduced), sp("  ", Style::new()), sp(cut(&s.wait, iw.saturating_sub(3)), fg(ORANGE))]
+        vec![
+            rail_stripe(s, tick, reduced),
+            sp("  ", Style::new()),
+            sp(cut(&s.wait, iw.saturating_sub(3)), fg(ORANGE)),
+        ]
     } else {
         rail_branch_row(s, tick, reduced, iw)
     };
-    vec![rail_word_top(s, n, tick, reduced), r2, r3, rail_spend_row(s, tick, reduced, iw, w >= RAIL_COMPACT)]
+    vec![
+        rail_word_top(s, n, tick, reduced),
+        r2,
+        r3,
+        rail_spend_row(s, tick, reduced, iw, w >= RAIL_COMPACT),
+    ]
 }
 /// Row 1 for the three card: number, glyph and state word on the left; elapsed,
 /// spend and context percentage right-aligned with the 2-cell margin, the percentage
@@ -1894,16 +2856,30 @@ fn rail_three_top(s: &Fake, n: usize, tick: u64, reduced: bool, iw: usize) -> Ve
     // the right cluster, front-pinned: elapsed, spend, percentage; crashed swaps the
     // elapsed for a trailing ✕. Entries drop from the front, never past `min_keep`.
     let mut items: Vec<(String, Style)> = if s.st == SState::Crashed {
-        vec![(s.spend.clone(), Style::new()), (pct, fg(rail_ctx_color(s.ctx))), ("✕".into(), fg(RED).add_modifier(Modifier::BOLD))]
+        vec![
+            (s.spend.clone(), Style::new()),
+            (pct, fg(rail_ctx_color(s.ctx))),
+            ("✕".into(), fg(RED).add_modifier(Modifier::BOLD)),
+        ]
     } else {
-        vec![(s.age.clone(), dim()), (s.spend.clone(), Style::new()), (pct, fg(rail_ctx_color(s.ctx)))]
+        vec![
+            (s.age.clone(), dim()),
+            (s.spend.clone(), Style::new()),
+            (pct, fg(rail_ctx_color(s.ctx))),
+        ]
     };
     let min_keep = if s.st == SState::Crashed { 2 } else { 1 };
-    while items.len() > min_keep && lw + items.iter().map(|(t, _)| 2 + t.width()).sum::<usize>() > iw {
+    while items.len() > min_keep
+        && lw + items.iter().map(|(t, _)| 2 + t.width()).sum::<usize>() > iw
+    {
         items.remove(0);
     }
     // double spaces, falling back to single when even that overflows
-    let sep = if lw + items.iter().map(|(t, _)| 2 + t.width()).sum::<usize>() > iw { " " } else { "  " };
+    let sep = if lw + items.iter().map(|(t, _)| 2 + t.width()).sum::<usize>() > iw {
+        " "
+    } else {
+        "  "
+    };
     for (t, st) in items {
         left.push(sp(sep, Style::new()));
         left.push(sp(t, st));
@@ -1912,7 +2888,15 @@ fn rail_three_top(s: &Fake, n: usize, tick: u64, reduced: bool, iw: usize) -> Ve
 }
 /// The three card: medium's rows with cost and context moved into row 1, both edges,
 /// 3 content rows. Narrow as medium: nothing further drops, the row-1 rules cover it.
-fn rail_card_three(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: bool, w: usize) -> Vec<Row> {
+fn rail_card_three(
+    s: &Fake,
+    n: usize,
+    i: usize,
+    on: bool,
+    tick: u64,
+    reduced: bool,
+    w: usize,
+) -> Vec<Row> {
     let iw = w.saturating_sub(2);
     let mid = rail_medium_inner(s, n, tick, reduced, iw, w);
     let top = rail_three_top(s, n, tick, reduced, iw);
@@ -1927,10 +2911,22 @@ fn rail_card_three(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: b
 /// The compact card: 3 content rows, a flat tint with no edges, and one blank
 /// untinted row between cards (added by the caller). Below RAIL_COMPACT the bar goes,
 /// keeping spend and percentage.
-fn rail_card_compact(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced: bool, w: usize) -> Vec<Row> {
+fn rail_card_compact(
+    s: &Fake,
+    n: usize,
+    i: usize,
+    on: bool,
+    tick: u64,
+    reduced: bool,
+    w: usize,
+) -> Vec<Row> {
     let iw = w.saturating_sub(2);
     let r2 = if s.st == SState::NeedsInput {
-        vec![rail_stripe(s, tick, reduced), sp("  ", Style::new()), sp(cut(&s.wait, iw.saturating_sub(3)), fg(ORANGE))]
+        vec![
+            rail_stripe(s, tick, reduced),
+            sp("  ", Style::new()),
+            sp(cut(&s.wait, iw.saturating_sub(3)), fg(ORANGE)),
+        ]
     } else {
         let base = rail_base_model(&s.model);
         // the branch gives way first, so the model survives truncation
@@ -1944,7 +2940,11 @@ fn rail_card_compact(s: &Fake, n: usize, i: usize, on: bool, tick: u64, reduced:
             sp(base.to_string(), dim()),
         ]
     };
-    let inner = vec![rail_dense_top(s, n, tick, reduced, iw), r2, rail_spend_row(s, tick, reduced, iw, w >= RAIL_COMPACT)];
+    let inner = vec![
+        rail_dense_top(s, n, tick, reduced, iw),
+        r2,
+        rail_spend_row(s, tick, reduced, iw, w >= RAIL_COMPACT),
+    ];
     let mut rows = rail_card_rows(inner, i, rail_card_bg(s, on), w, false);
     if s.st == SState::Crashed {
         rail_dismiss_hot(&mut rows, 0, i, w, iw as u16);
@@ -1980,12 +2980,24 @@ fn rail_project_head(name: &'static str, dollars: f64, done: u32, w: usize) -> R
         }
         x += sw;
     }
-    Row { spans, hot, ..Default::default() }
+    Row {
+        spans,
+        hot,
+        ..Default::default()
+    }
 }
 /// The cards (B) design: every project shows, the launch project's group first and the
 /// rest after in start order; numbers follow start order across groups. `density` is
 /// 0 full, 1 medium, 2 compact.
-fn rail_full_b(sess: &[Fake], shown: &[usize], screen: usize, tick: u64, reduced: bool, w: usize, density: u8) -> (Vec<Row>, Vec<(usize, usize, usize)>) {
+fn rail_full_b(
+    sess: &[Fake],
+    shown: &[usize],
+    screen: usize,
+    tick: u64,
+    reduced: bool,
+    w: usize,
+    density: u8,
+) -> (Vec<Row>, Vec<(usize, usize, usize)>) {
     let mut out = vec![];
     // (session index, first row, row count), so a jump can scroll the card into view
     let mut map = vec![];
@@ -2002,10 +3014,19 @@ fn rail_full_b(sess: &[Fake], shown: &[usize], screen: usize, tick: u64, reduced
         if g > 0 {
             out.push(row(vec![sp(" ", Style::new())]));
         }
-        let members: Vec<usize> = shown.iter().filter(|&&i| sess[i].project == *p).copied().collect();
+        let members: Vec<usize> = shown
+            .iter()
+            .filter(|&&i| sess[i].project == *p)
+            .copied()
+            .collect();
         let dollars: f64 = members.iter().map(|&i| sess[i].dollars).sum();
         let di = projects.iter().position(|q| q == p).unwrap_or(0);
-        out.push(rail_project_head(*p, dollars, done.get(di).copied().unwrap_or(0), w));
+        out.push(rail_project_head(
+            p,
+            dollars,
+            done.get(di).copied().unwrap_or(0),
+            w,
+        ));
         for &i in &members {
             // numbers are stable per session: a dismissal leaves its number's gap
             let n = i + 1;
@@ -2025,8 +3046,23 @@ fn rail_full_b(sess: &[Fake], shown: &[usize], screen: usize, tick: u64, reduced
     }
     out.push(row(vec![sp(" ", Style::new())]));
     out.push(row(fit(&[sp("click moves marker", dim())], w)));
-    out.push(rail_chips(&[("A", Act::RailVariant(0)), ("B", Act::RailVariant(1)), ("C", Act::RailVariant(2))], 1));
-    out.push(rail_chips(&[("full", Act::RailDensity(0)), ("medium", Act::RailDensity(1)), ("three", Act::RailDensity(2)), ("compact", Act::RailDensity(3))], density as usize));
+    out.push(rail_chips(
+        &[
+            ("A", Act::RailVariant(0)),
+            ("B", Act::RailVariant(1)),
+            ("C", Act::RailVariant(2)),
+        ],
+        1,
+    ));
+    out.push(rail_chips(
+        &[
+            ("full", Act::RailDensity(0)),
+            ("medium", Act::RailDensity(1)),
+            ("three", Act::RailDensity(2)),
+            ("compact", Act::RailDensity(3)),
+        ],
+        density as usize,
+    ));
     (out, map)
 }
 /// Clickable chips for the rail's bottom label: small tinted buttons, the current one
@@ -2037,7 +3073,14 @@ fn rail_chips(opts: &[(&'static str, Act)], cur: usize) -> Row {
         if k > 0 {
             parts.push((sp(" ", Style::new()), None));
         }
-        let st = if k == cur { Style::new().fg(Color::Black).bg(ORANGE).add_modifier(Modifier::BOLD) } else { dim() };
+        let st = if k == cur {
+            Style::new()
+                .fg(Color::Black)
+                .bg(ORANGE)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            dim()
+        };
         parts.push((sp(name.to_string(), st), Some(*act)));
     }
     hot_row(parts)
@@ -2061,16 +3104,34 @@ fn rail_ensure(ui: &mut Ui, lay: &(usize, usize, Vec<(usize, usize, usize)>), i:
 fn rail_foot(hidden: usize, others: bool, w: usize) -> Vec<Row> {
     let mut out = vec![];
     if hidden > 0 {
-        out.push(hot_row(vec![(sp(format!("+{hidden} other · show all"), dim()), Some(Act::RailAll))]));
+        out.push(hot_row(vec![(
+            sp(format!("+{hidden} other · show all"), dim()),
+            Some(Act::RailAll),
+        )]));
     } else if others {
         out.push(hot_row(vec![(sp("show less", dim()), Some(Act::RailAll))]));
     }
     out.push(row(fit(&[sp("click moves marker", dim())], w)));
-    out.push(rail_chips(&[("A", Act::RailVariant(0)), ("B", Act::RailVariant(1)), ("C", Act::RailVariant(2))], 0));
+    out.push(rail_chips(
+        &[
+            ("A", Act::RailVariant(0)),
+            ("B", Act::RailVariant(1)),
+            ("C", Act::RailVariant(2)),
+        ],
+        0,
+    ));
     out
 }
 /// The full-height list (A) design, `w` columns wide; other projects hide behind the scope line.
-fn rail_full(sess: &[Fake], shown: &[usize], screen: usize, tick: u64, reduced: bool, w: usize, hidden: usize) -> Vec<Row> {
+fn rail_full(
+    sess: &[Fake],
+    shown: &[usize],
+    screen: usize,
+    tick: u64,
+    reduced: bool,
+    w: usize,
+    hidden: usize,
+) -> Vec<Row> {
     let mut out = vec![];
     let each = |out: &mut Vec<Row>, ix: &[usize]| {
         for &i in ix {
@@ -2081,8 +3142,16 @@ fn rail_full(sess: &[Fake], shown: &[usize], screen: usize, tick: u64, reduced: 
         }
     };
     // own sessions first; sessions in other projects under a divider when shown
-    let own: Vec<usize> = shown.iter().filter(|&&i| sess[i].project == "fiber").copied().collect();
-    let autod: Vec<usize> = shown.iter().filter(|&&i| sess[i].project != "fiber").copied().collect();
+    let own: Vec<usize> = shown
+        .iter()
+        .filter(|&&i| sess[i].project == "fiber")
+        .copied()
+        .collect();
+    let autod: Vec<usize> = shown
+        .iter()
+        .filter(|&&i| sess[i].project != "fiber")
+        .copied()
+        .collect();
     each(&mut out, &own);
     if !autod.is_empty() {
         out.push(row(fit(&[sp("─ other projects ─", dim())], w)));
@@ -2092,7 +3161,15 @@ fn rail_full(sess: &[Fake], shown: &[usize], screen: usize, tick: u64, reduced: 
     out
 }
 /// The tabs (C): a one-row strip across the top of the conversation column.
-fn rail_tabs(sess: &[Fake], shown: &[usize], screen: usize, cw: usize, tick: u64, reduced: bool, hidden: usize) -> Row {
+fn rail_tabs(
+    sess: &[Fake],
+    shown: &[usize],
+    screen: usize,
+    cw: usize,
+    tick: u64,
+    reduced: bool,
+    hidden: usize,
+) -> Row {
     // the variant chips are always kept, so C can be left by click; tabs take what is left
     let room = cw.saturating_sub(10);
     let mut keep;
@@ -2123,7 +3200,11 @@ fn rail_tabs(sess: &[Fake], shown: &[usize], screen: usize, cw: usize, tick: u64
         let s = &sess[i];
         let on = i == screen;
         let mut g = rail_glyph(s, tick, reduced);
-        let mut nm = if s.st == SState::NeedsInput && !on { fg(ORANGE) } else { Style::new() };
+        let mut nm = if s.st == SState::NeedsInput && !on {
+            fg(ORANGE)
+        } else {
+            Style::new()
+        };
         let mut nn = dim();
         if on {
             g = Span::styled(g.content, g.style.bg(SEL));
@@ -2132,7 +3213,10 @@ fn rail_tabs(sess: &[Fake], shown: &[usize], screen: usize, cw: usize, tick: u64
         }
         parts.push((sp(format!("{} ", i + 1), nn), Some(Act::Rail(i))));
         parts.push((g, Some(Act::Rail(i))));
-        parts.push((sp(format!(" {}", cut(s.name, maxn)), nm), Some(Act::Rail(i))));
+        parts.push((
+            sp(format!(" {}", cut(s.name, maxn)), nm),
+            Some(Act::Rail(i)),
+        ));
     }
     if keep < shown.len() {
         parts.push((sp(" │ ", dim()), None));
@@ -2147,11 +3231,23 @@ fn rail_tabs(sess: &[Fake], shown: &[usize], screen: usize, cw: usize, tick: u64
         if k > 0 {
             parts.push((sp(" ", dim()), None));
         }
-        let st = if *v == 2 { Style::new().fg(Color::Black).bg(ORANGE).add_modifier(Modifier::BOLD) } else { dim() };
+        let st = if *v == 2 {
+            Style::new()
+                .fg(Color::Black)
+                .bg(ORANGE)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            dim()
+        };
         parts.push((sp(name.to_string(), st), Some(Act::RailVariant(*v))));
     }
     let r = hot_row(parts);
-    Row { spans: fit(&r.spans, cw), hot: r.hot, act: None, ..Default::default() }
+    Row {
+        spans: fit(&r.spans, cw),
+        hot: r.hot,
+        act: None,
+        ..Default::default()
+    }
 }
 
 // ============================================================ bottom of the conversation column
@@ -2165,7 +3261,16 @@ fn glimmer(word: &str, tick: u64, reduced: bool) -> Vec<Span<'static>> {
         .enumerate()
         .map(|(i, ch)| {
             let d = (i as i64 - pos).abs();
-            sp(ch.to_string(), if d == 0 { fg(ORANGE).add_modifier(Modifier::BOLD) } else if d == 1 { fg(ORANGE) } else { dim() })
+            sp(
+                ch.to_string(),
+                if d == 0 {
+                    fg(ORANGE).add_modifier(Modifier::BOLD)
+                } else if d == 1 {
+                    fg(ORANGE)
+                } else {
+                    dim()
+                },
+            )
         })
         .collect()
 }
@@ -2250,20 +3355,33 @@ struct Ui {
 impl Ui {
     /// The request on top: the first in arrival order not put aside, or the one clicked through to.
     fn top<'a>(&self, f: &'a Fold) -> Option<(usize, &'a Pending)> {
-        let open: Vec<(usize, &Pending)> = f.pending.iter().enumerate().filter(|(_, p)| !self.aside.contains(&p.rid)).collect();
+        let open: Vec<(usize, &Pending)> = f
+            .pending
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| !self.aside.contains(&p.rid))
+            .collect();
         (!open.is_empty()).then(|| open[self.shown % open.len()])
     }
     fn nothing_open(&self, f: &Fold) -> bool {
-        self.search.is_none() && self.qsel.is_none() && !self.ctx_view && self.completions.is_none() && self.top(f).is_none()
+        self.search.is_none()
+            && self.qsel.is_none()
+            && !self.ctx_view
+            && self.completions.is_none()
+            && self.top(f).is_none()
     }
     /// Starts a fresh form state when the form on top changes.
     fn sync_form(&mut self, f: &Fold) {
-        if let Some((_, p)) = self.top(f) {
-            if let Asking::Form(fields) = &p.what {
-                if self.form.rid != p.rid {
-                    self.form = Form { rid: p.rid.clone(), sel: vec![vec![]; fields.len()], text: vec![String::new(); fields.len()], ..Default::default() };
-                }
-            }
+        if let Some((_, p)) = self.top(f)
+            && let Asking::Form(fields) = &p.what
+            && self.form.rid != p.rid
+        {
+            self.form = Form {
+                rid: p.rid.clone(),
+                sel: vec![vec![]; fields.len()],
+                text: vec![String::new(); fields.len()],
+                ..Default::default()
+            };
         }
     }
     fn answer_of(&self, k: usize) -> Option<String> {
@@ -2277,7 +3395,10 @@ impl Ui {
 }
 
 fn primary(args: &Value) -> String {
-    ["command", "path", "url"].iter().find_map(|k| args[k].as_str()).map_or_else(|| args.to_string(), str::to_string)
+    ["command", "path", "url"]
+        .iter()
+        .find_map(|k| args[k].as_str())
+        .map_or_else(|| args.to_string(), str::to_string)
 }
 
 fn input_box(ui: &Ui, w: usize) -> Vec<Row> {
@@ -2285,15 +3406,32 @@ fn input_box(ui: &Ui, w: usize) -> Vec<Row> {
     let room = w.saturating_sub(40);
     let shown: String = if ui.input.width() > room {
         let cs: Vec<char> = ui.input.chars().collect();
-        format!("…{}", cs[cs.len().saturating_sub(room)..].iter().collect::<String>())
+        format!(
+            "…{}",
+            cs[cs.len().saturating_sub(room)..]
+                .iter()
+                .collect::<String>()
+        )
     } else {
         ui.input.clone()
     };
     // while search is open typing goes to the search box, so the draft shows without a cursor
     let cursor = if ui.search.is_none() { "█" } else { "" };
-    let mut line = vec![sp("▌", fg(if editing { ORANGE } else { BLUE })), sp(" ", Style::new()), sp("› ", fg(CYAN)), sp(shown, Style::new()), sp(cursor, dim())];
+    let mut line = vec![
+        sp("▌", fg(if editing { ORANGE } else { BLUE })),
+        sp(" ", Style::new()),
+        sp("› ", fg(CYAN)),
+        sp(shown, Style::new()),
+        sp(cursor, dim()),
+    ];
     if editing {
-        line.extend([t(), sp("editing a queued message · enter amends · ⌥x drops · esc stops ", dim())]);
+        line.extend([
+            t(),
+            sp(
+                "editing a queued message · enter amends · ⌥x drops · esc stops ",
+                dim(),
+            ),
+        ]);
     }
     slab(vec![row(line)], BI, None, w)
 }
@@ -2308,12 +3446,30 @@ fn search_box(s: &Search) -> Vec<Span<'static>> {
     } else {
         sp(format!("{} of {}", s.i + 1, s.hits.len()), Style::new())
     };
-    vec![sp(" ⌕ ", fg(ORANGE)), sp(s.q.clone(), bold()), sp("█", dim()), t(), status, sp(" ", Style::new())]
+    vec![
+        sp(" ⌕ ", fg(ORANGE)),
+        sp(s.q.clone(), bold()),
+        sp("█", dim()),
+        t(),
+        status,
+        sp(" ", Style::new()),
+    ]
 }
 
 /// A swapped view's header row: its name, and Esc back to the conversation.
 fn view_header(name: &str, cmd: &str) -> Row {
-    Row { spans: vec![sp(" ", Style::new()), sp(name.to_string(), bold()), sp(format!("  {cmd}"), dim()), t(), sp("esc returns ", dim())], bg: Some(BI), act: Some(Act::Back), ..Default::default() }
+    Row {
+        spans: vec![
+            sp(" ", Style::new()),
+            sp(name.to_string(), bold()),
+            sp(format!("  {cmd}"), dim()),
+            t(),
+            sp("esc returns ", dim()),
+        ],
+        bg: Some(BI),
+        act: Some(Act::Back),
+        ..Default::default()
+    }
 }
 
 /// The context breakdown: one bar of context by category against the handoff point, then
@@ -2348,7 +3504,10 @@ fn context_view(f: &Fold, w: usize) -> Vec<Row> {
                             Item::C(c) => {
                                 calls += c.name.len() + c.args.to_string().len();
                                 results += c.content.len();
-                                largest.push((format!("{} {}", kind_of(c), target(c)), tok(c.content.len())));
+                                largest.push((
+                                    format!("{} {}", kind_of(c), target(c)),
+                                    tok(c.content.len()),
+                                ));
                             }
                         }
                     }
@@ -2379,7 +3538,9 @@ fn context_view(f: &Fold, w: usize) -> Vec<Row> {
         if n == 0 || used >= bw {
             continue;
         }
-        let cells = ((n as f64 / HANDOFF_AT as f64 * bw as f64).round() as usize).max(1).min(bw - used);
+        let cells = ((n as f64 / HANDOFF_AT as f64 * bw as f64).round() as usize)
+            .max(1)
+            .min(bw - used);
         bar.push(sp("█".repeat(cells), fg(c)));
         used += cells;
     }
@@ -2388,25 +3549,67 @@ fn context_view(f: &Fold, w: usize) -> Vec<Row> {
     let hk = format!("handoff {}", k(HANDOFF_AT));
     let mut out = vec![
         Row::default(),
-        row(vec![sp("  ", Style::new()), sp(format!("{} tokens", k(total)), bold()), sp(format!(" · {}% of the {}M window · automatic handoff at {}", total * 100 / WINDOW, WINDOW / 1_000_000, k(HANDOFF_AT)), dim())]),
+        row(vec![
+            sp("  ", Style::new()),
+            sp(format!("{} tokens", k(total)), bold()),
+            sp(
+                format!(
+                    " · {}% of the {}M window · automatic handoff at {}",
+                    total * 100 / WINDOW,
+                    WINDOW / 1_000_000,
+                    k(HANDOFF_AT)
+                ),
+                dim(),
+            ),
+        ]),
         Row::default(),
         row(bar),
-        row(vec![sp(" ".repeat((bw + 3).saturating_sub(hk.width())), Style::new()), sp(hk, fg(ORANGE))]),
+        row(vec![
+            sp(
+                " ".repeat((bw + 3).saturating_sub(hk.width())),
+                Style::new(),
+            ),
+            sp(hk, fg(ORANGE)),
+        ]),
         Row::default(),
     ];
     for &(name, n, c) in &cats {
         let est = if name == "not attributed" { " " } else { "~" };
-        out.push(row(vec![sp("  ■ ", fg(c)), sp(format!("{name:<20}"), Style::new()), sp(format!("{est}{:>7}", k(n)), Style::new()), sp(format!("{:>6}", format!("{}%", n * 100 / total.max(1))), dim())]));
+        out.push(row(vec![
+            sp("  ■ ", fg(c)),
+            sp(format!("{name:<20}"), Style::new()),
+            sp(format!("{est}{:>7}", k(n)), Style::new()),
+            sp(
+                format!("{:>6}", format!("{}%", n * 100 / total.max(1))),
+                dim(),
+            ),
+        ]));
     }
-    out.extend([Row::default(), row(vec![sp("  Largest tool results", bold())])]);
+    out.extend([
+        Row::default(),
+        row(vec![sp("  Largest tool results", bold())]),
+    ]);
     largest.sort_by_key(|x| std::cmp::Reverse(x.1));
     let tw = w.saturating_sub(14).min(60);
     for (what, n) in largest.into_iter().take(5) {
-        out.push(row([vec![sp("  ", Style::new())], fit(&[sp(what, dim())], tw), vec![sp(format!("~{:>7}", k(n)), Style::new())]].concat()));
+        out.push(row([
+            vec![sp("  ", Style::new())],
+            fit(&[sp(what, dim())], tw),
+            vec![sp(format!("~{:>7}", k(n)), Style::new())],
+        ]
+        .concat()));
     }
     out.push(Row::default());
-    for l in ["~ is an estimate at 4 characters a token from the text in the event stream; usage reports only the total.", "Deferred tools are not counted until loaded."] {
-        out.extend(wrap_rows(vec![sp(l, dim())], w, vec![sp("  ", Style::new())], vec![sp("  ", Style::new())]));
+    for l in [
+        "~ is an estimate at 4 characters a token from the text in the event stream; usage reports only the total.",
+        "Deferred tools are not counted until loaded.",
+    ] {
+        out.extend(wrap_rows(
+            vec![sp(l, dim())],
+            w,
+            vec![sp("  ", Style::new())],
+            vec![sp("  ", Style::new())],
+        ));
     }
     out
 }
@@ -2417,16 +3620,41 @@ const CH_PROJECT: usize = 2;
 const CH_DENY: usize = 3;
 /// The choices an approval panel shows: the two that remember need a `rule` on the request.
 fn choices(has_rule: bool) -> Vec<usize> {
-    if has_rule { vec![CH_ONCE, CH_SESSION, CH_PROJECT, CH_DENY] } else { vec![CH_ONCE, CH_DENY] }
+    if has_rule {
+        vec![CH_ONCE, CH_SESSION, CH_PROJECT, CH_DENY]
+    } else {
+        vec![CH_ONCE, CH_DENY]
+    }
 }
 fn approval_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, w: usize) -> Vec<Row> {
-    let Asking::Approval { tool, args, effects, reversible, paths, step, req } = &p.what else { return vec![] };
+    let Asking::Approval {
+        tool,
+        args,
+        effects,
+        reversible,
+        paths,
+        step,
+        req,
+    } = &p.what
+    else {
+        return vec![];
+    };
     let arg = primary(args);
-    let (rule, standing_rule, escalation) = (req.get("rule"), req.get("standing_rule"), req.get("escalation"));
+    let (rule, standing_rule, escalation) = (
+        req.get("rule"),
+        req.get("standing_rule"),
+        req.get("escalation"),
+    );
     let why = if let Some(r) = standing_rule {
-        format!("asked by the {} rule {}", r["scope"].as_str().unwrap_or(""), r["prefix"].as_str().unwrap_or(""))
+        format!(
+            "asked by the {} rule {}",
+            r["scope"].as_str().unwrap_or(""),
+            r["prefix"].as_str().unwrap_or("")
+        )
     } else if let Some(e) = escalation {
-        let reason = e["reason"].as_str().map_or(String::new(), |r| format!(": {r}"));
+        let reason = e["reason"]
+            .as_str()
+            .map_or(String::new(), |r| format!(": {r}"));
         match e["cause"].as_str().unwrap_or("") {
             "reviewer_failed" => "the reviewer failed".to_string(),
             "session_blocks" => format!("the reviewer has blocked too many calls{reason}"),
@@ -2441,12 +3669,26 @@ fn approval_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, w: usize) -> Vec<Row
         .to_string()
     };
     let mut rows = vec![hot_row(vec![
-        (sp(format!("Approval {} of {}", k + 1, f.pending.len()), fg(ORANGE).add_modifier(Modifier::BOLD)), Some(Act::NextPending)),
+        (
+            sp(
+                format!("Approval {} of {}", k + 1, f.pending.len()),
+                fg(ORANGE).add_modifier(Modifier::BOLD),
+            ),
+            Some(Act::NextPending),
+        ),
         (sp(format!(" · {}", f.asker(&p.sid)), fg(ORANGE)), None),
         (t(), None),
         (sp("esc puts it aside", dim()), None),
     ])];
-    rows.extend(wrap_rows(vec![sp(format!("{tool} "), fg(CYAN).add_modifier(Modifier::BOLD)), sp(arg.clone(), bold())], w - 4, vec![], vec![]));
+    rows.extend(wrap_rows(
+        vec![
+            sp(format!("{tool} "), fg(CYAN).add_modifier(Modifier::BOLD)),
+            sp(arg.clone(), bold()),
+        ],
+        w - 4,
+        vec![],
+        vec![],
+    ));
     let mut facts = effects.join(", ");
     if !reversible {
         facts += " · not reversible";
@@ -2461,26 +3703,57 @@ fn approval_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, w: usize) -> Vec<Row
     rows.push(Row::default());
     let choice = |i: usize, n: usize, parts: Vec<Span<'static>>| {
         let on = ui.choice == i;
-        let mut v = vec![(sp(if on { "▸ " } else { "  " }, fg(ORANGE)), Some(Act::Choice(i))), (sp(format!("{} ", n + 1), dim()), Some(Act::Choice(i)))];
-        v.extend(parts.into_iter().map(|s| (if on { Span::styled(s.content, s.style.add_modifier(Modifier::BOLD)) } else { s }, Some(Act::Choice(i)))));
+        let mut v = vec![
+            (
+                sp(if on { "▸ " } else { "  " }, fg(ORANGE)),
+                Some(Act::Choice(i)),
+            ),
+            (sp(format!("{} ", n + 1), dim()), Some(Act::Choice(i))),
+        ];
+        v.extend(parts.into_iter().map(|s| {
+            (
+                if on {
+                    Span::styled(s.content, s.style.add_modifier(Modifier::BOLD))
+                } else {
+                    s
+                },
+                Some(Act::Choice(i)),
+            )
+        }));
         hot_row(v)
     };
     let prefix = rule.and_then(|r| r["prefix"].as_str()).unwrap_or("");
     for (n, i) in choices(rule.is_some()).into_iter().enumerate() {
         let parts = match i {
             CH_ONCE => vec![sp("Allow once", Style::new())],
-            CH_SESSION => vec![sp("Allow for this session ", Style::new()), sp(format!("{prefix} *"), fg(CYAN))],
-            CH_PROJECT => vec![sp("Always allow in this project ", Style::new()), sp(format!("{prefix} *"), fg(CYAN))],
+            CH_SESSION => vec![
+                sp("Allow for this session ", Style::new()),
+                sp(format!("{prefix} *"), fg(CYAN)),
+            ],
+            CH_PROJECT => vec![
+                sp("Always allow in this project ", Style::new()),
+                sp(format!("{prefix} *"), fg(CYAN)),
+            ],
             _ => {
-                let fb = if ui.feedback.is_empty() && ui.choice != CH_DENY { sp("  type to add feedback", dim()) } else { sp(format!("  {}█", ui.feedback), Style::new()) };
+                let fb = if ui.feedback.is_empty() && ui.choice != CH_DENY {
+                    sp("  type to add feedback", dim())
+                } else {
+                    sp(format!("  {}█", ui.feedback), Style::new())
+                };
                 vec![sp("Deny", Style::new()), fb]
             }
         };
         rows.push(choice(i, n, parts));
     }
     rows.push(Row::default());
-    rows.push(row(vec![sp("↑↓ choose · enter confirms · typing goes to the feedback · click a choice", dim())]));
-    let rows = rows.into_iter().map(|r| prefixed(r, vec![sp("▌", fg(ORANGE)), sp(" ", Style::new())])).collect();
+    rows.push(row(vec![sp(
+        "↑↓ choose · enter confirms · typing goes to the feedback · click a choice",
+        dim(),
+    )]));
+    let rows = rows
+        .into_iter()
+        .map(|r| prefixed(r, vec![sp("▌", fg(ORANGE)), sp(" ", Style::new())]))
+        .collect();
     slab(rows, BC, None, w)
 }
 
@@ -2489,28 +3762,78 @@ fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usi
     let fm = &ui.form;
     let iw = w - 4;
     let mut title = vec![
-        (sp("Question", fg(PURPLE).add_modifier(Modifier::BOLD)), None),
-        (sp(format!(" from {} · {n} question{}, any can be skipped", f.asker(&p.sid), if n == 1 { "" } else { "s" }), fg(PURPLE)), None),
+        (
+            sp("Question", fg(PURPLE).add_modifier(Modifier::BOLD)),
+            None,
+        ),
+        (
+            sp(
+                format!(
+                    " from {} · {n} question{}, any can be skipped",
+                    f.asker(&p.sid),
+                    if n == 1 { "" } else { "s" }
+                ),
+                fg(PURPLE),
+            ),
+            None,
+        ),
     ];
     if f.pending.len() > 1 {
-        title.push((sp(format!(" · {} of {}", k + 1, f.pending.len()), fg(PURPLE).add_modifier(Modifier::BOLD)), Some(Act::NextPending)));
+        title.push((
+            sp(
+                format!(" · {} of {}", k + 1, f.pending.len()),
+                fg(PURPLE).add_modifier(Modifier::BOLD),
+            ),
+            Some(Act::NextPending),
+        ));
     }
     title.extend([(t(), None), (sp("esc: chat about this", dim()), None)]);
     let mut rows = vec![hot_row(title), Row::default()];
     let mut tabs = vec![(sp("← ", dim()), None)];
     for (j, q) in fields.iter().enumerate() {
         let done = ui.answer_of(j).is_some();
-        let st = if fm.tab == j { Style::new().add_modifier(Modifier::REVERSED) } else if done { fg(BLUE) } else { Style::new() };
-        tabs.push((sp(format!(" {}{} ", if done { "✔ " } else { "☐ " }, q["header"].as_str().unwrap_or("")), st), Some(Act::Tab(j))));
+        let st = if fm.tab == j {
+            Style::new().add_modifier(Modifier::REVERSED)
+        } else if done {
+            fg(BLUE)
+        } else {
+            Style::new()
+        };
+        tabs.push((
+            sp(
+                format!(
+                    " {}{} ",
+                    if done { "✔ " } else { "☐ " },
+                    q["header"].as_str().unwrap_or("")
+                ),
+                st,
+            ),
+            Some(Act::Tab(j)),
+        ));
         tabs.push((sp(" ", Style::new()), None));
     }
-    tabs.push((sp(" ✔ Submit ", if fm.tab == n { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() }), Some(Act::Tab(n))));
+    tabs.push((
+        sp(
+            " ✔ Submit ",
+            if fm.tab == n {
+                Style::new().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::new()
+            },
+        ),
+        Some(Act::Tab(n)),
+    ));
     tabs.push((sp(" →", dim()), None));
     rows.extend([hot_row(tabs), Row::default()]);
     if let Some(q) = fields.get(fm.tab) {
         let multi = q["multiSelect"].as_bool().unwrap_or(false);
         let opts = q["options"].as_array().cloned().unwrap_or_default();
-        rows.extend(wrap_rows(vec![sp(q["question"].as_str().unwrap_or("").to_string(), bold())], iw, vec![], vec![]));
+        rows.extend(wrap_rows(
+            vec![sp(q["question"].as_str().unwrap_or("").to_string(), bold())],
+            iw,
+            vec![],
+            vec![],
+        ));
         if multi {
             rows.push(row(vec![sp("choose any", dim())]));
         }
@@ -2532,9 +3855,15 @@ fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usi
                 ls = ls.add_modifier(Modifier::UNDERLINED);
             }
             let mut v = vec![
-                (sp(if cur { "▸ " } else { "  " }, fg(PURPLE)), Some(Act::Opt(j))),
+                (
+                    sp(if cur { "▸ " } else { "  " }, fg(PURPLE)),
+                    Some(Act::Opt(j)),
+                ),
                 (sp(format!("{} ", j + 1), dim()), Some(Act::Opt(j))),
-                (sp(bx, if chosen { fg(PURPLE) } else { dim() }), Some(Act::Opt(j))),
+                (
+                    sp(bx, if chosen { fg(PURPLE) } else { dim() }),
+                    Some(Act::Opt(j)),
+                ),
                 (sp(label, ls), Some(Act::Opt(j))),
             ];
             if let Some(d) = o["description"].as_str() {
@@ -2548,10 +3877,20 @@ fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usi
         let body = if !txt.is_empty() {
             sp(txt.clone(), bold())
         } else {
-            sp(if opts.is_empty() { "Type an answer" } else { "Type an answer, alone or with the options" }, dim())
+            sp(
+                if opts.is_empty() {
+                    "Type an answer"
+                } else {
+                    "Type an answer, alone or with the options"
+                },
+                dim(),
+            )
         };
         rows.push(hot_row(vec![
-            (sp(if cur { "▸ " } else { "  " }, fg(PURPLE)), Some(Act::Opt(j))),
+            (
+                sp(if cur { "▸ " } else { "  " }, fg(PURPLE)),
+                Some(Act::Opt(j)),
+            ),
             (sp(format!("{} ", j + 1), dim()), Some(Act::Opt(j))),
             (sp("✎ ", dim()), Some(Act::Opt(j))),
             (body, Some(Act::Opt(j))),
@@ -2560,8 +3899,28 @@ fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usi
         if multi {
             // space toggles, so moving on is a row of its own
             let on = fm.cur == j + 1;
-            let lab = if fm.tab + 1 == n { "Review →" } else { "Next →" };
-            rows.push(hot_row(vec![(sp(if on { "▸ " } else { "  " }, fg(PURPLE)), Some(Act::Next)), (sp(lab, if on { fg(PURPLE).add_modifier(Modifier::BOLD) } else { fg(PURPLE) }), Some(Act::Next))]));
+            let lab = if fm.tab + 1 == n {
+                "Review →"
+            } else {
+                "Next →"
+            };
+            rows.push(hot_row(vec![
+                (
+                    sp(if on { "▸ " } else { "  " }, fg(PURPLE)),
+                    Some(Act::Next),
+                ),
+                (
+                    sp(
+                        lab,
+                        if on {
+                            fg(PURPLE).add_modifier(Modifier::BOLD)
+                        } else {
+                            fg(PURPLE)
+                        },
+                    ),
+                    Some(Act::Next),
+                ),
+            ]));
         }
         rows.push(Row::default());
         rows.push(row(vec![sp("←→ question · ↑↓ choose · enter chooses and moves on · space toggles · type to answer in words", dim())]));
@@ -2571,62 +3930,161 @@ fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usi
             let a = ui.answer_of(j);
             rows.push(hot_row(vec![
                 (sp("  ", Style::new()), None),
-                (sp(format!("{:<13}", q["header"].as_str().unwrap_or("")), fg(BLUE)), Some(Act::Tab(j))),
-                (sp(a.clone().unwrap_or("skipped".into()), if a.is_some() { bold() } else { dim() }), Some(Act::Tab(j))),
+                (
+                    sp(
+                        format!("{:<13}", q["header"].as_str().unwrap_or("")),
+                        fg(BLUE),
+                    ),
+                    Some(Act::Tab(j)),
+                ),
+                (
+                    sp(
+                        a.clone().unwrap_or("skipped".into()),
+                        if a.is_some() { bold() } else { dim() },
+                    ),
+                    Some(Act::Tab(j)),
+                ),
             ]));
         }
-        let note = if fm.note.is_empty() { sp("Add a note on the whole form", dim()) } else { sp(fm.note.clone(), bold()) };
-        rows.push(row(vec![sp("▸ ", fg(PURPLE)), sp(format!("{:<13}", "note"), fg(BLUE)), note, sp("█", dim())]));
+        let note = if fm.note.is_empty() {
+            sp("Add a note on the whole form", dim())
+        } else {
+            sp(fm.note.clone(), bold())
+        };
+        rows.push(row(vec![
+            sp("▸ ", fg(PURPLE)),
+            sp(format!("{:<13}", "note"), fg(BLUE)),
+            note,
+            sp("█", dim()),
+        ]));
         rows.push(Row::default());
         rows.push(hot_row(vec![
             (sp("  ", Style::new()), None),
-            (sp(" Submit ", Style::new().add_modifier(Modifier::REVERSED)), Some(Act::Submit)),
+            (
+                sp(" Submit ", Style::new().add_modifier(Modifier::REVERSED)),
+                Some(Act::Submit),
+            ),
             (sp("   ", Style::new()), None),
-            (sp(" Chat about this ", Style::new().bg(SEL)), Some(Act::Decline)),
-            (sp("  declines and ends the turn, so you can answer in your own words", dim()), None),
+            (
+                sp(" Chat about this ", Style::new().bg(SEL)),
+                Some(Act::Decline),
+            ),
+            (
+                sp(
+                    "  declines and ends the turn, so you can answer in your own words",
+                    dim(),
+                ),
+                None,
+            ),
         ]));
         rows.push(Row::default());
-        rows.push(row(vec![sp("←→ question · enter submits · type to add the note · esc: chat about this", dim())]));
+        rows.push(row(vec![sp(
+            "←→ question · enter submits · type to add the note · esc: chat about this",
+            dim(),
+        )]));
     }
-    let rows = rows.into_iter().map(|r| prefixed(r, vec![sp("▌", fg(PURPLE)), sp(" ", Style::new())])).collect();
+    let rows = rows
+        .into_iter()
+        .map(|r| prefixed(r, vec![sp("▌", fg(PURPLE)), sp(" ", Style::new())]))
+        .collect();
     slab(rows, BC, None, w)
 }
 
-fn bottom(f: &Fold, w: usize, tick: u64, now: i64, v: &View, narrow: bool, ui: &Ui, rail_note: Option<String>) -> Vec<Row> {
+// the footer reads every part of the frame, so one drawing function takes them all
+#[allow(clippy::too_many_arguments)]
+fn bottom(
+    f: &Fold,
+    w: usize,
+    tick: u64,
+    now: i64,
+    v: &View,
+    narrow: bool,
+    ui: &Ui,
+    rail_note: Option<String>,
+) -> Vec<Row> {
     let mut out = vec![];
-    let aside = f.pending.iter().filter(|p| ui.aside.contains(&p.rid)).count();
+    let aside = f
+        .pending
+        .iter()
+        .filter(|p| ui.aside.contains(&p.rid))
+        .count();
     if aside > 0 {
         let s = if aside == 1 { "" } else { "s" };
-        out.push(hot_row(vec![(sp("  ⚠ ", fg(ORANGE)), None), (sp(format!("{aside} approval{s} waiting · click to reopen"), fg(ORANGE).add_modifier(Modifier::BOLD)), Some(Act::Reopen))]));
+        out.push(hot_row(vec![
+            (sp("  ⚠ ", fg(ORANGE)), None),
+            (
+                sp(
+                    format!("{aside} approval{s} waiting · click to reopen"),
+                    fg(ORANGE).add_modifier(Modifier::BOLD),
+                ),
+                Some(Act::Reopen),
+            ),
+        ]));
     }
     for (i, (code, msg, gone)) in f.notices.iter().enumerate() {
         if !gone {
-            out.push(Row { spans: vec![sp("  ⚠ ", fg(ORANGE)), sp(code.clone(), fg(ORANGE)), sp(format!(" · {msg}"), dim()), t(), sp("✕ ", dim())], act: Some(Act::Notice(i)), ..Default::default() });
+            out.push(Row {
+                spans: vec![
+                    sp("  ⚠ ", fg(ORANGE)),
+                    sp(code.clone(), fg(ORANGE)),
+                    sp(format!(" · {msg}"), dim()),
+                    t(),
+                    sp("✕ ", dim()),
+                ],
+                act: Some(Act::Notice(i)),
+                ..Default::default()
+            });
         }
     }
     for m in &ui.flash {
-        out.push(row(vec![sp("  ", Style::new()), sp(m.clone(), fg(CYAN).add_modifier(Modifier::DIM))]));
+        out.push(row(vec![
+            sp("  ", Style::new()),
+            sp(m.clone(), fg(CYAN).add_modifier(Modifier::DIM)),
+        ]));
     }
     if f.running {
-        let spin = if v.reduced { "●" } else { SPIN[tick as usize % SPIN.len()] };
+        let spin = if v.reduced {
+            "●"
+        } else {
+            SPIN[tick as usize % SPIN.len()]
+        };
         let mut s = vec![sp("  ", Style::new()), sp(format!("{spin} "), fg(ORANGE))];
         s.extend(glimmer("Working", tick, v.reduced));
         // Esc interrupts only when nothing is open, so the hint shows only then
-        let hint = if ui.nothing_open(f) { " · esc to interrupt" } else { "" };
+        let hint = if ui.nothing_open(f) {
+            " · esc to interrupt"
+        } else {
+            ""
+        };
         s.push(sp(format!(" {}{hint}", dur(now - f.turn_start)), dim()));
         out.push(row(s));
     }
     if !f.queue.is_empty() {
-        out.push(row(vec![sp("  • Steering, joins the turn at the next step", dim())]));
+        out.push(row(vec![sp(
+            "  • Steering, joins the turn at the next step",
+            dim(),
+        )]));
         for (i, (_, q)) in f.queue.iter().enumerate() {
             let on = ui.qsel == Some(i);
             out.push(hot_row(vec![
-                (sp(if on { "    ▸ " } else { "    ↳ " }, if on { fg(ORANGE) } else { dim() }), Some(Act::QRow(i))),
-                (sp(q.clone(), if on { Style::new() } else { dim() }), Some(Act::QRow(i))),
+                (
+                    sp(
+                        if on { "    ▸ " } else { "    ↳ " },
+                        if on { fg(ORANGE) } else { dim() },
+                    ),
+                    Some(Act::QRow(i)),
+                ),
+                (
+                    sp(q.clone(), if on { Style::new() } else { dim() }),
+                    Some(Act::QRow(i)),
+                ),
                 (sp("  ✕", dim()), Some(Act::QDrop(i))),
             ]));
         }
-        out.push(row(vec![sp("      ⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to drop", dim())]));
+        out.push(row(vec![sp(
+            "      ⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to drop",
+            dim(),
+        )]));
     }
     // the `/` and `@` completion panels sit above the input box, over the conversation's bottom
     if let Some(c) = ui.completions.as_ref() {
@@ -2666,8 +4124,12 @@ fn selection_text(rows: &[Row], a: (usize, usize), b: (usize, usize)) -> String 
     let (a, b) = if a <= b { (a, b) } else { (b, a) };
     let mut out = String::new();
     let mut first = true;
-    for r in a.0..=b.0.min(rows.len().saturating_sub(1)) {
-        let row = &rows[r];
+    for (r, row) in rows
+        .iter()
+        .enumerate()
+        .take(b.0.min(rows.len().saturating_sub(1)) + 1)
+        .skip(a.0)
+    {
         let t = plain(row);
         let tt = t.trim();
         if !tt.is_empty() && tt.chars().all(|c| c == '▄' || c == '▀') {
@@ -2688,9 +4150,15 @@ fn b64(b: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut s = String::new();
     for c in b.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        let n = (c[0] as u32) << 16
+            | (*c.get(1).unwrap_or(&0) as u32) << 8
+            | *c.get(2).unwrap_or(&0) as u32;
         for i in 0..4 {
-            s.push(if i <= c.len() { T[(n >> (18 - 6 * i)) as usize & 63] as char } else { '=' });
+            s.push(if i <= c.len() {
+                T[(n >> (18 - 6 * i)) as usize & 63] as char
+            } else {
+                '='
+            });
         }
     }
     s
@@ -2712,7 +4180,9 @@ fn copy(out: &mut impl Write, text: &str) -> String {
     } else {
         None
     };
-    let Some((c, args)) = cmd else { return "OSC 52".into() };
+    let Some((c, args)) = cmd else {
+        return "OSC 52".into();
+    };
     let ok = std::process::Command::new(c)
         .args(args)
         .stdin(std::process::Stdio::piped())
@@ -2724,7 +4194,11 @@ fn copy(out: &mut impl Write, text: &str) -> String {
             ch.wait()
         })
         .is_ok_and(|s| s.success());
-    if ok { format!("OSC 52 and {c}") } else { format!("OSC 52; {c} failed") }
+    if ok {
+        format!("OSC 52 and {c}")
+    } else {
+        format!("OSC 52; {c} failed")
+    }
 }
 
 /// Every match of `q` (lower case) in the rendered rows, as (row, first cell, width).
@@ -2737,7 +4211,10 @@ fn find_all(rows: &[Row], q: &str) -> Vec<(usize, usize, usize)> {
     let low = |c: char| c.to_lowercase().next().unwrap_or(c);
     for (ri, r) in rows.iter().enumerate() {
         let t: Vec<char> = plain(r).chars().collect();
-        let wd: Vec<usize> = t.iter().map(|&c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)).collect();
+        let wd: Vec<usize> = t
+            .iter()
+            .map(|&c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0))
+            .collect();
         let mut i = 0;
         while i + qc.len() <= t.len() {
             if (0..qc.len()).all(|k| low(t[i + k]) == qc[k]) {
@@ -2773,8 +4250,14 @@ fn links_in(t: &str, cwd: &str, host: &str) -> Vec<(usize, usize, String)> {
             Some(w.clone())
         } else if w.contains('/')
             && w.chars().any(char::is_alphanumeric)
-            && w.chars().all(|c| c.is_alphanumeric() || "._-/~".contains(c))
-            && (w.rsplit('/').next().is_some_and(|l| l.contains('.') && !l.starts_with('.')) || w.starts_with("~/") || w.starts_with('/'))
+            && w.chars()
+                .all(|c| c.is_alphanumeric() || "._-/~".contains(c))
+            && (w
+                .rsplit('/')
+                .next()
+                .is_some_and(|l| l.contains('.') && !l.starts_with('.'))
+                || w.starts_with("~/")
+                || w.starts_with('/'))
         {
             let abs = if let Some(r) = w.strip_prefix("~/") {
                 format!("{home}/{r}")
@@ -2832,14 +4315,23 @@ fn command_line(id: &str, command: &str, session_id: Option<&str>, args: Value) 
     }
     c
 }
-fn send(ui: &mut Ui, cmds: &mut Option<std::fs::File>, command: &str, session_id: Option<&str>, args: Value) -> String {
+fn send(
+    ui: &mut Ui,
+    cmds: &mut Option<std::fs::File>,
+    command: &str,
+    session_id: Option<&str>,
+    args: Value,
+) -> String {
     ui.cmd_n += 1;
     let id = format!("c_{:04x}", 0xc000 + ui.cmd_n);
     let line = command_line(&id, command, session_id, args).to_string();
     if let Some(fh) = cmds {
         let _ = writeln!(fh, "{line}");
     }
-    if ui.flash_at.is_none_or(|t| t.elapsed() > Duration::from_millis(200)) {
+    if ui
+        .flash_at
+        .is_none_or(|t| t.elapsed() > Duration::from_millis(200))
+    {
         ui.flash.clear();
     }
     ui.flash.push(format!("→ would send {line}"));
@@ -2861,18 +4353,57 @@ fn interrupt(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i6
     send(ui, cmds, "cancel", None, json!({}));
     let me = f.session_id.clone();
     // a pending request of the turn ends with its resolved line before its call completes
-    let pending: Vec<(String, String, bool)> = f.pending.iter().filter(|p| p.sid == me).map(|p| (p.rid.clone(), p.aid.clone(), matches!(p.what, Asking::Form(_)))).collect();
+    let pending: Vec<(String, String, bool)> = f
+        .pending
+        .iter()
+        .filter(|p| p.sid == me)
+        .map(|p| {
+            (
+                p.rid.clone(),
+                p.aid.clone(),
+                matches!(p.what, Asking::Form(_)),
+            )
+        })
+        .collect();
     for (rid, aid, form) in pending {
         if form {
-            synth(f, "interaction_resolved", &me, None, ts, json!({ "request_id": rid, "by": "fiber", "declined": true }));
+            synth(
+                f,
+                "interaction_resolved",
+                &me,
+                None,
+                ts,
+                json!({ "request_id": rid, "by": "fiber", "declined": true }),
+            );
         } else {
-            synth(f, "permission_resolved", &me, Some(&aid), ts, json!({ "request_id": rid, "decision": "deny", "decided_by": "cancel" }));
+            synth(
+                f,
+                "permission_resolved",
+                &me,
+                Some(&aid),
+                ts,
+                json!({ "request_id": rid, "decision": "deny", "decided_by": "cancel" }),
+            );
         }
     }
     for a in f.running_calls() {
-        synth(f, "tool_call_completed", &me, Some(&a), ts, json!({ "status": "cancelled", "content": [] }));
+        synth(
+            f,
+            "tool_call_completed",
+            &me,
+            Some(&a),
+            ts,
+            json!({ "status": "cancelled", "content": [] }),
+        );
     }
-    synth(f, "turn_completed", &me, None, ts, json!({ "outcome": "interrupted" }));
+    synth(
+        f,
+        "turn_completed",
+        &me,
+        None,
+        ts,
+        json!({ "outcome": "interrupted" }),
+    );
     // queued steering messages start the next turn at once, in queue order
     if !f.queue.is_empty() {
         let input: Vec<Value> = f.queue.iter().map(|(id, t)| json!({ "type": "message", "content": [{ "type": "text", "text": t }], "source": "driver", "command_id": id })).collect();
@@ -2884,7 +4415,9 @@ fn interrupt(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i6
 }
 fn approve(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64, choice: usize) {
     let Some((_, p)) = ui.top(f) else { return };
-    let Asking::Approval { tool, req, .. } = &p.what else { return };
+    let Asking::Approval { tool, req, .. } = &p.what else {
+        return;
+    };
     let remember = matches!(choice, CH_SESSION | CH_PROJECT);
     // the remembering choices exist only on a request that offers a rule
     let prefix = match req["rule"]["prefix"].as_str() {
@@ -2895,17 +4428,28 @@ fn approve(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64,
     let (rid, sid, aid, tool) = (p.rid.clone(), p.sid.clone(), p.aid.clone(), tool.clone());
     let deny = choice == CH_DENY;
     let mut args = json!({ "request_id": rid, "decision": if deny { "deny" } else { "allow" } });
-    let mut resolved = json!({ "request_id": rid, "decision": args["decision"], "decided_by": "person" });
+    let mut resolved =
+        json!({ "request_id": rid, "decision": args["decision"], "decided_by": "person" });
     if deny && !ui.feedback.is_empty() {
         args["feedback"] = json!(ui.feedback);
         resolved["feedback"] = json!(ui.feedback);
     }
     if remember {
-        let (scope, key) = if choice == CH_SESSION { ("session", "grant") } else { ("project", "rule") };
+        let (scope, key) = if choice == CH_SESSION {
+            ("session", "grant")
+        } else {
+            ("project", "rule")
+        };
         args["remember"] = json!({ "scope": scope, "prefix": prefix });
         resolved[key] = json!({ "tool": tool, "prefix": prefix });
     }
-    send(ui, cmds, "reply", (sid != f.session_id).then_some(sid.as_str()), args);
+    send(
+        ui,
+        cmds,
+        "reply",
+        (sid != f.session_id).then_some(sid.as_str()),
+        args,
+    );
     synth(f, "permission_resolved", &sid, Some(&aid), ts, resolved);
     ui.feedback.clear();
     ui.choice = 0;
@@ -2914,7 +4458,9 @@ fn approve(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64,
 }
 fn submit_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
     let Some((_, p)) = ui.top(f) else { return };
-    let Asking::Form(fields) = &p.what else { return };
+    let Asking::Form(fields) = &p.what else {
+        return;
+    };
     let (rid, aid, sid) = (p.rid.clone(), p.aid.clone(), p.sid.clone());
     let mut lines = vec![];
     let answers: Vec<Value> = fields
@@ -2944,11 +4490,24 @@ fn submit_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: 
     }
     let mut args = ans.clone();
     args["request_id"] = json!(rid);
-    send(ui, cmds, "reply", (sid != f.session_id).then_some(sid.as_str()), args.clone());
+    send(
+        ui,
+        cmds,
+        "reply",
+        (sid != f.session_id).then_some(sid.as_str()),
+        args.clone(),
+    );
     let mut res = args;
     res["by"] = json!("person");
     synth(f, "interaction_resolved", &sid, None, ts, res);
-    synth(f, "tool_call_completed", &sid, Some(&aid), ts, json!({ "status": "completed", "content": [{ "type": "text", "text": lines.join("\n") }] }));
+    synth(
+        f,
+        "tool_call_completed",
+        &sid,
+        Some(&aid),
+        ts,
+        json!({ "status": "completed", "content": [{ "type": "text", "text": lines.join("\n") }] }),
+    );
     ui.shown = 0;
     ui.answered = true;
 }
@@ -2957,28 +4516,80 @@ fn submit_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: 
 fn finish_turn(f: &mut Fold, ts: i64) {
     let me = f.session_id.clone();
     for a in f.running_calls() {
-        synth(f, "tool_call_completed", &me, Some(&a), ts, json!({ "status": "completed", "content": [] }));
+        synth(
+            f,
+            "tool_call_completed",
+            &me,
+            Some(&a),
+            ts,
+            json!({ "status": "completed", "content": [] }),
+        );
     }
     let aid = format!("a_end_{}", f.turns.len());
-    synth(f, "assistant_message_started", &me, Some(&aid), ts, json!({}));
+    synth(
+        f,
+        "assistant_message_started",
+        &me,
+        Some(&aid),
+        ts,
+        json!({}),
+    );
     let text = "Thanks — that's everything I needed. Stopping here for the demo.";
-    synth(f, "assistant_message_completed", &me, Some(&aid), ts, json!({ "text": text, "outcome": "completed" }));
-    synth(f, "turn_completed", &me, None, ts, json!({ "outcome": "completed" }));
+    synth(
+        f,
+        "assistant_message_completed",
+        &me,
+        Some(&aid),
+        ts,
+        json!({ "text": text, "outcome": "completed" }),
+    );
+    synth(
+        f,
+        "turn_completed",
+        &me,
+        None,
+        ts,
+        json!({ "outcome": "completed" }),
+    );
 }
 /// "Chat about this", and Esc on a form: reply declined, then cancel.
 fn decline_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
     let Some((_, p)) = ui.top(f) else { return };
     let (rid, aid, sid) = (p.rid.clone(), p.aid.clone(), p.sid.clone());
-    send(ui, cmds, "reply", (sid != f.session_id).then_some(sid.as_str()), json!({ "request_id": rid, "declined": true }));
-    synth(f, "interaction_resolved", &sid, None, ts, json!({ "request_id": rid, "declined": true, "by": "person" }));
-    synth(f, "tool_call_completed", &sid, Some(&aid), ts, json!({ "status": "completed", "content": [{ "type": "text", "text": "declined" }] }));
+    send(
+        ui,
+        cmds,
+        "reply",
+        (sid != f.session_id).then_some(sid.as_str()),
+        json!({ "request_id": rid, "declined": true }),
+    );
+    synth(
+        f,
+        "interaction_resolved",
+        &sid,
+        None,
+        ts,
+        json!({ "request_id": rid, "declined": true, "by": "person" }),
+    );
+    synth(
+        f,
+        "tool_call_completed",
+        &sid,
+        Some(&aid),
+        ts,
+        json!({ "status": "completed", "content": [{ "type": "text", "text": "declined" }] }),
+    );
     interrupt(f, ui, cmds, ts);
     ui.shown = 0;
 }
 /// Space, Enter or a click on an option: single choice replaces, multi-choice toggles.
 fn form_choose(ui: &mut Ui, fields: &[Value]) {
-    let Some(q) = fields.get(ui.form.tab) else { return };
-    let Some(o) = q["options"].get(ui.form.cur) else { return };
+    let Some(q) = fields.get(ui.form.tab) else {
+        return;
+    };
+    let Some(o) = q["options"].get(ui.form.cur) else {
+        return;
+    };
     let label = o["label"].as_str().unwrap_or("").to_string();
     let sel = &mut ui.form.sel[ui.form.tab];
     if q["multiSelect"].as_bool().unwrap_or(false) {
@@ -3009,7 +4620,9 @@ fn queue_leave(ui: &mut Ui) {
     ui.input = std::mem::take(&mut ui.draft);
 }
 fn queue_drop(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64, i: usize) {
-    let Some((id, _)) = f.queue.get(i).cloned() else { return };
+    let Some((id, _)) = f.queue.get(i).cloned() else {
+        return;
+    };
     send(ui, cmds, "steer_drop", None, json!({ "command_id": id }));
     let mut q = f.queue.clone();
     q.remove(i);
@@ -3023,8 +4636,16 @@ fn queue_drop(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i
 fn enter(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
     let me = f.session_id.clone();
     if let Some(i) = ui.qsel {
-        let Some((id, _)) = f.queue.get(i).cloned() else { return queue_leave(ui) };
-        send(ui, cmds, "steer_amend", None, json!({ "command_id": id, "content": [{ "type": "text", "text": ui.input }] }));
+        let Some((id, _)) = f.queue.get(i).cloned() else {
+            return queue_leave(ui);
+        };
+        send(
+            ui,
+            cmds,
+            "steer_amend",
+            None,
+            json!({ "command_id": id, "content": [{ "type": "text", "text": ui.input }] }),
+        );
         let mut q = f.queue.clone();
         q[i].1 = ui.input.clone();
         synth(f, "steering_queue", &me, None, ts, queue_msgs(&q));
@@ -3035,12 +4656,24 @@ fn enter(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
     }
     let text = std::mem::take(&mut ui.input);
     if f.running {
-        let id = send(ui, cmds, "steer", None, json!({ "content": [{ "type": "text", "text": text }] }));
+        let id = send(
+            ui,
+            cmds,
+            "steer",
+            None,
+            json!({ "content": [{ "type": "text", "text": text }] }),
+        );
         let mut q = f.queue.clone();
         q.push((id, text));
         synth(f, "steering_queue", &me, None, ts, queue_msgs(&q));
     } else {
-        send(ui, cmds, "prompt", None, json!({ "content": [{ "type": "text", "text": text }] }));
+        send(
+            ui,
+            cmds,
+            "prompt",
+            None,
+            json!({ "content": [{ "type": "text", "text": text }] }),
+        );
     }
 }
 
@@ -3085,13 +4718,29 @@ fn rusage() -> (f64, i64, i64, u64, u64) {
     unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut u) };
     let t = |v: libc::timeval| v.tv_sec as f64 + v.tv_usec as f64 / 1e6;
     let (idle, intr) = wakeups();
-    (t(u.ru_utime) + t(u.ru_stime), u.ru_nvcsw as i64, u.ru_nivcsw as i64, idle, intr)
+    (
+        t(u.ru_utime) + t(u.ru_stime),
+        u.ru_nvcsw as i64,
+        u.ru_nivcsw as i64,
+        idle,
+        intr,
+    )
 }
 #[cfg(target_os = "macos")]
 fn wakeups() -> (u64, u64) {
     let mut i: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
-    let rc = unsafe { libc::proc_pid_rusage(libc::getpid(), libc::RUSAGE_INFO_V4, &mut i as *mut _ as *mut libc::rusage_info_t) };
-    if rc == 0 { (i.ri_pkg_idle_wkups, i.ri_interrupt_wkups) } else { (0, 0) }
+    let rc = unsafe {
+        libc::proc_pid_rusage(
+            libc::getpid(),
+            libc::RUSAGE_INFO_V4,
+            &mut i as *mut _ as *mut libc::rusage_info_t,
+        )
+    };
+    if rc == 0 {
+        (i.ri_pkg_idle_wkups, i.ri_interrupt_wkups)
+    } else {
+        (0, 0)
+    }
 }
 #[cfg(not(target_os = "macos"))]
 fn wakeups() -> (u64, u64) {
@@ -3108,7 +4757,13 @@ struct Audit {
 }
 
 /// Every surface that declares cases; `--help` and `check/` are built from them.
-const SURFACES: &[cases::Surface] = &[home::SURFACE, overlays::SURFACE, model_picker::SURFACE, completions::SURFACE, login::SURFACE];
+const SURFACES: &[cases::Surface] = &[
+    home::SURFACE,
+    overlays::SURFACE,
+    model_picker::SURFACE,
+    completions::SURFACE,
+    login::SURFACE,
+];
 
 // ============================================================ main
 struct Args {
@@ -3221,12 +4876,27 @@ fn args() -> Args {
             "--diff-audit" => a.audit = true,
             "--commands" => a.commands = it.next(),
             "--log-input" => a.log_input = it.next(),
-            "--wheel-lines" => a.wheel = it.next().and_then(|v| v.parse().ok()).expect("--wheel-lines N"),
+            "--wheel-lines" => {
+                a.wheel = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .expect("--wheel-lines N")
+            }
             "--lua-renderer" => a.lua = it.next(),
             "--lua-uncached" => a.lua_uncached = true,
             "--paged" => a.paged = true,
-            "--window" => a.window = it.next().and_then(|v| v.parse().ok()).expect("--window SCREENS"),
-            "--page-lines" => a.page_lines = it.next().and_then(|v| v.parse().ok()).expect("--page-lines N"),
+            "--window" => {
+                a.window = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .expect("--window SCREENS")
+            }
+            "--page-lines" => {
+                a.page_lines = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .expect("--page-lines N")
+            }
             "--verify-copy" => a.verify_copy = true,
             "--paging-bench" => a.bench = true,
             "--no-pending" => a.no_pending = true,
@@ -3250,8 +4920,18 @@ fn args() -> Args {
                     _ => panic!("--rail A|B|C"),
                 }
             }
-            "--rail-share" => a.rail_share = it.next().and_then(|v| v.parse().ok()).expect("--rail-share P"),
-            "--panel-share" => a.panel_share = it.next().and_then(|v| v.parse().ok()).expect("--panel-share P"),
+            "--rail-share" => {
+                a.rail_share = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .expect("--rail-share P")
+            }
+            "--panel-share" => {
+                a.panel_share = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .expect("--panel-share P")
+            }
             "--density" => {
                 a.density = match it.next().as_deref().map(|v| v.to_lowercase()).as_deref() {
                     Some("full") => 0,
@@ -3265,7 +4945,10 @@ fn args() -> Args {
             "--completions" => a.completions = it.next(),
             "--login" => a.login = it.next(),
             "-h" | "--help" => {
-                print!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}", cases::help(SURFACES));
+                print!(
+                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
+                    cases::help(SURFACES)
+                );
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -3287,7 +4970,11 @@ const HOVER_OFF: &str = "\x1b[?1003l";
 /// The hover tint: the cell's own background a little lighter.
 fn lift(c: Color) -> Color {
     match c {
-        Color::Rgb(r, g, b) => Color::Rgb(r.saturating_add(0x14), g.saturating_add(0x14), b.saturating_add(0x14)),
+        Color::Rgb(r, g, b) => Color::Rgb(
+            r.saturating_add(0x14),
+            g.saturating_add(0x14),
+            b.saturating_add(0x14),
+        ),
         _ => rgb(0x1e1e26),
     }
 }
@@ -3295,22 +4982,61 @@ fn lift(c: Color) -> Color {
 /// `--no-pending`: drops the requests nobody answered and the calls that asked them, drops the
 /// open turn's calls that never finished, and ends that turn, so the screen opens settled.
 fn settle(mut ev: Vec<Value>) -> Vec<Value> {
-    let me = ev.first().and_then(|e| e["session_id"].as_str()).unwrap_or("").to_string();
+    let me = ev
+        .first()
+        .and_then(|e| e["session_id"].as_str())
+        .unwrap_or("")
+        .to_string();
     let kind = |e: &Value| e["kind"].as_str().unwrap_or("").to_string();
-    let asks = |e: &Value| matches!(e["kind"].as_str(), Some("permission_requested" | "interaction_requested"));
-    let calls = |e: &Value| matches!(e["kind"].as_str(), Some("tool_call_requested" | "tool_call_started"));
-    let resolved: HashSet<String> = ev.iter().filter(|e| kind(e).ends_with("_resolved")).filter_map(|e| e["payload"]["request_id"].as_str().map(str::to_string)).collect();
-    let done: HashSet<String> = ev.iter().filter(|e| kind(e) == "tool_call_completed").filter_map(|e| e["action_id"].as_str().map(str::to_string)).collect();
-    let unasked = |e: &Value| asks(e) && !resolved.contains(e["payload"]["request_id"].as_str().unwrap_or(""));
-    let asked: HashSet<String> = ev.iter().filter(|e| unasked(e)).filter_map(|e| e["action_id"].as_str().or(e["payload"]["action_ids"][0].as_str()).map(str::to_string)).collect();
+    let asks = |e: &Value| {
+        matches!(
+            e["kind"].as_str(),
+            Some("permission_requested" | "interaction_requested")
+        )
+    };
+    let calls = |e: &Value| {
+        matches!(
+            e["kind"].as_str(),
+            Some("tool_call_requested" | "tool_call_started")
+        )
+    };
+    let resolved: HashSet<String> = ev
+        .iter()
+        .filter(|e| kind(e).ends_with("_resolved"))
+        .filter_map(|e| e["payload"]["request_id"].as_str().map(str::to_string))
+        .collect();
+    let done: HashSet<String> = ev
+        .iter()
+        .filter(|e| kind(e) == "tool_call_completed")
+        .filter_map(|e| e["action_id"].as_str().map(str::to_string))
+        .collect();
+    let unasked = |e: &Value| {
+        asks(e) && !resolved.contains(e["payload"]["request_id"].as_str().unwrap_or(""))
+    };
+    let asked: HashSet<String> = ev
+        .iter()
+        .filter(|e| unasked(e))
+        .filter_map(|e| {
+            e["action_id"]
+                .as_str()
+                .or(e["payload"]["action_ids"][0].as_str())
+                .map(str::to_string)
+        })
+        .collect();
     let mine = |e: &Value, k: &str| kind(e) == k && e["session_id"] == me.as_str();
-    let open = ev.iter().rposition(|e| mine(e, "turn_started")).filter(|&s| !ev[s..].iter().any(|e| mine(e, "turn_completed")));
+    let open = ev
+        .iter()
+        .rposition(|e| mine(e, "turn_started"))
+        .filter(|&s| !ev[s..].iter().any(|e| mine(e, "turn_completed")));
     let ts = ev.last().map_or(0, |e| e["ts"].as_i64().unwrap_or(0));
     let mut i = 0;
     ev.retain(|e| {
         i += 1;
         let aid = e["action_id"].as_str().unwrap_or("");
-        let unfinished = open.is_some_and(|s| i > s) && e["session_id"] == me.as_str() && calls(e) && !done.contains(aid);
+        let unfinished = open.is_some_and(|s| i > s)
+            && e["session_id"] == me.as_str()
+            && calls(e)
+            && !done.contains(aid);
         !(unasked(e) || (calls(e) && asked.contains(aid)) || unfinished)
     });
     if open.is_some() {
@@ -3324,15 +5050,37 @@ fn main() -> io::Result<()> {
     let mut a = args();
     if a.no_pending {
         // the settled lines go to a file of their own, so the paged mode reads them too
-        let ev: Vec<Value> = std::fs::read_to_string(&a.path)?.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
-        let p = std::env::temp_dir().join(format!("tui-prototype-settled-{}.jsonl", std::process::id()));
-        std::fs::write(&p, settle(ev).iter().map(|e| e.to_string() + "\n").collect::<String>())?;
+        let ev: Vec<Value> = std::fs::read_to_string(&a.path)?
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        let p = std::env::temp_dir().join(format!(
+            "tui-prototype-settled-{}.jsonl",
+            std::process::id()
+        ));
+        std::fs::write(
+            &p,
+            settle(ev)
+                .iter()
+                .map(|e| e.to_string() + "\n")
+                .collect::<String>(),
+        )?;
         a.path = p.to_string_lossy().into_owned();
     }
     if a.bench {
         // the conversation's text width and height at 160 by 48: 160 less the panel less
         // two margins, 48 less the input box
-        print!("{}", paged::bench(&a.path, a.page_lines, &[0, 1, 4], 160 - PANEL as usize - 2, 48 - 3, &["tool", "flaky"])?);
+        print!(
+            "{}",
+            paged::bench(
+                &a.path,
+                a.page_lines,
+                &[0, 1, 4],
+                160 - PANEL as usize - 2,
+                48 - 3,
+                &["tool", "flaky"]
+            )?
+        );
         return Ok(());
     }
     // paged: one streaming pass for the offset table and the panel; no event is kept
@@ -3341,7 +5089,10 @@ fn main() -> io::Result<()> {
         let (p, sum) = paged::Pager::open(&a.path, a.page_lines)?;
         (vec![], sum, Some(p), t.elapsed())
     } else {
-        let events: Vec<Value> = std::fs::read_to_string(&a.path)?.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+        let events: Vec<Value> = std::fs::read_to_string(&a.path)?
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
         (events, Fold::default(), None, Duration::ZERO)
     };
     let mut next = 0;
@@ -3369,10 +5120,20 @@ fn main() -> io::Result<()> {
             // terminal; the typed prompt is not injected into it.
             Ok(HomeNext::Conversation) => {
                 home_switched = true;
-                run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index)
+                run(
+                    &a, &events, &mut f, &mut next, &mut term, t0, pager, open_index,
+                )
             }
         }
-    } else if a.overlay.is_some() { overlays::run_overlay(&a, &mut term) } else if a.login.is_some() { login::run_login(&a, &mut term) } else { run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index) };
+    } else if a.overlay.is_some() {
+        overlays::run_overlay(&a, &mut term)
+    } else if a.login.is_some() {
+        login::run_login(&a, &mut term)
+    } else {
+        run(
+            &a, &events, &mut f, &mut next, &mut term, t0, pager, open_index,
+        )
+    };
     let b = term.backend_mut();
     if a.hover {
         b.write_all(HOVER_OFF.as_bytes())?;
@@ -3391,7 +5152,10 @@ fn main() -> io::Result<()> {
     // resume, unless home switched to the conversation, whose replayed
     // session resumes as usual.
     if a.home.is_none() && a.overlay.is_none() && a.login.is_none() || home_switched {
-        println!("Session {0} · resume it with fiber --resume {0}", f.session_id);
+        println!(
+            "Session {0} · resume it with fiber --resume {0}",
+            f.session_id
+        );
     }
     Ok(())
 }
@@ -3399,21 +5163,38 @@ fn main() -> io::Result<()> {
 type Term = Terminal<CrosstermBackend<Counting<BufWriter<io::Stdout>>>>;
 
 #[allow(clippy::too_many_arguments)]
-fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Term, t0: Instant, mut pager: Option<paged::Pager>, open_index: Duration) -> io::Result<String> {
+fn run(
+    a: &Args,
+    events: &[Value],
+    f: &mut Fold,
+    next: &mut usize,
+    term: &mut Term,
+    t0: Instant,
+    mut pager: Option<paged::Pager>,
+    open_index: Duration,
+) -> io::Result<String> {
     let v0 = Instant::now();
     // paged: rows in the whole conversation; the scans (count or search passes) and their
     // times; frames that loaded pages, how long the loading took, and from the input event
     // that caused the frame to its last byte; frames whose visible rows were not yet loaded
     let mut total_rows = 0usize;
     let mut scans: Vec<Duration> = vec![];
-    let (mut load_ms, mut ev_lat, mut vis_miss_n): (Vec<Duration>, Vec<Duration>, usize) = (vec![], vec![], 0);
+    let (mut load_ms, mut ev_lat, mut vis_miss_n): (Vec<Duration>, Vec<Duration>, usize) =
+        (vec![], vec![], 0);
     let mut ev_at: Option<Instant> = None;
     let mut copy_check: Option<bool> = None;
     let lua = match &a.lua {
-        Some(p) => Some(std::rc::Rc::new(lua::Ext::new(p, &std::fs::read_to_string(p)?, !a.lua_uncached).map_err(|e| io::Error::other(format!("{p}: {e}")))?)),
+        Some(p) => Some(std::rc::Rc::new(
+            lua::Ext::new(p, &std::fs::read_to_string(p)?, !a.lua_uncached)
+                .map_err(|e| io::Error::other(format!("{p}: {e}")))?,
+        )),
         None => None,
     };
-    let mut v = View { reduced: a.reduced, lua, ..Default::default() };
+    let mut v = View {
+        reduced: a.reduced,
+        lua,
+        ..Default::default()
+    };
     // Lua calls when the measurement window opens, and the Lua state's memory after the first frame
     let (mut lua_calls0, mut lua_mem) = (0u64, 0usize);
     // replay clock: an event is due `gap / speed` after the one before it
@@ -3422,8 +5203,15 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     let mut last_applied = (Instant::now(), f.last_ts);
     let schedule = |i: usize, prev_due: Instant| -> Instant {
         let gap = (ts_of(i) - ts_of(i.saturating_sub(1))).max(0) as f64 / a.speed;
-        let delta = events[i]["kind"].as_str().is_some_and(|k| k.ends_with("_delta"));
-        prev_due + Duration::from_secs_f64(gap / 1000.0).max(if delta { Duration::from_millis(25) } else { Duration::ZERO })
+        let delta = events[i]["kind"]
+            .as_str()
+            .is_some_and(|k| k.ends_with("_delta"));
+        prev_due
+            + Duration::from_secs_f64(gap / 1000.0).max(if delta {
+                Duration::from_millis(25)
+            } else {
+                Duration::ZERO
+            })
     };
     if *next < events.len() {
         due = schedule(*next, due);
@@ -3462,14 +5250,18 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         None => None,
     };
     let exit_at = a.exit_after.map(|s| v0 + Duration::from_secs_f64(s));
-    let mut window: Option<(Instant, u64, u64, u64, (f64, i64, i64, u64, u64))> = None;
+    type FrameWindow = (Instant, u64, u64, u64, (f64, i64, i64, u64, u64));
+    let mut window: Option<FrameWindow> = None;
     let mut audit = Audit::default();
     let mut prev_buf: Option<Buffer> = None;
     let mut frames: u64 = 0;
 
     let mut ui = Ui {
         // `--completions CASE` starts with its query already typed
-        input: a.completions.as_deref().map_or_else(String::new, completions::input_for),
+        input: a
+            .completions
+            .as_deref()
+            .map_or_else(String::new, completions::input_for),
         rail: a.rail,
         density: a.density.min(2),
         rail_share: a.rail_share.clamp(1.0, 90.0),
@@ -3481,7 +5273,12 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     model_picker::set_still(a.static_);
     let mut rd = input::Reader::new()?;
     let mut cmds = match &a.commands {
-        Some(p) => Some(std::fs::OpenOptions::new().create(true).append(true).open(p)?),
+        Some(p) => Some(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)?,
+        ),
         None => None,
     };
     let host = hostname();
@@ -3511,7 +5308,12 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         }
         let replaying = *next < events.len();
         let rate = if replaying { a.speed } else { 1.0 };
-        let vnow = last_applied.1 + (now_i.saturating_duration_since(last_applied.0).as_secs_f64() * 1000.0 * rate) as i64;
+        let vnow = last_applied.1
+            + (now_i
+                .saturating_duration_since(last_applied.0)
+                .as_secs_f64()
+                * 1000.0
+                * rate) as i64;
         if f.running && now_i >= next_tick {
             tick += 1;
             dirty = true;
@@ -3524,7 +5326,13 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             };
         }
         if window.is_none() && now_i >= v0 + Duration::from_secs_f64(a.warmup) {
-            window = Some((now_i, BYTES.load(Relaxed), frames, FLUSHES.load(Relaxed), rusage()));
+            window = Some((
+                now_i,
+                BYTES.load(Relaxed),
+                frames,
+                FLUSHES.load(Relaxed),
+                rusage(),
+            ));
             lua_calls0 = v.lua.as_ref().map_or(0, |x| x.calls.get());
         }
         // dragging past the top or bottom edge keeps scrolling while the button is held
@@ -3564,8 +5372,18 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             term.backend_mut().write_all(b"\x1b[?2026h")?;
             term.draw(|fr| {
                 if cols > 0 && rows > 0 {
-                    let msg: String = format!("Fiber needs {FLOOR_COLS}\u{d7}{FLOOR_ROWS} \u{b7} now {cols}\u{d7}{rows}").chars().take(cols as usize).collect();
-                    fr.buffer_mut().set_string((cols as usize).saturating_sub(msg.width()) as u16 / 2, rows / 2, &msg, Style::new());
+                    let msg: String = format!(
+                        "Fiber needs {FLOOR_COLS}\u{d7}{FLOOR_ROWS} \u{b7} now {cols}\u{d7}{rows}"
+                    )
+                    .chars()
+                    .take(cols as usize)
+                    .collect();
+                    fr.buffer_mut().set_string(
+                        (cols as usize).saturating_sub(msg.width()) as u16 / 2,
+                        rows / 2,
+                        &msg,
+                        Style::new(),
+                    );
                 }
             })?;
             let be = term.backend_mut();
@@ -3592,13 +5410,23 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             // handle; "N waiting" joins the status rows or the Session card. The
             // conversation keeps CONV_MIN throughout.
             let rail_full_w = ((cols as f64 * ui.rail_share / 100.0).round() as u16).clamp(22, 48);
-            let panel_full_w = ((cols as f64 * ui.panel_share / 100.0).round() as u16).clamp(30, 60);
-            let rail_cols: u16 = match ui.rail { 0 => RAIL_A, _ => rail_full_w };
+            let panel_full_w =
+                ((cols as f64 * ui.panel_share / 100.0).round() as u16).clamp(30, 60);
+            let rail_cols: u16 = match ui.rail {
+                0 => RAIL_A,
+                _ => rail_full_w,
+            };
             // too narrow for rail floor + conversation minimum + panel: the rail goes;
             // an auto-hidden rail returns by itself, a dragged-shut one stays shut
             let rail_auto = cols < 22 + CONV_MIN + panel_full_w;
             let rail_hidden = ui.rail != 2 && (ui.rail_off || rail_auto);
-            let mut rail_w: u16 = if ui.rail == 2 { 0 } else if rail_hidden { 1 } else { rail_cols };
+            let mut rail_w: u16 = if ui.rail == 2 {
+                0
+            } else if rail_hidden {
+                1
+            } else {
+                rail_cols
+            };
             if ui.rail != 2 && cols < rail_w + CONV_MIN {
                 rail_w = 0;
             }
@@ -3608,25 +5436,49 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             let conv_w = avail - panel_w;
             let cw = (conv_w as usize).saturating_sub(2);
             let sess = live_sessions(f, &ui, vnow);
-            let waiting = sess.iter().enumerate().filter(|(idx, s)| s.st == SState::NeedsInput && !ui.dismissed.contains(idx)).count();
+            let waiting = sess
+                .iter()
+                .enumerate()
+                .filter(|(idx, s)| s.st == SState::NeedsInput && !ui.dismissed.contains(idx))
+                .count();
             let rail_gone = rail_hidden || (ui.rail == 2 && cols < CONV_MIN);
             let rail_note = (rail_gone && waiting > 0).then(|| format!("{waiting} waiting"));
             // variant C takes one row from the top of the conversation column instead
             let show_tabs = ui.rail == 2 && cols >= CONV_MIN;
             // the call asking the person has its group open
-            v.force = ui.top(f).filter(|(_, p)| p.sid == f.session_id).and_then(|(_, p)| f.at.get(&p.aid)).map(|&(ti, bi, _)| Act::Group(ti, bi));
-            v.q = ui.search.as_ref().map(|s| s.q.to_lowercase()).filter(|q| q.chars().count() >= 3).unwrap_or_default();
+            v.force = ui
+                .top(f)
+                .filter(|(_, p)| p.sid == f.session_id)
+                .and_then(|(_, p)| f.at.get(&p.aid))
+                .map(|&(ti, bi, _)| Act::Group(ti, bi));
+            v.q = ui
+                .search
+                .as_ref()
+                .map(|s| s.q.to_lowercase())
+                .filter(|q| q.chars().count() >= 3)
+                .unwrap_or_default();
             let key: Key3 = (v.all_open, v.force, v.q.clone());
             if let Some(pg) = pager.as_mut() {
                 // no approval is folded into a page, and group ids name pages, not turns
                 v.force = None;
-                let find = ui.search.as_ref().map(|s| s.q.to_lowercase()).unwrap_or_default();
+                let find = ui
+                    .search
+                    .as_ref()
+                    .map(|s| s.q.to_lowercase())
+                    .unwrap_or_default();
                 scans.extend(pg.sync(cw, &v, &find));
                 if let Some(s) = ui.search.as_mut() {
-                    s.hits = pg.hits.iter().map(|&(p, r, c, n)| (pg.start_of(p) + r, c, n)).collect();
+                    s.hits = pg
+                        .hits
+                        .iter()
+                        .map(|&(p, r, c, n)| (pg.start_of(p) + r, c, n))
+                        .collect();
                     s.i = s.i.min(s.hits.len().saturating_sub(1));
                 }
-            } else if conv_cache.as_ref().is_none_or(|(w, k, _)| *w != cw || *k != key) {
+            } else if conv_cache
+                .as_ref()
+                .is_none_or(|(w, k, _)| *w != cw || *k != key)
+            {
                 conv_cache = Some((cw, key, conversation(f, cw, &v)));
                 conv_gen += 1;
                 if let Some(n) = v.lua.as_ref().and_then(|x| x.take_notice()) {
@@ -3637,7 +5489,13 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 panel_cache = None;
             }
             if panel_cache.is_none() && !narrow {
-                panel_cache = Some(panel_rows(f, vnow, &ui.keys, panel_w as usize, if rail_hidden { waiting } else { 0 }));
+                panel_cache = Some(panel_rows(
+                    f,
+                    vnow,
+                    &ui.keys,
+                    panel_w as usize,
+                    if rail_hidden { waiting } else { 0 },
+                ));
             }
             let no_rows = vec![];
             let conv: &Vec<Row> = conv_cache.as_ref().map_or(&no_rows, |c| &c.2);
@@ -3688,42 +5546,105 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     model_picker::view(p, cw)
                 })
                 .map(|body| {
-                    ui.vscroll = ui.vscroll.min(body.len().saturating_sub(view_h.saturating_sub(1)));
+                    ui.vscroll = ui
+                        .vscroll
+                        .min(body.len().saturating_sub(view_h.saturating_sub(1)));
                     let mut r = vec![view_header("Models", "/model")];
-                    r.extend(body.into_iter().skip(ui.vscroll).take(view_h.saturating_sub(1)));
+                    r.extend(
+                        body.into_iter()
+                            .skip(ui.vscroll)
+                            .take(view_h.saturating_sub(1)),
+                    );
                     r
                 })
                 .or_else(|| {
                     ui.ctx_view.then(|| {
                         let body = context_view(f, cw);
-                        ui.vscroll = ui.vscroll.min(body.len().saturating_sub(view_h.saturating_sub(1)));
+                        ui.vscroll = ui
+                            .vscroll
+                            .min(body.len().saturating_sub(view_h.saturating_sub(1)));
                         let mut r = vec![view_header("Context", "/context")];
-                        r.extend(body.into_iter().skip(ui.vscroll).take(view_h.saturating_sub(1)));
+                        r.extend(
+                            body.into_iter()
+                                .skip(ui.vscroll)
+                                .take(view_h.saturating_sub(1)),
+                        );
                         r
                     })
                 });
-            lay = (start, top_pad, if vrows.is_some() { 0 } else { vis.len() }, view_h, max_top);
+            lay = (
+                start,
+                top_pad,
+                if vrows.is_some() { 0 } else { vis.len() },
+                view_h,
+                max_top,
+            );
             hits.clear();
             geom = (conv_w, cols, rail_w, show_tabs, panel_w);
             let panel = panel_cache.as_ref();
             let uncached = v.lua.as_deref().filter(|x| !x.cached);
-            let (search, sel, copied) = (ui.search.as_ref(), ui.sel, ui.copied.as_ref().map(|c| c.0.as_str()));
+            let (search, sel, copied) = (
+                ui.search.as_ref(),
+                ui.sel,
+                ui.copied.as_ref().map(|c| c.0.as_str()),
+            );
             // the session rail's rows, built before the frame so jumps can clamp the scroll.
             // B shows every project; A and C hide other projects behind the scope line.
             let seq = rail_seq(&sess, ui.rail);
-            let shown: Vec<usize> = (if ui.rail == 1 { seq } else { seq.into_iter().filter(|&i| ui.show_all || sess[i].project == "fiber").collect() }).into_iter().filter(|&i| !ui.dismissed.contains(&i)).collect();
-            let hidden_n = if ui.rail == 1 { 0 } else { sess.iter().filter(|s| s.project != "fiber").count() - shown.iter().filter(|&&i| sess[i].project != "fiber").count() };
-            let (rrows, rmap): (Vec<Row>, Vec<(usize, usize, usize)>) = if rail_w <= 1 || ui.rail == 2 {
-                (vec![], vec![])
-            } else if ui.rail == 1 {
-                rail_full_b(&sess, &shown, ui.screen, tick, v.reduced, rail_w as usize, ui.density)
+            let shown: Vec<usize> = (if ui.rail == 1 {
+                seq
             } else {
-                (rail_full(&sess, &shown, ui.screen, tick, v.reduced, rail_w as usize, hidden_n), vec![])
+                seq.into_iter()
+                    .filter(|&i| ui.show_all || sess[i].project == "fiber")
+                    .collect()
+            })
+            .into_iter()
+            .filter(|&i| !ui.dismissed.contains(&i))
+            .collect();
+            let hidden_n = if ui.rail == 1 {
+                0
+            } else {
+                sess.iter().filter(|s| s.project != "fiber").count()
+                    - shown
+                        .iter()
+                        .filter(|&&i| sess[i].project != "fiber")
+                        .count()
             };
+            let (rrows, rmap): (Vec<Row>, Vec<(usize, usize, usize)>) =
+                if rail_w <= 1 || ui.rail == 2 {
+                    (vec![], vec![])
+                } else if ui.rail == 1 {
+                    rail_full_b(
+                        &sess,
+                        &shown,
+                        ui.screen,
+                        tick,
+                        v.reduced,
+                        rail_w as usize,
+                        ui.density,
+                    )
+                } else {
+                    (
+                        rail_full(
+                            &sess,
+                            &shown,
+                            ui.screen,
+                            tick,
+                            v.reduced,
+                            rail_w as usize,
+                            hidden_n,
+                        ),
+                        vec![],
+                    )
+                };
             ui.rail_top = ui.rail_top.min(rrows.len().saturating_sub(rows as usize));
             // a resize drag's live share, drawn as a dim pill over the conversation
             let drag_lab: Option<String> = ui.resize.map(|r| {
-                let (name, share, w) = if r == 0 { ("rail", ui.rail_share, rail_w) } else { ("panel", ui.panel_share, panel_w) };
+                let (name, share, w) = if r == 0 {
+                    ("rail", ui.rail_share, rail_w)
+                } else {
+                    ("panel", ui.panel_share, panel_w)
+                };
                 format!(" {name} {}% · {w} cols ", share.round() as u16)
             });
             // synchronised output (DEC mode 2026): the terminal shows the frame only once it is
@@ -3733,7 +5654,11 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 let buf = fr.buffer_mut();
                 if let Some(vr) = &vrows {
                     for (k, r) in vr.iter().enumerate() {
-                        let (x, w) = if k == 0 { (rail_w, conv_w) } else { (rail_w + 1, cw as u16) };
+                        let (x, w) = if k == 0 {
+                            (rail_w, conv_w)
+                        } else {
+                            (rail_w + 1, cw as u16)
+                        };
                         paint(buf, x, k as u16, w, r);
                         if let Some(act) = r.act {
                             hits.push((k as u16, rail_w, rail_w + conv_w, act));
@@ -3744,9 +5669,22 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 for (k, r) in vis.iter().enumerate().filter(|_| vrows.is_none()) {
                     let y = (top_pad + k) as u16;
                     // uncached: Lua is called again for every visible row it drew, every frame
-                    let fresh = r.lua.as_ref().zip(uncached).and_then(|(src, x)| x.frame_spans(src, cw, BW));
+                    let fresh = r
+                        .lua
+                        .as_ref()
+                        .zip(uncached)
+                        .and_then(|(src, x)| x.frame_spans(src, cw, BW));
                     match fresh {
-                        Some(spans) => paint(buf, rail_w + 1, y, cw as u16, &Row { spans, ..Default::default() }),
+                        Some(spans) => paint(
+                            buf,
+                            rail_w + 1,
+                            y,
+                            cw as u16,
+                            &Row {
+                                spans,
+                                ..Default::default()
+                            },
+                        ),
                         None => paint(buf, rail_w + 1, y, cw as u16, r),
                     }
                     if let Some(act) = r.act {
@@ -3756,13 +5694,27 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         hits.push((y, rail_w + 1 + x0, rail_w + 1 + x1, act));
                     }
                 }
-                let ys = |r: usize| (r >= start && r < start + vis.len()).then(|| (top_pad + r - start) as u16);
+                let ys = |r: usize| {
+                    (r >= start && r < start + vis.len()).then(|| (top_pad + r - start) as u16)
+                };
                 // every search match marked, the current one brighter
                 if let Some(s) = search.filter(|_| vrows.is_none()) {
                     for (i, &(r, c, w)) in s.hits.iter().enumerate() {
                         let Some(y) = ys(r) else { continue };
-                        let st = if i == s.i { Style::new().bg(ORANGE).fg(Color::Black) } else { Style::new().bg(rgb(0x5a4a1a)).fg(Color::White) };
-                        buf.set_style(Rect::new(rail_w + 1 + c as u16, y, (w as u16).min(cw as u16 - c as u16), 1), st);
+                        let st = if i == s.i {
+                            Style::new().bg(ORANGE).fg(Color::Black)
+                        } else {
+                            Style::new().bg(rgb(0x5a4a1a)).fg(Color::White)
+                        };
+                        buf.set_style(
+                            Rect::new(
+                                rail_w + 1 + c as u16,
+                                y,
+                                (w as u16).min(cw as u16 - c as u16),
+                                1,
+                            ),
+                            st,
+                        );
                     }
                 }
                 if let Some(s) = sel.filter(|s| s.moved) {
@@ -3772,7 +5724,10 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         let x0 = if r == a.0 { a.1 } else { 0 }.min(cw);
                         let x1 = if r == b.0 { b.1 + 1 } else { cw }.min(cw);
                         if x1 > x0 {
-                            buf.set_style(Rect::new(rail_w + 1 + x0 as u16, y, (x1 - x0) as u16, 1), Style::new().bg(rgb(0x264f78)));
+                            buf.set_style(
+                                Rect::new(rail_w + 1 + x0 as u16, y, (x1 - x0) as u16, 1),
+                                Style::new().bg(rgb(0x264f78)),
+                            );
                         }
                     }
                 }
@@ -3781,15 +5736,27 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     let th = (vh * vh / total).max(1);
                     let tt = (vh - th) * start / (total - vh);
                     for y in tt..tt + th {
-                        buf.set_string(rail_w + conv_w - 1, (tabs_h + y) as u16, "┃", fg(rgb(0x808080)));
+                        buf.set_string(
+                            rail_w + conv_w - 1,
+                            (tabs_h + y) as u16,
+                            "┃",
+                            fg(rgb(0x808080)),
+                        );
                     }
                 }
                 // scrolled up: a pill centred at the bottom of the conversation jumps to the end
                 if start < max_top && vrows.is_none() && view_h > 0 {
                     // paged: the rows below are not all rendered, and the ruling needs no count
-                    let label = if pager.is_some() { " ↓ New messages below · End ".to_string() } else { format!(" ↓ {} lines below · End ", max_top - start) };
+                    let label = if pager.is_some() {
+                        " ↓ New messages below · End ".to_string()
+                    } else {
+                        format!(" ↓ {} lines below · End ", max_top - start)
+                    };
                     let pw = label.width() as u16 + 2;
-                    let (x0, y) = (rail_w + 1 + (cw as u16).saturating_sub(pw) / 2, view_h as u16 - 1);
+                    let (x0, y) = (
+                        rail_w + 1 + (cw as u16).saturating_sub(pw) / 2,
+                        view_h as u16 - 1,
+                    );
                     for x in x0..x0 + pw {
                         let under = buf[(x, y)].bg;
                         buf[(x, y)].reset();
@@ -3806,17 +5773,29 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 if let Some(s) = search.filter(|_| vrows.is_none() && view_h >= 5) {
                     let bw = SBOX_W.min(cw.saturating_sub(2));
                     let x0 = rail_w + 1 + (cw - bw) as u16;
-                    for (y, r) in panel::frame(None, vec![row(search_box(s))], None, bw).into_iter().enumerate() {
+                    for (y, r) in panel::frame(None, vec![row(search_box(s))], None, bw)
+                        .into_iter()
+                        .enumerate()
+                    {
                         paint(buf, x0, y as u16, bw as u16, &r);
                     }
                 }
                 // the copy's confirmation: the top-right corner, below the search box when it is open
                 if let Some(m) = copied.filter(|_| vrows.is_none()) {
-                    let y = if search.is_some() && view_h >= 5 { 5 } else { 0 };
+                    let y = if search.is_some() && view_h >= 5 {
+                        5
+                    } else {
+                        0
+                    };
                     let s = vec![sp(format!(" {m} "), fg(CYAN))];
                     let mw = width(&s).min(cw);
                     if y < view_h && mw > 0 {
-                        buf.set_line(rail_w + 1 + (cw - mw) as u16, y as u16, &Line::from(tint(fit(&s, mw), BI)), mw as u16);
+                        buf.set_line(
+                            rail_w + 1 + (cw - mw) as u16,
+                            y as u16,
+                            &Line::from(tint(fit(&s, mw), BI)),
+                            mw as u16,
+                        );
                     }
                 }
                 for (k, r) in bot.iter().enumerate() {
@@ -3831,7 +5810,10 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 }
                 // side panel
                 if let Some(p) = panel.filter(|_| panel_w > 0) {
-                    buf.set_style(Rect::new(rail_w + conv_w, 0, panel_w, rows), Style::new().bg(BP));
+                    buf.set_style(
+                        Rect::new(rail_w + conv_w, 0, panel_w, rows),
+                        Style::new().bg(BP),
+                    );
                     let ps = pscroll.min(p.len().saturating_sub(rows as usize));
                     for (k, r) in p.iter().skip(ps).take(rows as usize).enumerate() {
                         paint(buf, rail_w + conv_w + 1, k as u16, panel_w - 2, r);
@@ -3846,7 +5828,12 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 // leaves a 1-column handle at the left edge.
                 if rail_w > 1 {
                     buf.set_style(Rect::new(0, 0, rail_w, rows), Style::new().bg(BP));
-                    for (k, r) in rrows.iter().skip(ui.rail_top).take(rows as usize).enumerate() {
+                    for (k, r) in rrows
+                        .iter()
+                        .skip(ui.rail_top)
+                        .take(rows as usize)
+                        .enumerate()
+                    {
                         paint(buf, 0, k as u16, rail_w, r);
                         if let Some(act) = r.act {
                             hits.push((k as u16, 0, rail_w, act));
@@ -3865,10 +5852,27 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 // approvals and completion panels paint their own first cell there.
                 let rail_hid = ui.rail != 2 && rail_w == 1;
                 let rail_hx = if rail_hid { 0 } else { rail_w };
-                let rail_gap_hot = ptr.is_some_and(|(x, _)| x == rail_hx) && ui.rail != 2 && rail_w > 0;
+                let rail_gap_hot =
+                    ptr.is_some_and(|(x, _)| x == rail_hx) && ui.rail != 2 && rail_w > 0;
                 let panel_gap_hot = ptr.is_some_and(|(x, _)| x == rail_w + conv_w) && panel_w > 0;
-                for (gx, active, clear_next, y_end) in [(rail_hx, ui.resize == Some(0) || rail_gap_hot, rail_hid, view_h.min(rows as usize) as u16), (rail_w + conv_w, ui.resize == Some(1) || panel_gap_hot, false, rows)] {
-                    if gx >= cols || (gx == rail_w && (rail_w == 0 || ui.rail == 2)) || (gx == rail_w + conv_w && panel_w == 0) {
+                for (gx, active, clear_next, y_end) in [
+                    (
+                        rail_hx,
+                        ui.resize == Some(0) || rail_gap_hot,
+                        rail_hid,
+                        view_h.min(rows as usize) as u16,
+                    ),
+                    (
+                        rail_w + conv_w,
+                        ui.resize == Some(1) || panel_gap_hot,
+                        false,
+                        rows,
+                    ),
+                ] {
+                    if gx >= cols
+                        || (gx == rail_w && (rail_w == 0 || ui.rail == 2))
+                        || (gx == rail_w + conv_w && panel_w == 0)
+                    {
                         continue;
                     }
                     let mid = rows / 2;
@@ -3880,9 +5884,29 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                             _ => (" ", Style::new()),
                         };
                         // Reset clears a stale tint when the drag ends; SEL tints the column
-                        paint(buf, gx, y, 1, &Row { spans: vec![sp(sym, st)], bg: Some(if active { SEL } else { Color::Reset }), ..Default::default() });
+                        paint(
+                            buf,
+                            gx,
+                            y,
+                            1,
+                            &Row {
+                                spans: vec![sp(sym, st)],
+                                bg: Some(if active { SEL } else { Color::Reset }),
+                                ..Default::default()
+                            },
+                        );
                         if clear_next {
-                            paint(buf, gx + 1, y, 1, &Row { spans: vec![sp(" ", Style::new())], bg: Some(Color::Reset), ..Default::default() });
+                            paint(
+                                buf,
+                                gx + 1,
+                                y,
+                                1,
+                                &Row {
+                                    spans: vec![sp(" ", Style::new())],
+                                    bg: Some(Color::Reset),
+                                    ..Default::default()
+                                },
+                            );
                         }
                     }
                 }
@@ -3894,13 +5918,20 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     }
                 }
                 // the target under the pointer, found as a click finds it
-                hovered = ptr.and_then(|(x, y)| hits.iter().find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1)).map(|h| (h.0, h.1, h.2));
+                hovered = ptr
+                    .and_then(|(x, y)| {
+                        hits.iter()
+                            .find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1)
+                    })
+                    .map(|h| (h.0, h.1, h.2));
                 // hovering a B card brightens the whole card, not just the hovered row
                 let hover_card: Option<usize> = if ui.rail == 1 && rail_w > 1 {
-                    hovered.and_then(|h| hits.iter().find(|j| (j.0, j.1, j.2) == h).map(|j| j.3)).and_then(|a| match a {
-                        Act::Rail(i) => Some(i),
-                        _ => None,
-                    })
+                    hovered
+                        .and_then(|h| hits.iter().find(|j| (j.0, j.1, j.2) == h).map(|j| j.3))
+                        .and_then(|a| match a {
+                            Act::Rail(i) => Some(i),
+                            _ => None,
+                        })
                 } else {
                     None
                 };
@@ -3924,73 +5955,131 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 }
                 // `--hover` over a rail row (not a B card): one tooltip line with the full
                 // name, workspace and spend
-                if ui.rail != 1 {
-                    if let Some((hy, _, _)) = hovered {
-                        let act = hits.iter().find(|h| Some((h.0, h.1, h.2)) == hovered).map(|h| h.3);
-                        if let Some(Act::Rail(i)) = act {
-                            if let Some(s) = sess.get(i) {
-                                let tip = format!(" {} · {} · {} ", s.name, s.ws, s.spend);
-                                let tw = tip.width().min(cw).max(1);
-                                paint(buf, rail_w + 1, hy, tw as u16, &Row { spans: tint(vec![sp(tip, Style::new())], BI), bg: Some(BI), ..Default::default() });
-                            }
-                        }
+                if ui.rail != 1
+                    && let Some((hy, _, _)) = hovered
+                {
+                    let act = hits
+                        .iter()
+                        .find(|h| Some((h.0, h.1, h.2)) == hovered)
+                        .map(|h| h.3);
+                    if let Some(Act::Rail(i)) = act
+                        && let Some(s) = sess.get(i)
+                    {
+                        let tip = format!(" {} · {} · {} ", s.name, s.ws, s.spend);
+                        let tw = tip.width().min(cw).max(1);
+                        paint(
+                            buf,
+                            rail_w + 1,
+                            hy,
+                            tw as u16,
+                            &Row {
+                                spans: tint(vec![sp(tip, Style::new())], BI),
+                                bg: Some(BI),
+                                ..Default::default()
+                            },
+                        );
                     }
                 }
                 // compact hides the name behind truncation and drops the workspace and
                 // thinking level: hovering a card shows its full identity in a dim footer
                 // at the rail's bottom row, running over the conversation like the A
                 // tooltip when it needs the room (`--hover` only, like the brightening)
-                if ui.rail == 1 && (ui.density == 3) && rail_w > 1 {
-                    if let Some(i) = hover_card {
-                        if let Some(s) = sess.get(i) {
-                            let tip = format!(" {} · {} · {} · {} ", s.name, s.ws, s.model, s.spend);
-                            let tw = tip.width().min(rail_w as usize + cw).max(1);
-                            paint(buf, 0, rows - 1, tw as u16, &Row { spans: tint(vec![sp(cut(&tip, tw), dim())], BI), bg: Some(BI), ..Default::default() });
-                        }
-                    }
+                if ui.rail == 1
+                    && (ui.density == 3)
+                    && rail_w > 1
+                    && let Some(i) = hover_card
+                    && let Some(s) = sess.get(i)
+                {
+                    let tip = format!(" {} · {} · {} · {} ", s.name, s.ws, s.model, s.spend);
+                    let tw = tip.width().min(rail_w as usize + cw).max(1);
+                    paint(
+                        buf,
+                        0,
+                        rows - 1,
+                        tw as u16,
+                        &Row {
+                            spans: tint(vec![sp(cut(&tip, tw), dim())], BI),
+                            bg: Some(BI),
+                            ..Default::default()
+                        },
+                    );
                 }
                 // a resize drag's live share, as a dim pill over the conversation's bottom edge
-                if let Some(lab) = &drag_lab {
-                    if view_h > 0 {
-                        let dw = lab.width() as u16 + 2;
-                        let dy = if start < max_top && vrows.is_none() { (view_h as u16).saturating_sub(2) } else { view_h as u16 - 1 };
-                        let dx = rail_w + 1 + (cw as u16).saturating_sub(dw) / 2;
-                        buf.set_string(dx, dy, "▐", fg(SEL));
-                        buf.set_string(dx + 1, dy, lab, dim().bg(SEL));
-                        buf.set_string(dx + dw - 1, dy, "▌", fg(SEL));
-                    }
+                if let Some(lab) = &drag_lab
+                    && view_h > 0
+                {
+                    let dw = lab.width() as u16 + 2;
+                    let dy = if start < max_top && vrows.is_none() {
+                        (view_h as u16).saturating_sub(2)
+                    } else {
+                        view_h as u16 - 1
+                    };
+                    let dx = rail_w + 1 + (cw as u16).saturating_sub(dw) / 2;
+                    buf.set_string(dx, dy, "▐", fg(SEL));
+                    buf.set_string(dx + 1, dy, lab, dim().bg(SEL));
+                    buf.set_string(dx + dw - 1, dy, "▌", fg(SEL));
                 }
             })?;
             rail_lay = (rrows.len(), rows as usize, rmap);
-            let frame_buf = (links_at != (conv_gen, start, ui.ctx_view, ui.picker.is_some(), ui.search.is_some()) || a.audit).then(|| completed.buffer.clone());
+            let frame_buf = (links_at
+                != (
+                    conv_gen,
+                    start,
+                    ui.ctx_view,
+                    ui.picker.is_some(),
+                    ui.search.is_some(),
+                )
+                || a.audit)
+                .then(|| completed.buffer.clone());
             if a.audit && window.is_some() {
                 let cur = frame_buf.clone().unwrap();
-                if let Some(prev) = &prev_buf {
-                    if prev.area == cur.area {
-                        let d = prev.diff(&cur);
-                        let mut ys: Vec<u16> = d.iter().map(|(_, y, _)| *y).collect();
-                        ys.sort();
-                        ys.dedup();
-                        audit.frames += 1;
-                        audit.cells += d.len() as u64;
-                        audit.cells_max = audit.cells_max.max(d.len());
-                        audit.rows_max = audit.rows_max.max(ys.len());
-                        *audit.rows_hist.entry(ys.len()).or_default() += 1;
-                    }
+                if let Some(prev) = &prev_buf
+                    && prev.area == cur.area
+                {
+                    let d = prev.diff(&cur);
+                    let mut ys: Vec<u16> = d.iter().map(|(_, y, _)| *y).collect();
+                    ys.sort();
+                    ys.dedup();
+                    audit.frames += 1;
+                    audit.cells += d.len() as u64;
+                    audit.cells_max = audit.cells_max.max(d.len());
+                    audit.rows_max = audit.rows_max.max(ys.len());
+                    *audit.rows_hist.entry(ys.len()).or_default() += 1;
                 }
                 prev_buf = Some(cur);
             }
             // links: mouse capture turns off the terminal's own link detection, so replies
             // mark URLs and paths with OSC 8, rewritten only when the conversation moves
-            if links_at != (conv_gen, start, ui.ctx_view, ui.picker.is_some(), ui.search.is_some()) {
-                links_at = (conv_gen, start, ui.ctx_view, ui.picker.is_some(), ui.search.is_some());
+            if links_at
+                != (
+                    conv_gen,
+                    start,
+                    ui.ctx_view,
+                    ui.picker.is_some(),
+                    ui.search.is_some(),
+                )
+            {
+                links_at = (
+                    conv_gen,
+                    start,
+                    ui.ctx_view,
+                    ui.picker.is_some(),
+                    ui.search.is_some(),
+                );
                 let fb = frame_buf.unwrap();
                 let be = term.backend_mut();
-                for (k, r) in vis.iter().enumerate().filter(|(_, r)| r.link && vrows.is_none()) {
+                for (k, r) in vis
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.link && vrows.is_none())
+                {
                     let y = (top_pad + k) as u16;
                     for (c0, w, url) in links_in(&plain(r), &f.cwd, &host) {
                         let x0 = 1 + c0 as u16;
-                        let cells: Vec<(u16, u16, &ratatui::buffer::Cell)> = (x0..x0 + w as u16).filter(|&x| x < conv_w).map(|x| (x, y, &fb[(x, y)])).collect();
+                        let cells: Vec<(u16, u16, &ratatui::buffer::Cell)> = (x0..x0 + w as u16)
+                            .filter(|&x| x < conv_w)
+                            .map(|x| (x, y, &fb[(x, y)]))
+                            .collect();
                         write!(be, "\x1b]8;;{url}\x1b\\")?;
                         ratatui::backend::Backend::draw(be, cells.into_iter())?;
                         write!(be, "\x1b]8;;\x1b\\")?;
@@ -4039,7 +6128,9 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             }
         };
         add(f.running.then_some(next_tick));
-        add(window.is_none().then(|| v0 + Duration::from_secs_f64(a.warmup)));
+        add(window
+            .is_none()
+            .then(|| v0 + Duration::from_secs_f64(a.warmup)));
         add(rd.deadline());
         add(ui.flash_at.map(|t| t + FLASH));
         add(ui.copied.as_ref().map(|c| c.1 + FLASH));
@@ -4061,7 +6152,12 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             conv_cache = None;
         }
         if let Some(l) = log.as_mut().filter(|_| !rd.raw.is_empty()) {
-            let _ = writeln!(l, "{:>9.1} read   {:?}", v0.elapsed().as_secs_f64() * 1000.0, String::from_utf8_lossy(&rd.raw));
+            let _ = writeln!(
+                l,
+                "{:>9.1} read   {:?}",
+                v0.elapsed().as_secs_f64() * 1000.0,
+                String::from_utf8_lossy(&rd.raw)
+            );
             for e in &evs {
                 let _ = writeln!(l, "{:>9} event  {e:?}", "");
             }
@@ -4085,7 +6181,10 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 ptr = Some((x, y));
                 if kind == Mouse::Move {
                     // a redraw only when the target under the pointer changes
-                    let h = hits.iter().find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1).map(|h| (h.0, h.1, h.2));
+                    let h = hits
+                        .iter()
+                        .find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1)
+                        .map(|h| (h.0, h.1, h.2));
                     if window.is_some() {
                         motions += 1;
                         hover_changes += (h != under) as u64;
@@ -4160,33 +6259,41 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         panel_cache = None;
                         continue;
                     }
-                    if m.alt {
-                        if let Key::Char(c) = k {
-                            if c == 'a' || c == 'A' {
-                                let sess = live_sessions(f, &ui, vnow);
-                                if let Some(i) = sess.iter().position(|s| s.st == SState::NeedsInput) {
-                                    ui.screen = i;
-                                    rail_ensure(&mut ui, &rail_lay, i);
-                                }
-                                continue;
+                    if m.alt
+                        && let Key::Char(c) = k
+                    {
+                        if c == 'a' || c == 'A' {
+                            let sess = live_sessions(f, &ui, vnow);
+                            if let Some(i) = sess.iter().position(|s| s.st == SState::NeedsInput) {
+                                ui.screen = i;
+                                rail_ensure(&mut ui, &rail_lay, i);
                             }
-                            if c == 'r' || c == 'R' {
-                                ui.rail_off = !ui.rail_off;
-                                panel_cache = None;
-                                continue;
+                            continue;
+                        }
+                        if c == 'r' || c == 'R' {
+                            ui.rail_off = !ui.rail_off;
+                            panel_cache = None;
+                            continue;
+                        }
+                        if let Some(d) = c.to_digit(10)
+                            && (1..=9).contains(&d)
+                        {
+                            let sess = live_sessions(f, &ui, vnow);
+                            let shown: Vec<usize> = rail_seq(&sess, ui.rail)
+                                .into_iter()
+                                .filter(|&i| {
+                                    !ui.dismissed.contains(&i)
+                                        && (ui.rail == 1
+                                            || ui.show_all
+                                            || sess[i].project == "fiber")
+                                })
+                                .collect();
+                            // numbers are stable per session, so ⌥N maps the number to its index
+                            if let Some(&i) = shown.iter().find(|&&i| i + 1 == d as usize) {
+                                ui.screen = i;
+                                rail_ensure(&mut ui, &rail_lay, i);
                             }
-                            if let Some(d) = c.to_digit(10) {
-                                if (1..=9).contains(&d) {
-                                    let sess = live_sessions(f, &ui, vnow);
-                                    let shown: Vec<usize> = rail_seq(&sess, ui.rail).into_iter().filter(|&i| !ui.dismissed.contains(&i) && (ui.rail == 1 || ui.show_all || sess[i].project == "fiber")).collect();
-                                    // numbers are stable per session, so ⌥N maps the number to its index
-                                    if let Some(&i) = shown.iter().find(|&&i| i + 1 == d as usize) {
-                                        ui.screen = i;
-                                        rail_ensure(&mut ui, &rail_lay, i);
-                                    }
-                                    continue;
-                                }
-                            }
+                            continue;
                         }
                     }
                     if let Some(s) = ui.search.as_mut() {
@@ -4265,7 +6372,11 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                 let has_rule = ui.top(f).is_some_and(|(_, p)| matches!(&p.what, Asking::Approval { req, .. } if req.get("rule").is_some()));
                                 let cs = choices(has_rule);
                                 let at = cs.iter().position(|&c| c == ui.choice).unwrap_or(0);
-                                ui.choice = cs[if k == Key::Up { (at + cs.len() - 1) % cs.len() } else { (at + 1) % cs.len() }];
+                                ui.choice = cs[if k == Key::Up {
+                                    (at + cs.len() - 1) % cs.len()
+                                } else {
+                                    (at + 1) % cs.len()
+                                }];
                             }
                             Key::Enter => {
                                 let c = ui.choice;
@@ -4283,13 +6394,19 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         // the question form: Esc means "Chat about this"
                         Some(true) => {
                             let Some((_, p)) = ui.top(f) else { continue };
-                            let Asking::Form(fields) = &p.what else { continue };
+                            let Asking::Form(fields) = &p.what else {
+                                continue;
+                            };
                             let fields = fields.clone();
                             let n = fields.len();
-                            let nopt = fields.get(ui.form.tab).map_or(0, |q| q["options"].as_array().map_or(0, Vec::len));
-                            let multi = fields.get(ui.form.tab).is_some_and(|q| q["multiSelect"].as_bool() == Some(true));
+                            let nopt = fields
+                                .get(ui.form.tab)
+                                .map_or(0, |q| q["options"].as_array().map_or(0, Vec::len));
+                            let multi = fields
+                                .get(ui.form.tab)
+                                .is_some_and(|q| q["multiSelect"].as_bool() == Some(true));
                             let on_text = ui.form.tab < n && ui.form.cur == nopt;
-                                                        match k {
+                            match k {
                                 Key::Esc => decline_form(f, &mut ui, &mut cmds, ts),
                                 Key::Left | Key::BackTab => {
                                     ui.form.tab = (ui.form.tab + n) % (n + 1);
@@ -4300,9 +6417,15 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                     ui.form.cur = 0;
                                 }
                                 Key::Up => ui.form.cur = ui.form.cur.saturating_sub(1),
-                                Key::Down => ui.form.cur = (ui.form.cur + 1).min(nopt + multi as usize),
-                                Key::Char(' ') if ui.form.tab < n && !on_text => form_choose(&mut ui, &fields),
-                                Key::Enter if ui.form.tab == n => submit_form(f, &mut ui, &mut cmds, ts),
+                                Key::Down => {
+                                    ui.form.cur = (ui.form.cur + 1).min(nopt + multi as usize)
+                                }
+                                Key::Char(' ') if ui.form.tab < n && !on_text => {
+                                    form_choose(&mut ui, &fields)
+                                }
+                                Key::Enter if ui.form.tab == n => {
+                                    submit_form(f, &mut ui, &mut cmds, ts)
+                                }
                                 Key::Enter if multi && ui.form.cur == nopt + 1 => {
                                     ui.form.tab += 1;
                                     ui.form.cur = 0;
@@ -4344,7 +6467,9 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                             Key::Esc if ui.qsel.is_some() => queue_leave(&mut ui),
                             Key::Esc if f.running => interrupt(f, &mut ui, &mut cmds, ts),
                             Key::Up if m.alt => {
-                                let i = ui.qsel.map_or(f.queue.len().saturating_sub(1), |i| i.saturating_sub(1));
+                                let i = ui.qsel.map_or(f.queue.len().saturating_sub(1), |i| {
+                                    i.saturating_sub(1)
+                                });
                                 queue_pick(f, &mut ui, i);
                             }
                             Key::Down if m.alt => match ui.qsel {
@@ -4353,7 +6478,9 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                 None => {}
                             },
                             // ⌥x, or the "≈" macOS types for it where Option is not Alt
-                            Key::Char('x') | Key::Char('≈') if ui.qsel.is_some() && (m.alt || k == Key::Char('≈')) => {
+                            Key::Char('x') | Key::Char('≈')
+                                if ui.qsel.is_some() && (m.alt || k == Key::Char('≈')) =>
+                            {
                                 let i = ui.qsel.unwrap();
                                 queue_drop(f, &mut ui, &mut cmds, ts, i);
                             }
@@ -4380,23 +6507,34 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     }
                 }
                 Ev::Mouse(kind, x, y, _) => {
-                    let over_panel = x >= rail_w + conv_w && rail_w + conv_w < cols && panel_cache.is_some();
+                    let over_panel =
+                        x >= rail_w + conv_w && rail_w + conv_w < cols && panel_cache.is_some();
                     let over_rail = rail_w > 0 && ui.rail != 2 && x < rail_w;
                     let in_conv = !over_panel && (y as usize) < view_h;
-                    let in_sbox = ui.search.is_some() && y < 5 && (x as usize) + SBOX_W + 2 > (rail_w + conv_w) as usize;
+                    let in_sbox = ui.search.is_some()
+                        && y < 5
+                        && (x as usize) + SBOX_W + 2 > (rail_w + conv_w) as usize;
                     // the resize handles: the rail's right edge and the panel's left edge,
                     // the one-column gaps beside them; hidden, the rail's 1-column handle
                     // at the screen's left edge
                     let rail_hid = ui.rail != 2 && rail_w == 1;
-                    let rail_edge = ui.rail != 2 && rail_w > 0 && x == if rail_hid { 0 } else { rail_w };
+                    let rail_edge =
+                        ui.rail != 2 && rail_w > 0 && x == if rail_hid { 0 } else { rail_w };
                     let panel_edge = panel_w > 0 && x == rail_w + conv_w;
                     let wl = a.wheel as isize;
                     match kind {
                         Mouse::WheelUp if over_panel => pscroll = pscroll.saturating_sub(a.wheel),
                         Mouse::WheelDown if over_panel => pscroll += a.wheel,
-                        Mouse::WheelUp if over_rail => ui.rail_top = ui.rail_top.saturating_sub(a.wheel),
-                        Mouse::WheelDown if over_rail => ui.rail_top = (ui.rail_top + a.wheel).min(rail_lay.0.saturating_sub(rail_lay.1)),
-                        Mouse::WheelUp if ui.ctx_view => ui.vscroll = ui.vscroll.saturating_sub(a.wheel),
+                        Mouse::WheelUp if over_rail => {
+                            ui.rail_top = ui.rail_top.saturating_sub(a.wheel)
+                        }
+                        Mouse::WheelDown if over_rail => {
+                            ui.rail_top =
+                                (ui.rail_top + a.wheel).min(rail_lay.0.saturating_sub(rail_lay.1))
+                        }
+                        Mouse::WheelUp if ui.ctx_view => {
+                            ui.vscroll = ui.vscroll.saturating_sub(a.wheel)
+                        }
                         Mouse::WheelDown if ui.ctx_view => ui.vscroll += a.wheel,
                         Mouse::WheelUp => top = scroll_by(top, max_top, -wl),
                         Mouse::WheelDown => top = scroll_by(top, max_top, wl),
@@ -4404,12 +6542,26 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                             ui.resize = Some(if rail_edge { 0 } else { 1 });
                             ui.sel = None;
                         }
-                        Mouse::Down if in_conv && !ui.ctx_view && ui.picker.is_none() && !in_sbox && !(show_tabs && y == 0) => {
-                            ui.sel = at(x, y).map(|p| Sel { a: p, b: p, moved: false, down: true });
+                        Mouse::Down
+                            if in_conv
+                                && !ui.ctx_view
+                                && ui.picker.is_none()
+                                && !in_sbox
+                                && !(show_tabs && y == 0) =>
+                        {
+                            ui.sel = at(x, y).map(|p| Sel {
+                                a: p,
+                                b: p,
+                                moved: false,
+                                down: true,
+                            });
                         }
                         Mouse::Down => {
                             ui.sel = None;
-                            click = hits.iter().find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1).map(|h| h.3);
+                            click = hits
+                                .iter()
+                                .find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1)
+                                .map(|h| h.3);
                         }
                         Mouse::Drag if ui.resize.is_some() => {
                             // a resize drag: the edge column is the new width, as a share that
@@ -4422,11 +6574,11 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                         ui.rail_off = false;
                                         ui.rail_share = x as f64 * 100.0 / cols.max(1) as f64;
                                     }
-                                } else if (x as u16) < 22 {
+                                } else if x < 22 {
                                     ui.rail_off = true;
                                 } else {
                                     let maxw = cols.saturating_sub(CONV_MIN + panel_w).max(22);
-                                    let w = (x as u16).clamp(22, 48).min(maxw);
+                                    let w = x.clamp(22, 48).min(maxw);
                                     ui.rail_share = w as f64 * 100.0 / cols.max(1) as f64;
                                 }
                             } else {
@@ -4443,7 +6595,13 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                     s.b = p;
                                     s.moved |= s.b != s.a;
                                 }
-                                ui.drag_edge = if y == 0 { -1 } else if y as usize >= view_h.saturating_sub(1) { 1 } else { 0 };
+                                ui.drag_edge = if y == 0 {
+                                    -1
+                                } else if y as usize >= view_h.saturating_sub(1) {
+                                    1
+                                } else {
+                                    0
+                                };
                             }
                         }
                         Mouse::Up => {
@@ -4454,15 +6612,26 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                 if !s.moved {
                                     // a click, not a drag: the row's target, if it has one
                                     ui.sel = None;
-                                    click = hits.iter().find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1).map(|h| h.3);
+                                    click = hits
+                                        .iter()
+                                        .find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1)
+                                        .map(|h| h.3);
                                 } else {
                                     let text = match pager.as_mut() {
                                         // pages dropped since the drag began are read and rendered again
                                         Some(pg) => {
-                                            let (base, rows) = pg.rows(s.a.0.min(s.b.0), s.a.0.max(s.b.0), &v);
-                                            selection_text(&rows, (s.a.0 - base, s.a.1), (s.b.0 - base, s.b.1))
+                                            let (base, rows) =
+                                                pg.rows(s.a.0.min(s.b.0), s.a.0.max(s.b.0), &v);
+                                            selection_text(
+                                                &rows,
+                                                (s.a.0 - base, s.a.1),
+                                                (s.b.0 - base, s.b.1),
+                                            )
                                         }
-                                        None => conv_cache.as_ref().map(|c| selection_text(&c.2, s.a, s.b)).unwrap_or_default(),
+                                        None => conv_cache
+                                            .as_ref()
+                                            .map(|c| selection_text(&c.2, s.a, s.b))
+                                            .unwrap_or_default(),
                                     };
                                     if a.verify_copy && pager.is_some() {
                                         // the same selection over the whole file folded and rendered at once
@@ -4480,7 +6649,14 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                     }
                                     if !text.is_empty() {
                                         let how = copy(term.backend_mut(), &text);
-                                        ui.copied = Some((format!("✓ copied {} characters, {} lines · {how}", text.chars().count(), text.lines().count()), Instant::now()));
+                                        ui.copied = Some((
+                                            format!(
+                                                "✓ copied {} characters, {} lines · {how}",
+                                                text.chars().count(),
+                                                text.lines().count()
+                                            ),
+                                            Instant::now(),
+                                        ));
                                     }
                                 }
                             }
@@ -4560,7 +6736,11 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     ui.picker = None;
                 }
                 Act::Ext(i) => {
-                    let id = v.lua.as_ref().map(|x| x.clicks.borrow()[i].clone()).unwrap_or_default();
+                    let id = v
+                        .lua
+                        .as_ref()
+                        .map(|x| x.clicks.borrow()[i].clone())
+                        .unwrap_or_default();
                     say(&mut ui, format!("extension click: {id}"));
                 }
                 Act::Choice(i) => {
@@ -4578,11 +6758,11 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 }
                 Act::Opt(j) => {
                     ui.form.cur = j;
-                    if let Some((_, p)) = ui.top(f) {
-                        if let Asking::Form(fields) = &p.what {
-                            let fields = fields.clone();
-                            form_choose(&mut ui, &fields);
-                        }
+                    if let Some((_, p)) = ui.top(f)
+                        && let Asking::Form(fields) = &p.what
+                    {
+                        let fields = fields.clone();
+                        form_choose(&mut ui, &fields);
                     }
                 }
                 Act::Next => {
@@ -4596,19 +6776,34 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             }
         }
         // the last answer the turn waited on, once the replay has nothing more to play
-        if std::mem::take(&mut ui.answered) && f.running && f.pending.is_empty() && *next >= events.len() {
+        if std::mem::take(&mut ui.answered)
+            && f.running
+            && f.pending.is_empty()
+            && *next >= events.len()
+        {
             finish_turn(f, ts);
             changed = true;
         }
         // the resize pointer (OSC 22): col-resize over either handle or while dragging,
         // default otherwise; written only when it changes, so idle frames stay silent
-        let rail_hx = if ui.rail != 2 && rail_w == 1 { 0 } else { rail_w };
+        let rail_hx = if ui.rail != 2 && rail_w == 1 {
+            0
+        } else {
+            rail_w
+        };
         let want_col = ui.resize.is_some()
-            || ptr.is_some_and(|(x, _)| (rail_w > 0 && ui.rail != 2 && x == rail_hx) || (panel_w > 0 && x == rail_w + conv_w));
+            || ptr.is_some_and(|(x, _)| {
+                (rail_w > 0 && ui.rail != 2 && x == rail_hx)
+                    || (panel_w > 0 && x == rail_w + conv_w)
+            });
         if want_col != ptr_col_resize {
             ptr_col_resize = want_col;
             let be = term.backend_mut();
-            be.write_all(if want_col { b"\x1b]22;col-resize\x1b\\".as_slice() } else { b"\x1b]22;default\x1b\\".as_slice() })?;
+            be.write_all(if want_col {
+                b"\x1b]22;col-resize\x1b\\".as_slice()
+            } else {
+                b"\x1b]22;default\x1b\\".as_slice()
+            })?;
             be.flush()?;
         }
         // a key or click that reached the panels or the input box may change the fold
@@ -4626,52 +6821,138 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
 
     use std::fmt::Write as _;
     let mut s = String::new();
-    let ms = |d: Option<Duration>| d.map_or("none".into(), |d| format!("{:.2}", d.as_secs_f64() * 1000.0));
+    let ms = |d: Option<Duration>| {
+        d.map_or("none".into(), |d| {
+            format!("{:.2}", d.as_secs_f64() * 1000.0)
+        })
+    };
     let _ = writeln!(s, "first_frame_ms\t{}", ms(first_frame));
     let _ = writeln!(s, "query_sent_ms\t{}", ms(det_sent));
     let _ = writeln!(s, "detected_ms\t{}", ms(det.map(|d| d.1)));
-    let _ = writeln!(s, "keys\t{}", match det {
-        Some((true, _)) => format!("kitty (flags {})", kitty_seen.unwrap_or(0)),
-        Some((false, _)) => "legacy".into(),
-        None => "no reply".into(),
-    });
+    let _ = writeln!(
+        s,
+        "keys\t{}",
+        match det {
+            Some((true, _)) => format!("kitty (flags {})", kitty_seen.unwrap_or(0)),
+            Some((false, _)) => "legacy".into(),
+            None => "no reply".into(),
+        }
+    );
     if let Some(x) = &v.lua {
         let n = x.calls.get();
-        let _ = writeln!(s, "lua_cached\t{}\nlua_calls\t{n}\nlua_calls_window\t{}", x.cached, n - lua_calls0);
-        let _ = writeln!(s, "lua_us_per_call\t{:.2}\nlua_us_in_render\t{:.2}", x.ns.get() as f64 / 1000.0 / n.max(1) as f64, x.ns_in.get() as f64 / 1000.0 / n.max(1) as f64);
+        let _ = writeln!(
+            s,
+            "lua_cached\t{}\nlua_calls\t{n}\nlua_calls_window\t{}",
+            x.cached,
+            n - lua_calls0
+        );
+        let _ = writeln!(
+            s,
+            "lua_us_per_call\t{:.2}\nlua_us_in_render\t{:.2}",
+            x.ns.get() as f64 / 1000.0 / n.max(1) as f64,
+            x.ns_in.get() as f64 / 1000.0 / n.max(1) as f64
+        );
         let _ = writeln!(s, "lua_mem_bytes\t{lua_mem}");
     }
     if let Some(pg) = &pager {
         let q = |v: &mut Vec<Duration>, p: f64| {
             v.sort();
-            ms(v.get(((v.len().max(1) - 1) as f64 * p).round() as usize).copied())
+            ms(v.get(((v.len().max(1) - 1) as f64 * p).round() as usize)
+                .copied())
         };
         let _ = writeln!(s, "open_index_ms\t{}", ms(Some(open_index)));
         let _ = writeln!(s, "open_count_ms\t{}", ms(scans.first().copied()));
-        let _ = writeln!(s, "pages\t{}\ntotal_rows\t{total_rows}\nresident_now\t{}\nresident_max\t{}", pg.pages.len(), pg.resident_count(), pg.resident_max);
-        let _ = writeln!(s, "scans\t{}\nscan_max_ms\t{}", scans.len(), q(&mut scans, 1.0));
-        let _ = writeln!(s, "load_frames\t{}\nvis_miss_frames\t{vis_miss_n}", load_ms.len());
-        let _ = writeln!(s, "load_median_ms\t{}\nload_max_ms\t{}", q(&mut load_ms, 0.5), q(&mut load_ms, 1.0));
-        let _ = writeln!(s, "ev_to_flush_n\t{}\nev_to_flush_median_ms\t{}\nev_to_flush_max_ms\t{}", ev_lat.len(), q(&mut ev_lat, 0.5), q(&mut ev_lat, 1.0));
-        let _ = writeln!(s, "copy_matches_whole\t{}", copy_check.map_or("none".into(), |c| c.to_string()));
+        let _ = writeln!(
+            s,
+            "pages\t{}\ntotal_rows\t{total_rows}\nresident_now\t{}\nresident_max\t{}",
+            pg.pages.len(),
+            pg.resident_count(),
+            pg.resident_max
+        );
+        let _ = writeln!(
+            s,
+            "scans\t{}\nscan_max_ms\t{}",
+            scans.len(),
+            q(&mut scans, 1.0)
+        );
+        let _ = writeln!(
+            s,
+            "load_frames\t{}\nvis_miss_frames\t{vis_miss_n}",
+            load_ms.len()
+        );
+        let _ = writeln!(
+            s,
+            "load_median_ms\t{}\nload_max_ms\t{}",
+            q(&mut load_ms, 0.5),
+            q(&mut load_ms, 1.0)
+        );
+        let _ = writeln!(
+            s,
+            "ev_to_flush_n\t{}\nev_to_flush_median_ms\t{}\nev_to_flush_max_ms\t{}",
+            ev_lat.len(),
+            q(&mut ev_lat, 0.5),
+            q(&mut ev_lat, 1.0)
+        );
+        let _ = writeln!(
+            s,
+            "copy_matches_whole\t{}",
+            copy_check.map_or("none".into(), |c| c.to_string())
+        );
     }
-    let Some((t0w, b0, f0, fl0, r0)) = window else { return Ok(s) };
+    let Some((t0w, b0, f0, fl0, r0)) = window else {
+        return Ok(s);
+    };
     let secs = t0w.elapsed().as_secs_f64();
     let r1 = rusage();
     let bytes = BYTES.load(Relaxed) - b0;
     let fr = frames - f0;
-    let _ = writeln!(s, "mode\t{}", if a.reduced { "reduced-motion" } else { "glimmer" });
+    let _ = writeln!(
+        s,
+        "mode\t{}",
+        if a.reduced {
+            "reduced-motion"
+        } else {
+            "glimmer"
+        }
+    );
     let _ = writeln!(s, "running\t{}", f.running);
     let _ = writeln!(s, "seconds\t{secs:.2}");
     let _ = writeln!(s, "frames\t{fr}\nfps\t{:.2}", fr as f64 / secs);
-    let _ = writeln!(s, "bytes\t{bytes}\nbytes_per_s\t{:.0}\nbytes_per_frame\t{:.1}", bytes as f64 / secs, bytes as f64 / fr.max(1) as f64);
+    let _ = writeln!(
+        s,
+        "bytes\t{bytes}\nbytes_per_s\t{:.0}\nbytes_per_frame\t{:.1}",
+        bytes as f64 / secs,
+        bytes as f64 / fr.max(1) as f64
+    );
     let _ = writeln!(s, "flushes\t{}", FLUSHES.load(Relaxed) - fl0);
-    let _ = writeln!(s, "cpu_s\t{:.4}\ncpu_pct\t{:.3}", r1.0 - r0.0, 100.0 * (r1.0 - r0.0) / secs);
+    let _ = writeln!(
+        s,
+        "cpu_s\t{:.4}\ncpu_pct\t{:.3}",
+        r1.0 - r0.0,
+        100.0 * (r1.0 - r0.0) / secs
+    );
     let _ = writeln!(s, "vol_csw\t{}\ninvol_csw\t{}", r1.1 - r0.1, r1.2 - r0.2);
-    let _ = writeln!(s, "idle_wakeups\t{}\ninterrupt_wakeups\t{}", r1.3 - r0.3, r1.4 - r0.4);
-    let _ = writeln!(s, "motions\t{motions}\nhover_changes\t{hover_changes}\nhover_changes_per_s\t{:.1}", hover_changes as f64 / secs);
+    let _ = writeln!(
+        s,
+        "idle_wakeups\t{}\ninterrupt_wakeups\t{}",
+        r1.3 - r0.3,
+        r1.4 - r0.4
+    );
+    let _ = writeln!(
+        s,
+        "motions\t{motions}\nhover_changes\t{hover_changes}\nhover_changes_per_s\t{:.1}",
+        hover_changes as f64 / secs
+    );
     if a.audit {
-        let _ = writeln!(s, "audit_frames\t{}\ncells_per_frame\t{:.2}\ncells_max\t{}\nrows_max\t{}\nrows_hist\t{:?}", audit.frames, audit.cells as f64 / audit.frames.max(1) as f64, audit.cells_max, audit.rows_max, audit.rows_hist);
+        let _ = writeln!(
+            s,
+            "audit_frames\t{}\ncells_per_frame\t{:.2}\ncells_max\t{}\nrows_max\t{}\nrows_hist\t{:?}",
+            audit.frames,
+            audit.cells as f64 / audit.frames.max(1) as f64,
+            audit.cells_max,
+            audit.rows_max,
+            audit.rows_hist
+        );
     }
     Ok(s)
 }
@@ -4715,7 +6996,20 @@ mod tests {
 
     #[test]
     fn the_case_names_are_pinned() {
-        let all: Vec<String> = SURFACES.iter().map(|s| format!("{} {}", s.flag, (s.docs)().iter().map(|d| d.name).collect::<Vec<_>>().join(", "))).collect();
+        let all: Vec<String> = SURFACES
+            .iter()
+            .map(|s| {
+                format!(
+                    "{} {}",
+                    s.flag,
+                    (s.docs)()
+                        .iter()
+                        .map(|d| d.name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+            .collect();
         assert_eq!(
             all,
             [
@@ -4727,7 +7021,12 @@ mod tests {
             ]
         );
         let h = cases::help(SURFACES);
-        assert!(SURFACES.iter().flat_map(|s| (s.docs)()).all(|d| h.contains(d.name)));
+        assert!(
+            SURFACES
+                .iter()
+                .flat_map(|s| (s.docs)())
+                .all(|d| h.contains(d.name))
+        );
     }
 
     /// `check/<surface>.md` is the slices' check lines; `UPDATE_CHECK=1 cargo test` rewrites them.
@@ -4740,13 +7039,21 @@ mod tests {
                 std::fs::create_dir_all(format!("{}/check", env!("CARGO_MANIFEST_DIR"))).unwrap();
                 std::fs::write(&path, &want).unwrap();
             }
-            assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), want, "{path} is stale: UPDATE_CHECK=1 cargo test");
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap_or_default(),
+                want,
+                "{path} is stale: UPDATE_CHECK=1 cargo test"
+            );
         }
     }
 
     fn fold_with(prompt: &str, reply: &str) -> Fold {
         let mut f = Fold::default();
-        f.turns.push(Turn { prompt: prompt.into(), blocks: vec![Block::Text(reply.into())], ..Default::default() });
+        f.turns.push(Turn {
+            prompt: prompt.into(),
+            blocks: vec![Block::Text(reply.into())],
+            ..Default::default()
+        });
         f
     }
     fn find(rows: &[Row], s: &str) -> usize {
@@ -4755,15 +7062,24 @@ mod tests {
 
     #[test]
     fn a_copy_unwraps_lines_and_leaves_out_layout() {
-        let f = fold_with("short", "alpha beta gamma delta epsilon zeta\n\n- one two three four five six seven");
+        let f = fold_with(
+            "short",
+            "alpha beta gamma delta epsilon zeta\n\n- one two three four five six seven",
+        );
         let rows = conversation(&f, 24, &View::default());
         let (r0, r1) = (find(&rows, "alpha"), find(&rows, "seven"));
         assert!(r1 > r0 + 2, "the text wrapped");
         let got = selection_text(&rows, (r0, 0), (r1, 99));
-        assert_eq!(got, "alpha beta gamma delta epsilon zeta\n\n• one two three four five six seven");
+        assert_eq!(
+            got,
+            "alpha beta gamma delta epsilon zeta\n\n• one two three four five six seven"
+        );
         // backwards, and starting mid-line
         let c = plain(&rows[r0]).find("beta").unwrap();
-        assert_eq!(selection_text(&rows, (r1, 99), (r0, c)), "beta gamma delta epsilon zeta\n\n• one two three four five six seven");
+        assert_eq!(
+            selection_text(&rows, (r1, 99), (r0, c)),
+            "beta gamma delta epsilon zeta\n\n• one two three four five six seven"
+        );
     }
 
     #[test]
@@ -4785,7 +7101,11 @@ mod tests {
 
     #[test]
     fn links_and_paths() {
-        let l = links_in("see crates/log/tests/lock.rs; and https://x.y/z.", "/w", "h");
+        let l = links_in(
+            "see crates/log/tests/lock.rs; and https://x.y/z.",
+            "/w",
+            "h",
+        );
         assert_eq!(l.len(), 2);
         assert_eq!(l[0], (4, 24, "file://h/w/crates/log/tests/lock.rs".into()));
         assert_eq!(l[1].2, "https://x.y/z");
@@ -4794,7 +7114,10 @@ mod tests {
 
     #[test]
     fn left_cut_keeps_the_file_name() {
-        assert_eq!(left_cut("crates/doors/tests/serve_attach.rs", 24), "…/tests/serve_attach.rs");
+        assert_eq!(
+            left_cut("crates/doors/tests/serve_attach.rs", 24),
+            "…/tests/serve_attach.rs"
+        );
         assert_eq!(left_cut("a/b.rs", 24), "a/b.rs");
     }
 
@@ -4802,7 +7125,11 @@ mod tests {
     fn scrolling_anchors_the_top_row_and_follows_again_at_the_end() {
         assert_eq!(scroll_by(None, 100, -3), Some(97));
         assert_eq!(scroll_by(Some(97), 100, 2), Some(99));
-        assert_eq!(scroll_by(Some(99), 100, 1), None, "the end follows the output again");
+        assert_eq!(
+            scroll_by(Some(99), 100, 1),
+            None,
+            "the end follows the output again"
+        );
         assert_eq!(scroll_by(Some(1), 100, -5), Some(0));
         assert_eq!(scroll_by(None, 100, 3), None);
     }
@@ -4827,8 +7154,25 @@ mod tests {
         };
         let long = "cargo test -p doors --test serve_attach -- --nocapture wait_for_path_sweeps_every_waiting_test";
         for n in 1..6 {
-            let items = (0..n).map(|i| call(if i % 2 == 0 { long } else { "grep -rn sleep crates" }, St::Running)).collect();
-            let g = Group { items, steps: 1, step_closed: false, open: false, last_ts: 1000 };
+            let items = (0..n)
+                .map(|i| {
+                    call(
+                        if i % 2 == 0 {
+                            long
+                        } else {
+                            "grep -rn sleep crates"
+                        },
+                        St::Running,
+                    )
+                })
+                .collect();
+            let g = Group {
+                items,
+                steps: 1,
+                step_closed: false,
+                open: false,
+                last_ts: 1000,
+            };
             let rows = group_lines(&g, Act::Group(0, 0), 60, &View::default());
             assert_eq!(rows.len(), 1, "{n} calls in flight");
             assert_eq!(width(&rows[0].spans), 60);
@@ -4844,18 +7188,52 @@ mod tests {
         let rows = context_view(&f, 90);
         let text: Vec<String> = rows.iter().map(plain).collect();
         assert!(text.iter().any(|l| l.contains("120k tokens")));
-        assert!(text.iter().any(|l| l.contains("system prompt") && l.contains("~") && l.contains("1.0k")));
+        assert!(
+            text.iter()
+                .any(|l| l.contains("system prompt") && l.contains("~") && l.contains("1.0k"))
+        );
         assert!(text.iter().any(|l| l.contains("not attributed")));
         assert!(rows.iter().all(|r| width(&r.spans) <= 90));
     }
 
     fn shell_fold(exit: i64) -> Fold {
-        let call = Call { name: "shell".into(), args: json!({ "command": "cargo test -p log" }), st: St::Completed, start: 0, end: Some(2500), err: None, lines: 42, exit: Some(exit), changes: vec![], content: String::new(), step: 1, asked: None };
-        let g = Group { items: vec![Item::C(call)], steps: 1, step_closed: true, open: true, last_ts: 2500 };
-        Fold { turns: vec![Turn { prompt: "p".into(), blocks: vec![Block::Group(g)], ..Default::default() }], ..Default::default() }
+        let call = Call {
+            name: "shell".into(),
+            args: json!({ "command": "cargo test -p log" }),
+            st: St::Completed,
+            start: 0,
+            end: Some(2500),
+            err: None,
+            lines: 42,
+            exit: Some(exit),
+            changes: vec![],
+            content: String::new(),
+            step: 1,
+            asked: None,
+        };
+        let g = Group {
+            items: vec![Item::C(call)],
+            steps: 1,
+            step_closed: true,
+            open: true,
+            last_ts: 2500,
+        };
+        Fold {
+            turns: vec![Turn {
+                prompt: "p".into(),
+                blocks: vec![Block::Group(g)],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
     }
     fn lua_view(src: &str, cached: bool) -> View {
-        View { lua: Some(std::rc::Rc::new(lua::Ext::new("test.lua", src, cached).unwrap())), ..Default::default() }
+        View {
+            lua: Some(std::rc::Rc::new(
+                lua::Ext::new("test.lua", src, cached).unwrap(),
+            )),
+            ..Default::default()
+        }
     }
     const SHELL_ROW: &str = include_str!("../lua/shell_row.lua");
 
@@ -4870,7 +7248,10 @@ mod tests {
         assert_eq!(find_all(&rows, "2.5s").len(), 1);
         // a copy of the row is the text behind its cells
         let t = selection_text(&rows, (r, 0), (r, 999));
-        assert!(t.contains("exit 1  cargo test -p log") && t.contains("▰") && t.ends_with("42 lines"), "{t}");
+        assert!(
+            t.contains("exit 1  cargo test -p log") && t.contains("▰") && t.ends_with("42 lines"),
+            "{t}"
+        );
         // the badge's click region covers its cells
         let p = plain(&rows[r]);
         let x = p[..p.find(" exit 1").unwrap()].width() as u16;
@@ -4891,10 +7272,17 @@ mod tests {
             for _ in 0..2 {
                 let rows = conversation(&shell_fold(0), 100, &v);
                 let r = find(&rows, "cargo test");
-                assert!(rows[r].lua.is_none() && plain(&rows[r]).contains("exit 0 · 42 lines"), "the built-in row: {src}");
+                assert!(
+                    rows[r].lua.is_none() && plain(&rows[r]).contains("exit 0 · 42 lines"),
+                    "the built-in row: {src}"
+                );
             }
             let x = v.lua.as_ref().unwrap();
-            assert!(x.take_notice().is_some_and(|n| n.contains("shell renderer failed")), "{src}");
+            assert!(
+                x.take_notice()
+                    .is_some_and(|n| n.contains("shell renderer failed")),
+                "{src}"
+            );
             assert!(x.take_notice().is_none(), "one notice");
         }
     }
@@ -4924,23 +7312,55 @@ mod tests {
             json!({ "header": "Three", "question": "q3", "multiSelect": true, "options": [{ "label": "d" }] }),
         ];
         let f = Fold::default();
-        let p = Pending { rid: "r".into(), sid: String::new(), aid: "a".into(), what: Asking::Form(fields.clone()) };
-        let mut ui = Ui::default();
-        ui.form = Form { rid: "r".into(), sel: vec![vec![]; 3], text: vec![String::new(); 3], ..Default::default() };
-        let texts = |ui: &Ui| form_panel(&f, ui, 0, &p, &fields, 100).iter().map(plain).collect::<Vec<_>>();
+        let p = Pending {
+            rid: "r".into(),
+            sid: String::new(),
+            aid: "a".into(),
+            what: Asking::Form(fields.clone()),
+        };
+        let mut ui = Ui {
+            form: Form {
+                rid: "r".into(),
+                sel: vec![vec![]; 3],
+                text: vec![String::new(); 3],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let texts = |ui: &Ui| {
+            form_panel(&f, ui, 0, &p, &fields, 100)
+                .iter()
+                .map(plain)
+                .collect::<Vec<_>>()
+        };
         let t = texts(&ui);
-        let (words, next) = (t.iter().position(|l| l.contains("Type an answer")).unwrap(), t.iter().position(|l| l.contains("Next →")).unwrap());
+        let (words, next) = (
+            t.iter().position(|l| l.contains("Type an answer")).unwrap(),
+            t.iter().position(|l| l.contains("Next →")).unwrap(),
+        );
         assert_eq!(next, words + 1, "Next follows the answer-in-words row");
         let rows = form_panel(&f, &ui, 0, &p, &fields, 100);
         assert!(rows[next].hot.iter().any(|h| h.2 == Act::Next));
         ui.form.tab = 1;
-        assert!(!texts(&ui).iter().any(|l| l.contains("Next →") || l.contains("Review →")), "single choice has no Next row");
+        assert!(
+            !texts(&ui)
+                .iter()
+                .any(|l| l.contains("Next →") || l.contains("Review →")),
+            "single choice has no Next row"
+        );
         ui.form.tab = 2;
-        assert!(texts(&ui).iter().any(|l| l.contains("Review →")), "the last question reads Review");
+        assert!(
+            texts(&ui).iter().any(|l| l.contains("Review →")),
+            "the last question reads Review"
+        );
     }
 
     fn fixture(path: &str) -> Vec<Value> {
-        std::fs::read_to_string(path).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
     }
     fn fold_of(ev: &[Value]) -> Fold {
         let mut f = Fold::default();
@@ -4953,12 +7373,18 @@ mod tests {
     #[test]
     fn no_pending_opens_the_demo_settled() {
         let whole = fold_of(&fixture("fixtures/session.jsonl"));
-        assert!(whole.running && !whole.pending.is_empty(), "the fixture ends waiting on the person");
+        assert!(
+            whole.running && !whole.pending.is_empty(),
+            "the fixture ends waiting on the person"
+        );
         let f = fold_of(&settle(fixture("fixtures/session.jsonl")));
         assert!(!f.running && f.pending.is_empty());
         let t = f.turns.last().unwrap();
         assert!(matches!(t.blocks.last(), Some(Block::Done(s)) if s.starts_with("completed")));
-        assert!(f.running_calls().is_empty(), "no call of the settled turn still runs");
+        assert!(
+            f.running_calls().is_empty(),
+            "no call of the settled turn still runs"
+        );
         // a settled log is left as it is
         let again = settle(fixture("fixtures/idle.jsonl"));
         assert_eq!(again, fixture("fixtures/idle.jsonl"));
@@ -4975,48 +7401,113 @@ mod tests {
         assert!(ui.answered && f.pending.is_empty());
         finish_turn(&mut f, 3);
         assert!(!f.running && f.running_calls().is_empty());
-        let rows: Vec<String> = conversation(&f, 100, &View::default()).iter().map(plain).collect();
-        let (reply, done) = (rows.iter().position(|l| l.contains("Stopping here for the demo")).unwrap(), rows.iter().rposition(|l| l.contains("▣ completed")).unwrap());
-        assert!(done > reply, "the card closes with its ▣ line after the reply");
+        let rows: Vec<String> = conversation(&f, 100, &View::default())
+            .iter()
+            .map(plain)
+            .collect();
+        let (reply, done) = (
+            rows.iter()
+                .position(|l| l.contains("Stopping here for the demo"))
+                .unwrap(),
+            rows.iter()
+                .rposition(|l| l.contains("▣ completed"))
+                .unwrap(),
+        );
+        assert!(
+            done > reply,
+            "the card closes with its ▣ line after the reply"
+        );
     }
 
     #[test]
     fn a_click_opens_a_ledger_row_or_a_thought() {
         let out: String = (1..=30).map(|i| format!("line {i}\n")).collect();
-        let call = Call { name: "shell".into(), args: json!({ "command": "cargo test" }), st: St::Completed, start: 0, end: Some(10), err: None, lines: 30, exit: Some(0), changes: vec![], content: out, step: 1, asked: None };
-        let thought = Reason { text: "**Plan**\nfirst this, then that".into(), start: 0, end: Some(5), step: 1 };
-        let g = Group { items: vec![Item::R(thought), Item::C(call)], steps: 1, step_closed: true, open: true, last_ts: 10 };
+        let call = Call {
+            name: "shell".into(),
+            args: json!({ "command": "cargo test" }),
+            st: St::Completed,
+            start: 0,
+            end: Some(10),
+            err: None,
+            lines: 30,
+            exit: Some(0),
+            changes: vec![],
+            content: out,
+            step: 1,
+            asked: None,
+        };
+        let thought = Reason {
+            text: "**Plan**\nfirst this, then that".into(),
+            start: 0,
+            end: Some(5),
+            step: 1,
+        };
+        let g = Group {
+            items: vec![Item::R(thought), Item::C(call)],
+            steps: 1,
+            step_closed: true,
+            open: true,
+            last_ts: 10,
+        };
         let mut v = View::default();
-        let text = |v: &View| group_lines(&g, Act::Group(0, 0), 80, v).iter().map(plain).collect::<Vec<_>>();
+        let text = |v: &View| {
+            group_lines(&g, Act::Group(0, 0), 80, v)
+                .iter()
+                .map(plain)
+                .collect::<Vec<_>>()
+        };
         let rows = group_lines(&g, Act::Group(0, 0), 80, &v);
         assert_eq!(rows[1].act, Some(Act::Item(0, 0, 0)));
         assert_eq!(rows[2].act, Some(Act::Item(0, 0, 1)));
         assert_eq!(rows.len(), 3);
         v.exp.insert((0, 0, 1));
         let t = text(&v);
-        assert!(t.iter().any(|l| l.trim() == "line 20") && !t.iter().any(|l| l.trim() == "line 21"));
+        assert!(
+            t.iter().any(|l| l.trim() == "line 20") && !t.iter().any(|l| l.trim() == "line 21")
+        );
         assert!(t.last().unwrap().contains("… 10 more lines"));
         v.exp.insert((0, 0, 0));
         assert!(text(&v).iter().any(|l| l.contains("first this, then that")));
         // a thought with no call is one line, and a click on it shows its text
-        let lone = Group { items: vec![Item::R(Reason { text: "why not".into(), start: 0, end: Some(1), step: 1 })], steps: 1, step_closed: true, open: false, last_ts: 1 };
+        let lone = Group {
+            items: vec![Item::R(Reason {
+                text: "why not".into(),
+                start: 0,
+                end: Some(1),
+                step: 1,
+            })],
+            steps: 1,
+            step_closed: true,
+            open: false,
+            last_ts: 1,
+        };
         let rows = group_lines(&lone, Act::Group(2, 3), 80, &View::default());
         assert_eq!((rows.len(), rows[0].act), (1, Some(Act::Item(2, 3, 0))));
-        let v = View { exp: HashSet::from([(2, 3, 0)]), ..Default::default() };
+        let v = View {
+            exp: HashSet::from([(2, 3, 0)]),
+            ..Default::default()
+        };
         assert!(plain(&group_lines(&lone, Act::Group(2, 3), 80, &v)[1]).contains("why not"));
     }
 
     #[test]
     fn a_ledger_row_opens_in_the_paged_mode() {
-        let mut v = View { all_open: true, ..Default::default() };
+        let mut v = View {
+            all_open: true,
+            ..Default::default()
+        };
         let (mut pg, _) = paged::Pager::open("fixtures/session.jsonl", 8).unwrap();
         pg.sync(124, &v, "");
         pg.ensure(0, pg.total(), &v);
         let (_, rows) = pg.rows(0, pg.total() - 1, &v);
-        let (r, key) = rows.iter().enumerate().find_map(|(r, x)| match x.act {
-            Some(Act::Item(p, bi, ii)) if plain(x).contains("read ") => Some((r, (p, bi, ii))),
-            _ => None,
-        }).unwrap();
+        let (r, key) = rows
+            .iter()
+            .enumerate()
+            .find_map(|(r, x)| match x.act {
+                Some(Act::Item(p, bi, ii)) if plain(x).contains("read ") => Some((r, (p, bi, ii))),
+                _ => None,
+            })
+            .unwrap();
         let before = pg.total();
         v.exp.insert(key);
         pg.toggle(key.0, key.1, &v);
@@ -5029,52 +7520,130 @@ mod tests {
 
     fn handoff_fold(outcome: Option<&str>) -> Fold {
         let e = |kind: &str, aid: &str, payload: Value| json!({ "kind": kind, "session_id": "s", "ts": 1000, "action_id": aid, "payload": payload });
-        let usage = |n: u64| e("usage_recorded", "", json!({ "tokens": { "input": n, "cache_read": 0, "output": 0 } }));
+        let usage = |n: u64| {
+            e(
+                "usage_recorded",
+                "",
+                json!({ "tokens": { "input": n, "cache_read": 0, "output": 0 } }),
+            )
+        };
         let mut ev = vec![
-            e("turn_started", "", json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "go" }], "source": "driver", "command_id": "c" }] })),
+            e(
+                "turn_started",
+                "",
+                json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "go" }], "source": "driver", "command_id": "c" }] }),
+            ),
             e("assistant_message_started", "a1", json!({})),
-            e("assistant_message_completed", "a1", json!({ "text": "before the handoff" })),
+            e(
+                "assistant_message_completed",
+                "a1",
+                json!({ "text": "before the handoff" }),
+            ),
             usage(402_000),
         ];
         match outcome {
             // a tool-started handoff writes no handoff_started and makes no note request
-            None => ev.push(e("handoff_completed", "", json!({ "outcome": "completed", "tokens_before": 402_000 }))),
+            None => ev.push(e(
+                "handoff_completed",
+                "",
+                json!({ "outcome": "completed", "tokens_before": 402_000 }),
+            )),
             Some(o) => ev.extend([
                 e("handoff_started", "", json!({ "trigger": "auto" })),
                 e("assistant_message_started", "a2", json!({})),
-                e("assistant_message_completed", "a2", json!({ "text": "THE NOTE" })),
+                e(
+                    "assistant_message_completed",
+                    "a2",
+                    json!({ "text": "THE NOTE" }),
+                ),
                 usage(403_000),
-                e("handoff_completed", "", json!({ "outcome": o, "tokens_before": 402_000, "note": ["a2"] })),
+                e(
+                    "handoff_completed",
+                    "",
+                    json!({ "outcome": o, "tokens_before": 402_000, "note": ["a2"] }),
+                ),
             ]),
         }
-        let after = if outcome == Some("failed") { 404_000 } else { 32_000 };
-        ev.extend([usage(after), e("assistant_message_started", "a3", json!({})), e("assistant_message_completed", "a3", json!({ "text": "after the handoff" })), e("turn_completed", "", json!({ "outcome": "completed" }))]);
+        let after = if outcome == Some("failed") {
+            404_000
+        } else {
+            32_000
+        };
+        ev.extend([
+            usage(after),
+            e("assistant_message_started", "a3", json!({})),
+            e(
+                "assistant_message_completed",
+                "a3",
+                json!({ "text": "after the handoff" }),
+            ),
+            e("turn_completed", "", json!({ "outcome": "completed" })),
+        ]);
         fold_of(&ev)
     }
 
     #[test]
     fn a_handoff_breaks_the_card_with_a_band() {
         let f = handoff_fold(Some("completed"));
-        let rows: Vec<String> = conversation(&f, 90, &View::default()).iter().map(plain).collect();
+        let rows: Vec<String> = conversation(&f, 90, &View::default())
+            .iter()
+            .map(plain)
+            .collect();
         let at = |s: &str| rows.iter().position(|l| l.contains(s));
-        let (b, band, a, done) = (at("before the handoff").unwrap(), at("automatic at 400k").unwrap(), at("after the handoff").unwrap(), at("▣ completed").unwrap());
+        let (b, band, a, done) = (
+            at("before the handoff").unwrap(),
+            at("automatic at 400k").unwrap(),
+            at("after the handoff").unwrap(),
+            at("▣ completed").unwrap(),
+        );
         assert!(b < band && band < a && a < done);
         assert!(rows[band].contains("402k → 32k"), "{}", rows[band]);
         assert!(at("THE NOTE").is_none(), "the note is not a reply");
-        assert_eq!(rows.iter().filter(|l| !l.is_empty() && l.chars().all(|c| c == '▄')).count(), 3, "two cards and the band");
+        assert_eq!(
+            rows.iter()
+                .filter(|l| !l.is_empty() && l.chars().all(|c| c == '▄'))
+                .count(),
+            3,
+            "two cards and the band"
+        );
         // the context follows the size after the handoff, and counts nothing before it
         assert_eq!(f.ctx, 32_000);
-        assert!(context_view(&f, 90).iter().any(|r| plain(r).contains("32k tokens")));
+        assert!(
+            context_view(&f, 90)
+                .iter()
+                .any(|r| plain(r).contains("32k tokens"))
+        );
         // before the first request after it, the size after is not known
         let mut g = handoff_fold(Some("completed"));
-        if let Some(Block::Handoff(h)) = g.turns[0].blocks.iter_mut().find(|b| matches!(b, Block::Handoff(_))) {
+        if let Some(Block::Handoff(h)) = g.turns[0]
+            .blocks
+            .iter_mut()
+            .find(|b| matches!(b, Block::Handoff(_)))
+        {
             h.after = None;
         }
-        assert!(conversation(&g, 90, &View::default()).iter().any(|r| plain(r).contains("402k → …")));
-        let failed: Vec<String> = conversation(&handoff_fold(Some("failed")), 90, &View::default()).iter().map(plain).collect();
-        assert!(failed.iter().any(|l| l.contains("failed · the context is unchanged")));
-        let tool: Vec<String> = conversation(&handoff_fold(None), 90, &View::default()).iter().map(plain).collect();
-        assert!(tool.iter().any(|l| l.contains("the model handed off") && l.contains("402k → 32k")));
+        assert!(
+            conversation(&g, 90, &View::default())
+                .iter()
+                .any(|r| plain(r).contains("402k → …"))
+        );
+        let failed: Vec<String> = conversation(&handoff_fold(Some("failed")), 90, &View::default())
+            .iter()
+            .map(plain)
+            .collect();
+        assert!(
+            failed
+                .iter()
+                .any(|l| l.contains("failed · the context is unchanged"))
+        );
+        let tool: Vec<String> = conversation(&handoff_fold(None), 90, &View::default())
+            .iter()
+            .map(plain)
+            .collect();
+        assert!(
+            tool.iter()
+                .any(|l| l.contains("the model handed off") && l.contains("402k → 32k"))
+        );
     }
 
     #[test]
@@ -5097,17 +7666,33 @@ mod tests {
             req["rule"] = r;
         }
         fold_of(&[
-            e("turn_started", None, json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "go" }], "source": "driver", "command_id": "c" }] })),
-            e("tool_call_requested", Some("a1"), json!({ "name": "shell", "arguments": { "command": "npm test -- --watch" }, "provider_id": "p" })),
+            e(
+                "turn_started",
+                None,
+                json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "go" }], "source": "driver", "command_id": "c" }] }),
+            ),
+            e(
+                "tool_call_requested",
+                Some("a1"),
+                json!({ "name": "shell", "arguments": { "command": "npm test -- --watch" }, "provider_id": "p" }),
+            ),
             e("permission_requested", Some("a1"), req),
         ])
     }
     /// Runs `act` and returns the command lines it wrote, parsed.
     fn sent(act: impl FnOnce(&mut Ui, &mut Option<std::fs::File>)) -> Vec<Value> {
-        let path = std::env::temp_dir().join(format!("tui-prototype-cmds-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let path = std::env::temp_dir().join(format!(
+            "tui-prototype-cmds-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let mut cmds = Some(std::fs::File::create(&path).unwrap());
         act(&mut Ui::default(), &mut cmds);
-        let out = std::fs::read_to_string(&path).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let out = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
         let _ = std::fs::remove_file(&path);
         out
     }
@@ -5116,17 +7701,33 @@ mod tests {
         let rule = json!({ "subject": "npm test -- --watch", "prefix": "npm test" });
         let mut want = vec![
             (CH_ONCE, json!({ "request_id": "r1", "decision": "allow" })),
-            (CH_SESSION, json!({ "request_id": "r1", "decision": "allow", "remember": { "scope": "session", "prefix": "npm test" } })),
-            (CH_PROJECT, json!({ "request_id": "r1", "decision": "allow", "remember": { "scope": "project", "prefix": "npm test" } })),
-            (CH_DENY, json!({ "request_id": "r1", "decision": "deny", "feedback": "not that" })),
+            (
+                CH_SESSION,
+                json!({ "request_id": "r1", "decision": "allow", "remember": { "scope": "session", "prefix": "npm test" } }),
+            ),
+            (
+                CH_PROJECT,
+                json!({ "request_id": "r1", "decision": "allow", "remember": { "scope": "project", "prefix": "npm test" } }),
+            ),
+            (
+                CH_DENY,
+                json!({ "request_id": "r1", "decision": "deny", "feedback": "not that" }),
+            ),
         ];
         for (choice, args) in want.drain(..) {
             let mut f = asking(Some(rule.clone()));
             let lines = sent(|ui, cmds| {
-                ui.feedback = if choice == CH_DENY { "not that".into() } else { String::new() };
+                ui.feedback = if choice == CH_DENY {
+                    "not that".into()
+                } else {
+                    String::new()
+                };
                 approve(&mut f, ui, cmds, 1, choice);
             });
-            assert_eq!(lines, vec![json!({ "id": "c_c001", "command": "reply", "args": args })]);
+            assert_eq!(
+                lines,
+                vec![json!({ "id": "c_c001", "command": "reply", "args": args })]
+            );
             assert!(f.pending.is_empty());
         }
         // no rule on the request: the remembering choices send nothing
@@ -5154,14 +7755,25 @@ mod tests {
             interrupt(&mut f, ui, cmds, 2);
         });
         let text = |t: &str| json!([{ "type": "text", "text": t }]);
-        assert_eq!(lines[0], json!({ "id": "c_c001", "command": "steer", "args": { "content": text("use the other file") } }));
-        assert_eq!(lines[2], json!({ "id": "c_c003", "command": "steer_amend", "args": { "command_id": "c_c001", "content": text("use the third file") } }));
-        assert_eq!(lines[3], json!({ "id": "c_c004", "command": "steer_drop", "args": { "command_id": "c_c002" } }));
+        assert_eq!(
+            lines[0],
+            json!({ "id": "c_c001", "command": "steer", "args": { "content": text("use the other file") } })
+        );
+        assert_eq!(
+            lines[2],
+            json!({ "id": "c_c003", "command": "steer_amend", "args": { "command_id": "c_c001", "content": text("use the third file") } })
+        );
+        assert_eq!(
+            lines[3],
+            json!({ "id": "c_c004", "command": "steer_drop", "args": { "command_id": "c_c002" } })
+        );
         assert_eq!(lines[5], json!({ "id": "c_c006", "command": "cancel" }));
         // the pending approval is denied by cancel, the call is cancelled, the queue starts the next turn
         assert!(f.pending.is_empty() && f.running && f.queue.is_empty());
         let t = f.turns.last().unwrap();
         assert_eq!(t.prompt, "use the third file\n\nand then run it again");
-        assert!(matches!(f.turns[0].blocks.last(), Some(Block::Done(s)) if s.starts_with("interrupted")));
+        assert!(
+            matches!(f.turns[0].blocks.last(), Some(Block::Done(s)) if s.starts_with("interrupted"))
+        );
     }
 }

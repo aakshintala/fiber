@@ -86,13 +86,55 @@ struct ToolStat {
     weight: u64,
 }
 const TOOLS: &[ToolStat] = &[
-    ToolStat { flavor: "bash", median: 799.0, p90: 4_856.0, p99: 18_916.0, weight: 26_829 },
-    ToolStat { flavor: "read", median: 4_444.0, p90: 21_797.0, p99: 51_263.0, weight: 5_070 },
-    ToolStat { flavor: "grep", median: 1_953.0, p90: 17_331.0, p99: 130_901.0, weight: 1_202 },
-    ToolStat { flavor: "ffgrep", median: 1_769.0, p90: 12_217.0, p99: 49_494.0, weight: 1_057 },
-    ToolStat { flavor: "find", median: 118.0, p90: 3_007.0, p99: 42_073.0, weight: 136 },
-    ToolStat { flavor: "web_fetch", median: 4_734.0, p90: 33_729.0, p99: 51_475.0, weight: 21 },
-    ToolStat { flavor: "edit", median: 110.0, p90: 149.0, p99: 203.0, weight: 3_567 },
+    ToolStat {
+        flavor: "bash",
+        median: 799.0,
+        p90: 4_856.0,
+        p99: 18_916.0,
+        weight: 26_829,
+    },
+    ToolStat {
+        flavor: "read",
+        median: 4_444.0,
+        p90: 21_797.0,
+        p99: 51_263.0,
+        weight: 5_070,
+    },
+    ToolStat {
+        flavor: "grep",
+        median: 1_953.0,
+        p90: 17_331.0,
+        p99: 130_901.0,
+        weight: 1_202,
+    },
+    ToolStat {
+        flavor: "ffgrep",
+        median: 1_769.0,
+        p90: 12_217.0,
+        p99: 49_494.0,
+        weight: 1_057,
+    },
+    ToolStat {
+        flavor: "find",
+        median: 118.0,
+        p90: 3_007.0,
+        p99: 42_073.0,
+        weight: 136,
+    },
+    ToolStat {
+        flavor: "web_fetch",
+        median: 4_734.0,
+        p90: 33_729.0,
+        p99: 51_475.0,
+        weight: 21,
+    },
+    ToolStat {
+        flavor: "edit",
+        median: 110.0,
+        p90: 149.0,
+        p99: 203.0,
+        weight: 3_567,
+    },
 ];
 
 // Assistant text and reasoning lengths (chars), measured for this ticket
@@ -120,9 +162,26 @@ const BETWEEN_TEXT_MAX: f64 = 141.0;
 
 fn filler(rng: &mut Rng, target: usize) -> String {
     const WORDS: &[&str] = &[
-        "session", "tool", "result", "fold", "render", "event", "payload", "turn", "action",
-        "call", "path", "budget", "measure", "prototype", "conversation", "panel", "ledger",
-        "step", "text", "fixture",
+        "session",
+        "tool",
+        "result",
+        "fold",
+        "render",
+        "event",
+        "payload",
+        "turn",
+        "action",
+        "call",
+        "path",
+        "budget",
+        "measure",
+        "prototype",
+        "conversation",
+        "panel",
+        "ledger",
+        "step",
+        "text",
+        "fixture",
     ];
     let mut s = String::with_capacity(target + 80);
     let mut n = 1u32;
@@ -162,7 +221,16 @@ struct Call {
 
 impl G {
     fn new(seed: u64) -> Self {
-        G { out: vec![], ts: 1_790_604_120_000, seq: 0, turn: None, n: 0, ctx: 8_000, gen_n: 0, rng: Rng::new(seed) }
+        G {
+            out: vec![],
+            ts: 1_790_604_120_000,
+            seq: 0,
+            turn: None,
+            n: 0,
+            ctx: 8_000,
+            gen_n: 0,
+            rng: Rng::new(seed),
+        }
     }
     fn id(&mut self, p: &str) -> String {
         self.n += 1;
@@ -194,7 +262,12 @@ impl G {
         self.m("turn_started", 1_500, None, json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": text }], "source": "driver", "command_id": cid }] }));
     }
     fn end_turn(&mut self) {
-        self.m("turn_completed", 400, None, json!({ "outcome": "completed" }));
+        self.m(
+            "turn_completed",
+            400,
+            None,
+            json!({ "outcome": "completed" }),
+        );
         self.turn = None;
     }
     fn usage(&mut self, aid: Option<&str>, out: u64) {
@@ -212,14 +285,25 @@ impl G {
         let a = self.id("a");
         self.m("assistant_message_started", 900, Some(&a), json!({}));
         if with_reasoning {
-            let rchars = (self.rng.lognormal(REASON_MEDIAN, REASON_P90) as usize).clamp(20, REASON_MAX as usize * 2);
+            let rchars = (self.rng.lognormal(REASON_MEDIAN, REASON_P90) as usize)
+                .clamp(20, REASON_MAX as usize * 2);
             let ra = self.id("a");
             self.m("reasoning_started", 800, Some(&ra), json!({}));
             let text = filler(&mut self.rng, rchars);
-            self.m("reasoning_completed", 4_000, Some(&ra), json!({ "text": text, "provider_item": { "type": "reasoning" } }));
+            self.m(
+                "reasoning_completed",
+                4_000,
+                Some(&ra),
+                json!({ "text": text, "provider_item": { "type": "reasoning" } }),
+            );
         }
         let text = filler(&mut self.rng, chars);
-        self.m("assistant_message_completed", 3_000, Some(&a), json!({ "text": text, "outcome": "completed" }));
+        self.m(
+            "assistant_message_completed",
+            3_000,
+            Some(&a),
+            json!({ "text": text, "outcome": "completed" }),
+        );
         self.usage(Some(&a), chars as u64 / 4);
     }
     fn gen_call(&mut self) -> Call {
@@ -232,7 +316,15 @@ impl G {
         match t.flavor {
             "read" => {
                 let path = format!("crates/mod{}/src/file{}.rs", n % 12, n % 47);
-                Call { name: "read", args: json!({ "path": path.clone() }), effects: json!(["reads"]), paths: json!([path]), content, process: None, changes: None }
+                Call {
+                    name: "read",
+                    args: json!({ "path": path.clone() }),
+                    effects: json!(["reads"]),
+                    paths: json!([path]),
+                    content,
+                    process: None,
+                    changes: None,
+                }
             }
             "edit" => {
                 let path = format!("crates/mod{}/src/file{}.rs", n % 12, n % 47);
@@ -284,21 +376,42 @@ impl G {
         let msg = self.id("a");
         self.m("assistant_message_started", 900, Some(&msg), json!({}));
         if with_reasoning {
-            let rchars = (self.rng.lognormal(REASON_MEDIAN, REASON_P90) as usize).clamp(20, REASON_MAX as usize * 2);
+            let rchars = (self.rng.lognormal(REASON_MEDIAN, REASON_P90) as usize)
+                .clamp(20, REASON_MAX as usize * 2);
             let ra = self.id("a");
             self.m("reasoning_started", 800, Some(&ra), json!({}));
             let text = filler(&mut self.rng, rchars);
-            self.m("reasoning_completed", 3_000, Some(&ra), json!({ "text": text, "provider_item": { "type": "reasoning" } }));
+            self.m(
+                "reasoning_completed",
+                3_000,
+                Some(&ra),
+                json!({ "text": text, "provider_item": { "type": "reasoning" } }),
+            );
         }
         let calls: Vec<(String, Call)> = (0..n).map(|_| (self.id("a"), self.gen_call())).collect();
         for (a, c) in &calls {
             let pid = format!("toolu_{a}");
-            self.m("tool_call_requested", 400, Some(a), json!({ "name": c.name, "arguments": c.args, "provider_id": pid }));
+            self.m(
+                "tool_call_requested",
+                400,
+                Some(a),
+                json!({ "name": c.name, "arguments": c.args, "provider_id": pid }),
+            );
         }
-        self.m("assistant_message_completed", 60, Some(&msg), json!({ "text": "", "outcome": "completed" }));
+        self.m(
+            "assistant_message_completed",
+            60,
+            Some(&msg),
+            json!({ "text": "", "outcome": "completed" }),
+        );
         self.usage(Some(&msg), 300 + 120 * n as u64);
         for (a, c) in &calls {
-            self.m("tool_call_started", 30, Some(a), json!({ "effects": c.effects, "reversible": c.name == "read", "paths": c.paths }));
+            self.m(
+                "tool_call_started",
+                30,
+                Some(a),
+                json!({ "effects": c.effects, "reversible": c.name == "read", "paths": c.paths }),
+            );
             let mut p = serde_json::Map::new();
             p.insert("status".into(), json!("completed"));
             p.insert("content".into(), c.content.clone());
@@ -313,8 +426,18 @@ impl G {
     }
 
     fn preamble(&mut self) {
-        self.m("fiber_started", 0, None, json!({ "version": "0.0.1", "resumed": false, "mode": "ask" }));
-        self.m("session_started", 5, None, json!({ "workspace": "~/work/fiber" }));
+        self.m(
+            "fiber_started",
+            0,
+            None,
+            json!({ "version": "0.0.1", "resumed": false, "mode": "ask" }),
+        );
+        self.m(
+            "session_started",
+            5,
+            None,
+            json!({ "workspace": "~/work/fiber" }),
+        );
         self.m("opening_message", 5, None, json!({
             "environment": { "date": "2026-09-28", "os": "macos", "arch": "aarch64", "shell": "zsh", "workspace": "~/work/fiber",
                 "git": { "branch": "large-session" }, "session_log": format!("~/.fiber/projects/fiber/sessions/{MAIN}/events.jsonl") },
@@ -329,7 +452,12 @@ impl G {
             "reason": "start", "model": "anthropic/claude-opus-5-5", "context_window": 1_000_000, "trigger_at": 400_000, "effort": "high", "thinking": "adaptive",
             "tool_choice": "auto", "cache_lifetime": "1h", "system_prompt": "…", "tools": tools,
         }));
-        self.m("mode_changed", 3_000, None, json!({ "before": "ask", "after": "auto", "by": "command" }));
+        self.m(
+            "mode_changed",
+            3_000,
+            None,
+            json!({ "before": "ask", "after": "auto", "by": "command" }),
+        );
     }
 }
 
@@ -386,7 +514,10 @@ fn build_by_prompts(seed: u64, prompts: u64) -> (G, u64) {
     for i in 0..prompts {
         g.ts += 20_000;
         g.turn(PROMPTS[(i as usize) % PROMPTS.len()]);
-        let calls = (g.rng.lognormal(CALLS_PER_PROMPT_MEDIAN, CALLS_PER_PROMPT_P90) as u64).max(1);
+        let calls = (g
+            .rng
+            .lognormal(CALLS_PER_PROMPT_MEDIAN, CALLS_PER_PROMPT_P90) as u64)
+            .max(1);
         total += calls;
         turn_body(&mut g, calls);
         g.end_turn();
@@ -424,26 +555,37 @@ fn write(path: &str, lines: &[Value]) {
     let s: String = lines.iter().map(|v| v.to_string() + "\n").collect();
     let bytes = s.len();
     std::fs::write(path, s).unwrap();
-    eprintln!("{path}: {} lines, {} bytes ({:.2} MiB)", lines.len(), bytes, bytes as f64 / (1024.0 * 1024.0));
+    eprintln!(
+        "{path}: {} lines, {} bytes ({:.2} MiB)",
+        lines.len(),
+        bytes,
+        bytes as f64 / (1024.0 * 1024.0)
+    );
 }
 
 fn main() {
     std::fs::create_dir_all("fixtures").ok();
 
     // median: 5 prompts (Claude Code median session length)
-    let (g, total) = build_by_prompts(0xC0FFEE_1, 5);
-    eprintln!("median: 5 prompts, {total} tool calls (target: per-prompt lognormal fit to median 5 / p90 28)");
+    let (g, total) = build_by_prompts(0x0C0F_FEE1, 5);
+    eprintln!(
+        "median: 5 prompts, {total} tool calls (target: per-prompt lognormal fit to median 5 / p90 28)"
+    );
     write("fixtures/large-median.jsonl", &g.out);
 
     // p90: 17 prompts (Claude Code p90 session length), same per-prompt distribution
-    let (g, total) = build_by_prompts(0xC0FFEE_2, 17);
-    eprintln!("p90: 17 prompts, {total} tool calls (same per-prompt distribution as median, more prompts)");
+    let (g, total) = build_by_prompts(0x0C0F_FEE2, 17);
+    eprintln!(
+        "p90: 17 prompts, {total} tool calls (same per-prompt distribution as median, more prompts)"
+    );
     write("fixtures/large-p90.jsonl", &g.out);
 
     // heavy: p99-centred prompts until the total matches the longest real
     // Claude Code session by tool-call count (984, found by measuring the
     // owner's ~/.claude/projects/*/*.jsonl main sessions for this ticket).
-    let (g, total, prompts) = build_heavy(0xC0FFEE_3, 984);
-    eprintln!("heavy: {prompts} prompts, {total} tool calls (target: 984, the longest real session found)");
+    let (g, total, prompts) = build_heavy(0x0C0F_FEE3, 984);
+    eprintln!(
+        "heavy: {prompts} prompts, {total} tool calls (target: 984, the longest real session found)"
+    );
     write("fixtures/large-heavy.jsonl", &g.out);
 }

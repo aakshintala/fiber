@@ -63,7 +63,12 @@ pub enum Ev {
 
 fn kitty_mods(n: u32) -> Mods {
     let b = n.saturating_sub(1);
-    Mods { shift: b & 1 != 0, alt: b & 2 != 0, ctrl: b & 4 != 0, sup: b & 8 != 0 }
+    Mods {
+        shift: b & 1 != 0,
+        alt: b & 2 != 0,
+        ctrl: b & 4 != 0,
+        sup: b & 8 != 0,
+    }
 }
 fn num(s: &str) -> u32 {
     s.split(':').next().unwrap_or("").parse().unwrap_or(1)
@@ -114,7 +119,16 @@ pub fn parse(b: &[u8]) -> Option<(Option<Ev>, usize)> {
         b'\r' => k(Key::Enter, 1),
         b'\t' => k(Key::Tab, 1),
         0x7f | 0x08 => k(Key::Backspace, 1),
-        0x01..=0x1a => Some((Some(Ev::Key(Key::Char((b'a' + c0 - 1) as char), Mods { ctrl: true, ..Default::default() })), 1)),
+        0x01..=0x1a => Some((
+            Some(Ev::Key(
+                Key::Char((b'a' + c0 - 1) as char),
+                Mods {
+                    ctrl: true,
+                    ..Default::default()
+                },
+            )),
+            1,
+        )),
         0x00..=0x1f => Some((None, 1)),
         _ => {
             let n = match c0 {
@@ -126,7 +140,10 @@ pub fn parse(b: &[u8]) -> Option<(Option<Ev>, usize)> {
             if b.len() < n {
                 return None;
             }
-            match std::str::from_utf8(&b[..n]).ok().and_then(|s| s.chars().next()) {
+            match std::str::from_utf8(&b[..n])
+                .ok()
+                .and_then(|s| s.chars().next())
+            {
                 Some(ch) => k(Key::Char(ch), n),
                 None => Some((None, 1)),
             }
@@ -150,8 +167,17 @@ fn csi(b: &[u8]) -> Option<(Option<Ev>, usize)> {
         if v.len() < 3 {
             return Some((None, n));
         }
-        let (cb, x, y) = (v[0], v[1].saturating_sub(1) as u16, v[2].saturating_sub(1) as u16);
-        let m = Mods { shift: cb & 4 != 0, alt: cb & 8 != 0, ctrl: cb & 16 != 0, sup: false };
+        let (cb, x, y) = (
+            v[0],
+            v[1].saturating_sub(1) as u16,
+            v[2].saturating_sub(1) as u16,
+        );
+        let m = Mods {
+            shift: cb & 4 != 0,
+            alt: cb & 8 != 0,
+            ctrl: cb & 16 != 0,
+            sup: false,
+        };
         // wheel buttons 4 to 7: up, down, left, right. A trackpad's sideways drift
         // arrives as 6 and 7 (66, 67), which are not vertical scrolling
         let kind = if cb & 64 != 0 {
@@ -186,7 +212,10 @@ fn csi(b: &[u8]) -> Option<(Option<Ev>, usize)> {
     let parts: Vec<&str> = params.split(';').collect();
     let mods = parts.get(1).map_or(Mods::default(), |m| kitty_mods(num(m)));
     // a key release, reported only under flag 2, which this program never asks for
-    if parts.get(1).is_some_and(|m| m.split(':').nth(1) == Some("3")) {
+    if parts
+        .get(1)
+        .is_some_and(|m| m.split(':').nth(1) == Some("3"))
+    {
         return Some((None, n));
     }
     match fin {
@@ -201,7 +230,9 @@ fn csi(b: &[u8]) -> Option<(Option<Ev>, usize)> {
                 9 => Key::Tab,
                 127 | 8 => Key::Backspace,
                 27 => Key::Esc,
-                c => char::from_u32(c).filter(|c| !c.is_control() && (*c as u32) < 57344).map_or(Key::Other, Key::Char),
+                c => char::from_u32(c)
+                    .filter(|c| !c.is_control() && (*c as u32) < 57344)
+                    .map_or(Key::Other, Key::Char),
             };
             key(kk, mods)
         }
@@ -211,7 +242,13 @@ fn csi(b: &[u8]) -> Option<(Option<Ev>, usize)> {
         b'D' => key(Key::Left, mods),
         b'H' => key(Key::Home, mods),
         b'F' => key(Key::End, mods),
-        b'Z' => key(Key::BackTab, Mods { shift: true, ..mods }),
+        b'Z' => key(
+            Key::BackTab,
+            Mods {
+                shift: true,
+                ..mods
+            },
+        ),
         b'~' => {
             let kk = match num(parts[0]) {
                 1 | 7 => Key::Home,
@@ -280,7 +317,12 @@ impl Reader {
         }
         WINCH_FD.store(fds[1], Relaxed);
         unsafe { libc::signal(libc::SIGWINCH, on_winch as *const () as libc::sighandler_t) };
-        Ok(Reader { buf: vec![], raw: vec![], winch: fds[0], stuck: None })
+        Ok(Reader {
+            buf: vec![],
+            raw: vec![],
+            winch: fds[0],
+            stuck: None,
+        })
     }
     /// The deadline by which an incomplete Esc sequence is flushed as the Esc key.
     pub fn deadline(&self) -> Option<Instant> {
@@ -288,12 +330,27 @@ impl Reader {
     }
     /// Waits up to `timeout` for input. Returns the events and whether the window was resized.
     pub fn wait(&mut self, timeout: Option<Duration>) -> io::Result<(Vec<Ev>, bool)> {
-        let mut p = [libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 }, libc::pollfd { fd: self.winch, events: libc::POLLIN, revents: 0 }];
+        let mut p = [
+            libc::pollfd {
+                fd: 0,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: self.winch,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
         let ms = timeout.map_or(-1, |t| t.as_millis().min(i32::MAX as u128) as i32);
         let rc = unsafe { libc::poll(p.as_mut_ptr(), 2, ms) };
         if rc < 0 {
             let e = io::Error::last_os_error();
-            return if e.kind() == io::ErrorKind::Interrupted { Ok((vec![], false)) } else { Err(e) };
+            return if e.kind() == io::ErrorKind::Interrupted {
+                Ok((vec![], false))
+            } else {
+                Err(e)
+            };
         }
         let mut resized = false;
         self.raw.clear();
@@ -347,31 +404,133 @@ mod tests {
     fn replies_and_keys() {
         assert_eq!(one(b"\x1b[?1u"), Some(Ev::KittyFlags(1)));
         assert_eq!(one(b"\x1b[?62;22c"), Some(Ev::Da1));
-        assert_eq!(one(b"\x1b[13;2u"), Some(Ev::Key(Key::Enter, Mods { shift: true, ..Default::default() })));
-        assert_eq!(one(b"\x1b[102;9u"), Some(Ev::Key(Key::Char('f'), Mods { sup: true, ..Default::default() })));
-        assert_eq!(one(b"\x06"), Some(Ev::Key(Key::Char('f'), Mods { ctrl: true, ..Default::default() })));
-        assert_eq!(one(b"\x1b[1;3A"), Some(Ev::Key(Key::Up, Mods { alt: true, ..Default::default() })));
-        assert_eq!(one(b"\x1bx"), Some(Ev::Key(Key::Char('x'), Mods { alt: true, ..Default::default() })));
-        assert_eq!(one(b"\x1b[<0;5;3M"), Some(Ev::Mouse(Mouse::Down, 4, 2, Mods::default())));
-        assert_eq!(one(b"\x1b[<32;6;3M"), Some(Ev::Mouse(Mouse::Drag, 5, 2, Mods::default())));
-        assert_eq!(one(b"\x1b[<0;6;3m"), Some(Ev::Mouse(Mouse::Up, 5, 2, Mods::default())));
-        assert_eq!(one(b"\x1b[<35;7;4M"), Some(Ev::Mouse(Mouse::Move, 6, 3, Mods::default())));
-        assert_eq!(one(b"\x1b[<64;5;3M"), Some(Ev::Mouse(Mouse::WheelUp, 4, 2, Mods::default())));
-        assert_eq!(one(b"\x1b[<65;5;3M"), Some(Ev::Mouse(Mouse::WheelDown, 4, 2, Mods::default())));
+        assert_eq!(
+            one(b"\x1b[13;2u"),
+            Some(Ev::Key(
+                Key::Enter,
+                Mods {
+                    shift: true,
+                    ..Default::default()
+                }
+            ))
+        );
+        assert_eq!(
+            one(b"\x1b[102;9u"),
+            Some(Ev::Key(
+                Key::Char('f'),
+                Mods {
+                    sup: true,
+                    ..Default::default()
+                }
+            ))
+        );
+        assert_eq!(
+            one(b"\x06"),
+            Some(Ev::Key(
+                Key::Char('f'),
+                Mods {
+                    ctrl: true,
+                    ..Default::default()
+                }
+            ))
+        );
+        assert_eq!(
+            one(b"\x1b[1;3A"),
+            Some(Ev::Key(
+                Key::Up,
+                Mods {
+                    alt: true,
+                    ..Default::default()
+                }
+            ))
+        );
+        assert_eq!(
+            one(b"\x1bx"),
+            Some(Ev::Key(
+                Key::Char('x'),
+                Mods {
+                    alt: true,
+                    ..Default::default()
+                }
+            ))
+        );
+        assert_eq!(
+            one(b"\x1b[<0;5;3M"),
+            Some(Ev::Mouse(Mouse::Down, 4, 2, Mods::default()))
+        );
+        assert_eq!(
+            one(b"\x1b[<32;6;3M"),
+            Some(Ev::Mouse(Mouse::Drag, 5, 2, Mods::default()))
+        );
+        assert_eq!(
+            one(b"\x1b[<0;6;3m"),
+            Some(Ev::Mouse(Mouse::Up, 5, 2, Mods::default()))
+        );
+        assert_eq!(
+            one(b"\x1b[<35;7;4M"),
+            Some(Ev::Mouse(Mouse::Move, 6, 3, Mods::default()))
+        );
+        assert_eq!(
+            one(b"\x1b[<64;5;3M"),
+            Some(Ev::Mouse(Mouse::WheelUp, 4, 2, Mods::default()))
+        );
+        assert_eq!(
+            one(b"\x1b[<65;5;3M"),
+            Some(Ev::Mouse(Mouse::WheelDown, 4, 2, Mods::default()))
+        );
         // sideways wheel, as a trackpad's drift sends it: not up and down
-        assert_eq!(one(b"\x1b[<66;5;3M"), Some(Ev::Mouse(Mouse::Other, 4, 2, Mods::default())));
-        assert_eq!(one(b"\x1b[<67;5;3M"), Some(Ev::Mouse(Mouse::Other, 4, 2, Mods::default())));
+        assert_eq!(
+            one(b"\x1b[<66;5;3M"),
+            Some(Ev::Mouse(Mouse::Other, 4, 2, Mods::default()))
+        );
+        assert_eq!(
+            one(b"\x1b[<67;5;3M"),
+            Some(Ev::Mouse(Mouse::Other, 4, 2, Mods::default()))
+        );
         // function keys: SS3, legacy tilde (with modifiers), and kitty's private-use codes
         assert_eq!(one(b"\x1bOQ"), Some(Ev::Key(Key::F(2), Mods::default())));
         assert_eq!(one(b"\x1bOR"), Some(Ev::Key(Key::F(3), Mods::default())));
         assert_eq!(one(b"\x1b[12~"), Some(Ev::Key(Key::F(2), Mods::default())));
-        assert_eq!(one(b"\x1b[13;2~"), Some(Ev::Key(Key::F(3), Mods { shift: true, ..Default::default() })));
-        assert_eq!(one("\x1b[57345u".as_bytes()), Some(Ev::Key(Key::F(2), Mods::default())));
+        assert_eq!(
+            one(b"\x1b[13;2~"),
+            Some(Ev::Key(
+                Key::F(3),
+                Mods {
+                    shift: true,
+                    ..Default::default()
+                }
+            ))
+        );
+        assert_eq!(
+            one("\x1b[57345u".as_bytes()),
+            Some(Ev::Key(Key::F(2), Mods::default()))
+        );
         // Alt+digit, both legacy ESC-prefix and kitty's `CSI 49;3u`
-        assert_eq!(one(b"\x1b3"), Some(Ev::Key(Key::Char('3'), Mods { alt: true, ..Default::default() })));
-        assert_eq!(one(b"\x1b[51;3u"), Some(Ev::Key(Key::Char('3'), Mods { alt: true, ..Default::default() })));
+        assert_eq!(
+            one(b"\x1b3"),
+            Some(Ev::Key(
+                Key::Char('3'),
+                Mods {
+                    alt: true,
+                    ..Default::default()
+                }
+            ))
+        );
+        assert_eq!(
+            one(b"\x1b[51;3u"),
+            Some(Ev::Key(
+                Key::Char('3'),
+                Mods {
+                    alt: true,
+                    ..Default::default()
+                }
+            ))
+        );
         assert_eq!(parse(b"\x1b"), None);
         assert_eq!(parse(b"\x1b[1;"), None);
-        assert_eq!(one("é".as_bytes()), Some(Ev::Key(Key::Char('é'), Mods::default())));
+        assert_eq!(
+            one("é".as_bytes()),
+            Some(Ev::Key(Key::Char('é'), Mods::default()))
+        );
     }
 }

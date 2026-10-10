@@ -358,7 +358,13 @@ mod tests {
 
     #[test]
     fn long_choices_wrap_onto_the_hanging_indent() {
-        let rows = choice_row(false, "enter", "leave them running while the turn winds down", 5, 30);
+        let rows = choice_row(
+            false,
+            "enter",
+            "leave them running while the turn winds down",
+            5,
+            30,
+        );
         assert!(rows.len() > 1, "nothing wrapped");
         assert!(!rows[0].cont);
         for r in &rows[1..] {
@@ -366,7 +372,10 @@ mod tests {
             assert_eq!(r.pre, (2 + 5 + 2) as u16, "hanging indent drifted");
         }
         let t = text(&rows);
-        assert!(t.contains("leave them running"), "first line lost the start");
+        assert!(
+            t.contains("leave them running"),
+            "first line lost the start"
+        );
     }
 
     #[test]
