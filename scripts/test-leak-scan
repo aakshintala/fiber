@@ -1,0 +1,428 @@
+#!/usr/bin/env bash
+# The negate-check for scripts/leak-scan (docs/testing.md, "Running tests"):
+# a thrown-away nonce proves the scan names a leaked process, ignores a
+# sibling run's processes, refuses an empty nonce, and stays silent once the
+# leakers have stopped.
+#
+# This self-test sends no signal to any process. Every fixture that can
+# poll does: it watches a stop file in this run's temp dir, exits when the
+# file exists, and exits on its own after 120 s at the latest, so a run
+# that dies without reaching the EXIT trap still leaves nothing behind.
+# The one fixture that cannot poll (sleep re-executed under a target/
+# argv0) runs `sleep 20`, and the test lets it expire. Cleanup touches the
+# stop file in the EXIT trap and waits for the fixtures to leave the
+# process table; a fixture still listed after the bound is reported with
+# its PID and command, and the test fails. The table is only read
+# (`ps -p`); no process is ever signalled.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+err=$(mktemp)
+tmp=$(mktemp -d)
+stop="$tmp/stop"
+leaker1=
+leaker2=
+# macOS orphans below, Darwin only; empty unless that block started them.
+leaker3=
+leaker4=
+leaker5=
+leaker6=
+leaker7=
+
+# True while ps still lists the PID. Read-only: this sends nothing.
+pid_alive() {
+  env -u FIBER_CHECK_RUN ps -p "$1" >/dev/null 2>&1
+}
+
+# Command line of a PID for a stray report. Read-only: sends nothing.
+pid_command() {
+  env -u FIBER_CHECK_RUN ps -o command= -p "$1" 2>/dev/null || true
+}
+
+# Wait up to $2 seconds for $1 to leave the process table, polling
+# read-only. Returns 0 once ps no longer lists it, 1 after the bound.
+require_gone() {
+  local target=$1
+  local bound=${2-10}
+  local i=0
+  local limit=$((bound * 5))
+  while pid_alive "$target"; do
+    i=$((i + 1))
+    if [ "$i" -ge "$limit" ]; then
+      return 1
+    fi
+    sleep 0.2
+  done
+  return 0
+}
+
+# Wait up to ~15 s for an orphan whose command line holds $1 to reach
+# ppid 1, printing its PID (empty when none arrived). Read-only: this
+# sends nothing. awk exits at the first match, so ps can die of SIGPIPE
+# under pipefail: not a failure, the match is already printed.
+await_orphan() {
+  local match=$1
+  local owner=${USER:-$(id -un)}
+  local tries=0 found=
+  while [ "$tries" -lt 30 ] && [ -z "$found" ]; do
+    found=$(env -u FIBER_CHECK_RUN ps -U "$owner" -o pid=,ppid=,lstart=,command= | awk -v t="$match" '$2 == 1 && index($0, t) { print $1; exit }' || true)
+    if [ -z "$found" ]; then
+      python3 -c 'import time; time.sleep(0.5)'
+    fi
+    tries=$((tries + 1))
+  done
+  printf '%s' "$found"
+}
+
+# Touch the stop file, reap the fixtures this shell spawned, and require
+# every given PID gone within 10 s. A PID still listed is reported with
+# its PID and command, and the test fails; nothing is signalled. Orphaned
+# fixtures are not this shell's children, so wait leaves them to the poll.
+stop_and_require_gone() {
+  touch "$stop"
+  local pid
+  for pid in "$@"; do
+    if [ -n "$pid" ]; then
+      if wait "$pid" 2>/dev/null; then
+        :
+      fi
+    fi
+  done
+  for pid in "$@"; do
+    if [ -n "$pid" ] && pid_alive "$pid"; then
+      if require_gone "$pid" 10; then
+        :
+      else
+        echo "scripts/test-leak-scan: fixture $pid still alive, leaving it alone: $(pid_command "$pid")" >&2
+        exit 1
+      fi
+    fi
+  done
+}
+
+cleanup() {
+  local rc=$?
+  if [ -n "${stop-}" ]; then
+    touch "$stop" 2>/dev/null || true
+  fi
+  local pid
+  for pid in "$leaker1" "$leaker2" "$leaker5" "$leaker7"; do
+    if [ -n "$pid" ]; then
+      if wait "$pid" 2>/dev/null; then
+        :
+      fi
+    fi
+  done
+  local stray=
+  for pid in "$leaker1" "$leaker2" "$leaker3" "$leaker4" "$leaker5" "$leaker6" "$leaker7"; do
+    if [ -n "$pid" ] && pid_alive "$pid"; then
+      # 25 s covers the sleep 20 fixture when the test died before its
+      # own wait for that fixture expired.
+      if require_gone "$pid" 25; then
+        :
+      else
+        echo "scripts/test-leak-scan: fixture $pid still alive, leaving it alone: $(pid_command "$pid")" >&2
+        stray=1
+      fi
+    fi
+  done
+  if [ -n "$tmp" ]; then
+    rm -rf "$tmp" || true
+  fi
+  rm -f "$err" || true
+  if [ -n "$stray" ]; then
+    exit 1
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+
+n="self-test-$$-$(date +%s)-$RANDOM"
+other="sibling-$$-$(date +%s)-$RANDOM"
+secret="leak-secret-$$-$(date +%s)-$RANDOM"
+
+# A leaker in this process group. It stays in python: macOS ps shows the
+# environment of python but not of sh or sleep, so only a python leaker
+# proves the scan names it. It ignores SIGTERM like the fixtures, and
+# stops when the stop file exists (or after 120 s on its own).
+FIBER_CHECK_RUN=$n LEAK_SCAN_SECRET="$secret" STOP="$stop" python3 -c 'import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); stop = os.environ["STOP"]; end = time.time() + 120; exec("while time.time() < end and not os.path.exists(stop):\n time.sleep(0.05)")' &
+leaker1=$!
+
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
+  echo "scripts/test-leak-scan: leak-scan exited 0 with leaker $leaker1 alive" >&2
+  exit 1
+fi
+if ! grep -Fq "leaked process $leaker1:" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan did not name leaker $leaker1:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+
+# The report names the PID and command only: the secret the leaker
+# carries in its environment must never reach the log.
+if grep -Fq "$secret" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan printed an environment value:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+
+# A leaker that escapes its process group: no group reap reaches it, and it
+# stays in python for the same reason as the first leaker. python3 is
+# already required by scripts/check, and macOS ships no setsid.
+FIBER_CHECK_RUN=$n STOP="$stop" python3 -c 'import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); os.setsid(); stop = os.environ["STOP"]; end = time.time() + 120; exec("while time.time() < end and not os.path.exists(stop):\n time.sleep(0.05)")' &
+leaker2=$!
+
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
+  echo "scripts/test-leak-scan: leak-scan exited 0 with leakers $leaker1 and $leaker2 alive" >&2
+  exit 1
+fi
+if ! grep -Fq "leaked process $leaker1:" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan did not name leaker $leaker1:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+if ! grep -Fq "leaked process $leaker2:" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan did not name group-escaping leaker $leaker2:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+
+# A process carrying this run's nonce under another name is not a leak:
+# only the exact token FIBER_CHECK_RUN=NONCE matches.
+UNRELATED_TOKEN=$n STOP="$stop" python3 -c 'import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); stop = os.environ["STOP"]; end = time.time() + 120; exec("while time.time() < end and not os.path.exists(stop):\n time.sleep(0.05)")' &
+leaker5=$!
+
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
+  echo "scripts/test-leak-scan: leak-scan exited 0 with leakers alive" >&2
+  exit 1
+fi
+if grep -Fq "leaked process $leaker5:" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan named UNRELATED_TOKEN carrier $leaker5:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+
+# A sibling run's nonce never matches this run's leakers. The unrelated
+# carrier stays alive through this check and the empty-nonce check: neither
+# needs it gone, and one stop file stops every fixture at once below.
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$other" 2>"$err"; then
+  :
+else
+  echo "scripts/test-leak-scan: leak-scan named this run's leakers for a sibling nonce:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+if [ -s "$err" ]; then
+  echo "scripts/test-leak-scan: clean sibling scan printed output:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+
+# An empty nonce would match everything, so the scan refuses it.
+empty_rc=0
+if env -u FIBER_CHECK_START scripts/leak-scan "" 2>"$err"; then
+  echo "scripts/test-leak-scan: leak-scan accepted an empty NONCE" >&2
+  exit 1
+else
+  empty_rc=$?
+fi
+if [ "$empty_rc" -ne 2 ]; then
+  echo "scripts/test-leak-scan: empty NONCE exited $empty_rc, want 2" >&2
+  exit 1
+fi
+
+stop_and_require_gone "$leaker1" "$leaker2" "$leaker5"
+leaker1=
+leaker2=
+leaker5=
+rm -f "$stop"
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
+  :
+else
+  echo "scripts/test-leak-scan: leak-scan still names the stopped leakers:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+if [ -s "$err" ]; then
+  echo "scripts/test-leak-scan: clean scan printed output:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+
+# The Linux environ reader must consume the whole stream: grep -q quits
+# early and SIGPIPEs tr under pipefail, hiding a leak.
+if grep -Fq 'grep -Fxq' scripts/leak-scan; then
+  echo "scripts/test-leak-scan: leak-scan uses grep -Fxq (SIGPIPEs tr under pipefail)" >&2
+  exit 1
+fi
+if ! grep -Fq 'grep -Fx "FIBER_CHECK_RUN=' scripts/leak-scan; then
+  echo "scripts/test-leak-scan: leak-scan lost its exact environ match" >&2
+  exit 1
+fi
+
+# macOS orphans: ps withholds the environment of sh, so the nonce scan
+# cannot name them. The orphan scan warns on sh with the PID and stays
+# green, and fails on a binary under target/ naming the PID.
+if [ "$(uname -s)" = Darwin ]; then
+  marker="fiber-orphan-$$-$RANDOM"
+  mkdir -p "$tmp/target"
+  # An sh fixture orphaned by a double fork, as the extensions fixtures
+  # were: reparented to init, ignoring SIGTERM like them, stopping when
+  # the stop file exists (or after 120 s on its own).
+  ( sh -c "trap '' TERM; while [ ! -e '$stop' ] && [ \"\$SECONDS\" -lt 120 ]; do sleep 0.05; done # $marker" & )
+  leaker3=$(await_orphan "$marker")
+  if [ -z "$leaker3" ]; then
+    echo "scripts/test-leak-scan: sh orphan never reached ppid 1" >&2
+    exit 1
+  fi
+  lstart=$(env -u FIBER_CHECK_RUN ps -o lstart= -p "$leaker3" 2>/dev/null | sed 's/^ *//;s/ *$//')
+  started=$(date -j -f "%a %b %e %T %Y" "$lstart" "+%s")
+  # Started after the check: the warning names the PID, exit stays 0.
+  if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$tmp" scripts/leak-scan "$n" "$((started - 1))" 2>"$err"; then
+    :
+  else
+    echo "scripts/test-leak-scan: orphan warning scan failed for $leaker3:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if ! grep -Fq "$leaker3" "$err"; then
+    echo "scripts/test-leak-scan: warning did not name sh orphan $leaker3:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if ! grep -Fq "may belong to another run" "$err"; then
+    echo "scripts/test-leak-scan: warning names no other-run caveat for $leaker3:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  # At the orphan's own start second: silent, the single -gt boundary.
+  if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$tmp" scripts/leak-scan "$n" "$started" 2>"$err"; then
+    :
+  else
+    echo "scripts/test-leak-scan: at-boundary scan failed for $leaker3:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if grep -Fq "$leaker3" "$err"; then
+    echo "scripts/test-leak-scan: orphan at its start second still named $leaker3:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  # Started before the check: silent too.
+  if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$tmp" scripts/leak-scan "$n" "$((started + 1))" 2>"$err"; then
+    :
+  else
+    echo "scripts/test-leak-scan: before-boundary scan failed for $leaker3:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if grep -Fq "$leaker3" "$err"; then
+    echo "scripts/test-leak-scan: older orphan still named $leaker3:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  stop_and_require_gone "$leaker3"
+  leaker3=
+  rm -f "$stop"
+  # A binary under target/ is this run's leak: exit 1 naming the PID. The
+  # orphan is sleep re-executed with argv0 set to the target/ path (bash
+  # exec -a, with SIGTERM ignored across the exec like the fixtures); ps
+  # shows the target/ path as the executable. LEAK_SCAN_ROOT points the
+  # rule at a temp dir instead of the worktree. sleep cannot poll a stop
+  # file, so it runs `sleep 20` and the test lets it expire below.
+  ( bash -c 'trap "" TERM; exec -a "$1/target/x" sleep 20' _ "$tmp" & )
+  leaker4=$(await_orphan "$tmp/target/x")
+  if [ -z "$leaker4" ]; then
+    echo "scripts/test-leak-scan: target orphan never reached ppid 1" >&2
+    exit 1
+  fi
+  # The check began a second before the orphan started, so the orphan is
+  # this run's leak: exit 1 naming the PID.
+  lstart4=$(env -u FIBER_CHECK_RUN ps -o lstart= -p "$leaker4" 2>/dev/null | sed 's/^ *//;s/ *$//')
+  started4=$(date -j -f "%a %b %e %T %Y" "$lstart4" "+%s")
+  if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$tmp" scripts/leak-scan "$n" "$((started4 - 1))" 2>"$err"; then
+    echo "scripts/test-leak-scan: target orphan $leaker4 did not fail the scan:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if ! grep -Fq "leaked process $leaker4:" "$err"; then
+    echo "scripts/test-leak-scan: scan did not name target orphan $leaker4:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  # Let the sleep expire: a bounded read-only wait for it to leave the
+  # table, 25 s for a 20 s sleep.
+  if require_gone "$leaker4" 25; then
+    :
+  else
+    echo "scripts/test-leak-scan: target orphan $leaker4 still alive after 25 s, leaving it alone: $(pid_command "$leaker4")" >&2
+    exit 1
+  fi
+  leaker4=
+  # A shell orphan carrying a target/ path in its arguments is not this
+  # run's leak: only argv0 names it, so this warns like sh, not fails.
+  rm -f "$stop"
+  printf "#!/bin/sh\ntrap '' TERM\nwhile [ ! -e '%s' ] && [ \"\$SECONDS\" -lt 120 ]; do sleep 0.05; done\n" "$stop" >"$tmp/target/argscript"
+  chmod +x "$tmp/target/argscript"
+  ( bash "$tmp/target/argscript" & )
+  leaker6=$(await_orphan "$tmp/target/argscript")
+  if [ -z "$leaker6" ]; then
+    echo "scripts/test-leak-scan: shell arg orphan never reached ppid 1" >&2
+    exit 1
+  fi
+  lstart6=$(env -u FIBER_CHECK_RUN ps -o lstart= -p "$leaker6" 2>/dev/null | sed 's/^ *//;s/ *$//')
+  started6=$(date -j -f "%a %b %e %T %Y" "$lstart6" "+%s")
+  if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$tmp" scripts/leak-scan "$n" "$((started6 - 1))" 2>"$err"; then
+    :
+  else
+    echo "scripts/test-leak-scan: shell arg orphan $leaker6 failed the scan:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if ! grep -Fq "$leaker6" "$err"; then
+    echo "scripts/test-leak-scan: warning did not name shell arg orphan $leaker6:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if ! grep -Fq "may belong to another run" "$err"; then
+    echo "scripts/test-leak-scan: warning names no other-run caveat for $leaker6:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if grep -Fq "leaked process $leaker6:" "$err"; then
+    echo "scripts/test-leak-scan: shell arg orphan $leaker6 reported as a leak:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  stop_and_require_gone "$leaker6"
+  leaker6=
+  # A root holding a space still fails on a target/ binary: the rule
+  # matches the command's prefix, not its first space-delimited word.
+  # The orphan is sh run through a symlink in the spaced target/ dir,
+  # polling the stop file like the other fixtures (or after 120 s on
+  # its own).
+  spaced_root="$tmp/a b"
+  mkdir -p "$spaced_root/target"
+  ln -s /bin/sh "$spaced_root/target/x"
+  rm -f "$stop"
+  ( "$spaced_root/target/x" -c "trap '' TERM; while [ ! -e '$stop' ] && [ \"\$SECONDS\" -lt 120 ]; do sleep 0.05; done" & )
+  leaker7=$(await_orphan "$spaced_root/target/x")
+  if [ -z "$leaker7" ]; then
+    echo "scripts/test-leak-scan: spaced target orphan never reached ppid 1" >&2
+    exit 1
+  fi
+  lstart7=$(env -u FIBER_CHECK_RUN ps -o lstart= -p "$leaker7" 2>/dev/null | sed 's/^ *//;s/ *$//')
+  started7=$(date -j -f "%a %b %e %T %Y" "$lstart7" "+%s")
+  if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$spaced_root" scripts/leak-scan "$n" "$((started7 - 1))" 2>"$err"; then
+    echo "scripts/test-leak-scan: spaced target orphan $leaker7 did not fail the scan:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if ! grep -Fq "leaked process $leaker7:" "$err"; then
+    echo "scripts/test-leak-scan: scan did not name spaced target orphan $leaker7:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  stop_and_require_gone "$leaker7"
+  leaker7=
+fi
