@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use contract::clock::Clock;
 use fakes::{ProviderServer, Response, Watchdog};
@@ -47,51 +47,15 @@ pub(crate) fn write_record(dir: &Path) {
     .unwrap();
 }
 
-/// nextest kills a test at 120 s (`.config/nextest.toml`): a test's
-/// deadlines sum to half of that.
-pub(crate) const BUDGET: Duration = Duration::from_secs(60);
-/// From the test's start, when its success-path waits must be over.
-pub(crate) const WAITS: Duration = Duration::from_secs(40);
-/// From the test's start, when cleanup waits must be over. `BUDGET -
-/// CLEANUP` holds the fixed bounds inside `fakes` that take no deadline.
-pub(crate) const CLEANUP: Duration = Duration::from_secs(50);
-
-/// The test's one deadline, started at its first operation. Every wait
-/// takes what remains of it, so a second wait gets only what the first
-/// left, and the waits of one test sum to [`BUDGET`].
-#[derive(Clone, Copy)]
-pub(crate) struct Deadline {
-    start: Instant,
-    clock: &'static dyn Clock,
-}
-
-impl Deadline {
-    /// A deadline on the process clock, starting now.
-    pub(crate) fn start() -> Self {
-        Self::on(&SystemClock)
-    }
-
-    /// A deadline on `clock`, starting at its `now()`.
-    pub(crate) fn on(clock: &'static dyn Clock) -> Self {
-        Self {
-            start: clock.now(),
-            clock,
-        }
-    }
-
-    /// What remains for success-path waits: zero from [`WAITS`] after the
-    /// start on, every time. It never panics; a wait handed zero takes only
-    /// an already-arrived result, then runs its own timeout branch.
-    pub(crate) fn left(&self) -> Duration {
-        (self.start + WAITS).saturating_duration_since(self.clock.now())
-    }
-
-    /// What remains for cleanup waits (a reap or group check after a wait
-    /// expired, a watchdog's stand-down): zero from [`CLEANUP`] on.
-    pub(crate) fn cleanup(&self) -> Duration {
-        (self.start + CLEANUP).saturating_duration_since(self.clock.now())
-    }
-}
+/// The test's one deadline and its bounds, shared from `fakes`
+/// (`docs/testing.md`, "Waits and timeouts").
+pub(crate) use fakes::clock::SystemClock;
+pub(crate) use fakes::deadline::Deadline;
+#[allow(
+    unused_imports,
+    reason = "only the deadline test reads the bounds; each test binary compiles its own subset"
+)]
+pub(crate) use fakes::deadline::{BUDGET, CLEANUP, WAITS};
 
 /// A `TimedOut` error naming `what`.
 fn timed_out(what: &str) -> io::Error {
@@ -267,7 +231,7 @@ pub(crate) fn expired<T>(
     match kill_group(deadline, group, "KILL") {
         Ok(_) | Err(_) => {}
     }
-    let reaped = reap.recv_timeout(deadline.cleanup()).is_ok();
+    let reaped = deadline.cleanup_phase().recv(reap).is_ok();
     assert!(
         fakes::group_empties(group, deadline.cleanup()),
         "waited until the deadline for {what}, and its group outlived the kill"
@@ -371,46 +335,6 @@ pub(crate) fn write_json(file: &Path, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
-/// The process clock behind `contract::clock::Clock`.
-pub(crate) struct SystemClock;
-
-impl Clock for SystemClock {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::now"
-    )]
-    fn now(&self) -> std::time::Instant {
-        std::time::Instant::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::wall"
-    )]
-    fn wall(&self) -> std::time::SystemTime {
-        std::time::SystemTime::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::sleep"
-    )]
-    fn sleep(&self, d: Duration) {
-        thread::sleep(d);
-    }
-
-    fn wait_until(
-        &self,
-        until: Option<std::time::Instant>,
-        wait: &mut dyn FnMut(Option<Duration>),
-    ) {
-        let bound = until.map(|until| until.saturating_duration_since(self.now()));
-        wait(bound);
-    }
-
-    fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
-}
-
 /// A hub the test started: killed on drop unless forgotten after a clean wait.
 pub(crate) struct HubProc {
     pub(crate) child: Child,
@@ -456,7 +380,7 @@ impl HubProc {
         } = self;
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
-        let status = match finished.recv_timeout(deadline.left()) {
+        let status = match deadline.recv(&finished) {
             Ok(status) => status.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 expired(deadline, group, &finished, "the hub to exit")
@@ -486,7 +410,7 @@ impl HubProc {
         kill_group(deadline, group, "KILL").unwrap();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
-        let status = match finished.recv_timeout(deadline.left()) {
+        let status = match deadline.recv(&finished) {
             Ok(status) => status.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 expired(deadline, group, &finished, "the killed hub to exit")
@@ -679,7 +603,7 @@ pub(crate) fn connect_hub_within(
         done.send(doors::hub::connect(&home, &mut start, &clock))
             .unwrap();
     });
-    let connected = match connected.recv_timeout(wait) {
+    let connected = match Deadline::after(wait).recv(&connected) {
         Ok(connected) => connected.unwrap(),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             panic!("waited {wait:?} for the hub to start and say hub_hello")
@@ -788,7 +712,7 @@ impl Drop for SessionGuard {
             }
         });
         if spawned.is_ok() {
-            match finished.recv_timeout(self.deadline.cleanup()) {
+            match self.deadline.cleanup_phase().recv(&finished) {
                 Ok(_) | Err(_) => {}
             }
         }
@@ -836,7 +760,7 @@ pub(crate) fn run_to_exit(deadline: Deadline, what: &str, mut command: Command) 
     let watchdog = Watchdog::group(group);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match finished.recv_timeout(deadline.left()) {
+    let output = match deadline.recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             expired(deadline, group, &finished, &format!("{what} to exit"))

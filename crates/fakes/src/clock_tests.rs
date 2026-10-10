@@ -5,7 +5,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use contract::clock::{Clock, Wake};
 
-use super::FakeClock;
+use super::{FakeClock, SystemClock};
 
 fn wall_epoch() -> std::time::SystemTime {
     UNIX_EPOCH + Duration::from_secs(1_700_000_000)
@@ -46,6 +46,33 @@ fn wait_until_at_or_before_now_hands_zero_and_does_not_park() {
     clock.wait_until(Some(earlier), &mut |bound| seen = Some(bound));
     assert_eq!(seen, Some(Some(Duration::ZERO)));
     assert!(clock.parked().is_empty());
+}
+
+#[test]
+fn system_clock_wait_until_hands_no_bound_for_no_deadline() {
+    let clock = SystemClock;
+    let mut seen = None;
+    clock.wait_until(None, &mut |bound| seen = Some(bound));
+    assert_eq!(seen, Some(None));
+}
+
+#[test]
+fn system_clock_wait_until_hands_at_most_the_span_to_a_future_deadline() {
+    let clock = SystemClock;
+    let until = clock.now() + Duration::from_secs(1);
+    let mut seen = None;
+    clock.wait_until(Some(until), &mut |bound| seen = Some(bound));
+    let bound = seen.unwrap().unwrap();
+    assert!(bound <= Duration::from_secs(1), "{bound:?}");
+}
+
+#[test]
+fn system_clock_wait_until_hands_zero_for_a_past_deadline() {
+    let clock = SystemClock;
+    let past = clock.now().checked_sub(Duration::from_secs(1)).unwrap();
+    let mut seen = None;
+    clock.wait_until(Some(past), &mut |bound| seen = Some(bound));
+    assert_eq!(seen, Some(Some(Duration::ZERO)));
 }
 
 /// Stands in for the hub: `wake` takes the mutex before it notifies, the

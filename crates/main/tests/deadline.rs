@@ -1,9 +1,10 @@
 //! Tests of the binary-level tests' shared deadline (`docs/testing.md`,
-//! "Waits and timeouts"): one deadline from the test's start, each wait
-//! taking only what remains of it. The arithmetic tests drive a fake clock
-//! that the code under test reads and never waits on; the live-process
-//! probe below waits on real processes, so it takes its deadline from the
-//! process clock, which is the only clock those waits advance.
+//! "Waits and timeouts") through the socket and process helpers in
+//! `support`: each wait takes what remains of the test's one deadline.
+//! The deadline's own arithmetic lives in `fakes::deadline`'s tests, on a
+//! fake clock; the live-process probe below waits on real processes, so it
+//! takes its deadline from the process clock, which is the only clock those
+//! waits advance.
 
 #![allow(
     clippy::unwrap_used,
@@ -53,47 +54,6 @@ fn sleeper() -> (std::process::Child, u32, KillGroup) {
         .unwrap();
     let group = child.id();
     (child, group, KillGroup(group))
-}
-
-#[test]
-fn a_second_wait_gets_only_what_the_first_left() {
-    let clock = fake_clock();
-    let deadline = Deadline::on(&**clock);
-    assert_eq!(deadline.left(), Duration::from_secs(40));
-    clock.advance(Duration::from_secs(15));
-    assert_eq!(deadline.left(), Duration::from_secs(25));
-    clock.advance(Duration::from_millis(24_999));
-    assert_eq!(deadline.left(), Duration::from_millis(1));
-}
-
-#[test]
-fn no_time_left_gives_zero_and_never_renews() {
-    let clock = fake_clock();
-    let deadline = Deadline::on(&**clock);
-    clock.advance(Duration::from_secs(40));
-    assert_eq!(deadline.left(), Duration::ZERO);
-    clock.advance(Duration::from_secs(1));
-    assert_eq!(deadline.left(), Duration::ZERO);
-    let (tx, rx) = mpsc::channel();
-    tx.send(7).unwrap();
-    assert_eq!(rx.recv_timeout(deadline.left()), Ok(7));
-    assert_eq!(
-        rx.recv_timeout(deadline.left()),
-        Err(mpsc::RecvTimeoutError::Timeout)
-    );
-}
-
-#[test]
-fn cleanup_keeps_its_reserve_after_the_waits_end() {
-    let clock = fake_clock();
-    let deadline = Deadline::on(&**clock);
-    assert_eq!(deadline.cleanup(), Duration::from_secs(50));
-    clock.advance(Duration::from_secs(40));
-    assert_eq!(deadline.cleanup(), Duration::from_secs(10));
-    clock.advance(Duration::from_secs(10));
-    assert_eq!(deadline.cleanup(), Duration::ZERO);
-    clock.advance(Duration::from_secs(20));
-    assert_eq!(deadline.cleanup(), Duration::ZERO);
 }
 
 #[test]
@@ -188,7 +148,7 @@ fn a_probe_on_a_live_group_is_bounded() {
         Ok(()) | Err(mpsc::SendError(_)) => {}
     });
     assert!(
-        reaped.recv_timeout(deadline.cleanup()).is_ok(),
+        deadline.cleanup_phase().recv(&reaped).is_ok(),
         "waited until the deadline for the killed sleep to be reaped"
     );
     assert!(fakes::group_empties(group, deadline.cleanup()));
@@ -201,7 +161,7 @@ fn a_probe_on_a_live_group_is_bounded() {
         Ok(()) | Err(mpsc::SendError(_)) => {}
     });
     assert!(
-        reaped.recv_timeout(deadline.cleanup()).is_ok(),
+        deadline.cleanup_phase().recv(&reaped).is_ok(),
         "waited until the deadline for the detached kill's sleep to be reaped"
     );
     assert!(fakes::group_empties(group, deadline.cleanup()));
