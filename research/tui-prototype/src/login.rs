@@ -2,7 +2,8 @@
 //! extensions declare, drawn as a centred panel over a dimmed conversation.
 //! Fixture data only: the prototype has no login flow, so the providers,
 //! secrets and every later state below are made up. Each case draws one
-//! static frame and waits for a key; Esc, q or Ctrl+C quits.
+//! static frame and waits for a key; Esc, q or Ctrl+C quits. Once a
+//! provider is picked, each step replaces the whole panel.
 
 use super::input::{Ev, Key};
 use super::overlays;
@@ -92,7 +93,7 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case {
         name: "waiting",
         help: "the browser-path wait, URL to copy, waiting state",
-        check: "the provider list stays with `Open this URL to log in to anthropic:` below it and the long URL cut from the left keeping its tail, `y` to copy, and a dim `Waiting for the browser…` line; a bold-key `y copy URL · Esc cancel` legend; same panel.",
+        check: "the panel titled `anthropic` with no provider list: `Open this URL to log in to anthropic:`, the long URL cut from the left keeping its tail, and a dim `Waiting for the browser…` line; a bold-key `y copy URL · Esc back` legend; the provider list's height and one width across the steps (a few cells wider than the list, for the longest legend).",
         build: || State {
             kind: Kind::Waiting,
             focus: 0,
@@ -101,7 +102,7 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case {
         name: "key",
         help: "key entry with the key masked",
-        check: "the provider list stays with `Label (--as): default.` and `Key for google:` below it, the key masked as eight dots with a block cursor; a bold-key `Tab key or label · Enter store · Esc cancel` legend; same panel.",
+        check: "the panel titled `google` with no provider list: `Label (--as): default.` and `Key for google:`, the key masked as eight dots with a block cursor; a bold-key `Tab key or label · Enter submit · Esc back` legend; the provider list's height and one width across the steps (a few cells wider than the list, for the longest legend).",
         build: || State {
             kind: Kind::Key,
             focus: 3,
@@ -110,7 +111,7 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case {
         name: "done",
         help: "the logged-in outcome",
-        check: "the provider list stays with a `✓ Logged in to anthropic.` outcome line in the success colour; a bold-key `Esc close` legend; same panel.",
+        check: "the panel titled `anthropic` with no provider list: a `✓ Logged in to anthropic.` outcome line in the success colour; a bold-key `Esc back` legend; the provider list's height and one width across the steps (a few cells wider than the list, for the longest legend).",
         build: || State {
             kind: Kind::Done,
             focus: 0,
@@ -119,7 +120,7 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case {
         name: "failed",
         help: "the failed outcome with its reason",
-        check: "the provider list stays with a `Login to anthropic failed: token expired.` outcome line, the reason in the error colour; a bold-key `Esc close` legend; same panel.",
+        check: "the panel titled `anthropic` with no provider list: a `Login to anthropic failed: token expired.` outcome line, the reason in the error colour; a bold-key `Esc back` legend; the provider list's height and one width across the steps (a few cells wider than the list, for the longest legend).",
         build: || State {
             kind: Kind::Failed,
             focus: 0,
@@ -148,24 +149,24 @@ fn footer(s: &State) -> super::Row {
         Kind::Providers => {
             panel::footer_legend(&[("↑↓", "move"), ("Enter", "log in"), ("Esc", "close")])
         }
-        Kind::Waiting => panel::footer_legend(&[("y", "copy URL"), ("Esc", "cancel")]),
+        Kind::Waiting => panel::footer_legend(&[("y", "copy URL"), ("Esc", "back")]),
         Kind::Key => panel::footer_legend(&[
             ("Tab", "key or label"),
-            ("Enter", "store"),
-            ("Esc", "cancel"),
+            ("Enter", "submit"),
+            ("Esc", "back"),
         ]),
-        Kind::Done | Kind::Failed => panel::footer_legend(&[("Esc", "close")]),
+        Kind::Done | Kind::Failed => panel::footer_legend(&[("Esc", "back")]),
     }
 }
 
-/// The rows below the list for a waiting or key case at an inner width.
-/// The list stays; the login's progress reads under it.
-fn below(kind: Kind, inner: usize) -> Vec<super::Row> {
+/// The step's rows at an inner width, for the provider the panel is titled
+/// with. The provider list is not drawn: the step takes over the panel.
+fn step(kind: Kind, name: &str, inner: usize) -> Vec<super::Row> {
     match kind {
         Kind::Providers => vec![],
         Kind::Waiting => vec![
             row(vec![sp(
-                "Open this URL to log in to anthropic:",
+                format!("Open this URL to log in to {name}:"),
                 Style::new(),
             )]),
             row(vec![sp(left_cut(URL, inner), fg(BLUE))]),
@@ -173,22 +174,21 @@ fn below(kind: Kind, inner: usize) -> Vec<super::Row> {
         ],
         Kind::Key => vec![
             row(vec![sp("Label (--as): default.", dim())]),
-            row(vec![sp("Key for google:", Style::new())]),
+            row(vec![sp(format!("Key for {name}:"), Style::new())]),
             row(vec![sp(DOTS, Style::new()), sp("█", dim())]),
         ],
-        Kind::Done => vec![row(vec![sp("✓ Logged in to anthropic.", fg(BLUE))])],
+        Kind::Done => vec![row(vec![sp(format!("✓ Logged in to {name}."), fg(BLUE))])],
         Kind::Failed => vec![row(vec![
-            sp("Login to anthropic failed: ", Style::new()),
+            sp(format!("Login to {name} failed: "), Style::new()),
             sp("token expired", fg(RED)),
             sp(".", Style::new()),
         ])],
     }
 }
 
-/// The panel's body at an inner width: dim group headings over the
-/// provider rows and the secret rows, the focused one barred, then the
-/// case's rows below the list.
-fn body(s: &State, inner: usize) -> Vec<super::Row> {
+/// The provider list at an inner width: dim group headings over the
+/// provider rows and the secret rows, the focused one barred.
+fn list(s: &State, inner: usize) -> Vec<super::Row> {
     let all = targets();
     let key_w = panel::key_width(&all.iter().map(|t| t.name).collect::<Vec<_>>());
     let mut out = vec![row(vec![sp("Providers", dim())])];
@@ -218,34 +218,74 @@ fn body(s: &State, inner: usize) -> Vec<super::Row> {
         }
         idx += 1;
     }
-    let extra = below(s.kind, inner);
-    if !extra.is_empty() {
-        out.push(row(vec![]));
-        out.extend(extra);
-    }
     out
+}
+
+/// The panel's body: the list, or the step that replaced it padded to the
+/// list's height, so the panel keeps its size from step to step.
+fn body(s: &State, inner: usize) -> Vec<super::Row> {
+    if s.kind == Kind::Providers {
+        return list(s, inner);
+    }
+    let height = list(s, inner).len();
+    let mut out = step(s.kind, targets()[s.focus].name, inner);
+    out.resize_with(height.max(out.len()), || row(vec![]));
+    out
+}
+
+/// The title: "Log in" over the list, the provider's name over a step.
+fn title(s: &State) -> &'static str {
+    if s.kind == Kind::Providers {
+        "Log in"
+    } else {
+        targets()[s.focus].name
+    }
 }
 
 /// The centred panel rows at an area this wide: a bold accent title with
 /// a dim ✕, the body, and the legend foot. Rows stay area-wide, so every
 /// click target keeps its coordinates.
 pub fn view(s: &State, w: usize) -> Vec<super::Row> {
-    let probe = body(s, 10_000);
-    let legend = footer(s);
-    let legend_w = width(&legend.spans);
-    let natural = probe
-        .iter()
-        .map(|r| width(&r.spans))
-        .max()
-        .unwrap_or(0)
-        .max(legend_w);
+    // A step is sized for the widest step and the list, so the panel keeps
+    // its width from one step to the next. The browser step's URL is cut to
+    // fit rather than widening the panel.
+    let kinds: &[Kind] = if s.kind == Kind::Providers {
+        &[Kind::Providers]
+    } else {
+        &[
+            Kind::Providers,
+            Kind::Waiting,
+            Kind::Key,
+            Kind::Done,
+            Kind::Failed,
+        ]
+    };
+    let mut natural = 0;
+    let mut legend_w = 0;
+    for &kind in kinds {
+        let probe = State {
+            kind,
+            focus: s.focus,
+        };
+        if kind != Kind::Waiting {
+            natural = natural.max(
+                body(&probe, 10_000)
+                    .iter()
+                    .map(|r| width(&r.spans))
+                    .max()
+                    .unwrap_or(0),
+            );
+        }
+        legend_w = legend_w.max(width(&footer(&probe).spans));
+    }
+    let natural = natural.max(legend_w);
     // The legend always fits: the preferred width stretches past the usual
     // cap rather than cutting the foot.
     let prefer = w.saturating_sub(4).min(96).max(legend_w);
     let panel_w = panel::fit_width(natural, prefer, w);
     let inner = panel::inner_w(panel_w);
     let rows = panel::frame(
-        Some(panel::title_row("Log in", Some(sp("✕", dim())))),
+        Some(panel::title_row(title(s), Some(sp("✕", dim())))),
         body(s, inner),
         Some(footer(s)),
         panel_w,
@@ -380,13 +420,19 @@ mod tests {
     }
 
     #[test]
-    fn waiting_keeps_the_list_under_a_cut_url() {
+    fn waiting_replaces_the_list_with_a_cut_url() {
         let t = text(&for_case("waiting"), 160, 48);
-        // The list stays: the rows and the focused bar are still there.
-        for name in ["anthropic", "Providers", "Secrets"] {
-            assert!(t.contains(name), "the list lost {name}");
+        // The step replaces the list: the provider is the title only.
+        assert!(t.contains("anthropic"), "the title is gone");
+        // The backdrop conversation may hold a `›`, so the panel alone is read.
+        let panel_text = view(&for_case("waiting"), 160)
+            .iter()
+            .map(plain)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for gone in ["Providers", "Secrets", "openai-codex", "\u{203a} "] {
+            assert!(!panel_text.contains(gone), "the list shows {gone}");
         }
-        assert!(t.contains("\u{203a} "), "the focus is gone");
         assert!(
             t.contains("Open this URL to log in to anthropic:"),
             "missing the prompt"
@@ -395,7 +441,7 @@ mod tests {
             t.contains("Waiting for the browser…"),
             "missing the waiting state"
         );
-        assert!(t.contains("y copy URL · Esc cancel"), "missing the legend");
+        assert!(t.contains("y copy URL · Esc back"), "missing the legend");
         // The URL cuts from the left, keeping its tail, and fits its row.
         let line = t
             .split('\n')
@@ -444,8 +490,10 @@ mod tests {
     #[test]
     fn key_masks_the_key_with_dots() {
         let t = text(&for_case("key"), 160, 48);
-        // The list stays above the prompts.
-        assert!(t.contains("google"), "the list is gone");
+        // The step replaces the list: google is the title only.
+        assert!(!t.contains("Providers"), "the list is shown");
+        assert!(!t.contains("cursor"), "the list is shown");
+        assert!(t.contains("google"), "the title is gone");
         assert!(
             t.contains("Label (--as): default."),
             "missing the label line"
@@ -454,7 +502,7 @@ mod tests {
         assert!(t.contains(DOTS), "the key is not masked");
         assert_eq!(DOTS.chars().count(), 8, "the mask is not eight dots");
         assert!(
-            t.contains("Tab key or label · Enter store · Esc cancel"),
+            t.contains("Tab key or label · Enter submit · Esc back"),
             "missing the legend"
         );
         // The mask reads on one row with the block cursor after it.
@@ -463,14 +511,56 @@ mod tests {
     }
 
     #[test]
-    fn every_case_keeps_one_bar_and_its_legend() {
-        for c in ["providers", "waiting", "key", "done", "failed"] {
+    fn the_list_keeps_one_bar_and_the_steps_none() {
+        for (c, bars) in [
+            ("providers", 1),
+            ("waiting", 0),
+            ("key", 0),
+            ("done", 0),
+            ("failed", 0),
+        ] {
             let rows = view(&for_case(c), 100);
             let barred = rows
                 .iter()
                 .filter(|r| r.spans.iter().any(|s| s.style.bg == Some(crate::BLUE)))
                 .count();
-            assert_eq!(barred, 1, "{c}: more than the focus is barred");
+            assert_eq!(barred, bars, "{c}: wrong number of barred rows");
+        }
+    }
+
+    #[test]
+    fn the_steps_keep_the_lists_height_and_one_width() {
+        for cols in [100, 160] {
+            let list = view(&for_case("providers"), cols);
+            let widths: Vec<usize> = ["waiting", "key", "done", "failed"]
+                .iter()
+                .map(|c| {
+                    let rows = view(&for_case(c), cols);
+                    assert_eq!(rows.len(), list.len(), "{c} jumps in height at {cols}");
+                    rows.iter().map(|r| crate::width(&r.spans)).max().unwrap()
+                })
+                .collect();
+            assert!(
+                widths.windows(2).all(|w| w[0] == w[1]),
+                "the steps differ in width at {cols}: {widths:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_step_names_its_provider_and_its_way_back() {
+        for (c, title) in [
+            ("waiting", "anthropic"),
+            ("key", "google"),
+            ("done", "anthropic"),
+            ("failed", "anthropic"),
+        ] {
+            let rows = view(&for_case(c), 160);
+            let text = rows.iter().map(plain).collect::<Vec<_>>().join("\n");
+            let head = rows.iter().map(plain).find(|l| l.contains(title)).unwrap();
+            assert!(head.contains('✕'), "{c}: the title row lost its ✕");
+            assert!(text.contains("Esc back"), "{c}: no way back");
+            assert!(!text.contains("Log in\n"), "{c}: still titled Log in");
         }
     }
 
@@ -532,12 +622,12 @@ mod tests {
     #[test]
     fn done_says_logged_in_and_failed_names_its_reason() {
         let t = text(&for_case("done"), 160, 48);
-        assert!(t.contains("anthropic"), "the list is gone");
+        assert!(!t.contains("Providers"), "the list is shown");
         assert!(
             t.contains("✓ Logged in to anthropic."),
             "missing the outcome"
         );
-        assert!(t.contains("Esc close"), "missing the legend");
+        assert!(t.contains("Esc back"), "missing the legend");
         let rows = view(&for_case("done"), 160);
         let line = rows
             .iter()
@@ -554,7 +644,8 @@ mod tests {
             t.contains("Login to anthropic failed: token expired."),
             "missing the outcome"
         );
-        assert!(t.contains("Esc close"), "missing the legend");
+        assert!(!t.contains("Providers"), "the list is shown");
+        assert!(t.contains("Esc back"), "missing the legend");
         let rows = view(&for_case("failed"), 160);
         let line = rows.iter().find(|r| plain(r).contains("failed")).unwrap();
         let ink = line
