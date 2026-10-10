@@ -19,18 +19,45 @@ use support::pty::{Run, Screen, contains};
 const COLS: u16 = 120;
 const ROWS: u16 = 32;
 
+/// Whether the cells starting at `x`, `y` spell `word`: one cell per
+/// byte, each a single-char cell holding that byte.
+fn spells(screen: &Screen, x: u16, y: u16, word: &[u8]) -> bool {
+    word.iter().enumerate().all(|(dx, byte)| {
+        let cell = screen.cell(x + u16::try_from(dx).unwrap(), y);
+        cell.symbol.len() == 1 && cell.symbol.as_bytes()[0] == *byte
+    })
+}
+
+/// Whether any row holds `word` in consecutive cells.
+fn shows(screen: &Screen, word: &[u8]) -> bool {
+    (0..ROWS).any(|y| {
+        (0..COLS - u16::try_from(word.len()).unwrap() + 1).any(|x| spells(screen, x, y, word))
+    })
+}
+
+/// Whether the screen shows the input box's prompt row: `>` with a
+/// space before it and a stripe or a space before that, the
+/// prompt-row shape look.rs reads.
+fn prompt(screen: &Screen) -> bool {
+    (0..ROWS).any(|y| {
+        (2..COLS).any(|x| {
+            screen.cell(x, y).symbol.as_str() == ">"
+                && screen.cell(x - 1, y).symbol.as_str() == " "
+                && matches!(screen.cell(x - 2, y).symbol.as_str(), "\u{258c}" | " ")
+        })
+    })
+}
+
+/// Whether the screen shows the reply's first fragment: `Hel` in
+/// consecutive cells on one row.
+fn reply(screen: &Screen) -> bool {
+    shows(screen, b"Hel")
+}
+
 /// Whether the screen shows the turn's `completed` status: nine
 /// consecutive cells spelling it on one row.
 fn completed(screen: &Screen) -> bool {
-    const WORD: &[u8] = b"completed";
-    (0..ROWS).any(|y| {
-        (0..COLS - u16::try_from(WORD.len()).unwrap() + 1).any(|x| {
-            WORD.iter().enumerate().all(|(dx, byte)| {
-                let cell = screen.cell(x + u16::try_from(dx).unwrap(), y);
-                cell.symbol.len() == 1 && cell.symbol.as_bytes()[0] == *byte
-            })
-        })
-    })
+    shows(screen, b"completed")
 }
 
 #[test]
@@ -54,9 +81,9 @@ fn quitting_right_after_completed_exits_and_restores_the_terminal() {
             ("TERM_PROGRAM", "ghostty"),
         ],
     );
-    run.read_until(">");
+    run.screen_until(COLS, ROWS, "the prompt", prompt);
     run.write(b"say hi\r");
-    run.read_until("Hel");
+    run.screen_until(COLS, ROWS, "the reply", reply);
     run.screen_until(COLS, ROWS, "the completed turn", completed);
     let stalled_at = run.output().len();
     run.stall();
