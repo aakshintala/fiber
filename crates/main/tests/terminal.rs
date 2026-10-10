@@ -1017,10 +1017,6 @@ fn resize_redraws_the_grid_at_the_new_size() {
     // The footer's last word proves the last row drew before the resize.
     run.wait_screen("the footer", |grid| grid.contents.contains("quit"));
     run.resize(40, 10);
-    // The grid shrinks to the new size with the input line on its last
-    // row; the old rows are gone, not just unaddressed.
-    // The grid shrinks to the new size with the input line still drawn;
-    // the old rows are gone, not just unaddressed.
     // The redrawn home at 40 by 10: the input line sits on row 4
     // with the cursor parked on it, and the footer hint closes row 9.
     // Only a redraw at the new size lays the frame out this way.
@@ -1604,10 +1600,15 @@ fn journey_prompt_answer_approval_resize_quit() {
     // bytes truncated to 116 columns lose its tail, so the whole phrase
     // plus the cursor parked on the input row only co-occur after a
     // redraw at the new size.
+    // The card's `turns` row ends mid-card only when cut: retained
+    // bytes truncated to 116 columns lose its tail, so the whole row
+    // plus the cursor parked on the slab's input row only co-occur
+    // after a redraw at the new size. (The slab tints its padding, so
+    // rows carry trailing blanks: `contains`, never `ends_with`.)
     run.wait_screen("the redrawn grid at the new size", |grid| {
         grid.rows.len() == 30
-            && grid.rows.iter().any(|row| row.contains("0% of window"))
-            && grid.cursor == (28, 2)
+            && grid.rows.iter().any(|row| row.contains("turns  2"))
+            && grid.cursor == (28, 4)
     });
     // Quit: the terminal is restored, with one resume line per live
     // session on the primary screen ("On exit").
