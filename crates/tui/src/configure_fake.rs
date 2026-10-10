@@ -49,17 +49,16 @@ impl FakeLogin {
 
 impl BrowserLogin for FakeLogin {
     fn run(&self) -> Result<Stored, ConfigureError> {
-        // The test answers from its own thread: the wait is a receive
-        // with a deadline on the wall clock.
-        let wait = std::time::Duration::from_secs(10);
+        // The test answers from its own thread. The wait has no deadline
+        // of its own: the test ending drops the sender and releases it.
         let rx = self
             .answer_rx
             .lock()
             .ok()
             .and_then(|mut rx| rx.take())
             .unwrap_or_else(|| panic!("the FakeLogin's run ran twice"));
-        rx.recv_timeout(wait)
-            .unwrap_or_else(|_| panic!("the FakeLogin was never answered within {wait:?}"))
+        rx.recv()
+            .unwrap_or_else(|_| panic!("the FakeLogin was never answered"))
     }
 
     fn cancel(&self) {
