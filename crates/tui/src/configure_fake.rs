@@ -22,7 +22,7 @@ use crate::configure::{
 /// Neither holds a secret: the answer is a path, never a key.
 pub(crate) struct FakeLogin {
     answer_rx: Mutex<Option<std::sync::mpsc::Receiver<Result<Stored, ConfigureError>>>>,
-    answer_tx: Mutex<std::sync::mpsc::Sender<Result<Stored, ConfigureError>>>,
+    answer_tx: std::sync::mpsc::Sender<Result<Stored, ConfigureError>>,
     cancels: Mutex<usize>,
 }
 
@@ -31,16 +31,14 @@ impl FakeLogin {
         let (tx, rx) = std::sync::mpsc::channel();
         Self {
             answer_rx: Mutex::new(Some(rx)),
-            answer_tx: Mutex::new(tx),
+            answer_tx: tx,
             cancels: Mutex::new(0),
         }
     }
 
     /// Answers `run` with `result`.
     pub(crate) fn answer(&self, result: Result<Stored, ConfigureError>) {
-        if let Ok(tx) = self.answer_tx.lock() {
-            drop(tx.send(result));
-        }
+        drop(self.answer_tx.send(result));
     }
 
     /// How many times `cancel` ran.

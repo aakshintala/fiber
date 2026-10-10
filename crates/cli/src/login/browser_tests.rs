@@ -905,7 +905,8 @@ fn a_cancel_after_registration_runs_the_stop_once() {
 #[test]
 fn a_cancel_during_the_store_waits_for_it() {
     use std::sync::Mutex as StdMutex;
-    const STEP: Duration = Duration::from_secs(10);
+    const WAIT: Duration = Duration::from_secs(4);
+    const STILL_HELD: Duration = Duration::from_millis(500);
     let cancel = Arc::new(LoginCancel::default());
     let log = Arc::new(StdMutex::new(Vec::<String>::new()));
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -934,31 +935,41 @@ fn a_cancel_during_the_store_waits_for_it() {
     thread::spawn(move || {
         let result = cancel_for_commit.commit(|| {
             entered_tx.send(()).unwrap();
-            release_rx.recv_timeout(STEP).expect("the release arrives");
+            release_rx.recv_timeout(WAIT).expect("the release arrives");
             log_for_commit.lock().unwrap().push("stored".to_owned());
             Ok::<_, Failure>(7)
         });
         commit_tx.send(result).unwrap();
     });
-    entered_rx.recv_timeout(STEP).expect("the store is entered");
+    entered_rx.recv_timeout(WAIT).expect("the store is entered");
     let cancelling = Arc::clone(&cancel);
+    let (attempt_tx, attempt_rx) = mpsc::channel();
     let (cancel_done_tx, cancel_done_rx) = mpsc::channel();
     thread::spawn(move || {
+        attempt_tx.send(()).unwrap();
         cancelling.cancel();
         cancel_done_tx.send(()).unwrap();
     });
+    attempt_rx.recv_timeout(WAIT).expect("the cancel starts");
+    // The cancel blocks on the store's mutex: it attempted, yet must
+    // still be running while the store is held. A cancel that skipped
+    // the mutex would have finished by now and fail here.
+    assert!(
+        cancel_done_rx.recv_timeout(STILL_HELD).is_err(),
+        "the cancel finished while the store was held"
+    );
     // The cancel waits for the store: releasing it lets both finish in
     // order.
     release_tx.send(()).unwrap();
-    let result = commit_rx.recv_timeout(STEP).expect("the commit returns");
+    let result = commit_rx.recv_timeout(WAIT).expect("the commit returns");
     assert_eq!(result.unwrap(), 7);
-    stopped_rx.recv_timeout(STEP).expect("the stop ran");
+    stopped_rx.recv_timeout(WAIT).expect("the stop ran");
     let inner = inner_rx
-        .recv_timeout(STEP)
+        .recv_timeout(WAIT)
         .expect("the inner commit returns");
     cancelled_of(&inner.unwrap_err());
     assert_eq!(log.lock().unwrap().as_slice(), ["stored", "stopped"]);
-    cancel_done_rx.recv_timeout(STEP).expect("cancel returned");
+    cancel_done_rx.recv_timeout(WAIT).expect("cancel returned");
 }
 
 #[test]

@@ -373,6 +373,8 @@ fn stop_while_a_login_waits_on_its_callback_ends_it_and_frees_the_port() {
 
 #[test]
 fn a_login_started_after_stop_runs_no_credential() {
+    use std::time::Duration;
+    const WAIT: Duration = Duration::from_secs(4);
     let port = free_port();
     let (_root, provider) = waiting_provider(
         "fiber-provider-login-after-stop",
@@ -383,8 +385,19 @@ fn a_login_started_after_stop_runs_no_credential() {
     // A second stop is idempotent: no panic, still stopped.
     provider.stop();
     // The parked-callback fixture never opens, so a login that ran would
-    // bind `port`: it must stay free.
-    let error = provider.login("p", None, LoginMethod::Browser).unwrap_err();
+    // bind `port`: it must stay free. The login runs on a worker thread
+    // with a wall deadline, so a hang fails the test instead of the
+    // harness.
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(
+        move || match done.send(provider.login("p", None, LoginMethod::Browser)) {
+            Ok(()) | Err(_) => {}
+        },
+    );
+    let error = finished
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("the login after stop did not return within {WAIT:?}"))
+        .unwrap_err();
     assert!(
         std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_ok(),
         "credential() ran after stop and bound the port"

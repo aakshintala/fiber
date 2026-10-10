@@ -165,7 +165,7 @@ mod browser {
     use std::net::{Ipv4Addr, TcpListener, TcpStream};
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
-    use std::sync::{Arc, Mutex, mpsc};
+    use std::sync::{Arc, mpsc};
     use std::thread;
     use std::time::Duration;
 
@@ -182,26 +182,18 @@ mod browser {
     const EMAIL: &str = "alice@example.com";
 
     struct Show {
-        opened: Mutex<Vec<String>>,
         notify: mpsc::Sender<String>,
     }
 
     impl Show {
         fn recording() -> (Arc<Self>, mpsc::Receiver<String>) {
             let (notify, opened) = mpsc::channel();
-            (
-                Arc::new(Self {
-                    opened: Mutex::new(Vec::new()),
-                    notify,
-                }),
-                opened,
-            )
+            (Arc::new(Self { notify }), opened)
         }
     }
 
     impl LoginShow for Show {
         fn open(&self, url: &str) {
-            self.opened.lock().unwrap().push(url.to_owned());
             match self.notify.send(url.to_owned()) {
                 Ok(()) | Err(_) => {}
             }
