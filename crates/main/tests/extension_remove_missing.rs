@@ -20,6 +20,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use fakes::Watchdog;
+use serde_json::json;
 use support::Deadline;
 
 struct Setup {
@@ -39,6 +40,18 @@ impl Setup {
 
     fn home(&self) -> PathBuf {
         self.root.path().join("h")
+    }
+
+    /// A source package named `acme`, version `v1`.
+    fn source(&self) -> String {
+        let path = self.root.path().join("src");
+        fs::create_dir_all(&path).unwrap();
+        fs::write(
+            path.join("extension.json"),
+            json!({"name": "acme", "version": "v1", "fiber": "0.0.0", "api": 1}).to_string(),
+        )
+        .unwrap();
+        path.to_str().unwrap().to_owned()
     }
 
     fn extension(&self, args: &[&str]) -> Run {
@@ -112,4 +125,20 @@ fn a_leftover_directory_under_another_name_is_not_touched() {
     let run = setup.extension(&["remove", "muse"]);
     assert_eq!(run.code, Some(1), "{}", run.stderr);
     assert!(other.exists());
+}
+
+/// A healthy install whose directory has another name than its slug, as an
+/// older layout left it: the record names `acme`, `extensions/acme/` is gone.
+#[test]
+fn a_record_in_a_directory_with_another_name_is_not_removed() {
+    let setup = Setup::new();
+    let run = setup.extension(&["install", &setup.source()]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let legacy = setup.home().join("extensions/legacy-acme");
+    fs::rename(setup.home().join("extensions/acme"), &legacy).unwrap();
+    let run = setup.extension(&["remove", "acme"]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(!run.stderr.contains("removed"), "{}", run.stderr);
+    assert!(run.stderr.contains("extensions/acme"), "{}", run.stderr);
+    assert!(legacy.join("extension.json").exists());
 }
