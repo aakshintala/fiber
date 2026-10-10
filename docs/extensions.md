@@ -1285,8 +1285,8 @@ does not change a command's exit code.
 
 Installing an extension runs none of its code, except an install step its
 manifest declares, such as `npm ci`. Fiber runs that step in the extension's
-directory at install and at every update. A step that runs longer than 600 s,
-and a git call that runs longer than 120 s, is stopped and fails the install.
+directory at install and at every update. A step that runs longer than 1800 s,
+and a git call that runs longer than 300 s, is stopped and fails the install.
 Fiber does not pass
 `--ignore-scripts`, so a dependency's
 own install scripts run too, and the install summary says so. A pure-data

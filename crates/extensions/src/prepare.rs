@@ -23,7 +23,7 @@ const MAX_BINARY: u64 = 268_435_456;
 
 /// How long an install step may run before it is stopped
 /// (`docs/extensions.md`, "Installing").
-pub(crate) const INSTALL_STEP_DEADLINE: Duration = Duration::from_secs(600);
+pub(crate) const INSTALL_STEP_DEADLINE: Duration = Duration::from_secs(1800);
 
 /// This platform's key in a manifest's `binaries`, such as `darwin-arm64`.
 pub fn platform() -> String {

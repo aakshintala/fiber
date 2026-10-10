@@ -16,7 +16,7 @@ pub use config::{SHORT_NAMES, full_name};
 
 /// How long each `git` call may run before it is stopped
 /// (`docs/extensions.md`, "Installing").
-pub(crate) const GIT_DEADLINE: Duration = Duration::from_secs(120);
+pub(crate) const GIT_DEADLINE: Duration = Duration::from_secs(300);
 
 /// Whether `typed` names a directory rather than an extension.
 pub fn is_path(typed: &str) -> bool {
