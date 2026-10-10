@@ -358,6 +358,7 @@ dependency.
 | Crate or tool | Kind | Used for |
 |---|---|---|
 | insta | dev-dependency | whole-screen and value snapshots (`docs/testing.md`) |
+| vt100 | dev-dependency | rebuilding the pseudo-terminal screen as a grid in the binary-level terminal tests (`docs/testing.md`, "Screens"): 0.16.2 (MIT, test-only; its new transitive crate is `vte`) |
 | proptest | dev-dependency | property tests that shrink and replay a failing case by seed |
 | cargo-nextest | tool | running tests, one process each |
 | cargo-mutants | tool | the mutation check on every pull request |

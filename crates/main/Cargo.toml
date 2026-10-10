@@ -37,6 +37,7 @@ tui = { path = "../tui" }
 
 [dev-dependencies]
 fakes = { path = "../fakes" }
+vt100 = "0.16.2"
 
 [lints]
 workspace = true
