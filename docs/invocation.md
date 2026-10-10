@@ -913,7 +913,16 @@ websocket for everything it does.
   sends that client `stream_closed` (`docs/events.md`) after every line the
   session sent on it, and keeps no subscription for that session: the client's
   next command for it is rejected `not_subscribed` until it subscribes again.
-  The connection's other sessions are untouched.
+  The connection's other sessions are untouched. The hub reads end of file on
+  a relayed connection as the session closing it while running only when the
+  relay never saw the session exiting, the session's log ends in neither
+  `fiber_exited` nor `rewound`, and `run/<session_id>` still accepts a
+  connection. A clean exit removes the socket before it shuts its
+  connections, and a crash leaves a socket that refuses, so either one is an
+  exit and sends no `stream_closed`. A session that crashes and is resumed by
+  another client before the hub checks its socket can give the client
+  `stream_closed` for the session that ended; the client subscribes again and
+  no line repeats.
 - **A command without one is for the hub.** These are the hub's commands:
 
 | Hub command | `args` | What it does |
