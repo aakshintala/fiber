@@ -1143,9 +1143,15 @@ fn the_focused_completion_sits_on_the_bar_and_the_others_do_not() {
         let text = row(y);
         // Cell columns, not byte indices: the focused row's gutter
         // holds a three-byte `›` in one cell.
-        let at = text.find(name).unwrap_or_else(|| panic!("the {name} in {shown}"));
+        let at = text
+            .find(name)
+            .unwrap_or_else(|| panic!("the {name} in {shown}"));
         let x = u16::try_from(text[..at].chars().count()).unwrap_or(u16::MAX);
-        assert_eq!(buf[(x, y)].bg, if barred { accent } else { surface }, "{name} in {shown}");
+        assert_eq!(
+            buf[(x, y)].bg,
+            if barred { accent } else { surface },
+            "{name} in {shown}"
+        );
     }
 }
 

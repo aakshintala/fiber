@@ -93,9 +93,7 @@ fn buffer(app: &App, width: u16, height: u16) -> Buffer {
 fn barred(buf: &Buffer) -> Vec<u16> {
     let area = buf.area;
     (area.top()..area.bottom())
-        .filter(|y| {
-            (area.left()..area.right()).any(|x| buf[(x, *y)].bg == Role::Accent.color())
-        })
+        .filter(|y| (area.left()..area.right()).any(|x| buf[(x, *y)].bg == Role::Accent.color()))
         .collect()
 }
 
@@ -138,7 +136,10 @@ fn a_scrolled_slash_list_counts_both_directions() {
         assert_eq!(app.on_key(Key::Down, now), Effect::None);
     }
     let shown = screen(&app, 160, 48);
-    assert!(shown.contains("↑ 3 above · 4–11 of 40 · ↓ 29 more"), "{shown}");
+    assert!(
+        shown.contains("↑ 3 above · 4–11 of 40 · ↓ 29 more"),
+        "{shown}"
+    );
     let buf = buffer(&app, 160, 48);
     assert_eq!(barred(&buf).len(), 1, "{shown}");
 }
@@ -186,7 +187,11 @@ fn slash_hint() {
     let hint = text.find("[instructions]").expect("the hint");
     for n in 0.."[instructions]".len() {
         let x = u16::try_from(hint + n).unwrap_or(u16::MAX);
-        assert_eq!(buf[(x, row)].style().fg, Some(Role::Attention.color()), "cell {x}");
+        assert_eq!(
+            buf[(x, row)].style().fg,
+            Some(Role::Attention.color()),
+            "cell {x}"
+        );
     }
     let tag = text.find("command").expect("the tag");
     assert!(
@@ -335,7 +340,11 @@ fn multibyte_paths_keep_their_match_bold_after_the_cut() {
     let x = u16::try_from(at).unwrap_or(u16::MAX);
     assert_eq!(buf[(x, row)].symbol(), "s");
     assert!(buf[(x, row)].modifier.contains(Modifier::BOLD), "cell {x}");
-    assert_eq!(buf[(x, row)].style().fg, Some(Role::Accent.color()), "cell {x}");
+    assert_eq!(
+        buf[(x, row)].style().fg,
+        Some(Role::Accent.color()),
+        "cell {x}"
+    );
     let plain = x.saturating_add(1);
     assert!(!buf[(plain, row)].modifier.contains(Modifier::BOLD));
 }
@@ -347,9 +356,17 @@ fn path_spans_bold_only_the_shown_part_of_a_match() {
     let accent = ratatui::style::Style::new().fg(Role::Accent.color());
     let bold = accent.add_modifier(Modifier::BOLD);
     // The whole path shows: the match reads bold between accent ends.
-    let spans = path_spans("caf\u{e9}/na\u{ef}ve.rs", 0, Some(Range { start: 6, end: 10 }), 14);
+    let spans = path_spans(
+        "caf\u{e9}/na\u{ef}ve.rs",
+        0,
+        Some(Range { start: 6, end: 10 }),
+        14,
+    );
     assert_eq!(
-        spans.iter().map(|span| span.content.clone()).collect::<Vec<_>>(),
+        spans
+            .iter()
+            .map(|span| span.content.clone())
+            .collect::<Vec<_>>(),
         ["caf\u{e9}/", "na\u{ef}", "ve.rs"]
     );
     assert_eq!(spans[0].style, accent);
@@ -358,7 +375,10 @@ fn path_spans_bold_only_the_shown_part_of_a_match() {
     // Cut inside the match: only the shown part reads bold.
     let spans = path_spans("\u{ef}ve.rs", 7, Some(Range { start: 6, end: 10 }), 14);
     assert_eq!(
-        spans.iter().map(|span| span.content.clone()).collect::<Vec<_>>(),
+        spans
+            .iter()
+            .map(|span| span.content.clone())
+            .collect::<Vec<_>>(),
         ["", "\u{ef}v", "e.rs"]
     );
     assert_eq!(spans[1].style, bold);
@@ -404,7 +424,10 @@ fn range_text_counts_bindings_on_both_sides() {
     assert_eq!(range_text(0, 8, 8), None);
     assert_eq!(range_text(0, 0, 0), None);
     // Neither end hidden: no counts, only where the rows sit.
-    assert_eq!(range_text(0, 8, 40), Some("1–8 of 40 · ↓ 32 more".to_owned()));
+    assert_eq!(
+        range_text(0, 8, 40),
+        Some("1–8 of 40 · ↓ 32 more".to_owned())
+    );
     // The end shown: no "more" behind it.
     assert_eq!(range_text(0, 8, 9), Some("1–8 of 9 · ↓ 1 more".to_owned()));
     assert_eq!(range_text(1, 8, 9), Some("↑ 1 above · 2–9 of 9".to_owned()));
@@ -441,15 +464,24 @@ fn cut_left_keeps_the_file_name() {
     // or one.
     assert_eq!(cut_left("ab/cdef", 5), ("cdef".to_owned(), 3));
     assert_eq!(cut_left("abcdef", 5), ("cdef".to_owned(), 2));
-    assert_eq!(cut_left("\u{65e5}\u{672c}\u{8a9e}/notes.rs", 8), ("otes.rs".to_owned(), 11));
+    assert_eq!(
+        cut_left("\u{65e5}\u{672c}\u{8a9e}/notes.rs", 8),
+        ("otes.rs".to_owned(), 11)
+    );
 }
 
 #[test]
 fn match_in_prefers_the_file_name_then_the_path() {
     use std::ops::Range;
     // The name holds the query: the occurrence in the name.
-    assert_eq!(match_in("src/main.rs", "main"), Some(Range { start: 4, end: 8 }));
-    assert_eq!(match_in("src/main.rs", "MAIN"), Some(Range { start: 4, end: 8 }));
+    assert_eq!(
+        match_in("src/main.rs", "main"),
+        Some(Range { start: 4, end: 8 })
+    );
+    assert_eq!(
+        match_in("src/main.rs", "MAIN"),
+        Some(Range { start: 4, end: 8 })
+    );
     // The name holds none of it: the first in the path.
     assert_eq!(match_in("src/main.rs", "sr"), Some(0..2));
     assert_eq!(match_in("src/main.rs", "zzz"), None);

@@ -16,8 +16,8 @@ use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
 mod banner;
-mod completions;
 pub(crate) mod chrome;
+mod completions;
 mod drag;
 #[path = "home_view.rs"]
 mod home;
