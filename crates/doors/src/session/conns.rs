@@ -15,6 +15,7 @@ pub(super) const GRACE: Duration = Duration::from_secs(2);
 pub(super) struct Live {
     pub(super) reader: Option<JoinHandle<()>>,
     pub(super) writer: Option<JoinHandle<()>>,
+    /// The stored closure: it stops the reader and shuts the socket.
     pub(super) shutdown: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
@@ -55,8 +56,8 @@ impl Gate {
     }
 
     /// Records `handle` and `shutdown` together, and returns the id `serve`
-    /// finishes the connection with. `close` joins the reader; the shutdown
-    /// is what unblocks it. A published connection never lacks one. The
+    /// finishes the connection with. `close` joins the reader; the stored
+    /// closure stops the reader and shuts the socket. A published connection never lacks one. The
     /// stopped check and the publication share the connection lock with
     /// [`Gate::mark_stopped`] and [`Gate::join_clients`], so a reader
     /// admitted after the stop is rejected: its stream is shut down and
@@ -111,9 +112,10 @@ impl Gate {
         self.writers.notify_all();
     }
 
-    /// Runs the live connection's stored shutdown closure, if any,
-    /// without removing its entry: the reader gets EOF and runs its normal
-    /// cleanup, and the client sees EOF. Runs under the connection lock
+    /// Runs the live connection's stored closure, if any,
+    /// without removing its entry: it stops the reader and shuts the
+    /// socket, so the reader runs its normal cleanup, and the client sees
+    /// EOF. Runs under the connection lock
     /// and never joins (`docs/code-quality.md`, "Threads"): a writer
     /// whose watcher failed calls it from the writer thread, while the
     /// reader reaps that thread.
@@ -185,7 +187,8 @@ pub(super) fn grace_remains(now: Instant, until: Instant) -> bool {
     now < until
 }
 
-/// Shuts the connection's socket and joins the threads still running on it.
+/// Stops the reader and shuts the socket through the stored closure, then
+/// joins the threads still running on it.
 /// A reader reaping itself detaches its own handle; joining it would deadlock.
 fn reap(live: Live) {
     if let Some(shutdown) = live.shutdown {

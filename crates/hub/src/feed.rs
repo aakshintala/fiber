@@ -25,6 +25,8 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -78,6 +80,10 @@ pub(crate) struct Feed {
     /// set once by the hub serving it: the rejoin sweep collects resumed
     /// sessions there. Never under the state lock.
     pub(crate) on_scan: OnceLock<ScanHook>,
+    /// Skips the `shutdown` in [`Feed::stop`]: with the stoppable read
+    /// wired, the stop's pipe ends a silent reader on its own.
+    #[cfg(test)]
+    pub(super) skip_shutdown: AtomicBool,
     #[cfg(test)]
     settle_pause: Mutex<Option<SettlePause>>,
 }
@@ -92,8 +98,9 @@ pub(super) struct SettlePause {
 struct State {
     stopped: bool,
     entries: BTreeMap<String, Entry>,
-    /// Sessions with a live summary connection, and a handle to shut it.
-    tracked: BTreeMap<String, UnixStream>,
+    /// Sessions with a live summary connection: the stream to shut, and
+    /// the stop that ends its reader.
+    tracked: BTreeMap<String, Tracked>,
     /// Sessions whose status named a parent, while their socket is in
     /// `run/`: never connected again.
     delegates: BTreeSet<String>,
@@ -117,6 +124,14 @@ impl State {
             .cloned()
             .collect()
     }
+}
+
+/// A followed session's summary connection: the stream to shut, and the
+/// stop that ends its reader. The reader holds the stream's other clone
+/// through its own stoppable wrapper, and is its only reader.
+struct Tracked {
+    stream: UnixStream,
+    stop: support::stoppable::Stop,
 }
 
 /// A session in the feed and its latest `session_status`.
@@ -156,6 +171,8 @@ impl Feed {
             on_rewound: OnceLock::new(),
             on_scan: OnceLock::new(),
             #[cfg(test)]
+            skip_shutdown: AtomicBool::new(false),
+            #[cfg(test)]
             settle_pause: Mutex::new(None),
         }
     }
@@ -186,8 +203,10 @@ impl Feed {
         }
     }
 
-    /// Stops the scanner, shuts every summary connection and ends every
-    /// subscriber, joining their threads.
+    /// Stops the scanner, stops every summary reader and shuts every
+    /// summary connection, then ends every subscriber, joining their
+    /// threads. Every tracked `Stop` is stopped before the first join of a
+    /// summary reader or a subscriber writer.
     pub(crate) fn stop(&self) {
         let (tracked, subscribers, threads) = {
             let mut state = lock(&self.state);
@@ -202,8 +221,17 @@ impl Feed {
         if let Some(scanner) = lock(&self.scanner).take() {
             join(scanner);
         }
-        for stream in tracked.values() {
-            stream.shutdown(Shutdown::Both).unwrap_or(());
+        for tracked in tracked.values() {
+            tracked.stop.stop();
+        }
+        #[cfg(test)]
+        let skipped = self.skip_shutdown.load(Ordering::Relaxed);
+        for tracked in tracked.values() {
+            #[cfg(test)]
+            if skipped {
+                continue;
+            }
+            tracked.stream.shutdown(Shutdown::Both).unwrap_or(());
         }
         for subscriber in subscribers {
             drop(subscriber.tx);
@@ -384,6 +412,9 @@ impl Feed {
         let Ok(shutdown) = stream.try_clone() else {
             return;
         };
+        let Ok((read, stop)) = support::stoppable::reader(stream) else {
+            return;
+        };
         // A fresh id per subscribe: a session keeps every accepted
         // command id, so a repeated id is rejected `duplicate_command`.
         // The `c_hub_feed_` prefix keeps the feed's own connection
@@ -392,7 +423,7 @@ impl Feed {
             "{{\"id\":\"{}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"summary\"}}}}\n",
             crate::start::mint("c_hub_feed_")
         );
-        if (&stream).write_all(subscribe.as_bytes()).is_err() {
+        if read.get_ref().write_all(subscribe.as_bytes()).is_err() {
             return;
         }
         let mut state = lock(&self.state);
@@ -405,20 +436,32 @@ impl Feed {
         let session = id.clone();
         let spawned = thread::Builder::new()
             .name("hub-feed-session".to_owned())
-            .spawn(move || feed.read_session(&session, stream, found));
+            .spawn(move || feed.read_session(&session, read, found));
         if let Ok(handle) = spawned {
             if !state.scanned {
                 state.awaited.insert(id.clone());
             }
-            state.tracked.insert(id, shutdown);
+            state.tracked.insert(
+                id,
+                Tracked {
+                    stream: shutdown,
+                    stop,
+                },
+            );
             state.threads.push(handle);
         }
     }
 
-    /// Reads session `id`'s summary lines until its socket closes.
-    fn read_session(&self, id: &str, stream: UnixStream, found: Option<(String, PathBuf, u64)>) {
+    /// Reads session `id`'s summary lines until its socket closes or its
+    /// stop ends the read.
+    fn read_session(
+        &self,
+        id: &str,
+        read: support::stoppable::Reader,
+        found: Option<(String, PathBuf, u64)>,
+    ) {
         let log = found.as_ref().map(|(_, dir, _)| dir.join("events.jsonl"));
-        let mut read = BufReader::new(stream);
+        let mut read = BufReader::new(read);
         let mut buf = Vec::new();
         loop {
             buf.clear();
@@ -426,7 +469,10 @@ impl Feed {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
                     if !self.on_line(id, &buf, log.as_deref()) {
-                        read.get_ref().shutdown(Shutdown::Both).unwrap_or(());
+                        read.get_ref()
+                            .get_ref()
+                            .shutdown(Shutdown::Both)
+                            .unwrap_or(());
                         return;
                     }
                 }

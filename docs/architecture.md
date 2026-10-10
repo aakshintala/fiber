@@ -47,7 +47,7 @@ ephemeral event where it is display-only.
 | Module | Job |
 |---|---|
 | `contract` | The vocabulary every other module speaks: what an event looks like, what a command looks like, and what a tool, a provider and a hook must each be able to do, and the clock seam, re-exported from `support`. It contains no behaviour beyond checking that a value fits the vocabulary, and pure conversions of its own values, such as a wall time to milliseconds or to a UTC date. |
-| `support` | Small shared mechanisms with no domain knowledge: the `Clock` and `Wake` traits, which `contract::clock` re-exports, the process clock, the clock-parked wait, the process-group guard and the poison-ignoring `lock`. |
+| `support` | Small shared mechanisms with no domain knowledge: the `Clock` and `Wake` traits, which `contract::clock` re-exports, the process clock, the clock-parked wait, the process-group guard, the poison-ignoring `lock` and the stoppable read. |
 | `log` | Owns the session directory. The only thing that opens `events.jsonl`, holds the lock, mints `seq` and decides fsync order. Also hands events to whoever is watching, and writes the diagnostic files in `logs/`. |
 | `loop` | Runs turns and steps (`docs/loop.md`). The only thing that decides what happens next. |
 | `provider` | Talks to model APIs: wire formats, credentials, streaming. Reached only through the provider seam. |
