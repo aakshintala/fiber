@@ -291,12 +291,6 @@ fn leave_out_line(package: &Package, protocol: &str, id: &str, model: &Value) ->
             stem(package)
         ));
     }
-    if package.drop_protocols.contains(&protocol) {
-        return Some(format!(
-            "models-dev: {}/{id} is on {protocol}, left out until probed; left out",
-            stem(package)
-        ));
-    }
     if pre3_gemini(protocol, id) {
         return Some(format!(
             "models-dev: {}/{id} is a pre-3 Gemini model; left out",

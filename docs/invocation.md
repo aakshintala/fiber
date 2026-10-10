@@ -141,7 +141,7 @@ credential a session uses"). A new session takes its label from
 |---|---|
 | `update` | Updates the Fiber binary and every installed extension together (`docs/releasing.md`, "Updating"). `upgrade` runs the same command. A repository's extensions are not updated: each changes only through a new offer. |
 | `approve [--yes]` | Run in a repository: shows every extension, hook and MCP server the repository declares, as one offer would, and approves them for this person (`docs/extensions.md`, "Code a repository ships"). `--yes` approves without asking, for a script or a machine image. It prints each approval on stderr. |
-| `login [<name>] [--as <label>]` | Stores a provider's key under a credential label (`docs/model-routing.md`, "Logging in"), or a secret an installed extension declares (`docs/configuration.md`, "Secrets"). Without `--as`, a provider's label is the account's email when the login reveals one, otherwise `default`; a label already stored is refused. `--as` applies only to a provider. A name that is neither an installed provider nor a declared secret is a usage error that lists both. With no name, a terminal offers the installed providers and the declared secrets; without a terminal, it is a usage error. |
+| `login [<name>] [--as <label>] [--device]` | Stores a provider's key under a credential label (`docs/model-routing.md`, "Logging in"), or a secret an installed extension declares (`docs/configuration.md`, "Secrets"). Without `--as`, a provider's label is the account's email when the login reveals one, otherwise `default`; a label already stored is refused. `--as` applies only to a provider. `--device` applies only to a provider that logs in by browser, and logs in with a device code instead of the browser. A name that is neither an installed provider nor a declared secret is a usage error that lists both. With no name, a terminal offers the installed providers and the declared secrets; without a terminal, it is a usage error. |
 | `logout <provider> [--as <label> \| --all]` | Deletes a provider's stored key. With several labels it needs `--as` or `--all`. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
 | `doctor` | Says whether a session can start, and how to fix it when it cannot. |
 | `completion <shell>` | Prints a completion script for `bash`, `zsh` or `fish`, such as `source <(fiber completion zsh)`. It completes commands and flags, generated from the same parser definitions, and no values. |
@@ -349,6 +349,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `cancel` | none |
 | `reply` | `request_id` (string) and the answer ("Replying") |
 | `job_stop` | `job_id` (string) |
+| `job_input` | `job_id` (string), `text` (string) |
 | `background` | none |
 | `reload` | none |
 | `tools` | none |
@@ -376,6 +377,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `cancel` | Ends the running turn (`docs/architecture.md`, "Cancellation"), and stops a running `shell` command. Rejected `stale_request` if no turn is running and no `shell` command is. |
 | `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input or form ("Replying"). |
 | `job_stop` | Stops a running job by `job_id`, at once, even while a model response streams (`docs/architecture.md`, "One inbox"). Rejected `stale_request` if the job is not running. |
+| `job_input` | Writes `text` to a running job started with `tty`, as the `jobs` action `write` does for the model (`docs/tools.md`, "Background jobs"), and is accepted once written. The job's output reaches the client on its stream as usual. Rejected `stale_request` if the job is not running, and `invalid_arguments` if it was not started with `tty`. |
 | `background` | Moves every shell call running in the current turn to the background (`docs/tools.md`, "Shell"). Rejected `stale_request` if none is running. |
 | `reload` | Re-reads configuration, restarts changed MCP servers and extensions, and declares the tool set again (`docs/mcp.md`, "Reload"). Rejected `busy` if a turn is running. |
 | `history` | Answers, in its `command_accepted`, with the session's durable lines from `from_seq` to `to_seq` inclusive, or to the latest when `to_seq` is absent, at most 256 lines; a client pages for more. This is how every client pages history, the local terminal included: no client reads a session's log from disk (`docs/tui.md`, "History and paging"). Rejected `invalid_arguments` when `from_seq` is past the latest line. |
@@ -425,6 +427,11 @@ and `reply` there like any session. No session forwards a command to another
 **`job_stop` names a running `job_id`.** It is rejected `stale_request` if the
 job is not running. The terminal lists jobs with `/jobs` and can stop one from
 there. The list is a fold of the log, so there is no driver list command.
+
+**`job_input` types `text` into a running job started with `tty`.** It is
+rejected `stale_request` if the job is not running, and `invalid_arguments`
+if the job was not started with `tty`. A write the terminal refuses is
+rejected `io_failed`.
 
 **`background` frees the turn without a message.** It moves every running
 shell call to the background, as a person's Ctrl+B does, with nothing sent

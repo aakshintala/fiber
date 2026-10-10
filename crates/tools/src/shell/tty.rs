@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::OwnedFd;
 use std::path::Path;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
@@ -78,9 +78,11 @@ pub(super) fn open() -> std::io::Result<Terminal> {
     )?;
     let writer = Mutex::new(File::from(primary.try_clone()?));
     let input = Input(Box::new(move |bytes, clock, cancel| {
-        let mut file = writer
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(mut file) = lock_writer(&writer, clock, cancel) else {
+            // The cancel fired while waiting for the lock: nothing was
+            // written, as a short write reports.
+            return Ok(0);
+        };
         write_chunks(&mut *file, bytes, clock, cancel)
     }));
     Ok(Terminal {
@@ -88,6 +90,34 @@ pub(super) fn open() -> std::io::Result<Terminal> {
         secondary,
         input,
     })
+}
+
+/// Takes the writer lock, waiting on `clock` the way [`write_chunks`]
+/// waits for room: a job that never releases it cannot hold a later write
+/// past its cancel. `None` when the cancel fired first: nothing was
+/// written.
+fn lock_writer<'a>(
+    writer: &'a Mutex<File>,
+    clock: &dyn Clock,
+    cancel: &dyn Cancel,
+) -> Option<MutexGuard<'a, File>> {
+    let nudge = Arc::new(Nudge::default());
+    let wake: Arc<dyn Wake> = nudge.clone();
+    cancel.subscribe(Arc::downgrade(&wake));
+    clock.subscribe(Arc::downgrade(&wake));
+    loop {
+        let seen = nudge.seen();
+        if cancel.is_cancelled() {
+            return None;
+        }
+        match writer.try_lock() {
+            Ok(file) => return Some(file),
+            Err(TryLockError::Poisoned(error)) => return Some(error.into_inner()),
+            Err(TryLockError::WouldBlock) => {
+                nudge.park(clock, clock.now().checked_add(WRITE_RETRY), seen);
+            }
+        }
+    }
 }
 
 /// Wakes a write that is waiting for room: the clock moved or the call was

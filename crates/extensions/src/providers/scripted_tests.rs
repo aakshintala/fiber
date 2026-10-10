@@ -271,6 +271,7 @@ fn add_scripted_replaces_an_entry_it_did_not_build() {
                 prompt_addendum: None,
             }],
             reviewer_model: None,
+            login: None,
         },
     );
     providers.add_scripted("scripted/s.json");

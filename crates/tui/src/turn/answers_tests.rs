@@ -241,7 +241,7 @@ fn a_close_reads_as_a_completed_row() {
     );
     let row = ledger(&app);
     assert!(rules(&app).is_empty());
-    assert!(row.ends_with("\"Name\"}]}"), "{row}");
+    assert!(row.ends_with("ask_user 2 questions"), "{row}");
 }
 
 #[test]

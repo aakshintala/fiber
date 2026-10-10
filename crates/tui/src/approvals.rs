@@ -380,13 +380,20 @@ impl Queue {
     }
 
     /// The badge line while the panel is closed and requests wait,
-    /// counting `extra` requests held elsewhere with them.
-    pub(crate) fn badge(&self, extra: usize) -> Option<String> {
+    /// counting `extra` requests held elsewhere with them. It names the
+    /// `next_request` action's bound key, leaving it out when unbound.
+    pub(crate) fn badge(&self, extra: usize, key: Option<&str>) -> Option<String> {
         if self.shown.is_some() {
             return None;
         }
         let waiting = self.waiting_indices().count().saturating_add(extra);
-        (waiting > 0).then(|| format!("! {waiting} waiting · /approvals or ⌥A"))
+        if waiting == 0 {
+            return None;
+        }
+        match key {
+            Some(key) => Some(format!("! {waiting} waiting · /approvals or {key}")),
+            None => Some(format!("! {waiting} waiting · /approvals")),
+        }
     }
 
     /// Handles a key while the panel is open; `None` when the panel is

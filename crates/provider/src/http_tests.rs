@@ -238,7 +238,7 @@ fn retry_after_is_kept_only_when_finite_and_non_negative() {
 }
 
 /// How long the test waits for the server to see the call.
-const REQUEST_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+const REQUEST_WITHIN: std::time::Duration = fakes::MUST_SUCCEED_WITHIN;
 
 /// How long a test waits for one call to return.
 ///
@@ -334,10 +334,10 @@ fn cancelling_a_call_mid_stream_closes_the_socket_without_a_proxy() {
 }
 
 /// How long a test waits for the proxy to record a CONNECT.
-const CONNECT_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+const CONNECT_WITHIN: std::time::Duration = fakes::MUST_SUCCEED_WITHIN;
 
 /// How long a test waits for the proxy to see a tunnel close.
-const CLOSE_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+const CLOSE_WITHIN: std::time::Duration = fakes::MUST_SUCCEED_WITHIN;
 
 /// A proxy value pointing at `proxy`, bypassing nothing.
 fn proxy_through(proxy: &fakes::ConnectProxy) -> ureq::Proxy {
@@ -408,7 +408,7 @@ fn a_call_past_no_proxy_bypasses_the_proxy() {
 }
 
 /// How long the test waits for the origin to see the handshake bytes.
-const HANDSHAKE_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+const HANDSHAKE_WITHIN: std::time::Duration = fakes::MUST_SUCCEED_WITHIN;
 
 #[test]
 fn tls_runs_end_to_end_inside_the_tunnel() {

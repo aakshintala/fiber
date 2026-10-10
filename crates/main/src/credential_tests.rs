@@ -16,6 +16,7 @@ fn provider(name: &str) -> ProviderData {
         placeholders: Default::default(),
         models: Vec::new(),
         reviewer_model: None,
+        login: None,
     }
 }
 

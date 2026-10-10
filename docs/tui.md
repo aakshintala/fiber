@@ -56,7 +56,9 @@ no rail. It is centred. From the top:
    switch, and the model and thinking chips and "enter starts a session"
 4. under the box, at its width, the session list ("The session list")
 
-A key hint sits at the foot. Until the first prompt, the input box's
+A key hint sits at the foot. It names the key map action's bound key,
+leaving the key out when the action is unbound; Ctrl+C cannot be
+rebound, so its hint stays fixed. Until the first prompt, the input box's
 placeholder says "/? for shortcuts". Typing a prompt and pressing Enter asks
 the hub to start a session in the chosen workspace, and the screen switches to
 it. No session exists before Enter, so opening the terminal, glancing at home
@@ -381,8 +383,11 @@ a click on it returns too. The views are:
   `session_not_found`; while its parent lists it running, the terminal asks
   again every 500 ms.
 - **A job running under a pseudo-terminal** has a live view of its screen. The
-  input box types into it as raw keys, as `jobs write` does for the model, so
-  the person can finish an interactive step the model started. The screen is
+  input box sends `job_input` to type into it as raw keys, as `jobs write`
+  does for the model, so the person can finish an interactive step the model
+  started. Esc, Ctrl+C and Ctrl+L keep their meanings there (closing the view,
+  clear then quit, the model picker), so they are not typed into the job; the
+  status card's stop target ends it. The screen is
   80 columns by 24 rows, drawn from the job's output since the terminal
   attached. Carriage return, line feed, backspace, tab, cursor movement and
   erasing in a line or the display are applied; other escape sequences are
@@ -798,7 +803,8 @@ An approval request is a panel at the bottom that replaces the input box
   (`docs/permissions.md`).
 - The asking call's tool group expands so the full call can be read.
 - Esc puts the request aside. It stays pending behind a badge, and clicking the
-  badge reopens it. Denying is always explicit.
+  badge reopens it. The badge names the `next_request` action's bound key,
+  leaving the key out when the action is unbound. Denying is always explicit.
 - Esc steps through waiting requests one at a time. With a question form
   behind an approval, a second Esc declines the form.
 - `/approvals` reopens the waiting queue at the first request. It is the key
@@ -1120,6 +1126,9 @@ The key map, `/?` or `/help`, is an overlay over the conversation listing every
 binding by area with its other paths. Esc closes it. Ctrl+L opens the model picker,
 so it does not redraw the screen as it does in some terminal programs.
 
+Hints that name a key, on home and on the approval badge, name the action's
+bound key from this table, leaving the key out when the action is unbound.
+
 Every action acts in some of six contexts, and the terminal is in exactly one
 of them when a key arrives:
 
@@ -1220,7 +1229,7 @@ later release still applies.
 | `/model` | Opens the model picker. |
 | `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. With no level, opens the model picker on the model's chips: Enter saves the level, `s` applies it to this session only. |
 | `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
-| `/scoped-models` | Chooses which models the model picker shows, saved as `scoped_models`. |
+| `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`, Space or a click on the mark toggles it, Enter saves the marked list as `scoped_models`, and Esc saves nothing. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
 | `/context` | Opens the context breakdown. |
 | `/usage` | Opens the usage view. |
 | `/tools` | Opens the tools view. |
@@ -1500,7 +1509,9 @@ images show inline: an image a tool returned, in its ledger row, and a pasted
 image, in the prompt bubble.
 
 - An image is at most 40% of the conversation's width and 12 rows tall,
-  keeping its proportions. A click opens it in the system viewer.
+  keeping its proportions. A click opens it in the system viewer, from a
+  copy the terminal writes to `cache/images/` in Fiber home
+  (`docs/state.md`).
 - The terminal holds the image and moves it with the text, through kitty's
   Unicode placeholders. Fiber keeps no decoded image and sends nothing again
   on a scroll.
@@ -1508,6 +1519,9 @@ image, in the prompt bubble.
   rows without decoding it.
 
 Elsewhere an image is one clickable line, `▣ screenshot.png · 1280×800`.
+An image the terminal cannot show, because its file is missing or too
+large or the terminal refused it, is its one line, with a notice saying
+why, and is not asked for again in that session.
 iTerm2's protocol and Sixel make the client redraw an image on every scroll,
 so only the logo, drawn once, uses them. `tui.inline_images` turns inline
 images off.

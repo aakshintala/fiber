@@ -2,7 +2,9 @@
 
 use serde_json::json;
 
-use super::{Kind, Kinds, count, cut, duration, heading, kind, money, seconds, tokens, wrap};
+use super::{
+    Kind, Kinds, count, cut, duration, heading, kind, money, seconds, summary, tokens, wrap,
+};
 
 #[test]
 fn durations_truncate_to_whole_seconds_at_each_threshold() {
@@ -311,4 +313,62 @@ fn ask_user_counts_its_questions_when_it_has_any() {
         kind("other", &json!({"questions": [{}]})),
         Kind::Other
     ));
+}
+
+#[test]
+fn summaries_show_parsed_arguments_never_json() {
+    let questions = |n: usize| {
+        (0..n)
+            .map(|i| json!({"header": format!("H{i}"), "question": format!("q{i}?")}))
+            .collect::<Vec<_>>()
+    };
+    let cases = [
+        // File tools and the shell keep their path and command.
+        ("read", json!({"path": "a.rs"}), "a.rs"),
+        ("edit", json!({"path": "a.rs"}), "a.rs"),
+        ("write", json!({"path": "n.rs"}), "n.rs"),
+        ("shell", json!({"command": "cargo test"}), "cargo test"),
+        // `ask_user` counts its questions: one is singular.
+        ("ask_user", json!({"questions": questions(1)}), "1 question"),
+        (
+            "ask_user",
+            json!({"questions": questions(2)}),
+            "2 questions",
+        ),
+        (
+            "ask_user",
+            json!({"questions": questions(4)}),
+            "4 questions",
+        ),
+        // Other tools show their first string field, one line.
+        ("search", json!({"pattern": "foo"}), "foo"),
+        (
+            "web_fetch",
+            json!({"url": "https://example.com/x"}),
+            "https://example.com/x",
+        ),
+        ("web_search", json!({"query": "rust"}), "rust"),
+        ("search", json!({"query": "a\nb"}), "a b"),
+        ("mystery", json!({"name": "x"}), "x"),
+        // The first key in `query, url, pattern, ...` order wins, and
+        // empty values are skipped.
+        ("search", json!({"url": "u", "query": "q"}), "q"),
+        ("search", json!({"query": "", "url": "u"}), "u"),
+        ("search", json!({"query": "  ", "url": "u"}), "u"),
+        // An array field reads as a short count; a nested object, an
+        // empty object and unparsed raw text read as nothing.
+        ("jobs", json!({"items": [1, 2, 3]}), "3 items"),
+        ("jobs", json!({"items": []}), ""),
+        ("mystery", json!({"filter": {"a": 1}}), ""),
+        ("mystery", json!({}), ""),
+    ];
+    for (name, arguments, expected) in &cases {
+        let found = summary(name, arguments);
+        assert_eq!(found, *expected, "{name} {arguments}");
+        assert!(!found.contains('{'), "{name} {arguments}");
+    }
+    // Raw text that was not JSON shows nothing: the running line already
+    // holds it until the call is requested.
+    let raw = summary("ask_user", &serde_json::Value::String("{\"q".to_owned()));
+    assert_eq!(raw, "");
 }
