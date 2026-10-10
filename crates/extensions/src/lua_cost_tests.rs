@@ -197,6 +197,7 @@ fn without_a_key_run_receives_no_key() {
 #[derive(Default)]
 struct Inner {
     calls: AtomicUsize,
+    warms: bool,
 }
 
 struct Idle;
@@ -215,6 +216,10 @@ impl Provider for Inner {
     fn call(&self, _request: &ModelRequest) -> Box<dyn ModelCall> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Box::new(Idle)
+    }
+
+    fn warms(&self, _request: &ModelRequest) -> bool {
+        self.warms
     }
 
     fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
@@ -304,4 +309,23 @@ fn costed_with_cost_delegates_calls_and_tools_and_looks_up_through_cost() {
     // A raised error is nothing to the loop.
     let missing = within(move || lookup.cost(&GenerationId("gen-gone".into())));
     assert_eq!(missing, None);
+}
+
+#[test]
+fn costed_forwards_whether_the_inner_provider_warms() {
+    for warms in [false, true] {
+        let root = fakes::TempDir::new("fiber-lua-cost");
+        let (lua, _) = provider_on(
+            &root,
+            "fiber.provider(\"p\", { cost = { timeout = 1000, run = function() return 0 end } })\n",
+            FakeClock::new(),
+        );
+        let inner: Arc<dyn Provider> = Arc::new(Inner {
+            warms,
+            ..Inner::default()
+        });
+        let wrapped = within(move || lua.costed(inner, "http://h/v1", None)).unwrap();
+        assert!(wrapped.cost_lookup().is_some());
+        assert_eq!(wrapped.warms(&request()), warms);
+    }
 }
