@@ -713,6 +713,9 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
     let mut run = Run::terminal(&setup);
     // The first frame draws the input line.
     run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    // The loop pushes kitty's flags only after it processes the harness's
+    // reply, so this also keeps the responder's pty write ahead of input.
+    run.read_bytes_until(b"\x1b[>1u", "kitty keyboard flags pushed");
     // Enter goes out once the hub connects.
     run.write(b"say hi\r");
     // The reply streams in two deltas; the turn's close says it finished.
@@ -724,8 +727,8 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
     // elapsed count proves `turn_started` folded, which opens the turn:
     // Esc goes out as `cancel` only while the turn is busy, so an Esc on
     // the bare working line is dropped and strands the stalled turn.
-    // With kitty's flags pushed Esc arrives as `CSI 27 u`, never as a
-    // lone byte.
+    // The earlier kitty-push wait ensures the harness finished its reply
+    // before this key is written to the pty master.
     run.write(b"again\r");
     run.wait_screen("the running turn", |grid| working_elapsed(&grid.contents));
     run.write(b"\x1b[27u");
@@ -971,6 +974,9 @@ fn a_streaming_ask_shows_its_raw_arguments_until_requested() {
     // A 160x48 grid, as the ticket's screen: every frame draws at the
     // ticket's width.
     run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    // The loop pushes kitty's flags only after it processes the harness's
+    // reply, so this also keeps the responder's pty write ahead of input.
+    run.read_bytes_until(b"\x1b[>1u", "kitty keyboard flags pushed");
     run.write(b"run it\r");
     // The call is still streaming its arguments, so the group line shows
     // the raw text; the scripted test above shows it gone once requested.
@@ -978,8 +984,8 @@ fn a_streaming_ask_shows_its_raw_arguments_until_requested() {
         grid.contents.contains("{\"questions\"")
     });
     // The turn stalls mid-arguments: Esc interrupts it, as the stalled
-    // turn test interrupts its stalled reply. With kitty's flags pushed
-    // Esc arrives as `CSI 27 u`, never as a lone byte.
+    // turn test interrupts its stalled reply. The kitty-push wait above
+    // ensures the harness finished its reply before this pty write.
     run.write(b"\x1b[27u");
     run.wait_screen("the interrupted turn", |grid| {
         grid.alternate_screen && grid.contents.contains("interrupted")
