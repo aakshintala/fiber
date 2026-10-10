@@ -163,8 +163,9 @@ the ticket's PR body: `keymap-narrow` at 100 by 40, the rest at 160 by 48.
 ## Login (#1736)
 
 `--login CASE` draws one `/login` case as a centred panel over a dimmed
-conversation instead of the conversation: the provider list, the browser
-wait, key entry, and the two outcomes. Each case draws one static frame
+conversation instead of the conversation: the provider list, then the
+browser wait, key entry, and the two outcomes, each replacing the whole
+panel. Each case draws one static frame
 from the fixtures in `src/login.rs` (four providers, two with `browser`
 tags and two with `key` tags; two extension credentials) and waits for a
 key; Esc, q or Ctrl+C quits. Combine with `--static`; the fixture still
@@ -181,17 +182,22 @@ cargo run --release -- fixtures/session.jsonl --static --login failed
 - `providers`: four providers under `Providers`, OAuth rows tagged
   `browser` and key rows tagged `key`, then two extension credentials under
   `Secrets`; the first row focused.
-- `waiting`: the list stays with `Open this URL to log in to anthropic:`
-  below it, the long URL cut from the left keeping its tail, `y` to copy,
-  and a dim `Waiting for the browser…` line.
-- `key`: the list stays with `Label (--as): default.` and
-  `Key for google:` below it, the key masked as eight dots with a block
-  cursor. The key panel sits in the centred overlay with the list, not in a
-  bottom panel like the built view: the static cases share one frame.
-- `done`: the list stays with a `✓ Logged in to anthropic.` outcome line
-  in the success colour.
-- `failed`: the list stays with a `Login to anthropic failed:` outcome
-  line, the `token expired` reason in the error colour.
+- `waiting`, `key`, `done`, `failed`: each step replaces the whole panel
+  (the provider list is not drawn). The title is the provider's name; the
+  panel keeps the provider list's height and one width across the four
+  steps, so it does not jump between steps. It is a few cells wider than
+  the list, because the `key` legend is the longest line; the URL is cut to
+  fit rather than widening it.
+  - `waiting`: `Open this URL to log in to anthropic:`, the long URL cut
+    from the left keeping its tail, and a dim `Waiting for the browser…`
+    line. Legend: `y copy URL · Esc back`.
+  - `key`: `Label (--as): default.` and `Key for google:`, the key masked as
+    eight dots with a block cursor. Legend:
+    `Tab key or label · Enter submit · Esc back`.
+  - `done`: a `✓ Logged in to anthropic.` outcome line in the success
+    colour. Legend: `Esc back`.
+  - `failed`: a `Login to anthropic failed: token expired.` outcome line,
+    the `token expired` reason in the error colour. Legend: `Esc back`.
 
 `./capture-login.sh` captures every case in tmux, plain text and SGR, for
 the ticket's PR body: `waiting-narrow` and `key-narrow` are the same cases

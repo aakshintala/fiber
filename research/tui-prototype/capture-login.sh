@@ -19,7 +19,7 @@ capture() {
   # shellcheck disable=SC2086
   tmux new-session -d -x $3 -y $4 -s login1736 "$BIN $FIX --static --login $1"
   for _ in $(seq 1 50); do
-    if tmux capture-pane -p -t login1736 2>/dev/null | grep -q "Log in"; then
+    if tmux capture-pane -p -t login1736 2>/dev/null | grep -q "Esc "; then
       break
     fi
   done
