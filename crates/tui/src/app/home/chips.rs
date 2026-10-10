@@ -266,9 +266,13 @@ impl App {
                 return Some(Effect::None);
             }
             // Past the last row, ↓ asks the next `recent` page when the
-            // focused row ends the list. Focus stays.
+            // focused row ends the list, and stays otherwise. Focus
+            // stays either way.
             if let Some(row) = row {
-                return self.page_recent(row);
+                if let Some(effect) = self.page_recent(row) {
+                    return Some(effect);
+                }
+                return Some(Effect::None);
             }
             return Some(Effect::None);
         }
