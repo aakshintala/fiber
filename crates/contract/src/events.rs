@@ -26,8 +26,8 @@ pub use context::{
     HandoffCompleted, HandoffStarted, HandoffTrigger, InstructionFile, InstructionFileSent,
     InstructionReason, InstructionSent, KeptMessage, ModelChanged, ModelSettings, Note, Notice,
     OpeningMessage, Outcome, PreambleBuilt, PreambleReason, QuotaNoticed, RetryScheduled,
-    ReviewerKept, ReviewerPurpose, ReviewerUse, SentTool, SkillListed, SkillSent, SkillSource, SkillsChanged, SkillsResent,
-    SwitchSource, ToolReplaced, UsageRecorded,
+    ReviewerKept, ReviewerPurpose, ReviewerUse, SentTool, SkillListed, SkillSent, SkillSource,
+    SkillsChanged, SkillsResent, SwitchSource, ToolReplaced, UsageRecorded,
 };
 pub use host::{
     CommandAccepted, CommandInfo, CommandRejected, CommandResult, DelegateFinished,

@@ -1063,8 +1063,10 @@ fn a_usage_without_input_bytes_does_not_read() {
 #[test]
 fn a_reviewer_use_round_trips_and_is_absent_otherwise() {
     let tokens = json!({"input": 1, "cache_read": 0, "cache_write": {}, "output": 1});
-    let base = || json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
-        "input_bytes": 1, "cost": null});
+    let base = || {
+        json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
+        "input_bytes": 1, "cost": null})
+    };
     let recorded = |payload: Value| match read("usage_recorded", payload).unwrap() {
         Some(Event::UsageRecorded(recorded)) => recorded,
         other => panic!("{other:?}"),
