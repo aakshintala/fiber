@@ -3627,6 +3627,34 @@ fn an_unknown_config_key_logs_one_notice_and_runs() {
     );
 }
 
+#[test]
+fn an_incompatible_extension_logs_one_notice_and_runs() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let dir = setup.home().join("extensions/old");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({"name": "old", "version": "v0.0.0", "fiber": "0.0.0", "api": 999}).to_string(),
+    )
+    .unwrap();
+    support::write_record(&dir);
+
+    let run = setup.fiber(&["ask", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.insert(3, "notice");
+    assert_eq!(run.kinds(), expected);
+    let notices: Vec<_> = run.lines.iter().filter(|l| l["kind"] == "notice").collect();
+    assert_eq!(notices.len(), 1, "{:?}", run.kinds());
+    assert_eq!(notices[0]["payload"]["code"], "extension_incompatible");
+    let message = notices[0]["payload"]["message"].as_str().unwrap();
+    for part in ["old", "999"] {
+        assert!(message.contains(part), "{message}");
+    }
+}
+
 /// Installs an inline extension `name` with `init_lua`, and makes `name/m1`
 /// the configured model.
 fn inline_extension(setup: &Setup, name: &str, init_lua: &str) {

@@ -231,7 +231,7 @@ fn assembled(
         Arc::new(tools::PathLocks::new()),
         None,
     );
-    let naming = crate::lua_providers::add_lua(&extensions, &mut providers, &config).unwrap();
+    let (naming, _) = crate::lua_providers::add_lua(&extensions, &mut providers, &config).unwrap();
     let owners = (extensions.lua_providers().iter())
         .map(|(extension, lua)| (lua.name().to_owned(), extension.clone()))
         .collect();
@@ -917,7 +917,7 @@ fn an_unconfigured_model_counts_toward_ambiguity() {
         Arc::new(tools::PathLocks::new()),
         None,
     );
-    let naming = crate::lua_providers::add_lua(&extensions, &mut providers, &config).unwrap();
+    let (naming, _) = crate::lua_providers::add_lua(&extensions, &mut providers, &config).unwrap();
     assert!(
         naming.contains(&("acme".to_owned(), "m".to_owned())),
         "the naming list keeps the unconfigured model: {naming:?}"

@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use config::{Config, ProviderData, Secret};
+use contract::events::Notice;
 use contract::shapes::Failure;
 use contract::signing::Signer;
 use extensions::{CredentialPair, LuaProvider, Providers, SessionExtensions};
@@ -40,6 +41,10 @@ impl Access {
     }
 }
 
+/// What `add_lua` returns: every model as `(provider, id)` pairs, and
+/// the discovery and placeholder notices for the session's startup lines.
+pub(crate) type AddedLua = (Vec<(String, String)>, Vec<Notice>);
+
 /// Merges every Lua provider's models into `providers`
 /// (`docs/model-routing.md`, "Model discovery"): with no cached copy
 /// `models()` runs synchronously once at startup for a provider with a
@@ -52,18 +57,16 @@ impl Access {
 ///
 /// Returns every model of every provider as `(provider, id)` pairs, taken
 /// after `add_lua` and before placeholders are filled, so a model left out
-/// with `model_unconfigured` still counts toward ambiguity.
-// debt: notices from discovery are dropped, as `parts_with` drops
-// them; surfaced when #382 lands.
+/// with `model_unconfigured` still counts toward ambiguity, alongside the
+/// discovery and placeholder notices for the session's startup lines.
 pub(crate) fn add_lua(
     extensions: &SessionExtensions,
     providers: &mut Providers,
     config: &Config,
-) -> Result<Vec<(String, String)>, Failure> {
+) -> Result<AddedLua, Failure> {
+    let mut notices = Vec::new();
     for (extension, provider) in extensions.lua_providers() {
-        // debt: notices from discovery are dropped, as `parts_with` drops
-        // them; surfaced when #382 lands.
-        let _notices = providers.add_lua(extension, provider, config);
+        notices.extend(providers.add_lua(extension, provider, config));
     }
     let naming: Vec<(String, String)> = providers
         .names()
@@ -79,11 +82,11 @@ pub(crate) fn add_lua(
                 .unwrap_or_default()
         })
         .collect();
-    // debt: notices from placeholders are dropped, as above; surfaced
-    // when #382 lands.
-    let _notices = providers
-        .fill_placeholders(config, &|name| std::env::var(name).ok())
-        .map_err(|e| failed(e.code(), e))?;
+    notices.extend(
+        providers
+            .fill_placeholders(config, &|name| std::env::var(name).ok())
+            .map_err(|e| failed(e.code(), e))?,
+    );
     // Detached: nothing joins them, and `fiber ask` does not wait on them
     // to exit.
     let started = extensions::refresh_lists(
@@ -97,7 +100,7 @@ pub(crate) fn add_lua(
         Some(config::refresh_after(config)),
     );
     let _detached = started;
-    Ok(naming)
+    Ok((naming, notices))
 }
 
 /// The session's key and signer for `provider`, whose Lua provider is

@@ -59,7 +59,7 @@ fn an_unconfigured_model_is_left_out_and_a_setting_fills_it() {
         Arc::new(PathLocks::new()),
         None,
     );
-    let naming = add_lua(&extensions, &mut providers, &config).unwrap();
+    let (naming, _) = add_lua(&extensions, &mut providers, &config).unwrap();
     assert!(
         naming.contains(&("acme".to_owned(), "m".to_owned())),
         "the naming list keeps the unconfigured model: {naming:?}"
@@ -82,7 +82,7 @@ fn an_unconfigured_model_is_left_out_and_a_setting_fills_it() {
         Arc::new(PathLocks::new()),
         None,
     );
-    add_lua(&extensions, &mut providers, &config).unwrap();
+    let _ = add_lua(&extensions, &mut providers, &config).unwrap();
     assert_eq!(
         providers.resolve("acme/m").unwrap().model.base_url,
         "https://adb-1.example/v1"
@@ -151,7 +151,7 @@ fn the_session_label_and_shared_credential_name_reach_credential() {
         Arc::new(PathLocks::new()),
         None,
     );
-    add_lua(&extensions, &mut providers, &config).unwrap();
+    let _ = add_lua(&extensions, &mut providers, &config).unwrap();
     let data = providers.data("acme");
     // The lookup blocks on Lua, so it runs on its own thread under a
     // deadline instead of hanging the test.
