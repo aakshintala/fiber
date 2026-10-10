@@ -325,18 +325,32 @@ fn sample(
     }
     let log = log_path(home, id);
     // usize::MAX draws the single final frame, as the jig's `end` does.
-    let one = open_run(ctx, &log, &usize::MAX.to_string())?;
-    // 4,096 is the loop's HUB_BATCH (`crates/tui/src/event_loop/batch.rs`),
-    // the lines each frame folds while the log streams in.
-    let batched = open_run(ctx, &log, "4096")?;
-    let dense = open_run(ctx, &log, "64")?;
-    samples.extend(attach_stage_rows(
-        label,
-        log_bytes,
-        terminal_ms,
-        hub_ms,
-        Some((&one, &batched, &dense)),
-    ));
+    // An open run that errs keeps the valid terminal and hub rows: the
+    // base jig predates `open` mode, so the base run fails here.
+    let opens = (|| {
+        let one = open_run(ctx, &log, &usize::MAX.to_string())?;
+        // 4,096 is the loop's HUB_BATCH (`crates/tui/src/event_loop/batch.rs`),
+        // the lines each frame folds while the log streams in.
+        let batched = open_run(ctx, &log, "4096")?;
+        let dense = open_run(ctx, &log, "64")?;
+        Ok::<_, String>((one, batched, dense))
+    })();
+    match opens {
+        Ok((one, batched, dense)) => {
+            samples.extend(attach_stage_rows(
+                label,
+                log_bytes,
+                terminal_ms,
+                hub_ms,
+                Some((&one, &batched, &dense)),
+            ));
+        }
+        Err(error) => {
+            let (rows, note) = open_error_samples(label, log_bytes, terminal_ms, hub_ms, &error);
+            notes.push(note);
+            samples.extend(rows);
+        }
+    }
     Ok(samples)
 }
 
@@ -376,6 +390,26 @@ pub(crate) fn attach_stage_rows(
             ("frames_64", dense.frames, dense.frame_ms),
         ],
     )
+}
+
+/// What the attach records when an open-mode jig run errs: the terminal
+/// and hub rows only (the same rows the no-jig path emits), with a note
+/// naming the unavailable stages and the jig's error. The bench harness
+/// also runs the base binary with the base jig, which predates `open`
+/// mode and fails on it; the failure must not lose the valid terminal
+/// and hub rows.
+pub(crate) fn open_error_samples(
+    label: &str,
+    log_bytes: u64,
+    terminal_ms: f64,
+    hub_ms: f64,
+    error: &str,
+) -> (Samples, String) {
+    let rows = attach_stage_rows(label, log_bytes, terminal_ms, hub_ms, None);
+    let note = format!(
+        "the paging jig's open run failed ({error}); parse, fold, frames_1, frames_4096 and frames_64 stages are missing"
+    );
+    (rows, note)
 }
 
 /// One `attach_stage_ms` sample per stage: the terminal's spawn-to-tail

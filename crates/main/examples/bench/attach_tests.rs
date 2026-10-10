@@ -4,8 +4,8 @@ use crate::busy::filler;
 
 use super::{
     ATTACH_TAIL, OPEN_HEIGHT, OPEN_WIDTH, OpenFigures, PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES,
-    attach_stage_rows, feed_step, open_command, parse_open_line, plan_turns, replay_finished,
-    size_note, stage_rows,
+    attach_stage_rows, feed_step, open_command, open_error_samples, parse_open_line, plan_turns,
+    replay_finished, size_note, stage_rows,
 };
 
 fn status(id: &str, state: &str) -> serde_json::Value {
@@ -415,4 +415,40 @@ fn attach_stage_rows_without_the_jig_reports_terminal_and_hub_only() {
     }
     // The missing stages are missing rows, not zeroed ones.
     assert_ne!(rows.len(), stages().len());
+}
+
+#[test]
+fn a_failing_open_run_keeps_the_terminal_and_hub_rows_with_a_note() {
+    // The base jig predates `open` mode, so its run fails while the
+    // terminal and hub rows are valid: they are kept, with a note.
+    let error = "the paging jig's open run exited 2; stderr: usage";
+    let (rows, note) = open_error_samples("1 MiB", 1_050_231, 31.0, 20.0, error);
+    let names: Vec<&str> = rows
+        .iter()
+        .map(|(_, sample)| {
+            sample
+                .get("stage")
+                .and_then(|stage| stage.as_str())
+                .unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(names, ["terminal", "hub_replay"]);
+    assert_eq!(rows.len(), 2);
+    // The same rows the no-jig path emits, not emptied or zeroed ones.
+    assert_eq!(
+        rows,
+        attach_stage_rows("1 MiB", 1_050_231, 31.0, 20.0, None)
+    );
+    assert_ne!(rows.len(), stages().len());
+    // The note names the unavailable stages and the jig's error.
+    for stage in ["parse", "fold", "frames_1", "frames_4096", "frames_64"] {
+        assert!(note.contains(stage), "{stage}: {note}");
+    }
+    assert!(note.contains(error), "{note}");
+    // A different error is a different note, so equal notes never hide
+    // a swallowed failure.
+    assert_ne!(
+        note,
+        open_error_samples("1 MiB", 1_050_231, 31.0, 20.0, "other").1
+    );
 }
