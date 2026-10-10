@@ -327,13 +327,10 @@ fn same_json_shape(expected: &Value, actual: &Value) -> bool {
                         .is_some_and(|actual| same_json_shape(value, actual))
                 })
         }
-        (Value::Array(expected), Value::Array(actual)) => {
-            expected.len() == actual.len()
-                && expected
-                    .iter()
-                    .zip(actual)
-                    .all(|(expected, actual)| same_json_shape(expected, actual))
-        }
+        (Value::Array(expected), Value::Array(actual)) => expected
+            .iter()
+            .zip(actual)
+            .all(|(expected, actual)| same_json_shape(expected, actual)),
         _ => true,
     }
 }

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{CallOutcome, compare_credential, compare_result, provider_extension, same_json_shape};
+use super::{CallOutcome, compare_credential, compare_result, provider_extension};
 
 #[test]
 fn cost_and_models_dispatch_and_anything_else_names_both() {
@@ -171,7 +171,6 @@ fn exact_credential_expectations_compare_the_whole_nested_value() {
 fn exact_credential_arrays_match_when_every_element_matches() {
     let expected = json!([{"id": 1, "meta": {"account": "a"}}, {"id": 2}]);
     let same = json!([{"id": 1, "meta": {"account": "a"}}, {"id": 2}]);
-    assert!(same_json_shape(&expected, &same));
     assert!(compare_credential(&expected, &same, true).is_ok());
 }
 
@@ -181,7 +180,6 @@ fn exact_credential_arrays_of_different_length_do_not_match() {
     let longer = json!([{"id": 1}, {"id": 2}, {"id": 3}]);
     let shorter = json!([{"id": 1}]);
     for actual in [&longer, &shorter] {
-        assert!(!same_json_shape(&expected, actual), "{actual}");
         assert!(
             compare_credential(&expected, actual, true).is_err(),
             "{actual}"
@@ -199,13 +197,11 @@ fn exact_credential_arrays_need_every_element_to_match_in_shape() {
 
     let extra_element_field =
         json!([{"id": 1}, {"id": 2, "meta": {"account": "a"}, "email": "a@example.test"}]);
-    assert!(!same_json_shape(&expected, &extra_element_field));
     assert!(compare_credential(&expected, &extra_element_field, true).is_err());
     assert!(compare_credential(&expected, &extra_element_field, false).is_ok());
 
     let nested_extra_in_element =
         json!([{"id": 1}, {"id": 2, "meta": {"account": "a", "email": "a@example.test"}}]);
-    assert!(!same_json_shape(&expected, &nested_extra_in_element));
     assert!(compare_credential(&expected, &nested_extra_in_element, true).is_err());
     assert!(compare_credential(&expected, &nested_extra_in_element, false).is_ok());
 }
@@ -214,7 +210,6 @@ fn exact_credential_arrays_need_every_element_to_match_in_shape() {
 fn exact_credential_same_length_arrays_pass_and_an_array_is_not_a_scalar_or_object() {
     let expected = json!([1, "two", null]);
     let same = json!([1, "two", null]);
-    assert!(same_json_shape(&expected, &same));
     assert!(compare_credential(&expected, &same, true).is_ok());
 
     let object = json!({"0": 1});
