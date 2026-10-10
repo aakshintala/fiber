@@ -90,13 +90,6 @@ impl App {
         }
     }
 
-    /// Whether the workspace picker owns input: while open, chip
-    /// and list moves act on the picker, so the chip stays focused
-    /// behind it and the draft keeps nothing.
-    fn picker_open(&self) -> bool {
-        self.home.as_ref().is_some_and(|home| home.picker.is_some())
-    }
-
     /// Whether the last frame drew a session row: row moves act only
     /// then, and do nothing when no row fits.
     fn drew_a_row(&self) -> bool {
@@ -123,9 +116,6 @@ impl App {
     /// the cursor down a row; otherwise the chip row takes focus and the
     /// draft is kept.
     pub(super) fn entry_down(&mut self) -> Option<Effect> {
-        if self.picker_open() {
-            return Some(Effect::None);
-        }
         if self.completions().is_some() || self.recall_browsing() {
             return None;
         }
@@ -148,9 +138,6 @@ impl App {
     /// change; every other key keeps the chip focused and acts as from
     /// the entry bar.
     pub(super) fn chip_key(&mut self, key: &Key) -> Option<Effect> {
-        if self.picker_open() {
-            return Some(Effect::None);
-        }
         let chip = self.focused_chip()?;
         match key {
             Key::Up => {
@@ -202,9 +189,6 @@ impl App {
     /// at the ends; every other edit returns focus to the entry bar and
     /// applies there. `None` passes the edit on.
     pub(super) fn chip_edit(&mut self, edit: &Edit) -> Option<Effect> {
-        if self.picker_open() {
-            return Some(Effect::None);
-        }
         let chip = self.focused_chip()?;
         match edit {
             Edit::Left | Edit::Right => {
@@ -242,9 +226,6 @@ impl App {
     /// and from the toggle to that chip. A row's ✕ counts as its row.
     /// `None` for any other key, or when no row was drawn.
     pub(super) fn list_key(&mut self, key: &Key) -> Option<Effect> {
-        if self.picker_open() {
-            return Some(Effect::None);
-        }
         let focus = self.focus?;
         if !matches!(key, Key::Up | Key::Down) {
             return None;
