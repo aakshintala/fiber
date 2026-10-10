@@ -887,34 +887,35 @@ impl Drop for Run {
 /// `hub serve` process to exit, naming `what` on expiry: the socket's
 /// absence alone cannot prove the hub is gone, since the hub removes the
 /// socket before it drops its hub and returns. An empty `hub_home` is an
-/// attached run, which waits on no hub. Every poll carries what remains of
-/// the deadline, so the wait ends at the deadline however the listing and
-/// probing below behave.
+/// attached run, which waits on no hub. The poll carries what remains of
+/// the deadline into every listing, and stops at zero, so the wait ends
+/// at the deadline however the listing below behaves.
 pub(crate) fn until_hub_exits(deadline: Deadline, socket: &Path, hub_home: &Path, what: &str) {
-    while socket.exists() {
-        if deadline.left().is_zero() {
-            panic!("waited until the deadline for {what}");
-        }
-        thread::yield_now();
-    }
-    if hub_home.as_os_str().is_empty() {
-        return;
-    }
     let home = hub_home.to_string_lossy();
     loop {
         if deadline.left().is_zero() {
             panic!("waited until the deadline for {what}");
         }
-        let pids = hub_pids(&list_processes(deadline.left()), &home);
-        assert!(
-            fakes::pids_exit(&pids, deadline.left()),
-            "waited until the deadline for {what}"
-        );
-        if hub_pids(&list_processes(deadline.left()), &home).is_empty() {
+        if hub_gone(socket, &home, &mut || list_processes(deadline.left())) {
             return;
         }
         thread::yield_now();
     }
+}
+
+/// Whether the hub is gone: its socket is absent and no listed process
+/// is this run's hub. An empty `home` is an attached run, which lists
+/// nothing and waits on the socket alone. Pure apart from the socket
+/// probe, so the pause-point repro in `look.rs` pins it without threads:
+/// the socket gone while the hub is alive is not gone.
+pub(crate) fn hub_gone(socket: &Path, home: &str, list: &mut dyn FnMut() -> String) -> bool {
+    if socket.exists() {
+        return false;
+    }
+    if home.is_empty() {
+        return true;
+    }
+    hub_pids(&list(), home).is_empty()
 }
 
 /// The pids in the `ps` table `table` that are this run's hub: every row

@@ -26,7 +26,7 @@ use support::Deadline;
 use support::Setup;
 use support::pty::{
     Colour, FINISHED_TITLE, Grid, HOME_TITLE, MOTION, Reader, Run, Shared, Writer, contains,
-    exact_end, hub_pids, list_processes, query_replies, sgr_params, until_hub_exits,
+    exact_end, hub_gone, hub_pids, list_processes, query_replies, sgr_params, until_hub_exits,
 };
 
 /// Feeds `bytes` into an attached run's terminal side and returns the
@@ -390,6 +390,39 @@ fn hub_pids_lists_only_this_runs_hub() {
     assert_eq!(hub_pids(&table, home), vec![12345, 12346]);
 }
 
+/// `hub_gone` is false while the socket is gone but the hub is alive:
+/// the pause-point repro without threads, pinning every condition (the
+/// socket probe, the empty-home shortcut, the listing).
+#[test]
+fn a_hub_alive_without_its_socket_is_not_gone() {
+    let dir = fakes::TempDir::new("hub-gone");
+    let socket = dir.path().join("hub");
+    fs::write(&socket, b"").unwrap();
+    let home = "/tmp/fiber-hub-home";
+    let hub_row = "4242 python3 -c 'import os, sys  # hub serve' FIBER_HOME=/tmp/fiber-hub-home";
+    // The socket gone while the hub is listed: not gone.
+    assert!(!hub_gone(&dir.path().join("missing"), home, &mut || {
+        hub_row.to_owned()
+    },));
+    // The socket gone and nothing listed: gone.
+    assert!(hub_gone(
+        &dir.path().join("missing"),
+        home,
+        &mut String::new,
+    ));
+    // The socket present and nothing listed: not gone.
+    assert!(!hub_gone(&socket, home, &mut String::new));
+    // An attached run lists nothing: the socket alone decides, and the
+    // lister never runs.
+    let mut listed = false;
+    let mut never = || {
+        listed = true;
+        String::new()
+    };
+    assert!(hub_gone(&dir.path().join("missing"), "", &mut never));
+    assert!(!listed, "an attached run lists no processes");
+}
+
 /// `Run::wait`'s hub wait must outlive the socket: the fake hub removes
 /// its socket, then blocks reading its stdin, so the socket's absence
 /// alone cannot prove the hub is gone (`docs/testing.md`, "Waits and
@@ -433,10 +466,11 @@ fn the_hub_wait_outlives_the_sockets_absence() {
     // The old condition is already true while the hub lives.
     assert!(!socket.exists(), "the socket is gone while the hub lives");
     let home = dir.path().to_string_lossy().into_owned();
-    assert_eq!(
-        hub_pids(&list_processes(deadline.left()), &home),
-        vec![group],
-        "the hub is listed after its socket is gone"
+    // The hub is listed while paused, so it is not gone: a socket-only
+    // wait would return here.
+    assert!(
+        !hub_gone(&socket, &home, &mut || list_processes(deadline.left())),
+        "the hub is not gone while it lives without its socket"
     );
     // Releasing stdin ends the read at end of file, and reaping proves
     // the exit, both bounded by the deadline.
@@ -452,8 +486,8 @@ fn the_hub_wait_outlives_the_sockets_absence() {
         "the fake hub exits cleanly after the release"
     );
     assert!(
-        hub_pids(&list_processes(deadline.left()), &home).is_empty(),
-        "no hub of this run remains"
+        hub_gone(&socket, &home, &mut || list_processes(deadline.left())),
+        "the hub is gone after its exit"
     );
     until_hub_exits(deadline, &socket, dir.path(), "the fake hub to exit");
     watchdog.stand_down(deadline.cleanup());
