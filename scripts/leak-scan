@@ -63,36 +63,37 @@ while [ "$grew" -eq 1 ]; do
 done
 excluded=$ancestors$members
 
-# Whether $1 holds $2 with no letter, digit or underscore beside it.
-holds_nonce() {
+# Whether $1 holds the exact token $2, whitespace-delimited: the token
+# starts the text or follows whitespace, and ends the text or precedes
+# whitespace. Callers pass FIBER_CHECK_RUN=$nonce as the token, so the
+# word before = is exactly FIBER_CHECK_RUN and a value like
+# UNRELATED_TOKEN=$nonce never matches.
+holds_token() {
   local text=$1
-  local word=$2
+  local token=$2
   local rest=$text
   local before=
   local after=
-  local beside_before=
-  local beside_after=
   while true; do
     case $rest in
-    *"$word"*) ;;
+    *"$token"*) ;;
     *) return 1 ;;
     esac
-    before=${rest%%"$word"*}
-    after=${rest#*"$word"}
-    beside_before=0
-    beside_after=0
+    before=${rest%%"$token"*}
+    after=${rest#*"$token"}
     case $before in
-    *[A-Za-z0-9_]) beside_before=1 ;;
+    '' | *[[:space:]]) ;;
+    *)
+      if [ -z "$after" ]; then
+        return 1
+      fi
+      rest=$after
+      continue
+      ;;
     esac
     case $after in
-    [A-Za-z0-9_]*) beside_after=1 ;;
+    '' | [[:space:]]*) return 0 ;;
     esac
-    if [ "$beside_before" -eq 0 ] && [ "$beside_after" -eq 0 ]; then
-      return 0
-    fi
-    if [ -z "$after" ]; then
-      return 1
-    fi
     rest=$after
   done
 }
@@ -108,8 +109,19 @@ if [ "$(uname -s)" = Darwin ]; then
     fi
     case $pid in '' | *[!0-9]*) continue ;; esac
     case $excluded in *" $pid "*) continue ;; esac
-    if holds_nonce "$line" "$nonce"; then
-      echo "leaked process $pid: $rest" >&2
+    if holds_token "$line" "FIBER_CHECK_RUN=$nonce"; then
+      # The -E row is matched internally only: the report refetches the
+      # command without -E, so no environment value reaches the log.
+      if cmd=$(env -u FIBER_CHECK_RUN ps -ww -o command= -p "$pid" 2>/dev/null); then
+        :
+      else
+        continue
+      fi
+      cmd=${cmd#"${cmd%%[![:space:]]*}"}
+      if [ -z "$cmd" ]; then
+        cmd="(no command line)"
+      fi
+      echo "leaked process $pid: $cmd" >&2
       leaks=$((leaks + 1))
     fi
   done <<<"$table"
@@ -121,7 +133,9 @@ else
     case $excluded in *" $pid "*) continue ;; esac
     # One exact line FIBER_CHECK_RUN=NONCE among the NUL-separated entries;
     # an unreadable file belongs to a process that already exited.
-    if env -u FIBER_CHECK_RUN tr '\0' '\n' <"$envfile" 2>/dev/null | env -u FIBER_CHECK_RUN grep -Fxq "FIBER_CHECK_RUN=$nonce"; then
+    # No -q: grep consumes the whole stream, so tr never dies of SIGPIPE
+    # under pipefail when the match comes early; matches go to /dev/null.
+    if env -u FIBER_CHECK_RUN tr '\0' '\n' <"$envfile" 2>/dev/null | env -u FIBER_CHECK_RUN grep -Fx "FIBER_CHECK_RUN=$nonce" >/dev/null; then
       if cmd=$(env -u FIBER_CHECK_RUN tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null); then
         if [ -z "$cmd" ]; then
           if cmd=$(env -u FIBER_CHECK_RUN ps -o command= -p "$pid" 2>/dev/null); then
@@ -174,14 +188,18 @@ if [ "$(uname -s)" = Darwin ] && [ -n "$orphan_start" ]; then
     else
       continue
     fi
-    case "${cmd-}" in *"$target_prefix"*)
+    # Only the executable (argv0, the first word) names this run's leak:
+    # a shell carrying a target/ path in its arguments may belong to
+    # another run, so it falls through to the sh/bash/sleep warning.
+    word=${cmd-}
+    word=${word%% *}
+    case $word in
+    "$target_prefix"*)
       echo "leaked process $pid: $cmd" >&2
       leaks=$((leaks + 1))
       continue
       ;;
     esac
-    word=${cmd-}
-    word=${word%% *}
     case $word in '' ) continue ;; esac
     base=${word##*/}
     case $base in sh | bash | sleep)

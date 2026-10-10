@@ -12,6 +12,8 @@ leaker2=
 # macOS orphans below, Darwin only; empty unless that block started them.
 leaker3=
 leaker4=
+leaker5=
+leaker6=
 tmp=
 # SIGKILL by explicit pid only: never a group id, never pkill, so a wrong
 # pid can only miss, never signal what this test did not start.
@@ -36,6 +38,8 @@ cleanup() {
   kill_one "$leaker2"
   kill_one "$leaker3"
   kill_one "$leaker4"
+  kill_one "$leaker5"
+  kill_one "$leaker6"
   if [ -n "$tmp" ]; then
     rm -rf "$tmp"
   fi
@@ -45,12 +49,13 @@ trap cleanup EXIT
 
 n="self-test-$$-$(date +%s)-$RANDOM"
 other="sibling-$$-$(date +%s)-$RANDOM"
+secret="leak-secret-$$-$(date +%s)-$RANDOM"
 
 # A leaker in this process group. It stays in python: macOS ps shows the
 # environment of python but not of sh or sleep, so only a python leaker
 # proves the scan names it. It ignores SIGTERM like the fixtures, so only
 # SIGKILL reaps it, and time.sleep starts no child to outlive it.
-FIBER_CHECK_RUN=$n python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(10000)' &
+FIBER_CHECK_RUN=$n LEAK_SCAN_SECRET="$secret" python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(10000)' &
 leaker1=$!
 
 if LEAK_SCAN_GRACE=0 scripts/leak-scan "$n" 2>"$err"; then
@@ -59,6 +64,14 @@ if LEAK_SCAN_GRACE=0 scripts/leak-scan "$n" 2>"$err"; then
 fi
 if ! grep -Fq "leaked process $leaker1:" "$err"; then
   echo "scripts/test-leak-scan: leak-scan did not name leaker $leaker1:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+
+# The report names the PID and command only: the secret the leaker
+# carries in its environment must never reach the log.
+if grep -Fq "$secret" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan printed an environment value:" >&2
   cat "$err" >&2
   exit 1
 fi
@@ -83,6 +96,24 @@ if ! grep -Fq "leaked process $leaker2:" "$err"; then
   cat "$err" >&2
   exit 1
 fi
+
+# A process carrying this run's nonce under another name is not a leak:
+# only the exact token FIBER_CHECK_RUN=NONCE matches.
+UNRELATED_TOKEN=$n python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(10000)' &
+leaker5=$!
+
+if LEAK_SCAN_GRACE=0 scripts/leak-scan "$n" 2>"$err"; then
+  echo "scripts/test-leak-scan: leak-scan exited 0 with leakers alive" >&2
+  exit 1
+fi
+if grep -Fq "leaked process $leaker5:" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan named UNRELATED_TOKEN carrier $leaker5:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+
+kill_one "$leaker5"
+leaker5=
 
 # A sibling run's nonce never matches this run's leakers.
 if LEAK_SCAN_GRACE=0 scripts/leak-scan "$other" 2>"$err"; then
@@ -125,6 +156,17 @@ fi
 if [ -s "$err" ]; then
   echo "scripts/test-leak-scan: clean scan printed output:" >&2
   cat "$err" >&2
+  exit 1
+fi
+
+# The Linux environ reader must consume the whole stream: grep -q quits
+# early and SIGPIPEs tr under pipefail, hiding a leak.
+if grep -Fq 'grep -Fxq' scripts/leak-scan; then
+  echo "scripts/test-leak-scan: leak-scan uses grep -Fxq (SIGPIPEs tr under pipefail)" >&2
+  exit 1
+fi
+if ! grep -Fq 'grep -Fx "FIBER_CHECK_RUN=' scripts/leak-scan; then
+  echo "scripts/test-leak-scan: leak-scan lost its exact environ match" >&2
   exit 1
 fi
 
@@ -202,12 +244,12 @@ if [ "$(uname -s)" = Darwin ]; then
   kill_one "$leaker3"
   leaker3=
   # A binary under target/ is this run's leak: exit 1 naming the PID. A
-  # copied platform binary is SIGKILLed on exec, so the orphan is a script
-  # whose command still carries the target/ path; LEAK_SCAN_ROOT points the
-  # rule at a temp dir instead of the worktree.
-  printf '#!/bin/sh\ntrap "" TERM\nwhile :; do :; done\n' >"$tmp/target/x"
-  chmod +x "$tmp/target/x"
-  ( "$tmp/target/x" & )
+  # copied platform binary is SIGKILLed on exec, so the orphan is sleep
+  # re-executed with argv0 set to the target/ path (bash exec -a, with
+  # SIGTERM ignored across the exec like the fixtures); ps shows the
+  # target/ path as the executable. LEAK_SCAN_ROOT points the rule at a
+  # temp dir instead of the worktree.
+  ( bash -c 'trap "" TERM; exec -a "$1/target/x" sleep 10000' _ "$tmp" & )
   tries=0
   while [ "$tries" -lt 30 ] && [ -z "$leaker4" ]; do
     leaker4=$(env -u FIBER_CHECK_RUN ps -U "$owner" -o pid=,ppid=,lstart=,command= | awk -v t="$tmp/target/x" '$2 == 1 && index($0, t) { print $1; exit }' || true)
@@ -236,6 +278,49 @@ if [ "$(uname -s)" = Darwin ]; then
   fi
   kill_one "$leaker4"
   leaker4=
+  # A shell orphan carrying a target/ path in its arguments is not this
+  # run's leak: only argv0 names it, so this warns like sh, not fails.
+  printf '#!/bin/sh\ntrap "" TERM\nwhile :; do :; done\n' >"$tmp/target/argscript"
+  chmod +x "$tmp/target/argscript"
+  ( bash "$tmp/target/argscript" & )
+  tries=0
+  while [ "$tries" -lt 30 ] && [ -z "$leaker6" ]; do
+    leaker6=$(env -u FIBER_CHECK_RUN ps -U "$owner" -o pid=,ppid=,lstart=,command= | awk -v t="$tmp/target/argscript" '$2 == 1 && index($0, t) { print $1; exit }' || true)
+    if [ -z "$leaker6" ]; then
+      python3 -c 'import time; time.sleep(0.5)'
+    fi
+    tries=$((tries + 1))
+  done
+  if [ -z "$leaker6" ]; then
+    echo "scripts/test-leak-scan: shell arg orphan never reached ppid 1" >&2
+    exit 1
+  fi
+  lstart6=$(env -u FIBER_CHECK_RUN ps -o lstart= -p "$leaker6" | sed 's/^ *//;s/ *$//')
+  started6=$(date -j -f "%a %b %e %T %Y" "$lstart6" "+%s")
+  if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$tmp" scripts/leak-scan "$n" "$((started6 - 1))" 2>"$err"; then
+    :
+  else
+    echo "scripts/test-leak-scan: shell arg orphan $leaker6 failed the scan:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if ! grep -Fq "$leaker6" "$err"; then
+    echo "scripts/test-leak-scan: warning did not name shell arg orphan $leaker6:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if ! grep -Fq "may belong to another run" "$err"; then
+    echo "scripts/test-leak-scan: warning names no other-run caveat for $leaker6:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if grep -Fq "leaked process $leaker6:" "$err"; then
+    echo "scripts/test-leak-scan: shell arg orphan $leaker6 reported as a leak:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  kill_one "$leaker6"
+  leaker6=
   rm -rf "$tmp"
   tmp=
 fi
