@@ -415,7 +415,7 @@ jobs:
       # docs/performance.md, "Measuring". The harness is built in the debug
       # profile; nothing it builds ships.
       - name: Build the benchmark harness
-        run: cargo build -p main --example bench
+        run: cargo build -p bench --example bench
       # fsyncs are the fdatasync calls strace counts (docs/performance.md,
       # "Measuring"); a runner without strace fails here.
       - name: Install strace

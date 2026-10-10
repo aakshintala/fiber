@@ -104,6 +104,11 @@ everything, and nothing depends on `main`.
 on `contract`. Any crate may take it as a test-only dependency, none takes it
 as a normal one, and no release binary contains it.
 
+`bench` holds the benchmark harness behind `docs/performance.md` as its
+`bench` example. It is not a module and nothing ships in it. It takes the
+Fiber crates it measures through, plus `fakes`, as dev-dependencies only,
+and no release binary contains it.
+
 When a module needs code that sits in a module it may not call, `contract`
 defines a trait and `main` injects the implementation: `Sessions`, the socket
 client in `doors` that `tools` uses for the session tools, `Images`, the
