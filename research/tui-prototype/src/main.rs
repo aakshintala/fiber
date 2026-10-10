@@ -6,6 +6,7 @@ mod cases;
 mod completions;
 mod home;
 mod input;
+mod login;
 mod logo;
 mod lua;
 mod model_picker;
@@ -3107,7 +3108,7 @@ struct Audit {
 }
 
 /// Every surface that declares cases; `--help` and `check/` are built from them.
-const SURFACES: &[cases::Surface] = &[home::SURFACE, overlays::SURFACE, model_picker::SURFACE, completions::SURFACE];
+const SURFACES: &[cases::Surface] = &[home::SURFACE, overlays::SURFACE, model_picker::SURFACE, completions::SURFACE, login::SURFACE];
 
 // ============================================================ main
 struct Args {
@@ -3148,6 +3149,8 @@ struct Args {
     picker: Option<String>,
     /// `--completions CASE`: start with the completion panel open
     completions: Option<String>,
+    /// the login case (`--login`), drawn instead of the conversation
+    login: Option<String>,
 }
 /// The `--home` case to consume: the next argument, but only when it
 /// exists and does not start with `-`. Otherwise the case is `live` and
@@ -3204,6 +3207,7 @@ fn args() -> Args {
         panel_share: 21.0,
         picker: None,
         completions: None,
+        login: None,
     };
     let mut it = std::env::args().skip(1).peekable();
     while let Some(x) = it.next() {
@@ -3259,8 +3263,9 @@ fn args() -> Args {
             }
             "--picker" => a.picker = it.next(),
             "--completions" => a.completions = it.next(),
+            "--login" => a.login = it.next(),
             "-h" | "--help" => {
-                print!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}", cases::help(SURFACES));
+                print!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}", cases::help(SURFACES));
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -3367,7 +3372,7 @@ fn main() -> io::Result<()> {
                 run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index)
             }
         }
-    } else if a.overlay.is_some() { overlays::run_overlay(&a, &mut term) } else { run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index) };
+    } else if a.overlay.is_some() { overlays::run_overlay(&a, &mut term) } else if a.login.is_some() { login::run_login(&a, &mut term) } else { run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index) };
     let b = term.backend_mut();
     if a.hover {
         b.write_all(HOVER_OFF.as_bytes())?;
@@ -3382,10 +3387,10 @@ fn main() -> io::Result<()> {
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
     }
-    // Home and the overlays draw no session, so there is nothing to
+    // Home, the overlays and the login draw no session, so there is nothing to
     // resume, unless home switched to the conversation, whose replayed
     // session resumes as usual.
-    if a.home.is_none() && a.overlay.is_none() || home_switched {
+    if a.home.is_none() && a.overlay.is_none() && a.login.is_none() || home_switched {
         println!("Session {0} · resume it with fiber --resume {0}", f.session_id);
     }
     Ok(())
@@ -4718,6 +4723,7 @@ mod tests {
                 "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, notice, close-mouse",
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",
+                "--login providers",
             ]
         );
         let h = cases::help(SURFACES);
