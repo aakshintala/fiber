@@ -2161,6 +2161,34 @@ fn an_include_str_of_the_same_path_is_not_a_run_time_read() {
 }
 
 #[test]
+fn a_typed_let_without_a_value_does_not_bind_its_name_to_a_later_value() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let p: PathBuf;\nlet base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\np.join(\"docs/x\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_method_other_than_join_on_a_manifest_base_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "Path::new(env!(\"CARGO_MANIFEST_DIR\")).exists_at(\"docs/x\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
 fn no_files_give_no_run_time_reads() {
     assert_eq!(
         runtime_read_mismatches(&[], &members_with_tools()).unwrap(),
