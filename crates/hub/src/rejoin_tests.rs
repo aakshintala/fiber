@@ -2312,3 +2312,23 @@ fn a_long_consumed_prefix_still_rejoins_from_the_offset() {
     let status = client.next_status("the later run's status");
     assert_eq!(status["payload"]["state"], "streaming");
 }
+
+#[test]
+fn the_pass_notice_arrives_after_busy_clears() {
+    // A scan that fires while busy is skipped and queues no pass, so a
+    // test that advances the clock on the notice must find busy clear.
+    let connections = Connections::default();
+    lock(&connections.inner).busy = true;
+    let (tx, done) = mpsc::channel();
+    *lock(&connections.pass_done) = Some(tx);
+    let guard = BusyGuard {
+        connections: &connections,
+    };
+    assert!(done.try_recv().is_err(), "no notice while the worker runs");
+    drop(guard);
+    assert!(done.try_recv().is_ok(), "the guard signals pass-done");
+    assert!(
+        !lock(&connections.inner).busy,
+        "busy is clear by the time the notice is read"
+    );
+}
