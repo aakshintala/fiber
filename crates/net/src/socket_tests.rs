@@ -446,8 +446,7 @@ fn a_reset_peer_is_not_a_stall() {
             peer,
         )
     });
-    // Unread bytes in the peer's queue turn its close into a reset, on
-    // Linux and macOS alike.
+    // Unread bytes in the peer's queue turn its close into a reset on Linux.
     let error = fakes::within("a reset read to fail", EACH_WITHIN, move || {
         socket.stream.write_all(&[7u8; 65536]).unwrap();
         drop(peer);
