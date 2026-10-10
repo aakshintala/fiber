@@ -773,7 +773,12 @@ fn expand_text(
     inputs: &PromptInputs,
     content: &[ContentPart],
 ) -> Option<Vec<ContentPart>> {
-    expand(inputs, &tree.top(), content)
+    let Some(ContentPart::Text { text }) = content.first() else {
+        return None;
+    };
+    let (name, _) = split_command(text)?;
+    let file = crate::skill_set::SkillSet::new(inputs.clone(), &tree.top()).command(name)?;
+    expand(&file, content)
 }
 
 fn expanded(content: &[ContentPart]) -> &str {

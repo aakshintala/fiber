@@ -45,8 +45,8 @@ const GRACE: Duration = Duration::from_secs(1);
 pub(super) const CHECK_EVERY: u32 = 1000;
 
 /// The Lua half of the host's globals: `coroutine.wrap` over the armed
-/// `coroutine.create`, `require`, `fiber.command`, `fiber.provider` and
-/// `fiber.hook`, which fill the tables the prelude returns. Lua's own `wrap`
+/// `coroutine.create`, `require`, `fiber.command`, `fiber.provider`,
+/// `fiber.hook`, `fiber.tool` and `fiber.search_backend`, which fill the tables the prelude returns. Lua's own `wrap`
 /// is a separate C function that would make an unarmed coroutine.
 // A callback's timeout is in milliseconds (docs/extensions.md, "How an
 // extension runs"). A hook's phase and `on_failure` are docs/extensions.md,
@@ -449,8 +449,6 @@ impl LuaExtension {
     }
 
     /// Records the extension's drop: anything routed after this is dropped.
-    /// Test tooling: production drops the extension instead.
-    #[cfg(test)]
     pub(crate) fn dispose(&self) {
         self.hub.dispose(&self.name);
     }
@@ -712,13 +710,17 @@ enum Target {
     /// The `run` of a tool `fiber.tool` registered, in the gaps of the
     /// stream.
     Tool(String),
+    /// The `run` of a search backend `fiber.search_backend` registered,
+    /// in the gaps of the stream.
+    Search(String),
     /// The `effects` function of a tool `fiber.tool` registered, in the gaps
     /// of the stream.
     Effects(String),
 }
 
 /// The callback's name as an error names it: a command's name,
-/// `<provider>.<function>`, a hook's point, a tool's name, or
+/// `<provider>.<function>`, a hook's point, a tool's name, a search
+/// backend's name, or
 /// `<tool>.effects`.
 impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -728,6 +730,7 @@ impl std::fmt::Display for Target {
             Self::Hook { point, .. } => f.write_str(point),
             Self::Timer { id } => write!(f, "timer {id}"),
             Self::Tool(name) => f.write_str(name),
+            Self::Search(name) => f.write_str(name),
             Self::Effects(name) => write!(f, "{name}.effects"),
         }
     }
@@ -746,6 +749,7 @@ mod declared;
 mod errors;
 mod hub;
 mod schedule;
+mod search;
 mod setup;
 mod tool;
 mod vm;

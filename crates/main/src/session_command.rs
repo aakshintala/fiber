@@ -272,8 +272,13 @@ pub(crate) fn run_new(
     );
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line; every server starts with the session too.
-    let skills: Arc<dyn contract::skills::Skills> =
-        Arc::new(r#loop::SkillReader::new(prompt_inputs.clone(), &workspace));
+    // The `skill` tool answers from the loop's set: the reader shares it,
+    // so a skill added after the opening stays unknown until the listing
+    // has it (`docs/system-prompt.md`, "Added and removed skills").
+    let skill_set = r#loop::SkillSet::new(prompt_inputs.clone(), &workspace);
+    let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
+    let web_search =
+        crate::builtin::web_search(web_search.as_deref(), extensions.search_backend().as_ref())?;
     let (tools, infos, driver, session_servers) = mcp_servers::session_tools(
         fiber,
         &home,
@@ -283,7 +288,7 @@ pub(crate) fn run_new(
         &jobs,
         &locks,
         mcp.specs,
-        web_search.as_deref(),
+        web_search,
         &delegates,
         skills,
         extensions.tools(),
@@ -340,6 +345,7 @@ pub(crate) fn run_new(
     let door = crate::switch::Door {
         declare: session.declarer(),
         hosted_stands,
+        backend: extensions.search_backend(),
     };
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: nothing was written, so nothing more is.
@@ -423,6 +429,7 @@ pub(crate) fn run_new(
                         .on_handoff(forget)
                         .switcher(switching.closure(door), switchable)
                         .repository_code(offer)
+                        .skill_set(skill_set)
                         .server_prompts(r#loop::ServerPrompts {
                             rows: prompt_rows,
                             fetch,

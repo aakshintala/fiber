@@ -255,6 +255,12 @@ control? }`, where `control` takes the fields any tool may set
 neither gets it, a `notice` names both, and configuration can leave one out
 (`extensions."<name>".tools.disabled`, `docs/configuration.md`).
 
+A search backend's `run` takes one table, `{ query }` with
+`allowed_domains` or `blocked_domains` when the call gave one, and returns
+a list of `{ title, url, snippet }` results, every field a string. An empty
+list is a success; anything else fails the call `tool_error`, naming the
+backend, its extension and the result's position.
+
 A tool, harness, search backend, hook or watcher registers before the
 session's tool set is fixed (`docs/prompt-cache.md`, "Tools"), which is why
 every enabled Lua extension runs its `init.lua` at session start ("Loading,

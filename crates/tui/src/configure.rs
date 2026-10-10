@@ -3,13 +3,16 @@
 //! configuration itself (`docs/architecture.md`, "The call rules"): `main`
 //! implements [`Configure`] and passes it in [`crate::Launch`]. Every call
 //! is a few small file reads or one locked write, made only on a person's
-//! action, so it runs on the loop's thread.
+//! action, so it runs on the loop's thread, except [`BrowserLogin::run`],
+//! which blocks on a worker thread until the login ends.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::Secret;
+use contract::clock::Clock;
 
 use crate::ThemeSetting;
 
@@ -168,6 +171,27 @@ pub struct KeyEdit {
     pub keys: Option<Vec<String>>,
 }
 
+/// Shows a browser login's URLs: `open` shows `url` and asks the terminal
+/// to open it; `show` shows the `code` to enter at `url` and opens nothing
+/// (`docs/tui.md`, "Logging in").
+pub trait LoginShow: Send + Sync {
+    /// Shows `url` and asks the terminal to open it.
+    fn open(&self, url: &str);
+    /// Shows the `code` to enter at `url`; opens nothing.
+    fn show(&self, url: &str, code: &str);
+}
+
+/// A browser login `Configure::browser_login` started: `run` blocks until
+/// the login ends and is called once, off the loop thread; `cancel`
+/// returns once nothing more can be stored, or once a store under way has
+/// finished.
+pub trait BrowserLogin: Send + Sync {
+    /// Blocks until the login ends: what `fiber login` stores.
+    fn run(&self) -> Result<Stored, ConfigureError>;
+    /// Cancels the waiting login, storing nothing further.
+    fn cancel(&self);
+}
+
 /// Why a read or a write failed: the failure's code and its message,
 /// which the view shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -285,6 +309,17 @@ pub trait Configure: Send + Sync {
         label: Option<&str>,
         key: Secret,
     ) -> Result<Stored, ConfigureError>;
+
+    /// Starts the browser login for `name`, showing its URLs through
+    /// `shown`: returns at once and does no I/O. The returned login's
+    /// `run` blocks until the login ends and runs only off the loop
+    /// thread; `cancel` returns once nothing more can be stored.
+    fn browser_login(
+        &self,
+        name: &str,
+        shown: Arc<dyn LoginShow>,
+        clock: Arc<dyn Clock>,
+    ) -> Arc<dyn BrowserLogin>;
 
     // The `tui.theme` row.
 

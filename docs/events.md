@@ -797,6 +797,7 @@ none.
 | `subscription` | boolean | no | `true` when a subscription login covered the call, so `cost` is an API-price estimate, not money billed; absent means billed per token |
 | `extension` | string | no | the extension whose `host.model` made the call |
 | `origin_session_id` | string | no | on a copy, the session whose call it was (`docs/delegates.md`, "Streams"); absent on the session's own calls |
+| `reviewer` | object | no | on a call the reviewer made: `purpose` (string, a closed set: `stage_1`, `stage_2` or `handoff`, the handoff selection) and `action_id` (string, the tool call under review; absent on `handoff`); absent on every other call. Present on every call the reviewer makes; the envelope's `action_id` stays absent, so an action's usage fold doesn't count the review as the call's own spend |
 
 #### `quota_noticed`
 

@@ -369,6 +369,7 @@ fn configure_fx(setup: &Setup, dir: &Path, extra: Value) {
     let mut server = json!({
         "command": "/bin/bash",
         "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
+        "startup_timeout_ms": 600000,
     });
     if let (Some(object), Value::Object(fields)) = (server.as_object_mut(), extra) {
         for (key, value) in fields {

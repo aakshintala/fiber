@@ -16,6 +16,7 @@ use fakes::clock::FakeClock;
 
 use super::SkillReader;
 use crate::prompt::PromptInputs;
+use crate::skill_set::SkillSet;
 
 struct Tree {
     _held: fakes::TempDir,
@@ -54,7 +55,7 @@ impl Tree {
     }
 
     fn reader(&self) -> SkillReader {
-        SkillReader::new(self.inputs(), &self.top())
+        SkillSet::new(self.inputs(), &self.top()).reader()
     }
 }
 
@@ -108,7 +109,7 @@ fn a_name_in_skills_disabled_returns_none() {
     skill(&tree.top().join(".agents/skills"), "tdd", "tdd", "d");
     let mut inputs = tree.inputs();
     inputs.skills_disabled = vec!["tdd".into()];
-    let reader = SkillReader::new(inputs, &tree.top());
+    let reader = SkillSet::new(inputs, &tree.top()).reader();
     assert_eq!(reader.file("tdd"), None);
 }
 
@@ -120,7 +121,7 @@ fn a_skill_in_an_extension_prompts_returns_none() {
     assert!(path.exists());
     let mut inputs = tree.inputs();
     inputs.extension_dirs = vec![("acme".into(), ext)];
-    let reader = SkillReader::new(inputs, &tree.top());
+    let reader = SkillSet::new(inputs, &tree.top()).reader();
     assert_eq!(reader.file("tdd"), None);
 }
 
@@ -155,7 +156,7 @@ fn a_workspace_below_a_git_repository_finds_a_skill_at_its_top_level() {
     let path = skill(&top.join(".agents/skills"), "tdd", "tdd", "d");
     let sub = top.join("a/b");
     std::fs::create_dir_all(&sub).unwrap();
-    let reader = SkillReader::new(tree.inputs(), &sub);
+    let reader = SkillSet::new(tree.inputs(), &sub).reader();
     assert_eq!(reader.file("tdd"), Some(path));
 }
 

@@ -29,8 +29,8 @@ use signal_hook::iterator::{Handle, Signals};
 
 mod browser;
 
-pub use browser::browser_login;
 use browser::login_with;
+pub use browser::{LoginCancel, browser_login};
 
 use crate::{LOGOUT_SHAPE, fail, project_of};
 
@@ -268,7 +268,7 @@ fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
     let providers: Vec<&str> = all
         .iter()
         .filter_map(|target| match target {
-            LoginName::Provider(name) => Some(name.as_str()),
+            LoginName::Provider(name) | LoginName::Browser(name) => Some(name.as_str()),
             LoginName::Secret(_) => None,
         })
         .collect();
@@ -276,7 +276,7 @@ fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
         .iter()
         .filter_map(|target| match target {
             LoginName::Secret(name) => Some(name.as_str()),
-            LoginName::Provider(_) => None,
+            LoginName::Provider(_) | LoginName::Browser(_) => None,
         })
         .collect();
     if providers.is_empty() && secrets.is_empty() {
@@ -333,6 +333,8 @@ fn credential_key(name: &str) -> String {
 pub enum LoginName {
     /// An installed provider, by name.
     Provider(String),
+    /// An installed provider whose data says `login: browser`, by name.
+    Browser(String),
     /// A secret an installed extension declares, by name.
     Secret(String),
 }
@@ -341,7 +343,7 @@ impl LoginName {
     /// The provider or secret's name.
     fn name(&self) -> &str {
         match self {
-            Self::Provider(name) | Self::Secret(name) => name,
+            Self::Provider(name) | Self::Browser(name) | Self::Secret(name) => name,
         }
     }
 }
@@ -371,17 +373,27 @@ impl From<Failure> for StoreFailure {
 
 /// The installed providers by name, then the secrets installed extensions
 /// declare: the one place the menu's order lives. A name that is both is
-/// the provider's.
+/// the provider's. A provider whose data says `login: browser` is a browser
+/// row, in provider order; every other provider is a key row.
 fn targets(providers: &Providers) -> Vec<LoginName> {
     providers
         .names()
-        .map(|name| LoginName::Provider(name.to_owned()))
+        .map(|name| {
+            if providers
+                .get(name)
+                .is_some_and(|data| data.login == Some(Login::Browser))
+            {
+                LoginName::Browser(name.to_owned())
+            } else {
+                LoginName::Provider(name.to_owned())
+            }
+        })
         .chain(declared(providers).map(|name| LoginName::Secret(name.to_owned())))
         .collect()
 }
 
 /// The installed providers in `home`.
-fn providers_in(home: &Path) -> Result<Providers, Failure> {
+pub fn providers_in(home: &Path) -> Result<Providers, Failure> {
     // debt: notices from loading are dropped, as `parts_with` drops them;
     // surfaced when #382 lands.
     let (providers, _notices) =

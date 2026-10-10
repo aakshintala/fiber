@@ -10,7 +10,7 @@ fn real_workflow() -> String {
 }
 
 fn real_doc() -> String {
-    read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/ci.md")).unwrap()
+    include_str!("../../docs/ci.md").to_owned()
 }
 
 /// A workflow with `select`, the report jobs, `ci` and each of `extra`,

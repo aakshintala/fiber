@@ -898,3 +898,43 @@ fn login_store_while_another_holds_the_lock_stores_nothing() {
 mod label;
 #[path = "login_secret_tests.rs"]
 mod secret;
+
+#[test]
+fn login_targets_list_a_browser_provider_as_browser_in_provider_order() {
+    let setup = Setup::new();
+    setup.install("beta", None, None);
+    setup.install("alpha", None, None);
+    let path = setup.home().join("extensions/beta/providers/beta.json");
+    let mut data: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    data["login"] = json!("browser");
+    fs::write(path, data.to_string()).unwrap();
+    setup.declare("acme", &["acme.api_key"]);
+    assert_eq!(
+        login_targets(&setup.home()).unwrap(),
+        [
+            LoginName::Provider("alpha".to_owned()),
+            LoginName::Browser("beta".to_owned()),
+            LoginName::Secret("acme.api_key".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn the_menu_numbers_a_browser_provider_among_the_providers() {
+    let setup = Setup::new();
+    setup.install("alpha", None, None);
+    setup.install("beta", None, None);
+    let path = setup.home().join("extensions/beta/providers/beta.json");
+    let mut data: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    data["login"] = json!("browser");
+    fs::write(path, data.to_string()).unwrap();
+    let (result, err) = setup.login(None, true, "1\n", &mut Fake::new(KEY));
+    result.unwrap();
+    assert!(
+        err.starts_with(
+            "Providers:\n  1) alpha\n  2) beta\nProvider or secret, by number or name: "
+        ),
+        "{err}"
+    );
+    assert_eq!(setup.stored("alpha", "default").as_deref(), Some(KEY));
+}

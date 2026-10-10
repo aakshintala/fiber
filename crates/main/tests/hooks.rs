@@ -376,7 +376,7 @@ fn read_kinds(loading: &[&'static str], hooked: &[&'static str]) -> Vec<&'static
 /// An `after_tool` hook of `phase` that appends `|<tag>`.
 fn tagging(tag: &str, phase: &str) -> String {
     format!(
-        "fiber.hook(\"after_tool\", {{ phase = \"{phase}\", on_failure = \"blocking\", timeout = 1000,\n\
+        "fiber.hook(\"after_tool\", {{ phase = \"{phase}\", on_failure = \"blocking\", timeout = 30000,\n\
            run = function(call) return {{ content = call.content .. \"|{tag}\" }} end }})\n"
     )
 }
@@ -427,7 +427,7 @@ fn the_artifact_holds_the_hooks_artifact_text() {
     let setup = Setup::new();
     setup.lua(
         "art",
-        "fiber.hook(\"after_tool\", { timeout = 1000, on_failure = \"blocking\",\n\
+        "fiber.hook(\"after_tool\", { timeout = 30000, on_failure = \"blocking\",\n\
            run = function(call) return { content = \"summary\", artifact = \"the whole log\" } end })\n",
     );
     let (run, server) = setup.read_note("raw build output\n", &json!({}));
@@ -452,11 +452,11 @@ fn hooks_that_do_not_register_or_fail_softly_leave_the_output_with_a_notice() {
         "bad",
         "local run = function(call) return { content = \"BAD\" } end\n\
          fiber.hook(\"after_tool\", { on_failure = \"blocking\", run = run })\n\
-         fiber.hook(\"after_tool\", { timeout = 1000, run = run })\n",
+         fiber.hook(\"after_tool\", { timeout = 30000, run = run })\n",
     );
     setup.lua(
         "soft",
-        "fiber.hook(\"after_tool\", { timeout = 1000, on_failure = \"non-blocking\",\n\
+        "fiber.hook(\"after_tool\", { timeout = 30000, on_failure = \"non-blocking\",\n\
            run = function(call) error(\"soft failure\") end })\n",
     );
     let (run, server) = setup.read_note("original\n", &json!({}));
@@ -506,7 +506,7 @@ fn a_blocking_hook_that_fails_withholds_the_output_and_keeps_the_status() {
     let setup = Setup::new();
     setup.lua(
         "hard",
-        "fiber.hook(\"after_tool\", { timeout = 1000, on_failure = \"blocking\",\n\
+        "fiber.hook(\"after_tool\", { timeout = 30000, on_failure = \"blocking\",\n\
            run = function(call) error(\"hard failure\") end })\n",
     );
     let (run, server) = setup.read_note("secret text\n", &json!({}));

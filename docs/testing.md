@@ -31,6 +31,11 @@ Tests sit at three levels. Each proves something the others cannot.
   what a consumer reads: the JSON lines and the session directory left
   behind. Driving a session by hand is the `connect` jig ("Jigs").
 
+A test at a higher level proves the wiring and one path per promise. It does
+not repeat a branch case that a lower-level test pins with the same event
+kinds and fields. A private-function test is deleted when a public-API test
+kills the same mutants.
+
 A binary-level test needs no test-only switch in the shipped binary. It sets
 `FIBER_HOME` to its own temporary directory, which holds an ordinary provider
 definition whose base URL points at a local fake server, or it names the
@@ -57,6 +62,8 @@ consumer observes it. A security boundary, such as the credential deny or a
 permission denial, is tested at binary level: the call is refused, it never
 starts, and no protected bytes reach the output or an artifact.
 
+Tests read a repository file only by compiling it in; the gate fails on a run-time read.
+
 ### Event streams
 
 An event-stream test asserts two things:
@@ -64,6 +71,9 @@ An event-stream test asserts two things:
 - the complete, ordered list of event kinds, so a duplicated, missing or
   reordered event fails
 - the fields under test, on the lines under test
+
+A test may build the list from named segments held in `fakes`; the full
+ordered list is still asserted.
 
 A line the contract writes on its own trigger, with no position relative to
 the session's other lines, is set aside from the ordered list rather than
@@ -328,11 +338,13 @@ breaking edits to the code the diff changed, such as replacing a function body
 with a default or flipping a comparison, and runs the mutated crate's tests
 against each one. An edit that no test notices fails CI.
 
-An edit that genuinely changes no behaviour is exempted in the code, with a
-written reason. The exemption goes on a function: move the code that changes
-nothing into its own function and mark that, since an exemption on a statement
-or block is not reliably honoured. How many runners share the mutants is CI's
-to set.
+A function is extracted and tested alone only where a surviving mutant would
+signal the wrong process or lose data, such as the `kill(-1)` refusal
+("Running tests"). Elsewhere a mutant that changes no behaviour a consumer
+sees takes an exemption in the code, with a written reason, instead of a test
+that pins it. The exemption goes on a function, since an exemption on a
+statement or block is not reliably honoured. How many runners share the
+mutants is CI's to set.
 
 Mutants run on Linux, so code compiled only on macOS, or on any platform other
 than Linux, is never built there, and every mutant of it would pass unnoticed.

@@ -81,6 +81,7 @@ fn recorded(generation: &str) -> UsageRecorded {
         subscription: None,
         extension: None,
         origin_session_id: None,
+        reviewer: None,
         input_bytes: 105,
         input_media: None,
     }

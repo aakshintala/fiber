@@ -1,16 +1,14 @@
 ---
 source: crates/tui/src/view/panel_tests.rs
-expression: "super::super::text(&draw_panel(&app))"
+expression: "super::super::text(&buf)"
 ---
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
   directory  …sers/you/work/fiber
-  model  test/model · thinking hi
-  context  50% of 1.0k tokens
-  ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆░░░░░░░░░│░░░░░░
-  │ handoff at 800 tokens: Fiber
-  writes a summary and the work
-  continues in a fresh context
+  model  test/model · thinking h…
+  ▆▆▆▆▆▆▆▆▆▆░░░░░░░│          500
+  handoff at 800    50% of window
+  then a summary, fresh context
   tokens in / out  500 / 0
   cache hits  0%
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
