@@ -7,6 +7,7 @@
 )]
 
 use crate::settings::block_limits;
+use crate::test_support::write_record;
 
 fn config(overrides: Vec<String>) -> config::Config {
     let root = fakes::TempDir::new("fiber-reviewer-limits");
@@ -64,6 +65,7 @@ fn reviewer_lifetime(overrides: &[&str]) -> contract::events::CacheLifetime {
         r#"{"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}"#,
     )
     .unwrap();
+    write_record(&extension);
     std::fs::write(
         extension.join("providers/fake.json"),
         r#"{"name": "fake", "models": [

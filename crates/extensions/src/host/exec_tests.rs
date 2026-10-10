@@ -359,6 +359,7 @@ const CHILD: &str = "FIBER_EXTENSIONS_EXEC_TEST_CHILD";
 /// it passed: `kill_every_group` reaches every group this process lists,
 /// so it runs where no other test's group is listed.
 fn in_child(name: &str) {
+    use std::os::unix::process::CommandExt as _;
     let module = module_path!().split_once("::").unwrap().1;
     let child = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
@@ -370,9 +371,13 @@ fn in_child(name: &str) {
         .env(CHILD, "1")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
+        .process_group(0)
         .spawn()
         .unwrap();
     let pid = child.id();
+    // Its own group, reaped on every path: dropping the watchdog kills
+    // the group when this test panics or its wait below times out.
+    let watchdog = fakes::Watchdog::group(pid);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
     let Ok(output) = rx.recv_timeout(DEADLINE) else {
@@ -388,6 +393,7 @@ fn in_child(name: &str) {
         stdout.contains("1 passed"),
         "the child ran exactly {name}: {stdout}"
     );
+    watchdog.stand_down(DEADLINE);
 }
 
 #[test]

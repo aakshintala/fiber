@@ -8,6 +8,7 @@
     reason = "test code; a failure is the test's"
 )]
 
+use crate::test_support::write_record;
 use std::fs;
 use std::io::{self, BufRead, Cursor, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -101,6 +102,7 @@ impl Setup {
             json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
         )
         .unwrap();
+        write_record(&dir);
         fs::write(
             dir.join("providers").join(format!("{name}.json")),
             data.to_string(),
@@ -119,6 +121,7 @@ impl Setup {
                 .to_string(),
         )
         .unwrap();
+        write_record(&dir);
     }
 
     fn providers(&self) -> Providers {

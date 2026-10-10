@@ -6,6 +6,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
 
 use crate::app::App;
 use crate::markdown::{Role, style};
@@ -26,7 +27,8 @@ pub(super) fn draw(
     let Some(working) = app.working_line() else {
         return;
     };
-    let laid = lay(&working, app.motion().wall_ms(), area.width);
+    let motion = app.motion();
+    let laid = lay(&working, motion.wall_ms(), motion.spinner(), area.width);
     let line = if laid.retrying {
         style(Role::Warning)
     } else {
@@ -35,24 +37,42 @@ pub(super) fn draw(
     let Some(rect) = super::put(buf, area, bottom, &laid.text, line) else {
         return;
     };
-    // The glimmer's band in the spinner's colour, the word plain. The
-    // sweep resumes after its rest, so rest frames ask for the next
+    // The spinner in the attention colour, stepping on the motion tick
+    // (`docs/tui.md`, "The working line"). Under reduced motion the
+    // spinner is still and the word is plain: the motion gives no band.
+    if let Some(at) = laid.spinner {
+        let x = rect.x.saturating_add(u16::try_from(at).unwrap_or(u16::MAX));
+        if let Some(cell) = buf.cell_mut((x, rect.y)) {
+            cell.set_style(style(Role::Attention));
+        }
+    }
+    // The glimmer's band across the word: its centre bold in the
+    // spinner's colour, its two sides in it, the rest of the word dim.
+    // The sweep resumes after its rest, so rest frames ask for the next
     // boundary too: frame 17 would otherwise wait a whole second.
     if let Some(word) = &laid.word {
-        if let Some(band) = app.motion().glimmer(word.len()) {
-            for cell in band {
-                let x = rect
-                    .x
-                    .saturating_add(u16::try_from(cell).unwrap_or(u16::MAX));
+        if let Some(band) = motion.glimmer(word.len()) {
+            // The band's middle cell carries the bold centre: the first
+            // of two, the only of one.
+            let centre = band
+                .start
+                .saturating_add(band.end.saturating_sub(band.start) / 2);
+            for cell in band.clone() {
+                let at = word.start.saturating_add(cell);
+                let x = rect.x.saturating_add(u16::try_from(at).unwrap_or(u16::MAX));
                 if let Some(into) = buf.cell_mut((x, rect.y)) {
-                    into.set_style(style(Role::Accent));
+                    let mut paint = Style::new().fg(Role::Attention.color());
+                    if cell == centre {
+                        paint = paint.add_modifier(Modifier::BOLD);
+                    }
+                    into.set_style(paint);
                 }
             }
         }
-        app.motion().ask_frame();
+        motion.ask_frame();
     }
     if let Some(next) = laid.next_ms {
-        app.motion().ask_wall(next);
+        motion.ask_wall(next);
     }
     if let Some(cells) = laid.interrupt {
         targets.push(Target {

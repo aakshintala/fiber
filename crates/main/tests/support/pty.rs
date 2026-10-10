@@ -49,12 +49,10 @@ pub(crate) const MOTION: &[u8] = b"\x1b[?1003h";
 pub(crate) const TITLE: &[u8] = b"\x1b]2;";
 /// The home title, written when no session is open.
 pub(crate) const HOME_TITLE: &[u8] = b"\x1b]2;fiber\x07";
-/// The start of a waiting title: the chrome title shows the waiting
-/// glyph with the session's name (`! <name> · fiber`,
-/// `crates/tui/src/home.rs`, `crates/tui/src/app/chrome.rs`), drawn from
-/// the session state the terminal already holds, so no hub attention
-/// line has to arrive first.
-pub(crate) const WAITING_TITLE: &[u8] = b"\x1b]2;! ";
+/// The start of the attention waiting title, `! fiber · <kind>`: it
+/// appears only once the hub's `attention` line arrives and the session's
+/// waiting row is listed (`crates/tui/src/app/attention.rs`).
+pub(crate) const WAITING_TITLE: &[u8] = "\x1b]2;! fiber \u{b7} ".as_bytes();
 /// The title the terminal shows once a turn finishes
 /// (`crates/tui/src/app/attention.rs`, `crates/tui/src/osc.rs`):
 /// session-side state reaching the terminal outside the cells.

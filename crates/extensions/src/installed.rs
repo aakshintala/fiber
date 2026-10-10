@@ -73,7 +73,7 @@ pub(crate) fn lock(home: &Path, clock: &dyn Clock) -> Result<Lock, Error> {
 /// error, invalid JSON, or a missing or mistyped key. The record is read
 /// before the manifest, so a damaged directory never surfaces a manifest
 /// error.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Damaged {
     /// The manifest's name, or the directory's name when the manifest
     /// does not read.
@@ -129,16 +129,47 @@ pub fn list(home: &Path, clock: &dyn Clock) -> Result<Listing, Error> {
     read(home)
 }
 
+/// One healthy extension with where it lives and what its manifest says:
+/// the locked read every loader shares, so no loader reads the manifest
+/// twice and every loader skips the same damaged directories.
+#[derive(Debug, Clone)]
+pub(crate) struct Entry {
+    pub(crate) installed: Installed,
+    pub(crate) dir: PathBuf,
+    pub(crate) manifest: config::Manifest,
+}
+
+/// What is installed, with manifests: the healthy extensions in directory
+/// order and the damaged directories.
+#[derive(Debug, Default)]
+pub(crate) struct Entries {
+    pub(crate) found: Vec<Entry>,
+    pub(crate) damaged: Vec<Damaged>,
+}
+
 /// The installed extensions, without taking the lock. The caller holds it
 /// and has already finished any commit that stopped halfway.
 pub(crate) fn read(home: &Path) -> Result<Listing, Error> {
+    let entries = read_entries(home)?;
+    let mut installed: Vec<Installed> = entries.found.into_iter().map(|e| e.installed).collect();
+    let mut damaged = entries.damaged;
+    installed.sort_by(|a, b| a.name.cmp(&b.name));
+    damaged.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(Listing { installed, damaged })
+}
+
+/// The installed extensions with their manifests, without taking the lock.
+/// The caller holds it and has already finished any commit that stopped
+/// halfway. `found` is in directory file-name order, as `Providers::load`
+/// iterates, so collision notices keep their order.
+pub(crate) fn read_entries(home: &Path) -> Result<Entries, Error> {
     let root = home.join("extensions");
     let entries = match fs::read_dir(&root) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Listing::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Entries::default()),
         Err(e) => return Err(io(&root)(e)),
     };
-    let mut installed = Vec::new();
+    let mut found = Vec::new();
     let mut damaged = Vec::new();
     for entry in entries {
         let entry = entry.map_err(io(&root))?;
@@ -161,17 +192,33 @@ pub(crate) fn read(home: &Path) -> Result<Listing, Error> {
             }
         };
         let manifest = config::read_manifest(&dir)?;
-        installed.push(Installed {
-            name: manifest.name,
+        let installed = Installed {
+            name: manifest.name.clone(),
             version: record.version,
             provenance: record.provenance,
             requested: record.requested,
-            depends: manifest.depends,
+            depends: manifest.depends.clone(),
+        };
+        found.push(Entry {
+            installed,
+            dir,
+            manifest,
         });
     }
-    installed.sort_by(|a, b| a.name.cmp(&b.name));
+    found.sort_by(|a, b| a.dir.file_name().cmp(&b.dir.file_name()));
     damaged.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(Listing { installed, damaged })
+    Ok(Entries { found, damaged })
+}
+
+/// The installed extensions with their manifests, under the same lock every
+/// other operation takes. A commit that stopped halfway is finished first.
+pub(crate) fn locked_entries(home: &Path, clock: &dyn Clock) -> Result<Entries, Error> {
+    let root = home.join("extensions");
+    if !root.try_exists().map_err(io(&root))? {
+        return Ok(Entries::default());
+    }
+    let _lock = lock(home, clock)?;
+    read_entries(home)
 }
 
 /// Whether the extension `name` loads: `extensions."<name>".enabled`,

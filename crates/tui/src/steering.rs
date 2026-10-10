@@ -30,6 +30,29 @@ struct Queued {
     image: bool,
 }
 
+/// One queued message laid out for its column: the mark, the text as
+/// one line, whether the row is selected, and whether it draws its `✕`
+/// (`docs/tui.md`, "Steering").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LaidRow {
+    /// `▸` while selected, else `↳`.
+    pub(crate) mark: char,
+    /// The row's text as one line, cut to fit past the indent, the mark
+    /// and the row's `✕`.
+    pub(crate) text: String,
+    /// Whether the row is selected.
+    pub(crate) selected: bool,
+    /// Whether the row draws its `✕`: whether a `steer` sent it.
+    pub(crate) droppable: bool,
+}
+
+/// The queue's two-column indent; the view draws it (`docs/tui.md`,
+/// "Steering").
+const INDENT: usize = 2;
+/// A droppable row's `✕` with its two-space gap; the view draws it
+/// after the text (`docs/tui.md`, "Steering").
+const CROSS: usize = 3;
+
 /// The queue, the selected row and the draft it stashed.
 #[derive(Debug, Default)]
 pub(crate) struct Steering {
@@ -88,7 +111,7 @@ impl Steering {
     }
 
     /// The selected row's index.
-    fn selected_at(&self) -> Option<usize> {
+    pub(crate) fn selected_at(&self) -> Option<usize> {
         self.selected.as_deref().and_then(|id| self.at(id))
     }
 
@@ -169,15 +192,6 @@ impl Steering {
         }
     }
 
-    /// For each row, oldest first, whether it can be dropped: whether a
-    /// `steer` sent it.
-    pub(crate) fn droppable(&self) -> Vec<bool> {
-        self.rows
-            .iter()
-            .map(|row| row.command_id.is_some())
-            .collect()
-    }
-
     /// The command id of the row at `at`, when it has one.
     pub(crate) fn id_at(&self, at: usize) -> Option<String> {
         self.rows.get(at).and_then(|row| row.command_id.clone())
@@ -188,22 +202,40 @@ impl Steering {
         self.rows.get(at).map(|row| row.text.as_str())
     }
 
-    /// One line per row at `width`, oldest first: "↳ <text>", the selected
-    /// row "▸ <text>", each cut to the width; a selectable row one cell
-    /// shorter, leaving its last column for the ✕ the view draws.
-    pub(crate) fn lines(&self, width: u16) -> Vec<String> {
+    /// One row per message at `width`, oldest first: the mark, the text
+    /// as one line cut to fit past the indent, the mark and the row's
+    /// `✕`, whether the row is selected, and whether it draws its `✕`.
+    /// `width` is the full conversation width: the view draws the indent
+    /// and the `✕` itself (`docs/tui.md`, "Steering").
+    pub(crate) fn rows(&self, width: u16) -> Vec<LaidRow> {
+        let room = usize::from(width).saturating_sub(INDENT);
         self.rows
             .iter()
             .map(|row| {
-                let mark = if row.command_id.is_some() && row.command_id == self.selected {
-                    '▸'
-                } else {
-                    '↳'
-                };
-                let line = format!("{mark} {}", row.text.replace('\n', " "));
-                let room = usize::from(width).saturating_sub(usize::from(row.command_id.is_some()));
-                format::cut(&line, room)
+                let selected = row.command_id.is_some() && row.command_id == self.selected;
+                let droppable = row.command_id.is_some();
+                let room = room
+                    .saturating_sub(2)
+                    .saturating_sub(if droppable { CROSS } else { 0 });
+                LaidRow {
+                    mark: if selected { '▸' } else { '↳' },
+                    text: format::cut(&row.text.replace('\n', " "), room),
+                    selected,
+                    droppable,
+                }
             })
+            .collect()
+    }
+
+    /// One line per row at `width`, oldest first: "↳ <text>", the selected
+    /// row "▸ <text>", each cut to the width. Tests read the queue
+    /// through this; the view lays its own rows out.
+    #[cfg(test)]
+    pub(crate) fn lines(&self, width: u16) -> Vec<String> {
+        let room = usize::from(width);
+        self.rows(width)
+            .into_iter()
+            .map(|row| format::cut(&format!("{} {}", row.mark, row.text), room))
             .collect()
     }
 }
@@ -223,16 +255,33 @@ impl App {
         Effect::None
     }
 
-    /// The steering queue's rows, oldest first: each cut at the inset
-    /// width, past the row's stripe and gap (`docs/tui.md`, "Look").
+    /// The steering queue's rows, oldest first: each cut at the column
+    /// width, past the indent, the mark and the row's `✕` the view draws
+    /// (`docs/tui.md`, "Steering"). Tests read the queue through this;
+    /// the view lays its own rows out.
+    #[cfg(test)]
     pub(crate) fn steering(&self) -> Vec<String> {
-        self.steering
-            .lines(crate::surface::inset(self.column_width()))
+        self.steering.lines(self.column_width())
     }
 
-    /// For each steering row, oldest first, whether it draws a ✕.
-    pub(crate) fn steering_drops(&self) -> Vec<bool> {
-        self.steering.droppable()
+    /// The steering queue's rows laid out for the view, oldest first
+    /// (`docs/tui.md`, "Steering").
+    pub(crate) fn steering_rows(&self) -> Vec<LaidRow> {
+        self.steering.rows(self.column_width())
+    }
+
+    /// The steering queue's rows below the conversation: one per message
+    /// with the heading above and the footer below them; none while
+    /// empty. The view draws exactly these (`docs/tui.md`, "Steering").
+    pub(crate) fn steering_below(&self) -> usize {
+        let rows = self.steering.rows.len();
+        rows.saturating_add(if rows > 0 { 2 } else { 0 })
+    }
+
+    /// The selected queue row's index, oldest first; none while no row
+    /// is edited (`docs/tui.md`, "Steering").
+    pub(crate) fn steering_selected(&self) -> Option<usize> {
+        self.steering.selected_at()
     }
 
     /// `select_steering` on the queued row at `index`.

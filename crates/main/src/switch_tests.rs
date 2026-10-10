@@ -10,6 +10,7 @@
     reason = "test code; a failure is the test's"
 )]
 
+use crate::test_support::write_record;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
@@ -62,6 +63,7 @@ fn data_extension(home: &Path, name: &str, data: &serde_json::Value) {
         json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&dir);
     std::fs::write(dir.join(format!("providers/{name}.json")), data.to_string()).unwrap();
 }
 
@@ -81,6 +83,7 @@ fn fixture(name: &str) -> Fixture {
         json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&fake);
     std::fs::write(
         fake.join("providers/fake.json"),
         json!({
@@ -107,6 +110,7 @@ fn fixture(name: &str) -> Fixture {
         json!({"name": "claude", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&claude);
     std::fs::write(
         claude.join("providers/claude.json"),
         json!({
@@ -127,6 +131,7 @@ fn fixture(name: &str) -> Fixture {
         json!({"name": "other", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&other);
     std::fs::write(
         other.join("providers/other.json"),
         json!({
@@ -152,6 +157,7 @@ fn fixture(name: &str) -> Fixture {
         json!({"name": "bed", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&bed);
     std::fs::write(
         bed.join("providers/bed.json"),
         json!({
@@ -772,6 +778,7 @@ fn with_literal_provider(fixture: &Fixture) {
         json!({"name": "lit", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&lit);
     std::fs::write(
         lit.join("providers/lit.json"),
         json!({
@@ -869,6 +876,7 @@ fn an_unconfigured_literal_id_beats_stripped_id_ambiguity() {
         json!({"name": "lit", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&lit);
     std::fs::write(
         lit.join("providers/lit.json"),
         json!({
@@ -930,6 +938,7 @@ fn an_unconfigured_model_counts_toward_ambiguity() {
         json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&acme);
     std::fs::write(
         acme.join("providers/acme.json"),
         json!({
@@ -1299,6 +1308,7 @@ fn with_two_literal_providers(fixture: &Fixture) {
             json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
         )
         .unwrap();
+        write_record(&dir);
         std::fs::write(
             dir.join(format!("providers/{name}.json")),
             json!({
@@ -1517,6 +1527,7 @@ fn lua_extension(fixture: &Fixture, counter: &Path, flag: &Path) {
             .to_string(),
     )
     .unwrap();
+    write_record(&src);
     std::fs::write(
         src.join("init.lua"),
         format!(

@@ -1,5 +1,6 @@
 //! Tests for the steering queue and its selection.
 
+use super::LaidRow;
 use super::Steering;
 use crate::input::Draft;
 use contract::clock::Clock;
@@ -170,9 +171,90 @@ fn rows_are_cut_to_the_width_on_one_line() {
         &queue(&[("a long message\nover lines", Some("c_1"))]),
         &mut draft,
     );
-    // The last column is the ✕'s.
-    assert_eq!(steering.lines(10), ["↳ a long "]);
+    // The indent, the mark and the row's `✕` are reserved: at width 10
+    // three cells of text fit.
+    assert_eq!(steering.lines(10), ["↳ a l"]);
     assert_eq!(steering.lines(40), ["↳ a long message over lines"]);
+}
+
+#[test]
+fn rows_carry_the_mark_selection_and_droppable() {
+    let mut draft = typed("mine");
+    let mut steering = three(&mut draft);
+    assert_eq!(
+        steering.rows(80),
+        [
+            LaidRow {
+                mark: '↳',
+                text: "one".to_owned(),
+                selected: false,
+                droppable: true,
+            },
+            LaidRow {
+                mark: '↳',
+                text: "two".to_owned(),
+                selected: false,
+                droppable: true,
+            },
+            LaidRow {
+                mark: '↳',
+                text: "three".to_owned(),
+                selected: false,
+                droppable: true,
+            },
+        ]
+    );
+    steering.up(&mut draft);
+    let rows = steering.rows(80);
+    assert_eq!(
+        rows.iter().map(|row| row.mark).collect::<Vec<_>>(),
+        ['↳', '↳', '▸']
+    );
+    assert_eq!(
+        rows.iter().map(|row| row.selected).collect::<Vec<_>>(),
+        [false, false, true]
+    );
+}
+
+#[test]
+fn rows_reserve_the_indent_mark_and_cross() {
+    let mut draft = Draft::default();
+    let mut steering = Steering::default();
+    // One droppable row, one of Fiber's own: the text is 24 cells.
+    steering.fold(
+        &queue(&[
+            ("a long message over lines", Some("c_1")),
+            ("a long message over lines", None),
+        ]),
+        &mut draft,
+    );
+    // A droppable row keeps 2 for the indent, 2 for the mark and 3 for
+    // its `✕`: at 32 the text fits whole, at 31 one cell is cut.
+    assert_eq!(steering.rows(32)[0].text, "a long message over lines");
+    assert_eq!(steering.rows(31)[0].text, "a long message over line");
+    // Fiber's own row keeps no `✕`: at 29 its text fits whole, at 28
+    // one cell is cut.
+    assert_eq!(steering.rows(29)[1].text, "a long message over lines");
+    assert_eq!(steering.rows(28)[1].text, "a long message over line");
+    assert!(!steering.rows(80)[1].droppable);
+}
+
+#[test]
+fn a_row_with_an_image_is_droppable_but_never_selected() {
+    let mut draft = typed("mine");
+    let mut steering = with_image(&mut draft);
+    steering.up(&mut draft);
+    steering.up(&mut draft);
+    // Selected is the first text row; the image row between them draws
+    // its `✕` but no selection mark.
+    assert_eq!(
+        steering
+            .rows(80)
+            .iter()
+            .map(|row| (row.mark, row.selected, row.droppable))
+            .collect::<Vec<_>>(),
+        [('▸', true, true), ('↳', false, true), ('↳', false, true)]
+    );
 }
 
 /// A queue whose middle row holds an image: `one`, a picture, `three`.
@@ -220,7 +302,15 @@ fn a_click_does_not_select_a_row_with_an_image() {
     assert!(!steering.is_selected());
     assert_eq!(steering.to_drop(), ["c_1", "c_2", "c_3"]);
     assert_eq!(steering.id_at(1).as_deref(), Some("c_2"));
-    assert_eq!(steering.droppable(), [true, true, true]);
+    // Every row draws its `✕`: whether a `steer` sent it.
+    assert_eq!(
+        steering
+            .rows(80)
+            .iter()
+            .map(|row| row.droppable)
+            .collect::<Vec<_>>(),
+        [true, true, true]
+    );
     assert!(steering.select(2, &mut draft));
     assert_eq!(steering.to_drop(), ["c_3"]);
 }

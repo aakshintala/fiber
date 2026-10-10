@@ -45,7 +45,7 @@ pub(crate) fn install(
     entry: Rc<Cell<bool>>,
     failure: Function,
 ) -> mlua::Result<()> {
-    let in_entry = lua.create_function(move |_, ()| Ok(entry.get()))?;
+    let in_entry = crate::host::failure::in_entry(lua, &entry)?;
     lua.load(DRIVE).set_name("=host.drive").call::<()>((
         host.clone(),
         tag.clone(),

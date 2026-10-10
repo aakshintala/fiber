@@ -6,6 +6,7 @@
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 #![allow(clippy::panic, reason = "the test's wait deadline is its failure")]
 
+use crate::test_support::write_record;
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
@@ -59,13 +60,15 @@ impl Setup {
     /// Installs the codex package copy pointing at `server`, with its
     /// callback port rewritten to `port`.
     fn install(&self, server: &OauthServer, port: u16) {
+        let dest = self.home().join("extensions").join("codex");
         copy_package(
-            &self.home().join("extensions").join("codex"),
+            &dest,
             &[
                 ("https://auth.openai.com", &server.url()),
                 ("local PORT = 1455", &format!("local PORT = {port}")),
             ],
         );
+        write_record(&dest);
     }
 
     /// Installs a key provider `name`.
@@ -77,6 +80,7 @@ impl Setup {
             json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
         )
         .unwrap();
+        write_record(&dir);
         fs::write(
             dir.join("providers").join(format!("{name}.json")),
             json!({
@@ -596,6 +600,7 @@ fn device_on_a_declared_secret_is_a_usage_error() {
             .to_string(),
     )
     .unwrap();
+    write_record(&dir);
     let providers = setup.providers();
     let mut err = Vec::new();
     let mut keys = Plain;
@@ -677,6 +682,7 @@ fn login_with_runs_the_provider_and_prints_its_stored_result() {
         json!({ "name": "acme-ext", "version": "v1.0.0", "fiber": "0.1.0", "api": 1 }).to_string(),
     )
     .unwrap();
+    write_record(&dir);
     fs::write(
         dir.join("providers/acme.json"),
         json!({

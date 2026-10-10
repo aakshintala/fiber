@@ -20,6 +20,23 @@ use extensions::{CredentialPair, Error, LuaExtension, LuaProvider, Origin, Reque
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
+/// Writes a healthy extension install record beside its manifest.
+pub(crate) fn write_record(dir: &Path) {
+    let text = fs::read_to_string(dir.join("extension.json")).unwrap();
+    let manifest: Value = serde_json::from_str(&text).unwrap();
+    let name = manifest.get("name").and_then(|n| n.as_str()).unwrap();
+    let version = manifest
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("v0.0.0");
+    fs::write(
+        dir.join(".fiber.json"),
+        json!({"name": name, "version": version, "requested": true, "source": {"path": "/p"}})
+            .to_string(),
+    )
+    .unwrap();
+}
+
 /// How far each round drives the fake clock: a day past any install or git
 /// bound, so the deadline, the grace and the drain all elapse.
 const FAR: Duration = Duration::from_secs(24 * 3600);

@@ -8,6 +8,7 @@
 
 mod common;
 
+use common::write_record;
 use common::{Setup, config, install, lua_named, manifest, provider, write};
 use config::{ModelData, write_model_cache};
 use contract::ErrorCode;
@@ -209,6 +210,7 @@ fn an_extension_for_another_api_is_left_out_with_a_notice() {
         &dir.join("providers/acme.json"),
         &provider("acme", &["m1"]).to_string(),
     );
+    write_record(&dir);
     write(
         &setup.home().join("extensions/.acme.1.new/extension.json"),
         "not json",

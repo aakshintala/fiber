@@ -6,6 +6,7 @@
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
 #![allow(clippy::panic, reason = "test helpers; a hang is the test's failure")]
 
+use crate::test_support::write_record;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -72,6 +73,7 @@ impl Setup {
             .to_string(),
         )
         .unwrap();
+        write_record(&dir);
         std::fs::write(
             dir.join("providers").join(format!("{name}.json")),
             json!({"name": name, "models": models}).to_string(),
@@ -616,6 +618,7 @@ fn load_notices_reach_the_catalogue() {
         .to_string(),
     )
     .unwrap();
+    write_record(&dir);
     let called = Cell::new(false);
     let catalogue = read(
         &setup.home(),

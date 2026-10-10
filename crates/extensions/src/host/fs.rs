@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 use std::sync::{Condvar, Mutex};
 
 use contract::files::PathLock;
-use mlua::{Lua, Table, Value as LuaValue};
+use mlua::{Lua, MultiValue, Table, Value as LuaValue};
 
 use super::{Session, failure};
 
@@ -72,153 +72,177 @@ pub(crate) fn install(
         memory_cap,
     };
     let table = lua.create_table()?;
-    // Each method returns `(nil, code, message)` on a coded failure for
-    // the Lua half to raise as the table, and `(nil, message)` on a wrong
-    // argument for it to raise as the string, so `coroutine.resume` sees
-    // the value at its source.
+    // Each method returns its value on success and a `Raise` on failure,
+    // raised as the table or the string at the call site, so
+    // `coroutine.resume` sees the value at its source.
     {
         let fs = fs.clone();
-        let raw = lua.create_function(move |lua, path: LuaValue| {
-            let Ok(path) = path_bytes(&path, "host.fs.read") else {
-                return failure::raw_string(lua, bad_path("host.fs.read"));
-            };
-            let data = match fs.read(&path) {
-                Ok(data) => data,
-                Err((code, message)) => return failure::raw_failure(lua, &code, message),
-            };
-            Ok(mlua::MultiValue::from_vec(vec![LuaValue::String(
-                lua.create_string(data)?,
-            )]))
-        })?;
-        table.set("read", failure::wrap(lua, raw, failure)?)?;
+        failure::register(
+            lua,
+            &table,
+            "read",
+            failure,
+            None,
+            move |lua, path: LuaValue| {
+                let path = path_bytes(&path, "host.fs.read")?;
+                let data = fs
+                    .read(&path)
+                    .map_err(|(code, message)| failure::Raise::Failed(code, message))?;
+                Ok(MultiValue::from_vec(vec![LuaValue::String(
+                    lua.create_string(data)
+                        .map_err(|e| failure::Raise::Arg(e.to_string()))?,
+                )]))
+            },
+        )?;
     }
     {
         let fs = fs.clone();
-        let raw = lua.create_function(
-            move |lua, (path, data, opts): (LuaValue, LuaValue, LuaValue)| {
-                let Ok(path) = path_bytes(&path, "host.fs.write") else {
-                    return failure::raw_string(lua, bad_path("host.fs.write"));
-                };
+        failure::register(
+            lua,
+            &table,
+            "write",
+            failure,
+            None,
+            move |_lua, (path, data, opts): (LuaValue, LuaValue, LuaValue)| {
+                let path = path_bytes(&path, "host.fs.write")?;
                 let LuaValue::String(data) = &data else {
-                    return failure::raw_string(
-                        lua,
+                    return Err(failure::Raise::Arg(
                         "host.fs.write: data must be a string".to_owned(),
-                    );
+                    ));
                 };
                 let data = data.as_bytes();
-                let with_lock = match lock(&opts) {
-                    Ok(with_lock) => with_lock,
-                    Err(message) => return failure::raw_string(lua, message),
-                };
-                raw_unit(lua, fs.write(&path, &data, with_lock))
+                let with_lock = lock(&opts)?;
+                raw_unit(fs.write(&path, &data, with_lock))
             },
         )?;
-        table.set("write", failure::wrap(lua, raw, failure)?)?;
     }
     {
         let fs = fs.clone();
-        let raw = lua.create_function(move |lua, path: LuaValue| {
-            let Ok(path) = path_bytes(&path, "host.fs.list") else {
-                return failure::raw_string(lua, bad_path("host.fs.list"));
-            };
-            let names = match fs.list(&path) {
-                Ok(names) => names,
-                Err((code, message)) => return failure::raw_failure(lua, &code, message),
-            };
-            let out = lua.create_table()?;
-            for (i, name) in names.iter().enumerate() {
-                out.raw_set(i + 1, lua.create_string(name)?)?;
-            }
-            Ok(mlua::MultiValue::from_vec(vec![LuaValue::Table(out)]))
-        })?;
-        table.set("list", failure::wrap(lua, raw, failure)?)?;
-    }
-    {
-        let fs = fs.clone();
-        let raw = lua.create_function(move |lua, path: LuaValue| {
-            let Ok(path) = path_bytes(&path, "host.fs.stat") else {
-                return failure::raw_string(lua, bad_path("host.fs.stat"));
-            };
-            let found = match fs.stat(&path) {
-                Ok(found) => found,
-                Err((code, message)) => return failure::raw_failure(lua, &code, message),
-            };
-            let Some(found) = found else {
-                return Ok(mlua::MultiValue::from_vec(vec![LuaValue::Nil]));
-            };
-            let out = lua.create_table()?;
-            out.raw_set("kind", found.kind)?;
-            out.raw_set("size", found.size)?;
-            out.raw_set("modified_ms", found.modified_ms)?;
-            Ok(mlua::MultiValue::from_vec(vec![LuaValue::Table(out)]))
-        })?;
-        table.set("stat", failure::wrap(lua, raw, failure)?)?;
-    }
-    {
-        let fs = fs.clone();
-        let raw = lua.create_function(move |lua, (path, opts): (LuaValue, LuaValue)| {
-            let Ok(path) = path_bytes(&path, "host.fs.mkdir") else {
-                return failure::raw_string(lua, bad_path("host.fs.mkdir"));
-            };
-            let with_lock = match lock(&opts) {
-                Ok(with_lock) => with_lock,
-                Err(message) => return failure::raw_string(lua, message),
-            };
-            raw_unit(lua, fs.mkdir(&path, with_lock))
-        })?;
-        table.set("mkdir", failure::wrap(lua, raw, failure)?)?;
-    }
-    {
-        let fs = fs.clone();
-        let raw = lua.create_function(move |lua, (path, opts): (LuaValue, LuaValue)| {
-            let Ok(path) = path_bytes(&path, "host.fs.remove") else {
-                return failure::raw_string(lua, bad_path("host.fs.remove"));
-            };
-            let with_lock = match lock(&opts) {
-                Ok(with_lock) => with_lock,
-                Err(message) => return failure::raw_string(lua, message),
-            };
-            raw_unit(lua, fs.remove(&path, with_lock))
-        })?;
-        table.set("remove", failure::wrap(lua, raw, failure)?)?;
-    }
-    {
-        let fs = fs.clone();
-        let raw = lua.create_function(
-            move |lua, (from, to, opts): (LuaValue, LuaValue, LuaValue)| {
-                let Ok(from) = path_bytes(&from, "host.fs.rename") else {
-                    return failure::raw_string(lua, bad_path("host.fs.rename"));
-                };
-                let Ok(to) = path_bytes(&to, "host.fs.rename") else {
-                    return failure::raw_string(lua, bad_path("host.fs.rename"));
-                };
-                let with_lock = match lock(&opts) {
-                    Ok(with_lock) => with_lock,
-                    Err(message) => return failure::raw_string(lua, message),
-                };
-                raw_unit(lua, fs.rename(&from, &to, with_lock))
+        failure::register(
+            lua,
+            &table,
+            "list",
+            failure,
+            None,
+            move |lua, path: LuaValue| {
+                let path = path_bytes(&path, "host.fs.list")?;
+                let names = fs
+                    .list(&path)
+                    .map_err(|(code, message)| failure::Raise::Failed(code, message))?;
+                let out = lua
+                    .create_table()
+                    .map_err(|e| failure::Raise::Arg(e.to_string()))?;
+                for (i, name) in names.iter().enumerate() {
+                    out.raw_set(
+                        i + 1,
+                        lua.create_string(name)
+                            .map_err(|e| failure::Raise::Arg(e.to_string()))?,
+                    )
+                    .map_err(|e| failure::Raise::Arg(e.to_string()))?;
+                }
+                Ok(MultiValue::from_vec(vec![LuaValue::Table(out)]))
             },
         )?;
-        table.set("rename", failure::wrap(lua, raw, failure)?)?;
+    }
+    {
+        let fs = fs.clone();
+        failure::register(
+            lua,
+            &table,
+            "stat",
+            failure,
+            None,
+            move |lua, path: LuaValue| {
+                let path = path_bytes(&path, "host.fs.stat")?;
+                let found = fs
+                    .stat(&path)
+                    .map_err(|(code, message)| failure::Raise::Failed(code, message))?;
+                let Some(found) = found else {
+                    return Ok(MultiValue::from_vec(vec![LuaValue::Nil]));
+                };
+                let out = lua
+                    .create_table()
+                    .map_err(|e| failure::Raise::Arg(e.to_string()))?;
+                out.raw_set("kind", found.kind)
+                    .map_err(|e| failure::Raise::Arg(e.to_string()))?;
+                out.raw_set("size", found.size)
+                    .map_err(|e| failure::Raise::Arg(e.to_string()))?;
+                out.raw_set("modified_ms", found.modified_ms)
+                    .map_err(|e| failure::Raise::Arg(e.to_string()))?;
+                Ok(MultiValue::from_vec(vec![LuaValue::Table(out)]))
+            },
+        )?;
+    }
+    {
+        let fs = fs.clone();
+        failure::register(
+            lua,
+            &table,
+            "mkdir",
+            failure,
+            None,
+            move |_lua, (path, opts): (LuaValue, LuaValue)| {
+                let path = path_bytes(&path, "host.fs.mkdir")?;
+                let with_lock = lock(&opts)?;
+                raw_unit(fs.mkdir(&path, with_lock))
+            },
+        )?;
+    }
+    {
+        let fs = fs.clone();
+        failure::register(
+            lua,
+            &table,
+            "remove",
+            failure,
+            None,
+            move |_lua, (path, opts): (LuaValue, LuaValue)| {
+                let path = path_bytes(&path, "host.fs.remove")?;
+                let with_lock = lock(&opts)?;
+                raw_unit(fs.remove(&path, with_lock))
+            },
+        )?;
+    }
+    {
+        let fs = fs.clone();
+        failure::register(
+            lua,
+            &table,
+            "rename",
+            failure,
+            None,
+            move |_lua, (from, to, opts): (LuaValue, LuaValue, LuaValue)| {
+                let from = path_bytes(&from, "host.fs.rename")?;
+                let to = path_bytes(&to, "host.fs.rename")?;
+                let with_lock = lock(&opts)?;
+                raw_unit(fs.rename(&from, &to, with_lock))
+            },
+        )?;
     }
     host.set("fs", table)?;
     {
         let fs = fs.clone();
-        let raw = lua.create_function(move |lua, scope: LuaValue| {
-            let LuaValue::String(scope) = &scope else {
-                return failure::raw_string(
-                    lua,
-                    "host.data_dir: scope must be \"machine\" or \"project\"".to_owned(),
-                );
-            };
-            match fs.data_dir(&scope.as_bytes()) {
-                Ok(dir) => Ok(mlua::MultiValue::from_vec(vec![LuaValue::String(
-                    lua.create_string(dir.as_os_str().as_bytes())?,
-                )])),
-                Err(message) => failure::raw_string(lua, message),
-            }
-        })?;
-        host.set("data_dir", failure::wrap(lua, raw, failure)?)?;
+        failure::register(
+            lua,
+            host,
+            "data_dir",
+            failure,
+            None,
+            move |lua, scope: LuaValue| {
+                let LuaValue::String(scope) = &scope else {
+                    return Err(failure::Raise::Arg(
+                        "host.data_dir: scope must be \"machine\" or \"project\"".to_owned(),
+                    ));
+                };
+                let dir = fs
+                    .data_dir(&scope.as_bytes())
+                    .map_err(failure::Raise::Arg)?;
+                Ok(MultiValue::from_vec(vec![LuaValue::String(
+                    lua.create_string(dir.as_os_str().as_bytes())
+                        .map_err(|e| failure::Raise::Arg(e.to_string()))?,
+                )]))
+            },
+        )?;
     }
     Ok(())
 }
@@ -226,20 +250,20 @@ pub(crate) fn install(
 /// A filesystem failure: its code and the message `host.fs` raises.
 type Failed = (contract::ErrorCode, String);
 
-/// The raw half's answer: `()` on success, `(nil, code, message)` for the
-/// Lua half to raise as the table.
-fn raw_unit(lua: &Lua, result: Result<(), Failed>) -> mlua::Result<mlua::MultiValue> {
+/// A mutating call's answer: nothing on success, the coded failure on
+/// failure.
+fn raw_unit(result: Result<(), Failed>) -> Result<MultiValue, failure::Raise> {
     match result {
-        Ok(()) => Ok(mlua::MultiValue::from_vec(vec![])),
-        Err((code, message)) => failure::raw_failure(lua, &code, message),
+        Ok(()) => Ok(MultiValue::from_vec(vec![])),
+        Err((code, message)) => Err(failure::Raise::Failed(code, message)),
     }
 }
 
-fn path_bytes(value: &LuaValue, _call: &str) -> Result<Vec<u8>, ()> {
+fn path_bytes(value: &LuaValue, call: &str) -> Result<Vec<u8>, failure::Raise> {
     if let LuaValue::String(path) = value {
         Ok(path.as_bytes().to_vec())
     } else {
-        Err(())
+        Err(failure::Raise::Arg(bad_path(call)))
     }
 }
 
@@ -250,11 +274,12 @@ fn bad_path(call: &str) -> String {
 /// The `lock` option of a mutating call: absent or missing is no lock, and a
 /// boolean is itself. Anything else, such as `"yes"`, a table or a number,
 /// is the caller's error, as the message to raise as a string.
-fn lock(opts: &LuaValue) -> Result<bool, String> {
+fn lock(opts: &LuaValue) -> Result<bool, failure::Raise> {
     match opts {
         LuaValue::Nil => Ok(false),
         LuaValue::Table(opts) => {
-            let not_boolean = || "host.fs: `lock` must be a boolean".to_owned();
+            let not_boolean =
+                || failure::Raise::Arg("host.fs: `lock` must be a boolean".to_owned());
             let value = opts.get::<LuaValue>("lock").map_err(|_| not_boolean())?;
             if value.is_nil() {
                 return Ok(false);
@@ -270,7 +295,9 @@ fn lock(opts: &LuaValue) -> Result<bool, String> {
         | LuaValue::Thread(_)
         | LuaValue::UserData(_)
         | LuaValue::Error(_)
-        | LuaValue::Other(_) => Err("host.fs: options must be a table".to_owned()),
+        | LuaValue::Other(_) => Err(failure::Raise::Arg(
+            "host.fs: options must be a table".to_owned(),
+        )),
     }
 }
 

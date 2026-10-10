@@ -3,14 +3,14 @@ source: crates/tui/src/view/banner_tests.rs
 expression: "screen(&app, 60)"
 ---
                                     Connection lost.       ✕
-
-                                                      ▄▄▄▄▄
                                                        hi ▐
                                                       ▀▀▀▀▀
                                                       00:00
 Connection lost · reconnecting (attempt 1)…
-▌ ↳ use the parser                                         ✕
-▌ ↳ and test it                                            ✕
+  • Steering, joins the turn at the next step
+  ↳ use the parser  ✕
+  ↳ and test it  ✕
+  ⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to dr
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ >
+▌ › █
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

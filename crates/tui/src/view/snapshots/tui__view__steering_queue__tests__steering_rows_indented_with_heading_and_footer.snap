@@ -3,14 +3,14 @@ source: crates/tui/src/view/steering_queue_tests.rs
 expression: "screen(&queued(60, 12), 60, 12)"
 ---
 
-
-
                                                       ▄▄▄▄▄
                                                        hi ▐
                                                       ▀▀▀▀▀
                                                       00:00
-▌ ↳ use the parser                                         ✕
-▌ ↳ and test it
+  • Steering, joins the turn at the next step
+  ↳ use the parser  ✕
+  ↳ and test it
+  ⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to dr
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ >
+▌ › █
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

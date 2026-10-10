@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 #![allow(clippy::panic, reason = "the test's wait deadline is its failure")]
 
+use crate::test_support::write_record;
 use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +23,7 @@ fn install(home: &std::path::Path, name: &str, provider: &str) {
         json!({ "name": name, "version": "v1.0.0", "fiber": "0.1.0", "api": 1 }).to_string(),
     )
     .unwrap();
+    write_record(&dir);
     fs::write(
         dir.join("providers").join(format!("{provider}.json")),
         json!({

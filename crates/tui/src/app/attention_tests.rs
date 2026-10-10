@@ -140,6 +140,15 @@ fn waiting_row(session: &str, kind: &str) -> Line {
     )
 }
 
+/// A waiting `session_status` that began at `since`.
+fn waiting_row_since(session: &str, kind: &str, since: u64) -> Line {
+    live(
+        session,
+        serde_json::json!({"state": "waiting", "since": since,
+            "waiting": {"request_id": "r_1", "kind": kind, "summary": "Run cargo test"}}),
+    )
+}
+
 /// An `attention` line for `session` with `reason` (`waiting` carries the
 /// approval summary).
 fn attention(session: &str, reason: &str) -> Line {
@@ -222,7 +231,10 @@ fn it_clears_when_the_row_stops_waiting() {
     app.on_line(waiting_row(SESSION, "approval"));
     app.on_line(attention(SESSION, "waiting"));
     assert_eq!(app.title(), "! fiber · approval");
-    app.on_line(live(SESSION, serde_json::json!({"state": "streaming"})));
+    app.on_line(live(
+        SESSION,
+        serde_json::json!({"state": "streaming", "since": 1}),
+    ));
     assert_eq!(app.title(), "fiber");
 }
 
@@ -324,10 +336,13 @@ fn a_seen_row_that_stops_waiting_stays_cleared() {
     app.on_line(waiting_row(SESSION, "approval"));
     app.on_line(attention(SESSION, "waiting"));
     assert_eq!(app.title(), "! fiber · approval");
-    app.on_line(live(SESSION, serde_json::json!({"state": "streaming"})));
+    app.on_line(live(
+        SESSION,
+        serde_json::json!({"state": "streaming", "since": 1}),
+    ));
     assert_eq!(app.title(), "fiber");
     // Waiting again without a new attention line never re-shows.
-    app.on_line(waiting_row(SESSION, "question"));
+    app.on_line(waiting_row_since(SESSION, "question", 2));
     assert_eq!(app.title(), "fiber");
     // A new attention line titles again.
     app.on_line(attention(SESSION, "waiting"));
@@ -349,13 +364,46 @@ fn a_seen_row_that_leaves_stays_cleared() {
 }
 
 #[test]
-fn an_attention_for_a_row_already_past_waiting_shows_no_title() {
+fn an_attention_before_the_waiting_status_of_a_listed_row_titles_its_kind() {
     let mut app = home(Attention::default());
     app.on_line(live(SESSION, serde_json::json!({"state": "streaming"})));
     app.on_line(attention(SESSION, "waiting"));
-    assert_eq!(app.title(), "fiber");
-    // Waiting later without a new attention line never shows.
     app.on_line(waiting_row(SESSION, "approval"));
+    assert_eq!(app.title(), "! fiber · approval");
+}
+
+#[test]
+fn a_waiting_status_before_the_attention_titles_its_kind() {
+    let mut app = home(Attention::default());
+    app.on_line(live(SESSION, serde_json::json!({"state": "streaming"})));
+    app.on_line(waiting_row(SESSION, "approval"));
+    app.on_line(attention(SESSION, "waiting"));
+    assert_eq!(app.title(), "! fiber · approval");
+}
+
+#[test]
+fn a_late_copy_of_an_earlier_status_keeps_the_waiting_title() {
+    let mut app = home(Attention::default());
+    app.on_line(live(
+        SESSION,
+        serde_json::json!({"state": "streaming", "since": 5}),
+    ));
+    app.on_line(waiting_row_since(SESSION, "approval", 9));
+    app.on_line(attention(SESSION, "waiting"));
+    // The `full` subscription's copy of the earlier status arrives late.
+    app.on_line(live(
+        SESSION,
+        serde_json::json!({"state": "streaming", "since": 5}),
+    ));
+    app.on_line(waiting_row_since(SESSION, "approval", 9));
+    assert_eq!(app.title(), "! fiber · approval");
+}
+
+#[test]
+fn a_listed_row_that_never_waits_titles_nothing() {
+    let mut app = home(Attention::default());
+    app.on_line(live(SESSION, serde_json::json!({"state": "streaming"})));
+    app.on_line(attention(SESSION, "waiting"));
     assert_eq!(app.title(), "fiber");
 }
 

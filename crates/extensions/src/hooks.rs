@@ -105,8 +105,8 @@ impl SessionExtensions {
             host_script: host.clone(),
             ..Self::default()
         };
-        let listing = match crate::list(home, clock.as_ref()) {
-            Ok(listing) => listing,
+        let entries = match crate::installed::locked_entries(home, clock.as_ref()) {
+            Ok(entries) => entries,
             Err(e) => {
                 session.notices.push(notice(e.code(), e.to_string(), None));
                 return session;
@@ -114,14 +114,14 @@ impl SessionExtensions {
         };
         // A damaged directory is skipped, with a notice naming it and
         // the fix, and the rest load.
-        for hit in &listing.damaged {
+        for hit in &entries.damaged {
             session.notices.push(notice(
                 ErrorCode::ExtensionFailed,
                 hit.to_string(),
                 Some(short_name(&hit.name)),
             ));
         }
-        let installed = listing.installed;
+        let found = entries.found;
         let mut chain = Vec::new();
         // debt: entry scripts load one after another, each up to its load
         // timeout; start every VM before waiting on any if session start
@@ -143,7 +143,8 @@ impl SessionExtensions {
             backends: Vec<String>,
         }
         let mut started: Vec<Started> = Vec::new();
-        for item in installed {
+        for entry in found {
+            let item = entry.installed;
             if !crate::is_enabled(config, &item.name) {
                 continue;
             }
@@ -154,14 +155,10 @@ impl SessionExtensions {
                     continue;
                 }
             };
-            let dir = home.join("extensions").join(&slug);
-            let manifest = match config::read_manifest(&dir) {
-                Ok(manifest) => manifest,
-                Err(e) => {
-                    session.failed(&item.name, &Error::Config(e));
-                    continue;
-                }
-            };
+            // The locked read already checked the record and read the
+            // manifest, so the directory and manifest are reused.
+            let dir = entry.dir;
+            let manifest = entry.manifest;
             // Written for another API: it does not load (`docs/extensions.md`,
             // "The extension API version").
             if manifest.api != API || manifest.process.is_some() {

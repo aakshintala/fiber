@@ -102,7 +102,7 @@ pub(super) fn install(lua: &Lua, problems: Table, entry: Rc<Cell<bool>>) -> mlua
         }
         Ok(())
     })?;
-    let in_entry = lua.create_function(move |_, ()| Ok(entry.get()))?;
+    let in_entry = crate::host::failure::in_entry(lua, &entry)?;
     lua.load(GUARD)
         .set_name("=fiber.tool")
         .call::<()>((register, in_entry))?;

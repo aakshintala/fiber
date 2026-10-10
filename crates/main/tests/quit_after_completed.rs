@@ -37,7 +37,7 @@ fn shows(screen: &Grid, word: &[u8]) -> bool {
 fn prompt(screen: &Grid) -> bool {
     (0..ROWS).any(|y| {
         (2..COLS).any(|x| {
-            screen.cell(x, y).symbol.as_str() == ">"
+            screen.cell(x, y).symbol.as_str() == "›"
                 && screen.cell(x - 1, y).symbol.as_str() == " "
                 && matches!(screen.cell(x - 2, y).symbol.as_str(), "▌" | " ")
         })

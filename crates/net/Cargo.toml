@@ -1,0 +1,23 @@
+[package]
+name = "net"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# `net` depends only on `contract` and ureq's TLS stack
+# (docs/architecture.md, "The call rules").
+[dependencies]
+contract = { path = "../contract" }
+thiserror.workspace = true
+ureq.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustls-native-certs = "0.8"
+
+[dev-dependencies]
+fakes = { path = "../fakes" }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+
+[lints]
+workspace = true

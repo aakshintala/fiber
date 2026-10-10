@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use support::write_record;
 
 use fakes::Watchdog;
 use rustix::pty;
@@ -76,6 +77,7 @@ impl Setup {
             json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
         )
         .unwrap();
+        write_record(&dir);
         fs::write(
             dir.join("providers").join(format!("{name}.json")),
             data.to_string(),
@@ -94,6 +96,7 @@ impl Setup {
                 .to_string(),
         )
         .unwrap();
+        write_record(&dir);
     }
 
     fn command(&self, args: &[&str]) -> Command {
@@ -729,6 +732,7 @@ fn install_codex(setup: &Setup, oauth: &str) {
         )
         .unwrap();
     }
+    write_record(&to);
 }
 
 /// A device-code exchange reply carrying `email`.

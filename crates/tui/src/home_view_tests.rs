@@ -114,6 +114,53 @@ fn type_draft(app: &mut App, text: &str) {
 }
 
 #[test]
+fn the_cursor_marks_the_last_fitting_row_and_sheds_below_it() {
+    // A three-line draft at 80 columns: the caret sits on the last
+    // draft row. Drawn below the floor, one row taller it marks the
+    // bottom row; one row shorter the row is past the area and nothing
+    // draws, without panicking (`docs/tui.md`, "The input box").
+    for (height, drawn) in [(6, true), (5, false)] {
+        let mut app = home(80, height);
+        type_draft(&mut app, "a\nb\nc");
+        let area = Rect::new(0, 0, 80, height);
+        let mut buf = Buffer::empty(area);
+        home_only(&app, area, &mut buf);
+        let at: Vec<(u16, u16)> = (0..height)
+            .flat_map(|y| (0..80).map(move |x| (x, y)))
+            .filter(|(x, y)| buf[(*x, *y)].symbol() == "█")
+            .collect();
+        if drawn {
+            assert_eq!(at, vec![(3, 5)], "height {height}");
+        } else {
+            assert!(at.is_empty(), "height {height}: {at:?}");
+        }
+    }
+}
+
+#[test]
+fn draft_rows_clip_at_the_areas_bottom_row() {
+    // Eight draft rows at 80 by 10: the box shows rows 0 to 5, so the
+    // row on the bottom row draws and the rows past it never reach the
+    // buffer, without panicking (`docs/tui.md`, "The input box").
+    let mut app = home(80, 10);
+    type_draft(&mut app, "a\nb\nc\nd\ne\nf\ng\nh");
+    let area = Rect::new(0, 0, 80, 10);
+    let mut buf = Buffer::empty(area);
+    home_only(&app, area, &mut buf);
+    let text: String = (0..10)
+        .map(|y| {
+            (0..80)
+                .map(|x| buf[(x, y)].symbol().to_owned())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("  f"), "{text}");
+    assert!(!text.contains("  g"), "{text}");
+    assert!(!text.contains("  h"), "{text}");
+}
+
+#[test]
 fn home_first_frame_80x24() {
     insta::assert_snapshot!("home_first_frame_80x24", screen(&home(80, 24), 80, 24));
 }
@@ -168,8 +215,48 @@ fn home_cursor_sits_at_the_draft_cursor_in_the_box() {
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
     // The pad is three rows, then the four-row logo and one blank row,
-    // the ▄ edge and the draft's first row; the cursor sits after "> hi".
+    // the ▄ edge and the draft's first row; the cursor sits after "› hi".
     assert_eq!(cursor(&app, area), Some(Position::new(4, 9)));
+}
+
+#[test]
+fn the_empty_home_prompt_is_info_and_its_text_dim() {
+    let app = home(80, 24);
+    assert!(app.home_screen().is_some_and(|screen| screen.placeholder));
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    // The placeholder's prompt is `info` like a draft's; the rest of
+    // the placeholder stays dim (`docs/tui.md`, "The input box"). The
+    // drawn cursor covers the placeholder's `/` at the caret.
+    let row = (0..24)
+        .find(|y| {
+            (0..80)
+                .map(|x| buf[(x, *y)].symbol().to_owned())
+                .collect::<String>()
+                .contains("? for shortcuts")
+        })
+        .expect("the placeholder row");
+    for x in [0, 1] {
+        assert_eq!(
+            buf[(x, row)].style().fg,
+            Some(crate::theme::Role::Info.color()),
+            "cell {x}"
+        );
+        assert_eq!(
+            buf[(x, row)].bg,
+            crate::theme::Role::Surface.color(),
+            "cell {x}"
+        );
+    }
+    assert_eq!(buf[(2, row)].symbol(), "█");
+    assert!(
+        buf[(3, row)]
+            .style()
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM),
+        "the placeholder text stays dim"
+    );
 }
 
 #[test]
@@ -393,9 +480,17 @@ fn the_four_row_logo_needs_its_height_exactly() {
     // At 80 columns the threshold is 17 rows: a pad of 2, the four-row
     // logo, one blank row, the six-row box, three list rows, the foot.
     let tall = screen(&home(80, 17), 80, 17);
-    assert!(tall.contains('█'), "four pixel rows at the threshold");
+    // The four pixel rows sit under the pad of 2; the drawn cursor in
+    // the box below must not stand in for them.
+    assert!(
+        tall.lines().skip(2).take(4).any(|row| row.contains('█')),
+        "four pixel rows at the threshold"
+    );
     let short = screen(&home(80, 16), 80, 16);
-    assert!(!short.contains('█'), "one row below the threshold");
+    assert!(
+        short.lines().take(3).all(|row| !row.contains('█')),
+        "one row below the threshold"
+    );
     assert!(short.contains("⌇ fiber 0.0.1"), "the one-row logo");
 }
 
@@ -405,7 +500,12 @@ fn a_screen_narrower_than_the_logo_gets_one_row() {
     let mut buf = Buffer::empty(area);
     home_only(&home(20, 24), area, &mut buf);
     let narrow = text(&buf);
-    assert!(!narrow.contains('█'), "no pixel rows without the width");
+    // The pad of 3 and the one logo row hold no pixel rows; the drawn
+    // cursor in the box below is out of the probe.
+    assert!(
+        narrow.lines().take(4).all(|row| !row.contains('█')),
+        "no pixel rows without the width"
+    );
     assert!(narrow.contains("⌇ fiber 0.0.1"), "the one-row logo");
 }
 
@@ -564,7 +664,12 @@ fn blockers_count_against_the_four_row_logo() {
         .collect(),
     }));
     let text = screen(&app, 80, 17);
-    assert!(!text.contains('█'), "one row while the blockers show");
+    // The pad of 2 and the one logo row hold no pixel rows while the
+    // blockers show.
+    assert!(
+        text.lines().take(3).all(|row| !row.contains('█')),
+        "one row while the blockers show"
+    );
     assert!(text.contains("⌇ fiber 0.0.1"), "the one-row logo");
     assert_eq!(
         app.home_screen()

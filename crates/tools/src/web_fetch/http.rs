@@ -1,13 +1,14 @@
 //! One `web_fetch` hop over HTTP, on a socket Fiber owns so a watcher thread
-//! can close it (`docs/tools.md`, "Cancellation"). ureq runs behind a
-//! connector that keeps a handle to each `TcpStream` it opens; shutting that
-//! handle down ends a read blocked inside ureq, under TLS too. The watcher
+//! can close it (`docs/tools.md`, "Cancellation"). Each hop runs its own
+//! agent over the shared connector in `net`, which keeps a handle to the
+//! hop's socket; shutting that handle down ends a read blocked inside ureq,
+//! under TLS too. The watcher
 //! waits on the injected clock for the hop's deadline and on the call's
 //! cancel, so ureq's own timeouts, which read the process clock, stay unset.
 //! The chain tunnels through the proxy the environment names
 //! (`docs/dependencies.md`, "Proxies").
 
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
@@ -15,15 +16,10 @@ use std::time::Instant;
 
 use contract::clock::{Clock, Wake};
 use contract::tool::Cancel;
-use ureq::Agent;
 use ureq::config::Config;
 use ureq::http::Uri;
-use ureq::tls::{RootCerts, TlsConfig};
 use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
-use ureq::unversioned::transport::{
-    Buffers, ConnectProxyConnector, ConnectionDetails, Connector, Either, LazyBuffers, NextTimeout,
-    RustlsConnector, Transport,
-};
+use ureq::unversioned::transport::NextTimeout;
 
 /// How many resolved addresses ureq keeps.
 const MAX_ADDRS: usize = 16;
@@ -118,7 +114,9 @@ impl Hop {
         state.seq = state.seq.wrapping_add(1);
         self.changed.notify_all();
     }
+}
 
+impl net::Keep for Hop {
     /// Keeps a handle to `socket`, or refuses it once the hop is stopped.
     fn keep(&self, socket: &TcpStream) -> io::Result<()> {
         let mut state = self.lock();
@@ -129,6 +127,12 @@ impl Hop {
         Ok(())
     }
 
+    fn is_stopped(&self) -> bool {
+        self.stopped().is_some()
+    }
+}
+
+impl Hop {
     /// Waits until `until` on `clock`, or a wake after `seen`.
     fn park(&self, clock: &dyn Clock, until: Instant, seen: u64) {
         // Taken before `wait_until`, and held until the condvar wait, so a
@@ -261,25 +265,16 @@ impl Hop {
         if self.stopped().is_some() {
             return Err("the fetch was stopped".to_owned());
         }
-        let tls = TlsConfig::builder()
-            .root_certs(RootCerts::PlatformVerifier)
-            .build();
-        let config = Config::builder()
-            .tls_config(tls)
-            .proxy(request.proxy.clone())
-            .http_status_as_error(false)
-            .max_redirects(0)
-            .build();
         // One agent per hop, so its connector keeps this hop's socket.
-        // debt: builds the TLS config per hop; share one agent with a
-        // per-hop socket slot if the handshake setup shows in a profile.
-        // The proxy step runs before the socket step: it opens the proxy
-        // connection by re-running the chain, so the socket this connector
-        // keeps is the proxy's, and a stop still closes the tunnel.
-        let connector = ConnectProxyConnector::default().chain(KeepSocket(Arc::clone(self)));
-        let connector = connector.chain(RustlsConnector::default());
-        let resolver = Pinned(request.pinned.map(<[SocketAddr]>::to_vec));
-        let agent = Agent::with_parts(config, connector, resolver);
+        let agent = net::agent(
+            net::config()
+                .proxy(request.proxy.clone())
+                .http_status_as_error(false)
+                .max_redirects(0)
+                .build(),
+            Arc::clone(self),
+            Pinned(request.pinned.map(<[SocketAddr]>::to_vec)),
+        );
         let response = agent
             .get(request.uri.clone())
             .call()
@@ -326,86 +321,6 @@ impl Resolver for Pinned {
         } else {
             Ok(addrs)
         }
-    }
-}
-
-/// The connector that opens the socket and keeps a handle to it. A tunnel
-/// the proxy step opened passes through untouched: the socket kept while
-/// opening the proxy connection is already the one a stop must close.
-// debt: this and `Socket` copy `crates/provider/src/http.rs`, because
-// `tools` may not depend on `provider`; share one HTTP crate when a third
-// copy is needed.
-#[derive(Debug)]
-struct KeepSocket(Arc<Hop>);
-
-impl Connector<Either<(), Box<dyn Transport>>> for KeepSocket {
-    type Out = Either<Box<dyn Transport>, Socket>;
-
-    fn connect(
-        &self,
-        details: &ConnectionDetails,
-        chained: Option<Either<(), Box<dyn Transport>>>,
-    ) -> Result<Option<Self::Out>, ureq::Error> {
-        // debt: a connect blocked on an unreachable address is not
-        // interruptible; the stop lands as soon as it returns. Connect with
-        // a timeout or from an interruptible thread if a stop stuck on
-        // connect is reported.
-        if let Some(Either::B(tunnel)) = chained {
-            return Ok(Some(Either::A(tunnel)));
-        }
-        let addrs: Vec<_> = details.addrs.iter().copied().collect();
-        let stream = TcpStream::connect(addrs.as_slice())?;
-        if details.config.no_delay() {
-            stream.set_nodelay(true)?;
-        }
-        self.0.keep(&stream)?;
-        let buffers = LazyBuffers::new(
-            details.config.input_buffer_size(),
-            details.config.output_buffer_size(),
-        );
-        Ok(Some(Either::B(Socket {
-            stream,
-            buffers,
-            open: true,
-        })))
-    }
-}
-
-/// A plain TCP transport over the kept socket.
-#[derive(Debug)]
-struct Socket {
-    stream: TcpStream,
-    buffers: LazyBuffers,
-    /// False once a read found the peer had closed.
-    open: bool,
-}
-
-impl Transport for Socket {
-    fn buffers(&mut self) -> &mut dyn Buffers {
-        &mut self.buffers
-    }
-
-    fn transmit_output(&mut self, amount: usize, _timeout: NextTimeout) -> Result<(), ureq::Error> {
-        let output = self
-            .buffers
-            .output()
-            .get(..amount)
-            .ok_or_else(|| io::Error::other("ureq asked to send more than its buffer holds"))?;
-        self.stream.write_all(output)?;
-        Ok(())
-    }
-
-    fn await_input(&mut self, _timeout: NextTimeout) -> Result<bool, ureq::Error> {
-        let input = self.buffers.input_append_buf();
-        let read = self.stream.read(input)?;
-        self.buffers.input_appended(read);
-        // No bytes is the peer closing: ureq reads `false` as no progress.
-        self.open = read != 0;
-        Ok(self.open)
-    }
-
-    fn is_open(&mut self) -> bool {
-        self.open
     }
 }
 

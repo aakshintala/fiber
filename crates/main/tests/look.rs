@@ -412,7 +412,7 @@ fn turn_drawn(grid: &Grid) -> bool {
     if grid.cell(BOX_LEFT + 1, INPUT_ROW).symbol != " " {
         return false;
     }
-    if grid.cell(BOX_LEFT + 2, INPUT_ROW).symbol != ">" {
+    if grid.cell(BOX_LEFT + 2, INPUT_ROW).symbol != "›" {
         return false;
     }
     for y in [EDGE_TOP, INPUT_ROW, EDGE_BOTTOM] {
@@ -473,7 +473,7 @@ fn one_turn(env: &[(&str, &str)]) -> (Grid, Vec<u8>) {
 fn input_row(screen: &Grid) -> (u16, u16) {
     for y in (0..48).rev() {
         for x in 2..160 {
-            if screen.cell(x, y).symbol.as_str() != ">" {
+            if screen.cell(x, y).symbol.as_str() != "›" {
                 continue;
             }
             if screen.cell(x - 1, y).symbol.as_str() != " " {
@@ -836,5 +836,5 @@ fn inside_tmux_no_stripe_draws_and_its_cell_keeps_the_tint() {
     let stripe = screen.cell(BOX_LEFT, INPUT_ROW);
     assert_eq!(stripe.symbol.as_str(), " ");
     assert_eq!(stripe.bg, SURFACE_RGB);
-    assert_eq!(screen.cell(BOX_LEFT + 2, INPUT_ROW).symbol.as_str(), ">");
+    assert_eq!(screen.cell(BOX_LEFT + 2, INPUT_ROW).symbol.as_str(), "›");
 }

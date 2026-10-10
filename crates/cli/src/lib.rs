@@ -32,6 +32,9 @@ mod sessions_list;
 mod sessions_search;
 mod table;
 
+#[cfg(test)]
+mod test_support;
+
 pub use approve::approve;
 pub use config::{config_get, config_set, config_set_text};
 pub use extension::{extension_install, extension_list, extension_remove, extension_update};

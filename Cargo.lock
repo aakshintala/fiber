@@ -1775,6 +1775,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
+name = "net"
+version = "0.0.0"
+dependencies = [
+ "contract",
+ "fakes",
+ "rustls",
+ "rustls-native-certs",
+ "thiserror 2.0.21",
+ "ureq",
+]
+
+[[package]]
 name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2197,6 +2209,7 @@ dependencies = [
  "base64 0.23.1",
  "contract",
  "fakes",
+ "net",
  "serde_json",
  "thiserror 2.0.21",
  "ureq",
@@ -3172,6 +3185,7 @@ dependencies = [
  "grep-searcher",
  "html5ever",
  "ignore",
+ "net",
  "proptest",
  "rustix",
  "serde_json",

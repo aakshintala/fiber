@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use config::ProjectKey;
 use contract::clock::Clock;
 use contract::events::OfferedKind;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::content::{Index, hash_paths};
 use super::declared::RepoItem;
@@ -204,18 +204,27 @@ impl Store {
     fn record(&self, item: &RepoItem, hash: &str, decision: &str) -> Result<(), Error> {
         let dir = self.approvals(item.kind);
         fs::create_dir_all(&dir).map_err(io_error(&dir))?;
-        let name = Value::String(item.name.clone()).to_string();
-        let declaration = item
-            .declaration
-            .as_ref()
-            .map(|d| format!(",\"declaration\":{d}"))
-            .unwrap_or_default();
         let files: Vec<&str> = item.files.iter().map(|f| f.rel.as_str()).collect();
         let files = Value::from(files);
-        let body = format!(
-            "{{\"decision\":\"{decision}\",\"kind\":\"{}\",\"name\":{name}{declaration},\"files\":{files}}}\n",
-            kind_name(item.kind)
-        );
+        // Built with `json!` so the key order is the serializer's, never
+        // hand-placed text.
+        let body = match &item.declaration {
+            Some(declaration) => json!({
+                "decision": decision,
+                "kind": kind_name(item.kind),
+                "name": item.name,
+                "declaration": declaration,
+                "files": files,
+            }),
+            None => json!({
+                "decision": decision,
+                "kind": kind_name(item.kind),
+                "name": item.name,
+                "files": files,
+            }),
+        }
+        .to_string()
+            + "\n";
         let target = dir.join(hash);
         let temp = dir.join(format!(".tmp-{}-{}", std::process::id(), next()));
         let written = fs::write(&temp, body).and_then(|()| fs::rename(&temp, &target));

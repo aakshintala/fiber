@@ -8,6 +8,7 @@
     reason = "test code; a failure is the test's"
 )]
 
+use crate::test_support::write_record;
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -78,6 +79,7 @@ impl Setup {
             .to_string(),
         )
         .unwrap();
+        write_record(&dir);
         fs::write(
             dir.join("providers").join(format!("{name}.json")),
             data.to_string(),
@@ -1163,6 +1165,7 @@ fn a_repository_settings_file_cannot_supply_the_host() {
         serde_json::from_str(&fs::read_to_string(dir.join("extension.json")).unwrap()).unwrap();
     manifest["repo_settings"] = json!(["workspace"]);
     fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+    write_record(&dir);
     let file = dir.join("providers/acme.json");
     let mut data: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
     data["placeholders"] = json!({"workspace": {}});

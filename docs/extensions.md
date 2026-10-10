@@ -1131,7 +1131,7 @@ When a signal stops Fiber, no extension code runs, as no hook does. The
   extension that holds it.
 - Give your extension a version tag for every release. Dependents name a
   minimum version, and Fiber installs nothing newer than someone asked for.
-- JSON is `json.decode` / `json.encode`, provided by the host. Lua has none.
+- JSON is `json.decode` / `json.encode`, provided by the host. Lua has none. `json.encode({})` is `{}`, while a callback returning `{}` gives `[]`.
 - In Lua, do not reach for `io`, `os`, `fetch`, sockets or environment
   variables — they are absent. Route every side effect through `host`.
 - Keep what must survive a resume in `state`, never in globals.
