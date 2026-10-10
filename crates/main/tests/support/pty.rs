@@ -391,6 +391,10 @@ pub(crate) struct Shared {
     parser: vt100::Parser,
     grid: Grid,
     queries: Vec<u8>,
+    /// Whether a synchronized-output block is open: waits snapshot whole frames only.
+    sync_open: bool,
+    /// The last bytes seen, completing a marker split across two reads.
+    sync_tail: Vec<u8>,
     pending_size: Option<(u16, u16)>,
     ended: bool,
 }
@@ -405,6 +409,8 @@ impl Shared {
             parser,
             grid,
             queries: Vec::new(),
+            sync_open: false,
+            sync_tail: Vec::new(),
             pending_size: None,
             ended: false,
         }
@@ -420,15 +426,44 @@ impl Shared {
 
     /// Publishes the chunk whose replies are already written: a pending
     /// resize lands before the chunk's bytes parse, so the first frame
-    /// after a resize draws at the new size; then the chunk is appended
-    /// and the grid is snapshotted.
+    /// after a resize draws at the new size; then the chunk is appended,
+    /// parsed, and snapshotted unless a synchronized-output block is open.
     pub(crate) fn publish(&mut self, bytes: &[u8]) {
         if let Some((cols, rows)) = self.pending_size.take() {
             self.parser.screen_mut().set_size(rows, cols);
         }
         self.parser.process(bytes);
         self.output.extend_from_slice(bytes);
-        self.grid = Grid::of(&self.parser);
+        self.sync_through(bytes);
+        if !self.sync_open {
+            self.grid = Grid::of(&self.parser);
+        }
+    }
+
+    /// Folds `chunk`'s markers into the block state in stream order, then
+    /// keeps the tail for a marker split across two reads.
+    fn sync_through(&mut self, chunk: &[u8]) {
+        let mut both = std::mem::take(&mut self.sync_tail);
+        let split = both.len();
+        both.extend_from_slice(chunk);
+        let mut at = 0;
+        while at + SYNC_BEGIN.len() <= both.len() {
+            if both[at..].starts_with(SYNC_BEGIN) && at + SYNC_BEGIN.len() > split {
+                self.sync_open = true;
+                at += SYNC_BEGIN.len();
+            } else if both[at..].starts_with(SYNC_END) && at + SYNC_END.len() > split {
+                self.sync_open = false;
+                at += SYNC_END.len();
+            } else {
+                at += 1;
+            }
+        }
+        self.sync_tail = both[both.len().saturating_sub(SYNC_KEEP)..].to_vec();
+    }
+
+    /// The grid rebuilt from the output so far: whole frames only.
+    pub(crate) fn grid(&self) -> Grid {
+        self.grid.clone()
     }
 
     /// Every byte published so far.
@@ -485,6 +520,14 @@ const CAPABILITIES: [(&[u8], &[u8]); 4] = [
 /// How many trailing bytes the query tail keeps for a query split across
 /// two reads: longer than the longest query above.
 const PENDING_KEEP: usize = 16;
+
+/// Synchronized output's markers (DEC mode 2026): the terminal brackets
+/// every frame in them (`docs/tui.md`, "Performance").
+const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
+const SYNC_END: &[u8] = b"\x1b[?2026l";
+/// The sync tail's kept bytes: one fewer than the markers' length, so a
+/// marker split across two reads completes.
+const SYNC_KEEP: usize = 7;
 
 /// The replies for every whole query in `pending`, in stream order,
 /// dropping the bytes through each answered query and keeping the tail

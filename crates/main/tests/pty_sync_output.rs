@@ -181,8 +181,9 @@ fn assert_frames_wrapped(terminal: &[u8], pre_resize: usize) {
         .map(|at| at + SETUP_END.len())
         .expect("the setup writes end with the device-attributes query");
     assert!(
-        terminal[..setup_end].windows(b"\x1b[?1049h".len()).any(|window| window
-            == b"\x1b[?1049h"),
+        terminal[..setup_end]
+            .windows(b"\x1b[?1049h".len())
+            .any(|window| window == b"\x1b[?1049h"),
         "the setup writes start on the alternate screen"
     );
     let restore_start = terminal[setup_end..]
@@ -261,4 +262,71 @@ fn osc_end(bytes: &[u8]) -> Option<usize> {
         at += 1;
     }
     None
+}
+
+/// A stream split inside a synchronized block yields no snapshot until
+/// the block closes: the grid still shows the pre-block screen after the
+/// begin marker and more text, and shows the whole block once it ends.
+#[test]
+fn the_harness_snapshots_only_whole_frames() {
+    let mut shared = support::pty::Shared::new(20, 5);
+    let blank = shared.grid().contents.clone();
+    shared.publish(b"\x1b[?2026hold");
+    assert_eq!(
+        shared.grid().contents,
+        blank,
+        "no snapshot lands while the block is open"
+    );
+    shared.publish(b"more");
+    assert_eq!(
+        shared.grid().contents,
+        blank,
+        "no snapshot lands while the block is open"
+    );
+    shared.publish(b"\x1b[?2026l");
+    assert!(
+        shared.grid().contents.contains("oldmore"),
+        "the closed block snapshots at once: {:?}",
+        shared.grid().contents,
+    );
+}
+
+/// A begin marker split across two reads still opens the block: at every
+/// split offset the grid waits for the end marker.
+#[test]
+fn the_harness_joins_a_marker_split_across_reads() {
+    for split in 1..BEGIN.len() {
+        let mut shared = support::pty::Shared::new(20, 5);
+        let blank = shared.grid().contents.clone();
+        shared.publish(&BEGIN[..split]);
+        shared.publish(&[&BEGIN[split..], b"x"].concat());
+        assert_eq!(
+            shared.grid().contents,
+            blank,
+            "no snapshot lands with the block open at split {split}"
+        );
+        shared.publish(END);
+        assert!(
+            shared.grid().contents.contains('x'),
+            "the closed block snapshots at split {split}"
+        );
+    }
+}
+
+/// A stream without mode 2026 snapshots after every read, as before.
+#[test]
+fn the_harness_snapshots_a_stream_without_markers_after_each_read() {
+    let mut shared = support::pty::Shared::new(20, 5);
+    shared.publish(b"a");
+    assert!(
+        shared.grid().contents.contains('a'),
+        "the first read snapshots: {:?}",
+        shared.grid().contents,
+    );
+    shared.publish(b"b");
+    assert!(
+        shared.grid().contents.contains("ab"),
+        "the second read snapshots: {:?}",
+        shared.grid().contents,
+    );
 }
