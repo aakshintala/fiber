@@ -44,6 +44,7 @@ fn described(inputs: &[Input]) -> Vec<String> {
             | Input::FindDue(_)
             | Input::Image { .. }
             | Input::Viewed { .. }
+            | Input::Login { .. }
             | Input::Models(_) => "other".to_owned(),
         })
         .collect()
