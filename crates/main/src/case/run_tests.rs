@@ -264,7 +264,7 @@ fn the_until_event_stops_driving_and_uses_the_short_exit_deadline() {
     );
 
     assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
-    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert_eq!(failures.len(), 3, "{failures:?}");
     assert!(
         failures[0].contains("wait for until event turn_completed occurrence 1"),
         "{failures:?}"
@@ -273,6 +273,9 @@ fn the_until_event_stops_driving_and_uses_the_short_exit_deadline() {
         failures[1],
         "the session did not write fiber_exited after close"
     );
+    assert!(failures[2].starts_with("diagnostics:"), "{failures:?}");
+    assert!(failures[2].contains("turn_completed"), "{failures:?}");
+    assert!(failures[2].contains("next_advance=none"), "{failures:?}");
 }
 
 #[test]
@@ -304,13 +307,12 @@ fn exiting_before_the_next_advance_names_that_advance() {
         Arc::new(r#loop::TurnCancel::default()),
     );
 
-    assert_eq!(
-        failures,
-        [
-            "the session exited before its until event",
-            "clock advance[1] was not reached",
-        ]
-    );
+    assert_eq!(failures[0], "the session exited before its until event");
+    assert_eq!(failures[1], "clock advance[1] was not reached");
+    assert_eq!(failures.len(), 3, "{failures:?}");
+    assert!(failures[2].starts_with("diagnostics:"), "{failures:?}");
+    assert!(failures[2].contains("fiber_exited"), "{failures:?}");
+    assert!(failures[2].contains("next_advance=1"), "{failures:?}");
 }
 
 #[test]
@@ -343,12 +345,96 @@ fn a_missing_advance_fails_on_the_short_advance_wait() {
     );
 
     assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
-    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert_eq!(failures.len(), 3, "{failures:?}");
     assert!(
         failures[0].contains("clock advance[1]: no waiter parked"),
         "{failures:?}"
     );
     assert_eq!(failures[1], "clock advance[1] was not reached");
+    assert!(failures[2].starts_with("diagnostics:"), "{failures:?}");
+    assert!(failures[2].contains("turn_completed"), "{failures:?}");
+    assert!(failures[2].contains("next_advance=1"), "{failures:?}");
+}
+
+#[test]
+fn an_expired_until_wait_dumps_parked_deadlines_events_and_next_advance() {
+    let (_root, log) = session_log(&[]);
+    let case = case_run(
+        vec![json!({"kind": "turn_completed"})],
+        vec![ClockAdvance {
+            after: Some(Selector {
+                kind: "extension_log".to_owned(),
+                nth: 1,
+            }),
+            advance_ms: 200,
+        }],
+        Some(Selector {
+            kind: "extension_log".to_owned(),
+            nth: 1,
+        }),
+    );
+    // A waiter parked at now + 200ms stays parked while the driver waits
+    // for an until event that never arrives.
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let waiter_clock = case.session_clock();
+    let waiter = std::thread::spawn(move || {
+        let until = waiter_clock.now() + Duration::from_millis(200);
+        waiter_clock.wait_until(Some(until), &mut |_| {
+            let _ignored = parked_tx.send(());
+            let _ignored = release_rx.recv_timeout(Duration::from_secs(5));
+        });
+    });
+    parked_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the waiter parks before the driver runs");
+    // Ephemeral lines appended after the watcher registers still reach
+    // the driver, so the dump must list them in order.
+    let watcher = log.watch_all();
+    log.append(
+        &Event::AssistantMessageDelta(TextDelta { text: "a".into() }),
+        None,
+        None,
+    )
+    .expect("append the ephemeral delta");
+    log.append(&turn_completed(), None, None)
+        .expect("append the durable event");
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: false,
+    });
+
+    let failures = case.drive(
+        driver as Arc<dyn contract::extension::Drive>,
+        watcher,
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+    let _ignored = release_tx.send(());
+    waiter.join().expect("join the parked waiter");
+
+    assert_eq!(failures.len(), 3, "{failures:?}");
+    assert!(
+        failures[0].contains("wait for until event extension_log occurrence 1"),
+        "{failures:?}"
+    );
+    assert!(
+        failures[0].contains("20ms"),
+        "the until wait stays at the test bound: {failures:?}"
+    );
+    assert_eq!(failures[1], "clock advance[1] was not reached");
+    let dump = &failures[2];
+    assert!(dump.starts_with("diagnostics:"), "{failures:?}");
+    assert!(dump.contains("now_offset_ms=0"), "{failures:?}");
+    assert!(dump.contains("parked_ms=[200ms]"), "{failures:?}");
+    let events = dump.split("events=[").nth(1).unwrap_or_default();
+    let delta_at = events.find("assistant_message_delta");
+    let completed_at = events.find("turn_completed");
+    assert!(
+        delta_at.is_some_and(|delta| completed_at.is_some_and(|completed| delta < completed)),
+        "ephemeral and durable kinds stay in order: {failures:?}"
+    );
+    assert!(dump.contains("next_advance=1"), "{failures:?}");
 }
 
 /// A clock whose first `now()` waits until the test releases it, holding

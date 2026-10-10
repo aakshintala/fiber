@@ -143,6 +143,7 @@ impl CaseRun {
         let mut events = Vec::new();
         let mut failures = Vec::new();
         let mut seen = BTreeMap::<String, usize>::new();
+        let mut seen_order = Vec::<String>::new();
         let mut advance = 0;
         let mut reached_until = false;
 
@@ -160,6 +161,7 @@ impl CaseRun {
             }
             let occurrence = seen.entry(line.kind.clone()).or_default();
             *occurrence = occurrence.saturating_add(1);
+            seen_order.push(line.kind.clone());
             if !self.apply_advances(Some((&line.kind, *occurrence)), &mut advance, &mut failures) {
                 self.close(&driver, &cancel, &mut failures);
                 break;
@@ -183,6 +185,7 @@ impl CaseRun {
                 .checked_add(self.waits.close)
                 .unwrap_or_else(|| self.process_clock.now());
             while let Some(line) = self.next_event(&mut watcher, exit_deadline, &mut failures) {
+                seen_order.push(line.kind.clone());
                 if line.is_durable() {
                     events.push(serde_json::to_value(&line).unwrap_or(Value::Null));
                 }
@@ -200,7 +203,34 @@ impl CaseRun {
             failures.push(format!("clock advance[{next}] was not reached"));
         }
         failures.extend(session_verdict(&self.expected, &events, &self.host.unmet()));
+        if !failures.is_empty() || advance < self.advances.len() {
+            failures.push(self.diagnostics(advance, &seen_order));
+        }
         failures
+    }
+
+    /// The failure dump names the clock's parked deadlines, the event
+    /// kinds seen in order and the next unapplied advance.
+    fn diagnostics(&self, next: usize, seen: &[String]) -> String {
+        let (offset, parked) = self.clock.parked_offsets();
+        let parked = parked
+            .iter()
+            .map(|deadline| match deadline {
+                Some(deadline) => format!("{}ms", deadline.as_millis()),
+                None => "none".to_owned(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let next = if next < self.advances.len() {
+            next.saturating_add(1).to_string()
+        } else {
+            "none".to_owned()
+        };
+        format!(
+            "diagnostics: now_offset_ms={} parked_ms=[{parked}] events=[{}] next_advance={next}",
+            offset.as_millis(),
+            seen.join(", ")
+        )
     }
 
     fn next_event(

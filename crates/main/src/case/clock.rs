@@ -43,6 +43,25 @@ impl CaseClock {
         })
     }
 
+    /// The deadlines currently parked in [`Clock::wait_until`], as
+    /// millisecond offsets from the clock's current now, with the now
+    /// offset from the clock origin. Past deadlines saturate to zero.
+    pub(crate) fn parked_offsets(&self) -> (Duration, Vec<Option<Duration>>) {
+        let state = lock(&self.state);
+        let now = now_in(&state, self.origin);
+        let offset = state.offset;
+        let parked = state
+            .parked
+            .iter()
+            .map(|parked| {
+                parked
+                    .until
+                    .map(|until| until.saturating_duration_since(now))
+            })
+            .collect();
+        (offset, parked)
+    }
+
     /// The deadlines currently parked in [`Clock::wait_until`].
     #[cfg(test)]
     pub(crate) fn parked(&self) -> Vec<Option<Instant>> {
