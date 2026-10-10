@@ -272,6 +272,21 @@ fn list_into(list: Vec<String>) -> Vec<Value> {
     list.into_iter().map(Value::String).collect()
 }
 
+impl Layer {
+    /// The source reading this layer's file.
+    pub(crate) fn source(self, home: &Path, workspace: &Path, project: &ProjectKey) -> Source {
+        match self {
+            Self::Global => Source::Global(home.join("config.json")),
+            Self::Project => Source::Project(
+                home.join("projects")
+                    .join(project.as_str())
+                    .join("config.json"),
+            ),
+            Self::Repository => Source::Repository(workspace.join(".fiber/config.json")),
+        }
+    }
+}
+
 /// The file and source `set` and `edit_list` write through for `layer`.
 fn layer_file(
     home: &Path,
@@ -279,26 +294,12 @@ fn layer_file(
     project: &ProjectKey,
     layer: Layer,
 ) -> Result<(PathBuf, Source), ConfigError> {
-    let (file, source) = match layer {
-        Layer::Global => {
-            let file = home.join("config.json");
-            let source = Source::Global(file.clone());
-            (file, source)
-        }
-        Layer::Project => {
-            let file = home
-                .join("projects")
-                .join(project.as_str())
-                .join("config.json");
-            let source = Source::Project(file.clone());
-            (file, source)
-        }
-        Layer::Repository => {
-            let file = workspace.join(".fiber/config.json");
-            let source = Source::Repository(file.clone());
-            (file, source)
-        }
+    let source = layer.source(home, workspace, project);
+    let (Source::Global(file) | Source::Repository(file) | Source::Project(file)) = &source
+    else {
+        unreachable!("a layer's source always names a file")
     };
+    let file = file.clone();
     if matches!(layer, Layer::Repository) {
         // Someone else's text: a link, or anything but a directory and a
         // regular file, is refused before the lock is taken, as
@@ -318,15 +319,17 @@ fn layer_file(
 fn refused_why(segments: &[String], source: &Source) -> &'static str {
     match keys::leaf(segments) {
         None => "this Fiber does not know it",
-        Some(found) if !found.repo && matches!(source, Source::Repository(_)) => {
+        Some(found) if !found.scope.repo() && matches!(source, Source::Repository(_)) => {
             "a repository may not set it"
         }
         Some(found) => match found.scope {
-            keys::Scope::GlobalOnly => "only Fiber home's `config.json` may set it",
-            keys::Scope::PersonFiles => {
+            keys::WriteScope::GlobalOnly => "only Fiber home's `config.json` may set it",
+            keys::WriteScope::PersonFiles => {
                 "only Fiber home's `config.json` or the project's `config.json` in Fiber home may set it"
             }
-            keys::Scope::Any | keys::Scope::RepoOnly => "only a repository's own file may set it",
+            keys::WriteScope::Any { .. } | keys::WriteScope::RepoOnly => {
+                "only a repository's own file may set it"
+            }
         },
     }
 }

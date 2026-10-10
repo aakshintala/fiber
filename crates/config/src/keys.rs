@@ -118,29 +118,41 @@ impl Kind {
 
 /// Which layers may set a key ("What a repository may set"). One value,
 /// so a key can never be both repository-only and global-only.
-#[derive(Clone, Copy)]
-pub(crate) enum Scope {
-    /// Any layer may set it.
-    Any,
-    /// Only a repository's own file may set it: any other layer's value is
-    /// ignored with a notice.
-    RepoOnly,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteScope {
+    /// Any layer may set it, and a repository's own file when `repo`.
+    Any {
+        /// Whether a repository may set it.
+        repo: bool,
+    },
     /// Only Fiber home's `config.json` may set it: any other layer's value
     /// is ignored with a notice.
     GlobalOnly,
+    /// Only a repository's own file may set it: any other layer's value is
+    /// ignored with a notice.
+    RepoOnly,
     /// Only the person's own files in Fiber home may set it: the global
     /// `config.json` or the project's `config.json` in Fiber home. Any
     /// other layer's value is ignored with a notice.
     PersonFiles,
 }
 
+impl WriteScope {
+    /// Whether a repository's own file may set a key of this scope.
+    pub(crate) fn repo(self) -> bool {
+        match self {
+            Self::Any { repo } => repo,
+            Self::RepoOnly => true,
+            Self::GlobalOnly | Self::PersonFiles => false,
+        }
+    }
+}
+
 /// One row of "Keys". `*` in a path stands for one name, such as a role's.
 pub(crate) struct Key {
     path: &'static str,
     pub(crate) kind: Kind,
-    /// Whether a repository may set it ("What a repository may set").
-    pub(crate) repo: bool,
-    pub(crate) scope: Scope,
+    pub(crate) scope: WriteScope,
     /// The built-in default, as JSON text.
     pub(crate) default: Option<&'static str>,
 }
@@ -149,8 +161,7 @@ const fn key(path: &'static str, kind: Kind, repo: bool, default: Option<&'stati
     Key {
         path,
         kind,
-        repo,
-        scope: Scope::Any,
+        scope: WriteScope::Any { repo },
         default,
     }
 }
@@ -160,8 +171,7 @@ const fn repo_only(path: &'static str, kind: Kind) -> Key {
     Key {
         path,
         kind,
-        repo: true,
-        scope: Scope::RepoOnly,
+        scope: WriteScope::RepoOnly,
         default: None,
     }
 }
@@ -171,8 +181,7 @@ const fn global_only(path: &'static str, kind: Kind, default: Option<&'static st
     Key {
         path,
         kind,
-        repo: false,
-        scope: Scope::GlobalOnly,
+        scope: WriteScope::GlobalOnly,
         default,
     }
 }
@@ -183,8 +192,7 @@ const fn person_files(path: &'static str, kind: Kind) -> Key {
     Key {
         path,
         kind,
-        repo: false,
-        scope: Scope::PersonFiles,
+        scope: WriteScope::PersonFiles,
         default: None,
     }
 }
@@ -363,17 +371,17 @@ fn walk(
     for (name, value) in map {
         path.push(name.clone());
         if let Some(key) = leaf(path) {
-            if matches!(source, Source::Repository(_)) && !key.repo {
+            if matches!(source, Source::Repository(_)) && !key.scope.repo() {
                 notices.push(ignored(path, "a repository may not set"));
             } else {
                 match key.scope {
-                    Scope::RepoOnly if !matches!(source, Source::Repository(_)) => {
+                    WriteScope::RepoOnly if !matches!(source, Source::Repository(_)) => {
                         notices.push(ignored(path, "only a repository's own file may set"));
                     }
-                    Scope::GlobalOnly if !matches!(source, Source::Global(_)) => {
+                    WriteScope::GlobalOnly if !matches!(source, Source::Global(_)) => {
                         notices.push(ignored(path, "only Fiber home's `config.json` may set"));
                     }
-                    Scope::PersonFiles
+                    WriteScope::PersonFiles
                         if !matches!(source, Source::Global(_) | Source::Project(_)) =>
                     {
                         notices.push(ignored(
@@ -382,7 +390,10 @@ fn walk(
                              in Fiber home may set",
                         ));
                     }
-                    Scope::Any | Scope::RepoOnly | Scope::GlobalOnly | Scope::PersonFiles => {
+                    WriteScope::Any { .. }
+                    | WriteScope::RepoOnly
+                    | WriteScope::GlobalOnly
+                    | WriteScope::PersonFiles => {
                         if key.kind.accepts(&value) {
                             kept.insert(name, value);
                         } else {

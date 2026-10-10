@@ -6,26 +6,10 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::keys::{self, Scope};
+use crate::keys::{self, WriteScope};
 use crate::path::{display, get};
 use crate::secret::CredentialSource;
 use crate::{Config, Layer, Source};
-
-/// Which files a key may be written to ("What a repository may set").
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WriteScope {
-    /// The global and the project's file, and the repository's when `repo`.
-    Any {
-        /// Whether a repository may set it.
-        repo: bool,
-    },
-    /// Only Fiber home's `config.json`.
-    GlobalOnly,
-    /// Only a repository's own file.
-    RepoOnly,
-    /// Only the person's own files: the global and the project's file.
-    PersonFiles,
-}
 
 /// A key's effective value as `/settings` shows it.
 #[derive(Debug, Clone, PartialEq)]
@@ -75,14 +59,8 @@ impl Config {
             .into_iter()
             .filter_map(|(key, segments)| {
                 let row = keys::leaf(&segments)?;
-                let scope = match row.scope {
-                    Scope::Any => WriteScope::Any { repo: row.repo },
-                    Scope::GlobalOnly => WriteScope::GlobalOnly,
-                    Scope::RepoOnly => WriteScope::RepoOnly,
-                    Scope::PersonFiles => WriteScope::PersonFiles,
-                };
                 let value = self.setting(&key, &segments);
-                Some(SettingInfo { key, value, scope })
+                Some(SettingInfo { key, value, scope: row.scope })
             })
             .collect()
     }
@@ -93,14 +71,7 @@ impl Config {
         let segments = crate::path::parse(key)?;
         self.layers
             .iter()
-            .find(|(source, _)| {
-                matches!(
-                    (source, layer),
-                    (Source::Global(_), Layer::Global)
-                        | (Source::Project(_), Layer::Project)
-                        | (Source::Repository(_), Layer::Repository)
-                )
-            })
+            .find(|(source, _)| source.layer() == Some(layer))
             .and_then(|(_, value)| get(value, &segments).cloned())
     }
 

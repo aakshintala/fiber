@@ -50,13 +50,13 @@ pub use secret::{
     CredentialSource, credential_labels, delete_credential, delete_credential_held,
     read_credential, read_secret, store_credential, store_secret,
 };
-pub use settings::{SettingInfo, SettingValue, WriteScope};
+pub use settings::{SettingInfo, SettingValue};
 pub use write::{
     Layer, ListChange, ListEdit, Scope, edit_list, get_global, remove_extension_settings,
     replace_global, set, set_global_if_unset, update_global_entries, write_atomic,
 };
 
-pub use keys::{diagnostics_debug, parse_duration, refresh_after};
+pub use keys::{WriteScope, diagnostics_debug, parse_duration, refresh_after};
 
 use home::{parse, plain, read, read_bytes};
 
@@ -85,6 +85,19 @@ pub enum Source {
     Project(PathBuf),
     /// `-c key=value` on the command line.
     Run,
+}
+
+impl Source {
+    /// The write layer this source's file is, if any: the built-in
+    /// defaults and `-c` flags name no file.
+    pub fn layer(&self) -> Option<Layer> {
+        match self {
+            Self::Global(_) => Some(Layer::Global),
+            Self::Project(_) => Some(Layer::Project),
+            Self::Repository(_) => Some(Layer::Repository),
+            Self::Default | Self::Run => None,
+        }
+    }
 }
 
 impl fmt::Display for Source {
