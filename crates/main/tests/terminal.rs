@@ -1649,3 +1649,69 @@ fn journey_prompt_answer_approval_resize_quit() {
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
+
+#[test]
+fn journey_quit_resume_answer_again() {
+    let setup = Setup::new();
+    // Two responses, each held until the test sees its request and lets
+    // it go: the first session's answer, then the resumed session's.
+    let server = ProviderServer::start([reply("First."), reply("Second.")]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    // One turn, then quit: the conversation grid holds the answer before
+    // the terminal is restored.
+    let mut run = Run::terminal(&setup);
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.write(b"first\r");
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the first request to reach the server"
+    );
+    server.release_one();
+    run.wait_screen("the answer", |grid| {
+        grid.alternate_screen && grid.contents.contains("First.")
+    });
+    // `/close` stops the session on screen: quitting with it live would
+    // leave it running with no terminal, and no list to resume from.
+    let id = setup.only_session();
+    run.write(b"/close\r");
+    until_socket(
+        setup.deadline,
+        &setup.home().join("run").join(&id),
+        false,
+        "the closed session to exit",
+    );
+    // Nothing live remains, so no resume line follows: the restored
+    // primary screen is the assertion.
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    // Resume lists the exited session by its first prompt; Enter opens
+    // the row, with the earlier turn on screen.
+    let mut run = Run::terminal_args(&setup, &["resume"]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the session list", |grid| grid.contents.contains("first"));
+    run.write(b"\r");
+    run.wait_screen("the earlier turn", |grid| {
+        grid.alternate_screen && grid.contents.contains("First.")
+    });
+    // A new prompt on the resumed session is answered.
+    run.write(b"second\r");
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "the second request to reach the server"
+    );
+    server.release_one();
+    run.wait_screen("the new answer", |grid| {
+        grid.alternate_screen && grid.contents.contains("Second.")
+    });
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
