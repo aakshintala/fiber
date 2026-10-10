@@ -963,3 +963,57 @@ fn right_then_esc_then_down_returns_to_the_moved_chip() {
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
 }
+
+#[test]
+fn up_from_a_chip_reached_by_shift_tab_remembers_that_chip() {
+    let mut app = home_with(Some("acme/m1"));
+    drawn(&mut app);
+    // Shift+Tab lands on the last chip without going through the chip
+    // row's arrows, so only ↑ remembers it.
+    assert_eq!(app.on_key(Key::BackTab, now()), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
+}
+
+#[test]
+fn an_open_file_panel_keeps_up_from_a_focused_chip() {
+    let mut app = home_with(Some("acme/m1"));
+    // Ctrl+P takes the recall binding, so ↑ in the box is unbound.
+    keyed(&mut app, &[("recall_prompt", serde_json::json!("ctrl+p"))]);
+    // An `@` opens the file panel before its search answers.
+    assert_eq!(app.on_key(Key::Char('@'), now()), Effect::ListFiles);
+    drawn(&mut app);
+    assert_eq!(app.on_key(Key::BackTab, now()), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
+    app.on_files(app.generation(), Ok(vec!["a.rs".to_owned(), "b.rs".to_owned()]));
+    assert!(app.completions().is_some());
+    drawn(&mut app);
+    // The panel is open, so ↑ belongs to the input box and the chip keeps
+    // its focus.
+    assert_eq!(press(&mut app, "up"), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
+}
+
+#[test]
+fn a_session_attached_before_a_frame_keeps_the_arrows_for_the_conversation() {
+    let mut app = home_with(Some("acme/m1"));
+    app.on_line(hello());
+    type_text(&mut app, "hi");
+    drawn(&mut app);
+    let Effect::Send(lines) = app.on_key(Key::Enter, now()) else {
+        panic!("Enter sends the start");
+    };
+    assert_eq!(app.on_key(Key::BackTab, now()), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
+    let start: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
+    let result = serde_json::json!({"session_id": "s_aaaaaaaaaaaaaaaa"});
+    app.on_line(accepted(start["id"].as_str().unwrap(), result));
+    // No frame has drawn the session yet, so the chip focus is still
+    // there: ↑ goes to the conversation's previous stop, not the chip row.
+    assert!(!app.on_home());
+    assert_eq!(press(&mut app, "up"), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Model)));
+}
