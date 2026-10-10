@@ -366,6 +366,181 @@ fn no_color_sends_no_colour_and_blank_edges_keep_their_rows() {
     }
 }
 
+/// Truecolour env for the layout runs.
+const TRUECOLOUR: [(&str, &str); 3] = [
+    ("TERM", "xterm-256color"),
+    ("COLORTERM", "truecolor"),
+    ("TERM_PROGRAM", "ghostty"),
+];
+
+const PANEL_RGB: Colour = Colour::Rgb(12, 12, 17);
+const RULE_RGB: Colour = Colour::Rgb(58, 58, 74);
+
+/// The first row holding `Hel` on screen.
+fn hel_row(screen: &Screen) -> u16 {
+    for y in 0..48 {
+        for x in 0..157 {
+            let word: String = (0..3).map(|dx| screen.cell(x + dx, y).symbol.as_str()).collect();
+            if word == "Hel" {
+                return y;
+            }
+        }
+    }
+    panic!("no Hel on the screen");
+}
+
+/// Spawns 160x48 with the scripted provider, runs one turn to `finished`
+/// and returns the run.
+fn started_run() -> (Setup, Run) {
+    let setup = Setup::new();
+    support::write_json(
+        &setup.workspace().join("s.json"),
+        &serde_json::json!({"steps": [{"text": ["Hel", "lo."]}]}),
+    );
+    support::write_json(
+        &setup.home().join("config.json"),
+        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+    );
+    let mut run = Run::spawn(&setup, 160, 48, &TRUECOLOUR);
+    run.read_until(">");
+    run.write(b"say hi\r");
+    run.read_until("Hel");
+    run.read_until("completed");
+    run.read_until("finished");
+    (setup, run)
+}
+
+fn quit(mut run: Run) {
+    run.write(b"\x03\x03\r");
+    run.read_until("\x1b[?25h");
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+#[test]
+fn one_session_has_no_header_row_and_a_blank_column_each_side() {
+    let (_setup, mut run) = started_run();
+    let screen = run.screen_until(160, 48, "the conversation", |s| {
+        s.cell(126, 0).bg == PANEL_RGB
+            && (0..48).any(|y| {
+                (0..157).any(|x| {
+                    (0..3).map(|dx| s.cell(x + dx, y).symbol.as_str()).collect::<String>()
+                        == "Hel"
+                })
+            })
+    });
+    for x in 0..126 {
+        assert_eq!(screen.cell(x, 0).symbol.as_str(), " ", "row 0 col {x}");
+    }
+    let y = hel_row(&screen);
+    let tint = screen.cell(1, y).bg;
+    assert_ne!(tint, Colour::Default, "the reply's tint");
+    assert_eq!(screen.cell(0, y).bg, Colour::Default);
+    assert_eq!(screen.cell(1, y).bg, tint);
+    assert_eq!(screen.cell(124, y).bg, tint);
+    assert_eq!(screen.cell(125, y).bg, Colour::Default);
+    for y in 0..48 {
+        for x in 126..160 {
+            assert_ne!(screen.cell(x, y).bg, Colour::Default, "panel cell ({x}, {y})");
+        }
+    }
+    for y in 0..48 {
+        assert_eq!(screen.cell(126, y).bg, PANEL_RGB, "panel edge row {y}");
+    }
+    for x in 126..160 {
+        assert_eq!(screen.cell(x, 0).bg, PANEL_RGB, "panel top col {x}");
+    }
+    for y in 23..=25 {
+        let grip = screen.cell(126, y);
+        assert_eq!(grip.symbol.as_str(), "⋮", "grip row {y}");
+        assert!(grip.dim, "grip row {y} dim");
+    }
+    quit(run);
+}
+
+#[test]
+fn hovering_the_panel_edge_tints_its_column_and_brightens_the_grip() {
+    let (_setup, mut run) = started_run();
+    run.write(b"\x1b[<35;127;21M");
+    let screen = run.screen_until(160, 48, "the active panel edge", |s| {
+        (0..48).all(|y| s.cell(126, y).bg == RULE_RGB)
+            && (23..=25).all(|y| {
+                let grip = s.cell(126, y);
+                grip.symbol.as_str() == "⋮"
+                    && grip.fg == ACCENT_RGB
+                    && grip.bold
+                    && !grip.dim
+            })
+    });
+    for y in 0..48 {
+        assert_eq!(screen.cell(126, y).bg, RULE_RGB, "edge row {y}");
+    }
+    for y in 23..=25 {
+        let grip = screen.cell(126, y);
+        assert_eq!(grip.symbol.as_str(), "⋮");
+        assert_eq!(grip.fg, ACCENT_RGB);
+        assert!(grip.bold);
+        assert!(!grip.dim);
+    }
+    run.write(b"\x1b[<35;61;21M");
+    let screen = run.screen_until(160, 48, "the idle panel edge", |s| {
+        (0..48).all(|y| s.cell(126, y).bg == PANEL_RGB)
+            && (23..=25).all(|y| {
+                let grip = s.cell(126, y);
+                grip.symbol.as_str() == "⋮" && grip.dim && !grip.bold
+            })
+    });
+    for y in 0..48 {
+        assert_eq!(screen.cell(126, y).bg, PANEL_RGB, "edge row {y}");
+    }
+    for y in 23..=25 {
+        let grip = screen.cell(126, y);
+        assert!(grip.dim);
+        assert!(!grip.bold);
+    }
+    quit(run);
+}
+
+#[test]
+fn two_sessions_show_the_rail_on_panel_and_hiding_it_leaves_the_grip() {
+    let (_setup, mut run) = started_run();
+    run.write(b"\x0e");
+    run.screen_until(160, 48, "home", |s| s.cell(150, 20).bg == Colour::Default);
+    run.write(b"again\r");
+    run.read_until("Hel");
+    run.read_until("finished");
+    let screen = run.screen_until(160, 48, "the rail", |s| {
+        (23..=25).all(|y| s.cell(23, y).symbol.as_str() == "⋮")
+            && s.cell(23, 0).bg == PANEL_RGB
+    });
+    for y in 0..48 {
+        for x in 0..24 {
+            assert_ne!(screen.cell(x, y).bg, Colour::Default, "rail cell ({x}, {y})");
+        }
+    }
+    assert_eq!(screen.cell(23, 0).bg, PANEL_RGB);
+    let y = hel_row(&screen);
+    let tint = screen.cell(25, y).bg;
+    assert_ne!(tint, Colour::Default);
+    assert_eq!(screen.cell(24, y).bg, Colour::Default);
+    assert_eq!(screen.cell(25, y).bg, tint);
+    run.write(b"\x1br");
+    let screen = run.screen_until(160, 48, "the grip", |s| {
+        (23..=25).all(|y| s.cell(0, y).symbol.as_str() == "⋮")
+    });
+    for y in 23..=25 {
+        assert_eq!(screen.cell(0, y).symbol.as_str(), "⋮", "grip row {y}");
+    }
+    let y = hel_row(&screen);
+    let tint = screen.cell(2, y).bg;
+    assert_ne!(tint, Colour::Default);
+    assert_eq!(screen.cell(1, y).bg, Colour::Default);
+    assert_eq!(screen.cell(2, y).bg, tint);
+    assert_eq!(screen.cell(124, y).bg, tint);
+    assert_eq!(screen.cell(125, y).bg, Colour::Default);
+    quit(run);
+}
+
 #[test]
 fn inside_tmux_no_stripe_draws_and_its_cell_keeps_the_tint() {
     let (screen, output) = one_turn(&[

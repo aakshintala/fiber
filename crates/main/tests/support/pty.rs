@@ -315,6 +315,35 @@ impl Run {
         }
     }
 
+    /// Feeds the whole output so far into a fresh `Screen` on each wake
+    /// until `done` holds, under the run's one deadline, panicking with
+    /// `what` and the output on expiry. On success sets `seen` to the
+    /// output's length, so a later `read_until` matches only newer output.
+    pub(crate) fn screen_until(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        what: &str,
+        done: impl Fn(&Screen) -> bool,
+    ) -> Screen {
+        loop {
+            let output = self.output();
+            let mut screen = Screen::new(cols, rows);
+            screen.feed(&output);
+            if done(&screen) {
+                self.seen = output.len();
+                return screen;
+            }
+            let left = self.deadline.left();
+            if left.is_zero() || self.wakes.recv_timeout(left).is_err() {
+                panic!(
+                    "waited until the deadline for {what}; output: {:?}",
+                    String::from_utf8_lossy(&output)
+                );
+            }
+        }
+    }
+
     /// Stops the reader, waits for the child to exit and reaps it, then
     /// for the hub to idle out and remove its socket: a hub whose home is
     /// deleted under it never exits. Dropping `self` kills the hub's
@@ -500,6 +529,7 @@ pub(crate) struct Cell {
     pub(crate) fg: Colour,
     pub(crate) bg: Colour,
     pub(crate) dim: bool,
+    pub(crate) bold: bool,
 }
 
 /// The pen writing cells: the SGR state.
@@ -550,6 +580,7 @@ impl Screen {
             fg: Colour::Default,
             bg: Colour::Default,
             dim: false,
+            bold: false,
         };
         Self {
             cols,
@@ -609,6 +640,7 @@ impl Screen {
                 fg: self.pen.fg,
                 bg: self.pen.bg,
                 dim: self.pen.dim,
+                bold: self.pen.bold,
             };
         }
         self.cursor.0 = self.cursor.0.saturating_add(1);
@@ -677,6 +709,7 @@ impl Screen {
                     fg: self.pen.fg,
                     bg: self.pen.bg,
                     dim: false,
+                    bold: false,
                 };
                 for cell in &mut self.cells {
                     *cell = blank.clone();
