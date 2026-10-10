@@ -661,8 +661,8 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
     // stdin closed, SIGTERM, then SIGKILL 800 ms later. It ignores SIGTERM
     // (`trap '' TERM` is inherited across its exec of `sleep`), so the
     // stop's kill after the grace is the path exercised, and the server is
-    // reaped before fiber exits. The process itself still exits at the
-    // bound on this path (see #830). Its startup deadline is far past the
+    // reaped before fiber exits. The process itself exits without waiting
+    // out the bound on this path. Its startup deadline is far past the
     // 5 s bound. It holds the death FIFO open across the exec, so
     // the read end above sees end-of-file when it dies. Fiber never opens
     // that FIFO (`crates/mcp/src/server.rs` pipes only stdin and stdout):
