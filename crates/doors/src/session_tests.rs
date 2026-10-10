@@ -2880,3 +2880,118 @@ fn close_with_nothing_written_and_the_log_held_returns() {
     let _held = Arc::clone(&opened.log);
     close_within(opened.session, opened.log);
 }
+
+#[test]
+fn close_prints_durable_lines_dropped_before_stop() {
+    // The `STOP` `close` pushes is kept ahead of the catch-up, so ending on
+    // it would truncate stdout before the durable lines the queue dropped
+    // are recovered, including `fiber_exited` (#830).
+    reset();
+    // Every write waits for the test's release, so `close`'s `STOP` is
+    // queued while the printer still holds undrained lines: without the
+    // drain it ends on `STOP` before the catch-up, with it every line
+    // below still prints.
+    struct GatedOut {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+    impl Write for GatedOut {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            if let Ok(()) = self.entered.send(()) {}
+            // Held until the test releases this write; the waits below
+            // name a hang through their deadlines instead of blocking
+            // forever.
+            if self.release.recv().is_err() {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "the test went away",
+                ));
+            }
+            lock(&self.buf).extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let temp = fakes::TempDir::new("fd");
+    let home = temp.path().join("h");
+    let sessions = home.join("projects/p/sessions");
+    let id = contract::SessionId(crate::mint("s_"));
+    let dir = sessions.join(&id.0);
+    let clock = FakeClock::new();
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Arc::new(Log::create(&sessions, id, Arc::clone(&timed)).unwrap());
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let out = GatedOut {
+        entered: entered_tx,
+        release: release_rx,
+        buf: Arc::clone(&buf),
+    };
+    let timed: Arc<dyn Clock> = clock;
+    let session = Session::open(&home, &dir, &log, timed, Vec::new(), Box::new(out)).unwrap();
+    // Prompted, so `close` keeps the session directory: the drain's
+    // catch-up re-reads the dropped lines from `events.jsonl`.
+    keep_dir(&log);
+    // One more durable line than the watcher's queue holds, so some are
+    // dropped while the printer is held on its first write.
+    const LINES: usize = 1_202;
+    Deadline::after(DEADLINE)
+        .recv(&entered_rx)
+        .expect("the printer blocks in its first write");
+    for _ in 1..LINES - 1 {
+        log.append(&step(), None, None).unwrap();
+    }
+    log.append(&exited(), None, None).unwrap();
+    let (done_tx, done_rx) = mpsc::channel();
+    let closing = Arc::clone(&log);
+    thread::spawn(move || {
+        session.close(closing);
+        if let Ok(()) = done_tx.send(()) {}
+    });
+    drop(log);
+    // Releases each write in turn until every line is through or the
+    // printer went away early; without the drain it ends on `STOP` with
+    // most lines still undelivered.
+    let mut released = 0;
+    if release_tx.send(()).is_err() {
+        panic!("the printer is still held on its first write");
+    }
+    released += 1;
+    while released < LINES {
+        if done_rx.try_recv().is_ok() {
+            break;
+        }
+        match Deadline::after(DEADLINE).recv(&entered_rx) {
+            Ok(()) => {
+                if release_tx.send(()).is_err() {
+                    break;
+                }
+                released += 1;
+            }
+            Err(_) => break,
+        }
+    }
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("close returns after the writer is released");
+    let text = String::from_utf8(lock(&buf).clone()).expect("stdout is UTF-8");
+    let lines = lines_of(&text);
+    let seqs: Vec<u64> = lines
+        .iter()
+        .filter_map(|line| line["seq"].as_u64())
+        .collect();
+    let expected: Vec<u64> = (0..LINES as u64).collect();
+    assert_eq!(
+        seqs, expected,
+        "stdout holds every durable line in order, including fiber_exited"
+    );
+    assert_eq!(
+        lines.last().expect("stdout holds fiber_exited")["kind"],
+        "fiber_exited"
+    );
+}

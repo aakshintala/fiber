@@ -697,14 +697,37 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
     while let Ok(Some(line)) = watcher.recv() {
         if line.kind == client::STOP {
+            drain(&mut watcher, out.as_mut());
             return;
         }
-        // A reader that went away, or a line that cannot be written, stops
-        // the copy, never the session.
-        if client::write_line(out.as_mut(), &line).is_err() {
+        if write_until_stop(out.as_mut(), &line) {
             return;
         }
-        if line.kind == "fiber_exited" || line.kind == "rewound" {
+    }
+}
+
+/// Writes `line`, reporting whether printing stops after it: a failed
+/// write, `fiber_exited` or `rewound` (`docs/invocation.md`, "What a
+/// caller gets back"). A reader that went away, or a line that cannot be
+/// written, stops the copy, never the session.
+fn write_until_stop(out: &mut dyn Write, line: &contract::Envelope) -> bool {
+    if client::write_line(out, line).is_err() {
+        return true;
+    }
+    line.kind == "fiber_exited" || line.kind == "rewound"
+}
+
+/// Prints what `print` has not yet reached once its `STOP` arrived: the
+/// durable lines the queue dropped, re-read from the log without waiting,
+/// until none is available or the copy stops as `print` stops it. The
+/// `STOP` is kept ahead of the catch-up, so returning on it would end
+/// printing before those lines are recovered, including `fiber_exited`.
+fn drain(watcher: &mut Watcher, out: &mut dyn Write) {
+    while let Ok(Some(line)) = watcher.try_recv() {
+        if line.kind == client::STOP {
+            continue;
+        }
+        if write_until_stop(out, &line) {
             return;
         }
     }
