@@ -312,6 +312,23 @@ pub struct Usage {
     pub subscription_cost: f64,
 }
 
+impl Default for Usage {
+    /// No model call is known, so no tokens and no cost: zero counts and
+    /// a known `0` cost, never `null`, which would mean an unknown one.
+    fn default() -> Self {
+        Self {
+            tokens: Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: BTreeMap::new(),
+                output: 0,
+            },
+            cost: Some(0.0),
+            subscription_cost: 0.0,
+        }
+    }
+}
+
 /// One `ask_user` question as the model called it (`docs/tools.md`, "The
 /// call"). Its keys are the tool's argument names.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -421,4 +438,22 @@ where
     T: Deserialize<'de>,
 {
     Option::deserialize(deserializer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_usage_is_zero_counts_with_a_known_zero_cost() {
+        // Field by field: a derived `Default` would leave `cost` as
+        // `None`, an unknown cost, instead of a known `0`.
+        let usage = Usage::default();
+        assert_eq!(usage.tokens.input, 0);
+        assert_eq!(usage.tokens.cache_read, 0);
+        assert_eq!(usage.tokens.cache_write, BTreeMap::new());
+        assert_eq!(usage.tokens.output, 0);
+        assert_eq!(usage.cost, Some(0.0));
+        assert_eq!(usage.subscription_cost, 0.0);
+    }
 }

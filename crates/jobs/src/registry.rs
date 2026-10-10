@@ -24,6 +24,8 @@ mod park;
 
 use park::{Parked, Parker};
 
+use crate::delegate::outcome::empty;
+
 /// A job's end not yet reported, held by the closure in its [`End`] or
 /// [`Finish`]. Reporting consumes it; dropped unreported, it records the
 /// job failed `indeterminate`, since a runner that returned without
@@ -56,7 +58,7 @@ impl Unreported {
 impl Drop for Unreported {
     fn drop(&mut self) {
         if let Some(registry) = self.registry.take() {
-            let delegate = self.delegate.then(|| empty_finished(&self.job_id));
+            let delegate = self.delegate.then(|| empty(&self.job_id));
             registry.finish(
                 JobCompleted {
                     job_id: self.job_id.clone(),
@@ -87,27 +89,6 @@ impl Finish {
     /// recorded one, as [`Unreported::report`] does.
     pub(crate) fn report(self, completed: JobCompleted, delegate: Option<DelegateFinished>) {
         self.0.report(completed, delegate);
-    }
-}
-
-/// A delegate that ended without reporting one: empty text, zero usage.
-fn empty_finished(job_id: &JobId) -> DelegateFinished {
-    DelegateFinished {
-        job_id: job_id.clone(),
-        text: String::new(),
-        artifact: None,
-        questions: None,
-        usage: contract::shapes::Usage {
-            tokens: contract::shapes::Tokens {
-                input: 0,
-                cache_read: 0,
-                cache_write: std::collections::BTreeMap::new(),
-                output: 0,
-            },
-            cost: Some(0.0),
-            subscription_cost: 0.0,
-        },
-        worktree: None,
     }
 }
 

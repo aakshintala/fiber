@@ -3,12 +3,11 @@
 //! or the drain kept, and the exit status, checked in that order
 //! (`docs/delegates.md`, "Lifetime").
 
-use std::collections::BTreeMap;
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
 
 use contract::events::{DelegateFinished, FiberExited, JobCompleted, Outcome};
-use contract::shapes::{Failure, Process, Tokens, Usage};
+use contract::shapes::{Failure, Process, Usage};
 use contract::{ErrorCode, JobId};
 
 /// Why the runner itself ended the delegate. Set once, under the runner's
@@ -37,18 +36,20 @@ pub(crate) fn outcome(
     // stdout line only when it did not.
     let exited = socket.or(stdout);
     let process = process_of(status);
-    let finished = DelegateFinished {
-        job_id: job_id.clone(),
-        text: exited
-            .and_then(|exited| exited.final_message.as_ref())
-            .map(|message| message.text.clone())
-            .unwrap_or_default(),
-        artifact: None,
-        questions: exited.and_then(|exited| exited.questions.clone()),
-        usage: exited
-            .map(|exited| exited.usage.clone())
-            .unwrap_or_else(zero_usage),
-        worktree: None,
+    let finished = match exited {
+        Some(exited) => DelegateFinished {
+            job_id: job_id.clone(),
+            text: exited
+                .final_message
+                .as_ref()
+                .map(|message| message.text.clone())
+                .unwrap_or_default(),
+            artifact: None,
+            questions: exited.questions.clone(),
+            usage: exited.usage.clone(),
+            worktree: None,
+        },
+        None => empty(job_id),
     };
     let completed = match termination {
         Some(Termination::Stopped) => JobCompleted {
@@ -150,17 +151,17 @@ fn process_of(status: ExitStatus) -> Process {
     }
 }
 
-/// No `fiber_exited` was seen, so no model call is known: zero.
-fn zero_usage() -> Usage {
-    Usage {
-        tokens: Tokens {
-            input: 0,
-            cache_read: 0,
-            cache_write: BTreeMap::new(),
-            output: 0,
-        },
-        cost: Some(0.0),
-        subscription_cost: 0.0,
+/// A delegate that ended without reporting one: empty text, zero usage.
+/// Both the outcome fold's no-line case and the registry's dropped report
+/// build it from here, so the two never drift apart.
+pub(crate) fn empty(job_id: &JobId) -> DelegateFinished {
+    DelegateFinished {
+        job_id: job_id.clone(),
+        text: String::new(),
+        artifact: None,
+        questions: None,
+        usage: Usage::default(),
+        worktree: None,
     }
 }
 

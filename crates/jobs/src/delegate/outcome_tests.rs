@@ -216,7 +216,7 @@ fn the_finish_carries_questions_and_usage() {
 }
 
 #[test]
-fn no_line_means_empty_text_and_zero_usage() {
+fn no_line_means_empty_text_and_default_usage() {
     let (_, finished) = outcome(None, None, None, exit(0), &job_id());
     assert_eq!(finished.text, "");
     assert_eq!(finished.job_id, job_id());
