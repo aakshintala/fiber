@@ -1,29 +1,21 @@
 ---
 source: crates/tui/src/model_picker_view_tests.rs
-assertion_line: 171
+assertion_line: 176
 expression: "screen(&app, 80, 24)"
 ---
 Models                                                                         ✕
-Type to search █
-↻ refresh  scoped_models: 2 of 4 · Tab shows all
-acme
-m1 · deep, review   low [high]
-zeta
-z2 · chat   low [high]
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
+  Type to search █
+  scoped · 2 of 4 [show all]                                     ⟳ refresh all
+  acme
+  m1 [deep] [review]
+      thinking low [high]
 
+  zeta
+  z2 [chat]
+      thinking low [high]
 
+  ↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refre
 
-
-
-
-
-
-
-
-
-
-
-
-
-↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refresh ·
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
