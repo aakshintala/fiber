@@ -19,14 +19,74 @@
 )]
 
 use std::fmt::Write as _;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
 use contract::clock::{Clock, Wake};
 
-const USAGE: &str =
-    "usage: cargo run --release -p tui --example paging -- [scale] [width] [height]";
+const USAGE: &str = "usage: cargo run --release -p tui --example paging -- [scale] [width] [height]\n\
+    usage: cargo run --release -p tui --example paging -- open <events-file> <width> <height> <frame_every|end>";
+
+/// What the jig runs: its generated session, or one file's log reopened.
+#[derive(Debug, PartialEq, Eq)]
+enum Mode {
+    Paging {
+        scale: usize,
+        width: u16,
+        height: u16,
+    },
+    Open {
+        events: PathBuf,
+        width: u16,
+        height: u16,
+        frame_every: usize,
+    },
+}
+
+/// How many lines each frame folds: a number, or `end` for the single
+/// final frame. The bench prints the single frame's count as its number,
+/// so both spell it.
+fn parse_frame_every(text: &str) -> Result<usize, String> {
+    if text == "end" {
+        return Ok(usize::MAX);
+    }
+    text.parse::<usize>().map_err(|_| USAGE.to_owned())
+}
+
+/// The command line: `open` with its file, size and frame count, or the
+/// positional scale, width and height, each defaulted as the jig ran
+/// before the open mode existed.
+fn parse_args(args: &[String]) -> Result<Mode, String> {
+    if args.first().is_some_and(|first| first == "open") {
+        let (_, rest) = args.split_first().unwrap_or((&String::new(), &[]));
+        let [file, width, height, frame_every] = rest else {
+            return Err(USAGE.to_owned());
+        };
+        let width = width.parse::<u16>().map_err(|_| USAGE.to_owned())?;
+        let height = height.parse::<u16>().map_err(|_| USAGE.to_owned())?;
+        return Ok(Mode::Open {
+            events: PathBuf::from(file),
+            width,
+            height,
+            frame_every: parse_frame_every(frame_every)?,
+        });
+    }
+    let arg = |at: usize, default: &str| args.get(at).map_or(default, String::as_str).to_owned();
+    let (Ok(scale), Ok(width), Ok(height)) = (
+        arg(0, "1").parse::<usize>(),
+        arg(1, "160").parse::<u16>(),
+        arg(2, "48").parse::<u16>(),
+    ) else {
+        return Err(USAGE.to_owned());
+    };
+    Ok(Mode::Paging {
+        scale,
+        width,
+        height,
+    })
+}
 
 /// Turns in the session at scale 1.
 const TURNS: usize = 10;
@@ -42,14 +102,65 @@ const TEXT: [usize; 10] = [120, 193, 150, 90, 193, 250, 100, 300, 180, 900];
 /// fixture's `tool_call_completed` lines are.
 const OUTPUT: [usize; 8] = [400, 1200, 2600, 3000, 9000, 600, 2000, 5200];
 
+/// One JSON line with what reopening the file cost: parsing each line,
+/// folding it, and the frames drawn.
+fn open_report(
+    events: &str,
+    width: u16,
+    height: u16,
+    frame_every: usize,
+) -> Result<String, String> {
+    let stages = tui::measure_open(events, width, height, frame_every, Arc::new(ProcessClock))?;
+    let ms = |took: Duration| took.as_secs_f64() * 1000.0;
+    Ok(serde_json::json!({
+        "parse_ms": ms(stages.parse),
+        "fold_ms": ms(stages.fold),
+        "frames": stages.frames,
+        "frame_ms": ms(stages.frame_time),
+    })
+    .to_string())
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let arg = |at: usize, default: &str| args.get(at).map_or(default, String::as_str).to_owned();
-    let (Ok(scale), Ok(width), Ok(height)) = (
-        arg(0, "1").parse::<usize>(),
-        arg(1, "160").parse::<u16>(),
-        arg(2, "48").parse::<u16>(),
-    ) else {
+    let mode = match parse_args(&args) {
+        Ok(mode) => mode,
+        Err(usage) => {
+            eprintln!("{usage}");
+            return ExitCode::from(2);
+        }
+    };
+    if let Mode::Open {
+        events,
+        width,
+        height,
+        frame_every,
+    } = mode
+    {
+        let events = match std::fs::read_to_string(&events) {
+            Ok(events) => events,
+            Err(error) => {
+                eprintln!("paging: reading {}: {error}", events.display());
+                return ExitCode::FAILURE;
+            }
+        };
+        return match open_report(&events, width, height, frame_every) {
+            Ok(line) => {
+                println!("{line}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("paging: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    let Mode::Paging {
+        scale,
+        width,
+        height,
+    } = mode
+    else {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
@@ -314,4 +425,111 @@ impl Clock for ProcessClock {
     }
 
     fn subscribe(&self, _waker: Weak<dyn Wake>) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Mode, open_report, parse_args, parse_frame_every};
+
+    fn args(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    #[test]
+    fn positional_args_keep_their_defaults() {
+        // No word is scale 1 at 160 by 48, as the jig ran before the
+        // open mode existed.
+        assert_eq!(
+            parse_args(&args(&[])),
+            Ok(Mode::Paging {
+                scale: 1,
+                width: 160,
+                height: 48,
+            })
+        );
+        assert_eq!(
+            parse_args(&args(&["2", "100", "30"])),
+            Ok(Mode::Paging {
+                scale: 2,
+                width: 100,
+                height: 30,
+            })
+        );
+        // A word that is neither a number nor `open` is a usage error,
+        // not the open mode.
+        assert!(parse_args(&args(&["wide"])).is_err());
+        assert_ne!(
+            parse_args(&args(&["2"])),
+            Ok(Mode::Paging {
+                scale: 3,
+                width: 160,
+                height: 48
+            })
+        );
+    }
+
+    #[test]
+    fn open_takes_a_file_a_size_and_a_frame_count() {
+        assert_eq!(
+            parse_args(&args(&["open", "/tmp/e.jsonl", "60", "12", "64"])),
+            Ok(Mode::Open {
+                events: std::path::PathBuf::from("/tmp/e.jsonl"),
+                width: 60,
+                height: 12,
+                frame_every: 64,
+            })
+        );
+        // The single final frame spells its count as its number.
+        assert_eq!(
+            parse_args(&args(&[
+                "open",
+                "/tmp/e.jsonl",
+                "60",
+                "12",
+                "18446744073709551615"
+            ])),
+            Ok(Mode::Open {
+                events: std::path::PathBuf::from("/tmp/e.jsonl"),
+                width: 60,
+                height: 12,
+                frame_every: usize::MAX,
+            })
+        );
+        // A missing word is a usage error, not a defaulted open run.
+        assert!(parse_args(&args(&["open", "/tmp/e.jsonl", "60", "12"])).is_err());
+        assert!(parse_args(&args(&["open", "/tmp/e.jsonl", "60", "x", "64"])).is_err());
+    }
+
+    #[test]
+    fn open_spells_the_single_frame_end() {
+        // `end` draws the single final frame, as the count's number does.
+        assert_eq!(parse_frame_every("end"), Ok(usize::MAX));
+        assert_eq!(
+            parse_args(&args(&["open", "/tmp/e.jsonl", "60", "12", "end"])),
+            Ok(Mode::Open {
+                events: std::path::PathBuf::from("/tmp/e.jsonl"),
+                width: 60,
+                height: 12,
+                frame_every: usize::MAX,
+            })
+        );
+        assert_ne!(parse_frame_every("end"), Ok(64));
+        assert!(parse_frame_every("every").is_err());
+    }
+
+    #[test]
+    fn the_open_report_is_one_json_line() {
+        // An empty log still draws its single frame, so the report holds
+        // four keys on one line.
+        let line = open_report("", 60, 12, usize::MAX).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(line.lines().count(), 1, "{line}");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&line).unwrap_or_else(|error| panic!("{error}"));
+        for key in ["parse_ms", "fold_ms", "frames", "frame_ms"] {
+            assert!(parsed.get(key).is_some(), "{line}");
+        }
+        assert_eq!(parsed.get("frames"), Some(&serde_json::json!(1)));
+        // A line the log cannot hold is an error naming it, not a report.
+        assert!(open_report("not json", 60, 12, usize::MAX).is_err());
+    }
 }
