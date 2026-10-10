@@ -211,7 +211,8 @@ impl App {
     /// the focused conversation, a completion panel, a steering
     /// selection, else the input box. The notice overlay is no context:
     /// it takes only Esc, which is `close_or_interrupt`'s key everywhere.
-    fn key_context(&self) -> Context {
+    /// Home's arrows read it through `home_owns_arrows`.
+    pub(super) fn key_context(&self) -> Context {
         if self.quit_open()
             || self.config_view_open()
             || self.session_view_open()

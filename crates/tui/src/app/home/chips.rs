@@ -7,6 +7,7 @@ use super::super::{App, Effect};
 use crate::focus::{Area, order};
 use crate::home::Spot;
 use crate::keys::{Edit, Key};
+use crate::keyset::Context;
 use crate::mouse::TargetId;
 
 impl App {
@@ -24,24 +25,15 @@ impl App {
     /// Whether home owns plain arrows: on home with nothing open, and
     /// focus on a chip or a list stop. There they dispatch as home's own
     /// keys, ahead of the bindings (`docs/tui.md`, "Keys", "Bindings").
+    /// Nothing open is the input context's word for it: the key context
+    /// is Input or Conversation, with the completion panel and a
+    /// steering selection still keeping the arrows, since a focused chip
+    /// reads as the input box ahead of both.
     pub(in crate::app) fn home_owns_arrows(&self) -> bool {
-        if !self.on_home()
-            || self.quit_open()
-            || self.home_modal()
-            || self.model_picker_open()
-            || self.config_view_open()
-            || self.session_view_open()
-        {
+        if !self.on_home() || self.completions().is_some() || self.steering.is_selected() {
             return false;
         }
-        if self.keymap_top().is_some()
-            || self.panel().is_some()
-            || self.offer_open()
-            || self.search_panel().is_some()
-            || self.find_open()
-            || self.completions().is_some()
-            || self.steering.is_selected()
-        {
+        if !matches!(self.key_context(), Context::Input | Context::Conversation) {
             return false;
         }
         matches!(
