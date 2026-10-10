@@ -24,8 +24,8 @@ use std::thread;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
-use support::Deadline;
 use support::pty::{KITTY_PUSH, TITLE, WAITING_TITLE};
+use support::{Deadline, hello, write_json};
 
 /// Installs a provider `fake` with model `m` on `openai-responses` at the
 /// fake server, makes `fake/m` the configured model, and idles the hub
@@ -63,7 +63,7 @@ fn provider_full(
     panel_width: Option<f64>,
 ) {
     let source = setup.root.path().join("src");
-    write(
+    write_json(
         &source.join("extension.json"),
         &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
     );
@@ -72,7 +72,7 @@ fn provider_full(
     for (key, value) in model_extra.as_object().unwrap() {
         model[key] = value.clone();
     }
-    write(
+    write_json(
         &source.join("providers/fake.json"),
         &json!({
             "name": "fake",
@@ -94,7 +94,7 @@ fn provider_full(
     if let Some(width) = panel_width {
         config["tui"] = json!({"panel": {"width": width}});
     }
-    write(&setup.home().join("config.json"), &config);
+    write_json(&setup.home().join("config.json"), &config);
 }
 
 /// The project's sessions directory, through the canonical workspace,
@@ -196,46 +196,17 @@ fn until_socket(deadline: Deadline, socket: &Path, present: bool, what: &str) {
     );
 }
 
-/// "Hello." in two deltas.
-fn hello() -> Response {
-    let events = [
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-        json!({"type": "response.completed", "response": {
-            "id": "resp_1", "status": "completed",
-            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-        }}),
-    ];
-    let body: String = events
-        .iter()
-        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
-        .collect();
-    Response::stream(body)
-}
-
 /// A reply saying `text` in two deltas.
 fn reply(text: &str) -> Response {
     let at = text.len() / 2;
     let (first, rest) = text.split_at(at);
-    let events = [
+    support::stream(&[
         json!({"type": "response.output_text.delta", "delta": first}),
         json!({"type": "response.output_text.delta", "delta": rest}),
         json!({"type": "response.output_item.done", "item": {
             "type": "message", "content": [{"type": "output_text", "text": text}]
         }}),
-        json!({"type": "response.completed", "response": {
-            "id": "resp_1", "status": "completed",
-            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-        }}),
-    ];
-    let body: String = events
-        .iter()
-        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
-        .collect();
-    Response::stream(body)
+    ])
 }
 
 /// A reply that stalls mid-body: the turn stays running until cancelled.
@@ -421,11 +392,11 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
     // The built-in `scripted` provider answers from a script in the
     // workspace, named as an ordinary model (`docs/model-routing.md`,
     // "The scripted provider"): one step carries both tool calls.
-    write(
+    write_json(
         &setup.workspace().join("s.json"),
         &ask_then_echo_hi_script(),
     );
-    write(
+    write_json(
         &setup.home().join("config.json"),
         &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
     );
@@ -562,7 +533,7 @@ fn a_repository_offer_swaps_in_and_approve_lets_the_turn_run() {
     let server = ProviderServer::start([hello()]).unwrap();
     provider(&setup, &server);
     // The workspace's repository declares one MCP server nobody approved.
-    write(
+    write_json(
         &setup.workspace().join(".fiber/config.json"),
         &json!({"mcp": {"servers": {"db": {"command": "/bin/echo"}}}}),
     );
@@ -769,11 +740,6 @@ fn assert_names_ask(deadline: Deadline, stdin: Stdio, missing: &str, args: &[&st
         String::from_utf8(output.stderr).unwrap(),
         "fiber: The terminal needs a tty; run `fiber ask \"<prompt>\"`. Run `fiber --help` for usage.\n"
     );
-}
-
-fn write(file: &Path, value: &Value) {
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(file, value.to_string()).unwrap();
 }
 
 /// A 1x1 PNG, 69 bytes: within every cap, as `session_command.rs` holds
