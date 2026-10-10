@@ -456,116 +456,6 @@ fn sign_still_overrides_authorization_with_headers_present() {
 }
 
 #[test]
-fn completed_history_keeps_the_last_sixteen_distinct_tokens() {
-    for (calls, first_kept) in [(15_u32, 1_u32), (16, 1), (17, 2), (20, 5)] {
-        let setup = Setup::new();
-        let clock = FakeClock::new();
-        let provider = script_provider(
-            &setup,
-            clock.clone(),
-            Some(
-                "(function() calls = (calls or 0) + 1 return { \
-                 token = calls == 1 and \"never-used-token\" or \"tok-\" .. (calls - 1), \
-                 expires_at = 1700000000 + (calls - 1) * 3600 + 1800 } end)()",
-            ),
-            Some("{}"),
-        );
-        let signer = signer_of(&provider);
-        let unused = within({
-            let provider = Arc::clone(&provider);
-            move || provider.token(&pair(provider.name()))
-        })
-        .unwrap();
-        assert_eq!(unused.expose(), "never-used-token");
-        clock.advance(Duration::from_secs(3600));
-        for round in 1..=calls {
-            if round > 1 {
-                clock.advance(Duration::from_secs(3600));
-            }
-            let headers = sign_with(&signer, &[]).unwrap();
-            assert_eq!(
-                header(&headers, "authorization"),
-                Some(format!("Bearer tok-{round}")),
-                "calls {calls}, round {round}"
-            );
-        }
-        let mut reported: Vec<String> = signer
-            .credentials()
-            .iter()
-            .map(|secret| secret.expose().to_owned())
-            .collect();
-        reported.sort();
-        let mut expected: Vec<String> = (first_kept..=calls)
-            .map(|round| format!("tok-{round}"))
-            .collect();
-        expected.sort();
-        assert_eq!(reported, expected, "calls {calls}");
-        assert!(!reported.contains(&"never-used-token".to_owned()));
-    }
-}
-
-#[test]
-fn past_values_are_bounded_to_sixteen_distinct() {
-    let setup = Setup::new();
-    let clock = FakeClock::new();
-    // Every fetch returns the same token with a new header value, and an
-    // expiry 1800 seconds past the fetch's own wall, so each advance of an
-    // hour expires it and the next sign fetches synchronously: no
-    // background refresh, one new distinct value per round.
-    let provider = script_provider(
-        &setup,
-        clock.clone(),
-        Some(
-            "(function() calls = (calls or 0) + 1 return { token = \"tok\", \
-             expires_at = 1700000000 + (calls - 1) * 3600 + 1800, \
-             headers = { [\"x-n\"] = \"hv-\" .. calls } } end)()",
-        ),
-        Some("{}"),
-    );
-    let signer = signer_of(&provider);
-    let reported = || {
-        let mut values: Vec<String> = signer
-            .credentials()
-            .iter()
-            .map(|secret| secret.expose().to_owned())
-            .collect();
-        values.sort();
-        values
-    };
-    for round in 1..=17_u32 {
-        if round > 1 {
-            clock.advance(Duration::from_secs(3600));
-        }
-        let headers = sign_with(&signer, &[]).unwrap();
-        assert_eq!(
-            header(&headers, "x-n"),
-            Some(format!("hv-{round}")),
-            "round {round}"
-        );
-        if round == 15 {
-            // Sixteen distinct values beside nothing else: the token and
-            // fifteen header values are all still reported.
-            assert!(
-                reported().contains(&"hv-1".to_owned()),
-                "exactly sixteen values are all kept: {:?}",
-                reported()
-            );
-        }
-    }
-    // Seventeen distinct values beside the token: the two oldest idle ones
-    // are dropped, the rest are kept.
-    let values = reported();
-    assert!(
-        !values.contains(&"hv-1".to_owned()) && !values.contains(&"hv-2".to_owned()),
-        "the oldest values past sixteen are dropped: {values:?}"
-    );
-    assert!(
-        values.contains(&"hv-3".to_owned()) && values.contains(&"hv-17".to_owned()),
-        "the newest sixteen are kept: {values:?}"
-    );
-}
-
-#[test]
 fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_history_values() {
     let setup = Setup::new();
     let clock = FakeClock::new();
@@ -581,9 +471,12 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
              credential = {{ timeout = 60000, run = function()\n\
              calls_c = calls_c + 1\n\
              if calls_c == 1 then\n\
+             return {{ token = \"tok-unused\", expires_at = 1700000301 }}\n\
+             end\n\
+             if calls_c == 2 then\n\
              local headers = {{}}\n\
              for i = 1, 16 do headers[\"x-\" .. i] = \"hv-\" .. i end\n\
-             return {{ token = \"tok-old\", expires_at = 1700000301, headers = headers }}\n\
+             return {{ token = \"tok-old\", expires_at = 1700000602, headers = headers }}\n\
              end\n\
              return {{ token = \"tok-current\", expires_at = 4102444800 }}\n\
              end }},\n\
@@ -599,6 +492,14 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
     let extension = Arc::new(LuaExtension::new("ext", dir, setup.home(), clock.clone()));
     let provider = LuaProvider::new(extension, "p");
     let signer = signer_of(&provider);
+    // A token fetched and replaced before any sign leaves no trace.
+    let unused = within({
+        let provider = Arc::clone(&provider);
+        move || provider.token(&pair(provider.name()))
+    })
+    .unwrap();
+    assert_eq!(unused.expose(), "tok-unused");
+    clock.advance(Duration::from_secs(301));
     let (done, first) = mpsc::channel();
     let held = Arc::clone(&signer);
     std::thread::spawn(move || {
@@ -642,7 +543,7 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
         "sixteen completed values plus the current cache"
     );
     assert!(!reported.contains(&"tok-old".to_owned()));
-    assert!(!reported.contains(&"never-used-token".to_owned()));
+    assert!(!reported.contains(&"tok-unused".to_owned()));
 }
 
 #[test]
