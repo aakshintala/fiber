@@ -355,8 +355,9 @@ fn stalled_idle(error: &ureq::Error) -> Option<std::time::Duration> {
 #[test]
 fn a_silent_peer_times_out_as_a_stall_and_shuts_the_socket() {
     let (mut socket, mut peer) = silent_pair(IDLE_200MS);
-    let error = fakes::within("a silent read to stall", EACH_WITHIN, move || {
-        socket.await_input(wait()).unwrap_err()
+    let (socket, error) = fakes::within("a silent read to stall", EACH_WITHIN, move || {
+        let error = socket.await_input(wait()).unwrap_err();
+        (socket, error)
     });
     assert!(crate::timed_out(&error), "a silent peer times out: {error}");
     assert!(
@@ -368,12 +369,13 @@ fn a_silent_peer_times_out_as_a_stall_and_shuts_the_socket() {
         Some(IDLE_200MS),
         "the stall carries the idle bound"
     );
+    // The socket stays alive, so only the stall's own shutdown ends the peer's read.
     let mut byte = [0u8; 1];
-    match peer.read(&mut byte) {
-        Ok(0) => {}
-        Err(_) => {}
-        Ok(count) => panic!("the peer saw {count} unexpected bytes after the stall"),
-    }
+    let count = peer
+        .read(&mut byte)
+        .expect("the shutdown ends the peer's read as end of stream");
+    assert_eq!(count, 0, "the peer sees end of stream after the stall");
+    drop(socket);
 }
 
 #[test]
