@@ -352,22 +352,18 @@ impl Run {
                     let mut pending: Vec<u8> = Vec::new();
                     let mut buf = [0u8; 4096];
                     loop {
-                        if let Some((cols, rows)) = pending_size.lock().unwrap().take() {
-                            parser.screen_mut().set_size(rows, cols);
-                        }
                         match reader.read(&mut buf) {
                             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                             Ok(0) | Err(_) => break,
                             Ok(n) => {
                                 let Some(bytes) = buf.get(..n) else { break };
-                                pending.extend_from_slice(bytes);
-                                let replies = query_replies(&mut pending);
+                                let replies =
+                                    ingest(&mut parser, &pending_size, &mut pending, bytes);
                                 // A write that fails means the terminal is
                                 // gone: end quietly, as at end of file.
                                 if !replies.is_empty() && writer.write_all(&replies).is_err() {
                                     break;
                                 }
-                                parser.process(bytes);
                                 appended.lock().unwrap().extend_from_slice(bytes);
                                 screen.lock().unwrap().grid = snapshot(&parser);
                                 tx.send(()).unwrap_or(());
@@ -401,15 +397,9 @@ struct Grid {
     contents: String,
     rows: Vec<String>,
     cursor: (u16, u16),
-    #[allow(
-        dead_code,
-        reason = "the restore assertions read it from a later task on"
-    )]
+
     alternate_screen: bool,
-    #[allow(
-        dead_code,
-        reason = "the restore assertions read it from a later task on"
-    )]
+
     hide_cursor: bool,
 }
 
@@ -419,6 +409,25 @@ struct Grid {
 struct Shared {
     grid: Grid,
     ended: bool,
+}
+
+/// Feeds one master chunk through the parser: a pending resize lands
+/// before the chunk's bytes parse, so the first frame after a resize
+/// draws at the new size; capability queries are answered from the same
+/// bytes. Returns the replies for the child.
+fn ingest(
+    parser: &mut vt100::Parser,
+    pending_size: &Mutex<Option<(u16, u16)>>,
+    pending: &mut Vec<u8>,
+    bytes: &[u8],
+) -> Vec<u8> {
+    if let Some((cols, rows)) = pending_size.lock().unwrap().take() {
+        parser.screen_mut().set_size(rows, cols);
+    }
+    pending.extend_from_slice(bytes);
+    let replies = query_replies(pending);
+    parser.process(bytes);
+    replies
 }
 
 /// One snapshot of the parser's screen.
@@ -454,19 +463,11 @@ const PENDING_KEEP: usize = 16;
 /// dropping the bytes through each answered query and keeping the tail
 /// for a query still arriving.
 fn query_replies(pending: &mut Vec<u8>) -> Vec<u8> {
-    fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-        if needle.is_empty() || haystack.len() < needle.len() {
-            return None;
-        }
-        haystack
-            .windows(needle.len())
-            .position(|window| window == needle)
-    }
     let mut replies = Vec::new();
     loop {
         let mut first: Option<(usize, usize)> = None;
         for (at, (query, _)) in CAPABILITIES.iter().enumerate() {
-            if let Some(pos) = find(pending, query)
+            if let Some(pos) = pending.windows(query.len()).position(|w| w == *query)
                 && first.is_none_or(|(best, _)| pos < best)
             {
                 first = Some((pos, at));
@@ -483,15 +484,8 @@ fn query_replies(pending: &mut Vec<u8>) -> Vec<u8> {
 
 impl Run {
     /// The grid rebuilt from the output so far.
-    #[allow(dead_code, reason = "the grid waits use it from the next task on")]
     fn screen(&self) -> Grid {
         self.screen.lock().unwrap().grid.clone()
-    }
-
-    /// The grid's text.
-    #[allow(dead_code, reason = "the grid waits use it from the next task on")]
-    fn screen_contents(&self) -> String {
-        self.screen().contents
     }
 
     /// The grid's rows, top to bottom, without newlines.
@@ -499,17 +493,10 @@ impl Run {
         self.screen().rows
     }
 
-    /// The grid's cursor position, as (row, column).
-    #[allow(dead_code, reason = "the grid waits use it from the next task on")]
-    fn cursor_position(&self) -> (u16, u16) {
-        self.screen().cursor
-    }
-
     /// Waits under one named deadline for the whole wait until the grid
     /// matches, however many frames arrive. When the terminal ends first
     /// the panic shows the last grid, so a stall says how far the journey
     /// got.
-    #[allow(dead_code, reason = "the grid waits use it from the next task on")]
     fn wait_screen(&self, what: &str, mut matches: impl FnMut(&Grid) -> bool) {
         let wakes = self.wakes.lock().unwrap();
         loop {
@@ -1016,8 +1003,17 @@ fn resize_redraws_the_grid_at_the_new_size() {
     // row; the old rows are gone, not just unaddressed.
     // The grid shrinks to the new size with the input line still drawn;
     // the old rows are gone, not just unaddressed.
+    // The redrawn home at 40 by 10: the input line sits on row 4
+    // with the cursor parked on it, and the footer hint closes row 9.
+    // Only a redraw at the new size lays the frame out this way.
     run.wait_screen("the redrawn grid at the new size", |grid| {
-        grid.rows.len() == 10 && grid.rows.iter().any(|row| row.contains("> /?"))
+        grid.rows.len() == 10
+            && grid
+                .rows
+                .get(4)
+                .is_some_and(|row| row == "> /? for shortcuts")
+            && grid.rows.get(9).is_some_and(|row| row.contains("key map"))
+            && grid.cursor == (4, 2)
     });
     // The hub `fiber` started is up before the quit, so `wait` sees it
     // idle out rather than start after the home is gone.
@@ -1561,8 +1557,11 @@ fn journey_prompt_answer_approval_resize_quit() {
     // A resize mid-session: the grid follows to the new size with the
     // conversation still on it.
     run.resize(100, 30);
+    // The panel's Session card ends in its `turns` row at the new
+    // right edge: retained bytes cut to 100 columns end mid-card, so
+    // only a redraw at the new size puts `turns  2` last.
     run.wait_screen("the redrawn grid at the new size", |grid| {
-        grid.rows.len() == 30 && grid.contents.contains("Done.")
+        grid.rows.len() == 30 && grid.rows.iter().any(|row| row.ends_with("turns  2"))
     });
     // Quit: the terminal is restored, with one resume line per live
     // session on the primary screen ("On exit").
