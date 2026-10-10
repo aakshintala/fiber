@@ -1072,6 +1072,9 @@ on click; schemes are `http`, `https` and `mailto`. A click runs `open` or
 copies the URL and shows "Copied". A focused link opens with Enter and
 copies with `y`.
 
+A copy, link or image command still running after 10 seconds is stopped;
+what it started keeps running.
+
 ## Keys
 
 ### Rules
