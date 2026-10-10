@@ -9,6 +9,7 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{McpServerFailed, ServerFailure};
 use contract::tool::ServerRecord;
+use fakes::Deadline;
 use serde_json::json;
 
 use crate::server_json::ListedTool;
@@ -33,6 +34,7 @@ impl Setup {
 
     /// Starts once to populate the cache, stops, and clears the spawn
     /// signals, so the next start declares from the cache.
+    #[track_caller]
     fn populate(&self, spec: ServerSpec) {
         let started = self.start(vec![spec]);
         assert!(started.failed.is_empty());
@@ -46,6 +48,7 @@ impl Setup {
 
     /// Kills the running server of `started`'s only slot and waits until its
     /// reader has seen the exit.
+    #[track_caller]
     fn kill(&self, started: &Started) {
         fakes::kill_pid(self.pid(), "KILL").expect("the server dies");
         let slot = Arc::clone(&started.servers.slots[0]);
@@ -197,11 +200,12 @@ fn two_concurrent_first_calls_spawn_once() {
         });
     }
     drop(done);
-    let first = results
-        .recv_timeout(WITHIN)
+    let wait = Deadline::after(WITHIN);
+    let first = wait
+        .recv(&results)
         .unwrap_or_else(|_| panic!("the first call ends within {WITHIN:?}"));
-    let second = results
-        .recv_timeout(WITHIN)
+    let second = wait
+        .recv(&results)
         .unwrap_or_else(|_| panic!("the second call ends within {WITHIN:?}"));
     let outputs = vec![first, second];
     assert_eq!(outputs.len(), 2);
@@ -290,7 +294,9 @@ fn a_lazy_start_that_misses_its_deadline_fails_with_deadline() {
         "the lazy start waits on the startup deadline",
     );
     setup.fake.advance(DEFAULT_STARTUP_TIMEOUT);
-    let output = result.recv_timeout(WITHIN).expect("the call ends");
+    let output = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the call ends");
     let error = output.error.expect("failed");
     assert_eq!(error.code, ErrorCode::McpServerUnavailable);
     assert_eq!(
@@ -588,10 +594,10 @@ fn concurrent_calls_that_see_one_death_record_it_once() {
     );
     fakes::kill_pid(setup.pid(), "KILL").expect("the server dies");
     let mut outputs = Vec::new();
+    let wait = Deadline::after(WITHIN);
     for _ in 0..2 {
         outputs.push(
-            results
-                .recv_timeout(WITHIN)
+            wait.recv(&results)
                 .unwrap_or_else(|_| panic!("each call ends within {WITHIN:?}")),
         );
     }
@@ -707,8 +713,8 @@ fn run_rejects_its_server_after_a_concurrent_restart_replaces_it() {
     std::thread::spawn(move || {
         done.send(calling.run("echo")).expect("collected");
     });
-    got_served
-        .recv_timeout(WITHIN)
+    Deadline::after(WITHIN)
+        .recv(&got_served)
         .expect("run served the original server within the wall-clock limit");
 
     setup.kill(&started);
@@ -716,8 +722,8 @@ fn run_rejects_its_server_after_a_concurrent_restart_replaces_it() {
     let restarted = setup.serve(&slot);
     let new_pid = setup.pid();
     resume.send(()).expect("release the waiting call");
-    let outcome = result
-        .recv_timeout(WITHIN)
+    let outcome = Deadline::after(WITHIN)
+        .recv(&result)
         .expect("the call ends within the wall-clock limit");
 
     assert_ne!(
@@ -828,8 +834,12 @@ fn a_call_ended_by_the_stop_records_no_death() {
         slot.stop();
         stopped_tx.send(()).expect("collected");
     });
-    let output = result.recv_timeout(WITHIN).expect("the call ends");
-    stopped.recv_timeout(WITHIN).expect("the stop ends");
+    let output = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the call ends");
+    Deadline::after(WITHIN)
+        .recv(&stopped)
+        .expect("the stop ends");
     let error = output.error.expect("failed");
     assert_eq!(error.code, ErrorCode::McpServerUnavailable);
     assert_eq!(

@@ -9,6 +9,7 @@ use contract::clock::Clock;
 use contract::events::ServerFailure;
 use contract::events::ToolSource;
 use contract::shapes::Effect;
+use fakes::Deadline;
 use serde_json::json;
 
 use super::{DEFAULT_STARTUP_TIMEOUT, ServerSpec, start};
@@ -230,8 +231,8 @@ fn a_server_that_misses_its_deadline_is_left_out() {
             "the start waits on the startup deadline",
         );
         setup.fake.advance(DEFAULT_STARTUP_TIMEOUT);
-        let started = result
-            .recv_timeout(WITHIN)
+        let started = Deadline::after(WITHIN)
+            .recv(&result)
             .unwrap_or_else(|_| panic!("the failed start ends within {WITHIN:?}"));
         assert!(started.tools.is_empty());
         assert_eq!(started.failed.len(), 1);
@@ -287,8 +288,8 @@ fn servers_stop_at_once() {
             .send(start(specs, &workspace, &cache, &clock, "0.0.0"))
             .expect("collected");
     });
-    let started = started
-        .recv_timeout(WITHIN)
+    let started = Deadline::after(WITHIN)
+        .recv(&started)
         .unwrap_or_else(|_| panic!("both servers start within {WITHIN:?}"));
     assert_eq!(started.failed.len(), 0);
     let grace = setups[0].fake.now() + Duration::from_millis(800);
@@ -303,8 +304,8 @@ fn servers_stop_at_once() {
         "both stops wait on the grace at once"
     );
     setups[0].fake.advance(Duration::from_millis(800));
-    stopped
-        .recv_timeout(WITHIN)
+    Deadline::after(WITHIN)
+        .recv(&stopped)
         .unwrap_or_else(|_| panic!("the stop returned within {WITHIN:?}"));
 }
 
@@ -442,8 +443,8 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
         "the start waits on the startup deadline",
     );
     setup.fake.advance(DEFAULT_STARTUP_TIMEOUT);
-    let started = result
-        .recv_timeout(WITHIN)
+    let started = Deadline::after(WITHIN)
+        .recv(&result)
         .unwrap_or_else(|_| panic!("the required start ends within {WITHIN:?}"));
     assert!(started.tools.is_empty());
     assert!(started.failed.is_empty());
