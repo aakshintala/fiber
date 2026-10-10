@@ -988,7 +988,10 @@ fn an_open_file_panel_keeps_up_from_a_focused_chip() {
     drawn(&mut app);
     assert_eq!(app.on_key(Key::BackTab, now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
-    app.on_files(app.generation(), Ok(vec!["a.rs".to_owned(), "b.rs".to_owned()]));
+    app.on_files(
+        app.generation(),
+        Ok(vec!["a.rs".to_owned(), "b.rs".to_owned()]),
+    );
     assert!(app.completions().is_some());
     drawn(&mut app);
     // The panel is open, so ↑ belongs to the input box and the chip keeps
@@ -1002,7 +1005,10 @@ fn a_session_attached_before_a_frame_keeps_the_arrows_for_the_conversation() {
     let mut app = home_with(Some("acme/m1"));
     // With the conversation's ↑ moved off, a plain ↑ reaches the chip row
     // only through home's own arrows.
-    keyed(&mut app, &[("focus_next_prev", serde_json::json!(["j", "k"]))]);
+    keyed(
+        &mut app,
+        &[("focus_next_prev", serde_json::json!(["j", "k"]))],
+    );
     app.on_line(hello());
     type_text(&mut app, "hi");
     drawn(&mut app);
