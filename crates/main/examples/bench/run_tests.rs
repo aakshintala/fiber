@@ -10,7 +10,7 @@ use contract::clock::Clock;
 use fakes::children::{Ready, leaves_descendants};
 use fakes::{TempDir, Watchdog};
 
-use super::{Proc, Startup, System, command, parse_line, run_to_end};
+use super::{EXIT_GRACE, Proc, Startup, System, command, grace_left, parse_line, run_to_end};
 
 /// The wall-clock bound on each test below that runs a child.
 const WALL: Duration = Duration::from_secs(30);
@@ -461,11 +461,11 @@ fn a_timed_run_past_its_deadline_errs_and_leaves_nothing_behind() {
     watchdog.stand_down(READY);
 }
 
-/// A child that holds for a real second before it exits: a fake clock that
+/// A child that holds for half a real second before it exits: a fake clock that
 /// races ahead of it must not end the wait.
 fn holds_then_exits() -> Command {
     let mut command = Command::new("/bin/sh");
-    command.args(["-c", "sleep 1"]);
+    command.args(["-c", "sleep 0.5"]);
     command
 }
 
@@ -489,4 +489,12 @@ fn waiting_for_a_process_to_exit_does_not_depend_on_how_fast_fake_time_moves() {
     })
     .unwrap();
     assert_eq!(finished.status.code(), Some(0));
+}
+
+#[test]
+fn the_real_time_grace_ends_at_its_bound() {
+    assert!(grace_left(Duration::ZERO));
+    assert!(grace_left(EXIT_GRACE.checked_sub(super::PROBE).unwrap()));
+    assert!(!grace_left(EXIT_GRACE));
+    assert!(!grace_left(EXIT_GRACE + super::PROBE));
 }
