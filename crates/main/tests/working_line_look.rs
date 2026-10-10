@@ -292,11 +292,9 @@ fn the_working_line_glimmers_and_the_queue_selects() {
     // The prompt starts the turn; the draft is empty again.
     let from = run.output().len();
     run.write(b"\r");
-    grid = run.wait_screen("the empty session box", |grid| session_box(grid).is_some());
-    let (empty_box, empty_x) = session_box(&grid).expect("the box");
-    assert_fill(&grid, empty_box, empty_x, "session empty");
-    assert_eq!(grid.cell(empty_x + 2, empty_box).symbol.as_str(), "›");
-    assert_eq!(grid.cell(empty_x + 2, empty_box).fg, INFO);
+    // The empty session box is asserted in
+    // `the_empty_session_box_fills_while_the_turn_streams`: the sleep
+    // call's approval can arrive before any frame shows the empty box.
 
     // The call asks approval: Esc puts it aside behind its badge, and
     // the input box comes back with the turn still waiting. Steers typed
@@ -460,6 +458,31 @@ fn the_working_line_glimmers_and_the_queue_selects() {
 
     // The draft clears and the turn ends on its own.
     clear_draft(&mut run);
+    run.turn_finished(from);
+    quit(run);
+}
+
+/// The empty session box at 160x48 fills edge to edge and shows its
+/// info-coloured prompt mark. A paced reply holds the turn open with no
+/// approval to redraw the box, so the state asserted is the one held.
+#[test]
+fn the_empty_session_box_fills_while_the_turn_streams() {
+    let setup = Setup::new();
+    script(&setup, 20, 400);
+    config(&setup, false);
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    run.write(b"kq");
+    run.wait_screen("home with one word", |grid| {
+        boxed_row(grid, "› kq").is_some()
+    });
+    let from = run.output().len();
+    run.write(b"\r");
+    let grid = run.wait_screen("the empty session box", |grid| session_box(grid).is_some());
+    let (empty_box, empty_x) = session_box(&grid).expect("the box");
+    assert_fill(&grid, empty_box, empty_x, "session empty");
+    assert_eq!(grid.cell(empty_x + 2, empty_box).symbol.as_str(), "›");
+    assert_eq!(grid.cell(empty_x + 2, empty_box).fg, INFO);
     run.turn_finished(from);
     quit(run);
 }
