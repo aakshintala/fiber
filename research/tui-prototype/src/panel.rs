@@ -23,7 +23,7 @@ pub(crate) enum Stripe {
 }
 
 thread_local! {
-    static MODE: Cell<Stripe> = Cell::new(Stripe::Left);
+    static MODE: Cell<Stripe> = const { Cell::new(Stripe::Left) };
 }
 
 /// Sets the stripe mode, from `--panel-stripe`. Main-thread only, like the
