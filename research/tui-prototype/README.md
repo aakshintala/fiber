@@ -93,6 +93,8 @@ still loads but the overlay ignores it.
 
 ```sh
 cargo run --release -- fixtures/session.jsonl --static --overlay keymap
+cargo run --release -- fixtures/session.jsonl --static --overlay keymap-tab
+cargo run --release -- fixtures/session.jsonl --static --overlay keymap-search
 cargo run --release -- fixtures/session.jsonl --static --overlay keymap-narrow
 cargo run --release -- fixtures/session.jsonl --static --overlay quit
 cargo run --release -- fixtures/session.jsonl --static --overlay delete
@@ -101,11 +103,13 @@ cargo run --release -- fixtures/session.jsonl --static --overlay notice
 cargo run --release -- fixtures/session.jsonl --static --overlay close-mouse
 ```
 
-- `keymap`: every binding grouped by area (Session, Input, Conversation,
-  Panels, Search, Steering, Requests, Model), each with its id, key and other
-  paths, in two aligned columns.
-- `keymap-narrow`: the same content in one column, opened scrolled, with an
-  "↑ N more · ↓ M more" indicator; run it in a 100x40 tmux.
+- `keymap`: every binding in one panel docked at the bottom, with group tabs,
+  type-to-search, and three fixed columns (group, action, keys with other
+  paths); the All tab selected and nothing typed.
+- `keymap-tab`: the same panel with the Session tab selected.
+- `keymap-search`: the same panel with `session` typed, narrowing the rows.
+- `keymap-narrow`: the same panel at 100 columns, rows wrapped, opened
+  scrolled, with an "↑ N more · ↓ M more" indicator; run it in a 100x40 tmux.
 - `quit`: the quit question for 2 working sessions, with the three ways out.
 - `delete`: home's delete question for the exited "docs: rail spec" session,
   naming what `--cascade` would add.
@@ -414,7 +418,7 @@ For `docs/tui.md`: every frame is written inside synchronised output; a frame is
 
 ## Model picker (#1629)
 
-A second swapped view, drawn like the context breakdown: Ctrl+L and `/model` open it over the conversation area, under a "Models /model" header, with the side panel and the input box still there. Typing still goes to the input box. It draws from a fixture in `src/model_picker.rs` (three providers, twelve models): the stream names only the current model, so the roles, thinking levels and rebuild costs are made up. Every body row sits on the raised surface (`SEL`); the model name is in the accent colour, its thinking chips in the attention colour, the rest dim.
+A second swapped view, drawn like the context breakdown: Ctrl+L and `/model` open it over the conversation area, under a "Models /model" header, with the side panel and the input box still there. Typing still goes to the input box. It draws from a fixture in `src/model_picker.rs` (three providers, twelve models): the stream names only the current model, so the roles, thinking levels and rebuild costs are made up. A centred panel on the raised surface; dim provider sections with a blank row between them; the focused model on a full-width accent bar with a `›` marker; the model name in the accent colour, its thinking chips in the attention colour, the rest dim.
 
 | Case | How to reach it |
 |---|---|

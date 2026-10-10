@@ -1,51 +1,30 @@
 //! Reads one listed skill's body (`docs/tools.md`, "Skills"): the file
-//! discovery found for its name now, and the body's revalidated read.
-//! A free-standing reader over [`PromptInputs`] and the workspace, with
-//! no loop state and no events.
+//! the session's maintained set holds for its name, and the body's
+//! revalidated read. A free-standing reader over the shared set, with no
+//! loop state and no events.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use contract::skills::{SkillRead, Skills};
 
-use crate::opening;
-use crate::prompt::PromptInputs;
 use crate::skill_header;
-use crate::skills;
+use crate::skill_set::SkillSet;
 
 /// Reads one listed skill's body (`docs/tools.md`, "Skills").
 pub struct SkillReader {
-    inputs: PromptInputs,
-    workspace: PathBuf,
+    set: SkillSet,
 }
 
 impl SkillReader {
-    /// Reads skills listed for `inputs` above `workspace`. The workspace
-    /// is canonicalised, as [`crate::commands::skills`] reads it.
-    pub fn new(inputs: PromptInputs, workspace: &Path) -> Self {
-        Self {
-            inputs,
-            workspace: opening::canonical(workspace),
-        }
-    }
-
-    fn top(&self) -> PathBuf {
-        let (chain, _) = opening::repo_chain(&self.workspace);
-        chain
-            .first()
-            .cloned()
-            .unwrap_or_else(|| self.workspace.clone())
+    /// Reads skills from `set`: the session's maintained set.
+    pub(crate) fn new(set: SkillSet) -> Self {
+        Self { set }
     }
 }
 
 impl Skills for SkillReader {
-    fn file(&self, name: &str) -> Option<PathBuf> {
-        let top = self.top();
-        let found = skills::discover(&self.inputs, &top);
-        let listed = skills::listing(&found.skills, &self.inputs.skills_disabled);
-        listed
-            .into_iter()
-            .find(|found| found.listed.name == name)
-            .map(|found| found.file.clone())
+    fn file(&self, name: &str) -> Option<std::path::PathBuf> {
+        self.set.listed_file(name)
     }
 
     fn body(&self, name: &str, file: &Path) -> Result<String, SkillRead> {

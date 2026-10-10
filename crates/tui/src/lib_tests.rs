@@ -1597,18 +1597,21 @@ fn run_home_names_the_key_maps_bound_key() {
     let mut started = launch();
     started.keys = crate::KeysSetup { user: keys };
     let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    // The footer draws word by word: unchanged cells are never
-    // rewritten, so the spaces between its words never arrive as bytes.
-    // The markers arrive in order, which is the whole phrase.
-    let (mut pair, finished, frames) =
-        spawn_run_with_launch(hub, vec![b"F2", b"the", b"key", b"map"], started);
-    let first = watched(&frames, "F2");
+    let (mut pair, finished, frames) = spawn_run_with_launch(hub, vec![b"quit" as &[u8]], started);
+    let first = watched(&frames, "the first frame");
     assert!(
         first.starts_with(START),
         "the first chunk starts with the start bytes: {first:?}"
     );
-    for marker in ["the", "key", "map"] {
-        watched(&frames, marker);
+    // The renderer moves the cursor between words instead of writing the
+    // blank cells, so the foot's words arrive apart, in order.
+    let text = String::from_utf8_lossy(&first);
+    let mut rest = &*text;
+    for word in ["F2", "the", "key", "map", "Ctrl+C"] {
+        let Some(at) = rest.find(word) else {
+            panic!("home names the rebound key: {word:?} missing in {first:?}");
+        };
+        rest = &rest[at + word.len()..];
     }
     // Nothing works: Ctrl+C twice quits at once.
     pair.main

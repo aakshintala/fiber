@@ -32,6 +32,9 @@ pub(crate) struct Collected {
     /// notices in discovery order, then `skills_large` when the listing
     /// does.
     pub(crate) notices: Vec<Notice>,
+    /// The discovery's winners, in discovery order: what the listing was
+    /// built from, and what the maintained set is refreshed with.
+    pub(crate) found: Vec<skills::Found>,
 }
 
 /// Reads the environment, the instruction files and the skills once
@@ -96,7 +99,11 @@ pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
     notices.extend(large);
     notices.extend(found.notices);
     notices.extend(skills::size_notice(&listed, inputs.context_window));
-    Collected { message, notices }
+    Collected {
+        message,
+        notices,
+        found: found.skills,
+    }
 }
 
 /// Renders `message` from its logged fields only: no clock, no disk, so a
