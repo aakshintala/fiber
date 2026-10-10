@@ -1223,7 +1223,7 @@ fn zero_width_draws_no_steering_drop_target() {
         None,
     ));
     assert!(
-        app.steering_drops().iter().any(|drop| *drop),
+        app.steering_rows().iter().any(|row| row.droppable),
         "the fixture needs a selectable steering row"
     );
     let area = Rect::new(0, 0, 0, HEIGHT);

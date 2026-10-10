@@ -1,15 +1,15 @@
 ---
-source: crates/tui/src/view/banner_tests.rs
-expression: "screen(&app, 60)"
+source: crates/tui/src/view/steering_queue_tests.rs
+expression: "screen(&queued(60, 12), 60, 12)"
 ---
-                                    Connection lost.       ✕
+
+                                                      ▄▄▄▄▄
                                                        hi ▐
                                                       ▀▀▀▀▀
                                                       00:00
-Connection lost · reconnecting (attempt 1)…
   • Steering, joins the turn at the next step
   ↳ use the parser  ✕
-  ↳ and test it  ✕
+  ↳ and test it
   ⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to dr
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ >

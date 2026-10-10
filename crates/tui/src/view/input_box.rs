@@ -7,9 +7,14 @@ use ratatui::style::{Modifier, Style};
 
 use super::{put, to_u16};
 use crate::app::App;
+use crate::format;
+use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
 use crate::surface;
-use crate::theme::Role;
+
+/// The hint at the box's right end while a queued message is edited
+/// (`docs/tui.md`, "Steering").
+const EDITING_HINT: &str = "editing a queued message · enter amends · ⌥x drops · esc stops";
 
 /// Draws the input box on the rows above `bottom`: its rows on the surface
 /// tint with edges where they fit, token targets over them, and the
@@ -22,7 +27,7 @@ pub(super) fn draw(
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
 ) {
-    let (rows, top, _, _) = rows(app, area.width);
+    let (rows, top, cursor_row, cursor_col) = rows(app, area.width);
     let fits = surface::edged(rows.len(), usize::from(area.height)) > rows.len();
     let mut bottom_edge = false;
     if fits && let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) {
@@ -40,12 +45,19 @@ pub(super) fn draw(
         *bottom = y;
         top_edge = true;
     }
+    // While a queued message is edited the stripe is in `attention`
+    // (`docs/tui.md`, "Steering").
+    let stripe = if app.steering_selected().is_some() {
+        Role::Attention
+    } else {
+        Role::Accent
+    };
     surface::draw_slab(
         buf,
         slab,
         Role::Surface,
         Some(surface::Stripe {
-            colour: Role::Accent,
+            colour: stripe,
             right: false,
         }),
         surface::Edges {
@@ -53,6 +65,9 @@ pub(super) fn draw(
             bottom: bottom_edge,
         },
     );
+    if app.steering_selected().is_some() {
+        draw_editing_hint(area, below, &rows, (cursor_row, cursor_col), buf);
+    }
     token_targets(app, area, below, (top, rows.len()), targets);
     if let Some(completions) = app.completions() {
         for (at, line) in completions.lines.iter().enumerate().rev() {
@@ -108,6 +123,42 @@ pub(super) fn rows(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
     (rows, top, row.saturating_sub(top), col)
 }
 
+/// Draws the editing hint at the box's right end on its last text row,
+/// right-aligned and dim: only over cells past the draft's text and never
+/// over the caret, so a long draft clips it at the right edge instead of
+/// covering text (`docs/tui.md`, "Steering").
+fn draw_editing_hint(
+    area: Rect,
+    below: u16,
+    rows: &[String],
+    (cursor_row, cursor_col): (usize, u16),
+    buf: &mut Buffer,
+) {
+    let Some(last) = rows.last() else {
+        return;
+    };
+    let Some(y) = below.checked_sub(1).filter(|y| *y >= area.y) else {
+        return;
+    };
+    let text = text_area(area);
+    let end = text.x.saturating_add(to_u16(format::width(last)));
+    let caret = (
+        text.x.saturating_add(cursor_col),
+        below
+            .saturating_sub(to_u16(rows.len()))
+            .saturating_add(to_u16(cursor_row)),
+    );
+    let mut x = area
+        .right()
+        .saturating_sub(to_u16(format::width(EDITING_HINT)));
+    for ch in EDITING_HINT.chars() {
+        let wide = to_u16(format::width(&ch.to_string()));
+        if x >= end && (x, y) != caret && x < area.right() {
+            buf.set_stringn(x, y, ch.to_string(), usize::from(wide), style(Role::Muted));
+        }
+        x = x.saturating_add(wide.max(1));
+    }
+}
 /// The cursor's rows above the column's bottom and its column: the shown
 /// rows below the cursor's with the bottom edge below them, so the cursor
 /// sits in the same column as without edges, past the stripe and gap

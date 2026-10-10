@@ -702,15 +702,17 @@ fn a_click_on_a_steering_row_selects_it_into_the_draft() {
             None,
         ),
     ]);
-    // The queue's rows sit on rows 7 and 8, above the input box's edges.
-    assert_eq!(row_of(&lp, "▌ ↳ use the parser"), 7);
-    assert_eq!(row_of(&lp, "▌ ↳ and test it"), 8);
+    // The queue's rows sit on rows 6 and 7, newest lowest, above the
+    // footer and the input box's edges: indented, with no stripe
+    // (`docs/tui.md`, "Steering").
+    assert_eq!(row_of(&lp, "↳ use the parser"), 6);
+    assert_eq!(row_of(&lp, "↳ and test it"), 7);
     // The edge row below the queue is no target.
     feed(&mut lp, vec![click(40, 9)]);
     assert_eq!(lp.app.input().expand(), "mine");
-    feed(&mut lp, vec![click(3, 7)]);
+    feed(&mut lp, vec![click(3, 6)]);
     assert_eq!(lp.app.input().expand(), "use the parser");
-    assert_eq!(row_of(&lp, "▌ ▸ use the parser"), 7);
+    assert_eq!(row_of(&lp, "▸ use the parser"), 6);
     // Esc puts the stashed draft back.
     feed(&mut lp, vec![esc()]);
     assert_eq!(lp.app.input().expand(), "mine");
@@ -893,23 +895,27 @@ fn a_click_on_a_steering_rows_cross_drops_it_and_its_text_still_selects() {
             None,
         )],
     );
-    // Rows 6 to 8 above the input box's edges; Fiber's own row has no ✕.
+    // Rows 5 to 7 above the footer and the input box's edges, oldest on
+    // top: each droppable row's ✕ follows its text, and Fiber's own row
+    // has none (`docs/tui.md`, "Steering").
     let rows: Vec<String> = shown(&lp).lines().map(str::to_owned).collect();
-    assert!(rows[6].ends_with('✕') && rows[7].ends_with('✕'), "{rows:?}");
-    assert!(!rows[8].contains('✕'), "{rows:?}");
+    assert!(rows[5].ends_with('✕') && rows[6].ends_with('✕'), "{rows:?}");
+    assert!(!rows[7].contains('✕'), "{rows:?}");
     // Fiber's own row is a steering target with no ✕ on it.
     assert!(matches!(
-        hit_at(&lp, 59, 8),
+        hit_at(&lp, 59, 7),
         Some(crate::mouse::TargetId::Steering(2))
     ));
-    feed(&mut lp, vec![click(59, 6)]);
+    // The oldest row's ✕ sits two spaces past its text: 2 for the
+    // indent, 1 for the mark, 1 for its gap, 14 for the text, 2 gap.
+    feed(&mut lp, vec![click(20, 5)]);
     let (_, dropped) = super::tests::command(BufReader::new(theirs), "the steer_drop");
     assert_eq!(dropped["command"], "steer_drop");
     assert_eq!(dropped["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(dropped["args"], json!({"command_id": "c_1"}));
     // The ✕ selects nothing; the row's text still selects it.
     assert_eq!(lp.app.input().expand(), "");
-    feed(&mut lp, vec![click(3, 7)]);
+    feed(&mut lp, vec![click(3, 6)]);
     assert_eq!(lp.app.input().expand(), "and test it");
 }
 

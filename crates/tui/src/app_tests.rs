@@ -809,7 +809,8 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
     assert_eq!(app.conversation_height(), 9);
     app.attach(contract::SessionId(S_A.to_owned()));
     app.on_line(steering_queue(S_A, &[("a", Some("c_1")), ("b", None)]));
-    assert_eq!(app.conversation_height(), 7);
+    // Two queued rows with the heading above and the footer below them.
+    assert_eq!(app.conversation_height(), 5);
     app.set_size(60, 1);
     assert_eq!(app.conversation_height(), 0);
 }
