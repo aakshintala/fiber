@@ -20,6 +20,7 @@ use fakes::{CancelToken, Recorder, TempDir};
 
 use super::Registry;
 use crate::support::{opening, world};
+use support::clock::Parker;
 
 const DEADLINE: Duration = Duration::from_secs(5);
 
@@ -79,7 +80,7 @@ fn open_without_the_registry_arc_records_nothing() {
             inbox: None,
             foreground: Vec::new(),
         }),
-        park: super::park::Parker::new(),
+        park: Parker::new(),
         me: Weak::new(),
     };
     let Err(error) = registry.open(opening("npm test")) else {
