@@ -16,7 +16,7 @@ use rustix::process::{Pid, Signal};
 use super::{
     MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, WATCHDOG_SCRIPT, alive, bounded, group_empties,
     group_lives, kill_group, kill_matching, kill_pid, listed_exit, matching, matching_exits,
-    pattern, pids_exit, signal_group, signal_named, signal_pid,
+    pattern, pids_exit, signal_group, signal_named, signal_pid, try_matching_exits,
 };
 use crate::deadline::Deadline;
 
@@ -655,12 +655,78 @@ fn matching_exits_waits_for_a_live_match() {
 }
 
 #[test]
-fn listed_exit_is_false_when_the_second_listing_still_matches() {
+fn listed_exit_names_a_first_listing_failure() {
+    let err = listed_exit(
+        || Err::<Vec<u32>, _>(io::Error::other("pgrep blew up")),
+        DEADLINE,
+    )
+    .unwrap_err();
+    assert!(err.contains("first pgrep failed"), "{err}");
+    assert!(err.contains("pgrep blew up"), "{err}");
+}
+
+#[test]
+fn listed_exit_names_a_second_listing_failure() {
+    let mut child = held();
+    let pid = child.id();
+    drop(child.stdin.take().unwrap());
+    reaped(child, "the held child to exit once its stdin closed");
+    let mut calls = 0;
+    let err = listed_exit(
+        move || {
+            calls += 1;
+            if calls == 1 {
+                Ok(vec![pid])
+            } else {
+                Err(io::Error::other("pgrep fell over"))
+            }
+        },
+        DEADLINE,
+    )
+    .unwrap_err();
+    assert!(err.contains("second pgrep failed"), "{err}");
+    assert!(err.contains("pgrep fell over"), "{err}");
+}
+
+#[test]
+fn listed_exit_names_the_pids_a_second_listing_still_finds() {
+    let mut child = held();
+    let pid = child.id();
+    let stdin = child.stdin.take().unwrap();
+    // A pid no `ps` can find: the lookup prints `<gone>` yet the pid is
+    // still named.
+    let gone = u32::MAX;
+    let mut calls = 0;
+    let err = listed_exit(
+        move || {
+            calls += 1;
+            if calls == 1 {
+                Ok(vec![])
+            } else {
+                Ok(vec![pid, gone])
+            }
+        },
+        DEADLINE,
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("processes started after the first listing still hold the path"),
+        "{err}"
+    );
+    assert!(err.contains(&pid.to_string()), "{err}");
+    assert!(err.contains(&gone.to_string()), "{err}");
+    assert!(err.contains("<gone>"), "{err}");
+    drop(stdin);
+    reaped(child, "the held child to exit once its stdin closed");
+}
+
+#[test]
+fn listed_exit_names_a_live_holder_instead_of_gone() {
     let mut child = held();
     let pid = child.id();
     let stdin = child.stdin.take().unwrap();
     let mut calls = 0;
-    let listed = listed_exit(
+    let err = listed_exit(
         move || {
             calls += 1;
             if calls == 1 {
@@ -670,11 +736,62 @@ fn listed_exit_is_false_when_the_second_listing_still_matches() {
             }
         },
         DEADLINE,
-    );
+    )
+    .unwrap_err();
+    assert!(err.contains(&pid.to_string()), "{err}");
     assert!(
-        !listed,
-        "a second listing that still matches must read as live"
+        !err.contains("<gone>"),
+        "a live pid must print its command line: {err}"
     );
+    drop(stdin);
+    reaped(child, "the held child to exit once its stdin closed");
+}
+
+#[test]
+fn listed_exit_reports_expiry_when_a_listed_pid_never_exits() {
+    let mut child = held();
+    let pid = child.id();
+    let stdin = child.stdin.take().unwrap();
+    let err = listed_exit(move || Ok(vec![pid]), Duration::from_millis(200)).unwrap_err();
+    assert!(err.contains("deadline expired waiting for exit"), "{err}");
+    drop(stdin);
+    reaped(child, "the held child to exit once its stdin closed");
+}
+
+#[test]
+fn try_matching_exits_is_ok_when_nothing_matches() {
+    let dir = crate::TempDir::new("px-try");
+    let marker = dir
+        .path()
+        .join("nothing-matches-this-marker")
+        .to_string_lossy()
+        .into_owned();
+    assert!(try_matching_exits(&marker, DEADLINE).is_ok());
+}
+
+#[test]
+fn listed_exit_is_false_when_the_second_listing_still_matches() {
+    let mut child = held();
+    let pid = child.id();
+    let stdin = child.stdin.take().unwrap();
+    let mut calls = 0;
+    let err = listed_exit(
+        move || {
+            calls += 1;
+            if calls == 1 {
+                Ok(vec![])
+            } else {
+                Ok(vec![pid])
+            }
+        },
+        DEADLINE,
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("processes started after the first listing still hold the path"),
+        "a second listing that still matches must read as live: {err}"
+    );
+    assert!(err.contains(&pid.to_string()), "{err}");
     drop(stdin);
     reaped(child, "the held child to exit once its stdin closed");
 }
@@ -697,5 +814,8 @@ fn listed_exit_is_true_when_the_second_listing_is_empty() {
         },
         DEADLINE,
     );
-    assert!(listed, "waited {DEADLINE:?} for the listed pid to exit");
+    assert!(
+        listed.is_ok(),
+        "waited {DEADLINE:?} for the listed pid to exit"
+    );
 }

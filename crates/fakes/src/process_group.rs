@@ -388,47 +388,90 @@ pub fn pids_exit(pids: &[u32], deadline: Duration) -> bool {
     result
 }
 
+/// What a command line lookup prints when the process is already gone:
+/// the pid in the failure message still names the holder.
+const GONE_ARGS: &str = "<gone>";
+
+/// `pid`'s command line through `ps -o args= -p <pid>`, `None` when `ps`
+/// fails or prints nothing: the process exited between the listing and
+/// the lookup.
+fn command_line(pid: u32) -> Option<String> {
+    let output = Command::new("ps")
+        .args(["-o", "args=", "-p", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let args = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if args.is_empty() { None } else { Some(args) }
+}
+
+/// Each listed pid with its command line, for the failure message: a
+/// lookup that fails prints `<gone>`, so a reused pid still reads named.
+fn describe_holders(pids: &[u32]) -> String {
+    pids.iter()
+        .map(|pid| {
+            let args = command_line(*pid).unwrap_or_else(|| GONE_ARGS.to_owned());
+            format!("{pid} {args}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// `matching_exits` with the listing injected: `list` is called once before
 /// the probes and once after. The test seam for the final check.
 fn listed_exit(
     list: impl FnMut() -> io::Result<Vec<u32>> + Send + 'static,
     deadline: Duration,
-) -> bool {
-    let (done, finished) = mpsc::channel::<bool>();
+) -> Result<(), String> {
+    let (done, finished) = mpsc::channel::<Result<(), String>>();
     let (stop, stopped) = mpsc::channel::<()>();
     thread::spawn(move || {
         let mut list = list;
         let first = match list() {
             Ok(pids) => pids,
-            Err(_) => {
-                match done.send(false) {
+            Err(err) => {
+                match done.send(Err(format!("first pgrep failed: {err}"))) {
                     Ok(()) | Err(_) => {}
                 }
                 return;
             }
         };
         if !wait_exits(&first, &stopped) {
-            match done.send(false) {
+            match done.send(Err("deadline expired waiting for exit".to_owned())) {
                 Ok(()) | Err(_) => {}
             }
             return;
         }
         let last = match list() {
             Ok(pids) => pids,
-            Err(_) => {
-                match done.send(false) {
+            Err(err) => {
+                match done.send(Err(format!("second pgrep failed: {err}"))) {
                     Ok(()) | Err(_) => {}
                 }
                 return;
             }
         };
-        match done.send(last.is_empty()) {
+        if !last.is_empty() {
+            match done.send(Err(format!(
+                "processes started after the first listing still hold the path: {}",
+                describe_holders(&last)
+            ))) {
+                Ok(()) | Err(_) => {}
+            }
+            return;
+        }
+        match done.send(Ok(())) {
             Ok(()) | Err(_) => {}
         }
     });
-    let result = Deadline::after(deadline)
-        .recv(&finished)
-        .unwrap_or_default();
+    let result = match Deadline::after(deadline).recv(&finished) {
+        Ok(result) => result,
+        Err(_) => Err("deadline expired waiting for exit".to_owned()),
+    };
     drop(stop);
     result
 }
@@ -437,10 +480,20 @@ fn listed_exit(
 /// line contains `text` to exit: one `pgrep` lists the matches, the probes
 /// wait for each listed pid, and a second `pgrep` checks that nothing
 /// matches. One thread, one deadline, at most two `pgrep`s.
-#[must_use]
-pub fn matching_exits(text: &str, deadline: Duration) -> bool {
+///
+/// # Errors
+///
+/// When a `pgrep` fails, when the second listing still matches, or when
+/// the deadline expires first. The message names the path.
+pub fn try_matching_exits(text: &str, deadline: Duration) -> Result<(), String> {
     let text = text.to_owned();
     listed_exit(move || matching(&text), deadline)
+}
+
+/// [`try_matching_exits`] as a boolean: `false` on any failure path.
+#[must_use]
+pub fn matching_exits(text: &str, deadline: Duration) -> bool {
+    try_matching_exits(text, deadline).is_ok()
 }
 
 #[cfg(test)]
