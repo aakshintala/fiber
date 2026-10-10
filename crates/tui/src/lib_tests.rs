@@ -155,7 +155,9 @@ pub(super) fn new_loop<B: Backend + crate::screen::SyncEmit>(
     (lp, attached)
 }
 
-/// Runs `lp` over `inputs`, then with every sender gone.
+/// Runs `lp` over `inputs`, then with every sender gone. With no inputs it
+/// returns before drawing, so a test that captures a frame feeds at least one
+/// input first.
 pub(super) fn feed<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> i32 {
     let (tx, rx) = mpsc::channel();
     for input in inputs {
