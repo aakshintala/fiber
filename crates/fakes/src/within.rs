@@ -21,13 +21,15 @@ pub fn within<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> T {
     let (done, finished) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
+    match std::thread::Builder::new()
         .name("fakes-within".to_owned())
         .spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
             done.send(outcome).unwrap_or(());
-        })
-        .unwrap_or_else(|err| panic!("could not start a thread for {what}: {err}"));
+        }) {
+        Ok(_) => {}
+        Err(err) => panic!("could not start a thread for {what}: {err}"),
+    }
     match Deadline::after(deadline).recv(&finished) {
         Ok(Ok(value)) => value,
         Ok(Err(payload)) => panic!("the wait for {what} panicked: {}", describe(&payload)),

@@ -62,9 +62,10 @@ fn collect_to_eof<T: Send + 'static>(rx: mpsc::Receiver<T>, what: &str) -> Vec<T
     thread::spawn(move || {
         done_tx.send(rx.iter().collect::<Vec<T>>()).unwrap_or(());
     });
-    Deadline::after(WAIT)
-        .recv(&done_rx)
-        .unwrap_or_else(|err| panic!("waited {WAIT:?} for {what}: {err}"))
+    match Deadline::after(WAIT).recv(&done_rx) {
+        Ok(values) => values,
+        Err(err) => panic!("waited {WAIT:?} for {what}: {err}"),
+    }
 }
 
 fn disconnected<T: std::fmt::Debug>(result: Result<T, mpsc::RecvTimeoutError>, what: &str) {
