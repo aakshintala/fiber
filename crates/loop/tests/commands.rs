@@ -1173,3 +1173,47 @@ fn a_shutdown_that_closes_the_inbox_during_a_standing_ask_leaves_the_request_pen
     let exited = log::read(&session.dir).unwrap().pop().unwrap();
     assert_eq!(exited.payload["suspended_on"], request_id);
 }
+
+/// Writes the `late` skill into `workspace`'s `.agents/skills/`.
+fn late_skill(workspace: &Path) {
+    let dir = workspace.join(".agents/skills/late");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: late\ndescription: Runs late.\n---\nRuns late.\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_skill_written_after_the_first_lookup_is_sent_as_written() {
+    let mut session = Session::new(vec![Scripted::text("Hi."), Scripted::text("Again.")], None);
+    session.inbox.send(support::delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(kinds(&session.lines()), plain());
+    // Written after the opening's discovery, the skill is unknown to the
+    // maintained set: the prompt is sent as written.
+    late_skill(&session.workspace);
+    session.inbox.send(support::delivery("/late 1")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let started = lines
+        .iter()
+        .find(|line| line.kind == "turn_started")
+        .unwrap();
+    assert_eq!(started.payload["input"][0]["content"][0]["text"], "/late 1");
+}

@@ -57,6 +57,8 @@ consumer observes it. A security boundary, such as the credential deny or a
 permission denial, is tested at binary level: the call is refused, it never
 starts, and no protected bytes reach the output or an artifact.
 
+Tests read a repository file only by compiling it in; the gate fails on a run-time read.
+
 ### Event streams
 
 An event-stream test asserts two things:

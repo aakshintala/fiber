@@ -36,7 +36,8 @@ jobs:
   select:
     name: Selection
     runs-on: ubuntu-24.04
-    # Median 44 s; the 5-minute floor applies (docs/ci.md, "Job time limits").
+    # Median 44 s; the slowest passing run of the last 25 took 65 s, so the 5-minute
+    # floor covers twice it (docs/ci.md, "Job time limits").
     timeout-minutes: 5
     permissions:
       contents: read
@@ -157,7 +158,7 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).lint
     runs-on: ubuntu-24.04
-    # Median 55 s; floor.
+    # Median 55 s, slowest passing run of the last 25 69 s; the 5-minute floor covers twice it.
     timeout-minutes: 5
     env:
       BASE: ${{ needs.select.outputs.base }}
@@ -207,8 +208,10 @@ jobs:
         # A draft runs Linux x86_64 only; marking it ready runs all three (docs/ci.md).
         runner: ${{ github.event.pull_request.draft && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "ubuntu-24.04-arm", "macos-26"]') }}
     runs-on: ${{ matrix.runner }}
-    # Medians: Linux 4 min, macOS 7 min.
-    timeout-minutes: ${{ matrix.runner == 'macos-26' && 15 || 10 }}
+    # Warm medians: Linux 4 min, macOS 7 min. The slowest passing run of the last
+    # 25, a window that holds the cache-eviction runs, took 9 min on Linux and
+    # 12 min on macOS; the bound is twice that (docs/ci.md, "Job time limits").
+    timeout-minutes: ${{ matrix.runner == 'macos-26' && 25 || 20 }}
     env:
       BASE: ${{ needs.select.outputs.base }}
     steps:
@@ -314,7 +317,7 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).bug_red
     runs-on: ubuntu-24.04
-    # One run, 3 min.
+    # One run, 3 min; the slowest passing run of the last 25 took 3.5 min; 10 minutes covers twice it.
     timeout-minutes: 10
     env:
       BASE: ${{ needs.select.outputs.base }}
@@ -334,9 +337,11 @@ jobs:
     if: fromJSON(needs.select.outputs.jobs).release
     runs-on: ubuntu-24.04
     # The release build, the debug benchmark harness build, the paging jig's
-    # head and base builds and the benchmarks ran in about 7.5 minutes on the
-    # pull request that added the jig (docs/ci.md, "Job time limits").
-    timeout-minutes: 15
+    # head and base builds and the benchmarks take about 7 minutes warm. The
+    # cold steps sum to about 14 minutes (release-size 6.8, paging jig 2.1,
+    # benchmarks 5.3+; those runs timed out at 15), and the bound is twice
+    # that (docs/ci.md, "Job time limits").
+    timeout-minutes: 30
     env:
       BASE: ${{ needs.select.outputs.base }}
       # C code (lua-src, ring) compiles against musl's headers; the Rust linker stays the default.

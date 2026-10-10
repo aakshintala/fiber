@@ -13,6 +13,7 @@ use crate::prompt::PromptInputs;
 use crate::skill_header::{self, Invalid};
 
 /// A skill found in one place.
+#[derive(Clone, Debug)]
 pub(crate) struct Found {
     /// The `SKILL.md` discovery opened, lossless.
     pub(crate) file: PathBuf,
@@ -289,29 +290,16 @@ pub(crate) fn split_command(text: &str) -> Option<(&str, &str)> {
 /// Expands a `prompt` whose first word is `/name` into the skill's text,
 /// then the rest of the prompt as its arguments (`docs/invocation.md`,
 /// "Driver commands"): the body, then, when the arguments are non-empty,
-/// one blank line and the arguments. `None` means "send as written": the
-/// first part is no text, names no skill, is switched off, or its
-/// `SKILL.md` cannot be read at expansion. Every discovered skill counts,
-/// including `disable-model-invocation` and extension `prompts/` skills;
-/// the winner of a shared name is the one `discover` keeps. Only the first
-/// content part changes.
-pub(crate) fn expand(
-    inputs: &PromptInputs,
-    top: &Path,
-    content: &[ContentPart],
-) -> Option<Vec<ContentPart>> {
+/// one blank line and the arguments. `file` is the winner's `SKILL.md`,
+/// as the session's maintained set holds it. `None` means "send as
+/// written": the first part is no text, names no command, or the file
+/// cannot be read at expansion. Only the first content part changes.
+pub(crate) fn expand(file: &Path, content: &[ContentPart]) -> Option<Vec<ContentPart>> {
     let Some((ContentPart::Text { text }, rest)) = content.split_first() else {
         return None;
     };
-    let (name, args) = split_command(text)?;
-    if inputs.skills_disabled.iter().any(|off| off == name) {
-        return None;
-    }
-    let found = discover(inputs, top)
-        .skills
-        .into_iter()
-        .find(|found| found.listed.name == name)?;
-    let raw = std::fs::read(&found.listed.path).ok()?;
+    let (_, args) = split_command(text)?;
+    let raw = std::fs::read(file).ok()?;
     let read = String::from_utf8_lossy(&raw);
     let body = skill_header::body(&read)?;
     let expanded = if args.is_empty() {

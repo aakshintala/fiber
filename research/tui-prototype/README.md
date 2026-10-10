@@ -19,7 +19,7 @@ cargo run --release -- fixtures/session.jsonl
 | `--static` | loads the whole file at once |
 | `--reduced-motion` | keeps the working line's word still; `FIBER_REDUCED_MOTION=1` does the same |
 | `--hover` | also turns on mode 1003, every mouse motion, and tints the click target under the pointer; see "Hover's cost" |
-| `--home CASE` | draws the home screen case instead of the conversation; see "Home (#1628)" |
+| `--home [CASE]` | draws the home screen case instead of the conversation, or the live home with no case; see "Home (#1628, #1657)" |
 | `--overlay CASE` | draws one overlay case over a dimmed conversation; see "Overlays (#1630)" |
 | `--rail A\|B\|C` | the session rail design at start: list, cards, or tabs; the default is B; F2 cycles; see "The rail (#692)" |
 | `--rail-share P` | the rail's width at start, as a percent of the window; the default is 15, clamped to [22, 48] columns |
@@ -42,19 +42,32 @@ cargo run --release -- fixtures/session.jsonl
 
 The key map is under "Stage 2".
 
-## Home (#1628)
+## Home (#1628, #1657)
 
-`--home CASE` draws the home screen instead of the conversation: the logo,
+`--home [CASE]` draws the home screen instead of the conversation: the logo,
 the large input box with its chip row, and the session list, or the workspace
-picker over home. Each case draws one static frame from the fixtures in
-`src/home.rs` (six exited sessions with name or first prompt, spend and
-workspace segment; four recent workspaces; `~/work/fi` completing to `fiber`
-and `fiber-worktrees`) and waits for a key; Esc, q or Ctrl+C quits. Combine
-with `--static`; the fixture still loads but home ignores it.
+picker over home. With no case, or a `live` case, home runs its event loop:
+typing fills the box and Enter switches to the conversation view; clicking
+the workspace chip opens the workspace picker; the model and thinking chips
+open the model picker; `/` opens slash completions; ↑↓ and Enter work on
+the session list; q quits. The other cases each draw one still frame from
+the fixtures in `src/home.rs` and wait for a key; Esc, q or Ctrl+C quits.
+Combine with `--static`; the fixture still loads but home ignores it.
+
+The logo is real Fiber's: the pixel letters copied from
+`crates/tui/src/logo.rs`, and where the terminal speaks kitty graphics (kitty,
+Ghostty or WezTerm, never under tmux or screen) an image tints the checked-in
+`assets/logo-mask.bin` copy with the theme's accents and replaces the pixel
+letters in exactly the same cells. The pixel logo draws first and the image
+replaces it from the second draw, so detection never delays the first frame.
+iTerm2 and Sixel are not drawn; the pixel logo stays there.
 
 ```sh
 cargo run --release -- fixtures/session.jsonl --static --home empty
 cargo run --release -- fixtures/session.jsonl --static --home sessions
+cargo run --release -- fixtures/session.jsonl --static --home live-only
+cargo run --release -- fixtures/session.jsonl --static --home past-only
+cargo run --release -- fixtures/session.jsonl --static --home selected
 cargo run --release -- fixtures/session.jsonl --static --home hover-workspace
 cargo run --release -- fixtures/session.jsonl --static --home hover-worktree
 cargo run --release -- fixtures/session.jsonl --static --home hover-model
@@ -65,19 +78,27 @@ cargo run --release -- fixtures/session.jsonl --static --home picker-recent
 cargo run --release -- fixtures/session.jsonl --static --home picker-typed
 ```
 
-- `empty`: home with an empty session list.
-- `sessions`: home with six exited sessions (○, name or first prompt, spend,
-  the workspace's last segment outside the launch project).
+- `live`: the interactive home and its keys (see below); `--home` with no
+  case runs this.
+- `empty`: home with an empty session list, a still frame.
+- `sessions`: five live sessions under `Live sessions` and six exited ones
+  under `Past sessions`, each a two-line row (the glyph, the name or first
+  prompt, its age and its verb; dim `id · turns · branch · spend` with the
+  workspace segment and the wait), a still frame.
+- `live-only`, `past-only`: one section only, still frames.
+- `selected`: the first live row selected, a still frame.
 - `hover-workspace`, `hover-worktree`, `hover-model`, `hover-thinking`: one
-  chip hovered (the `lift` tint, as `--hover` does it).
-- `worktree-on`, `worktree-off`: the new-worktree switch on and off.
-- `picker-recent`: the picker over home with recent workspaces only.
+  chip hovered (the `lift` tint, as `--hover` does it), still frames.
+- `worktree-on`, `worktree-off`: the new-worktree switch on and off, still
+  frames.
+- `picker-recent`: the picker over home with recent workspaces only, a
+  still frame.
 - `picker-typed`: the picker over home with the typed-path row
   (`~/work/fi` completing to `fiber` and `fiber-worktrees`, first row
-  selected) over the recents; this settles #1604 Q7.
+  selected) over the recents, a still frame; this settles #1604 Q7.
 
-`./capture-home.sh` captures every case in tmux at 160 by 48, plain text and
-SGR, for the ticket's PR body.
+`./capture-home.sh` captures every still frame in tmux at 160 by 48, plain
+text and SGR, for the ticket's PR body.
 
 ## Overlays (#1630)
 

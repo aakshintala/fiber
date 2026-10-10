@@ -42,12 +42,7 @@ fn a_bare_name_is_ambiguous_once_a_dependency_shares_it() {
 
 #[test]
 fn markdown_docs_and_research_run_the_docs_job_alone() {
-    let files = strings(&[
-        "docs/ci.md",
-        "README.md",
-        "crates/loop/notes.md",
-        "research/x/run.sh",
-    ]);
+    let files = strings(&["README.md", "crates/loop/notes.md", "research/x/run.sh"]);
     let selection = classify(&files, &members());
     assert_eq!(selection, Selection::Docs);
     assert_eq!(selection.mode(), "docs");
@@ -144,6 +139,20 @@ fn a_compiled_in_doc_runs_its_crate_alone() {
         );
         assert_eq!(selection.mode(), "crates", "{path}");
     }
+}
+
+#[test]
+fn a_shared_compiled_in_doc_runs_every_crate_that_compiles_it_in() {
+    let selection = classify(&strings(&["docs/tui.md"]), &members_with_tools());
+    assert_eq!(selection, Selection::Crates(strings(&["contract", "tui"])));
+    assert_eq!(selection.mode(), "crates");
+}
+
+#[test]
+fn a_compiled_in_ci_doc_runs_xtask() {
+    let selection = classify(&strings(&["docs/ci.md"]), &members_with_tools());
+    assert_eq!(selection, Selection::Crates(strings(&["xtask"])));
+    assert_eq!(selection.mode(), "crates");
 }
 
 #[test]
@@ -940,14 +949,60 @@ fn tools_src(source: &str) -> RustFile {
     }
 }
 
-/// `members()` with the `tools` crate: only the compiled-in tests name
-/// it, so the selection tests keep the smaller fixture.
+fn tui_src(source: &str) -> RustFile {
+    RustFile {
+        krate: "tui".to_owned(),
+        path: "crates/tui/src/theme_tests.rs".to_owned(),
+        rel: "src/theme_tests.rs".to_owned(),
+        source: source.to_owned(),
+    }
+}
+
+fn xtask_src(source: &str) -> RustFile {
+    RustFile {
+        krate: "xtask".to_owned(),
+        path: "xtask/src/ci_needs_tests.rs".to_owned(),
+        rel: "src/ci_needs_tests.rs".to_owned(),
+        source: source.to_owned(),
+    }
+}
+
+fn main_src(source: &str) -> RustFile {
+    RustFile {
+        krate: "main".to_owned(),
+        path: "crates/main/tests/ask.rs".to_owned(),
+        rel: "tests/ask.rs".to_owned(),
+        source: source.to_owned(),
+    }
+}
+
+/// `members()` with the `tools`, `tui` and `xtask` crates: only the
+/// compiled-in tests name them, so the selection tests keep the smaller
+/// fixture.
 fn members_with_tools() -> Members {
     let mut members = members();
     members.insert(
         "tools".to_owned(),
         Member {
             dir: "crates/tools".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            library: true,
+        },
+    );
+    members.insert(
+        "tui".to_owned(),
+        Member {
+            dir: "crates/tui".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            library: true,
+        },
+    );
+    members.insert(
+        "xtask".to_owned(),
+        Member {
+            dir: "xtask".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
             library: true,
@@ -971,7 +1026,21 @@ fn listed_files() -> Vec<RustFile> {
         contract_src(&listed_includes("contract")),
         loop_src(&listed_includes("loop")),
         tools_src(&listed_includes("tools")),
+        tui_src(&listed_includes("tui")),
+        xtask_src(&listed_includes("xtask")),
+        main_src(&listed_includes("main")),
     ]
+}
+
+/// `listed_files()` with the `contract` source replaced by `source`.
+fn listed_files_with_contract(source: &str) -> Vec<RustFile> {
+    let mut files = listed_files();
+    for file in &mut files {
+        if file.krate == "contract" {
+            *file = contract_src(source);
+        }
+    }
+    files
 }
 
 #[test]
@@ -989,11 +1058,7 @@ fn an_unlisted_outside_include_fails() {
         "{}include_str!(\"../../../README.md\");",
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         ["README.md: contract compiles it in, but the compiled-in list does not list it"]
@@ -1006,11 +1071,7 @@ fn an_unlisted_non_docs_outside_include_fails() {
         "{}include_str!(\"../../../LICENSE\");",
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         ["LICENSE: contract compiles it in, but the compiled-in list does not list it"]
@@ -1023,11 +1084,7 @@ fn an_unlisted_markdown_inside_the_crate_dir_fails() {
         "{}include_str!(\"../prompt/system.md\");",
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         [
@@ -1056,11 +1113,7 @@ fn a_non_docs_include_inside_the_crate_dir_is_unlisted() {
         "{}include_str!(\"owned.bin\");",
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         Vec::<String>::new()
@@ -1074,11 +1127,7 @@ fn a_raw_string_include_is_resolved() {
         r##"include_str!(r#"../../../README.md"#);"##,
     ] {
         let source = format!("{}{extra}", listed_includes("contract"));
-        let files = [
-            contract_src(&source),
-            loop_src(&listed_includes("loop")),
-            tools_src(&listed_includes("tools")),
-        ];
+        let files = listed_files_with_contract(&source);
         assert_eq!(
             compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
             ["README.md: contract compiles it in, but the compiled-in list does not list it"],
@@ -1093,11 +1142,7 @@ fn an_unresolvable_include_argument_fails() {
         "{}include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../README.md\"));",
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         [
@@ -1109,11 +1154,7 @@ fn an_unresolvable_include_argument_fails() {
 #[test]
 fn another_macro_with_a_string_argument_yields_no_target() {
     let source = format!("{}my_macro!(\"../x.md\");", listed_includes("contract"));
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         Vec::<String>::new()
@@ -1126,11 +1167,7 @@ fn include_bytes_yields_its_target() {
         "{}include_bytes!(\"../x.md\");",
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         [
@@ -1146,11 +1183,7 @@ fn a_trailing_comma_on_an_include_is_accepted() {
         r#"include_bytes!("../../../README.md",);"#,
     ] {
         let source = format!("{}{extra}", listed_includes("contract"));
-        let files = [
-            contract_src(&source),
-            loop_src(&listed_includes("loop")),
-            tools_src(&listed_includes("tools")),
-        ];
+        let files = listed_files_with_contract(&source);
         assert_eq!(
             compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
             ["README.md: contract compiles it in, but the compiled-in list does not list it"],
@@ -1165,11 +1198,7 @@ fn an_include_with_tokens_after_the_literal_fails() {
         r#"{}include_str!("a.md", "b");"#,
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         [
@@ -1362,23 +1391,13 @@ fn package_ok_files() -> Vec<RustFile> {
     ]
 }
 
-/// `members()` with the `tools` and `xtask` crates: only the package-reader
-/// tests name them, so the selection tests keep the smaller fixture.
+/// The members the package-reader tests use.
 fn package_members() -> Members {
     let mut members = members_with_tools();
     members.insert(
         "cli".to_owned(),
         Member {
             dir: "crates/cli".to_owned(),
-            version: "0.0.0".to_owned(),
-            deps: Vec::new(),
-            library: true,
-        },
-    );
-    members.insert(
-        "xtask".to_owned(),
-        Member {
-            dir: "xtask".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
             library: true,
@@ -1567,15 +1586,653 @@ fn an_include_str_in_a_comment_is_ignored() {
         "{}// include_str!(\"../../../README.md\");",
         listed_includes("contract")
     );
-    let files = [
-        contract_src(&source),
-        loop_src(&listed_includes("loop")),
-        tools_src(&listed_includes("tools")),
-    ];
+    let files = listed_files_with_contract(&source);
     assert_eq!(
         compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
         Vec::<String>::new()
     );
+}
+
+fn runtime_src(krate: &str, path: &str, rel: &str, source: &str) -> RustFile {
+    RustFile {
+        krate: krate.to_owned(),
+        path: path.to_owned(),
+        rel: rel.to_owned(),
+        source: source.to_owned(),
+    }
+}
+
+#[test]
+fn a_read_to_string_of_a_docs_path_is_a_run_time_read() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "let doc = std::fs::read_to_string(\"../../docs/tui.md\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_fs_read_of_a_prompt_path_is_a_run_time_read() {
+    let files = [runtime_src(
+        "loop",
+        "crates/loop/src/reviewer.rs",
+        "src/reviewer.rs",
+        "let raw = std::fs::read(\"../prompt/system.md\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/loop/src/reviewer.rs: reads ../prompt/system.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_file_open_of_a_docs_path_is_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "let file = std::fs::File::open(\"../../docs/errors.md\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/contract/src/lib.rs: reads ../../docs/errors.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_concat_on_the_manifest_dir_is_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "let doc = read_to_string(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../docs/ci.md\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/contract/src/lib.rs: reads /../docs/ci.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_join_in_a_manifest_file_is_a_run_time_read() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../docs/tui.md\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_read_of_a_computed_path_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let doc = std::fs::read_to_string(home.join(\"docs/README.md\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_join_without_the_manifest_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let path = home.join(\"docs/README.md\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_join_onto_a_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/ask.rs",
+        "tests/ask.rs",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet doc = std::fs::read_to_string(home.join(\"docs/README.md\")).unwrap();\nlet dir = home.join(\"docs/skills\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_join_on_a_bound_manifest_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet doc = std::fs::read_to_string(base.join(\"../../docs/tui.md\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_chained_bound_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "let a = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet b = a.join(\"x\");\nlet doc = b.join(\"docs/y\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/tui/src/theme_tests.rs: reads docs/y at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_bound_temp_dir_base_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let dir = tempdir().unwrap();\nlet doc = std::fs::read_to_string(dir.join(\"docs/README.md\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_let_without_the_manifest_binds_nothing() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = home_dir();\nlet p = base.join(\"docs/x\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_typed_manifest_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "let base: &Path = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet doc = base.join(\"../../docs/tui.md\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_mut_manifest_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "let mut base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet doc = base.join(\"../../docs/tui.md\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_manifest_base_shadowed_by_a_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet base = tempdir();\nlet p = base.join(\"docs/x\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_temp_dir_shadowed_by_a_manifest_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = tempdir();\nlet base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = base.join(\"docs/x\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/main/tests/release.rs: reads docs/x at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_block_binding_does_not_leak_to_a_sibling_block() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "{ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); }\nlet p = base.join(\"docs/x\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_outer_binding_is_visible_in_a_nested_block() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nif x { base.join(\"docs/x\"); }\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/main/tests/release.rs: reads docs/x at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_ref_to_a_bound_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = fs::read_to_string(&base.join(\"docs/a\"));\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/main/tests/release.rs: reads docs/a at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_mut_ref_to_a_bound_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = &mut base.join(\"docs/b\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/main/tests/release.rs: reads docs/b at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_deref_of_a_bound_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = *base.join(\"docs/c\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/main/tests/release.rs: reads docs/c at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_parenthesised_bound_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = (base).join(\"docs/d\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/main/tests/release.rs: reads docs/d at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_parenthesised_ref_to_a_bound_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = (&base).join(\"docs/e\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/main/tests/release.rs: reads docs/e at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_rebuilt_path_on_a_bound_base_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = Path::new(base).join(\"docs/f\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        ["crates/main/tests/release.rs: reads docs/f at run time; compile it in with include_str!"]
+    );
+}
+
+#[test]
+fn a_ref_to_a_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = &home.join(\"docs/a\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_mut_ref_to_a_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = &mut home.join(\"docs/b\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_deref_of_a_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = *home.join(\"docs/c\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_parenthesised_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = (home).join(\"docs/d\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_parenthesised_ref_to_a_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = (&home).join(\"docs/e\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_rebuilt_path_on_a_temp_dir_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet p = Path::new(home).join(\"docs/f\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_read_argument_block_does_not_leak_its_bindings() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "read_to_string({ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); \"x\" });\nbase.join(\"docs/x\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_concat_argument_block_does_not_leak_its_bindings() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let c = concat!({ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); \"x\" });\nbase.join(\"docs/x\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_join_argument_block_does_not_leak_its_bindings() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "outer.join({ let base = Path::new(env!(\"CARGO_MANIFEST_DIR\")); \"docs/x\" });\nbase.join(\"docs/y\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_partial_segment_is_not_a_repository_path() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "let a = std::fs::read_to_string(\"mydocs/x.md\").unwrap();\nlet b = std::fs::read_to_string(\"docs.md\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_concat_without_the_manifest_dir_or_the_bang_is_not_a_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "let a = concat!(\"docs/tui.md\", \"b\");\nlet b = concat(\"docs/tui.md\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_xtask_command_read_is_not_a_test_read() {
+    let source = "let doc = std::fs::read_to_string(\"../../docs/ci.md\").unwrap();\n";
+    let files = [
+        runtime_src("xtask", "xtask/src/main.rs", "src/main.rs", source),
+        runtime_src(
+            "xtask",
+            "xtask/src/ci_needs_tests.rs",
+            "src/ci_needs_tests.rs",
+            source,
+        ),
+        runtime_src("xtask", "xtask/tests/cli.rs", "tests/cli.rs", source),
+    ];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "xtask/src/ci_needs_tests.rs: reads ../../docs/ci.md at run time; compile it in with include_str!",
+            "xtask/tests/cli.rs: reads ../../docs/ci.md at run time; compile it in with include_str!"
+        ]
+    );
+}
+
+#[test]
+fn a_path_in_a_comment_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "// let doc = read_to_string(\"../../docs/tui.md\");\nlet x = 1;\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_include_str_of_the_same_path_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "let doc = include_str!(\"../../../docs/tui.md\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_typed_let_without_a_value_does_not_bind_its_name_to_a_later_value() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let p: PathBuf;\nlet base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\np.join(\"docs/x\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_method_other_than_join_on_a_manifest_base_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "Path::new(env!(\"CARGO_MANIFEST_DIR\")).exists_at(\"docs/x\");\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn no_files_give_no_run_time_reads() {
+    assert_eq!(
+        runtime_read_mismatches(&[], &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_file_outside_the_workspace_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "nope",
+        "elsewhere/src/lib.rs",
+        "src/lib.rs",
+        "let doc = std::fs::read_to_string(\"../../docs/tui.md\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_file_that_does_not_tokenise_fails_the_run_time_check() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "fn broken( {\n",
+    )];
+    let failure = runtime_read_mismatches(&files, &members_with_tools()).unwrap_err();
+    assert!(
+        failure.starts_with("crates/contract/src/lib.rs: does not tokenise as Rust: "),
+        "{failure}"
+    );
+}
+
+#[test]
+fn a_shared_compiled_in_skill_runs_every_crate_that_compiles_it_in() {
+    let selection = classify(
+        &strings(&["docs/skills/using-fiber/SKILL.md"]),
+        &members_with_tools(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["loop", "main"])));
+    assert_eq!(selection.mode(), "crates");
 }
 
 #[test]

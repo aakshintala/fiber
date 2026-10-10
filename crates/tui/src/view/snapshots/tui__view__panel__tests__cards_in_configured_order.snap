@@ -5,17 +5,15 @@ expression: "super::super::text(&buf)"
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
   directory  …sers/you/work/fiber
-  model  test/model · thinking hi
-  context  50% of 1.0k tokens
-  ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆░░░░░░░░░│░░░░░░
-  │ handoff at 800 tokens: Fiber
-  writes a summary and the work
-  continues in a fresh context
+  model  test/model · thinking h…
+  ▆▆▆▆▆▆▆▆▆▆░░░░░░░│          500
+  handoff at 800    50% of window
+  then a summary, fresh context
   tokens in / out  1.1k / 200
   cache hits  9%
   cost billed  $0.41
   cost on subscription  $1.10
-  output speed, last reply  250 t
+  output speed, last reply  250 …
   turns  1
   tools  relay down
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

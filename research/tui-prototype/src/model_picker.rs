@@ -192,6 +192,44 @@ fn base() -> State {
     State { still: STILL.load(Relaxed), ..Default::default() }
 }
 
+/// The picker's choice as an id and a level: the focused model's id, and
+/// the focused chip's level, else the model's own level.
+pub fn chosen(s: &State) -> (&'static str, &'static str) {
+    let mut i = 0;
+    for p in fixture() {
+        for m in &p.models {
+            if i == s.focus {
+                let level = match s.chip {
+                    Some(j) => m.levels.get(j).copied().unwrap_or(""),
+                    None => m.level.unwrap_or(""),
+                };
+                return (m.id, level);
+            }
+            i += 1;
+        }
+    }
+    ("", "")
+}
+
+/// Opens the picker on one model: `base` focused on the model's flat
+/// index (0 when unknown), the chip the index of `level` in that model's
+/// levels.
+pub fn opened_at(model: &str, level: Option<&str>) -> State {
+    let mut s = base();
+    let mut i = 0;
+    for p in fixture() {
+        for m in &p.models {
+            if m.id == model {
+                s.focus = i;
+                s.chip = level.and_then(|l| m.levels.iter().position(|&x| x == l));
+                return s;
+            }
+            i += 1;
+        }
+    }
+    s
+}
+
 pub fn for_case(case: &str) -> State {
     crate::cases::lookup(CASES, case).unwrap_or_else(|| panic!("--picker {}", crate::cases::names(CASES).replace(", ", "|")))
 }
@@ -660,6 +698,27 @@ mod tests {
             t.contains("this session only · nothing saved"),
             "missing the note"
         );
+    }
+
+    #[test]
+    fn chosen_reads_focus_and_chip() {
+        assert_eq!(chosen(&for_case("list")), ("claude-opus-5-5", "high"));
+        let mut sonnet = for_case("list");
+        sonnet.focus = 1;
+        assert_eq!(chosen(&sonnet), ("claude-sonnet-5-5", "medium"));
+        let mut low = for_case("list");
+        low.chip = Some(0);
+        assert_eq!(chosen(&low), ("claude-opus-5-5", "low"));
+    }
+
+    #[test]
+    fn opened_at_focuses_model_and_level() {
+        let s = opened_at("claude-sonnet-5-5", None);
+        assert_eq!((s.focus, s.chip), (1, None));
+        let s = opened_at("claude-opus-5-5", Some("low"));
+        assert_eq!((s.focus, s.chip), (0, Some(0)));
+        let s = opened_at("no-such-model", None);
+        assert_eq!((s.focus, s.chip), (0, None));
     }
 
     #[test]
