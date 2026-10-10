@@ -431,10 +431,7 @@ fn the_hub_wait_outlives_the_sockets_absence() {
         thread::yield_now();
     }
     // The old condition is already true while the hub lives.
-    assert!(
-        !socket.exists(),
-        "the socket is gone while the hub lives"
-    );
+    assert!(!socket.exists(), "the socket is gone while the hub lives");
     let home = dir.path().to_string_lossy().into_owned();
     assert_eq!(
         hub_pids(&list_processes(deadline.left()), &home),
@@ -450,7 +447,10 @@ fn the_hub_wait_outlives_the_sockets_absence() {
         .recv_timeout(deadline.left())
         .expect("the fake hub back after the release")
         .expect("the fake hub reaped");
-    assert!(status.success(), "the fake hub exits cleanly after the release");
+    assert!(
+        status.success(),
+        "the fake hub exits cleanly after the release"
+    );
     assert!(
         hub_pids(&list_processes(deadline.left()), &home).is_empty(),
         "no hub of this run remains"
