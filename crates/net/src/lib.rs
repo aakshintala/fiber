@@ -1,14 +1,17 @@
 //! The TLS configuration every HTTPS call uses, the connector that keeps
-//! each request's socket so another thread can close it, and the error its
-//! socket reports (`docs/architecture.md`, "The modules", "Cancellation";
-//! `docs/dependencies.md`, "Root certificates", "Proxies"). [`config`]
+//! each request's socket so another thread can close it, the limits that
+//! bound each call's socket, and the error its socket reports
+//! (`docs/architecture.md`, "The modules", "Cancellation";
+//! `docs/dependencies.md`, "Root certificates", "Proxies";
+//! `docs/model-routing.md`, "When a model call fails"). [`config`]
 //! carries the platform verifier, or on Linux Mozilla's roots when the
 //! system store is empty, and nothing else; each caller sets its own
 //! proxy and request policy on top.
 
 use std::io;
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use ureq::tls::{RootCerts, TlsConfig};
 use ureq::unversioned::resolver::Resolver;
@@ -84,10 +87,74 @@ pub fn agent<K: Keep>(
     config: ureq::config::Config,
     keep: Arc<K>,
     resolver: impl Resolver,
+    limits: Limits,
 ) -> ureq::Agent {
-    let connector = ConnectProxyConnector::default().chain(KeepSocket::new(keep));
+    let connector = ConnectProxyConnector::default().chain(KeepSocket::new(keep, limits));
     let connector = connector.chain(RustlsConnector::default());
     ureq::Agent::with_parts(config, connector, resolver)
+}
+
+/// How long one call may wait on its socket: each resolved address gets
+/// [`Limits::connect`] to connect, and each read or write syscall gets
+/// [`Limits::idle`] to move a byte, from the request being sent through
+/// the end of the stream (`docs/model-routing.md`, "When a model call
+/// fails"). Both are kernel timeouts, so no clock is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    connect: Duration,
+    idle: Duration,
+}
+
+/// The production limits: 15 seconds per address to connect, 300 seconds
+/// without a byte in either direction.
+pub const LIMITS: Limits = Limits {
+    connect: Duration::from_secs(15),
+    idle: Duration::from_secs(300),
+};
+
+impl Limits {
+    /// Some limit unless either bound is zero. A zero would make the
+    /// socket call fail with `InvalidInput`, so it is refused here.
+    pub fn new(connect: Duration, idle: Duration) -> Option<Self> {
+        if connect.is_zero() || idle.is_zero() {
+            None
+        } else {
+            Some(Self { connect, idle })
+        }
+    }
+
+    /// How long one resolved address may take to connect.
+    pub fn connect(&self) -> Duration {
+        self.connect
+    }
+
+    /// How long one read or write syscall may wait for progress.
+    pub fn idle(&self) -> Duration {
+        self.idle
+    }
+}
+
+impl Default for Limits {
+    /// The production limits.
+    fn default() -> Self {
+        LIMITS
+    }
+}
+
+/// Whether `error` is a socket timeout: ureq's own deadline or a socket
+/// read, write or connect that waited out its bound.
+#[must_use]
+pub fn timed_out(error: &ureq::Error) -> bool {
+    if matches!(error, ureq::Error::Timeout(_)) {
+        return true;
+    }
+    // Only the timed-out kind is a timeout; a refused or reset peer is
+    // not, and `timed_out_is_false_for_a_refused_peer` fails when this
+    // guard flips to true.
+    matches!(
+        error,
+        ureq::Error::Io(timed) if timed.kind() == io::ErrorKind::TimedOut
+    )
 }
 
 /// One call's handle on its socket: keeping the handle lets another thread
@@ -121,6 +188,20 @@ pub enum Error {
     /// The call was stopped before a connect attempt started.
     #[error("the call was stopped")]
     Stopped,
+    /// No byte arrived or was sent within the idle bound.
+    #[error("no bytes for {idle:?}")]
+    Stalled {
+        /// The idle bound that expired.
+        idle: Duration,
+    },
+    /// No address accepted a connection within its bound.
+    #[error("could not connect to {addr} within {limit:?}")]
+    ConnectTimedOut {
+        /// The address that did not connect.
+        addr: SocketAddr,
+        /// The per-address bound that expired.
+        limit: Duration,
+    },
 }
 
 impl Error {
@@ -128,6 +209,8 @@ impl Error {
     pub fn code(&self) -> contract::ErrorCode {
         match self {
             Self::Stopped => contract::ErrorCode::ConnectionFailed,
+            Self::Stalled { .. } => contract::ErrorCode::ConnectionFailed,
+            Self::ConnectTimedOut { .. } => contract::ErrorCode::ConnectionFailed,
         }
     }
 }

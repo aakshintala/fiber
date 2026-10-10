@@ -2,7 +2,9 @@
 //! can close it (`docs/tools.md`, "Cancellation"). Each hop runs its own
 //! agent over the shared connector in `net`, which keeps a handle to the
 //! hop's socket; shutting that handle down ends a read blocked inside ureq,
-//! under TLS too. The watcher
+//! under TLS too. The hop uses `net`'s connect and idle socket timeouts;
+//! its deadlines on the injected clock still end a hop, and its 60 s ends
+//! a stalled read before the 300 s idle limit. The watcher
 //! waits on the injected clock for the hop's deadline and on the call's
 //! cancel, so ureq's own timeouts, which read the process clock, stay unset.
 //! The chain tunnels through the proxy the environment names
@@ -274,6 +276,7 @@ impl Hop {
                 .build(),
             Arc::clone(self),
             Pinned(request.pinned.map(<[SocketAddr]>::to_vec)),
+            net::LIMITS,
         );
         let response = agent
             .get(request.uri.clone())
