@@ -22,8 +22,8 @@ use fakes::{Deadline, TempDir, Watchdog, kill_group};
 use rustix::process::Signal;
 
 use super::{
-    Error, GROUP_POLL, alive, kill_every_group, live, refused, signal, signal_name,
-    signal_process, spawn,
+    Error, GROUP_POLL, alive, kill_every_group, live, refused, signal, signal_name, signal_process,
+    spawn,
 };
 
 /// How long a test waits on a child before it fails.
@@ -90,7 +90,10 @@ fn signal_kill_ends_a_live_group() {
 
 #[test]
 fn signal_to_a_gone_group_is_ok() {
-    assert!(signal(UNUSED, Signal::TERM).is_ok(), "a gone group reads as Ok");
+    assert!(
+        signal(UNUSED, Signal::TERM).is_ok(),
+        "a gone group reads as Ok"
+    );
 }
 
 #[test]
@@ -157,7 +160,10 @@ fn two_listings_are_two_entries() {
     assert_eq!(live().len(), before + 2);
 
     live().unlist(first);
-    assert!(live().contains(UNUSED_TWO), "unlisting one entry keeps the id");
+    assert!(
+        live().contains(UNUSED_TWO),
+        "unlisting one entry keeps the id"
+    );
     live().unlist(second);
     assert!(!live().contains(UNUSED_TWO), "unlisting both drops the id");
 }
@@ -228,7 +234,11 @@ fn spawn_after_a_kill_is_killed_at_its_listing() {
     let pgid = child.id();
     let watchdog = Watchdog::group(pgid);
 
-    assert_eq!(reap(child).signal(), Some(9), "the shutdown kill reached it");
+    assert_eq!(
+        reap(child).signal(),
+        Some(9),
+        "the shutdown kill reached it"
+    );
     live().unlist(listing);
     watchdog.stand_down(DEADLINE);
 }
@@ -243,7 +253,10 @@ fn kill_every_group_kills_a_listed_live_group() {
 
     kill_every_group();
     assert_eq!(reap(child).signal(), Some(9));
-    assert!(live().contains(pgid), "a killed group stays listed until reaped");
+    assert!(
+        live().contains(pgid),
+        "a killed group stays listed until reaped"
+    );
 
     // Reaped, the group is empty: the next kill drops it unsignalled.
     kill_every_group();

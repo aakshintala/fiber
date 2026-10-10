@@ -200,9 +200,7 @@ impl Live {
     /// else. The token is consumed, so one registration unlists once.
     pub fn unlist(&mut self, listing: Listing) {
         let serial = listing.serial;
-        self.guard
-            .entries
-            .retain(|(listed, _)| *listed != serial);
+        self.guard.entries.retain(|(listed, _)| *listed != serial);
     }
 }
 
