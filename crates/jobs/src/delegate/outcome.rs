@@ -1,6 +1,6 @@
 //! How a Fiber delegate's job ends: a pure fold over the termination
-//! reason the runner itself set, the one `fiber_exited` ruling 9 chose,
-//! and the exit status, checked in ruling 10's order
+//! reason the runner itself set, the `fiber_exited` the socket received
+//! or the drain kept, and the exit status, checked in that order
 //! (`docs/delegates.md`, "Lifetime").
 
 use std::collections::BTreeMap;
@@ -23,7 +23,7 @@ pub(crate) enum Termination {
     OutputCap,
 }
 
-/// The pure fold from ruling 10. `socket` is the subscription's
+/// The pure fold. `socket` is the subscription's
 /// `fiber_exited` when it received one; `stdout` is the drain's last line,
 /// used only then (`docs/delegates.md`, "Streams").
 pub(crate) fn outcome(
@@ -90,7 +90,7 @@ fn without_error(
     // Killed by a signal: with no `fiber_exited`, or after writing one,
     // for example by an outside SIGTERM.
     if let Some(number) = status.signal() {
-        let name = signal_name(number);
+        let name = support::group::signal_name(number);
         return failed(
             job_id,
             ErrorCode::Signal,
@@ -145,28 +145,9 @@ fn failed(job_id: &JobId, code: ErrorCode, message: &str, process: Process) -> J
 fn process_of(status: ExitStatus) -> Process {
     Process {
         exit_code: status.code(),
-        signal: status.signal().map(signal_name),
+        signal: status.signal().map(support::group::signal_name),
         timed_out: false,
     }
-}
-
-/// The signal's name, as shell jobs report it.
-fn signal_name(number: i32) -> String {
-    match number {
-        1 => "SIGHUP",
-        2 => "SIGINT",
-        3 => "SIGQUIT",
-        4 => "SIGILL",
-        6 => "SIGABRT",
-        8 => "SIGFPE",
-        9 => "SIGKILL",
-        11 => "SIGSEGV",
-        13 => "SIGPIPE",
-        14 => "SIGALRM",
-        15 => "SIGTERM",
-        _ => return format!("SIG{number}"),
-    }
-    .to_owned()
 }
 
 /// No `fiber_exited` was seen, so no model call is known: zero.
