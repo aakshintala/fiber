@@ -676,11 +676,7 @@ fn open_fully_parses_only_the_lines_it_folds() {
     for seq in 0..100_000u64 {
         let (kind, payload, action) = if seq % 10_000 == 0 {
             folded += 1;
-            (
-                "usage_recorded",
-                json!({}),
-                Some(format!("a_{seq}")),
-            )
+            ("usage_recorded", json!({}), Some(format!("a_{seq}")))
         } else if seq % 5_000 == 0 {
             folded += 1;
             ("preamble_built", json!({}), None)
@@ -703,9 +699,7 @@ fn open_fully_parses_only_the_lines_it_folds() {
             });
             bytes.extend_from_slice(format!("{line}\n").as_bytes());
         } else {
-            bytes.extend_from_slice(
-                fixture_line(kind, "s_1", 1, seq, &payload).as_bytes(),
-            );
+            bytes.extend_from_slice(fixture_line(kind, "s_1", 1, seq, &payload).as_bytes());
         }
     }
     session_log(&dir, &bytes);
@@ -729,9 +723,7 @@ fn open_opens_a_line_of_an_unfolded_kind_that_fails_the_envelope_schema() {
     let sessions = fakes::TempDir::new("log-unit-open-unfolded-bad");
     let dir = sessions.path().join("s_1");
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(
-        fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes(),
-    );
+    bytes.extend_from_slice(fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes());
     bytes.extend_from_slice(br#"{"kind":"turn_started","seq":1}"#.as_slice());
     bytes.push(b'\n');
     session_log(&dir, &bytes);
@@ -752,9 +744,7 @@ fn open_refuses_a_folded_line_that_fails_the_envelope_schema() {
     let sessions = fakes::TempDir::new("log-unit-open-folded-bad");
     let dir = sessions.path().join("s_1");
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(
-        fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes(),
-    );
+    bytes.extend_from_slice(fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes());
     bytes.extend_from_slice(br#"{"kind":"extensions_loaded","seq":1}"#.as_slice());
     bytes.push(b'\n');
     session_log(&dir, &bytes);
@@ -786,9 +776,7 @@ fn open_refuses_a_line_with_no_seq_or_no_kind() {
         let sessions = fakes::TempDir::new(&format!("log-unit-open-{name}"));
         let dir = sessions.path().join("s_1");
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(
-            fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes(),
-        );
+        bytes.extend_from_slice(fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes());
         bytes.extend_from_slice(second.as_bytes());
         bytes.push(b'\n');
         session_log(&dir, &bytes);
@@ -809,9 +797,7 @@ fn open_refuses_a_line_that_is_not_utf8() {
     let sessions = fakes::TempDir::new("log-unit-open-not-utf8");
     let dir = sessions.path().join("s_1");
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(
-        fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes(),
-    );
+    bytes.extend_from_slice(fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes());
     bytes.extend_from_slice(
         b"{\"kind\":\"turn_started\",\"session_id\":\"s_1\",\"ts\":1,\"schema_version\":1,\"seq\":1,\"payload\":{\"text\":\"",
     );
@@ -836,12 +822,8 @@ fn open_refuses_a_line_whose_seq_leaves_no_next() {
     let sessions = fakes::TempDir::new("log-unit-open-seq-max");
     let dir = sessions.path().join("s_1");
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(
-        fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes(),
-    );
-    bytes.extend_from_slice(
-        fixture_line("turn_started", "s", 1, u64::MAX, &json!({})).as_bytes(),
-    );
+    bytes.extend_from_slice(fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes());
+    bytes.extend_from_slice(fixture_line("turn_started", "s", 1, u64::MAX, &json!({})).as_bytes());
     session_log(&dir, &bytes);
     let whole = std::fs::read(dir.join(crate::EVENTS)).unwrap();
     let Err(err) = Log::open(
@@ -861,9 +843,7 @@ fn open_reads_an_escaped_kind() {
     let sessions = fakes::TempDir::new("log-unit-open-escaped");
     let dir = sessions.path().join("s_1");
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(
-        fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes(),
-    );
+    bytes.extend_from_slice(fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes());
     let escaped = r#"{"kind":"extensions\u005floaded","session_id":"s_1","ts":1,"schema_version":1,"seq":1,"payload":{"extensions":[]}}"#;
     bytes.extend_from_slice(escaped.as_bytes());
     bytes.push(b'\n');

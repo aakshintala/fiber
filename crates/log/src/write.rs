@@ -497,11 +497,7 @@ struct Head<'a> {
 fn latest_wins(kind: &str) -> bool {
     matches!(
         kind,
-        "session_status"
-            | "extensions_loaded"
-            | "steering_queue"
-            | "clients"
-            | "extension_ui"
+        "session_status" | "extensions_loaded" | "steering_queue" | "clients" | "extension_ui"
     )
 }
 
