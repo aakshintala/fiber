@@ -30,6 +30,15 @@ use super::{ENTRY, GRACE, Target, expired};
 pub(super) use super::declared::CallbackTimeouts;
 pub(crate) use super::declared::{DeclaredHooks, HookPhase};
 use super::errors::again;
+
+/// How many deliveries ending before any inbox are kept, newest first:
+/// an extension that ends more runs before any sender still delivers its
+/// latest lines in call order.
+pub(super) const MAX_PENDING_DELIVERIES: usize = 1024;
+
+/// How many ephemeral events emitted before any emitter are kept, newest
+/// first, flushed in call order on the first emitter.
+pub(super) const MAX_PENDING_EVENTS: usize = 1024;
 pub(super) use super::errors::{not_registered, stopped, timed_out};
 
 pub(crate) struct Hub {
@@ -217,7 +226,7 @@ impl Hub {
         // Whatever is not sent is moved out and dropped only after the
         // lock is released: a dropped `Resolved` answers its driver,
         // which may re-enter this hub.
-        let unsent: Vec<Delivery> = {
+        let unsent: VecDeque<Delivery> = {
             let mut shared = self.lock();
             if shared.disposed {
                 return;
@@ -232,7 +241,7 @@ impl Hub {
                 let buffered = std::mem::take(&mut shared.buffer);
                 #[cfg(test)]
                 self.at_window(Window::Flushing);
-                let mut unsent = Vec::new();
+                let mut unsent = VecDeque::new();
                 let mut failed = false;
                 for delivery in buffered {
                     // `send` on an `mpsc` Sender never blocks; held under
@@ -243,12 +252,12 @@ impl Hub {
                             Ok(()) => continue,
                             Err(failed_send) => {
                                 failed = true;
-                                unsent.push(failed_send.0);
+                                unsent.push_back(failed_send.0);
                                 continue;
                             }
                         }
                     }
-                    unsent.push(delivery);
+                    unsent.push_back(delivery);
                 }
                 unsent
             }
@@ -293,7 +302,10 @@ impl Hub {
             return;
         }
         let Some(emitter) = shared.emitter.clone() else {
-            shared.emit_buffer.push(event);
+            shared.emit_buffer.push_back(event);
+            if shared.emit_buffer.len() > MAX_PENDING_EVENTS {
+                drop(shared.emit_buffer.pop_front());
+            }
             return;
         };
         #[cfg(test)]
@@ -457,8 +469,8 @@ pub(crate) struct Shared {
     /// The loop's inbox for the extension's deliveries, set by `deliver_to`.
     pub(super) inbox: Option<std::sync::mpsc::Sender<Delivery>>,
     /// Deliveries that ended before any inbox, in call order, sent on the
-    /// first one.
-    pub(super) buffer: Vec<Delivery>,
+    /// first one: at most [`MAX_PENDING_DELIVERIES`], oldest dropped first.
+    pub(super) buffer: VecDeque<Delivery>,
     /// The extension was dropped: anything routed after this is dropped,
     /// under the same lock that routes deliveries.
     pub(super) disposed: bool,
@@ -472,8 +484,9 @@ pub(crate) struct Shared {
     /// `drive_to`. None before it, or once the extension is sealed.
     pub(super) driver: Option<std::sync::Arc<dyn contract::extension::Drive>>,
     /// Ephemeral events emitted before any emitter, in call order, flushed
-    /// on the first one.
-    pub(super) emit_buffer: Vec<contract::events::Event>,
+    /// on the first one: at most [`MAX_PENDING_EVENTS`], oldest dropped
+    /// first.
+    pub(super) emit_buffer: VecDeque<contract::events::Event>,
     /// The timers `host.after` and `host.every` set, by id.
     pub(crate) timers: HashMap<u64, Timer>,
     /// Timer ids whose Lua functions the extension's thread still frees.

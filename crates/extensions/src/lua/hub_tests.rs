@@ -537,3 +537,130 @@ fn driver_after_seal_alone_is_none() {
     assert!(!hub.lock().disposed, "seal alone does not dispose");
     assert!(hub.driver().is_none(), "no drive follows fiber_exited");
 }
+
+/// The status text of an `ExtensionUi` status event, if that is what it is.
+fn status_text(event: &Event) -> Option<&str> {
+    if let Event::ExtensionUi(ui) = event
+        && let Ui::Status { status } = &ui.ui
+    {
+        Some(status)
+    } else {
+        None
+    }
+}
+
+/// Buffered deliveries keep at most the cap, oldest dropped first: the cap
+/// flushes all of them, the first included, and one more drops exactly the
+/// oldest.
+#[test]
+fn buffered_deliveries_keep_at_most_the_cap() {
+    let hub = Hub::new(FakeClock::new());
+    for n in 0..MAX_PENDING_DELIVERIES {
+        hub.send(Delivery::ExtensionExec(exec(&format!("n-{n}"))));
+    }
+    let (tx, rx) = mpsc::channel();
+    hub.set_inbox(tx);
+    let mut flushed = Vec::new();
+    while let Some(program) = received(&rx) {
+        flushed.push(program);
+    }
+    assert_eq!(flushed.len(), MAX_PENDING_DELIVERIES);
+    assert_eq!(flushed.first().map(String::as_str), Some("n-0"));
+    assert_eq!(
+        flushed.last().map(String::as_str),
+        Some(format!("n-{}", MAX_PENDING_DELIVERIES - 1).as_str())
+    );
+
+    let hub = Hub::new(FakeClock::new());
+    for n in 0..=MAX_PENDING_DELIVERIES {
+        hub.send(Delivery::ExtensionExec(exec(&format!("m-{n}"))));
+    }
+    let (tx, rx) = mpsc::channel();
+    hub.set_inbox(tx);
+    let mut flushed = Vec::new();
+    while let Some(program) = received(&rx) {
+        flushed.push(program);
+    }
+    assert_eq!(flushed.len(), MAX_PENDING_DELIVERIES);
+    assert_eq!(flushed.first().map(String::as_str), Some("m-1"));
+    assert_eq!(
+        flushed.last().map(String::as_str),
+        Some(format!("m-{MAX_PENDING_DELIVERIES}").as_str())
+    );
+}
+
+/// Buffered events keep at most the cap, oldest dropped first: the cap
+/// flushes all of them, the first included, and one more drops exactly the
+/// oldest.
+#[test]
+fn buffered_events_keep_at_most_the_cap() {
+    let hub = Hub::new(FakeClock::new());
+    for n in 0..MAX_PENDING_EVENTS {
+        hub.emit(status(&format!("n-{n}")));
+    }
+    let recorder = Arc::new(Recorder::default());
+    hub.set_emit(Arc::clone(&recorder) as Arc<dyn Emit>);
+    let flushed: Vec<String> = recorder
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(status_text)
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(flushed.len(), MAX_PENDING_EVENTS);
+    assert_eq!(flushed.first().map(String::as_str), Some("n-0"));
+
+    let hub = Hub::new(FakeClock::new());
+    for n in 0..=MAX_PENDING_EVENTS {
+        hub.emit(status(&format!("m-{n}")));
+    }
+    let recorder = Arc::new(Recorder::default());
+    hub.set_emit(Arc::clone(&recorder) as Arc<dyn Emit>);
+    let flushed: Vec<String> = recorder
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(status_text)
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(flushed.len(), MAX_PENDING_EVENTS);
+    assert_eq!(flushed.first().map(String::as_str), Some("m-1"));
+}
+
+/// An evicted delivery drops after the hub lock is released: its payload's
+/// drop guard finds the lock free.
+#[test]
+fn an_evicted_delivery_drops_after_the_hub_lock_is_released() {
+    struct DropProbe {
+        hub: Arc<Hub>,
+        at_drop: mpsc::Sender<bool>,
+    }
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            let _sent = self.at_drop.send(locked(&self.hub));
+        }
+    }
+
+    let hub = Hub::new(FakeClock::new());
+    let (dropped_tx, dropped_rx) = mpsc::channel();
+    let probe = DropProbe {
+        hub: Arc::clone(&hub),
+        at_drop: dropped_tx,
+    };
+    hub.send(Delivery::Close(contract::inbox::Ack(Box::new(
+        move |_: contract::inbox::Answer| {
+            drop(probe);
+        },
+    ))));
+    for n in 0..MAX_PENDING_DELIVERIES {
+        hub.send(Delivery::ExtensionExec(exec(&format!("n-{n}"))));
+    }
+    assert_eq!(
+        dropped_rx.recv_timeout(WAIT),
+        Ok(false),
+        "the evicted delivery drops with the hub lock released"
+    );
+}
