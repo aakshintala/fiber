@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
 
-use crate::connection::{Hub, Tick, Wait, lock};
+use crate::connection::{Hub, lock};
+use crate::tick::{Tick, Wait};
 use crate::relay::Relays;
 use crate::start::{self, Held};
 

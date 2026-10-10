@@ -15,7 +15,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake, wall_ms};
@@ -30,6 +30,7 @@ use crate::feed::{Feed, answer, on_feed};
 use crate::first::{FIRST_PROMPT_WAIT, First};
 use crate::relay::Relays;
 use crate::start::{self, Outcome};
+use crate::tick::Tick;
 
 /// What the hub shares across its connections: home, the version it
 /// reports, how it starts sessions, the clock, the diagnostic log, and the
@@ -256,7 +257,7 @@ impl Hub {
         // Taken before the checks and held into the wait: a change or a
         // signal that lands in between blocks in `Tick::wake` until this
         // thread waits, instead of waking nobody.
-        let guard = lock(&self.tick.held);
+        let guard = self.tick.hold();
         let signal = got.swap(0, Ordering::SeqCst);
         if signal != 0 {
             return Idle::Signal(signal);
@@ -275,26 +276,9 @@ impl Hub {
                 until => until,
             }
         };
-        let mut slot = Some(guard);
-        self.clock.wait_until(until, &mut |bound| {
-            let Some(guard) = slot.take() else {
-                return;
-            };
-            slot = Some(match bound {
-                Some(limit) => {
-                    self.tick
-                        .moved
-                        .wait_timeout(guard, limit)
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .0
-                }
-                None => self
-                    .tick
-                    .moved
-                    .wait(guard)
-                    .unwrap_or_else(PoisonError::into_inner),
-            });
-        });
+        // Held into the park: a change or a signal that lands after the
+        // checks wakes this thread instead of nobody.
+        self.tick.park(self.clock.as_ref(), guard, until);
         Idle::Woken
     }
 
@@ -330,76 +314,6 @@ pub(crate) enum Accept {
     Dropped,
     /// The hub is exiting: drop unanswered.
     Exiting,
-}
-
-/// Woken on every clock move, every change to the open connections and
-/// every signal.
-#[derive(Default)]
-pub(crate) struct Tick {
-    held: Mutex<()>,
-    moved: Condvar,
-}
-
-impl Wake for Tick {
-    fn wake(&self) {
-        // Taken before the notify, so a waiter that has checked and not
-        // yet parked cannot miss it.
-        let _held = lock(&self.held);
-        self.moved.notify_all();
-    }
-}
-
-/// What one check of [`Tick::wait_for`] found.
-pub(crate) enum Wait {
-    /// The wait is over.
-    Done,
-    /// Park until this instant (`None`: no deadline) or a wake.
-    Until(Option<Instant>),
-}
-
-impl Tick {
-    /// Returns once `clock` reads `until` or later.
-    pub(crate) fn until(&self, clock: &dyn Clock, until: Instant) {
-        self.wait_for(clock, &mut |now| {
-            if now >= until {
-                Wait::Done
-            } else {
-                Wait::Until(Some(until))
-            }
-        });
-    }
-
-    /// Calls `check` with the clock's reading, under the tick lock, until it
-    /// returns [`Wait::Done`], parking on the clock between calls as it
-    /// says. A wake after a change to what `check` reads is never missed:
-    /// the change's `wake` takes the tick lock, so it waits until this
-    /// thread parks.
-    pub(crate) fn wait_for(&self, clock: &dyn Clock, check: &mut dyn FnMut(Instant) -> Wait) {
-        loop {
-            let guard = lock(&self.held);
-            let Wait::Until(until) = check(clock.now()) else {
-                return;
-            };
-            let mut slot = Some(guard);
-            clock.wait_until(until, &mut |bound| {
-                let Some(guard) = slot.take() else {
-                    return;
-                };
-                slot = Some(match bound {
-                    Some(limit) => {
-                        self.moved
-                            .wait_timeout(guard, limit)
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .0
-                    }
-                    None => self
-                        .moved
-                        .wait(guard)
-                        .unwrap_or_else(PoisonError::into_inner),
-                });
-            });
-        }
-    }
 }
 
 /// Serves one client connection: `hub_hello`, then one acknowledgement per

@@ -650,9 +650,9 @@ fn await_unregistered(hub: &Hub, clock: &FakeClock, what: &str) {
         scope.spawn(move || {
             hub.tick.wait_for(clock, &mut |_| {
                 if hub.rejoins.ids().is_empty() || given_up.load(Ordering::SeqCst) {
-                    crate::connection::Wait::Done
+                    crate::tick::Wait::Done
                 } else {
-                    crate::connection::Wait::Until(None)
+                    crate::tick::Wait::Until(None)
                 }
             });
             tx.send(()).unwrap_or(());
