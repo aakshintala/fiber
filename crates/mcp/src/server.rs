@@ -16,12 +16,14 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 use contract::tool::Cancel;
 use rustix::process::Signal;
-use serde_json::{Map, Value};
+use serde::Serialize;
+use serde_json::Value;
 
-use crate::effects::Hints;
+use crate::cache::Cached;
 use crate::registry::{LIVE, Stopping, before_lock, before_signal, lock, signal};
-use crate::rpc::{Outcome, encode_notification, encode_request};
-use crate::wait::{CancelBridge, NoCancel, Shared, park};
+use crate::rpc::{Named, Outcome, encode_notification, encode_request};
+use crate::server_json::{ListedPrompt, ListedTool, entries};
+use crate::wait::{CancelBridge, NoCancel, Shared, deadline, park};
 
 /// The protocol version Fiber speaks (`docs/mcp.md` has no number; the
 /// current draft does).
@@ -31,19 +33,10 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 /// `GRACE` (`crates/tools/src/shell/command.rs`).
 const GRACE: Duration = Duration::from_millis(800);
 
-/// One tool the server lists: its name, description, schema and hints, as
-/// [`crate::tool`] declares them.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ListedTool {
-    /// The server's own name for it.
-    pub name: String,
-    /// Its description; `""` when the server gave none.
-    pub description: String,
-    /// Its input schema; `{"type":"object"}` when the server gave none.
-    pub schema: Value,
-    /// Its hints; absent when the server gave none.
-    pub hints: Hints,
-}
+/// How many request lines wait for the writer thread. Picked, not
+/// measured: no doc sets a number. A full queue means the server is
+/// wedged, so it counts as gone.
+const WRITE_QUEUE: usize = 64;
 
 /// Why [`Server::start`] failed: the session records it as
 /// `mcp_server_failed` and leaves the server out.
@@ -67,15 +60,15 @@ fn shutting_down() -> StartError {
 /// fresh cursor still ends at it (`docs/mcp.md`, "Starting servers"). A
 /// missed deadline fails the start; any other failure runs `fail`, which
 /// fails the start for tools and keeps no prompts for prompts.
-fn list_pages(
+fn list_pages<T: serde::de::DeserializeOwned>(
     server: &Server,
     clock: &Arc<dyn Clock>,
     method: &str,
     entry: &str,
     deadline: Instant,
     cancel: &dyn Cancel,
-    fail: impl Fn() -> Result<Vec<Value>, StartError>,
-) -> Result<Vec<Value>, StartError> {
+    fail: impl Fn() -> Result<Vec<T>, StartError>,
+) -> Result<Vec<T>, StartError> {
     let mut listed = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
@@ -96,7 +89,7 @@ fn list_pages(
             None => return fail(),
         };
         match object.get(entry).and_then(Value::as_array) {
-            Some(entries) => listed.extend(entries.iter().cloned()),
+            Some(found) => listed.extend(entries(found.clone())),
             None => return fail(),
         }
         cursor = object
@@ -130,9 +123,7 @@ pub(crate) enum CallError {
 
 /// A running server and its end of the wire.
 pub(crate) struct Server {
-    /// `None` once [`Server::stop`] ran: the child below was reaped exactly
-    /// once, and [`Drop`] does nothing.
-    inner: Option<Inner>,
+    inner: Inner,
 }
 
 struct Inner {
@@ -141,7 +132,7 @@ struct Inner {
     /// and it drops the pipe. The reader holds only a [`Weak`] to it, so
     /// closing here really closes: a strong clone in the reader would keep
     /// the channel open and EOF would never arrive during the grace.
-    writer: Mutex<Option<std::sync::Arc<mpsc::Sender<Vec<u8>>>>>,
+    writer: Mutex<Option<std::sync::Arc<mpsc::SyncSender<Vec<u8>>>>>,
     /// The child, until [`Server::stop`] or [`Drop`] takes, kills and reaps
     /// it exactly once.
     child: Mutex<Option<Child>>,
@@ -152,12 +143,8 @@ struct Inner {
 pub(crate) struct OpenServer {
     /// The running server.
     pub server: Server,
-    /// Its raw `tools/list` entries, in the order listed; empty when
-    /// the server advertises no tools capability.
-    pub tools: Vec<Value>,
-    /// Its raw `prompts/list` entries, in the order listed; empty when
-    /// the server advertises no prompts or its list failed.
-    pub prompts: Vec<Value>,
+    /// The tools and prompts it listed.
+    pub listed: Cached,
 }
 
 impl Server {
@@ -197,7 +184,7 @@ impl Server {
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let shared = Arc::new(Shared::default());
-        let (writer, incoming) = mpsc::channel();
+        let (writer, incoming) = mpsc::sync_channel(WRITE_QUEUE);
         thread::spawn(move || crate::pipes::write_stdin(stdin, incoming));
         let writer = Arc::new(writer);
         let reading = Arc::clone(&shared);
@@ -210,24 +197,21 @@ impl Server {
             }
         });
         clock.subscribe(Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)));
-        let mut server = Server {
-            inner: Some(Inner {
+        let server = Server {
+            inner: Inner {
                 shared,
                 writer: Mutex::new(Some(writer)),
                 child: Mutex::new(Some(child)),
                 clock: Arc::clone(clock),
-            }),
+            },
         };
-        let deadline = clock
-            .now()
-            .checked_add(startup_timeout)
-            .unwrap_or(clock.now());
+        let deadline = deadline(clock.as_ref(), startup_timeout);
         // One shutdown on `Err`: every failure path below returns through
         // here, so no arm repeats `shutdown`. `NoCancel` never fires, so
         // `Cancelled` is just another failed start, not a deadline.
         let not_a_list =
             || StartError::StartFailed("The server's tool list was not a result.".to_owned());
-        let handshake = |server: &Server| -> Result<(Vec<Value>, Vec<Value>), StartError> {
+        let handshake = |server: &Server| -> Result<Cached, StartError> {
             let initialize = match server.request(
                 "initialize",
                 &serde_json::json!({
@@ -256,7 +240,7 @@ impl Server {
                 .get("capabilities")
                 .and_then(|capabilities| capabilities.get("tools"))
                 .is_some_and(Value::is_object);
-            let tools = if advertises_tools {
+            let tools: Vec<ListedTool> = if advertises_tools {
                 list_pages(
                     server,
                     clock,
@@ -278,7 +262,7 @@ impl Server {
                 .get("capabilities")
                 .and_then(|capabilities| capabilities.get("prompts"))
                 .is_some_and(Value::is_object);
-            let prompts = if advertises {
+            let prompts: Vec<ListedPrompt> = if advertises {
                 list_pages(
                     server,
                     clock,
@@ -291,14 +275,10 @@ impl Server {
             } else {
                 Vec::new()
             };
-            Ok((tools, prompts))
+            Ok(Cached { tools, prompts })
         };
         match handshake(&server) {
-            Ok((tools, prompts)) => Ok(OpenServer {
-                server,
-                tools,
-                prompts,
-            }),
+            Ok(listed) => Ok(OpenServer { server, listed }),
             Err(error) => {
                 if stopping.is_cancelled() {
                     // The documented stop, then the failure the door never writes.
@@ -312,64 +292,24 @@ impl Server {
         }
     }
 
-    /// Calls `tool` with `arguments`, waiting until `timeout` passes on the
+    /// Calls `method` with `params`, waiting until `timeout` passes on the
     /// clock or `cancel` fires. A late response to a timed-out or cancelled
     /// id is discarded: the slot is removed on every exit path.
     pub(crate) fn call(
         &self,
-        tool: &str,
-        arguments: &Value,
+        method: &str,
+        params: &Named<'_>,
         timeout: Duration,
         cancel: &dyn Cancel,
     ) -> Result<Value, CallError> {
-        let Some(inner) = self.inner.as_ref() else {
-            return Err(CallError::Gone);
-        };
-        let deadline = inner
-            .clock
-            .now()
-            .checked_add(timeout)
-            .unwrap_or(inner.clock.now());
-        self.request(
-            "tools/call",
-            &serde_json::json!({"name": tool, "arguments": arguments}),
-            deadline,
-            cancel,
-        )
+        let inner = &self.inner;
+        let deadline = deadline(inner.clock.as_ref(), timeout);
+        self.request(method, params, deadline, cancel)
     }
 
-    /// Gets `prompt` with `arguments`, waiting until `timeout` passes on
-    /// the clock or `cancel` fires. Params encode with sorted keys, so the
-    /// top-level `name` follows `arguments` on the wire (`docs/mcp.md`,
-    /// "Prompts and resources").
-    pub(crate) fn get_prompt(
-        &self,
-        name: &str,
-        arguments: &Map<String, Value>,
-        timeout: Duration,
-        cancel: &dyn Cancel,
-    ) -> Result<Value, CallError> {
-        let Some(inner) = self.inner.as_ref() else {
-            return Err(CallError::Gone);
-        };
-        let deadline = inner
-            .clock
-            .now()
-            .checked_add(timeout)
-            .unwrap_or(inner.clock.now());
-        self.request(
-            "prompts/get",
-            &serde_json::json!({"name": name, "arguments": arguments}),
-            deadline,
-            cancel,
-        )
-    }
-
-    /// Whether the server's output ended (it exited), or it has no connection.
+    /// Whether the server's output ended (it exited).
     pub(crate) fn is_gone(&self) -> bool {
-        self.inner
-            .as_ref()
-            .is_none_or(|inner| lock(&inner.shared.inner).gone)
+        lock(&self.inner.shared.inner).gone
     }
 
     /// Stops the server: closes stdin, sends SIGTERM to its process, waits
@@ -379,37 +319,34 @@ impl Server {
     /// repeats only what is left. `&self` because tools share the
     /// connection while [`Servers`] owns the shutdown.
     pub(crate) fn stop(&self) {
-        if let Some(inner) = self.inner.as_ref() {
-            inner.close_stdin();
-            // Under the child's lock: a reap takes the child under it, so
-            // the pid is unreaped while `kill` runs.
-            let child = lock(&inner.child);
-            if let Some(child) = child.as_ref() {
-                before_signal();
-                signal(&[child.id()], Signal::TERM);
-            }
-            drop(child);
-            inner.wait_gone();
+        let inner = &self.inner;
+        inner.close_stdin();
+        // Under the child's lock: a reap takes the child under it, so
+        // the pid is unreaped while `kill` runs.
+        let child = lock(&inner.child);
+        if let Some(child) = child.as_ref() {
+            before_signal();
+            signal(&[child.id()], Signal::TERM);
         }
+        drop(child);
+        inner.wait_gone();
         self.reap();
     }
 
     /// Sends one request and waits for its response.
-    fn request(
+    fn request<P: Serialize + ?Sized>(
         &self,
         method: &str,
-        params: &Value,
+        params: &P,
         deadline: Instant,
         cancel: &dyn Cancel,
     ) -> Result<Value, CallError> {
-        let Some(inner) = self.inner.as_ref() else {
-            return Err(CallError::Gone);
-        };
+        let inner = &self.inner;
         let id = inner.shared.next_id();
         inner.shared.insert(id);
         // The slot is removed on every exit path below, so a late response
         // finds no slot and is discarded.
-        let line = encode_request(id, method, Some(params));
+        let line = encode_request(id, method, params);
         inner.send(line);
         let bridge = CancelBridge::arm(&inner.shared);
         cancel.subscribe(Arc::downgrade(&(Arc::clone(&bridge) as Arc<dyn Wake>)));
@@ -424,7 +361,7 @@ impl Server {
             if view.cancelled {
                 inner.send(encode_notification(
                     "notifications/cancelled",
-                    Some(&serde_json::json!({"requestId": id})),
+                    &serde_json::json!({"requestId": id}),
                 ));
                 break Err(CallError::Cancelled);
             }
@@ -449,25 +386,21 @@ impl Server {
     }
 
     /// Sends a notification: no id, no answer.
-    fn notify(&self, method: &str, params: &Value) {
-        if let Some(inner) = self.inner.as_ref() {
-            inner.send(encode_notification(method, Some(params)));
-        }
+    fn notify<P: Serialize + ?Sized>(&self, method: &str, params: &P) {
+        self.inner.send(encode_notification(method, params));
     }
 
     /// Closes stdin by dropping the writer's sender.
-    fn shutdown(&mut self) {
-        if let Some(inner) = self.inner.as_mut() {
-            inner.close_stdin();
-        }
+    fn shutdown(&self) {
+        self.inner.close_stdin();
     }
 
     /// Kills and reaps the child exactly once; later calls find none.
     fn reap(&self) {
-        let child = self.inner.as_ref().and_then(|inner| {
+        let child = {
             before_lock("child");
-            lock(&inner.child).take()
-        });
+            lock(&self.inner.child).take()
+        };
         if let Some(mut child) = child {
             // An exited child refuses the kill; the reap below still runs.
             match child.kill() {
@@ -491,37 +424,6 @@ impl Drop for Server {
     }
 }
 
-impl ListedTool {
-    /// Reads one `tools/list` entry. A nameless entry becomes `""`, and a
-    /// missing description or schema takes the default the tool declares.
-    pub(crate) fn read(entry: &Value) -> Self {
-        let name = entry
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let description = entry
-            .get("description")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let schema = entry
-            .get("inputSchema")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({"type": "object"}));
-        let hints = entry
-            .get("annotations")
-            .map(Hints::from_annotations)
-            .unwrap_or_default();
-        Self {
-            name,
-            description,
-            schema,
-            hints,
-        }
-    }
-}
-
 impl Inner {
     /// Closes stdin by dropping the writer's sender.
     fn close_stdin(&self) {
@@ -531,11 +433,7 @@ impl Inner {
     /// Waits until the server's output ends or [`GRACE`] passes on the
     /// clock.
     fn wait_gone(&self) {
-        let until = self
-            .clock
-            .now()
-            .checked_add(GRACE)
-            .unwrap_or(self.clock.now());
+        let until = deadline(self.clock.as_ref(), GRACE);
         loop {
             let (gone, seq) = {
                 let state = lock(&self.shared.inner);
@@ -548,13 +446,10 @@ impl Inner {
         }
     }
 
-    /// Sends `line` to the writer thread. A failed send means the thread
-    /// is gone, and the pending wait ends through `gone`.
+    /// Sends `line` to the writer thread through the bounded queue.
     fn send(&self, line: String) {
         if let Some(writer) = lock(&self.writer).as_ref() {
-            match writer.send(line.into_bytes()) {
-                Ok(()) | Err(_) => {}
-            }
+            crate::pipes::queue(writer, line.into_bytes(), &self.shared);
         }
     }
 }

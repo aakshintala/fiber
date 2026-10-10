@@ -4,82 +4,22 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{McpServerFailed, ServerFailure};
-use contract::tool::{ServerRecord, Tool};
-use fakes::TempDir;
-use fakes::clock::FakeClock;
-use serde_json::{Value, json};
+use contract::tool::ServerRecord;
+use serde_json::json;
 
-use crate::server::ListedTool;
+use crate::server_json::ListedTool;
 use crate::slot::{Run, Served, State};
-use crate::start::{
-    DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Servers, Started, start,
-};
-
-/// How long a test waits for a thread or a child, in real time.
-const WITHIN: Duration = Duration::from_secs(10);
-
-/// One real-time poll of a child's exit.
-const POLL: Duration = Duration::from_millis(50);
-
-/// Poll iterations that span one `WITHIN` of `POLL` sleeps.
-const POLLS: u128 = WITHIN.as_millis() / POLL.as_millis();
-
-struct Setup {
-    dir: TempDir,
-    fake: Arc<FakeClock>,
-}
+use crate::start::{DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Started};
+use crate::test_support::{Setup, WITHIN, await_until};
 
 impl Setup {
-    fn new() -> Self {
-        Self {
-            dir: TempDir::new("fiber-mcp-slot"),
-            fake: FakeClock::new(),
-        }
-    }
-
-    fn clock(&self) -> Arc<dyn Clock> {
-        self.fake.clone()
-    }
-
-    fn workspace(&self) -> std::path::PathBuf {
-        self.dir.path().to_path_buf()
-    }
-
-    fn cache(&self) -> std::path::PathBuf {
-        self.dir.path().join("cache")
-    }
-
-    fn tools(&self, tools: &Value) {
-        std::fs::write(self.dir.path().join("tools.json"), tools.to_string()).expect("tools");
-    }
-
-    fn result(&self, name: &str, body: &str) {
-        std::fs::write(self.dir.path().join(format!("call-{name}.json")), body).expect("result");
-    }
-
-    fn spec(&self, name: &str) -> ServerSpec {
-        ServerSpec {
-            name: name.to_owned(),
-            command: fakes::mcp_fixture().display().to_string(),
-            args: vec![self.dir.path().display().to_string()],
-            env: BTreeMap::new(),
-            startup_timeout: DEFAULT_STARTUP_TIMEOUT,
-            call_timeout: DEFAULT_CALL_TIMEOUT,
-            enabled: None,
-            disabled: Vec::new(),
-            hints: BTreeMap::new(),
-            required: false,
-        }
-    }
-
     /// Writes the cache for `spec` holding `tools` and no prompts, as a
     /// first start would.
-    fn write_cache(&self, spec: &ServerSpec, tools: &[Value]) {
+    fn write_cache(&self, spec: &ServerSpec, tools: &[ListedTool]) {
         crate::cache::write(
             &self.cache(),
             &spec.name,
@@ -104,114 +44,18 @@ impl Setup {
         }
     }
 
-    fn start(&self, specs: Vec<ServerSpec>) -> Started {
-        let workspace = self.workspace();
-        let cache = self.cache();
-        let clock = self.clock();
-        // Threaded with a wall-clock limit: a silent server would sit
-        // parked on the fake clock forever, so a bare direct start would
-        // hang the test instead of failing it.
-        let (done, result) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let started = start(specs, &workspace, &cache, &clock, "0.0.0");
-            done.send(started).expect("collected");
-        });
-        result
-            .recv_timeout(WITHIN)
-            .unwrap_or_else(|_| panic!("the start ends within {WITHIN:?}"))
-    }
-
-    fn tool(&self, started: &Started, name: &str) -> Arc<dyn Tool> {
-        started
-            .tools
-            .iter()
-            .find(|(_, tool)| tool.definition().name == name)
-            .unwrap_or_else(|| panic!("tool {name} is declared"))
-            .1
-            .clone()
-    }
-
-    fn run(&self, tool: &Arc<dyn Tool>) -> contract::tool::Output {
-        // Threaded with a wall-clock limit: a silent server would sit
-        // parked on the fake clock forever, so a bare direct call would
-        // hang the test instead of failing it.
-        let tool = Arc::clone(tool);
-        let (done, result) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let output = tool.run(
-                &Default::default(),
-                &fakes::CancelToken::new(),
-                &fakes::Recorder::default(),
-            );
-            done.send(output).expect("collected");
-        });
-        result
-            .recv_timeout(WITHIN)
-            .unwrap_or_else(|_| panic!("the call ends within {WITHIN:?}"))
-    }
-
-    fn serve_slot(&self, slot: &Arc<crate::slot::Slot>) -> Served {
-        // Threaded with a wall-clock limit: startup waits on the fake clock.
-        let slot = Arc::clone(slot);
-        let (done, result) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            done.send(slot.serve()).expect("collected");
-        });
-        result
-            .recv_timeout(WITHIN)
-            .unwrap_or_else(|_| panic!("the serve ends within {WITHIN:?}"))
-    }
-
-    fn stop(&self, servers: Servers) {
-        // Detached with a wall-clock limit: a lingering child would keep
-        // the stop parked on the fake clock forever, so a bare direct
-        // stop, or a join on its thread, would hang the test instead of
-        // failing it.
-        let (done, stopped) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            servers.stop();
-            done.send(()).expect("collected");
-        });
-        stopped
-            .recv_timeout(WITHIN)
-            .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
-    }
-
-    fn pid(&self) -> u32 {
-        std::fs::read_to_string(self.dir.path().join("pid.txt"))
-            .expect("pid.txt")
-            .trim()
-            .parse()
-            .expect("a pid")
-    }
-
-    /// Marks a server with this name as never having spawned, so a test can
-    /// tell whether a later call spawns it.
-    fn forget_spawn(&self) {
-        std::fs::remove_file(self.dir.path().join("pid.txt")).expect("pid.txt");
-    }
-
-    fn spawned(&self) -> bool {
-        self.dir.path().join("pid.txt").exists()
-    }
-
-    /// Kills the running server of `started`'s only slot and waits, at most
-    /// `WITHIN`, until its reader has seen the exit.
+    /// Kills the running server of `started`'s only slot and waits until its
+    /// reader has seen the exit.
     fn kill(&self, started: &Started) {
         fakes::kill_pid(self.pid(), "KILL").expect("the server dies");
-        let slot = &started.servers.slots[0];
-        let (_held, probe) = std::sync::mpsc::channel::<()>();
-        for _ in 0..POLLS {
-            if let State::Running { server, .. } = &*super::lock(&slot.state)
-                && server.is_gone()
-            {
-                return;
+        let slot = Arc::clone(&started.servers.slots[0]);
+        await_until("the killed server to be gone", move || {
+            if let State::Running { server, .. } = &*super::lock(&slot.state) {
+                server.is_gone()
+            } else {
+                false
             }
-            match probe.recv_timeout(POLL) {
-                Ok(()) | Err(_) => {}
-            }
-        }
-        panic!("waited {WITHIN:?} for the killed server to be gone");
+        });
     }
 
     fn cache_inode(&self) -> u64 {
@@ -234,11 +78,11 @@ impl Setup {
         .expect("the cache holds lists")
         .tools
         .iter()
-        .map(|entry| ListedTool::read(entry).name)
+        .map(|tool| tool.name.clone())
         .collect()
     }
 
-    fn cached_prompts(&self) -> Vec<Value> {
+    fn cached_prompts(&self) -> Vec<crate::server_json::ListedPrompt> {
         crate::cache::read(
             &self.cache(),
             "fx",
@@ -252,8 +96,8 @@ impl Setup {
         .prompts
     }
 
-    fn listed(name: &str) -> Vec<Value> {
-        vec![json!({"name": name})]
+    fn listed(name: &str) -> Vec<ListedTool> {
+        vec![serde_json::from_value(json!({"name": name})).expect("listed")]
     }
 }
 
@@ -496,7 +340,7 @@ fn a_call_to_a_removed_tool_fails_without_calling_and_updates_the_cache() {
     assert_eq!(
         live.tools
             .iter()
-            .map(|entry| ListedTool::read(entry).name)
+            .map(|tool| tool.name.clone())
             .collect::<Vec<_>>(),
         ["echo"],
     );
@@ -557,16 +401,7 @@ fn stop_stops_a_lazily_started_server_and_ignores_a_never_started_one() {
         .parse()
         .expect("a pid");
     setup.stop(started.servers);
-    let (_held, probe) = std::sync::mpsc::channel::<()>();
-    for _ in 0..POLLS {
-        if !fakes::kill_pid(pid, "0").expect("probe") {
-            return;
-        }
-        match probe.recv_timeout(POLL) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    panic!("waited {WITHIN:?} for pid {pid} to exit after the stop");
+    setup.await_reaped(pid);
 }
 
 #[test]
@@ -878,7 +713,7 @@ fn run_rejects_its_server_after_a_concurrent_restart_replaces_it() {
 
     setup.kill(&started);
     setup.tools(&json!([{"name": "replacement"}]));
-    let restarted = setup.serve_slot(&slot);
+    let restarted = setup.serve(&slot);
     let new_pid = setup.pid();
     resume.send(()).expect("release the waiting call");
     let outcome = result
@@ -939,7 +774,7 @@ fn a_changed_prompt_list_rewrites_the_cache() {
     setup.tools(&json!([{"name": "echo"}]));
     setup.result("echo", HI);
     setup.populate(setup.spec("fx"));
-    assert_eq!(setup.cached_prompts(), Vec::<Value>::new());
+    assert!(setup.cached_prompts().is_empty());
     // Only the prompt list changes: the tools are untouched.
     std::fs::write(
         setup.dir.path().join("prompts.json"),
@@ -953,11 +788,54 @@ fn a_changed_prompt_list_rewrites_the_cache() {
     assert!(output.error.is_none());
     assert_eq!(
         setup.cached_prompts(),
-        json!([{"name": "greet", "description": "Greets."}])
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
+        vec![
+            serde_json::from_value(json!({"name": "greet", "description": "Greets."}))
+                .expect("prompt")
+        ]
     );
     assert_eq!(setup.cached_names(), ["echo"]);
+    setup.stop(started.servers);
+}
+
+#[test]
+fn a_call_ended_by_the_stop_records_no_death() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "hang"}]));
+    setup.result("hang", "hang");
+    let started = setup.start(vec![setup.spec("fx")]);
+    let tool = setup.tool(&started, "mcp__fx__hang");
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let output = tool.run(
+            &Default::default(),
+            &fakes::CancelToken::new(),
+            &fakes::Recorder::default(),
+        );
+        done.send(output).expect("collected");
+    });
+    let deadline = setup
+        .fake
+        .now()
+        .checked_add(DEFAULT_CALL_TIMEOUT)
+        .expect("deadline");
+    assert!(
+        setup.fake.await_parked(deadline, WITHIN),
+        "the call waits on its timeout",
+    );
+    let slot = std::sync::Arc::clone(&started.servers.slots[0]);
+    let (stopped_tx, stopped) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        slot.stop();
+        stopped_tx.send(()).expect("collected");
+    });
+    let output = result.recv_timeout(WITHIN).expect("the call ends");
+    stopped.recv_timeout(WITHIN).expect("the stop ends");
+    let error = output.error.expect("failed");
+    assert_eq!(error.code, ErrorCode::McpServerUnavailable);
+    assert_eq!(
+        error.message,
+        "The MCP server `fx` did not start, or it has since exited."
+    );
+    assert!(output.servers.is_empty(), "a stop is not a death");
     setup.stop(started.servers);
 }

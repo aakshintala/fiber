@@ -12,98 +12,9 @@ use fakes::TempDir;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use super::{CallError, ListedTool, Server, StartError};
-
-/// How long a test waits for a thread or a child, in real time.
-///
-/// The largest round value that keeps every test's serial deadlines within
-/// half of nextest's 120 s kill: the worst test,
-/// `kill_every_server_holds_its_pids_unreaped_while_it_signals`, makes six
-/// (start, signal reached, `await_lock`, `await_gone`, killed and reaped:
-/// 6 x 10 s = 60 s). A passing run never waits on it; it only
-/// bounds a hang.
-const WITHIN: Duration = Duration::from_secs(10);
-
-struct Setup {
-    dir: TempDir,
-    fake: std::sync::Arc<FakeClock>,
-}
-
-impl Setup {
-    fn tools(tools: &Value) -> Self {
-        let dir = TempDir::new("fiber-mcp-server");
-        write(&dir, "tools.json", &tools.to_string());
-        Self {
-            dir,
-            fake: FakeClock::new(),
-        }
-    }
-
-    fn clock(&self) -> std::sync::Arc<dyn Clock> {
-        self.fake.clone()
-    }
-
-    fn result(&self, tool: &str, body: &str) {
-        write(&self.dir, &format!("call-{tool}.json"), body);
-    }
-
-    fn start(&self, timeout: Duration) -> super::OpenServer {
-        let script = fakes::mcp_fixture().display().to_string();
-        let workspace = self.dir.path().to_path_buf();
-        let arg = workspace.display().to_string();
-        Self::start_result(&script, &[arg], &workspace, &self.clock(), timeout)
-            .expect("the fixture server starts")
-    }
-
-    fn start_result(
-        command: &str,
-        args: &[String],
-        workspace: &std::path::Path,
-        clock: &std::sync::Arc<dyn Clock>,
-        timeout: Duration,
-    ) -> Result<super::OpenServer, StartError> {
-        // Threaded with a wall-clock limit: without `send`, `insert`,
-        // `deliver` or `read_stdout` the handshake would sit parked on the
-        // fake clock forever, so a bare direct start would hang the test
-        // instead of failing it.
-        let command = command.to_owned();
-        let args = args.to_owned();
-        let workspace = workspace.to_path_buf();
-        let clock = std::sync::Arc::clone(clock);
-        let (done, result) = mpsc::channel();
-        thread::spawn(move || {
-            let outcome = Server::start(
-                &command,
-                &args,
-                &BTreeMap::new(),
-                &workspace,
-                &clock,
-                timeout,
-                "0.0.0",
-            );
-            done.send(outcome).expect("collected");
-        });
-        result
-            .recv_timeout(WITHIN)
-            .unwrap_or_else(|_| panic!("the start ends within {WITHIN:?}"))
-    }
-
-    fn pid(&self) -> u32 {
-        std::fs::read_to_string(self.dir.path().join("pid.txt"))
-            .expect("pid.txt")
-            .trim()
-            .parse()
-            .expect("a pid")
-    }
-}
-
-fn write(dir: &TempDir, name: &str, content: &str) {
-    let path = dir.path().join(name);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).expect("fixture parent");
-    }
-    std::fs::write(path, content).expect("fixture file");
-}
+use super::{CallError, Server, StartError};
+use crate::rpc::{Named, TOOLS_CALL};
+use crate::test_support::{Setup, WITHIN};
 
 fn echo_tools() -> Value {
     json!([{
@@ -118,17 +29,40 @@ fn echo_tools() -> Value {
     }])
 }
 
+fn call_tool(
+    server: &Server,
+    tool: &str,
+    args: serde_json::Value,
+    timeout: Duration,
+    cancel: &dyn contract::tool::Cancel,
+) -> Result<serde_json::Value, CallError> {
+    let binding = args;
+    let empty;
+    let arguments = match binding.as_object() {
+        Some(map) => map,
+        None => {
+            empty = serde_json::Map::new();
+            &empty
+        }
+    };
+    let params = Named {
+        arguments,
+        name: tool,
+    };
+    server.call(TOOLS_CALL, &params, timeout, cancel)
+}
+
 #[test]
 fn initialize_and_list_succeed() {
-    let setup = Setup::tools(&echo_tools());
+    let setup = Setup::with_tools(&echo_tools());
     setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
-    let opened = setup.start(Duration::from_secs(5));
-    assert_eq!(opened.tools.len(), 1);
-    let tool = ListedTool::read(&opened.tools[0]);
+    let opened = setup.start_expect(Duration::from_secs(5));
+    assert_eq!(opened.listed.tools.len(), 1);
+    let tool = opened.listed.tools[0].clone();
     assert_eq!(tool.name, "echo");
     assert_eq!(tool.description, "Echoes.");
-    assert_eq!(tool.hints.read_only, Some(true));
-    assert_eq!(tool.hints.destructive, None);
+    assert_eq!(tool.hints().read_only, Some(true));
+    assert_eq!(tool.hints().destructive, None);
     // The start sends `notifications/initialized`: without it the fixture's
     // log would miss the notification.
     let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
@@ -143,16 +77,17 @@ fn initialize_and_list_succeed() {
 
 #[test]
 fn a_call_round_trips() {
-    let setup = Setup::tools(&echo_tools());
+    let setup = Setup::with_tools(&echo_tools());
     setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
-    let opened = setup.start(Duration::from_secs(5));
+    let opened = setup.start_expect(Duration::from_secs(5));
     // Calling code that blocks is a wait too (`docs/testing.md`, "Waits and
     // timeouts"): the call runs on a thread and its result is received
     // with a deadline naming the wait.
     let (answer, opened) = fakes::within("the call to `echo`", WITHIN, move || {
-        let answer = opened.server.call(
+        let answer = call_tool(
+            &opened.server,
             "echo",
-            &json!({"text": "hi"}),
+            json!({"text": "hi"}),
             Duration::from_secs(30),
             &fakes::CancelToken::new(),
         );
@@ -173,7 +108,7 @@ fn a_call_round_trips() {
 #[test]
 fn two_concurrent_calls_resolve_by_id_out_of_order() {
     let tools = json!([{"name": "slow"}, {"name": "fast"}]);
-    let setup = Setup::tools(&tools);
+    let setup = Setup::with_tools(&tools);
     setup.result("slow", r#"{"content":[{"type":"text","text":"slow"}]}"#);
     setup.result("fast", r#"{"content":[{"type":"text","text":"fast"}]}"#);
     for name in ["held-slow", "release-slow"] {
@@ -183,16 +118,17 @@ fn two_concurrent_calls_resolve_by_id_out_of_order() {
             .expect("mkfifo runs");
         assert!(status.success(), "mkfifo creates {name}");
     }
-    let opened = setup.start(Duration::from_secs(5));
+    let opened = setup.start_expect(Duration::from_secs(5));
     let server = std::sync::Arc::new(opened.server);
     let (done, results) = mpsc::channel();
     {
         let server = std::sync::Arc::clone(&server);
         let done = done.clone();
         thread::spawn(move || {
-            let answer = server.call(
+            let answer = call_tool(
+                &server,
                 "slow",
-                &json!({}),
+                json!({}),
                 Duration::from_secs(30),
                 &fakes::CancelToken::new(),
             );
@@ -218,9 +154,10 @@ fn two_concurrent_calls_resolve_by_id_out_of_order() {
         let server = std::sync::Arc::clone(&server);
         let done = done.clone();
         thread::spawn(move || {
-            let answer = server.call(
+            let answer = call_tool(
+                &server,
                 "fast",
-                &json!({}),
+                json!({}),
                 Duration::from_secs(30),
                 &fakes::CancelToken::new(),
             );
@@ -266,16 +203,20 @@ fn two_concurrent_calls_resolve_by_id_out_of_order() {
 
 #[test]
 fn a_hang_tool_times_out_only_after_the_clock_advances() {
-    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     setup.result("hang", "hang");
-    let opened = setup.start(Duration::from_secs(5));
+    let opened = setup.start_expect(Duration::from_secs(5));
     let timeout = Duration::from_secs(60);
     let deadline = setup.fake.now().checked_add(timeout).expect("deadline");
     let (done, result) = mpsc::channel();
     thread::spawn(move || {
-        let answer = opened
-            .server
-            .call("hang", &json!({}), timeout, &fakes::CancelToken::new());
+        let answer = call_tool(
+            &opened.server,
+            "hang",
+            json!({}),
+            timeout,
+            &fakes::CancelToken::new(),
+        );
         done.send(answer).expect("collected");
     });
     assert!(
@@ -302,10 +243,10 @@ fn a_hang_tool_times_out_only_after_the_clock_advances() {
 
 #[test]
 fn cancel_ends_the_wait_and_sends_cancelled() {
-    let setup = Setup::tools(&json!([{"name":"hang"},{"name":"echo"}]));
+    let setup = Setup::with_tools(&json!([{"name":"hang"},{"name":"echo"}]));
     setup.result("hang", "hang");
     setup.result("echo", r#"{"content":[]}"#);
-    let opened = setup.start(Duration::from_secs(5));
+    let opened = setup.start_expect(Duration::from_secs(5));
     let timeout = Duration::from_secs(60);
     let deadline = setup.fake.now().checked_add(timeout).expect("deadline");
     let cancel = fakes::CancelToken::new();
@@ -320,7 +261,7 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
         let server = std::sync::Arc::clone(&server);
         let cancel = cancel.clone();
         thread::spawn(move || {
-            let answer = server.call("hang", &json!({}), timeout, &cancel);
+            let answer = call_tool(&server, "hang", json!({}), timeout, &cancel);
             done.send(answer).expect("collected");
         });
     }
@@ -347,9 +288,10 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
     // answered, so the answer to a later call proves it is logged.
     let after = std::sync::Arc::clone(&server);
     let answer = fakes::within("a call after the cancel", WITHIN, move || {
-        after.call(
+        call_tool(
+            &after,
             "echo",
-            &json!({}),
+            json!({}),
             Duration::from_secs(30),
             &fakes::CancelToken::new(),
         )
@@ -401,7 +343,7 @@ fn a_non_object_initialize_reply_fails_the_start() {
 
 #[test]
 fn a_command_that_does_not_exist_fails_the_start() {
-    let setup = Setup::tools(&json!([]));
+    let setup = Setup::with_tools(&json!([]));
     let workspace = setup.dir.path().to_path_buf();
     let error = Setup::start_result(
         "/no/such/command",
@@ -417,7 +359,7 @@ fn a_command_that_does_not_exist_fails_the_start() {
 
 #[test]
 fn a_server_that_exits_at_once_fails_the_start() {
-    let setup = Setup::tools(&json!([]));
+    let setup = Setup::with_tools(&json!([]));
     let workspace = setup.dir.path().to_path_buf();
     let clock = setup.clock();
     let error = Setup::start_result("/bin/true", &[], &workspace, &clock, Duration::from_secs(5))
@@ -428,7 +370,7 @@ fn a_server_that_exits_at_once_fails_the_start() {
 
 #[test]
 fn a_server_that_misses_its_startup_deadline_is_left_out() {
-    let setup = Setup::tools(&json!([]));
+    let setup = Setup::with_tools(&json!([]));
     let workspace = setup.dir.path().to_path_buf();
     let timeout = Duration::from_secs(5);
     let deadline = setup.fake.now().checked_add(timeout).expect("deadline");
@@ -464,17 +406,18 @@ fn a_server_that_misses_its_startup_deadline_is_left_out() {
 
 #[test]
 fn a_server_killed_mid_call_is_gone() {
-    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     setup.result("hang", "hang");
-    let opened = setup.start(Duration::from_secs(5));
-    let shared = std::sync::Arc::clone(&opened.server.inner.as_ref().expect("running").shared);
+    let opened = setup.start_expect(Duration::from_secs(5));
+    let shared = std::sync::Arc::clone(&opened.server.inner.shared);
     fakes::kill_pid(setup.pid(), "KILL").expect("the server dies");
     await_gone(&shared);
     // Gone is set, so the call answers without parking on the clock.
     let answer = fakes::within("a call to a gone server", WITHIN, move || {
-        opened.server.call(
+        call_tool(
+            &opened.server,
             "hang",
-            &json!({}),
+            json!({}),
             Duration::from_secs(1),
             &fakes::CancelToken::new(),
         )
@@ -484,17 +427,18 @@ fn a_server_killed_mid_call_is_gone() {
 
 #[test]
 fn garbage_on_stdout_is_ignored() {
-    let setup = Setup::tools(&echo_tools());
+    let setup = Setup::with_tools(&echo_tools());
     setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
-    write(&setup.dir, "noise", "not json at all\n[1, 2, 3]\n");
-    let opened = setup.start(Duration::from_secs(5));
+    setup.write("noise", "not json at all\n[1, 2, 3]\n");
+    let opened = setup.start_expect(Duration::from_secs(5));
     let (answer, opened) = fakes::within(
         "the call to `echo` past garbage on stdout",
         WITHIN,
         move || {
-            let answer = opened.server.call(
+            let answer = call_tool(
+                &opened.server,
                 "echo",
-                &json!({"text": "hi"}),
+                json!({"text": "hi"}),
                 Duration::from_secs(30),
                 &fakes::CancelToken::new(),
             );
@@ -516,17 +460,18 @@ fn closing_stdin_lets_the_server_exit_on_eof() {
     // and the fixture's `read` loop sees EOF and exits on its own: the
     // next call sees `gone` without any kill. With a strong sender in the
     // reader the channel would stay open and every call would time out.
-    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     setup.result("hang", "hang");
-    let mut opened = setup.start(Duration::from_secs(5));
-    let shared = std::sync::Arc::clone(&opened.server.inner.as_ref().expect("running").shared);
+    let opened = setup.start_expect(Duration::from_secs(5));
+    let shared = std::sync::Arc::clone(&opened.server.inner.shared);
     opened.server.shutdown();
     await_gone(&shared);
     // Gone is set, so the call answers without parking on the clock.
     let answer = fakes::within("a call to a gone server", WITHIN, move || {
-        opened.server.call(
+        call_tool(
+            &opened.server,
             "hang",
-            &json!({}),
+            json!({}),
             Duration::from_secs(1),
             &fakes::CancelToken::new(),
         )
@@ -538,9 +483,9 @@ fn closing_stdin_lets_the_server_exit_on_eof() {
 fn dropping_the_server_reaps_the_child() {
     // Without `Drop`'s kill and reap the child would stay (as a zombie:
     // `kill -0` still finds it) after the handles are gone.
-    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     setup.result("hang", "hang");
-    let opened = setup.start(Duration::from_secs(5));
+    let opened = setup.start_expect(Duration::from_secs(5));
     let pid = setup.pid();
     assert!(
         fakes::kill_pid(pid, "0").expect("probe"),
@@ -557,18 +502,19 @@ fn dropping_the_server_reaps_the_child() {
 
 #[test]
 fn server_requests_are_answered_ping_ok_and_unknown_32601() {
-    let setup = Setup::tools(&json!([{"name": "echo"}]));
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
     setup.result("echo", r#"{"content":[]}"#);
-    write(&setup.dir, "ping-on-start", "");
-    let opened = setup.start(Duration::from_secs(5));
+    setup.write("ping-on-start", "");
+    let opened = setup.start_expect(Duration::from_secs(5));
     // The fixture prints `ping` and `bogus` before it reads anything. The
     // reader answers each one through the shared writer channel before it
     // reads the `initialize` reply, and `start` returns only after that
     // reply. So once `start` returns, the answers are already logged.
     let (answer, opened) = fakes::within("a call after the server's requests", WITHIN, move || {
-        let answer = opened.server.call(
+        let answer = call_tool(
+            &opened.server,
             "echo",
-            &json!({}),
+            json!({}),
             Duration::from_secs(30),
             &fakes::CancelToken::new(),
         );
@@ -596,9 +542,9 @@ fn server_requests_are_answered_ping_ok_and_unknown_32601() {
 
 #[test]
 fn stop_leaves_no_running_child() {
-    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     setup.result("hang", "hang");
-    let opened = setup.start(Duration::from_secs(5));
+    let opened = setup.start_expect(Duration::from_secs(5));
     let pid = setup.pid();
     assert!(
         fakes::kill_pid(pid, "0").expect("probe"),
@@ -611,6 +557,150 @@ fn stop_leaves_no_running_child() {
         !fakes::kill_pid(pid, "0").expect("probe"),
         "pid {pid} is still there after the stop"
     );
+}
+
+fn greet_prompts() -> serde_json::Value {
+    serde_json::json!([{
+        "name": "greet",
+        "description": "Greets someone.",
+        "arguments": [{"name": "who", "required": true}, {"name": "tone"}],
+    }])
+}
+
+#[test]
+fn a_server_with_prompts_lists_them_at_start() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    setup.prompts(&greet_prompts());
+    let open = setup.start_expect(Duration::from_secs(5));
+    assert_eq!(
+        open.listed.prompts,
+        serde_json::from_value::<Vec<crate::server_json::ListedPrompt>>(greet_prompts())
+            .expect("prompts read")
+    );
+    assert_eq!(open.listed.tools.len(), 1);
+    assert_eq!(open.listed.tools[0].name, "echo");
+    let log = setup.requests();
+    let initialized = log
+        .find("notifications/initialized")
+        .expect("the handshake notifies initialized");
+    let listed = log
+        .find(r#""method":"prompts/list""#)
+        .expect("the handshake lists prompts");
+    assert!(
+        initialized < listed,
+        "prompts/list runs after notifications/initialized",
+    );
+    open.server.stop();
+}
+
+#[test]
+fn a_server_without_the_prompts_capability_is_never_asked_for_prompts() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    let open = setup.start_expect(Duration::from_secs(5));
+    assert!(open.listed.prompts.is_empty());
+    assert!(
+        !setup.requests().contains(r#""method":"prompts/list""#),
+        "no prompts/list without the capability",
+    );
+    open.server.stop();
+}
+
+#[test]
+fn tool_listing_follows_the_tools_capability() {
+    let present = Setup::new();
+    present.tools(&json!([{"name": "echo"}]));
+    let open = present.start_expect(Duration::from_secs(5));
+    assert_eq!(open.listed.tools.len(), 1);
+    assert!(
+        present.requests().contains(r#""method":"tools/list""#),
+        "the handshake lists tools when advertised",
+    );
+    open.server.stop();
+    let absent = Setup::new();
+    absent.write("tools.json", "error");
+    let open = absent.start_expect(Duration::from_secs(5));
+    assert!(open.listed.tools.is_empty());
+    assert!(
+        !absent.requests().contains(r#""method":"tools/list""#),
+        "no tools/list without the capability",
+    );
+    open.server.stop();
+}
+
+#[test]
+fn a_prompt_only_server_lists_prompts_with_no_tools() {
+    let setup = Setup::new();
+    setup.write("tools.json", "error");
+    setup.prompts(&greet_prompts());
+    let open = setup.start_expect(Duration::from_secs(5));
+    assert!(open.listed.tools.is_empty());
+    assert_eq!(
+        open.listed.prompts,
+        serde_json::from_value::<Vec<crate::server_json::ListedPrompt>>(greet_prompts())
+            .expect("prompts read")
+    );
+    let log = setup.requests();
+    assert!(
+        log.contains(r#""method":"prompts/list""#),
+        "the handshake lists prompts: {log}"
+    );
+    assert!(
+        !log.contains(r#""method":"tools/list""#),
+        "the handshake never lists tools: {log}"
+    );
+    open.server.stop();
+}
+
+#[test]
+fn a_failing_prompt_list_leaves_the_server_started_with_no_prompts() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    setup.prompts_raw("error");
+    let open = setup.start_expect(Duration::from_secs(5));
+    assert!(open.listed.prompts.is_empty());
+    assert_eq!(open.listed.tools.len(), 1, "the tools still list");
+    open.server.stop();
+}
+
+#[test]
+fn endless_pages_end_at_the_startup_deadline() {
+    for method in ["tools/list", "prompts/list"] {
+        let setup = Setup::new();
+        setup.tools(&json!([{"name": "echo"}]));
+        setup.prompts(&greet_prompts());
+        setup.write("cursor-forever", method);
+        let timeout = Duration::from_secs(5);
+        let script = fakes::mcp_fixture().display().to_string();
+        let workspace = setup.dir.path().to_path_buf();
+        let arg = workspace.display().to_string();
+        let clock = setup.clock();
+        let (done, result) = mpsc::channel();
+        thread::spawn(move || {
+            let outcome = Server::start(
+                &script,
+                &[arg],
+                &BTreeMap::new(),
+                &workspace,
+                &clock,
+                timeout,
+                "0.0.0",
+            );
+            done.send(outcome).expect("collected");
+        });
+        setup.await_requests(&format!(r#""method":"{method}""#), 2);
+        let pid = setup.pid();
+        setup.fake.advance(timeout + Duration::from_millis(1));
+        let outcome = result
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the paging start ends within {WITHIN:?}"));
+        assert!(
+            matches!(outcome, Err(StartError::Deadline)),
+            "endless {method} pages end at the startup deadline",
+        );
+        setup.await_reaped(pid);
+    }
 }
 
 /// A server that keeps running after its stdin ends: the fixture under a
@@ -658,7 +748,7 @@ fn stopping(server: super::Server) -> mpsc::Receiver<()> {
 
 #[test]
 fn a_server_that_ignores_end_of_input_stops_on_sigterm_before_the_grace() {
-    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     let opened = lingering(&setup, "exit 0");
     let stopped = stopping(opened.server);
     // The clock never moves: only the SIGTERM ends the server.
@@ -669,7 +759,7 @@ fn a_server_that_ignores_end_of_input_stops_on_sigterm_before_the_grace() {
 
 #[test]
 fn kill_every_server_kills_one_that_ignores_sigterm() {
-    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     let opened = lingering(&setup, "");
     let grace = setup.fake.now() + super::GRACE;
     let stopped = stopping(opened.server);
@@ -686,9 +776,9 @@ fn kill_every_server_kills_one_that_ignores_sigterm() {
 
 #[test]
 fn a_server_is_listed_until_its_reap() {
-    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     setup.result("hang", "hang");
-    let opened = setup.start(Duration::from_secs(5));
+    let opened = setup.start_expect(Duration::from_secs(5));
     assert_eq!(super::lock(&super::LIVE).len(), 1);
     stopping(opened.server)
         .recv_timeout(WITHIN)
@@ -769,11 +859,11 @@ fn await_gone(shared: &super::Shared) {
 
 #[test]
 fn kill_every_server_holds_its_pids_unreaped_while_it_signals() {
-    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     setup.result("hang", "hang");
-    let opened = setup.start(Duration::from_secs(5));
+    let opened = setup.start_expect(Duration::from_secs(5));
     let pid = setup.pid();
-    let shared = std::sync::Arc::clone(&opened.server.inner.as_ref().expect("running").shared);
+    let shared = std::sync::Arc::clone(&opened.server.inner.shared);
     let (entered, go) = pause_signallers();
     let (killed_tx, killed) = mpsc::channel();
     thread::spawn(move || {
@@ -813,11 +903,11 @@ fn kill_every_server_holds_its_pids_unreaped_while_it_signals() {
 
 #[test]
 fn stop_holds_the_child_unreaped_while_it_sends_sigterm() {
-    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     let opened = lingering(&setup, "exit 0");
     let server = std::sync::Arc::new(opened.server);
-    let shared = std::sync::Arc::clone(&server.inner.as_ref().expect("running").shared);
-    let pid = super::lock(&server.inner.as_ref().expect("running").child)
+    let shared = std::sync::Arc::clone(&server.inner.shared);
+    let pid = super::lock(&server.inner.child)
         .as_ref()
         .expect("unreaped")
         .id();
@@ -926,7 +1016,7 @@ fn assert_shutdown_failed(outcome: Result<super::OpenServer, StartError>) {
 fn a_stopped_start_waits_out_the_grace_before_its_kill() {
     // Without the grace wait the stop would kill at once, as a plain
     // shutdown and reap does: the probe below pins the wait.
-    let setup = Setup::tools(&json!([]));
+    let setup = Setup::with_tools(&json!([]));
     let workspace = setup.dir.path().to_path_buf();
     let ready = fakes::children::Ready::new(setup.dir.path());
     let result = starting_silent_ignoring(
@@ -964,7 +1054,7 @@ fn a_stopped_start_waits_out_the_grace_before_its_kill() {
 
 #[test]
 fn a_stopped_start_whose_server_exits_on_sigterm_returns_without_the_clock_moving() {
-    let setup = Setup::tools(&json!([]));
+    let setup = Setup::with_tools(&json!([]));
     let workspace = setup.dir.path().to_path_buf();
     // Silent, but SIGTERM ends it: its output ends inside the grace.
     let start_deadline = setup
@@ -1001,7 +1091,7 @@ fn a_stopped_start_whose_server_exits_on_sigterm_returns_without_the_clock_movin
 
 #[test]
 fn a_start_after_stop_every_start_spawns_nothing() {
-    let setup = Setup::tools(&json!([]));
+    let setup = Setup::with_tools(&json!([]));
     crate::registry::stop_every_start();
     let workspace = setup.dir.path().to_path_buf();
     let result = starting(
@@ -1024,16 +1114,82 @@ fn a_start_after_stop_every_start_spawns_nothing() {
 
 #[test]
 fn is_gone_turns_true_once_the_server_exits() {
-    let setup = Setup::tools(&json!([{"name": "hang"}]));
-    let opened = setup.start(Duration::from_secs(5));
+    let setup = Setup::with_tools(&json!([{"name": "hang"}]));
+    let opened = setup.start_expect(Duration::from_secs(5));
     assert!(!opened.server.is_gone(), "a running server is not gone");
-    let shared = std::sync::Arc::clone(&opened.server.inner.as_ref().expect("running").shared);
+    let shared = std::sync::Arc::clone(&opened.server.inner.shared);
     fakes::kill_pid(setup.pid(), "KILL").expect("the server dies");
     await_gone(&shared);
     assert!(opened.server.is_gone());
 }
 
 #[test]
-fn a_server_with_no_connection_is_gone() {
-    assert!(Server { inner: None }.is_gone());
+fn a_server_that_stops_reading_stdin_ends_every_call_gone() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "big"}]));
+    let fixture = fakes::mcp_fixture().display().to_string();
+    let dir = setup.dir.path().display().to_string();
+    let script = "if [ -e \"$2/started\" ]; then exit 1; fi\ntouch \"$2/started\"\ni=0; while [ $i -lt 3 ] && IFS= read -r line; do printf '%s\\n' \"$line\"; i=$((i+1)); done | \"$1\" \"$2\"\nread -r _ < \"$2/hold\"\n";
+    let hold = setup.dir.path().join("hold");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&hold)
+        .status()
+        .expect("mkfifo runs");
+    assert!(status.success(), "mkfifo creates hold");
+    let mut spec = setup.spec("fx");
+    spec.command = "/bin/bash".to_owned();
+    spec.args = vec![
+        "-c".to_owned(),
+        script.to_owned(),
+        "wedged".to_owned(),
+        fixture,
+        dir,
+    ];
+    let started = setup.start(vec![spec]);
+    assert!(started.failed.is_empty());
+    let tool = setup.tool(&started, "mcp__fx__big");
+    let pad = "x".repeat(128 * 1024);
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("pad".to_owned(), serde_json::Value::from(pad));
+    let arguments = std::sync::Arc::new(arguments);
+    let calls = super::WRITE_QUEUE + 2;
+    let (done, results) = mpsc::channel();
+    for _ in 0..calls {
+        let done = done.clone();
+        let tool = std::sync::Arc::clone(&tool);
+        let arguments = std::sync::Arc::clone(&arguments);
+        std::thread::spawn(move || {
+            let output = tool.run(
+                &arguments,
+                &fakes::CancelToken::new(),
+                &fakes::Recorder::default(),
+            );
+            done.send(output).expect("collected");
+        });
+    }
+    drop(done);
+    let outputs = fakes::within("every wedged call to end", WITHIN, move || {
+        results.into_iter().collect::<Vec<_>>()
+    });
+    assert_eq!(outputs.len(), calls);
+    for output in &outputs {
+        assert_eq!(
+            output.error.as_ref().map(|error| &error.code),
+            Some(&contract::ErrorCode::McpServerUnavailable),
+            "every call ends unavailable",
+        );
+    }
+    let died = outputs
+        .iter()
+        .flat_map(|output| output.servers.iter())
+        .filter(|record| {
+            matches!(
+                record,
+                contract::tool::ServerRecord::Failed(failed)
+                    if failed.reason == contract::events::ServerFailure::Died
+            )
+        })
+        .count();
+    assert_eq!(died, 1, "exactly one death is recorded");
+    setup.stop(started.servers);
 }
