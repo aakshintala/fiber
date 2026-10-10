@@ -211,7 +211,6 @@ impl App {
                         self.focus_chip(*landed);
                     }
                 }
-                self.remember_chip(chip);
                 Some(Effect::None)
             }
             Edit::ShiftEnter

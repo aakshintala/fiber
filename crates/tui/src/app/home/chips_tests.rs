@@ -896,3 +896,32 @@ fn left_and_right_on_a_chip_ignore_a_person_binding() {
     assert_eq!(press(&mut app, "left"), Effect::None);
     assert_eq!(app.focused(), None);
 }
+
+#[test]
+fn right_then_typing_then_down_returns_to_the_moved_chip() {
+    let mut app = home_with(Some("acme/m1"));
+    drawn(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_edit(Edit::Right), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
+    // Typing returns to the entry bar; the chip focused last stays
+    // the worktree chip.
+    assert_eq!(app.on_key(Key::Char('x'), now()), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.input().expand(), "x");
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
+}
+
+#[test]
+fn right_then_esc_then_down_returns_to_the_moved_chip() {
+    let mut app = home_with(Some("acme/m1"));
+    drawn(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_edit(Edit::Right), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
+}
