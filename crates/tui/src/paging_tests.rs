@@ -17,7 +17,7 @@ use crate::keys::Key;
 use crate::link::Line;
 use crate::local_time::new_york;
 use crate::rows::Rows;
-use crate::turn::{Row, Turn};
+use crate::turn::{Entry, Row, Turn};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -2590,4 +2590,33 @@ fn shown_carries_the_spin_marks_of_its_lines() {
         .iter()
         .rposition(|(line, _, _)| line.to_string().starts_with("• Read 1 file"));
     assert_eq!(shown.spins, vec![(moving.unwrap_or(usize::MAX), 0)]);
+}
+
+#[test]
+fn drawing_a_page_keeps_each_replys_render() {
+    let mut stream = Stream::new(false);
+    stream.turn(0, 1);
+    let mut pages = Pages::new(60);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    // Drawing the page renders its replies: reading them back must find
+    // the stored cards' renders, not only their clones'.
+    assert!(pages.page_text(0).is_some());
+    let _ = pages.shown(0, 10);
+    let part = pages.part(0).expect("page 0 is resident");
+    let mut replies = part
+        .turns
+        .iter()
+        .flat_map(|turn| &turn.entries)
+        .filter_map(|entry| match entry {
+            Entry::Reply { reply, .. } => Some(reply),
+            Entry::Steer(_)
+            | Entry::Group(_)
+            | Entry::Aside(_)
+            | Entry::Band(_)
+            | Entry::Answers(_) => None,
+        });
+    let reply = replies.next().expect("the turn has a reply");
+    assert_eq!(reply.cached_at(), Some(60));
 }
