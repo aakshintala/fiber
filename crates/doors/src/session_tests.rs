@@ -2856,26 +2856,47 @@ fn close_returns_when_the_socket_path_was_rebound_with_a_full_backlog() {
     let _other = UnixListener::bind(&opened.socket).unwrap();
     // Fill the replacement's backlog with connected-but-unaccepted clients:
     // a close that made a blocking `connect` wake here would block forever
-    // on Linux once the queue is full, so close must never make one.
+    // on Linux once the queue is full, so close must never make one. Each
+    // connect runs on its own helper thread with a short wall-clock bound:
+    // the first connect that blocks or is refused proves the queue is full,
+    // not a fixed count (Linux queues backlog+1, so 128 successes prove
+    // nothing). Every connected stream and every still-blocked helper is
+    // retained until the test ends so the queue stays full through close.
+    const CONNECT_WAIT: Duration = Duration::from_millis(500);
     let path = opened.socket.clone();
-    let (queued_tx, queued_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut held = Vec::new();
-        for _ in 0..512 {
-            match UnixStream::connect(&path) {
-                Ok(stream) => {
-                    held.push(stream);
-                    queued_tx.send(()).unwrap_or(());
-                }
-                Err(_) => break,
+    let mut held = Vec::new();
+    let mut blocked = Vec::new();
+    let mut saturated = false;
+    for _ in 0..4096 {
+        let (tx, rx) = mpsc::channel();
+        let connecting = path.clone();
+        let helper = thread::Builder::new()
+            .name("doors-test-backlog".to_owned())
+            .spawn(move || {
+                tx.send(UnixStream::connect(&connecting).ok()).unwrap_or(());
+            })
+            .unwrap();
+        match Deadline::after(CONNECT_WAIT).recv(&rx) {
+            Ok(Some(stream)) => {
+                helper.join().unwrap();
+                held.push(stream);
+            }
+            Ok(None) => {
+                helper.join().unwrap();
+                saturated = true;
+                break;
+            }
+            Err(_) => {
+                blocked.push(helper);
+                saturated = true;
+                break;
             }
         }
-    });
-    for _ in 0..128 {
-        Deadline::after(DEADLINE)
-            .recv(&queued_rx)
-            .expect("the replacement backlog fills");
     }
+    assert!(
+        saturated,
+        "the replacement backlog filled until a connect blocked or refused"
+    );
     let dir = opened.session.dir.clone();
     close_within(opened.session, opened.log);
     assert_lock_released(&dir);
