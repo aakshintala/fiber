@@ -84,6 +84,28 @@ fn fiber(setup: &Setup, args: &[&str]) -> Run {
     Run::from(run_to_exit(setup.deadline, "fiber", command))
 }
 
+/// Installs `fiber.test/<short>` with entry script `init`.
+fn install_lua(setup: &Setup, short: &str, init: &str) {
+    let source = setup.root.path().join(format!("ext-{short}"));
+    std::fs::create_dir_all(&source).unwrap();
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name": format!("fiber.test/{short}"), "version": "v2.0.0",
+            "fiber": "0.1.0", "api": 1}),
+    );
+    std::fs::write(source.join("init.lua"), init).unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
 /// `fiber ask --model scripted/s.json hi`.
 fn ask(setup: &Setup) -> Run {
     fiber(setup, &["ask", "--model", "scripted/s.json", "hi"])
@@ -751,4 +773,106 @@ fn a_live_scripted_resume_with_a_label_is_rejected() {
         kinds.iter().map(String::as_str).collect::<Vec<_>>(),
         TEXT_TURN
     );
+}
+
+/// A reviewed shell call that reaches stage 2, then an automatic handoff,
+/// with an extension loaded throughout: the saved log holds exactly three
+/// reviewer `usage_recorded` lines, and no other line carries `reviewer`.
+/// An extension's own model call needs `host.model`, which this build does
+/// not offer yet, so no extension usage line can exist; the extension still
+/// loads and its hook runs on the reviewed call, and the exclusion is
+/// asserted over every usage line in the log.
+#[test]
+fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "tag",
+        "fiber.hook(\"after_tool\", { timeout = 10000, on_failure = \"non-blocking\",\n\
+           run = function(call) host.log(\"seen\") end })\n",
+    );
+    script(
+        &setup,
+        "s.json",
+        &json!({"steps": [
+            {"tool_calls": [{"name": "shell", "arguments": {"command": "touch made && echo ran"}}],
+             "usage": {"input": 100, "output": 10}},
+            {"text": "Handing off."},
+            {"text": "Done."}
+        ]}),
+    );
+    script(
+        &setup,
+        "r.json",
+        &json!({"steps": [
+            {"text": "check"},
+            {"text": "allow: fine"},
+            {"text": "1"}
+        ]}),
+    );
+    reviewed_by_script(
+        &setup,
+        json!({"model": "scripted/s.json", "handoff": {"tokens": 5}}),
+    );
+    let run = ask(&setup);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    // The stage-2 allow ran the call, and the extension's hook saw it.
+    assert!(setup.workspace().join("made").exists());
+    let seen: Vec<&Value> = run
+        .of("extension_log")
+        .into_iter()
+        .filter(|line| line["payload"]["extension"] == "fiber.test/tag")
+        .collect();
+    assert_eq!(seen.len(), 1, "{:?}", run.of("extension_log"));
+    assert_eq!(
+        run.of("handoff_completed")[0]["payload"]["outcome"],
+        "completed"
+    );
+
+    let id = session_id(&run).to_owned();
+    let log = log_lines(&setup, &id);
+    let usages: Vec<&Value> = log
+        .iter()
+        .filter(|line| line["kind"] == "usage_recorded")
+        .collect();
+    // The reviewed call, decided at stage 2.
+    let resolved = log
+        .iter()
+        .find(|line| {
+            line["kind"] == "permission_resolved" && line["payload"]["reviewer"]["stage"] == 2
+        })
+        .unwrap();
+    assert_eq!(resolved["payload"]["decision"], "allow");
+    let call = resolved.get("action_id").unwrap().clone();
+    // Exactly the reviewer's three calls carry `reviewer`.
+    let review: Vec<&&Value> = usages
+        .iter()
+        .filter(|line| line["payload"]["model"] == "scripted/r.json")
+        .collect();
+    assert_eq!(review.len(), 3);
+    let stage = |purpose: &str| {
+        review
+            .iter()
+            .find(|line| line["payload"]["reviewer"]["purpose"] == purpose)
+            .unwrap()
+    };
+    for purpose in ["stage_1", "stage_2"] {
+        let line = stage(purpose);
+        assert_eq!(
+            line["payload"]["reviewer"],
+            json!({"purpose": purpose, "action_id": call}),
+            "{line}"
+        );
+        assert!(line.get("action_id").is_none(), "{line}");
+    }
+    let handoff = stage("handoff");
+    assert_eq!(handoff["payload"]["reviewer"], json!({"purpose": "handoff"}));
+    assert!(handoff.get("action_id").is_none(), "{handoff}");
+    // Nothing else does: neither the session's own calls nor any other
+    // line in the log.
+    for line in &usages {
+        if line["payload"]["model"] != "scripted/r.json" {
+            assert!(line["payload"].get("reviewer").is_none(), "{line}");
+        }
+    }
 }
