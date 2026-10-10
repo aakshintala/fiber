@@ -198,15 +198,19 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
     // a starter on the way up reports a timeout the stall never caused.
     let early = await_stuck(&done_rx, &watching);
     assert!(early.is_none(), "the stall answers only at its deadline");
-    // Past the git deadline the run stops.
+    // Past the git deadline the run stops: it parks for the grace, or
+    // answers at once when the stall dies on SIGTERM with no grace park.
     clock.advance(GIT_DEADLINE + Duration::from_secs(1));
     let kill_at = clock.now() + GRACE;
-    assert!(
-        clock.await_parked(kill_at, WITHIN),
-        "waited {WITHIN:?} for diff to park for the grace"
-    );
-    clock.advance(GRACE);
-    let err = done_rx.recv_timeout(WITHIN).unwrap().unwrap_err();
+    let answered = crate::stall::await_grace_or_answer(&clock, &done_rx, kill_at);
+    if answered.is_none() {
+        clock.advance(GRACE);
+    }
+    let answer = match answered {
+        Some(answer) => answer,
+        None => done_rx.recv_timeout(WITHIN).unwrap(),
+    };
+    let err = answer.unwrap_err();
     assert!(
         matches!(&err, Error::Git { .. }),
         "a stalled diff fails as git failed: {err}"

@@ -603,34 +603,17 @@ fn stalled_ls_files_child() {
     assert!(early.is_none(), "the stall answers only at its deadline");
     // Past the git deadline the run stops.
     clock.advance(GIT_DEADLINE + Duration::from_secs(1));
-    // The run parks for the grace; an answer meanwhile ends this at once,
-    // as above: no blind wait burns the child's budget.
+    // The run parks for the grace, or answers at once when the stall dies
+    // on SIGTERM with no grace park; an answer meanwhile ends this at
+    // once, as above.
     let kill_at = clock.now() + GRACE;
-    let mut graced = false;
-    let mut answered = None;
-    for _ in 0..STUCK_ROUNDS {
-        if clock.await_parked(kill_at, SIGHT) {
-            graced = true;
-            break;
-        }
-        match done_rx.try_recv() {
-            Ok(done) => {
-                answered = Some(done);
-                break;
-            }
-            Err(mpsc::TryRecvError::Empty) => {}
-            Err(mpsc::TryRecvError::Disconnected) => {
-                panic!("the stalled run returns")
-            }
-        }
+    let answered = crate::stall::await_grace_or_answer(&clock, &done_rx, kill_at);
+    if answered.is_none() {
+        clock.advance(GRACE);
     }
-    clock.advance(GRACE);
     let answer = match answered {
         Some(answer) => answer,
-        None => {
-            assert!(graced, "ls-files parks for the grace");
-            done_rx.recv_timeout(WITHIN).unwrap()
-        }
+        None => done_rx.recv_timeout(WITHIN).unwrap(),
     };
     let err = answer.unwrap_err();
     assert!(

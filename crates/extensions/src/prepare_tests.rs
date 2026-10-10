@@ -163,15 +163,17 @@ fn a_stalled_install_step_is_stopped_at_its_deadline() {
     // Past the install-step deadline the run stops.
     clock.advance(INSTALL_STEP_DEADLINE + Duration::from_secs(1));
     let kill_at = clock.now() + GRACE;
-    assert!(
-        clock.await_parked(kill_at, WITHIN),
-        "waited {WITHIN:?} for the step to park for the grace"
-    );
-    clock.advance(GRACE);
-    let err = done_rx
-        .recv_timeout(WITHIN)
-        .unwrap_or_else(|_| panic!("waited {WITHIN:?} for the stalled step"))
-        .expect_err("a stalled step fails");
+    let answered = crate::stall::await_grace_or_answer(&clock, &done_rx, kill_at);
+    if answered.is_none() {
+        clock.advance(GRACE);
+    }
+    let answer = match answered {
+        Some(answer) => answer,
+        None => done_rx
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("waited {WITHIN:?} for the stalled step")),
+    };
+    let err = answer.expect_err("a stalled step fails");
     assert!(
         matches!(err, crate::Error::InstallExited { .. }),
         "a stalled step fails as its install step failed: {err}"
