@@ -1354,10 +1354,7 @@ fn a_skill_added_between_turns_is_announced_before_turn_started() {
         .find(|line| line.kind == "skills_changed")
         .unwrap();
     assert_eq!(changed.payload["added"][0]["name"], "late");
-    assert_eq!(
-        changed.payload["added"][0]["description"],
-        "Runs late."
-    );
+    assert_eq!(changed.payload["added"][0]["description"], "Runs late.");
     // The log holds one opening message: the turn did not rebuild it.
     let log = log::read(&session.dir).unwrap();
     assert_eq!(
@@ -1448,12 +1445,7 @@ fn switching_a_skill_off_and_on_is_removed_then_added() {
     assert!(changed[0].payload["added"].as_array().unwrap().is_empty());
     assert_eq!(changed[0].payload["removed"], json!(["late"]));
     assert_eq!(changed[1].payload["added"][0]["name"], "late");
-    assert!(
-        changed[1].payload["removed"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(changed[1].payload["removed"].as_array().unwrap().is_empty());
     // Each request carries its turn's line.
     let requests = session.provider.requests();
     assert_eq!(requests.len(), 4);

@@ -64,12 +64,16 @@ fn invalid_json_fails_with_the_config_invalid_code() {
     let error = reader().unwrap_err();
     assert_eq!(error.code, contract::ErrorCode::ConfigInvalid);
     assert!(
-        error.message.starts_with("Fiber could not re-read skills.disabled: "),
+        error
+            .message
+            .starts_with("Fiber could not re-read skills.disabled: "),
         "{}",
         error.message
     );
     assert!(
-        error.message.ends_with("The last list read stays in force."),
+        error
+            .message
+            .ends_with("The last list read stays in force."),
         "{}",
         error.message
     );

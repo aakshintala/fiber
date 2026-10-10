@@ -173,11 +173,7 @@ pub(crate) fn discover(inputs: &PromptInputs, top: &Path) -> Discovered {
 /// longer sees leave the cache, so it never grows past the skills on
 /// disk. A place whose canonical path an earlier place already had is
 /// skipped.
-pub(crate) fn discover_cached(
-    inputs: &PromptInputs,
-    top: &Path,
-    cache: &mut Cache,
-) -> Discovered {
+pub(crate) fn discover_cached(inputs: &PromptInputs, top: &Path, cache: &mut Cache) -> Discovered {
     let mut skills: Vec<Found> = Vec::new();
     let mut shadowed: Vec<Shadowed> = Vec::new();
     let mut notices = Vec::new();
@@ -303,9 +299,10 @@ fn read_place(
         // The size-and-time shortcut: unchanged without reading, as the
         // instruction-file check reads (`docs/system-prompt.md`, "When
         // something changes").
-        if let (Some(now), Some((known, header))) =
-            (stat_of(&path.display().to_string()), cache.entries.get(&path))
-            && now == *known
+        if let (Some(now), Some((known, header))) = (
+            stat_of(&path.display().to_string()),
+            cache.entries.get(&path),
+        ) && now == *known
         {
             found.push(Read {
                 path,
@@ -317,9 +314,7 @@ fn read_place(
             Ok(bytes) => {
                 let header = skill_header::parse(&String::from_utf8_lossy(&bytes));
                 if let Some(now) = stat_of(&path.display().to_string()) {
-                    cache
-                        .entries
-                        .insert(path.clone(), (now, header.clone()));
+                    cache.entries.insert(path.clone(), (now, header.clone()));
                 }
                 found.push(Read { path, header });
             }

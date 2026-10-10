@@ -3519,10 +3519,7 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
         .find(|line| line["kind"] == "skills_changed")
         .expect("the check announced the added skill");
     assert_eq!(changed["payload"]["added"][0]["name"], "late");
-    assert_eq!(
-        changed["payload"]["added"][0]["description"],
-        "Runs late."
-    );
+    assert_eq!(changed["payload"]["added"][0]["description"], "Runs late.");
     let path = changed["payload"]["added"][0]["path"].clone();
     // The second request carries the added line's text.
     let requests = server.requests();

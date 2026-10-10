@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use contract::events::{Event, Notice, SkillListed, SkillsChanged};
 use contract::Envelope;
+use contract::events::{Event, Notice, SkillListed, SkillsChanged};
 
 use crate::Error;
 use crate::opening;
@@ -175,9 +175,7 @@ impl SkillSet {
         let mut current: BTreeMap<String, SkillListed> = BTreeMap::new();
         let mut winners: BTreeMap<String, skills::Found> = BTreeMap::new();
         for found in discovered.skills {
-            if found.model_invocable
-                && !disabled.iter().any(|off| off == &found.listed.name)
-            {
+            if found.model_invocable && !disabled.iter().any(|off| off == &found.listed.name) {
                 current.insert(found.listed.name.clone(), found.listed.clone());
             }
             winners.insert(found.listed.name.clone(), found);
@@ -233,8 +231,7 @@ impl SkillSet {
         // nothing until it is fixed and broken again.
         let previous = std::mem::take(&mut inner.noticed);
         let mut notices = Vec::new();
-        let candidates: Vec<&Notice> =
-            discovered.notices.iter().chain(pending.as_ref()).collect();
+        let candidates: Vec<&Notice> = discovered.notices.iter().chain(pending.as_ref()).collect();
         for notice in &candidates {
             if !previous.contains(&notice.message) {
                 notices.push((*notice).clone());

@@ -261,13 +261,7 @@ fn added_names(changed: &Option<contract::events::SkillsChanged>) -> Vec<&str> {
 fn removed_names(changed: &Option<contract::events::SkillsChanged>) -> Vec<&str> {
     changed
         .as_ref()
-        .map(|changed| {
-            changed
-                .removed
-                .iter()
-                .map(String::as_str)
-                .collect()
-        })
+        .map(|changed| changed.removed.iter().map(String::as_str).collect())
         .unwrap_or_default()
 }
 
@@ -298,11 +292,7 @@ fn two_skills_added_are_sorted_with_their_entries() {
     let first = &changed.added[0];
     assert_eq!(first.name, "alpha");
     assert_eq!(first.description, "First.");
-    assert!(
-        first.path.ends_with("alpha/SKILL.md"),
-        "{}",
-        first.path
-    );
+    assert!(first.path.ends_with("alpha/SKILL.md"), "{}", first.path);
     assert_eq!(first.source, SkillSource::Repository);
 }
 
@@ -721,10 +711,7 @@ fn changed_text_renders_added_then_removed_on_one_line_each() {
 fn a_lookup_consults_the_reader_before_any_check() {
     let tree = Tree::new();
     skill(&tree.top().join(".agents/skills"), "a", "a", "d");
-    let set = reading_set(
-        &tree,
-        shared_reader(Arc::new(Mutex::new(vec!["a".into()]))),
-    );
+    let set = reading_set(&tree, shared_reader(Arc::new(Mutex::new(vec!["a".into()]))));
     assert_eq!(set.command("a"), None);
     assert!(set.is_disabled("a"));
 }

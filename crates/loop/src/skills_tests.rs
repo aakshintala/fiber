@@ -1135,10 +1135,7 @@ fn an_mtime_change_alone_re_reads_the_skill() {
     // Same byte length, only the mtime moved: re-read all the same.
     let mtime = mtime_of(&path);
     std::fs::write(&path, "---\nname: same\ndescription: bbb\n---\nBody.\n").unwrap();
-    restore_mtime(
-        &path,
-        mtime + std::time::Duration::from_secs(60),
-    );
+    restore_mtime(&path, mtime + std::time::Duration::from_secs(60));
     assert_eq!(description_of(&cached(&tree, &mut cache), "same"), "bbb");
 }
 
