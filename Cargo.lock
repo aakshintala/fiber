@@ -500,6 +500,7 @@ version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
+ "support",
  "thiserror 2.0.21",
 ]
 
@@ -904,6 +905,7 @@ dependencies = [
  "ring",
  "rustix",
  "serde_json",
+ "support",
 ]
 
 [[package]]
