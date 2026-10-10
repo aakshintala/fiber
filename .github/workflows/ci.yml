@@ -675,6 +675,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
         run: |
           dir=$RUNNER_TEMP/flaky
+          find "$dir" -ls || true
           [ -d "$dir" ] || exit 0
           for file in "$dir"/flaky-tests-*/flaky-tests.txt; do
             [ -f "$file" ] || continue
