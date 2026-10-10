@@ -1132,8 +1132,7 @@ fn a_transfer_lands_on_the_live_relay() {
 /// `#[track_caller]` cannot cross.
 #[track_caller]
 fn await_release(reply: &std::sync::mpsc::Receiver<()>, wait: &Deadline) {
-    wait.recv(reply)
-        .expect("the test releases the fake reply");
+    wait.recv(reply).expect("the test releases the fake reply");
 }
 
 #[test]
