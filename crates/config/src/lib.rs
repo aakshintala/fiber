@@ -183,13 +183,7 @@ impl Config {
         let project_dir = home.join("projects").join(sources.project.as_str());
         let mut notices = Vec::new();
         let mut layers = vec![(Source::Default, keys::defaults())];
-        let repository_file = fiber.join("config.json");
-        plain(&fiber, true)?;
-        let repository = if plain(&repository_file, false)? {
-            read(&repository_file)?
-        } else {
-            None
-        };
+        let (repository_file, repository) = read_repository(&sources.workspace)?;
         let files = [
             (
                 Source::Global(home.join("config.json")),
@@ -491,13 +485,9 @@ const HOOKS_EXTENSION: &str = "github.com/aakshintala/fiber/extensions/hooks";
 /// checks as [`Config::load`]. A repository with none gets an empty
 /// [`Declared`].
 pub fn declared(workspace: &Path) -> Result<Declared, ConfigError> {
-    let fiber = workspace.join(".fiber");
-    plain(&fiber, true)?;
     let mut declared = Declared::default();
-    let file = fiber.join("config.json");
-    if plain(&file, false)?
-        && let Some(value) = read(&file)?
-    {
+    let (file, repository) = read_repository(workspace)?;
+    if let Some(value) = repository {
         let Value::Object(layer) = value else {
             return Err(top_level(&file.display().to_string()));
         };
@@ -522,12 +512,11 @@ pub fn declared(workspace: &Path) -> Result<Declared, ConfigError> {
             declared.mcp_servers = servers.clone();
         }
     }
-    plain(&fiber.join("config"), true)?;
-    let hooks_file = write::settings_file(&fiber, HOOKS_EXTENSION);
-    if plain(&hooks_file, false)?
-        && let Some(bytes) = read_bytes(&hooks_file)?
-    {
-        let Value::Object(map) = parse(&hooks_file, &bytes)? else {
+    let mut settings_files = BTreeMap::new();
+    snapshot_settings(&workspace.join(".fiber"), true, &mut settings_files)?;
+    let hooks_file = write::settings_file(&workspace.join(".fiber"), HOOKS_EXTENSION);
+    if let Some(bytes) = settings_files.get(&hooks_file) {
+        let Value::Object(map) = parse(&hooks_file, bytes)? else {
             return Err(top_level(&hooks_file.display().to_string()));
         };
         match map.get("hooks") {
@@ -543,6 +532,21 @@ pub fn declared(workspace: &Path) -> Result<Declared, ConfigError> {
         }
     }
     Ok(declared)
+}
+
+/// The workspace's `.fiber/config.json`: plain-file checks, then the
+/// parsed value, shared by [`Config::load`] and [`declared`]. `None` when
+/// there is no such file.
+fn read_repository(workspace: &Path) -> Result<(PathBuf, Option<Value>), ConfigError> {
+    let fiber = workspace.join(".fiber");
+    plain(&fiber, true)?;
+    let file = fiber.join("config.json");
+    let value = if plain(&file, false)? {
+        read(&file)?
+    } else {
+        None
+    };
+    Ok((file, value))
 }
 
 /// Reads every `*.json` in a layer directory's `config/` into `into`. In a
