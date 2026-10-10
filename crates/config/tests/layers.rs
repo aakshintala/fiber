@@ -9,6 +9,7 @@ use std::fs;
 use common::Setup;
 use config::{CredentialSource, ProjectKey, Source};
 use contract::ErrorCode;
+use fakes::Deadline;
 use serde_json::json;
 
 fn model_layers(setup: &Setup) {
@@ -406,8 +407,8 @@ fn a_repository_file_that_is_a_directory_or_a_fifo_is_refused() {
         });
         tx.send(loaded.map(drop)).unwrap();
     });
-    let e = rx
-        .recv_timeout(std::time::Duration::from_secs(10))
+    let e = Deadline::after(std::time::Duration::from_secs(10))
+        .recv(&rx)
         .expect("the load blocked reading a FIFO")
         .unwrap_err();
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);

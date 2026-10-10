@@ -15,6 +15,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock as _;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 
@@ -167,8 +168,11 @@ fn the_bound_kills_then_exits_only_once_five_seconds_pass() {
     assert!(calls.try_recv().is_err(), "nothing killed before the bound");
     assert!(did.try_recv().is_err(), "no exit before the bound");
     clock.advance(Duration::from_millis(1));
-    assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
-    assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(143));
+    assert_eq!(Deadline::after(DEADLINE).recv(&calls).unwrap(), Did::Bound);
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&did).unwrap(),
+        Did::Exit(143)
+    );
 }
 
 #[test]
@@ -186,8 +190,11 @@ fn a_started_shutdown_has_the_same_bound() {
         "the bound waits on the clock"
     );
     clock.advance(SHUTDOWN_BOUND);
-    assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
-    assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(129));
+    assert_eq!(Deadline::after(DEADLINE).recv(&calls).unwrap(), Did::Bound);
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&did).unwrap(),
+        Did::Exit(129)
+    );
 }
 
 /// A reader that fails at once, as a broken lifeline does.
@@ -229,7 +236,7 @@ fn a_lifeline_eof_after_start_takes_the_sighup_path() {
     // Bytes the parent writes are ignored; EOF ends the lifeline.
     signals.lifeline(Box::new(std::io::Cursor::new(b"hello".to_vec())));
     assert_eq!(
-        calls.recv_timeout(DEADLINE).unwrap(),
+        Deadline::after(DEADLINE).recv(&calls).unwrap(),
         Did::Signal(129),
         "EOF after start shuts down with the hangup code"
     );
@@ -238,8 +245,11 @@ fn a_lifeline_eof_after_start_takes_the_sighup_path() {
         "the bound waits on the clock"
     );
     clock.advance(SHUTDOWN_BOUND);
-    assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
-    assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(129));
+    assert_eq!(Deadline::after(DEADLINE).recv(&calls).unwrap(), Did::Bound);
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&did).unwrap(),
+        Did::Exit(129)
+    );
 }
 
 #[test]
@@ -256,8 +266,8 @@ fn a_blocked_lifeline_triggers_nothing_until_released() {
         entered: entered_tx,
         release: release_rx,
     }));
-    entered_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&entered_rx)
         .expect("the lifeline blocks reading stdin: a skipped drain never reads");
     assert!(
         calls.try_recv().is_err(),
@@ -269,7 +279,7 @@ fn a_blocked_lifeline_triggers_nothing_until_released() {
     );
     release_tx.send(()).unwrap();
     assert_eq!(
-        calls.recv_timeout(DEADLINE).unwrap(),
+        Deadline::after(DEADLINE).recv(&calls).unwrap(),
         Did::Signal(129),
         "EOF after the block shuts down with the hangup code"
     );
@@ -278,8 +288,11 @@ fn a_blocked_lifeline_triggers_nothing_until_released() {
         "the bound waits on the clock"
     );
     clock.advance(SHUTDOWN_BOUND);
-    assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
-    assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(129));
+    assert_eq!(Deadline::after(DEADLINE).recv(&calls).unwrap(), Did::Bound);
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&did).unwrap(),
+        Did::Exit(129)
+    );
 }
 
 #[test]
@@ -291,7 +304,7 @@ fn a_lifeline_read_error_takes_the_same_path() {
     assert_eq!(start(&signals, &tx), None);
     signals.lifeline(Box::new(Broken));
     assert_eq!(
-        calls.recv_timeout(DEADLINE).unwrap(),
+        Deadline::after(DEADLINE).recv(&calls).unwrap(),
         Did::Signal(129),
         "a read error after start shuts down too"
     );
@@ -303,7 +316,7 @@ fn a_lifeline_eof_while_booting_exits_129_at_once() {
     let (signals, did) = recorded(&clock);
     signals.lifeline(Box::new(std::io::Cursor::new(Vec::new())));
     assert_eq!(
-        did.recv_timeout(DEADLINE).unwrap(),
+        Deadline::after(DEADLINE).recv(&did).unwrap(),
         Did::Exit(129),
         "EOF while booting exits at once, as a real SIGHUP does"
     );
@@ -317,7 +330,7 @@ fn a_lifeline_eof_while_armed_is_recorded_for_start() {
     arm(&signals, &tx);
     signals.lifeline(Box::new(std::io::Cursor::new(Vec::new())));
     assert_eq!(
-        calls.recv_timeout(DEADLINE).unwrap(),
+        Deadline::after(DEADLINE).recv(&calls).unwrap(),
         Did::Signal(-1),
         "EOF while armed records the hangup"
     );
@@ -416,8 +429,8 @@ fn close_now_once_started_shuts_down_with_code_0_and_the_bound_exits_0() {
         "the bound waits on the clock"
     );
     clock.advance(SHUTDOWN_BOUND);
-    assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
-    assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(0));
+    assert_eq!(Deadline::after(DEADLINE).recv(&calls).unwrap(), Did::Bound);
+    assert_eq!(Deadline::after(DEADLINE).recv(&did).unwrap(), Did::Exit(0));
 }
 
 #[test]
@@ -441,8 +454,8 @@ fn a_second_close_now_does_nothing_and_a_later_term_kills_the_groups() {
         "the bound waits on the clock"
     );
     clock.advance(SHUTDOWN_BOUND);
-    assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
-    assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(0));
+    assert_eq!(Deadline::after(DEADLINE).recv(&calls).unwrap(), Did::Bound);
+    assert_eq!(Deadline::after(DEADLINE).recv(&did).unwrap(), Did::Exit(0));
     assert!(did.try_recv().is_err(), "no second bound ran");
     assert!(calls.try_recv().is_err(), "no second bound ran");
 }
@@ -464,8 +477,11 @@ fn close_now_after_a_signal_keeps_the_signal_and_its_code() {
         "the bound waits on the clock"
     );
     clock.advance(SHUTDOWN_BOUND);
-    assert_eq!(calls.recv_timeout(DEADLINE).unwrap(), Did::Bound);
-    assert_eq!(did.recv_timeout(DEADLINE).unwrap(), Did::Exit(143));
+    assert_eq!(Deadline::after(DEADLINE).recv(&calls).unwrap(), Did::Bound);
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&did).unwrap(),
+        Did::Exit(143)
+    );
 }
 
 /// The child's marker: set, the test installs the signals and sends itself
@@ -484,7 +500,7 @@ fn a_real_sigterm_while_booting_exits_143() {
         // The signals thread exits the process; this wait only bounds a
         // child whose exit never came.
         let (_held, never) = mpsc::channel::<()>();
-        let _waited = never.recv_timeout(CHILD_DEADLINE);
+        let _waited = Deadline::after(CHILD_DEADLINE).recv(&never);
         std::process::exit(0);
     }
     let name = module_path!().split_once("::").unwrap().1;
@@ -504,7 +520,7 @@ fn a_real_sigterm_while_booting_exits_143() {
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
         fakes::kill_pid(pid, "KILL").unwrap();
         panic!("waited {CHILD_DEADLINE:?} for the child to exit on SIGTERM");
     };

@@ -725,6 +725,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use fakes::Deadline;
     use fakes::TempDir;
     use serde_json::json;
 
@@ -733,6 +734,7 @@ mod tests {
     /// How long the test waits for a thread before failing.
     const DEADLINE: Duration = Duration::from_secs(10);
 
+    #[track_caller]
     fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || {
@@ -742,19 +744,20 @@ mod tests {
             done.send(()).unwrap();
         });
         assert!(
-            finished.recv_timeout(DEADLINE).is_ok(),
+            Deadline::after(DEADLINE).recv(&finished).is_ok(),
             "waited {DEADLINE:?} for {what}"
         );
     }
 
     /// Runs `f`, which may block, on a worker and returns its result,
     /// failing the test after [`DEADLINE`] with `what` named.
+    #[track_caller]
     fn within<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || {
             let _sent = done.send(f());
         });
-        match finished.recv_timeout(DEADLINE) {
+        match Deadline::after(DEADLINE).recv(&finished) {
             Ok(value) => value,
             Err(_) => panic!("waited {DEADLINE:?} for {what}"),
         }
@@ -780,7 +783,7 @@ mod tests {
             done.send(()).unwrap();
         });
         assert!(
-            started_rx.recv_timeout(DEADLINE).is_ok(),
+            Deadline::after(DEADLINE).recv(&started_rx).is_ok(),
             "waited {DEADLINE:?} for the second update to reach the file's lock"
         );
         wait_until("the second update to be waiting on the file's lock", || {
@@ -795,7 +798,7 @@ mod tests {
         fs::write(&file, "{\"a\": 1, \"c\": 3}\n").unwrap();
         drop(held);
         assert!(
-            done_rx.recv_timeout(DEADLINE).is_ok(),
+            Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
             "waited {DEADLINE:?} for the second update to finish after the release"
         );
         worker.join().unwrap();
@@ -819,7 +822,7 @@ mod tests {
             done.send(removed).unwrap();
         });
         assert!(
-            started_rx.recv_timeout(DEADLINE).is_ok(),
+            Deadline::after(DEADLINE).recv(&started_rx).is_ok(),
             "waited {DEADLINE:?} for the remove to reach the file's lock"
         );
         wait_until("the remove to be waiting on the file's lock", || {
@@ -833,7 +836,7 @@ mod tests {
         // serializes whole-file writes, it does not hide them.
         fs::write(&file, "{\"gone\": 1}\n{\"late\": 3}\n").unwrap();
         drop(held);
-        let removed = match done_rx.recv_timeout(DEADLINE) {
+        let removed = match Deadline::after(DEADLINE).recv(&done_rx) {
             Ok(removed) => removed,
             Err(_) => panic!("waited {DEADLINE:?} for the remove to finish after the release"),
         };

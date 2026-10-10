@@ -1,5 +1,6 @@
 //! Waiting on a child process under a deadline, for tests.
 
+use fakes::Deadline;
 use std::io::Write as _;
 use std::process::{Child, Output};
 use std::time::Duration;
@@ -16,6 +17,7 @@ use std::time::Duration;
 /// the bound to reap, then fails naming the wait (`docs/testing.md`,
 /// "Waits and timeouts"). The child leads its own group
 /// (`process_group(0)` at spawn), so the kill never reaches the test's.
+#[track_caller]
 pub(crate) fn finished(what: &str, mut child: Child, stdin: &[u8], within: Duration) -> Output {
     let pid = child.id();
     let stdin = stdin.to_vec();
@@ -31,7 +33,7 @@ pub(crate) fn finished(what: &str, mut child: Child, stdin: &[u8], within: Durat
         })();
         done.send(outcome).unwrap_or(());
     });
-    match waited.recv_timeout(within) {
+    match Deadline::after(within).recv(&waited) {
         Ok(outcome) => match outcome {
             Ok(output) => output,
             Err(err) => panic!("{what} has no output: {err}"),
@@ -40,7 +42,7 @@ pub(crate) fn finished(what: &str, mut child: Child, stdin: &[u8], within: Durat
             match fakes::kill_group(pid, "KILL") {
                 Ok(_) | Err(_) => {}
             }
-            let reaped = waited.recv_timeout(within).is_ok();
+            let reaped = Deadline::after(within).recv(&waited).is_ok();
             panic!("waited {within:?} for {what} (reaped: {reaped})");
         }
     }

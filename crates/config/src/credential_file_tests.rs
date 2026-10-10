@@ -5,6 +5,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use fakes::Deadline;
 use fakes::TempDir;
 use serde_json::json;
 
@@ -77,8 +78,8 @@ fn a_writer_never_exposes_a_file_wider_than_0600() {
             });
             lock.write(&json!({ "token": "t" })).unwrap();
         });
-        paused
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&paused)
             .expect("the writer paused between creating the temporary file and renaming it");
         let mut temporaries = 0;
         for entry in fs::read_dir(&dir).unwrap() {
