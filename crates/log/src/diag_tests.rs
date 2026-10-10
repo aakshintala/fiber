@@ -18,6 +18,7 @@ use std::time::Duration;
 use contract::diag::Purpose;
 
 use super::*;
+use fakes::Deadline;
 
 type Reader = fn() -> Option<u64>;
 
@@ -307,16 +308,16 @@ fn a_line_racing_attach_lands_whole_in_the_file_its_order_implies() {
             .spawn(move || {
                 diag.line(Severity::Info, None, "before", "Before attach.");
                 wrote_tx.send(()).unwrap();
-                attached_rx.recv_timeout(LIMIT).unwrap();
+                Deadline::after(LIMIT).recv(&attached_rx).unwrap();
                 diag.line(Severity::Info, None, "after", "After attach.");
                 wrote_tx.send(()).unwrap();
             })
             .unwrap()
     };
-    wrote_rx.recv_timeout(LIMIT).unwrap();
+    Deadline::after(LIMIT).recv(&wrote_rx).unwrap();
     diag.attach(&session());
     attached_tx.send(()).unwrap();
-    wrote_rx.recv_timeout(LIMIT).unwrap();
+    Deadline::after(LIMIT).recv(&wrote_rx).unwrap();
     writer.join().unwrap();
     let before: serde_json::Value =
         serde_json::from_str(home.text(&pid_file("session")).trim_end()).unwrap();

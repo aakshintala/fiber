@@ -30,6 +30,7 @@ use contract::shapes::{ContentPart, Process, Tokens, Usage};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, ErrorCode};
 use fakes::Client;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use log::Log;
 use serde_json::{Map, Value};
@@ -178,13 +179,14 @@ fn open_with(tools: Vec<contract::events::ToolInfo>) -> Opened {
     }
 }
 
+#[track_caller]
 fn close_within(session: Session, log: Arc<Log>) {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         session.close(log);
         if let Ok(()) = tx.send(()) {}
     });
-    rx.recv_timeout(DEADLINE).expect("close returned");
+    Deadline::after(DEADLINE).recv(&rx).expect("close returned");
 }
 
 fn notice() -> Event {
@@ -320,7 +322,9 @@ fn close_joins_a_reader_that_is_still_connected() {
             Ok(())
         })
         .unwrap();
-    let client = rx.recv_timeout(DEADLINE).expect("the client subscribed");
+    let client = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the client subscribed");
     CONTROL.hold_reader.store(true, Ordering::Relaxed);
     let (done_tx, done_rx) = mpsc::channel();
     let session = opened.session;
@@ -351,8 +355,8 @@ fn close_joins_a_reader_that_is_still_connected() {
         CONTROL.hold_reader.store(false, Ordering::Relaxed);
         CONTROL.hold_cv.notify_all();
     }
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("close returns after the reader finishes");
     drop(client);
 }
@@ -597,7 +601,8 @@ fn a_disconnect_stops_a_writer_whose_queue_is_full() {
         crate::client::write_loop(watcher, Box::new(stream), false, mpsc::channel().1);
         if let Ok(()) = tx.send(()) {}
     });
-    rx.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the writer stops when its queue was full");
     drop(log);
 }
@@ -651,7 +656,8 @@ fn an_acknowledgement_survives_a_lagged_queue() {
         "a kept acknowledgement is returned before catch-up"
     );
     drop(log);
-    rx.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the writer ends once the log is dropped");
 }
 
@@ -692,8 +698,8 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
         "close has not returned one millisecond before the grace"
     );
     clock.advance(Duration::from_millis(1));
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("close returns once the grace has passed");
 }
 
@@ -734,8 +740,8 @@ fn a_published_reader_is_shut_down_before_it_is_joined() {
         finishing.finish(id);
         if let Ok(()) = done_tx.send(()) {}
     });
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("reap shuts the reader down before joining it");
     assert!(shut.load(Ordering::SeqCst), "reap ran the shutdown");
     close_within(opened.session, opened.log);
@@ -752,7 +758,7 @@ fn a_reader_that_reaps_itself_finishes() {
     let (done_tx, done_rx) = mpsc::channel();
     let child = Arc::clone(&gate);
     let reader = thread::spawn(move || {
-        let Ok(id) = id_rx.recv_timeout(DEADLINE) else {
+        let Ok(id) = Deadline::after(DEADLINE).recv(&id_rx) else {
             return;
         };
         crate::client::serve(stream, child, id);
@@ -761,8 +767,8 @@ fn a_reader_that_reaps_itself_finishes() {
     let id = gate.push_reader(reader, crate::client::shutdown_both(shutdown));
     if let Ok(()) = id_tx.send(id) {}
     drop(peer);
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("a reader that reaps itself finishes");
     close_within(opened.session, opened.log);
 }
@@ -854,7 +860,8 @@ fn accept_waits_after_an_error_until_a_connection_ends() {
         "accept waits until a connection ends or the session stops"
     );
     gate.end_writer();
-    rx.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("a connection ending lets accept try again");
     close_within(opened.session, opened.log);
 }
@@ -921,7 +928,8 @@ fn a_full_subscribers_latest_status_survives_a_queue_saturated_after_registratio
         .expect("the latest status reaches a subscriber whose queue saturated");
     assert_eq!(status["payload"]["name"], "latest");
     drop(log);
-    rx.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the writer ends once the log is dropped");
 }
 
@@ -1173,8 +1181,8 @@ fn a_clock_move_delivers_cancelled_and_nothing_before() {
     let clock = Arc::clone(&opened.clock);
     let (entered, entered_rx) = mpsc::channel();
     thread::spawn(move || {
-        entered_rx
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&entered_rx)
             .expect("the receiver is blocked");
         clock.advance(Duration::from_millis(1));
     });
@@ -1186,8 +1194,8 @@ fn a_clock_move_delivers_cancelled_and_nothing_before() {
                 "nothing arrives before the clock moves"
             );
             entered.send(()).unwrap();
-            let delivery = inbox
-                .recv_timeout(DEADLINE)
+            let delivery = Deadline::after(DEADLINE)
+                .recv(&inbox)
                 .expect("a clock move wakes the inbox");
             assert!(matches!(delivery, Delivery::Cancelled));
             Ok(())
@@ -1292,8 +1300,8 @@ fn a_shell_registered_after_close_is_cancelled() {
             Ok(())
         })
         .unwrap();
-    let client = client_rx
-        .recv_timeout(DEADLINE)
+    let client = Deadline::after(DEADLINE)
+        .recv(&client_rx)
         .expect("the client connected");
 
     let watcher = opened.log.watch();
@@ -1317,13 +1325,13 @@ fn a_shell_registered_after_close_is_cancelled() {
     client
         .send(r#"{"id":"c_shell","command":"shell","args":{"command":"sleep 60"}}"#)
         .unwrap();
-    entered_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&entered_rx)
         .expect("the shell registered after close");
     assert!(saw.load(Ordering::Relaxed), "the tool saw its cancel");
     clock.advance(super::GRACE);
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("close returned without the tool's timeout");
 }
 
@@ -1348,8 +1356,8 @@ fn run_sends_the_jobs_ends_to_the_loops_inbox() {
         .session
         .run(Vec::new(), Arc::new(|| false), move |inbox| {
             drop(job.end);
-            let delivery = inbox
-                .recv_timeout(DEADLINE)
+            let delivery = Deadline::after(DEADLINE)
+                .recv(&inbox)
                 .expect("the job's end reached the inbox");
             let Delivery::Job(notice) = delivery else {
                 panic!("the end sent {delivery:?}");
@@ -1393,12 +1401,12 @@ fn run_hands_the_hooks_the_loops_inbox() {
     opened
         .session
         .run(Vec::new(), Arc::new(|| false), move |inbox| {
-            let given = given_rx
-                .recv_timeout(DEADLINE)
+            let given = Deadline::after(DEADLINE)
+                .recv(&given_rx)
                 .expect("waited for the hooks to be handed the inbox");
             given.send(Delivery::Cancelled).unwrap();
-            let delivery = inbox
-                .recv_timeout(DEADLINE)
+            let delivery = Deadline::after(DEADLINE)
+                .recv(&inbox)
                 .expect("waited for the hooks' send to reach the loop's inbox");
             assert!(
                 matches!(delivery, Delivery::Cancelled),
@@ -1484,7 +1492,30 @@ struct Running {
     release: mpsc::Sender<()>,
 }
 
-fn running_shell(check: impl FnOnce(&mpsc::Receiver<Delivery>, &Session) + Send) -> Running {
+/// Stops the session, then expects the loop's inbox to wake with
+/// [`Delivery::Cancelled`]: what the stopper test checks mid-run. A check
+/// returns what failed, and `running_shell` panics with it at the test's line.
+fn stop_and_expect_cancel(
+    inbox: &mpsc::Receiver<Delivery>,
+    session: &Session,
+) -> Result<(), &'static str> {
+    (session.stopper())();
+    match Deadline::after(DEADLINE).recv(inbox) {
+        Ok(Delivery::Cancelled) => Ok(()),
+        Ok(_) => Err("the stopper wakes the inbox with Cancelled"),
+        Err(_) => Err("the stopper wakes the inbox"),
+    }
+}
+
+/// No mid-run check: the shell runs until the test releases it.
+fn no_check(_: &mpsc::Receiver<Delivery>, _: &Session) -> Result<(), &'static str> {
+    Ok(())
+}
+
+#[track_caller]
+fn running_shell(
+    check: fn(&mpsc::Receiver<Delivery>, &Session) -> Result<(), &'static str>,
+) -> Running {
     let opened = open();
     let (entered_tx, entered_rx) = mpsc::channel();
     let (cancelled_tx, cancelled) = mpsc::channel();
@@ -1496,6 +1527,7 @@ fn running_shell(check: impl FnOnce(&mpsc::Receiver<Delivery>, &Session) + Send)
     }));
     let socket = opened.socket.clone();
     let mut connected = None;
+    let mut failed = None;
     let session = &opened.session;
     session
         .run(Vec::new(), Arc::new(|| false), |inbox| {
@@ -1505,14 +1537,17 @@ fn running_shell(check: impl FnOnce(&mpsc::Receiver<Delivery>, &Session) + Send)
             client
                 .send(r#"{"id":"c_shell","command":"shell","args":{"command":"sleep 60"}}"#)
                 .unwrap();
-            entered_rx
-                .recv_timeout(DEADLINE)
-                .expect("the driver shell started");
-            check(&inbox, session);
+            failed = match Deadline::after(DEADLINE).recv(&entered_rx) {
+                Ok(()) => check(&inbox, session).err(),
+                Err(_) => Some("the driver shell started"),
+            };
             connected = Some(client);
             Ok(())
         })
         .unwrap();
+    if let Some(what) = failed {
+        panic!("{what}");
+    }
     Running {
         opened,
         client: connected.expect("the client connected"),
@@ -1523,16 +1558,9 @@ fn running_shell(check: impl FnOnce(&mpsc::Receiver<Delivery>, &Session) + Send)
 
 #[test]
 fn the_stopper_cancels_a_running_driver_shell_and_wakes_the_loop() {
-    let running = running_shell(|inbox, session| {
-        (session.stopper())();
-        let delivery = inbox
-            .recv_timeout(DEADLINE)
-            .expect("the stopper wakes the inbox");
-        assert!(matches!(delivery, Delivery::Cancelled));
-    });
-    running
-        .cancelled
-        .recv_timeout(DEADLINE)
+    let running = running_shell(stop_and_expect_cancel);
+    Deadline::after(DEADLINE)
+        .recv(&running.cancelled)
         .expect("the driver shell saw its cancel");
     running.release.send(()).unwrap();
     drop(running.client);
@@ -1574,7 +1602,7 @@ fn abandon_unregisters_a_driver_shell_that_never_ran() {
 
 #[test]
 fn quiesce_cancels_a_running_driver_shell_and_waits_for_it() {
-    let running = running_shell(|_, _| {});
+    let running = running_shell(no_check);
     let session = running.opened.session;
     let (done_tx, done) = mpsc::channel();
     let gate = Arc::clone(&session.gate);
@@ -1583,9 +1611,8 @@ fn quiesce_cancels_a_running_driver_shell_and_waits_for_it() {
         done_tx.send(()).unwrap();
         session
     });
-    running
-        .cancelled
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&running.cancelled)
         .expect("quiesce cancelled the driver shell");
     // The shell is cancelled but still running: quiesce is still waiting.
     assert!(!super::lock(&gate.shells).running.is_empty());
@@ -1594,7 +1621,8 @@ fn quiesce_cancels_a_running_driver_shell_and_waits_for_it() {
         "quiesce returned before the shell ended"
     );
     running.release.send(()).unwrap();
-    done.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("quiesce returned once the shell ended");
     let session = quiescing.join().unwrap();
     assert!(super::lock(&gate.shells).running.is_empty());
@@ -1604,7 +1632,7 @@ fn quiesce_cancels_a_running_driver_shell_and_waits_for_it() {
 
 #[test]
 fn close_cancels_a_running_driver_shell_and_waits_for_its_answer() {
-    let running = running_shell(|_, _| {});
+    let running = running_shell(no_check);
     let session = running.opened.session;
     let log = running.opened.log;
     let (done_tx, done) = mpsc::channel();
@@ -1613,9 +1641,8 @@ fn close_cancels_a_running_driver_shell_and_waits_for_its_answer() {
         session.close(log);
         done_tx.send(()).unwrap();
     });
-    running
-        .cancelled
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&running.cancelled)
         .expect("close cancelled the driver shell");
     // The shell is cancelled but still running: close is still waiting,
     // before it stops accepting. A subscriber's writer would hold close
@@ -1633,7 +1660,8 @@ fn close_cancels_a_running_driver_shell_and_waits_for_its_answer() {
     };
     assert_eq!(answer["kind"], "command_accepted", "{answer}");
     assert_eq!(answer["payload"]["result"]["output"], "stopped");
-    done.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("close returned once the shell ended");
     assert!(super::lock(&gate.shells).running.is_empty());
 }
@@ -1666,11 +1694,11 @@ fn a_driver_shell_started_after_the_stopper_is_cancelled_and_waited_for() {
             Ok(())
         })
         .unwrap();
-    entered
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&entered)
         .expect("the driver shell started");
-    cancelled
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&cancelled)
         .expect("the driver shell started cancelled");
     // Registered although shutdown had begun, so close waits for it.
     assert!(!super::lock(&gate.shells).running.is_empty());
@@ -1724,28 +1752,29 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
         session.close(log);
         if let Ok(()) = done_tx.send(()) {}
     });
-    first
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&first)
         .expect("close's first wait saw no driver shell");
     client
         .send(r#"{"id":"c_shell","command":"shell","args":{"command":"sleep 60"}}"#)
         .unwrap();
-    entered
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&entered)
         .expect("the reader admitted the driver shell");
-    cancelled
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&cancelled)
         .expect("a shell admitted during teardown starts cancelled");
     resume.send(()).unwrap();
-    waiting
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&waiting)
         .expect("close waits again for the shell once no reader is left");
     assert!(
         done.try_recv().is_err(),
         "close returned while the shell ran"
     );
     release.send(()).unwrap();
-    done.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("close returned once the shell ended");
     assert!(super::lock(&gate.shells).running.is_empty());
     drop(client);
@@ -1783,9 +1812,10 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     // reads that line before quiesce: one still unwritten would be taken
     // for a line that followed quiesce.
     let lines = fakes::within("the joining client's clients line", DEADLINE, move || {
+        let wait = Deadline::after(DEADLINE);
         loop {
-            let line = lines
-                .recv_timeout(DEADLINE)
+            let line = wait
+                .recv(&lines)
                 .expect("the joining client's clients line arrives");
             if line.kind == "clients" {
                 break;
@@ -1802,8 +1832,9 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     let _ack = recv(&late);
     opened.log.append(&notice(), None, None).unwrap();
     let _lines = fakes::within("the notice", DEADLINE, move || {
+        let wait = Deadline::after(DEADLINE);
         loop {
-            let line = lines.recv_timeout(DEADLINE).expect("the notice arrives");
+            let line = wait.recv(&lines).expect("the notice arrives");
             assert_ne!(line.kind, "clients", "a clients line followed quiesce");
             if line.kind == "notice" {
                 break;
@@ -1825,7 +1856,9 @@ fn serve_with_a_prompt_delivers_exactly_that_prompt_and_no_close() {
         .session
         .serve(Some("hi".to_owned()), Arc::new(|| false), |inbox| {
             seen.store(true, Ordering::Relaxed);
-            let delivery = inbox.recv_timeout(DEADLINE).expect("the prompt arrives");
+            let delivery = Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("the prompt arrives");
             let Delivery::Prompt(message, _) = delivery else {
                 panic!("the first delivery is the prompt, got {delivery:?}");
             };
@@ -1903,8 +1936,11 @@ fn answer_of(client: &Client, id: &str) -> Value {
 }
 
 /// The next delivery, which must be a prompt; returns its acknowledgement.
+#[track_caller]
 fn next_prompt(inbox: &mpsc::Receiver<Delivery>) -> contract::inbox::Ack {
-    let delivery = inbox.recv_timeout(DEADLINE).expect("a delivery arrives");
+    let delivery = Deadline::after(DEADLINE)
+        .recv(inbox)
+        .expect("a delivery arrives");
     let Delivery::Prompt(_, ack) = delivery else {
         panic!("expected a prompt, got {delivery:?}");
     };
@@ -1984,7 +2020,7 @@ fn a_served_session_appends_no_rejected_dropped_steered_or_own_prompt() {
             assert_eq!(dropped["kind"], "command_rejected");
             assert_eq!(dropped["payload"]["code"], "closing");
             send_text(&client, "c_steer", "steer", "steered");
-            let Delivery::Steer(_, ack) = inbox.recv_timeout(DEADLINE).unwrap() else {
+            let Delivery::Steer(_, ack) = Deadline::after(DEADLINE).recv(&inbox).unwrap() else {
                 panic!("the steer arrives");
             };
             (ack.0)(Ok(None));
@@ -2006,7 +2042,7 @@ fn an_ask_session_appends_no_prompt_even_one_a_client_sends() {
         .session
         .ask("asked".into(), Arc::new(|| false), |inbox| {
             (next_prompt(&inbox).0)(Ok(None));
-            let Delivery::Close(close) = inbox.recv_timeout(DEADLINE).unwrap() else {
+            let Delivery::Close(close) = Deadline::after(DEADLINE).recv(&inbox).unwrap() else {
                 panic!("ask queues close after its prompt");
             };
             (close.0)(Ok(None));
@@ -2068,8 +2104,8 @@ fn a_full_subscriber_sees_the_kept_ui_line_before_a_later_one() {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_full", "full");
             // The reader parks at the probe; it holds no test assertion yet.
-            parked
-                .recv_timeout(DEADLINE)
+            Deadline::after(DEADLINE)
+                .recv(&parked)
                 .expect("subscribe parked at its seed");
             // Appended after the watcher is registered: `append` returns, so no
             // lock is held when the probe releases.
@@ -2125,8 +2161,8 @@ fn a_full_subscribe_is_counted_before_its_acknowledgement() {
         .run(Vec::new(), Arc::new(|| false), move |_| {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_full", "full");
-            let counted = count
-                .recv_timeout(DEADLINE)
+            let counted = Deadline::after(DEADLINE)
+                .recv(&count)
                 .expect("the subscribe was acknowledged");
             assert_eq!(counted, 1, "the acknowledgement preceded the count");
             let ack = recv(&client);
@@ -2297,6 +2333,7 @@ fn a_malformed_line_does_not_free_an_accepted_id() {
 
 /// A resumed session whose log holds `events`, closed; whether its
 /// directory is left.
+#[track_caller]
 fn kept_after_close(events: Vec<Event>) -> bool {
     let temp = fakes::TempDir::new("fd");
     let home = temp.path().join("h");
@@ -2459,8 +2496,8 @@ fn the_inbox_wake_wakes_the_loop_and_never_keeps_the_inbox_open() {
         .session
         .run(Vec::new(), Arc::new(|| false), |inbox| {
             wake.wake();
-            let delivery = inbox
-                .recv_timeout(DEADLINE)
+            let delivery = Deadline::after(DEADLINE)
+                .recv(&inbox)
                 .expect("the wake reaches the inbox");
             assert!(matches!(delivery, Delivery::Cancelled));
             kept = Some(inbox);
@@ -2474,7 +2511,7 @@ fn the_inbox_wake_wakes_the_loop_and_never_keeps_the_inbox_open() {
     wake.wake();
     assert!(
         matches!(
-            inbox.recv_timeout(DEADLINE),
+            Deadline::after(DEADLINE).recv(&inbox),
             Err(mpsc::RecvTimeoutError::Disconnected)
         ),
         "the inbox closes with the session"
@@ -2601,7 +2638,7 @@ fn print_ends_at_rewound_while_the_log_is_held() {
     // would wait for a `fiber_exited` that never comes.
     let _held = log;
     assert!(
-        finished.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&finished).is_ok(),
         "the copy ends at `rewound`"
     );
     let out = String::from_utf8_lossy(&lock(&out).clone()).into_owned();
@@ -2623,7 +2660,7 @@ fn ask_returns_the_first_prompts_rejection_as_its_failure() {
                 code: ErrorCode::InvalidArguments,
                 message: "The MCP server `fx`'s prompt `/greet` needs <who>.".into(),
             }));
-            let Delivery::Close(close) = inbox.recv_timeout(DEADLINE).unwrap() else {
+            let Delivery::Close(close) = Deadline::after(DEADLINE).recv(&inbox).unwrap() else {
                 panic!("ask queues close after its prompt");
             };
             (close.0)(Ok(None));
@@ -2648,7 +2685,7 @@ fn ask_whose_first_prompt_is_accepted_returns_what_run_returned() {
         .session
         .ask("asked".into(), Arc::new(|| false), |inbox| {
             (next_prompt(&inbox).0)(Ok(None));
-            let Delivery::Close(close) = inbox.recv_timeout(DEADLINE).unwrap() else {
+            let Delivery::Close(close) = Deadline::after(DEADLINE).recv(&inbox).unwrap() else {
                 panic!("ask queues close after its prompt");
             };
             (close.0)(Ok(None));
@@ -2663,7 +2700,7 @@ fn ask_whose_first_prompt_is_accepted_returns_what_run_returned() {
         .session
         .ask("asked".into(), Arc::new(|| false), |inbox| {
             (next_prompt(&inbox).0)(Ok(None));
-            let Delivery::Close(close) = inbox.recv_timeout(DEADLINE).unwrap() else {
+            let Delivery::Close(close) = Deadline::after(DEADLINE).recv(&inbox).unwrap() else {
                 panic!("ask queues close after its prompt");
             };
             (close.0)(Ok(None));

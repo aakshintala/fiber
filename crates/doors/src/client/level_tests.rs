@@ -17,6 +17,7 @@ use std::time::Duration;
 use contract::clock::Clock;
 use contract::events::{CommandAccepted, Empty, Event, ExtensionsLoaded, LoadedExtension, Notice};
 use contract::{CommandId, SessionId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use log::Log;
 
@@ -277,7 +278,7 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
     held.release();
     drop(log);
     assert!(
-        done_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "the writer ends once the log is dropped"
     );
     let text = String::from_utf8(lock(&held.buf).clone()).unwrap();

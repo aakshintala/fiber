@@ -21,6 +21,7 @@ use contract::extension::Drive;
 use contract::inbox::{Ack, Answer, Delivery, Rejection};
 use contract::shapes::Origin;
 use contract::{ErrorCode, SessionId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use log::Log;
 use serde_json::{Map, Value};
@@ -99,7 +100,7 @@ fn drive_steer_is_accepted_with_an_extension_sender() {
         .session
         .run(Vec::new(), Arc::new(|| false), move |inbox| {
             let outcome = drive(&driver, "steer", text_args("use the other file"));
-            let Delivery::Steer(message, ack) = inbox.recv_timeout(DEADLINE).expect("the steer is delivered") else {
+            let Delivery::Steer(message, ack) = Deadline::after(DEADLINE).recv(&inbox).expect("the steer is delivered") else {
                 panic!("a steer is delivered");
             };
             // drive_steer_carries_extension_sender: the message carries
@@ -111,7 +112,7 @@ fn drive_steer_is_accepted_with_an_extension_sender() {
                 message.sender
             );
             ack.0(Ok(None));
-            let answered = outcome.recv_timeout(DEADLINE);
+            let answered = Deadline::after(DEADLINE).recv(&outcome);
             assert!(
                 matches!(answered, Ok(Ok(None))),
                 "an accepted steer answers no result: {answered:?}"
@@ -130,7 +131,7 @@ fn drive_prompt_answered_busy_rejects_busy() {
         .session
         .run(Vec::new(), Arc::new(|| false), move |inbox| {
             let outcome = drive(&driver, "prompt", text_args("hi"));
-            let Delivery::Prompt(message, ack) = inbox.recv_timeout(DEADLINE).expect("the prompt is delivered") else {
+            let Delivery::Prompt(message, ack) = Deadline::after(DEADLINE).recv(&inbox).expect("the prompt is delivered") else {
                 panic!("a prompt is delivered");
             };
             assert!(matches!(&message.sender.origin, Origin::Extension { extension } if extension == "fiber.test/a"), "{:?}", message.sender);
@@ -138,7 +139,7 @@ fn drive_prompt_answered_busy_rejects_busy() {
                 code: ErrorCode::Busy,
                 message: "A turn is running; send `steer` to add to it.".into(),
             }));
-            let rejection = rejected(outcome.recv_timeout(DEADLINE).expect("the drive is answered"));
+            let rejection = rejected(Deadline::after(DEADLINE).recv(&outcome).expect("the drive is answered"));
             assert_eq!(rejection.code, ErrorCode::Busy);
             Ok(())
         })
@@ -154,8 +155,8 @@ fn drive_tools_answers_with_its_result() {
         .session
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let outcome = drive(&driver, "tools", Value::Object(Map::new()));
-            match outcome
-                .recv_timeout(DEADLINE)
+            match Deadline::after(DEADLINE)
+                .recv(&outcome)
                 .expect("the drive is answered")
             {
                 Ok(Some(CommandResult::Tools { tools })) => {
@@ -183,15 +184,17 @@ fn drive_approval_reply_is_rejected_before_the_inbox() {
                 serde_json::json!({"request_id": "r_1", "decision": "allow"}),
             );
             let rejection = rejected(
-                outcome
-                    .recv_timeout(DEADLINE)
+                Deadline::after(DEADLINE)
+                    .recv(&outcome)
                     .expect("the drive is answered"),
             );
             // drive_approval_reply_is_rejected: an extension never answers an approval.
             assert_eq!(rejection.code, ErrorCode::InvalidArguments);
             assert_eq!(rejection.message, "An extension never answers an approval.");
             assert!(
-                inbox.recv_timeout(Duration::from_millis(100)).is_err(),
+                Deadline::after(Duration::from_millis(100))
+                    .recv(&inbox)
+                    .is_err(),
                 "the refused reply never reaches the inbox"
             );
             Ok(())
@@ -209,8 +212,8 @@ fn drive_subscribe_is_rejected_as_a_second_one() {
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let outcome = drive(&driver, "subscribe", serde_json::json!({"level": "full"}));
             let rejection = rejected(
-                outcome
-                    .recv_timeout(DEADLINE)
+                Deadline::after(DEADLINE)
+                    .recv(&outcome)
                     .expect("the drive is answered"),
             );
             assert_eq!(rejection.code, ErrorCode::InvalidArguments);
@@ -229,8 +232,8 @@ fn drive_unknown_command_is_rejected() {
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let outcome = drive(&driver, "frobnicate", Value::Object(Map::new()));
             let rejection = rejected(
-                outcome
-                    .recv_timeout(DEADLINE)
+                Deadline::after(DEADLINE)
+                    .recv(&outcome)
                     .expect("the drive is answered"),
             );
             // drive_unknown_command_is_rejected: no `reply` to an unknown name.
@@ -257,7 +260,11 @@ fn drive_after_close_answers_closing() {
         Map::new(),
         Ack(Box::new(move |answer| tx.send(answer).unwrap())),
     );
-    let rejection = rejected(rx.recv_timeout(DEADLINE).expect("the drive is answered"));
+    let rejection = rejected(
+        Deadline::after(DEADLINE)
+            .recv(&rx)
+            .expect("the drive is answered"),
+    );
     assert_eq!(rejection.code, ErrorCode::Closing);
 }
 
@@ -276,7 +283,11 @@ fn drive_after_close_answers_closing_with_a_retained_handle() {
         Map::new(),
         Ack(Box::new(move |answer| tx.send(answer).unwrap())),
     );
-    let rejection = rejected(rx.recv_timeout(DEADLINE).expect("the drive is answered"));
+    let rejection = rejected(
+        Deadline::after(DEADLINE)
+            .recv(&rx)
+            .expect("the drive is answered"),
+    );
     assert_eq!(rejection.code, ErrorCode::Closing);
 }
 
@@ -323,8 +334,8 @@ fn reply_for_a_held_ask_never_reaches_the_inbox() {
         .session
         .run(Vec::new(), Arc::new(|| false), move |inbox| {
             let outcome = drive(&driver, "reply", reply_args("r_held"));
-            let answered = outcome
-                .recv_timeout(DEADLINE)
+            let answered = Deadline::after(DEADLINE)
+                .recv(&outcome)
                 .expect("the reply is answered");
             assert!(
                 matches!(answered, Ok(None)),
@@ -349,16 +360,16 @@ fn reply_handed_back_reaches_the_inbox() {
         .session
         .run(Vec::new(), Arc::new(|| false), move |inbox| {
             let outcome = drive(&driver, "reply", reply_args("r_other"));
-            let Delivery::Reply(reply, ack) = inbox
-                .recv_timeout(DEADLINE)
+            let Delivery::Reply(reply, ack) = Deadline::after(DEADLINE)
+                .recv(&inbox)
                 .expect("the reply is delivered")
             else {
                 panic!("a handed-back reply is delivered");
             };
             assert_eq!(reply.request_id.0, "r_other");
             ack.0(Ok(None));
-            let answered = outcome
-                .recv_timeout(DEADLINE)
+            let answered = Deadline::after(DEADLINE)
+                .recv(&outcome)
                 .expect("the reply is answered");
             assert!(
                 matches!(answered, Ok(None)),
@@ -378,16 +389,16 @@ fn reply_with_no_door_reaches_the_inbox() {
         .session
         .run(Vec::new(), Arc::new(|| false), move |inbox| {
             let outcome = drive(&driver, "reply", reply_args("r_other"));
-            let Delivery::Reply(reply, ack) = inbox
-                .recv_timeout(DEADLINE)
+            let Delivery::Reply(reply, ack) = Deadline::after(DEADLINE)
+                .recv(&inbox)
                 .expect("the reply is delivered")
             else {
                 panic!("a reply with no door is delivered");
             };
             assert_eq!(reply.request_id.0, "r_other");
             ack.0(Ok(None));
-            let answered = outcome
-                .recv_timeout(DEADLINE)
+            let answered = Deadline::after(DEADLINE)
+                .recv(&outcome)
                 .expect("the reply is answered");
             assert!(
                 matches!(answered, Ok(None)),
@@ -412,8 +423,8 @@ fn drive_offer_reply_is_rejected_before_the_inbox() {
                 serde_json::json!({"request_id": "r_1", "decisions": ["approve"]}),
             );
             let rejection = rejected(
-                outcome
-                    .recv_timeout(DEADLINE)
+                Deadline::after(DEADLINE)
+                    .recv(&outcome)
                     .expect("the drive is answered"),
             );
             assert_eq!(rejection.code, ErrorCode::InvalidArguments);
@@ -422,7 +433,9 @@ fn drive_offer_reply_is_rejected_before_the_inbox() {
                 "An extension never answers an offer of a repository's code."
             );
             assert!(
-                inbox.recv_timeout(Duration::from_millis(100)).is_err(),
+                Deadline::after(Duration::from_millis(100))
+                    .recv(&inbox)
+                    .is_err(),
                 "the refused reply never reaches the inbox"
             );
             Ok(())

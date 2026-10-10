@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use common::{PROJECT, Setup};
 use config::{Secret, store_secret};
+use fakes::Deadline;
 use serde_json::{Value, json};
 
 /// How long the resolve jig may take. `.config/nextest.toml` kills a slow
@@ -38,6 +39,7 @@ fn example_path() -> PathBuf {
     path.join("examples").join("resolve")
 }
 
+#[track_caller]
 fn resolve(setup: &Setup, args: &[&str]) -> Output {
     let child = Command::new(example_path())
         .arg(setup.workspace())
@@ -52,8 +54,8 @@ fn resolve(setup: &Setup, args: &[&str]) -> Output {
     let watchdog = fakes::Watchdog::group(child.id());
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = finished
-        .recv_timeout(JIG_DEADLINE)
+    let output = Deadline::after(JIG_DEADLINE)
+        .recv(&finished)
         .expect("the resolve jig finished: the resolve example")
         .unwrap();
     watchdog.stand_down(Duration::from_secs(5));

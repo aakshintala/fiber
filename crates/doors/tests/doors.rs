@@ -27,6 +27,7 @@ use doors::{
     InstallSummary, Session, exit_before_session, failure, install_approved, mint, project, prompt,
     remove_approved, resolve_project,
 };
+use fakes::Deadline;
 use log::Log;
 use serde_json::Value;
 
@@ -365,9 +366,8 @@ fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
     let failed = failure(ErrorCode::IoFailed, "disk full");
 
     let ran = session.ask("hi".into(), Arc::new(|| false), |inbox| {
-        let Delivery::Prompt(message, _) =
-            inbox.recv_timeout(DEADLINE).expect("the prompt arrives")
-        else {
+        let wait = Deadline::after(DEADLINE);
+        let Delivery::Prompt(message, _) = wait.recv(&inbox).expect("the prompt arrives") else {
             panic!("the prompt arrives as a prompt");
         };
         assert_eq!(message.content, [ContentPart::Text { text: "hi".into() }]);
@@ -381,9 +381,7 @@ fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
         );
         assert!(
             matches!(
-                inbox
-                    .recv_timeout(DEADLINE)
-                    .expect("close follows the prompt"),
+                wait.recv(&inbox).expect("close follows the prompt"),
                 Delivery::Close(_)
             ),
             "close follows the prompt"

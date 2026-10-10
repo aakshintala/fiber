@@ -19,6 +19,7 @@ use contract::events::{Clients, Empty, Event, FiberExited};
 use contract::shapes::{Tokens, Usage};
 use contract::{Envelope, SessionId};
 use doors::{Session, Watched, mint};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use log::Log;
 
@@ -88,6 +89,7 @@ impl Opened {
     /// Closes the session on a thread bounded by [`DEADLINE`]. The log
     /// moves in: dropping its last handle ends the stdout copy, so the
     /// close never waits on it.
+    #[track_caller]
     fn close(self) {
         let Self {
             _temp,
@@ -102,7 +104,9 @@ impl Opened {
             session.close(log);
             let _sent = done.send(());
         });
-        finished.recv_timeout(DEADLINE).expect("close returned");
+        Deadline::after(DEADLINE)
+            .recv(&finished)
+            .expect("close returned");
     }
 }
 
@@ -156,12 +160,13 @@ fn a_watch_folds_then_streams_then_returns_at_fiber_exited() {
     // attach, rather than in the thread. The lines go out either way, so
     // a missed attach fails the test instead of hanging the watch.
     let mut watcher = log.watch();
+    let deadline = Deadline::after(ATTACH_DEADLINE);
     let live = thread::spawn(move || {
-        attached_rx
-            .recv_timeout(ATTACH_DEADLINE)
+        Deadline::after(ATTACH_DEADLINE)
+            .recv(&attached_rx)
             .expect("the watch attached");
         let saw_clients = loop {
-            match watcher.recv_timeout(ATTACH_DEADLINE) {
+            match watcher.recv_timeout(deadline.left()) {
                 Some(Ok(Some(line))) if line.kind == "clients" => break true,
                 Some(Ok(_)) => {}
                 Some(Err(error)) => panic!("the watcher failed: {error}"),
@@ -247,8 +252,8 @@ fn a_closed_connection_returns_the_last_seq() {
         .run(Vec::new(), Arc::new(|| false), |_inbox| {
             // Fold or live, the line reaches the watch either way.
             opened.step();
-            saw_rx
-                .recv_timeout(DEADLINE)
+            Deadline::after(DEADLINE)
+                .recv(&saw_rx)
                 .expect("the watch read the line");
             // An ephemeral line after the last `seq`: the close still
             // reports that seq, not the absence of one.
@@ -258,8 +263,8 @@ fn a_closed_connection_returns_the_last_seq() {
         .unwrap();
     // The run returned; closing ends the watch's connection.
     opened.close();
-    let (watched, seqs) = res_rx
-        .recv_timeout(DEADLINE)
+    let (watched, seqs) = Deadline::after(DEADLINE)
+        .recv(&res_rx)
         .expect("the watch ended at the close");
     assert_eq!(watched, Watched::Closed { last_seq: Some(0) });
     assert_eq!(seqs, vec![0]);

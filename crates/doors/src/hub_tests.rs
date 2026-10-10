@@ -19,6 +19,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::*;
+use fakes::Deadline;
 
 /// One named deadline per wait: `connect` answers before it.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -46,6 +47,7 @@ impl Temp {
 
 /// Runs `connect` on a thread: calling code that blocks is a wait, so the
 /// test receives its result with a wall-clock deadline.
+#[track_caller]
 fn run_connect(
     home: PathBuf,
     mut start: impl FnMut() -> io::Result<()> + Send + 'static,
@@ -59,8 +61,8 @@ fn run_connect(
             done_tx.send(hub).unwrap_or(());
         })
         .unwrap();
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("connect answers before its deadline")
 }
 
@@ -225,7 +227,7 @@ fn eof_before_hello_retries_the_whole_connect_once() {
     // `connect` returns once the hello is read, which can be before the
     // server finishes its second connection.
     assert!(
-        served_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&served_rx).is_ok(),
         "waited {DEADLINE:?} for the server to serve both connections"
     );
 }
@@ -245,7 +247,7 @@ fn a_hub_that_exited_before_the_retry_is_started_again() {
     assert_eq!(hub.1.kind, "hub_hello");
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert!(
-        exited_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&exited_rx).is_ok(),
         "waited {DEADLINE:?} for the old hub to exit"
     );
 }
@@ -263,7 +265,7 @@ fn the_retry_after_a_dropped_handshake_waits_one_poll() {
     // One poll between the attempts, and none after the final failure.
     assert_eq!(clock.now(), clock.origin() + CONNECT_POLL);
     assert!(
-        dropped_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&dropped_rx).is_ok(),
         "waited {DEADLINE:?} for the server to drop both connections"
     );
 }
@@ -431,6 +433,7 @@ fn only_the_closed_peer_refusal_is_folded_away() {
 /// Runs `connect_until` on a thread with `total` on `clock`: calling code
 /// that blocks is a wait, so the test receives its result with a
 /// wall-clock deadline.
+#[track_caller]
 fn run_connect_until(
     home: PathBuf,
     mut start: impl FnMut() -> io::Result<()> + Send + 'static,
@@ -446,8 +449,8 @@ fn run_connect_until(
             done_tx.send(hub).unwrap_or(());
         })
         .unwrap();
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("connect_until answers before its deadline")
 }
 
@@ -567,7 +570,7 @@ fn connect_until_eof_race_retries_once() {
     .unwrap();
     assert_eq!(hub.1.kind, "hub_hello");
     assert!(
-        served_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&served_rx).is_ok(),
         "waited {DEADLINE:?} for the server to serve both connections"
     );
 }
@@ -588,7 +591,7 @@ fn connect_until_a_hub_that_exited_before_the_retry_is_started_again() {
     assert_eq!(hub.1.kind, "hub_hello");
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert!(
-        exited_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&exited_rx).is_ok(),
         "waited {DEADLINE:?} for the old hub to exit"
     );
 }
@@ -606,7 +609,7 @@ fn connect_until_the_retry_after_a_dropped_handshake_waits_one_poll() {
     // One poll between the attempts, and none after the final failure.
     assert_eq!(clock.now(), clock.origin() + CONNECT_POLL);
     assert!(
-        dropped_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&dropped_rx).is_ok(),
         "waited {DEADLINE:?} for the server to drop both connections"
     );
 }
@@ -716,6 +719,7 @@ fn connect_until_hello_from_a_peer_that_already_closed_is_read() {
     assert_eq!(hello.kind, "hub_hello");
     assert_eq!(stream.read_timeout().unwrap(), None);
 }
+#[track_caller]
 fn run_connect_within(home: PathBuf, hello_within: Duration) -> io::Result<Hub> {
     let (done_tx, done_rx) = mpsc::channel();
     thread::Builder::new()
@@ -727,11 +731,12 @@ fn run_connect_within(home: PathBuf, hello_within: Duration) -> io::Result<Hub> 
             done_tx.send(hub).unwrap_or(());
         })
         .unwrap();
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("connect_within answers before its deadline")
 }
 
+#[track_caller]
 fn run_connect_within_with_start(
     home: PathBuf,
     mut start: impl FnMut() -> io::Result<()> + Send + 'static,
@@ -745,8 +750,8 @@ fn run_connect_within_with_start(
             done_tx.send(hub).unwrap_or(());
         })
         .unwrap();
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("connect_within answers before its deadline")
 }
 
@@ -815,7 +820,7 @@ fn connect_within_a_hub_that_exited_before_the_retry_is_started_again() {
     assert_eq!(hub.1.kind, "hub_hello");
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert!(
-        exited_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&exited_rx).is_ok(),
         "waited {DEADLINE:?} for the old hub to exit"
     );
 }
@@ -879,9 +884,9 @@ fn a_trickling_hub_cannot_extend_the_handshake_deadline() {
         .unwrap();
     let line = hello_line();
     peer.write_all(&line[..1]).unwrap();
+    let wait = Deadline::after(Duration::from_secs(5));
     for n in 1..=2 {
-        read_rx
-            .recv_timeout(Duration::from_secs(5))
+        wait.recv(&read_rx)
             .unwrap_or_else(|_| panic!("the reader is about to read for the {n}th time"));
     }
     // The reader read the first byte and checked the time left for the
@@ -889,8 +894,8 @@ fn a_trickling_hub_cannot_extend_the_handshake_deadline() {
     // the handshake.
     clock.advance(DEADLINE);
     peer.write_all(&line[1..2]).unwrap();
-    let got = done_rx
-        .recv_timeout(Duration::from_secs(5))
+    let got = Deadline::after(Duration::from_secs(5))
+        .recv(&done_rx)
         .expect("the reader returns once the deadline has passed");
     let Err(Poll::Failed(error)) = got else {
         panic!("a trickle past the deadline fails");
