@@ -596,13 +596,52 @@ closes after the first `turn_completed` or `turn_failed`.
 
 A call case invokes a provider function without starting a session. It requires
 `call` with `provider`, `function` and `arg`, plus exactly one of `returns` or
-`error`. The runner supports `function: "cost"` and `function: "models"`. A
-`cost` return is `null` or a finite number at or above 0. `models` takes `{}`
+`error`. The runner supports `cost`, `models`, `login`, `credential` and
+`sign`. A `cost` return is `null` or a finite number at or above 0. `models` takes `{}`
 as its `arg`, and its return is the model list, matched as a session case's
 `expect` is: an object checks only the fields it gives, an array matches in
 full, and an expected `null` matches a missing field. An error checks its
 `code` and may also check its `message`. The case can script the same `host`
 replies as a session case.
+
+The credential functions take these arguments:
+
+- `login`: `{"method":"browser"}` or `{"method":"device"}`, with an optional
+  `label`; returns the logged-in record and stores it under that label, the
+  returned email, or `default`
+- `credential`: `{}`, with an optional `label`; returns
+  `{token, expires_at, headers}` from the provider's credential cache
+- `sign`: `{method, url, headers}`; signs an empty-body request and returns
+  the headers the signer adds
+
+`credentials` maps `<credential>/<label>` to stored JSON, written before the
+first call. `expect_credentials` checks those files after the calls, using
+`expect`'s matching rules. `attended: false` runs with nobody attached.
+
+Use `calls` instead of `call` for an ordered list on one provider instance in
+one Fiber home. A case cannot have both. Each entry has `call` and exactly
+one of `returns` or `error`. An entry's optional `clock` advances before its
+call. Call clocks cannot use `after`, because call cases have no event stream.
+The case's top-level `clock` advances while its first call is parked on the
+clock deadline, as in a session case.
+
+A `calls` entry `{"await":"credential_idle"}` invokes no function. It waits
+for the case's pair to finish fetching a credential, with a wall-clock bound.
+At the bound the case fails, naming the await. Put it between a sign that
+starts a background refresh and a sign that must use the refreshed credential.
+
+`host.oauth` scripts OAuth calls in order:
+
+- `{"pkce":{"verifier":"fixed", "challenge":"fixed"}}` supplies a PKCE pair
+- `{"open":{"url":"https://example.test"}}` checks the URL without opening it
+- `{"show":{"url":"https://example.test", "code":"1234"}}` checks the URL and code
+- `{"callback":{"reply":{"query":{"code":"answer", "state":"fixed"}}}}`
+  supplies a callback query without listening on a port
+- `{"callback":{"error":{"code":"io_failed", "message":"busy"}}}` raises
+  the scripted callback error
+
+A mismatch, missing reply or unused OAuth entry fails the case, as for
+`host.http`. Interactive calls still fail when nobody is attached.
 
 ```json
 {

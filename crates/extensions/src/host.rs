@@ -212,7 +212,10 @@ pub(crate) fn install(
         lua,
         &host,
         &tag,
-        browser,
+        oauth::Context {
+            browser,
+            script: hub.host_script(),
+        },
         entry.clone(),
         failure.clone(),
         note_failure,

@@ -38,12 +38,28 @@ pub(crate) struct SessionCase {
 pub(crate) struct CallCase {
     /// The optional display name, defaulted by the caller from the file stem.
     pub(crate) name: Option<String>,
-    /// Provider callback to invoke.
-    pub(crate) call: Call,
+    /// Ordered calls and credential barriers sharing one provider.
+    pub(crate) steps: Vec<CallStep>,
+    /// Stored credentials to seed before the first call.
+    pub(crate) credentials: Map<String, Value>,
+    /// Stored credentials to check after the last call.
+    pub(crate) expect_credentials: Map<String, Value>,
+    /// Whether a person is attached to the case.
+    pub(crate) attended: bool,
+    /// Advances while a call is parked on its clock deadline.
+    pub(crate) clock: Vec<ClockAdvance>,
     /// Scripted extension host calls.
     pub(crate) host: Host,
-    /// The one expected outcome: the return or the error.
-    pub(crate) outcome: CallOutcome,
+}
+
+pub(crate) struct CallStep {
+    pub(crate) operation: CallOperation,
+    pub(crate) clock: Vec<ClockAdvance>,
+}
+
+pub(crate) enum CallOperation {
+    Invoke { call: Call, outcome: CallOutcome },
+    AwaitCredentialIdle,
 }
 
 /// The expected outcome of a provider call: what it returns or the error
@@ -61,6 +77,8 @@ pub(crate) struct Host {
     pub(crate) http: Vec<extensions::HttpEntry>,
     /// Exec replies in request order.
     pub(crate) exec: Vec<extensions::ExecEntry>,
+    /// OAuth calls in order.
+    pub(crate) oauth: Vec<Value>,
 }
 
 /// One manual clock advance, optionally anchored to an event line.
@@ -99,6 +117,9 @@ impl Case {
             .as_object()
             .ok_or_else(|| format!("{}: case must be an object", path.display()))?;
         only(map, CASE_FIELDS, "case")?;
+        if map.contains_key("call") && map.contains_key("calls") {
+            return Err("call and calls cannot be used in the same case".to_owned());
+        }
         let name = optional_string(map, "name", "case")?;
         let script = map.get("script").cloned();
         let prompt = optional_string(map, "prompt", "case")?;
@@ -117,49 +138,60 @@ impl Case {
         let returns = map.get("returns").cloned();
         let error = map.get("error").cloned();
 
-        if let Some(call) = call {
+        if call.is_some() || map.contains_key("calls") {
             if prompt.is_some() {
                 return Err("call and prompt cannot be used in the same case".to_owned());
             }
-            if ["script", "config", "clock", "until", "expect"]
+            if ["script", "config", "until", "expect"]
                 .iter()
                 .any(|field| map.contains_key(*field))
             {
                 return Err("call cases take call, host and one of returns or error".to_owned());
             }
-            let outcome = match (returns, error) {
-                (Some(returns), None) => CallOutcome::Returns(returns),
-                (None, Some(error)) => CallOutcome::Error(error),
-                _ => {
-                    return Err("a call case needs exactly one of returns or error".to_owned());
+            let steps = if let Some(call) = call {
+                vec![CallStep {
+                    operation: CallOperation::Invoke {
+                        outcome: parse_outcome(&call, returns, error)?,
+                        call,
+                    },
+                    clock: Vec::new(),
+                }]
+            } else {
+                if returns.is_some() || error.is_some() {
+                    return Err("calls entries carry their own returns or error".to_owned());
                 }
+                parse_calls(map.get("calls"))?
             };
-            if call.function == "cost" {
-                if let CallOutcome::Returns(value) = &outcome
-                    && !value.is_null()
-                    && value
-                        .as_f64()
-                        .is_none_or(|number| !number.is_finite() || number < 0.0)
-                {
-                    return Err(
-                        "returns: expected null or a finite number at or above 0".to_owned()
-                    );
-                }
-            } else if let CallOutcome::Returns(value) = &outcome
-                && !value.is_array()
-            {
-                return Err("returns: models expects a list of models".to_owned());
-            }
-            if let CallOutcome::Error(value) = &outcome {
-                validate_expected_error(value)?;
+            let credentials = credential_map(map.get("credentials"), "credentials")?;
+            let expect_credentials =
+                credential_map(map.get("expect_credentials"), "expect_credentials")?;
+            let attended = match map.get("attended") {
+                None => true,
+                Some(Value::Bool(value)) => *value,
+                Some(_) => return Err("attended: expected a boolean".to_owned()),
+            };
+            if clock.iter().any(|advance| advance.after.is_some()) {
+                return Err("clock.after: call cases have no events".to_owned());
             }
             Ok(Case::Call(CallCase {
                 name,
-                call,
+                steps,
                 host,
-                outcome,
+                credentials,
+                expect_credentials,
+                attended,
+                clock,
             }))
         } else {
+            if ["credentials", "expect_credentials", "attended"]
+                .iter()
+                .any(|key| map.contains_key(*key))
+            {
+                return Err(
+                    "credentials, expect_credentials and attended are only valid in a call case"
+                        .to_owned(),
+                );
+            }
             if !map.contains_key("expect") {
                 return Err("expect: required for a session case".to_owned());
             }
@@ -188,17 +220,201 @@ impl Case {
     }
 }
 
+fn parse_outcome(
+    call: &Call,
+    returns: Option<Value>,
+    error: Option<Value>,
+) -> Result<CallOutcome, String> {
+    let outcome = match (returns, error) {
+        (Some(returns), None) => CallOutcome::Returns(returns),
+        (None, Some(error)) => CallOutcome::Error(error),
+        _ => {
+            return Err("a call case needs exactly one of returns or error".to_owned());
+        }
+    };
+    if call.function == "cost" {
+        if let CallOutcome::Returns(value) = &outcome
+            && !value.is_null()
+            && value
+                .as_f64()
+                .is_none_or(|number| !number.is_finite() || number < 0.0)
+        {
+            return Err("returns: expected null or a finite number at or above 0".to_owned());
+        }
+    } else if call.function == "models"
+        && let CallOutcome::Returns(value) = &outcome
+        && !value.is_array()
+    {
+        return Err("returns: models expects a list of models".to_owned());
+    }
+    if let CallOutcome::Error(value) = &outcome {
+        validate_expected_error(value)?;
+    }
+    Ok(outcome)
+}
+
 const CASE_FIELDS: &[&str] = &[
-    "name", "script", "prompt", "config", "host", "clock", "until", "expect", "call", "returns",
+    "name",
+    "script",
+    "prompt",
+    "config",
+    "host",
+    "clock",
+    "until",
+    "expect",
+    "call",
+    "returns",
     "error",
+    "calls",
+    "credentials",
+    "expect_credentials",
+    "attended",
 ];
+
+fn parse_calls(value: Option<&Value>) -> Result<Vec<CallStep>, String> {
+    let entries = value
+        .and_then(Value::as_array)
+        .ok_or("calls: expected a non-empty list")?;
+    if entries.is_empty() {
+        return Err("calls: expected a non-empty list".to_owned());
+    }
+    entries
+        .iter()
+        .map(|value| {
+            let map = value.as_object().ok_or("calls entry: expected an object")?;
+            only(
+                map,
+                &["call", "returns", "error", "clock", "await"],
+                "calls entry",
+            )?;
+            if let Some(value) = map.get("await") {
+                only(map, &["await"], "calls await")?;
+                if value.as_str() != Some("credential_idle") {
+                    return Err("await: supported value is credential_idle".to_owned());
+                }
+                return Ok(CallStep {
+                    operation: CallOperation::AwaitCredentialIdle,
+                    clock: Vec::new(),
+                });
+            }
+            let call = parse_call(map.get("call").ok_or("calls entry.call: required")?)?;
+            let outcome = parse_outcome(
+                &call,
+                map.get("returns").cloned(),
+                map.get("error").cloned(),
+            )?;
+            let clock = parse_clock(map.get("clock"))?;
+            if clock.iter().any(|advance| advance.after.is_some()) {
+                return Err("calls clock.after: call cases have no events".to_owned());
+            }
+            Ok(CallStep {
+                operation: CallOperation::Invoke { call, outcome },
+                clock,
+            })
+        })
+        .collect()
+}
+
+fn credential_map(value: Option<&Value>, field: &str) -> Result<Map<String, Value>, String> {
+    let Some(value) = value else {
+        return Ok(Map::new());
+    };
+    let map = value
+        .as_object()
+        .ok_or_else(|| format!("{field}: expected an object"))?;
+    for key in map.keys() {
+        let (credential, label) = key
+            .split_once('/')
+            .ok_or_else(|| format!("{field}: expected credential/label"))?;
+        config::CredentialFile::new(Path::new("."), credential, label)
+            .map_err(|error| format!("{field}.{key}: {error}"))?;
+    }
+    Ok(map.clone())
+}
+
+fn parse_oauth(value: Option<&Value>) -> Result<Vec<Value>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let entries = value.as_array().ok_or("host.oauth: expected a list")?;
+    for entry in entries {
+        let map = entry
+            .as_object()
+            .ok_or("host.oauth entry: expected an object")?;
+        only(
+            map,
+            &["pkce", "open", "show", "callback"],
+            "host.oauth entry",
+        )?;
+        if map.len() != 1 {
+            return Err("host.oauth entry: expected exactly one operation".to_owned());
+        }
+        for (kind, value) in map {
+            let fields = value
+                .as_object()
+                .ok_or("host.oauth operation: expected an object")?;
+            match kind.as_str() {
+                "pkce" => {
+                    only(fields, &["verifier", "challenge"], "host.oauth.pkce")?;
+                    string(fields, "verifier", "host.oauth.pkce")?;
+                    string(fields, "challenge", "host.oauth.pkce")?;
+                }
+                "open" => {
+                    only(fields, &["url"], "host.oauth.open")?;
+                    string(fields, "url", "host.oauth.open")?;
+                }
+                "show" => {
+                    only(fields, &["url", "code"], "host.oauth.show")?;
+                    string(fields, "url", "host.oauth.show")?;
+                    string(fields, "code", "host.oauth.show")?;
+                }
+                "callback" => {
+                    only(fields, &["reply", "error"], "host.oauth.callback")?;
+                    match (fields.get("reply"), fields.get("error")) {
+                        (Some(reply), None) => {
+                            let reply = reply
+                                .as_object()
+                                .ok_or("host.oauth.callback.reply: expected an object")?;
+                            only(reply, &["query"], "host.oauth.callback.reply")?;
+                            let query = reply
+                                .get("query")
+                                .and_then(Value::as_object)
+                                .ok_or("host.oauth.callback.reply.query: expected an object")?;
+                            if !query.values().all(Value::is_string) {
+                                return Err(
+                                    "host.oauth.callback.reply.query: expected string values"
+                                        .to_owned(),
+                                );
+                            }
+                        }
+                        (None, Some(error)) => {
+                            validate_expected_error(error)?;
+                            let fields = error
+                                .as_object()
+                                .ok_or("host.oauth.callback.error: expected an object")?;
+                            string(fields, "message", "host.oauth.callback.error")?;
+                        }
+                        _ => {
+                            return Err(
+                                "host.oauth.callback: expected exactly one of reply or error"
+                                    .to_owned(),
+                            );
+                        }
+                    }
+                }
+                _ => return Err("host.oauth: unsupported operation".to_owned()),
+            }
+        }
+    }
+    Ok(entries.clone())
+}
 
 fn parse_host(value: Option<&Value>) -> Result<Host, String> {
     let Some(value) = value else {
         return Ok(Host::default());
     };
     let map = value.as_object().ok_or("host: expected an object")?;
-    only(map, &["http", "exec"], "host")?;
+    only(map, &["http", "exec", "oauth"], "host")?;
     let http = match map.get("http") {
         None => Vec::new(),
         Some(value) => value
@@ -219,7 +435,8 @@ fn parse_host(value: Option<&Value>) -> Result<Host, String> {
             .map(|(index, value)| parse_exec(value, index))
             .collect::<Result<_, _>>()?,
     };
-    Ok(Host { http, exec })
+    let oauth = parse_oauth(map.get("oauth"))?;
+    Ok(Host { http, exec, oauth })
 }
 
 fn parse_http(value: &Value, index: usize) -> Result<extensions::HttpEntry, String> {
@@ -391,8 +608,8 @@ fn parse_call(value: &Value) -> Result<Call, String> {
     only(map, &["provider", "function", "arg"], "call")?;
     let provider = string(map, "provider", "call")?;
     let function = string(map, "function", "call")?;
-    if function != "cost" && function != "models" {
-        return Err("call.function: supported functions are `cost` and `models`".to_owned());
+    if !["cost", "models", "login", "credential", "sign"].contains(&function.as_str()) {
+        return Err("call.function: supported functions are `cost`, `models`, `login`, `credential` and `sign`".to_owned());
     }
     let arg = map.get("arg").cloned().ok_or("call.arg: required")?;
     Ok(Call {

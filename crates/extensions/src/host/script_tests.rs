@@ -5,6 +5,55 @@ use serde_json::{Value, json};
 
 use super::{ExecEntry, ExecReply, HostScript, HttpEntry, json_matches};
 
+#[test]
+fn oauth_entries_match_in_order_and_misses_consume_nothing() {
+    let script = HostScript::new(
+        vec![],
+        vec![],
+        vec![
+            json!({"pkce": {"verifier": "fixed", "challenge": "challenge"}}),
+            json!({"open": {"url": "https://example.test"}}),
+            json!({"show": {"url": "https://example.test/device", "code": "1234"}}),
+            json!({"callback": {"reply": {"query": {"code": "yes"}}}}),
+            json!({"callback": {"error": {"code": "io_failed", "message": "busy"}}}),
+        ],
+    );
+    assert_eq!(script.unmet().len(), 5);
+    assert!(
+        script
+            .oauth("open", &json!({"url": "https://example.test"}))
+            .is_err()
+    );
+    assert_eq!(
+        script.oauth("pkce", &json!({})).unwrap()["verifier"],
+        "fixed"
+    );
+    assert!(script.oauth("open", &json!({"url": "wrong"})).is_err());
+    assert!(
+        script
+            .oauth("open", &json!({"url": "https://example.test"}))
+            .is_ok()
+    );
+    assert!(
+        script
+            .oauth(
+                "show",
+                &json!({"url": "https://example.test/device", "code": "1234"})
+            )
+            .is_ok()
+    );
+    assert_eq!(
+        script.oauth("callback", &json!({})).unwrap()["query"]["code"],
+        "yes"
+    );
+    assert_eq!(
+        script.oauth("callback", &json!({})).unwrap_err(),
+        (ErrorCode::IoFailed, "busy".to_owned())
+    );
+    assert!(script.oauth("pkce", &json!({})).is_err());
+    assert_eq!(script.unmet().len(), 3, "only the three misses remain");
+}
+
 fn http(request: Value) -> HttpEntry {
     HttpEntry {
         request,
@@ -125,6 +174,7 @@ fn http_misses_do_not_consume_entries_and_unmet_lists_misses_before_unused_entri
             http(json!({"url": "https://example.test/two"})),
         ],
         vec![],
+        Vec::new(),
     );
 
     let mismatch = script.http(json!({"url": "https://example.test/wrong"}));
@@ -157,6 +207,7 @@ fn http_call_past_the_script_is_a_miss_at_the_next_index() {
     let script = HostScript::new(
         vec![http(json!({"url": "https://example.test/one"}))],
         vec![],
+        Vec::new(),
     );
     assert!(
         script
@@ -188,6 +239,7 @@ fn http_header_names_are_matched_without_case() {
             "body": null
         }))],
         vec![],
+        Vec::new(),
     );
     assert!(
         script
@@ -209,7 +261,7 @@ fn exec_matches_program_arguments_and_working_directory_in_order() {
         "args": ["status", "--short"],
         "cwd": "/workspace"
     });
-    let script = HostScript::new(vec![], vec![exec(request.clone())]);
+    let script = HostScript::new(vec![], vec![exec(request.clone())], Vec::new());
 
     assert!(
         script
@@ -241,6 +293,7 @@ fn exec_call_past_the_script_is_a_miss_at_the_next_index() {
             "args": [],
             "cwd": "/workspace"
         }))],
+        Vec::new(),
     );
     assert!(
         script

@@ -86,6 +86,7 @@ fn a_stopped_extension_starts_no_exec_for_a_suspended_callback() {
                 stderr: String::new(),
             }),
         }],
+        Vec::new(),
     );
     hub.set_host_script(Arc::clone(&script));
     let id = {

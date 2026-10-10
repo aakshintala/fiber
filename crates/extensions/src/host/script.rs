@@ -46,6 +46,8 @@ pub struct HostScript {
 struct State {
     http: Vec<HttpEntry>,
     exec: Vec<ExecEntry>,
+    oauth: Vec<Value>,
+    oauth_next: usize,
     http_next: usize,
     exec_next: usize,
     misses: Vec<String>,
@@ -53,7 +55,7 @@ struct State {
 
 impl HostScript {
     /// Builds a shared script with the supplied HTTP and exec entries.
-    pub fn new(http: Vec<HttpEntry>, exec: Vec<ExecEntry>) -> Arc<Self> {
+    pub fn new(http: Vec<HttpEntry>, exec: Vec<ExecEntry>, oauth: Vec<Value>) -> Arc<Self> {
         let http = http
             .into_iter()
             .map(|mut entry| {
@@ -65,6 +67,8 @@ impl HostScript {
             state: Mutex::new(State {
                 http,
                 exec,
+                oauth,
+                oauth_next: 0,
                 http_next: 0,
                 exec_next: 0,
                 misses: Vec::new(),
@@ -90,7 +94,46 @@ impl HostScript {
                 entry.request
             ));
         }
+        for (index, entry) in state.oauth.iter().enumerate().skip(state.oauth_next) {
+            unmet.push(format!(
+                "host.oauth[{}] unused: {entry}",
+                index.saturating_add(1)
+            ));
+        }
         unmet
+    }
+
+    pub(crate) fn oauth(&self, kind: &str, request: &Value) -> Result<Value, (ErrorCode, String)> {
+        let mut state = lock(&self.state);
+        let index = state.oauth_next;
+        let entry = state
+            .oauth
+            .get(index)
+            .and_then(|entry| entry.get(kind))
+            .cloned();
+        let Some(entry) = entry else {
+            state.misses.push(miss("oauth", index, request));
+            return Err(no_reply("oauth"));
+        };
+        if matches!(kind, "open" | "show") && json_matches(&entry, request).is_err() {
+            state.misses.push(miss("oauth", index, request));
+            return Err(no_reply("oauth"));
+        }
+        state.oauth_next = index.saturating_add(1);
+        if let Some(error) = entry.get("error") {
+            let code = error
+                .get("code")
+                .cloned()
+                .and_then(|code| serde_json::from_value(code).ok())
+                .unwrap_or(ErrorCode::IoFailed);
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("invalid scripted OAuth error")
+                .to_owned();
+            return Err((code, message));
+        }
+        Ok(entry.get("reply").cloned().unwrap_or(entry))
     }
 
     pub(crate) fn http(&self, mut request: Value) -> Result<(u16, Vec<u8>), (ErrorCode, String)> {
