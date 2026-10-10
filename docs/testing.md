@@ -110,6 +110,11 @@ bounded retry, such as `doors::hub::connect` retrying the hub's socket on the
 injected clock, runs on the real clock when a binary-level test drives it
 against a real process.
 
+A timeout the kernel keeps for each socket call, such as a connect or read
+timeout, reads no clock in Fiber. It is tested by injecting a short limit
+and waiting for the call's result with a deadline, and one test pins the
+production values. Deadlines Fiber keeps itself stay on the injected clock.
+
 ### Screens
 
 The terminal UI is tested by feeding a sequence of events to its drawing code
