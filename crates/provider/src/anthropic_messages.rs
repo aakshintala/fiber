@@ -94,6 +94,17 @@ impl Provider for Messages {
     fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
         wire_tools(tools)
     }
+
+    fn warms(&self, request: &ModelRequest) -> bool {
+        // A refresh capped at one token would leave a token budget out,
+        // changing the thinking parameters and paying for a rebuild
+        // (`docs/prompt-cache.md`, "Warming while idle").
+        !(self.endpoint.compat.thinking_budget
+            && matches!(
+                request.thinking,
+                Some(level) if level != contract::ThinkingLevel::Off
+            ))
+    }
 }
 
 /// One `anthropic-messages` call, ready to send.
@@ -246,10 +257,27 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     }
     body.insert("tool_choice".into(), tool_choice(&request.tool_choice));
     body.insert("stream".into(), json!(true));
-    // Anthropic takes adaptive thinking plus an effort, not a token budget
-    // (`research/anthropic-messages-probe`: "Use thinking.type.adaptive and
-    // output_config.effort").
-    if let Some(level) = &request.thinking
+    // The `max_tokens` the body ends up sending, resolved once so the
+    // thinking budget and the insert below cannot disagree.
+    let sent = sent_max_tokens(
+        endpoint.output_limit(request.max_output_tokens),
+        endpoint.extra_body.get("max_tokens"),
+    );
+    // Without `thinking_budget`, Anthropic takes adaptive thinking plus an
+    // effort, not a token budget (`research/anthropic-messages-probe`:
+    // "Use thinking.type.adaptive and output_config.effort"). With it,
+    // the level goes in `thinking: {type: "enabled", budget_tokens}`
+    // measured against the sent `max_tokens`, with no `output_config`.
+    if endpoint.compat.thinking_budget {
+        if let Some(level) = &request.thinking
+            && let Some(budget) = budget_tokens(level, sent)
+        {
+            body.insert(
+                "thinking".into(),
+                json!({"type": "enabled", "budget_tokens": budget}),
+            );
+        }
+    } else if let Some(level) = &request.thinking
         && *level != contract::ThinkingLevel::Off
     {
         body.insert("thinking".into(), json!({"type": "adaptive"}));
@@ -259,14 +287,45 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     // Anthropic requires `max_tokens`. It is the model's limit, or the
     // model data's own `max_tokens` when that is lower (`docs/errors.md`,
     // "Output tokens").
-    if let Some(limit) = endpoint.output_limit(request.max_output_tokens) {
-        let max = body
-            .get("max_tokens")
-            .and_then(Value::as_u64)
-            .map_or(limit, |n| n.min(limit));
+    if let Some(max) = sent {
         body.insert("max_tokens".into(), json!(max));
     }
     Value::Object(body).to_string().into_bytes()
+}
+
+/// The `max_tokens` the body ends up sending: the limit capped by an
+/// integer `extra_body.max_tokens`, or that value alone with no limit.
+/// `None` when the body sends no `max_tokens`, or sends one that is not
+/// an unsigned integer, which the insert keeps as sent.
+fn sent_max_tokens(limit: Option<u64>, extra: Option<&Value>) -> Option<u64> {
+    match limit {
+        Some(limit) => Some(
+            extra
+                .and_then(Value::as_u64)
+                .map_or(limit, |n| n.min(limit)),
+        ),
+        None => extra.and_then(Value::as_u64),
+    }
+}
+
+/// The token budget for `level` measured against the sent `max_tokens`
+/// `m`: the level's budget with no `m`; no `thinking` key when no budget
+/// is both at least 1024 and below `m`; otherwise the budget capped so at
+/// least 1024 tokens stay for the reply. `None` means no `thinking` key.
+fn budget_tokens(level: &contract::ThinkingLevel, max_tokens: Option<u64>) -> Option<u64> {
+    use contract::ThinkingLevel::{High, Low, Max, Medium, Minimal, Off, Xhigh};
+    let budget = match level {
+        Off => return None,
+        Minimal => 1024,
+        Low => 2048,
+        Medium => 8192,
+        High | Xhigh | Max => 16384,
+    };
+    match max_tokens {
+        None => Some(budget),
+        Some(m) if m <= 1024 => None,
+        Some(m) => Some(1024.max(budget.min(m - 1024))),
+    }
 }
 
 /// Whether any `enum` in `schema` has an object or array value.

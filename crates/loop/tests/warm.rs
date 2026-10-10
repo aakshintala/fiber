@@ -245,6 +245,41 @@ fn warming_off_or_a_cap_of_zero_sends_nothing_after_the_turn() {
     }
 }
 
+/// A provider whose last request does not warm: no refresh is sent, and
+/// the idle clock counts from the wait start.
+struct NoWarm {
+    inner: Arc<ScriptedProvider>,
+}
+
+impl Provider for NoWarm {
+    fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
+        self.inner.call(request)
+    }
+
+    fn warms(&self, _request: &ModelRequest) -> bool {
+        false
+    }
+}
+
+#[test]
+fn a_provider_that_does_not_warm_sends_no_refresh() {
+    let mut session = Session::wrapped(
+        vec![Scripted::text("ok."), refresh_reply()],
+        CacheLifetime::FiveMinutes,
+        move |inner, _clock| Arc::new(NoWarm { inner }),
+    );
+    arm(&mut session, MINUTE, Some(2));
+    let start = session.clock.now();
+    session.inbox.send(delivery("hi")).unwrap();
+    let finished = spawn_run(&mut session);
+    let exit = start + MINUTE;
+    parked(&session.clock, exit, "idle counts from the wait start");
+    advance_to(&session, exit);
+    ended(&finished);
+    assert_refreshes(&session, 0);
+    assert_usage_only(&session, 0);
+}
+
 #[test]
 fn a_refresh_due_at_the_cap_is_not_sent() {
     // The step's call takes 240 s, so the wait starts at 240 s and the cap of

@@ -60,6 +60,10 @@ const LOW_MEDIUM_HIGH_XHIGH_MAX: &[&str] = &["low", "medium", "high", "xhigh", "
 const MEDIUM_XHIGH: &[&str] = &["medium", "xhigh"];
 const MEDIUM_HIGH_XHIGH: &[&str] = &["medium", "high", "xhigh"];
 const HIGH_ONLY: &[&str] = &["high"];
+const OFF_MINIMAL_LOW_MEDIUM_HIGH: &[&str] = &["off", "minimal", "low", "medium", "high"];
+
+/// The compat layer of an Anthropic model that takes a token budget.
+const THINKING_BUDGET: &str = r#"{"compat":{"thinking_budget":true}}"#;
 
 /// Anthropic's models, all on `anthropic-messages` with its search tool.
 const ANTHROPIC: Package = Package {
@@ -76,7 +80,14 @@ const ANTHROPIC: Package = Package {
         "anthropic-messages",
         r#"{"web_search":"web_search_20250305"}"#,
     )],
-    by_model: &[],
+    by_model: &[
+        ("claude-haiku-4-5", THINKING_BUDGET),
+        ("claude-haiku-4-5-20251001", THINKING_BUDGET),
+        ("claude-opus-4-5", THINKING_BUDGET),
+        ("claude-opus-4-5-20251101", THINKING_BUDGET),
+        ("claude-sonnet-4-5", THINKING_BUDGET),
+        ("claude-sonnet-4-5-20250929", THINKING_BUDGET),
+    ],
     thinking: &[
         ("claude-fable-5", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         ("claude-fable-5-1", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
@@ -89,6 +100,24 @@ const ANTHROPIC: Package = Package {
         ("claude-sonnet-4-6", OFF_LOW_MEDIUM_HIGH_MAX, None),
         ("claude-sonnet-5", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         ("claude-sonnet-5-5", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("claude-haiku-4-5", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
+        (
+            "claude-haiku-4-5-20251001",
+            OFF_MINIMAL_LOW_MEDIUM_HIGH,
+            None,
+        ),
+        ("claude-opus-4-5", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
+        (
+            "claude-opus-4-5-20251101",
+            OFF_MINIMAL_LOW_MEDIUM_HIGH,
+            None,
+        ),
+        ("claude-sonnet-4-5", OFF_MINIMAL_LOW_MEDIUM_HIGH, None),
+        (
+            "claude-sonnet-4-5-20250929",
+            OFF_MINIMAL_LOW_MEDIUM_HIGH,
+            None,
+        ),
     ],
 };
 
