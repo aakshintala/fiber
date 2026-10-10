@@ -2,7 +2,9 @@
 
 use serde_json::{Map, Value, json};
 
-use super::{Argument, CallResult, Content, ListedPrompt, ListedTool, entries};
+use super::{
+    Argument, CallResult, Content, ListedPrompt, ListedTool, Message, entries, from_object,
+};
 
 fn tool(value: Value) -> ListedTool {
     serde_json::from_value(value).expect("a tool reads")
@@ -184,6 +186,7 @@ fn content_parses_each_shape() {
             {"type": "resource"},
             {"type": "resource", "resource": null},
             {"type": "resource", "resource": 5},
+            {"type": "resource", "resource": ["hello", null]},
             {"type": "resource_link"},
             {"type": "bogus"},
             {"no": "type"},
@@ -236,13 +239,44 @@ fn content_parses_each_shape() {
                     blob: None,
                 }
             },
+            Content::Resource {
+                resource: super::Resource {
+                    text: None,
+                    blob: None,
+                }
+            },
             Content::ResourceLink,
             Content::Other,
             Content::Unreadable,
             Content::Unreadable,
         ]
     );
-    let empty: CallResult = serde_json::from_value(json!(7)).expect("a non-object is default");
+    let empty: CallResult = from_object(json!(7)).unwrap_or_default();
     assert_eq!(empty, CallResult::default());
     let _: Map<String, Value> = Map::new();
+}
+
+#[test]
+fn array_shapes_never_read_positionally() {
+    let tools: Vec<ListedTool> = entries(vec![json!([
+        "echo",
+        "Echoes.",
+        {"type": "object"},
+        {},
+        {},
+    ])]);
+    assert!(tools.is_empty());
+    let prompts: Vec<ListedPrompt> = entries(vec![json!(["greet", "Greets.", [], {}])]);
+    assert!(prompts.is_empty());
+    let read = prompt(json!({"name": "greet", "arguments": [["who", true, {}]]}));
+    assert!(read.arguments.is_empty());
+    let read = tool(json!({"name": "echo", "annotations": [true]}));
+    assert_eq!(read.annotations, super::Annotations::default());
+    let message: Message =
+        serde_json::from_value(json!(["hello"])).expect("an array message reads");
+    assert!(message.content.is_empty());
+    assert!(from_object::<super::PromptResult>(json!([[{"messages": []}]])).is_err());
+    let result: CallResult =
+        from_object(json!([[{"type": "text", "text": "hi"}], true])).unwrap_or_default();
+    assert_eq!(result, CallResult::default());
 }

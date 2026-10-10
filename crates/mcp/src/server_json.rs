@@ -1,6 +1,6 @@
 //! Typed reads of the server's JSON: tools, prompts, results and content.
-//! Every field tolerates what the old hand readers accepted: a missing
-//! value, a `null` or a value of the wrong type reads as the default.
+//! Every field is tolerant: a missing value, a `null` or a value of the
+//! wrong type reads as the default.
 
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
@@ -12,15 +12,20 @@ fn object_schema() -> Value {
     serde_json::json!({"type": "object"})
 }
 
-/// Reads any JSON value, giving the default when it does not deserialize
-/// as `T`: missing, `null` or the wrong type all read as default, exactly
-/// as the old hand readers did. It never errors on JSON input.
+/// Reads any JSON value, giving the default when it does not read as `T`:
+/// a missing value, a `null` or a value of the wrong type reads as the
+/// default. An array reads as the default without a positional read, so a
+/// struct field never takes its fields from array positions. It never
+/// errors on JSON input.
 fn lenient<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
     T: serde::de::DeserializeOwned + Default,
 {
     let value = Value::deserialize(deserializer)?;
+    if value.is_array() {
+        return Ok(T::default());
+    }
     Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
@@ -128,7 +133,7 @@ pub(crate) struct Argument {
 }
 
 /// Reads the argument list: a non-array reads as empty, and each entry
-/// that is not an object or has an empty name is dropped, as before.
+/// that is not an object or has an empty name is dropped.
 fn arguments<'de, D>(deserializer: D) -> Result<Vec<Argument>, D::Error>
 where
     D: Deserializer<'de>,
@@ -140,7 +145,7 @@ where
     };
     let mut kept = Vec::new();
     for entry in listed {
-        let argument: Argument = match serde_json::from_value(entry.clone()) {
+        let argument: Argument = match from_object(entry.clone()) {
             Ok(argument) => argument,
             Err(_) => continue,
         };
@@ -153,36 +158,31 @@ where
 }
 
 /// A `tools/call` result.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 pub(crate) struct CallResult {
-    /// Its content parts.
+    /// Its content parts; anything but an array reads as empty.
+    #[serde(default, deserialize_with = "parts")]
     pub content: Vec<Content>,
     /// Whether the server marked it as an error.
+    #[serde(rename = "isError", default, deserialize_with = "lenient")]
     pub is_error: bool,
 }
 
-impl<'de> Deserialize<'de> for CallResult {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        let object = match value.as_object() {
-            Some(object) => object,
-            None => return Ok(CallResult::default()),
-        };
-        let content = match object.get("content") {
-            Some(Value::Array(listed)) => listed
-                .iter()
-                .map(|part| serde_json::from_value(part.clone()).unwrap_or(Content::Unreadable))
-                .collect(),
-            Some(_) | None => Vec::new(),
-        };
-        let is_error = match object.get("isError") {
-            Some(value) => serde_json::from_value(value.clone()).unwrap_or_default(),
-            None => false,
-        };
-        Ok(CallResult { content, is_error })
+/// Reads the content list: an array reads each part, with any part that
+/// fails to read as `Unreadable`; anything else reads as empty.
+fn parts<'de, D>(deserializer: D) -> Result<Vec<Content>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::Array(listed) => Ok(listed
+            .into_iter()
+            .map(|part| serde_json::from_value(part).unwrap_or(Content::Unreadable))
+            .collect()),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Object(_) => {
+            Ok(Vec::new())
+        }
     }
 }
 
@@ -270,12 +270,28 @@ pub(crate) struct Resource {
     pub blob: Option<Value>,
 }
 
-/// Drops the entries that do not deserialize, which are exactly the
-/// non-objects, given lenient fields.
+/// Reads server JSON that must be an object: anything else is rejected, so
+/// no value takes its fields from array positions. The caller maps the
+/// rejection: a call result reads as the default, a prompt result as
+/// "no messages".
+pub(crate) fn from_object<T: serde::de::DeserializeOwned>(
+    value: Value,
+) -> Result<T, serde_json::Error> {
+    if value.is_object() {
+        serde_json::from_value(value)
+    } else {
+        Err(<serde_json::Error as serde::de::Error>::custom(
+            "expected an object",
+        ))
+    }
+}
+
+/// Decodes the listed entries, keeping only the objects: anything else is
+/// dropped, so no entry takes its fields from array positions.
 pub(crate) fn entries<T: serde::de::DeserializeOwned>(listed: Vec<Value>) -> Vec<T> {
     listed
         .into_iter()
-        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .filter_map(|entry| from_object(entry).ok())
         .collect()
 }
 

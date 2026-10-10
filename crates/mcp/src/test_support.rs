@@ -128,42 +128,13 @@ impl Setup {
         })
     }
 
-    /// Starts the fixture directly, with a deadline naming the wait.
-    pub(crate) fn start_server(&self, timeout: Duration) -> Result<OpenServer, StartError> {
+    /// Starts the fixture directly, expecting success, with a deadline naming the wait.
+    pub(crate) fn start_expect(&self, timeout: Duration) -> OpenServer {
         let script = fakes::mcp_fixture().display().to_string();
         let workspace = self.workspace();
         let arg = workspace.display().to_string();
-        self.start_command(&script, &[arg], timeout)
-    }
-
-    /// Starts the fixture directly, expecting success, with a deadline naming the wait.
-    pub(crate) fn start_expect(&self, timeout: Duration) -> OpenServer {
-        self.start_server(timeout)
+        Self::start_result(&script, &[arg], &workspace, &self.clock(), timeout)
             .expect("the fixture server starts")
-    }
-
-    /// Starts `command` directly, with a deadline naming the wait.
-    pub(crate) fn start_command(
-        &self,
-        command: &str,
-        args: &[String],
-        timeout: Duration,
-    ) -> Result<OpenServer, StartError> {
-        let command = command.to_owned();
-        let args = args.to_owned();
-        let workspace = self.workspace();
-        let clock = self.clock();
-        fakes::within("the server start", WITHIN, move || {
-            crate::server::Server::start(
-                &command,
-                &args,
-                &BTreeMap::new(),
-                &workspace,
-                &clock,
-                timeout,
-                "0.0.0",
-            )
-        })
     }
 
     /// Starts `command` with an explicit workspace and clock, with a deadline naming the wait.

@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 
 use crate::fail;
 use crate::rpc::{Named, PROMPTS_GET};
-use crate::server_json::{Argument, Content, ListedPrompt, PromptResult};
+use crate::server_json::{Argument, Content, ListedPrompt, PromptResult, from_object};
 use crate::slot::{self, Fault, Served, Slot};
 
 /// The `commands` row's `argument_hint`: each argument as `<name>` when
@@ -284,7 +284,7 @@ fn output(
     let server = entry.server.as_str();
     let prompt = entry.prompt.name.as_str();
     match called {
-        Ok(result) => match serde_json::from_value::<PromptResult>(result) {
+        Ok(result) => match from_object::<PromptResult>(result) {
             Err(_) => {
                 let mut out = fail::failed(
                     ErrorCode::McpPromptFailed,

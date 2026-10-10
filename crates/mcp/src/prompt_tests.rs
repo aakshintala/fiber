@@ -113,8 +113,8 @@ fn fill_with_no_arguments_appends_the_text() {
 
 fn read_text(result: Value) -> Result<String, String> {
     use super::text;
-    use crate::server_json::PromptResult;
-    match serde_json::from_value::<PromptResult>(result) {
+    use crate::server_json::{PromptResult, from_object};
+    match from_object::<PromptResult>(result) {
         Err(_) => Err("no messages".to_owned()),
         Ok(result) => text(&result),
     }

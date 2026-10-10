@@ -18,7 +18,7 @@ use crate::effects::Hints;
 use crate::fail;
 use crate::name::qualified;
 use crate::rpc::{Named, TOOLS_CALL};
-use crate::server_json::{CallResult, Content};
+use crate::server_json::{CallResult, Content, from_object};
 use crate::slot::{self, Fault, Run, Slot};
 
 /// One server tool declared to the model.
@@ -135,7 +135,7 @@ impl Tool for McpTool {
 fn output(call: &Call, called: Result<Value, Fault>, servers: Vec<ServerRecord>) -> Output {
     match called {
         Ok(result) => {
-            let result: CallResult = serde_json::from_value(result).unwrap_or_default();
+            let result: CallResult = from_object(result).unwrap_or_default();
             let mut answered = answer(&call.server, &call.tool, &result);
             answered.servers = servers;
             answered

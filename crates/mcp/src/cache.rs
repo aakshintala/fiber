@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::server_json::{ListedPrompt, ListedTool};
 
-/// The cache file version. A file with no `version`, the one every earlier
-/// build wrote, or with any other version, is a miss.
+/// The cache file version. A file with no `version`, or with any other
+/// version, is a miss.
 const CACHE_VERSION: u32 = 1;
 
 /// The key of a server's declaration: the lowercase hex SHA-256 of the
