@@ -616,6 +616,7 @@ fn check_row(f: usize, m: &Model, focused: bool, marked: bool, hits: &[usize]) -
         mark = mark.add_modifier(Modifier::DIM);
     }
     spans.push(sp(if marked { "[x]" } else { "[ ]" }, mark));
+    spans.push(sp(" ", Style::new()));
     // The id reads as one word even underlined per matched char: matched
     // chars carry underline plus bold over the row's own colour.
     for (i, ch) in m.id.chars().enumerate() {
@@ -638,7 +639,7 @@ fn check_row(f: usize, m: &Model, focused: bool, marked: bool, hits: &[usize]) -
     }
     spans.extend([sp("\t", Style::new()), sp(m.rebuild, dim())]);
     // The focused model reads bold throughout, like every focused choice.
-    let rest = 3 + m.id.chars().count();
+    let rest = 4 + m.id.chars().count();
     if focused {
         for s in spans.iter_mut().skip(rest) {
             s.style = s.style.patch(bold());
@@ -1664,6 +1665,10 @@ mod tests {
             .split('\n')
             .find(|l| l.contains("claude-opus-5-5"))
             .unwrap();
+        assert!(
+            line.contains("[x] claude-opus-5-5"),
+            "a space sits between mark and id"
+        );
         assert!(line.find("[x]").unwrap() < line.find("claude-opus-5-5").unwrap());
         let line = t
             .split('\n')
