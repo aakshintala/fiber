@@ -19,21 +19,7 @@ use crate::effects::Hints;
 use crate::server::Server;
 use crate::slot::Slot;
 use crate::start::ServerSpec;
-
-/// How long a test waits for a thread or a child, in real time.
-///
-/// The largest round value that keeps every test's serial deadlines within
-/// half of nextest's 120 s kill: the worst mcp test,
-/// `server::tests::cancel_ends_the_wait_and_sends_cancelled`, can exhaust five
-/// (5 x 10 s = 50 s <= 60 s). A passing run never waits on it; it only
-/// bounds a hang.
-const WITHIN: Duration = Duration::from_secs(10);
-
-/// One real-time poll of a file the server writes.
-const POLL: Duration = Duration::from_millis(50);
-
-/// Poll iterations that span one `WITHIN` of `POLL` sleeps.
-const POLLS: u128 = WITHIN.as_millis() / POLL.as_millis();
+use crate::test_support::{WITHIN, await_until};
 
 fn arguments() -> Map<String, Value> {
     Map::new()
@@ -355,27 +341,36 @@ fn a_cancelled_call_is_mcp_cancel_requested() {
     }
     // The server was told: `notifications/cancelled` names the call's id.
     let log = live._dir.path().join("requests.log");
-    let (_held, probe) = std::sync::mpsc::channel::<()>();
-    for _ in 0..POLLS {
-        let lines: Vec<Value> = std::fs::read_to_string(&log)
-            .unwrap_or_default()
-            .lines()
-            .map(|line| serde_json::from_str(line).expect("a JSON line"))
-            .collect();
-        let call = lines.iter().find(|line| line["method"] == "tools/call");
-        let cancelled = lines
-            .iter()
-            .find(|line| line["method"] == "notifications/cancelled");
-        if let (Some(call), Some(cancelled)) = (call, cancelled) {
-            assert_eq!(cancelled["params"]["requestId"], call["id"]);
-            assert!(cancelled.get("id").is_none(), "a notification has no id");
-            return;
-        }
-        match probe.recv_timeout(POLL) {
-            Ok(()) | Err(_) => {}
-        }
+    await_until(
+        "`notifications/cancelled` to reach the server",
+        move || {
+            let lines: Vec<Value> = std::fs::read_to_string(&log)
+                .unwrap_or_default()
+                .lines()
+                .map(|line| serde_json::from_str(line).expect("a JSON line"))
+                .collect();
+            let call = lines.iter().find(|line| line["method"] == "tools/call");
+            let cancelled = lines
+                .iter()
+                .find(|line| line["method"] == "notifications/cancelled");
+            call.is_some() && cancelled.is_some()
+        },
+    );
+    let lines: Vec<Value> = std::fs::read_to_string(live._dir.path().join("requests.log"))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("a JSON line"))
+        .collect();
+    let call = lines.iter().find(|line| line["method"] == "tools/call");
+    let cancelled = lines
+        .iter()
+        .find(|line| line["method"] == "notifications/cancelled");
+    if let (Some(call), Some(cancelled)) = (call, cancelled) {
+        assert_eq!(cancelled["params"]["requestId"], call["id"]);
+        assert!(cancelled.get("id").is_none(), "a notification has no id");
+        return;
     }
-    panic!("waited {WITHIN:?} for `notifications/cancelled` to reach the server");
+    panic!("the log holds no cancelled call");
 }
 
 /// Runs `tool` on a detached thread and hands back its output's receiver.

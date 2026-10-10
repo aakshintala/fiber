@@ -2,7 +2,6 @@
 //! public [`start`].
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use contract::ErrorCode;
@@ -10,76 +9,11 @@ use contract::clock::Clock;
 use contract::events::ServerFailure;
 use contract::events::ToolSource;
 use contract::shapes::Effect;
-use fakes::TempDir;
-use fakes::clock::FakeClock;
-use serde_json::{Value, json};
+use serde_json::json;
 
-use super::{DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, start};
+use super::{DEFAULT_STARTUP_TIMEOUT, ServerSpec, start};
 use crate::effects::Hints;
-
-/// How long a test waits for a thread or a child, in real time.
-///
-/// The largest round value that keeps every test's serial deadlines within
-/// half of nextest's 120 s kill: the worst mcp test,
-/// `server::tests::cancel_ends_the_wait_and_sends_cancelled`, can exhaust five
-/// (5 x 10 s = 50 s <= 60 s). A passing run never waits on it; it only
-/// bounds a hang.
-const WITHIN: Duration = Duration::from_secs(10);
-
-/// One real-time poll of a child's exit.
-const POLL: Duration = Duration::from_millis(50);
-
-/// Poll iterations that span one `WITHIN` of `POLL` sleeps.
-const POLLS: u128 = WITHIN.as_millis() / POLL.as_millis();
-
-struct Setup {
-    dir: TempDir,
-    fake: Arc<FakeClock>,
-}
-
-impl Setup {
-    fn new() -> Self {
-        Self {
-            dir: TempDir::new("fiber-mcp-start"),
-            fake: FakeClock::new(),
-        }
-    }
-
-    fn clock(&self) -> Arc<dyn Clock> {
-        self.fake.clone()
-    }
-
-    fn tools(&self, tools: &Value) {
-        std::fs::write(self.dir.path().join("tools.json"), tools.to_string()).expect("tools");
-    }
-
-    fn prompts(&self, prompts: &Value) {
-        std::fs::write(self.dir.path().join("prompts.json"), prompts.to_string()).expect("prompts");
-    }
-
-    fn result(&self, name: &str, body: &str) {
-        std::fs::write(self.dir.path().join(format!("call-{name}.json")), body).expect("result");
-    }
-
-    fn spec(&self, name: &str) -> ServerSpec {
-        ServerSpec {
-            name: name.to_owned(),
-            command: fakes::mcp_fixture().display().to_string(),
-            args: vec![self.dir.path().display().to_string()],
-            env: BTreeMap::new(),
-            startup_timeout: DEFAULT_STARTUP_TIMEOUT,
-            call_timeout: DEFAULT_CALL_TIMEOUT,
-            enabled: None,
-            disabled: Vec::new(),
-            hints: BTreeMap::new(),
-            required: false,
-        }
-    }
-
-    fn workspace(&self) -> std::path::PathBuf {
-        self.dir.path().to_path_buf()
-    }
-}
+use crate::test_support::{Setup, WITHIN};
 
 fn names(started: &super::Started) -> Vec<String> {
     started
@@ -89,24 +23,7 @@ fn names(started: &super::Started) -> Vec<String> {
         .collect()
 }
 
-fn start_within(
-    specs: Vec<ServerSpec>,
-    workspace: std::path::PathBuf,
-    clock: Arc<dyn Clock>,
-) -> super::Started {
-    // Threaded with a wall-clock limit: a silent or missing server would
-    // sit parked on the fake clock forever, so a bare direct start would
-    // hang the test instead of failing it.
-    let (done, result) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let cache = workspace.join("cache");
-        let started = start(specs, &workspace, &cache, &clock, "0.0.0");
-        done.send(started).expect("collected");
-    });
-    result
-        .recv_timeout(WITHIN)
-        .unwrap_or_else(|_| panic!("the start ends within {WITHIN:?}"))
-}
+
 
 #[test]
 fn tools_of_two_servers_declare_in_one_sorted_order() {
@@ -117,7 +34,7 @@ fn tools_of_two_servers_declare_in_one_sorted_order() {
     second.tools(&json!([{"name": "alpha"}]));
     second.result("alpha", r#"{"content":[]}"#);
     let specs = vec![first.spec("one"), second.spec("two")];
-    let started = start_within(specs, first.workspace(), first.clock());
+    let started = first.start(specs);
     assert!(started.failed.is_empty());
     assert_eq!(names(&started), ["mcp__one__zeta", "mcp__two__alpha"]);
     assert_eq!(
@@ -148,7 +65,7 @@ fn enabled_declares_only_those_tools() {
     setup.result("drop", r#"{"content":[]}"#);
     let mut spec = setup.spec("fx");
     spec.enabled = Some(vec!["keep".to_owned()]);
-    let started = start_within(vec![spec], setup.workspace(), setup.clock());
+    let started = setup.start(vec![spec]);
     assert_eq!(names(&started), ["mcp__fx__keep"]);
     started.servers.stop();
 }
@@ -161,7 +78,7 @@ fn disabled_removes_those_tools() {
     setup.result("drop", r#"{"content":[]}"#);
     let mut spec = setup.spec("fx");
     spec.disabled = vec!["drop".to_owned()];
-    let started = start_within(vec![spec], setup.workspace(), setup.clock());
+    let started = setup.start(vec![spec]);
     assert_eq!(names(&started), ["mcp__fx__keep"]);
     started.servers.stop();
 }
@@ -175,7 +92,7 @@ fn enabled_and_disabled_is_enabled_minus_disabled() {
     let mut spec = setup.spec("fx");
     spec.enabled = Some(vec!["a".to_owned(), "b".to_owned()]);
     spec.disabled = vec!["b".to_owned()];
-    let started = start_within(vec![spec], setup.workspace(), setup.clock());
+    let started = setup.start(vec![spec]);
     assert_eq!(names(&started), ["mcp__fx__a"]);
     started.servers.stop();
 }
@@ -197,7 +114,7 @@ fn the_persons_hints_replace_the_servers() {
             open_world: None,
         },
     );
-    let started = start_within(vec![spec], setup.workspace(), setup.clock());
+    let started = setup.start(vec![spec]);
     assert_eq!(names(&started), ["mcp__fx__wipe"]);
     let (_, tool) = started.tools.first().expect("one tool");
     let effects = tool.effects(&Default::default()).expect("classifiable");
@@ -221,7 +138,7 @@ fn the_schema_passes_through_with_sorted_keys() {
         },
     }]));
     setup.result("echo", r#"{"content":[]}"#);
-    let started = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
+    let started = setup.start(vec![setup.spec("fx")]);
     let (_, tool) = started.tools.first().expect("one tool");
     let definition = tool.definition();
     assert_eq!(definition.description, "Echoes.");
@@ -243,7 +160,7 @@ fn a_long_qualified_name_is_cut() {
     let server = "s".repeat(crate::name::MAX_NAME_LEN);
     let mut spec = setup.spec(&server);
     spec.name = server;
-    let started = start_within(vec![spec], setup.workspace(), setup.clock());
+    let started = setup.start(vec![spec]);
     let name = names(&started).pop().expect("one tool");
     assert_eq!(name.chars().count(), crate::name::MAX_NAME_LEN);
     assert!(name.starts_with("mcp__ssss"));
@@ -257,7 +174,7 @@ fn a_cut_name_keeps_the_servers_own_tool_name() {
     setup.result("tool", r#"{"content":[]}"#);
     let server = "s".repeat(crate::name::MAX_NAME_LEN);
     let spec = setup.spec(&server);
-    let started = start_within(vec![spec], setup.workspace(), setup.clock());
+    let started = setup.start(vec![spec]);
     let info = started.infos.first().expect("one tool");
     assert_eq!(info.name.chars().count(), crate::name::MAX_NAME_LEN);
     assert_eq!(
@@ -279,11 +196,7 @@ fn a_failing_command_leaves_the_other_servers_tools_declared() {
     let mut failing = bad.spec("bad");
     failing.command = "/no/such/command".to_owned();
     failing.args = Vec::new();
-    let started = start_within(
-        vec![good.spec("good"), failing],
-        good.workspace(),
-        good.clock(),
-    );
+    let started = good.start(vec![good.spec("good"), failing]);
     assert_eq!(names(&started), ["mcp__good__echo"]);
     assert_eq!(started.failed.len(), 1);
     let failure = &started.failed[0];
@@ -336,7 +249,7 @@ fn a_server_that_misses_its_deadline_is_left_out() {
 #[test]
 fn no_specs_starts_nothing() {
     let setup = Setup::new();
-    let started = start_within(Vec::new(), setup.workspace(), setup.clock());
+    let started = setup.start(Vec::new());
     assert!(started.tools.is_empty());
     assert!(started.infos.is_empty());
     assert!(started.failed.is_empty());
@@ -350,7 +263,7 @@ fn stopping_all_servers_leaves_no_running_child() {
     let setup = Setup::new();
     setup.tools(&json!([{"name": "hang"}]));
     setup.result("hang", "hang");
-    let started = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
+    let started = setup.start(vec![setup.spec("fx")]);
     assert!(started.failed.is_empty());
     let pid: u32 = std::fs::read_to_string(setup.dir.path().join("pid.txt"))
         .expect("pid.txt")
@@ -358,17 +271,8 @@ fn stopping_all_servers_leaves_no_running_child() {
         .parse()
         .expect("a pid");
     assert!(fakes::kill_pid(pid, "0").expect("probe"));
-    started.servers.stop();
-    let (_held, probe) = std::sync::mpsc::channel::<()>();
-    for _ in 0..POLLS {
-        if !fakes::kill_pid(pid, "0").expect("probe") {
-            return;
-        }
-        match probe.recv_timeout(POLL) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    panic!("waited {WITHIN:?} for pid {pid} to exit after the stop");
+    setup.stop(started.servers);
+    setup.await_reaped(pid);
 }
 
 #[test]
@@ -425,26 +329,12 @@ fn servers_stop_at_once() {
         .unwrap_or_else(|_| panic!("the stop returned within {WITHIN:?}"));
 }
 
-fn stop_within(servers: super::Servers) {
-    // Detached with a wall-clock limit: a lingering child would keep the
-    // stop parked on the fake clock forever, so a bare direct stop, or a
-    // join on its thread, would hang the test instead of failing it.
-    let (done, stopped) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        servers.stop();
-        done.send(()).expect("collected");
-    });
-    stopped
-        .recv_timeout(WITHIN)
-        .unwrap_or_else(|_| panic!("the stop ends within {WITHIN:?}"));
-}
-
 #[test]
 fn a_cached_server_declares_without_spawning() {
     let setup = Setup::new();
     setup.tools(&json!([{"name": "echo", "description": "Echoes."}]));
     setup.result("echo", r#"{"content":[]}"#);
-    let first = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
+    let first = setup.start(vec![setup.spec("fx")]);
     assert_eq!(names(&first), ["mcp__fx__echo"]);
     assert!(first.failed.is_empty());
     assert!(first.required_failed.is_none());
@@ -452,11 +342,11 @@ fn a_cached_server_declares_without_spawning() {
         setup.workspace().join("cache").join("fx.json").exists(),
         "the first start writes the cache",
     );
-    stop_within(first.servers);
+    setup.stop(first.servers);
     std::fs::remove_file(setup.dir.path().join("pid.txt")).expect("pid.txt");
     // The second start shares the workspace, so it shares the cache: it
     // declares the same tools and infos and spawns nothing.
-    let second = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
+    let second = setup.start(vec![setup.spec("fx")]);
     assert_eq!(names(&second), ["mcp__fx__echo"]);
     assert_eq!(second.infos, first.infos);
     assert!(second.failed.is_empty());
@@ -465,7 +355,7 @@ fn a_cached_server_declares_without_spawning() {
         !setup.dir.path().join("pid.txt").exists(),
         "a cached server spawns nothing before its first call",
     );
-    stop_within(second.servers);
+    setup.stop(second.servers);
 }
 
 #[test]
@@ -473,19 +363,19 @@ fn a_changed_arg_misses_the_cache_and_spawns() {
     let setup = Setup::new();
     setup.tools(&json!([{"name": "echo"}]));
     setup.result("echo", r#"{"content":[]}"#);
-    let first = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
+    let first = setup.start(vec![setup.spec("fx")]);
     assert_eq!(names(&first), ["mcp__fx__echo"]);
-    stop_within(first.servers);
+    setup.stop(first.servers);
     std::fs::remove_file(setup.dir.path().join("pid.txt")).expect("pid.txt");
     let mut changed = setup.spec("fx");
     changed.args.push("changed".to_owned());
-    let second = start_within(vec![changed], setup.workspace(), setup.clock());
+    let second = setup.start(vec![changed]);
     assert_eq!(names(&second), ["mcp__fx__echo"]);
     assert!(
         setup.dir.path().join("pid.txt").exists(),
         "a changed declaration misses the cache and spawns",
     );
-    stop_within(second.servers);
+    setup.stop(second.servers);
 }
 
 #[test]
@@ -493,9 +383,9 @@ fn a_required_server_with_a_cache_starts_and_declares_live() {
     let setup = Setup::new();
     setup.tools(&json!([{"name": "echo"}]));
     setup.result("echo", r#"{"content":[]}"#);
-    let first = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
+    let first = setup.start(vec![setup.spec("fx")]);
     assert_eq!(names(&first), ["mcp__fx__echo"]);
-    stop_within(first.servers);
+    setup.stop(first.servers);
     std::fs::remove_file(setup.dir.path().join("pid.txt")).expect("pid.txt");
     // The live list changed since the cache was written: a required
     // server declares what the server lists now, not the cached list.
@@ -503,13 +393,13 @@ fn a_required_server_with_a_cache_starts_and_declares_live() {
     setup.result("other", r#"{"content":[]}"#);
     let mut required = setup.spec("fx");
     required.required = true;
-    let second = start_within(vec![required], setup.workspace(), setup.clock());
+    let second = setup.start(vec![required]);
     assert_eq!(names(&second), ["mcp__fx__other"]);
     assert!(
         setup.dir.path().join("pid.txt").exists(),
         "a required server starts with the session even with a cache",
     );
-    stop_within(second.servers);
+    setup.stop(second.servers);
 }
 
 #[test]
@@ -519,7 +409,7 @@ fn a_required_server_that_fails_to_start_yields_required_failed() {
     failing.command = "/no/such/command".to_owned();
     failing.args = Vec::new();
     failing.required = true;
-    let started = start_within(vec![failing], setup.workspace(), setup.clock());
+    let started = setup.start(vec![failing]);
     assert!(started.tools.is_empty());
     assert!(started.failed.is_empty());
     let failure = started.required_failed.as_ref().expect("required_failed");
@@ -543,7 +433,7 @@ fn a_required_server_that_fails_to_start_yields_required_failed() {
         "message: {}",
         failure.error.message,
     );
-    stop_within(started.servers);
+    setup.stop(started.servers);
 }
 
 #[test]
@@ -586,7 +476,7 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
         "The required MCP server `slow` did not answer before its startup deadline of 5000 ms. \
          Raise `startup_timeout_ms` under `mcp.servers.slow` if it needs longer.",
     );
-    stop_within(started.servers);
+    setup.stop(started.servers);
 }
 
 #[test]
@@ -595,7 +485,7 @@ fn a_session_start_failure_carries_what_to_do() {
     let mut failing = setup.spec("bad");
     failing.command = "/no/such/command".to_owned();
     failing.args = Vec::new();
-    let started = start_within(vec![failing], setup.workspace(), setup.clock());
+    let started = setup.start(vec![failing]);
     assert_eq!(started.failed.len(), 1);
     let failure = &started.failed[0];
     assert!(
@@ -614,7 +504,7 @@ fn a_session_start_failure_carries_what_to_do() {
         "message: {}",
         failure.error.message,
     );
-    stop_within(started.servers);
+    setup.stop(started.servers);
 }
 
 #[test]
@@ -628,11 +518,11 @@ fn the_first_failing_required_server_in_spec_order_wins() {
     second.command = "/no/such/command".to_owned();
     second.args = Vec::new();
     second.required = true;
-    let started = start_within(vec![first, second], setup.workspace(), setup.clock());
+    let started = setup.start(vec![first, second]);
     assert!(started.failed.is_empty());
     let failure = started.required_failed.as_ref().expect("required_failed");
     assert_eq!(failure.server, "first");
-    stop_within(started.servers);
+    setup.stop(started.servers);
 }
 
 #[test]
@@ -663,11 +553,7 @@ fn rows_list_each_servers_prompts_tagged_with_its_name_in_server_name_order() {
     second.tools(&json!([{"name": "echo"}]));
     second.prompts(&json!([{ "name": "alpha", "description": "First by server." }]));
     // Specs passed `zz` then `aa`: rows sort by server name.
-    let started = start_within(
-        vec![first.spec("zz"), second.spec("aa")],
-        first.workspace(),
-        first.clock(),
-    );
+    let started = first.start(vec![first.spec("zz"), second.spec("aa")]);
     assert!(started.failed.is_empty());
     assert_eq!(
         started.prompts.commands(),
@@ -698,17 +584,17 @@ fn a_cached_server_gives_rows_without_starting() {
         "description": "Greets someone.",
         "arguments": [{"name": "who", "required": true}],
     }]));
-    let first = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
+    let first = setup.start(vec![setup.spec("fx")]);
     assert!(first.failed.is_empty());
     assert_eq!(first.prompts.commands().len(), 1);
-    stop_within(first.servers);
+    setup.stop(first.servers);
     std::fs::remove_file(setup.dir.path().join("pid.txt")).expect("pid.txt");
-    let second = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
+    let second = setup.start(vec![setup.spec("fx")]);
     assert!(second.failed.is_empty());
     assert_eq!(second.prompts.commands(), first.prompts.commands());
     assert!(
         !setup.dir.path().join("pid.txt").exists(),
         "a cached server's rows come from the cache",
     );
-    stop_within(second.servers);
+    setup.stop(second.servers);
 }
