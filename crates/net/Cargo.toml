@@ -14,6 +14,7 @@ ureq.workspace = true
 
 [dev-dependencies]
 fakes = { path = "../fakes" }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 [lints]
 workspace = true

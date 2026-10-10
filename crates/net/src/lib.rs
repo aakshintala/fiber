@@ -7,7 +7,7 @@
 
 use std::io;
 use std::net::TcpStream;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use ureq::tls::{RootCerts, TlsConfig};
 use ureq::unversioned::resolver::Resolver;
@@ -19,9 +19,34 @@ mod socket;
 
 /// The TLS configuration every HTTPS call uses: the platform verifier.
 pub fn tls_config() -> TlsConfig {
+    tls_config_with(
+        &STORE_IS_EMPTY,
+        platform_certificate_count,
+        RootCerts::WebPki,
+    )
+}
+
+/// Whether the Linux system store came back empty. The store is loaded once
+/// per process and the answer is kept here, so later calls reuse it.
+static STORE_IS_EMPTY: OnceLock<bool> = OnceLock::new();
+
+/// The TLS configuration for `fallback` when the cached empty-store answer
+/// says the store is empty, else the platform verifier. `load` counts the
+/// store's certificates; it runs at most once per `cache`.
+fn tls_config_with(
+    _cache: &OnceLock<bool>,
+    _load: impl FnOnce() -> usize,
+    _fallback: RootCerts,
+) -> TlsConfig {
     TlsConfig::builder()
         .root_certs(RootCerts::PlatformVerifier)
         .build()
+}
+
+/// How many certificates the platform's loader returns: the Linux system
+/// store's count, or 1 elsewhere, where the platform verifier always runs.
+fn platform_certificate_count() -> usize {
+    1
 }
 
 /// The agent config every HTTPS call starts from: [`tls_config`] and nothing

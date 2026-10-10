@@ -1780,6 +1780,7 @@ version = "0.0.0"
 dependencies = [
  "contract",
  "fakes",
+ "rustls",
  "thiserror 2.0.21",
  "ureq",
 ]
