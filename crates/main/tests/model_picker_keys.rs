@@ -110,7 +110,7 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
             ("FIBER_TEST_FAKE_KEY", "sk-test"),
         ],
     );
-    run.read_until(">");
+    run.read_until("›");
     run.write(b"say hi\r");
     run.read_until("Hel");
     run.read_until("completed");

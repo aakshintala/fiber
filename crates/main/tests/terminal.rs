@@ -712,7 +712,7 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
     setup.provider(&server);
     let mut run = Run::terminal(&setup);
     // The first frame draws the input line.
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     // The loop pushes kitty's flags only after it processes the harness's
     // reply, so this also keeps the responder's pty write ahead of input.
     run.read_bytes_until(b"\x1b[>1u", "kitty keyboard flags pushed");
@@ -758,7 +758,7 @@ fn a_finished_turn_sends_an_osc_9_notification() {
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let mut run = Run::terminal_with(&setup, &[("TERM_PROGRAM", "ghostty")]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.write(b"say hi\r");
     // The reply streams in two deltas; the turn's close says it finished.
     run.wait_screen("the first delta", |grid| grid.contents.contains("Hel"));
@@ -808,7 +808,7 @@ fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
     )
     .unwrap();
     let mut run = Run::terminal(&setup);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.write(b"run it\r");
     run.wait_screen("the approval panel", |grid| {
         grid.contents.contains("asked by a global rule: echo hi")
@@ -895,7 +895,7 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
     let mut run = Run::terminal_full_sized(&setup, &[], &[], 160, 48);
     // A 160x48 grid, as the ticket's screen: every frame draws at the
     // ticket's width.
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.write(b"run it\r");
     // The collapsed group line counts the call's parsed form, before the
     // shell's approval panel opens below it.
@@ -973,7 +973,7 @@ fn a_streaming_ask_shows_its_raw_arguments_until_requested() {
     let mut run = Run::terminal_full_sized(&setup, &[], &[], 160, 48);
     // A 160x48 grid, as the ticket's screen: every frame draws at the
     // ticket's width.
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     // The loop pushes kitty's flags only after it processes the harness's
     // reply, so this also keeps the responder's pty write ahead of input.
     run.read_bytes_until(b"\x1b[>1u", "kitty keyboard flags pushed");
@@ -1010,7 +1010,7 @@ fn a_repository_offer_swaps_in_and_approve_lets_the_turn_run() {
         &json!({"mcp": {"servers": {"db": {"command": "/bin/echo"}}}}),
     );
     let mut run = Run::terminal(&setup);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.write(b"say hi\r");
     // The offer names the TUI files it installs; the grid reassembles
     // the line however the terminal wraps it.
@@ -1044,19 +1044,20 @@ fn resize_redraws_the_grid_at_the_new_size() {
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let mut run = Run::terminal(&setup);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     // The footer's last word proves the last row drew before the resize.
     run.wait_screen("the footer", |grid| grid.contents.contains("quit"));
     run.resize(40, 10);
-    // The redrawn home at 40 by 10: the input line sits on row 4
-    // with the cursor parked on it, and the footer hint closes row 9.
+    // The redrawn home at 40 by 10: the input line sits on row 4 with
+    // the drawn cursor over its first placeholder cell and the native
+    // cursor parked on it, and the footer hint closes row 9.
     // Only a redraw at the new size lays the frame out this way.
     run.wait_screen("the redrawn grid at the new size", |grid| {
         grid.rows.len() == 10
             && grid
                 .rows
                 .get(4)
-                .is_some_and(|row| row == "> /? for shortcuts")
+                .is_some_and(|row| row.trim_end() == "› █? for shortcuts")
             && grid.rows.get(9).is_some_and(|row| row.contains("key map"))
             && grid.cursor == (4, 2)
     });
@@ -1105,7 +1106,7 @@ fn resume_opens_the_session_a_prefix_names() {
     assert_eq!(asked.status.code(), Some(0));
     let id = setup.only_session();
     let mut run = Run::terminal_args(&setup, &["resume", &id[..4]]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.wait_screen("the earlier reply", |grid| grid.contents.contains("Hello."));
     run.write(b"\x03\x03\r");
     run.wait_screen("the restored primary screen", |grid| {
@@ -1123,7 +1124,7 @@ fn continue_opens_the_latest_session() {
     assert_eq!(setup.fiber(&["ask", "first"]).status.code(), Some(0));
     assert_eq!(setup.fiber(&["ask", "second"]).status.code(), Some(0));
     let mut run = Run::terminal_args(&setup, &["continue"]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.wait_screen("the latest reply", |grid| grid.contents.contains("Second."));
     run.write(b"\x03\x03\r");
     run.wait_screen("the restored primary screen", |grid| {
@@ -1141,7 +1142,7 @@ fn resume_without_an_id_opens_home_at_the_session_list() {
     let asked = setup.fiber(&["ask", "say hi"]);
     assert_eq!(asked.status.code(), Some(0));
     let mut run = Run::terminal_args(&setup, &["resume"]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     // The exited session is listed by its first prompt.
     run.wait_screen("the session list", |grid| grid.contents.contains("say hi"));
     // The list is focused, so Enter opens the row: the reply shows.
@@ -1295,7 +1296,7 @@ fn ctrl_v_pastes_an_image_that_the_session_stores() {
         env.push(("WAYLAND_DISPLAY", "fiber-test"));
     }
     let mut run = Run::terminal_with(&setup, &env);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.write(&[0x16]);
     run.wait_screen("the pasted image", |grid| {
         grid.contents.contains("[Image #1]")
@@ -1324,7 +1325,7 @@ fn resume_draws_the_reply_then_its_closed_turn() {
     assert_eq!(asked.status.code(), Some(0));
     let id = setup.only_session();
     let mut run = Run::terminal_args(&setup, &["resume", &id[..4]]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     // The turn ended before the attach: the reply draws, then the turn's
     // close, which folds only once `turn_completed` arrives.
     run.wait_screen("the reply", |grid| grid.contents.contains("marker reply"));
@@ -1544,7 +1545,7 @@ fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
     setup.provider_with_panel(&server, share);
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
     let mut run = Run::terminal_full_sized(&setup, &[], &[], 160, 48);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.write(b"say hi\r");
     // The reply streams in two deltas; the turn's close says it finished.
     // The updated status (with the turn's usage) can arrive before or
@@ -1598,7 +1599,7 @@ fn journey_prompt_answer_approval_resize_quit() {
     )
     .unwrap();
     let mut run = Run::terminal(&setup);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     // Prompt one: the test releases the answer once the server holds its
     // request, never on a timer.
     run.write(b"say hi\r");
@@ -1672,7 +1673,7 @@ fn journey_quit_resume_answer_again() {
     // One turn, then quit: the conversation grid holds the answer before
     // the terminal is restored.
     let mut run = Run::terminal(&setup);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.write(b"first\r");
     assert!(
         server.await_requests(1, setup.deadline.left()),
@@ -1703,7 +1704,7 @@ fn journey_quit_resume_answer_again() {
     // Resume lists the exited session by its first prompt; Enter opens
     // the row, with the earlier turn on screen.
     let mut run = Run::terminal_args(&setup, &["resume"]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.wait_screen("the session list", |grid| grid.contents.contains("first"));
     run.write(b"\r");
     run.wait_screen("the earlier turn", |grid| {
