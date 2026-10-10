@@ -130,44 +130,49 @@ pub(crate) fn window_start(selected: usize) -> usize {
 
 /// The first case-folded occurrence of `query` in `name`, as byte
 /// offsets on char boundaries; `None` when the query is empty or the
-/// name holds none of it (`docs/tui.md`, "Rules"). The walk runs over
-/// the name's own characters, folding each for comparison, and maps
-/// back to the name's byte offsets: folding can expand (İ lowercases
-/// to two code points), so folded offsets can lie past the original
-/// string, and every loop here is bounded by the two lengths.
+/// name holds none of it (`docs/tui.md`, "Rules"). The match comes
+/// from the same fold the list filter uses, whole-string lowercase, so
+/// the two agree on every input the filter accepts (a final sigma
+/// folds contextually, which per-character folding misses). Folded
+/// offsets map back by walking the name's characters with the folded
+/// length of each prefix ending at a boundary: folding can expand (İ
+/// lowercases to two code points) or reshape, so folded offsets are
+/// never used on the original directly. Every step is bounded: the
+/// edges hold one entry per boundary, and both searches stop at one.
 pub(crate) fn matched(name: &str, query: &str) -> Option<std::ops::Range<usize>> {
-    let query: Vec<char> = query.to_lowercase().chars().collect();
-    if query.is_empty() {
+    let folded = name.to_lowercase();
+    let want = query.to_lowercase();
+    if want.is_empty() {
         return None;
     }
-    let chars: Vec<(usize, char)> = name.char_indices().collect();
-    for (s, &(start, _)) in chars.iter().enumerate() {
-        // The fold from `s`, each character with its origin: enough
-        // folded characters to cover the query, and no more.
-        let mut folded: Vec<(usize, char)> = Vec::new();
-        for (oi, &(_, ch)) in chars.iter().enumerate().skip(s) {
-            folded.extend(ch.to_lowercase().map(|fold| (oi, fold)));
-            if folded.len() >= query.len() {
-                break;
-            }
-        }
-        let same = folded.len() >= query.len()
-            && folded
-                .iter()
-                .map(|&(_, fold)| fold)
-                .zip(query.iter().copied())
-                .all(|(fold, want)| fold == want);
-        if !same {
-            continue;
-        }
-        // The match ends where the last character it consumed ends.
-        let end = folded
-            .get(query.len() - 1)
-            .and_then(|&(oi, _)| chars.get(oi + 1))
-            .map_or(name.len(), |(at, _)| *at);
-        return Some(start..end);
+    let at = folded.find(&want)?;
+    let end = at.saturating_add(want.len());
+    // Each original boundary with the folded length before it: the
+    // prefix grows character by character, so every offset here is a
+    // char boundary of the original string.
+    let mut edges: Vec<(usize, usize)> = vec![(0, 0)];
+    let mut prefix = String::new();
+    for (byte, ch) in name.char_indices() {
+        prefix.push(ch);
+        edges.push((
+            byte.saturating_add(ch.len_utf8()),
+            prefix.to_lowercase().len(),
+        ));
     }
-    None
+    // The match covers the original characters whose folds it
+    // touches: the last boundary at or before its start, and the
+    // first at or past its end. Both always exist: the edges open at
+    // zero and close at the whole fold's length.
+    let start = edges
+        .iter()
+        .rev()
+        .find(|(_, before)| *before <= at)
+        .map_or(0, |(byte, _)| *byte);
+    let stop = edges
+        .iter()
+        .find(|(_, before)| *before >= end)
+        .map_or(name.len(), |(byte, _)| *byte);
+    Some(start..stop)
 }
 
 #[cfg(test)]

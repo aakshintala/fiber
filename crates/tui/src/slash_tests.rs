@@ -133,18 +133,56 @@ fn matched_is_the_first_case_folded_occurrence_on_char_boundaries() {
     assert_eq!(matched("reload", "load"), Some(2..6));
     assert_eq!(matched("reload", "RE"), Some(0..2));
     assert_eq!(matched("close", "ose"), Some(2..5));
+    assert_eq!(matched("abcb", "bc"), Some(1..3));
     assert_eq!(matched("caf\u{e9}", "F\u{c9}"), Some(2..5));
     assert_eq!(matched("reload", "zzz"), None);
     assert_eq!(matched("reload", ""), None);
     assert_eq!(matched("", "re"), None);
+    // The same fold the filter uses: a final sigma folds contextually,
+    // which per-character folding misses, so the filter accepts these
+    // and the match agrees with it.
+    assert_eq!(matched("\u{39f}\u{3a3}", "\u{3bf}\u{3c2}"), Some(0..4));
+    assert_eq!(matched("\u{39f}\u{3a3}", "\u{39f}\u{3a3}"), Some(0..4));
     // Folding can expand past the original string: İ lowercases to
-    // two code points, so the walk maps back to the name's own bytes.
+    // two code points, so folded offsets map back to the name's own
+    // boundaries.
     assert_eq!(matched("\u{130}\u{130}abc", "c"), Some(6..7));
     assert_eq!(matched("\u{130}\u{130}abc", "bc"), Some(5..7));
     assert_eq!(matched("\u{130}\u{130}abc", "ab"), Some(4..6));
     assert_eq!(matched("\u{130}\u{130}abc", "d"), None);
-    // A query landing mid-expansion finds no character to bold.
-    assert_eq!(matched("\u{130}x", "\u{307}x"), None);
+    // A query landing mid-expansion bolds the characters its match
+    // touches: the whole name here.
+    assert_eq!(matched("\u{130}x", "\u{307}x"), Some(0..3));
     // A query matching a fold's head bolds the whole character.
     assert_eq!(matched("\u{130}", "i"), Some(0..2));
+}
+
+#[test]
+fn matched_agrees_with_the_filter_fold_wherever_it_matches() {
+    // Wherever the whole-string fold contains the query, the match maps
+    // to whole characters covering it: agreement holds by construction,
+    // pinned here over the fold's tricky cases, with every range on
+    // char boundaries and never empty.
+    for (name, query) in [
+        ("\u{39f}\u{3a3}", "\u{3bf}\u{3c2}"),
+        (
+            "\u{39f}\u{394}\u{3a5}\u{3a3}\u{3a3}\u{395}\u{38e}\u{3a3}",
+            "\u{3c5}\u{3c3}\u{3c3}",
+        ),
+        ("\u{130}\u{130}abc", "c"),
+        ("\u{130}\u{130}abc", "i"),
+        ("Straße", "STRASSE"),
+        ("maße", "MASSE"),
+        ("reload", "re"),
+        ("reload", "zzz"),
+    ] {
+        let accepted = name.to_lowercase().contains(&query.to_lowercase());
+        let found = super::matched(name, query);
+        assert_eq!(found.is_some(), accepted, "{name:?} / {query:?}");
+        if let Some(found) = found {
+            assert!(name.is_char_boundary(found.start));
+            assert!(name.is_char_boundary(found.end));
+            assert!(found.start < found.end, "{name:?} / {query:?}");
+        }
+    }
 }
