@@ -1,5 +1,6 @@
 //! Tests for the shared MCP response slots and wait conditions.
 
+use contract::clock::Clock;
 use serde_json::json;
 
 #[test]
@@ -37,4 +38,19 @@ fn the_wait_ends_on_a_new_response_or_cancel() {
 fn no_cancel_never_cancels() {
     use contract::tool::Cancel;
     assert!(!super::NoCancel.is_cancelled());
+}
+
+#[test]
+fn deadline_is_now_plus_timeout_and_saturates() {
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.now();
+    assert_eq!(
+        super::deadline(clock.as_ref(), std::time::Duration::from_secs(5)),
+        now.checked_add(std::time::Duration::from_secs(5)).expect("deadline"),
+    );
+    assert_eq!(
+        super::deadline(clock.as_ref(), std::time::Duration::MAX),
+        now,
+        "an overflowing timeout saturates to now",
+    );
 }

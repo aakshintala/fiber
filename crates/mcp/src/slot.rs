@@ -11,17 +11,21 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::tool::Cancel;
 use contract::events::{McpServerFailed, McpServerReady, ServerFailure};
 use contract::shapes::Failure;
 use contract::tool::ServerRecord;
 
 use crate::cache::{self, Cached};
-use crate::server::Server;
+use crate::server::{CallError, Server};
+use crate::rpc::Named;
+use serde_json::Value;
 use crate::server_json::ListedTool;
-use crate::start::{ServerSpec, failed};
+use crate::start::{ServerSpec, not_started};
 
 /// One server's place in the session: what [`Slot::run`] starts, calls,
 /// restarts or refuses, and what [`Slot::stop`] stops.
@@ -76,6 +80,22 @@ pub(crate) struct RunFailed {
     /// The lines this call observed; empty for a call that only found the
     /// server dead.
     pub records: Vec<ServerRecord>,
+}
+
+/// Why a call through [`Slot::call`] failed.
+#[allow(clippy::result_large_err, reason = "the death record travels with the call that observed it")]
+pub(crate) enum Fault {
+    /// Nothing answered before the call's deadline.
+    Timeout,
+    /// The call was cancelled.
+    Cancelled,
+    /// The server refused the call, with its message.
+    Refused(String),
+    /// This call observed the death and carries its record.
+    Died(McpServerFailed),
+    /// The slot had already moved on: it was stopped or replaced, and
+    /// nothing is recorded.
+    Gone,
 }
 
 /// What [`Slot::serve`] found, with the server lines the call carries.
@@ -236,7 +256,7 @@ impl Slot {
             Err(error) => {
                 // A failed first start is the server's one death; a failed
                 // restart is its second.
-                let mut record = failed(&name, &error, timeout, false);
+                let mut record = not_started(&name, &error, timeout, false);
                 record.will_restart = !restart;
                 let failure = record.error.clone();
                 records.push(ServerRecord::Failed(record));
@@ -280,12 +300,10 @@ impl Slot {
                     | State::Down { .. }
                     | State::Dead { .. } => {
                         return Run::Failed(Box::new(RunFailed {
-                            error: Failure {
-                                code: ErrorCode::McpServerUnavailable,
-                                message: unavailable(&self.spec.name),
-                                retry_after_ms: None,
-                                provider: None,
-                            },
+                            error: crate::fail::failure(
+                                ErrorCode::McpServerUnavailable,
+                                unavailable(&self.spec.name),
+                            ),
                             records,
                         }));
                     }
@@ -296,6 +314,30 @@ impl Slot {
                     Run::Removed(records)
                 }
             }
+        }
+    }
+
+    /// Calls `method` on `server`, mapping the wire outcome to one step.
+    /// `server` is the one [`Slot::run`] or [`Slot::serve`] returned. The
+    /// call is never replayed.
+    #[allow(clippy::result_large_err, reason = "the death record travels with the call that observed it")]
+    pub(crate) fn call(
+        &self,
+        server: &Arc<Server>,
+        method: &str,
+        params: &Named<'_>,
+        timeout: Duration,
+        cancel: &dyn Cancel,
+    ) -> Result<Value, Fault> {
+        match server.call(method, params, timeout, cancel) {
+            Ok(value) => Ok(value),
+            Err(CallError::Timeout) => Err(Fault::Timeout),
+            Err(CallError::Cancelled) => Err(Fault::Cancelled),
+            Err(CallError::JsonRpc { message, .. }) => Err(Fault::Refused(message)),
+            Err(CallError::Gone) => match self.died(server) {
+                Some(record) => Err(Fault::Died(record)),
+                None => Err(Fault::Gone),
+            },
         }
     }
 
@@ -338,12 +380,12 @@ impl Slot {
         let mut state = lock(&self.state);
         let error = match &*state {
             State::Dead { error } => error.clone(),
-            State::NotStarted { .. } | State::Running { .. } | State::Down { .. } => Failure {
-                code: ErrorCode::McpServerUnavailable,
-                message: unavailable(&self.spec.name),
-                retry_after_ms: None,
-                provider: None,
-            },
+            State::NotStarted { .. } | State::Running { .. } | State::Down { .. } => {
+                crate::fail::failure(
+                    ErrorCode::McpServerUnavailable,
+                    unavailable(&self.spec.name),
+                )
+            }
         };
         let previous = std::mem::replace(&mut *state, State::Dead { error });
         drop(state);
@@ -370,12 +412,7 @@ fn died(server: &str, will_restart: bool) -> McpServerFailed {
         server: server.to_owned(),
         reason: ServerFailure::Died,
         will_restart,
-        error: Failure {
-            code: ErrorCode::McpServerUnavailable,
-            message,
-            retry_after_ms: None,
-            provider: None,
-        },
+        error: crate::fail::failure(ErrorCode::McpServerUnavailable, message),
     }
 }
 

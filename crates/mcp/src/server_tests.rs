@@ -13,6 +13,7 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::{CallError, Server, StartError};
+use crate::rpc::{Named, TOOLS_CALL};
 use crate::test_support::{Setup, WITHIN};
 
 fn echo_tools() -> Value {
@@ -26,6 +27,29 @@ fn echo_tools() -> Value {
         },
         "annotations": {"readOnlyHint": true},
     }])
+}
+
+fn call_tool(
+    server: &Server,
+    tool: &str,
+    args: serde_json::Value,
+    timeout: Duration,
+    cancel: &dyn contract::tool::Cancel,
+) -> Result<serde_json::Value, CallError> {
+    let binding = args;
+    let empty;
+    let arguments = match binding.as_object() {
+        Some(map) => map,
+        None => {
+            empty = serde_json::Map::new();
+            &empty
+        }
+    };
+    let params = Named {
+        arguments,
+        name: tool,
+    };
+    server.call(TOOLS_CALL, &params, timeout, cancel)
 }
 
 #[test]
@@ -60,12 +84,8 @@ fn a_call_round_trips() {
     // timeouts"): the call runs on a thread and its result is received
     // with a deadline naming the wait.
     let (answer, opened) = fakes::within("the call to `echo`", WITHIN, move || {
-        let answer = opened.server.call(
-            "echo",
-            &json!({"text": "hi"}),
-            Duration::from_secs(30),
-            &fakes::CancelToken::new(),
-        );
+        let answer =
+            call_tool(&opened.server, "echo", json!({"text": "hi"}), Duration::from_secs(30), &fakes::CancelToken::new());
         (answer, opened)
     });
     assert_eq!(
@@ -100,11 +120,7 @@ fn two_concurrent_calls_resolve_by_id_out_of_order() {
         let server = std::sync::Arc::clone(&server);
         let done = done.clone();
         thread::spawn(move || {
-            let answer = server.call(
-                "slow",
-                &json!({}),
-                Duration::from_secs(30),
-                &fakes::CancelToken::new(),
+            let answer = call_tool(&server, "slow", json!({}), Duration::from_secs(30), &fakes::CancelToken::new(),
             );
             done.send(("slow".to_owned(), answer)).expect("collected");
         });
@@ -128,11 +144,7 @@ fn two_concurrent_calls_resolve_by_id_out_of_order() {
         let server = std::sync::Arc::clone(&server);
         let done = done.clone();
         thread::spawn(move || {
-            let answer = server.call(
-                "fast",
-                &json!({}),
-                Duration::from_secs(30),
-                &fakes::CancelToken::new(),
+            let answer = call_tool(&server, "fast", json!({}), Duration::from_secs(30), &fakes::CancelToken::new(),
             );
             done.send(("fast".to_owned(), answer)).expect("collected");
         });
@@ -183,9 +195,7 @@ fn a_hang_tool_times_out_only_after_the_clock_advances() {
     let deadline = setup.fake.now().checked_add(timeout).expect("deadline");
     let (done, result) = mpsc::channel();
     thread::spawn(move || {
-        let answer = opened
-            .server
-            .call("hang", &json!({}), timeout, &fakes::CancelToken::new());
+        let answer = call_tool(&opened.server, "hang", json!({}), timeout, &fakes::CancelToken::new());
         done.send(answer).expect("collected");
     });
     assert!(
@@ -230,7 +240,7 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
         let server = std::sync::Arc::clone(&server);
         let cancel = cancel.clone();
         thread::spawn(move || {
-            let answer = server.call("hang", &json!({}), timeout, &cancel);
+            let answer = call_tool(&server, "hang", json!({}), timeout, &cancel);
             done.send(answer).expect("collected");
         });
     }
@@ -257,11 +267,7 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
     // answered, so the answer to a later call proves it is logged.
     let after = std::sync::Arc::clone(&server);
     let answer = fakes::within("a call after the cancel", WITHIN, move || {
-        after.call(
-            "echo",
-            &json!({}),
-            Duration::from_secs(30),
-            &fakes::CancelToken::new(),
+        call_tool(&after, "echo", json!({}), Duration::from_secs(30), &fakes::CancelToken::new(),
         )
     });
     assert_eq!(answer.expect("echo answers"), json!({"content": []}));
@@ -377,16 +383,12 @@ fn a_server_killed_mid_call_is_gone() {
     let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     setup.result("hang", "hang");
     let opened = setup.start_expect(Duration::from_secs(5));
-    let shared = std::sync::Arc::clone(&opened.server.inner.as_ref().expect("running").shared);
+    let shared = std::sync::Arc::clone(&opened.server.inner.shared);
     fakes::kill_pid(setup.pid(), "KILL").expect("the server dies");
     await_gone(&shared);
     // Gone is set, so the call answers without parking on the clock.
     let answer = fakes::within("a call to a gone server", WITHIN, move || {
-        opened.server.call(
-            "hang",
-            &json!({}),
-            Duration::from_secs(1),
-            &fakes::CancelToken::new(),
+        call_tool(&opened.server, "hang", json!({}), Duration::from_secs(1), &fakes::CancelToken::new(),
         )
     });
     assert_eq!(answer, Err(CallError::Gone));
@@ -402,11 +404,7 @@ fn garbage_on_stdout_is_ignored() {
         "the call to `echo` past garbage on stdout",
         WITHIN,
         move || {
-            let answer = opened.server.call(
-                "echo",
-                &json!({"text": "hi"}),
-                Duration::from_secs(30),
-                &fakes::CancelToken::new(),
+            let answer = call_tool(&opened.server, "echo", json!({"text": "hi"}), Duration::from_secs(30), &fakes::CancelToken::new(),
             );
             (answer, opened)
         },
@@ -428,17 +426,13 @@ fn closing_stdin_lets_the_server_exit_on_eof() {
     // reader the channel would stay open and every call would time out.
     let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     setup.result("hang", "hang");
-    let mut opened = setup.start_expect(Duration::from_secs(5));
-    let shared = std::sync::Arc::clone(&opened.server.inner.as_ref().expect("running").shared);
+    let opened = setup.start_expect(Duration::from_secs(5));
+    let shared = std::sync::Arc::clone(&opened.server.inner.shared);
     opened.server.shutdown();
     await_gone(&shared);
     // Gone is set, so the call answers without parking on the clock.
     let answer = fakes::within("a call to a gone server", WITHIN, move || {
-        opened.server.call(
-            "hang",
-            &json!({}),
-            Duration::from_secs(1),
-            &fakes::CancelToken::new(),
+        call_tool(&opened.server, "hang", json!({}), Duration::from_secs(1), &fakes::CancelToken::new(),
         )
     });
     assert_eq!(answer, Err(CallError::Gone));
@@ -476,11 +470,7 @@ fn server_requests_are_answered_ping_ok_and_unknown_32601() {
     // reads the `initialize` reply, and `start` returns only after that
     // reply. So once `start` returns, the answers are already logged.
     let (answer, opened) = fakes::within("a call after the server's requests", WITHIN, move || {
-        let answer = opened.server.call(
-            "echo",
-            &json!({}),
-            Duration::from_secs(30),
-            &fakes::CancelToken::new(),
+        let answer = call_tool(&opened.server, "echo", json!({}), Duration::from_secs(30), &fakes::CancelToken::new(),
         );
         (answer, opened)
     });
@@ -521,6 +511,151 @@ fn stop_leaves_no_running_child() {
         !fakes::kill_pid(pid, "0").expect("probe"),
         "pid {pid} is still there after the stop"
     );
+}
+
+
+fn greet_prompts() -> serde_json::Value {
+    serde_json::json!([{
+        "name": "greet",
+        "description": "Greets someone.",
+        "arguments": [{"name": "who", "required": true}, {"name": "tone"}],
+    }])
+}
+
+#[test]
+fn a_server_with_prompts_lists_them_at_start() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    setup.prompts(&greet_prompts());
+    let open = setup.start_expect(Duration::from_secs(5));
+    assert_eq!(
+        open.listed.prompts,
+        serde_json::from_value::<Vec<crate::server_json::ListedPrompt>>(greet_prompts())
+            .expect("prompts read")
+    );
+    assert_eq!(open.listed.tools.len(), 1);
+    assert_eq!(open.listed.tools[0].name, "echo");
+    let log = setup.requests();
+    let initialized = log
+        .find("notifications/initialized")
+        .expect("the handshake notifies initialized");
+    let listed = log
+        .find(r#""method":"prompts/list""#)
+        .expect("the handshake lists prompts");
+    assert!(
+        initialized < listed,
+        "prompts/list runs after notifications/initialized",
+    );
+    open.server.stop();
+}
+
+#[test]
+fn a_server_without_the_prompts_capability_is_never_asked_for_prompts() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    let open = setup.start_expect(Duration::from_secs(5));
+    assert!(open.listed.prompts.is_empty());
+    assert!(
+        !setup.requests().contains(r#""method":"prompts/list""#),
+        "no prompts/list without the capability",
+    );
+    open.server.stop();
+}
+
+#[test]
+fn tool_listing_follows_the_tools_capability() {
+    let present = Setup::new();
+    present.tools(&json!([{"name": "echo"}]));
+    let open = present.start_expect(Duration::from_secs(5));
+    assert_eq!(open.listed.tools.len(), 1);
+    assert!(
+        present.requests().contains(r#""method":"tools/list""#),
+        "the handshake lists tools when advertised",
+    );
+    open.server.stop();
+    let absent = Setup::new();
+    absent.write("tools.json", "error");
+    let open = absent.start_expect(Duration::from_secs(5));
+    assert!(open.listed.tools.is_empty());
+    assert!(
+        !absent.requests().contains(r#""method":"tools/list""#),
+        "no tools/list without the capability",
+    );
+    open.server.stop();
+}
+
+#[test]
+fn a_prompt_only_server_lists_prompts_with_no_tools() {
+    let setup = Setup::new();
+    setup.write("tools.json", "error");
+    setup.prompts(&greet_prompts());
+    let open = setup.start_expect(Duration::from_secs(5));
+    assert!(open.listed.tools.is_empty());
+    assert_eq!(
+        open.listed.prompts,
+        serde_json::from_value::<Vec<crate::server_json::ListedPrompt>>(greet_prompts())
+            .expect("prompts read")
+    );
+    let log = setup.requests();
+    assert!(
+        log.contains(r#""method":"prompts/list""#),
+        "the handshake lists prompts: {log}"
+    );
+    assert!(
+        !log.contains(r#""method":"tools/list""#),
+        "the handshake never lists tools: {log}"
+    );
+    open.server.stop();
+}
+
+#[test]
+fn a_failing_prompt_list_leaves_the_server_started_with_no_prompts() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    setup.prompts_raw("error");
+    let open = setup.start_expect(Duration::from_secs(5));
+    assert!(open.listed.prompts.is_empty());
+    assert_eq!(open.listed.tools.len(), 1, "the tools still list");
+    open.server.stop();
+}
+
+#[test]
+fn endless_pages_end_at_the_startup_deadline() {
+    for method in ["tools/list", "prompts/list"] {
+        let setup = Setup::new();
+        setup.tools(&json!([{"name": "echo"}]));
+        setup.prompts(&greet_prompts());
+        setup.write("cursor-forever", method);
+        let timeout = Duration::from_secs(5);
+        let script = fakes::mcp_fixture().display().to_string();
+        let workspace = setup.dir.path().to_path_buf();
+        let arg = workspace.display().to_string();
+        let clock = setup.clock();
+        let (done, result) = mpsc::channel();
+        thread::spawn(move || {
+            let outcome = Server::start(
+                &script,
+                &[arg],
+                &BTreeMap::new(),
+                &workspace,
+                &clock,
+                timeout,
+                "0.0.0",
+            );
+            done.send(outcome).expect("collected");
+        });
+        setup.await_requests(&format!(r#""method":"{method}""#), 2);
+        let pid = setup.pid();
+        setup.fake.advance(timeout + Duration::from_millis(1));
+        let outcome = result
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the paging start ends within {WITHIN:?}"));
+        assert!(
+            matches!(outcome, Err(StartError::Deadline)),
+            "endless {method} pages end at the startup deadline",
+        );
+        setup.await_reaped(pid);
+    }
 }
 
 /// A server that keeps running after its stdin ends: the fixture under a
@@ -683,7 +818,7 @@ fn kill_every_server_holds_its_pids_unreaped_while_it_signals() {
     setup.result("hang", "hang");
     let opened = setup.start_expect(Duration::from_secs(5));
     let pid = setup.pid();
-    let shared = std::sync::Arc::clone(&opened.server.inner.as_ref().expect("running").shared);
+    let shared = std::sync::Arc::clone(&opened.server.inner.shared);
     let (entered, go) = pause_signallers();
     let (killed_tx, killed) = mpsc::channel();
     thread::spawn(move || {
@@ -726,8 +861,8 @@ fn stop_holds_the_child_unreaped_while_it_sends_sigterm() {
     let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     let opened = lingering(&setup, "exit 0");
     let server = std::sync::Arc::new(opened.server);
-    let shared = std::sync::Arc::clone(&server.inner.as_ref().expect("running").shared);
-    let pid = super::lock(&server.inner.as_ref().expect("running").child)
+    let shared = std::sync::Arc::clone(&server.inner.shared);
+    let pid = super::lock(&server.inner.child)
         .as_ref()
         .expect("unreaped")
         .id();
@@ -937,13 +1072,8 @@ fn is_gone_turns_true_once_the_server_exits() {
     let setup = Setup::with_tools(&json!([{"name": "hang"}]));
     let opened = setup.start_expect(Duration::from_secs(5));
     assert!(!opened.server.is_gone(), "a running server is not gone");
-    let shared = std::sync::Arc::clone(&opened.server.inner.as_ref().expect("running").shared);
+    let shared = std::sync::Arc::clone(&opened.server.inner.shared);
     fakes::kill_pid(setup.pid(), "KILL").expect("the server dies");
     await_gone(&shared);
     assert!(opened.server.is_gone());
-}
-
-#[test]
-fn a_server_with_no_connection_is_gone() {
-    assert!(Server { inner: None }.is_gone());
 }

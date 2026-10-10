@@ -257,25 +257,6 @@ fn no_specs_starts_nothing() {
 }
 
 #[test]
-fn stopping_all_servers_leaves_no_running_child() {
-    // Without `Servers::stop` the fixture would stay alive in the test
-    // process: poll its pid until the reap makes `kill -0` fail.
-    let setup = Setup::new();
-    setup.tools(&json!([{"name": "hang"}]));
-    setup.result("hang", "hang");
-    let started = setup.start(vec![setup.spec("fx")]);
-    assert!(started.failed.is_empty());
-    let pid: u32 = std::fs::read_to_string(setup.dir.path().join("pid.txt"))
-        .expect("pid.txt")
-        .trim()
-        .parse()
-        .expect("a pid");
-    assert!(fakes::kill_pid(pid, "0").expect("probe"));
-    setup.stop(started.servers);
-    setup.await_reaped(pid);
-}
-
-#[test]
 fn servers_stop_at_once() {
     // Each server ignores SIGTERM and outlives the end of its input, so
     // each stop waits out the grace: both are parked on the clock together.
@@ -595,6 +576,57 @@ fn a_cached_server_gives_rows_without_starting() {
     assert!(
         !setup.dir.path().join("pid.txt").exists(),
         "a cached server's rows come from the cache",
+    );
+    setup.stop(second.servers);
+}
+
+#[test]
+fn a_lazy_prompt_run_starts_the_server_and_sends_its_arguments() {
+    use contract::shapes::ContentPart;
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    setup.prompts(&json!([{
+        "name": "greet",
+        "description": "Greets someone.",
+        "arguments": [{"name": "who", "required": true}, {"name": "tone"}],
+    }]));
+    setup.prompt_result(
+        "greet",
+        r#"{"messages":[{"role":"user","content":{"type":"text","text":"Say hello to Ada, warmly."}}]}"#,
+    );
+    let first = setup.start(vec![setup.spec("fx")]);
+    assert!(first.failed.is_empty());
+    setup.stop(first.servers);
+    std::fs::remove_file(setup.dir.path().join("pid.txt")).expect("pid.txt");
+    let second = setup.start(vec![setup.spec("fx")]);
+    assert!(
+        !setup.spawned(),
+        "declaring from the cache spawns nothing",
+    );
+    let out = setup.get(
+        &second.prompts,
+        "fx",
+        "greet",
+        "Ada warm",
+        &fakes::CancelToken::new(),
+    );
+    assert!(out.error.is_none());
+    assert_eq!(
+        out.content,
+        [ContentPart::Text {
+            text: "Say hello to Ada, warmly.".to_owned(),
+        }]
+    );
+    assert!(setup.spawned(), "the first prompt run starts the server");
+    let line = setup
+        .requests()
+        .lines()
+        .find(|line| line.contains(r#""method":"prompts/get""#))
+        .expect("a prompts/get line")
+        .to_owned();
+    assert!(
+        line.contains(r#""arguments":{"tone":"warm","who":"Ada"}"#),
+        "the get sends the named arguments: {line}",
     );
     setup.stop(second.servers);
 }

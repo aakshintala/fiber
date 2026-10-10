@@ -6,6 +6,7 @@
 
 mod cache;
 mod effects;
+mod fail;
 mod name;
 mod pipes;
 mod prompt;

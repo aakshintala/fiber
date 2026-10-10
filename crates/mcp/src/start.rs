@@ -16,7 +16,6 @@ use std::time::Duration;
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{McpServerFailed, ServerFailure, ToolInfo, ToolSource, ToolState};
-use contract::shapes::Failure;
 use contract::tool::Tool;
 
 use crate::cache;
@@ -273,9 +272,9 @@ pub(crate) fn open(
         Ok(open) => open,
         Err(error) => {
             return if required {
-                Opened::RequiredDown(failed(&name, &error, timeout, true))
+                Opened::RequiredDown(not_started(&name, &error, timeout, true))
             } else {
-                Opened::Down(failed(&name, &error, timeout, false))
+                Opened::Down(not_started(&name, &error, timeout, false))
             };
         }
     };
@@ -379,7 +378,7 @@ pub(crate) fn declare(spec: &ServerSpec, tools: &[ListedTool], link: &Weak<Slot>
 /// themselves, because the session stops before the log, so a required
 /// failure is never written as `mcp_server_failed` but returned for the
 /// exit-before-session path instead.
-pub(crate) fn failed(
+pub(crate) fn not_started(
     server: &str,
     error: &crate::server::StartError,
     startup: Duration,
@@ -390,12 +389,7 @@ pub(crate) fn failed(
         server: server.to_owned(),
         reason,
         will_restart: false,
-        error: Failure {
-            code: ErrorCode::McpServerUnavailable,
-            message,
-            retry_after_ms: None,
-            provider: None,
-        },
+        error: crate::fail::failure(ErrorCode::McpServerUnavailable, message),
     }
 }
 

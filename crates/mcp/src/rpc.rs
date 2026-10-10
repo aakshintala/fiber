@@ -49,6 +49,23 @@ pub(crate) enum Incoming {
     Ignored,
 }
 
+/// The `tools/call` method.
+pub(crate) const TOOLS_CALL: &str = "tools/call";
+
+/// The `prompts/get` method.
+pub(crate) const PROMPTS_GET: &str = "prompts/get";
+
+/// The params of a `tools/call` or `prompts/get` line: `arguments` before
+/// `name`, so the top-level `name` stays last on the wire when the
+/// arguments hold a `name` key.
+#[derive(serde::Serialize)]
+pub(crate) struct Named<'a> {
+    /// The call's arguments.
+    pub arguments: &'a serde_json::Map<String, Value>,
+    /// The tool or prompt name.
+    pub name: &'a str,
+}
+
 /// Encodes a request: `{"jsonrpc":"2.0","id":<id>,"method":<method>,
 /// "params":<params>}`, defaulting absent params to `{}`.
 pub(crate) fn encode_request(id: u64, method: &str, params: Option<&Value>) -> String {

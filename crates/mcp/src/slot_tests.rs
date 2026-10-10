@@ -794,3 +794,48 @@ fn a_changed_prompt_list_rewrites_the_cache() {
     assert_eq!(setup.cached_names(), ["echo"]);
     setup.stop(started.servers);
 }
+
+#[test]
+fn a_call_ended_by_the_stop_records_no_death() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "hang"}]));
+    setup.result("hang", "hang");
+    let started = setup.start(vec![setup.spec("fx")]);
+    let tool = setup.tool(&started, "mcp__fx__hang");
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let output = tool.run(
+            &Default::default(),
+            &fakes::CancelToken::new(),
+            &fakes::Recorder::default(),
+        );
+        done.send(output).expect("collected");
+    });
+    let deadline = setup
+        .fake
+        .now()
+        .checked_add(DEFAULT_CALL_TIMEOUT)
+        .expect("deadline");
+    assert!(
+        setup.fake.await_parked(deadline, WITHIN),
+        "the call waits on its timeout",
+    );
+    let slot = std::sync::Arc::clone(&started.servers.slots[0]);
+    let (stopped_tx, stopped) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        slot.stop();
+        stopped_tx.send(()).expect("collected");
+    });
+    let output = result
+        .recv_timeout(WITHIN)
+        .expect("the call ends");
+    stopped.recv_timeout(WITHIN).expect("the stop ends");
+    let error = output.error.expect("failed");
+    assert_eq!(error.code, ErrorCode::McpServerUnavailable);
+    assert_eq!(
+        error.message,
+        "The MCP server `fx` did not start, or it has since exited."
+    );
+    assert!(output.servers.is_empty(), "a stop is not a death");
+    setup.stop(started.servers);
+}

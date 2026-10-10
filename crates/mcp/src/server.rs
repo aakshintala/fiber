@@ -16,13 +16,13 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 use contract::tool::Cancel;
 use rustix::process::Signal;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::cache::Cached;
 use crate::registry::{LIVE, Stopping, before_lock, before_signal, lock, signal};
+use crate::rpc::{Named, Outcome, encode_notification, encode_request};
 use crate::server_json::{ListedPrompt, ListedTool, entries};
-use crate::rpc::{Outcome, encode_notification, encode_request};
-use crate::wait::{CancelBridge, NoCancel, Shared, park};
+use crate::wait::{CancelBridge, NoCancel, Shared, deadline, park};
 
 /// The protocol version Fiber speaks (`docs/mcp.md` has no number; the
 /// current draft does).
@@ -117,9 +117,7 @@ pub(crate) enum CallError {
 
 /// A running server and its end of the wire.
 pub(crate) struct Server {
-    /// `None` once [`Server::stop`] ran: the child below was reaped exactly
-    /// once, and [`Drop`] does nothing.
-    inner: Option<Inner>,
+    inner: Inner,
 }
 
 struct Inner {
@@ -193,18 +191,15 @@ impl Server {
             }
         });
         clock.subscribe(Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)));
-        let mut server = Server {
-            inner: Some(Inner {
+        let server = Server {
+            inner: Inner {
                 shared,
                 writer: Mutex::new(Some(writer)),
                 child: Mutex::new(Some(child)),
                 clock: Arc::clone(clock),
-            }),
+            },
         };
-        let deadline = clock
-            .now()
-            .checked_add(startup_timeout)
-            .unwrap_or(clock.now());
+        let deadline = deadline(clock.as_ref(), startup_timeout);
         // One shutdown on `Err`: every failure path below returns through
         // here, so no arm repeats `shutdown`. `NoCancel` never fires, so
         // `Cancelled` is just another failed start, not a deadline.
@@ -294,64 +289,25 @@ impl Server {
         }
     }
 
-    /// Calls `tool` with `arguments`, waiting until `timeout` passes on the
+    /// Calls `method` with `params`, waiting until `timeout` passes on the
     /// clock or `cancel` fires. A late response to a timed-out or cancelled
     /// id is discarded: the slot is removed on every exit path.
     pub(crate) fn call(
         &self,
-        tool: &str,
-        arguments: &Value,
+        method: &str,
+        params: &Named<'_>,
         timeout: Duration,
         cancel: &dyn Cancel,
     ) -> Result<Value, CallError> {
-        let Some(inner) = self.inner.as_ref() else {
-            return Err(CallError::Gone);
-        };
-        let deadline = inner
-            .clock
-            .now()
-            .checked_add(timeout)
-            .unwrap_or(inner.clock.now());
-        self.request(
-            "tools/call",
-            &serde_json::json!({"name": tool, "arguments": arguments}),
-            deadline,
-            cancel,
-        )
+        let inner = &self.inner;
+        let deadline = deadline(inner.clock.as_ref(), timeout);
+        let params = serde_json::to_value(params).unwrap_or(Value::Null);
+        self.request(method, &params, deadline, cancel)
     }
 
-    /// Gets `prompt` with `arguments`, waiting until `timeout` passes on
-    /// the clock or `cancel` fires. Params encode with sorted keys, so the
-    /// top-level `name` follows `arguments` on the wire (`docs/mcp.md`,
-    /// "Prompts and resources").
-    pub(crate) fn get_prompt(
-        &self,
-        name: &str,
-        arguments: &Map<String, Value>,
-        timeout: Duration,
-        cancel: &dyn Cancel,
-    ) -> Result<Value, CallError> {
-        let Some(inner) = self.inner.as_ref() else {
-            return Err(CallError::Gone);
-        };
-        let deadline = inner
-            .clock
-            .now()
-            .checked_add(timeout)
-            .unwrap_or(inner.clock.now());
-        self.request(
-            "prompts/get",
-            &serde_json::json!({"name": name, "arguments": arguments}),
-            deadline,
-            cancel,
-        )
-    }
-
-    /// Whether the server's output ended (it exited), or it has no connection.
+    /// Whether the server's output ended (it exited).
     pub(crate) fn is_gone(&self) -> bool {
-        self.inner
-            .as_ref()
-            .is_none_or(|inner| lock(&inner.shared.inner).gone)
+        lock(&self.inner.shared.inner).gone
     }
 
     /// Stops the server: closes stdin, sends SIGTERM to its process, waits
@@ -361,18 +317,17 @@ impl Server {
     /// repeats only what is left. `&self` because tools share the
     /// connection while [`Servers`] owns the shutdown.
     pub(crate) fn stop(&self) {
-        if let Some(inner) = self.inner.as_ref() {
-            inner.close_stdin();
-            // Under the child's lock: a reap takes the child under it, so
-            // the pid is unreaped while `kill` runs.
-            let child = lock(&inner.child);
-            if let Some(child) = child.as_ref() {
-                before_signal();
-                signal(&[child.id()], Signal::TERM);
-            }
-            drop(child);
-            inner.wait_gone();
+        let inner = &self.inner;
+        inner.close_stdin();
+        // Under the child's lock: a reap takes the child under it, so
+        // the pid is unreaped while `kill` runs.
+        let child = lock(&inner.child);
+        if let Some(child) = child.as_ref() {
+            before_signal();
+            signal(&[child.id()], Signal::TERM);
         }
+        drop(child);
+        inner.wait_gone();
         self.reap();
     }
 
@@ -383,10 +338,8 @@ impl Server {
         params: &Value,
         deadline: Instant,
         cancel: &dyn Cancel,
-    ) -> Result<Value, CallError> {
-        let Some(inner) = self.inner.as_ref() else {
-            return Err(CallError::Gone);
-        };
+) -> Result<Value, CallError> {
+        let inner = &self.inner;
         let id = inner.shared.next_id();
         inner.shared.insert(id);
         // The slot is removed on every exit path below, so a late response
@@ -432,24 +385,20 @@ impl Server {
 
     /// Sends a notification: no id, no answer.
     fn notify(&self, method: &str, params: &Value) {
-        if let Some(inner) = self.inner.as_ref() {
-            inner.send(encode_notification(method, Some(params)));
-        }
+        self.inner.send(encode_notification(method, Some(params)));
     }
 
     /// Closes stdin by dropping the writer's sender.
-    fn shutdown(&mut self) {
-        if let Some(inner) = self.inner.as_mut() {
-            inner.close_stdin();
-        }
+    fn shutdown(&self) {
+        self.inner.close_stdin();
     }
 
     /// Kills and reaps the child exactly once; later calls find none.
     fn reap(&self) {
-        let child = self.inner.as_ref().and_then(|inner| {
+        let child = {
             before_lock("child");
-            lock(&inner.child).take()
-        });
+            lock(&self.inner.child).take()
+        };
         if let Some(mut child) = child {
             // An exited child refuses the kill; the reap below still runs.
             match child.kill() {

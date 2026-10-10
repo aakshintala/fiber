@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
 use contract::tool::Cancel;
@@ -94,6 +94,13 @@ impl Shared {
         drop(state);
         self.cv.notify_all();
     }
+}
+
+/// The deadline `timeout` after now on `clock`, or now when the sum
+/// overflows. It reads the clock once.
+pub(crate) fn deadline(clock: &dyn Clock, timeout: Duration) -> Instant {
+    let now = clock.now();
+    now.checked_add(timeout).unwrap_or(now)
 }
 
 /// True when the waiter stops waiting: a response landed (`seq` moved) or
