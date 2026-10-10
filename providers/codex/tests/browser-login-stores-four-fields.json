@@ -50,28 +50,19 @@
       }
     ]
   },
+  "exact_credentials": true,
   "returns": {
     "token": "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xIn0sImV4cCI6NDEwMjQ0NDgwMH0.",
     "expires_at": 4102444800,
     "refresh_token": "rt_1",
-    "account_id": "acct_1",
-    "access_token": null,
-    "email": null,
-    "expires_in": null,
-    "headers": null,
-    "id_token": null
+    "account_id": "acct_1"
   },
   "expect_credentials": {
     "codex/alice@example.com": {
       "token": "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xIn0sImV4cCI6NDEwMjQ0NDgwMH0.",
       "expires_at": 4102444800,
       "refresh_token": "rt_1",
-      "account_id": "acct_1",
-      "access_token": null,
-      "email": null,
-      "expires_in": null,
-      "headers": null,
-      "id_token": null
+      "account_id": "acct_1"
     }
   }
 }
