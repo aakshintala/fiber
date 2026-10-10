@@ -200,6 +200,26 @@ fn two_provider_setup() -> Setup {
 }
 
 #[test]
+fn an_unknown_config_key_prints_its_notice_as_one_line() {
+    let setup = two_provider_setup();
+    setup.write_config(&json!({"model": "acme/big", "frobnicate": 1}));
+    let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+    result.unwrap();
+    assert!(
+        out.lines()
+            .any(|line| line == "* acme/big        200000   3       15"),
+        "{out:?}"
+    );
+    assert_eq!(
+        err,
+        format!(
+            "{}: ignored `frobnicate`, which this Fiber does not know.\n",
+            setup.home().join("config.json").display()
+        )
+    );
+}
+
+#[test]
 fn the_text_table_marks_exactly_the_default_row() {
     let setup = two_provider_setup();
     let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());

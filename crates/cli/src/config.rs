@@ -9,11 +9,21 @@ use std::path::Path;
 
 use config::{Config, Layer, ProjectKey, Sources};
 use contract::ErrorCode;
+use contract::events::Notice;
 use contract::shapes::Failure;
 use extensions::Providers;
 use serde_json::Value;
 
 use crate::{fail, failed, project_of};
+
+/// Prints each notice as one line on standard error: exactly the notice's
+/// message, nothing else (`docs/configuration.md`, "When Fiber reads
+/// configuration"). Standard output and the exit status are untouched.
+pub(crate) fn print_notices(err: &mut dyn Write, notices: &[Notice]) {
+    for notice in notices {
+        writeln!(err, "{}", notice.message).unwrap_or(());
+    }
+}
 
 /// The effective value of `key` and the layer it came from, as `get` prints
 /// them: the value as compact JSON, then ` from `, then the layer.
@@ -32,6 +42,13 @@ fn run_get(
         overrides: Vec::new(),
     })
     .map_err(|e| failed(e.code(), e))?;
+    // Each notice as one line on stderr: this load's, then the installed
+    // providers', each once per command run.
+    let mut notices: Vec<Notice> = config.notices().to_vec();
+    if let Ok((_, loading)) = Providers::load(home) {
+        notices.extend(loading);
+    }
+    print_notices(err, &notices);
     // The notes print as the reviewer reads them: each layer's text under
     // its heading, with no layer named (`docs/permissions.md`, "What the
     // person tells it").
@@ -132,9 +149,9 @@ fn check_model(
     typed: &str,
     err: &mut dyn Write,
 ) -> Result<(), Failure> {
-    // debt: notices from loading are dropped, as `parts_with` drops them;
-    // surfaced when #382 lands.
-    let (providers, _notices) = Providers::load(home).map_err(|e| failed(e.code(), e))?;
+    let (providers, loading) = Providers::load(home).map_err(|e| failed(e.code(), e))?;
+    // Each notice as one line on stderr: each load's, once per command run.
+    print_notices(err, &loading);
     // Without a cached list the reference is accepted unchecked: one
     // naming a provider that is not installed, or one installed with an
     // empty list, and a bare id when every installed list is empty. This
@@ -165,6 +182,7 @@ fn check_model(
         overrides: Vec::new(),
     })
     .map_err(|e| failed(e.code(), e))?;
+    print_notices(err, config.notices());
     let mut providers = providers;
     let _notices = providers
         .fill_placeholders(&config, &|name| std::env::var(name).ok())
