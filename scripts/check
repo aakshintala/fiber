@@ -104,7 +104,7 @@ if [ "$scope" != platform ]; then
         crates/main/tests/install_fixture/fiber \
         crates/main/tests/install_fixture/bin/uname \
         crates/main/tests/install_fixture/bin/sysctl
-      shellcheck --shell=bash scripts/leak-scan scripts/test-leak-scan
+      shellcheck --shell=bash scripts/leak-scan scripts/test-leak-scan scripts/test-leak-probe
     else
       echo "== shellcheck: Linux only (docs/ci.md), not run here"
     fi
@@ -131,6 +131,12 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   # reports every failure, so a rerun is not needed to see them.
   cargo nextest run --no-fail-fast "${package_spec_args[@]}" 2>&1 | tee "$log"
   nextest=$(count '[0-9]+ tests? run')
+  case " $packages " in
+    *" main "*)
+      echo "== leak probe"
+      scripts/test-leak-probe
+      ;;
+  esac
   if [ -n "$extension_packages" ]; then
     echo "== fiber extension test"
     target_directory=$(cargo metadata --format-version 1 --no-deps | \
