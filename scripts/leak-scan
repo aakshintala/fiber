@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# Reports this check run's leaked processes (docs/testing.md, "Running
+# tests"). It only reports: it sends no signal.
+#
+# Usage: scripts/leak-scan NONCE
+#
+# Every descendant of scripts/check inherits FIBER_CHECK_RUN, so a process
+# whose environment still holds FIBER_CHECK_RUN=NONCE started under this run
+# and outlived the tests. A sibling run carries another nonce and never
+# matches.
+set -euo pipefail
+
+nonce=${1-}
+# An empty match would name every process the scan sees, so refuse it.
+if [ -z "$nonce" ]; then
+  echo "scripts/leak-scan: refusing an empty NONCE: it matches every process" >&2
+  exit 2
+fi
+
+# How long a normally exiting process gets before the scan lists.
+sleep "${LEAK_SCAN_GRACE:-2}"
+
+self=$$
+# Helpers run with FIBER_CHECK_RUN unset so the listing never names them,
+# and matching stays in this shell, so no child carries the nonce. -e lists
+# every process: without it ps shows only the caller's terminal session,
+# and the ancestor walk below would stop before scripts/check.
+map=$(env -u FIBER_CHECK_RUN ps -e -o pid=,ppid=)
+
+# The scan's own process, its ancestors (scripts/check itself carries the
+# variable), and its own descendants: none is a leak.
+ancestors=" $self "
+lineage=$self
+while true; do
+  parent=
+  while read -r pid ppid _rest; do
+    if [ "$pid" = "$lineage" ]; then
+      parent=$ppid
+      break
+    fi
+  done <<<"$map"
+  case $parent in '' | *[!0-9]* | 0 | 1) break ;; esac
+  case $ancestors in *" $parent "*) break ;; esac
+  ancestors="$ancestors$parent "
+  lineage=$parent
+done
+members=" $self "
+grew=1
+while [ "$grew" -eq 1 ]; do
+  grew=0
+  while read -r pid ppid _rest; do
+    case $pid in '' | *[!0-9]*) continue ;; esac
+    case $ppid in '' | *[!0-9]*) continue ;; esac
+    case $members in *" $pid "*) continue ;; esac
+    case $members in *" $ppid "*) members="$members$pid " && grew=1 ;; esac
+  done <<<"$map"
+done
+excluded=$ancestors$members
+
+# Whether $1 holds $2 with no letter, digit or underscore beside it.
+holds_nonce() {
+  local text=$1
+  local word=$2
+  local rest=$text
+  local before=
+  local after=
+  local beside_before=
+  local beside_after=
+  while true; do
+    case $rest in
+    *"$word"*) ;;
+    *) return 1 ;;
+    esac
+    before=${rest%%"$word"*}
+    after=${rest#*"$word"}
+    beside_before=0
+    beside_after=0
+    case $before in
+    *[A-Za-z0-9_]) beside_before=1 ;;
+    esac
+    case $after in
+    [A-Za-z0-9_]*) beside_after=1 ;;
+    esac
+    if [ "$beside_before" -eq 0 ] && [ "$beside_after" -eq 0 ]; then
+      return 0
+    fi
+    if [ -z "$after" ]; then
+      return 1
+    fi
+    rest=$after
+  done
+}
+
+leaks=0
+if [ "$(uname -s)" = Darwin ]; then
+  table=$(env -u FIBER_CHECK_RUN ps -E -ww -o pid=,command= -U "$USER")
+  while IFS= read -r line; do
+    if IFS=' ' read -r pid rest <<<"$line"; then
+      :
+    else
+      continue
+    fi
+    case $pid in '' | *[!0-9]*) continue ;; esac
+    case $excluded in *" $pid "*) continue ;; esac
+    if holds_nonce "$line" "$nonce"; then
+      echo "leaked process $pid: $rest" >&2
+      leaks=$((leaks + 1))
+    fi
+  done <<<"$table"
+else
+  for envfile in /proc/[0-9]*/environ; do
+    pid=${envfile#/proc/}
+    pid=${pid%/environ}
+    case $pid in '' | *[!0-9]*) continue ;; esac
+    case $excluded in *" $pid "*) continue ;; esac
+    # One exact line FIBER_CHECK_RUN=NONCE among the NUL-separated entries;
+    # an unreadable file belongs to a process that already exited.
+    if env -u FIBER_CHECK_RUN tr '\0' '\n' <"$envfile" 2>/dev/null | env -u FIBER_CHECK_RUN grep -Fxq "FIBER_CHECK_RUN=$nonce"; then
+      if cmd=$(env -u FIBER_CHECK_RUN tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null); then
+        if [ -z "$cmd" ]; then
+          if cmd=$(env -u FIBER_CHECK_RUN ps -o command= -p "$pid" 2>/dev/null); then
+            :
+          else
+            continue
+          fi
+        fi
+      else
+        continue
+      fi
+      cmd=${cmd% }
+      cmd=${cmd#"${cmd%%[![:space:]]*}"}
+      if [ -z "$cmd" ]; then
+        cmd="(no command line)"
+      fi
+      echo "leaked process $pid: $cmd" >&2
+      leaks=$((leaks + 1))
+    fi
+  done
+fi
+
+if [ "$leaks" -eq 0 ]; then
+  exit 0
+fi
+echo "scripts/leak-scan: found $leaks leaked process(es)" >&2
+exit 1
