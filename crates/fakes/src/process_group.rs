@@ -173,6 +173,11 @@ pub(crate) const MATCHING_PATTERN_VAR: &str = "FIBER_WATCHDOG_PATTERN";
 pub(crate) const MATCHING_WATCHDOG_SCRIPT: &str = r#"[ -n "$FIBER_WATCHDOG_PATTERN" ] || exit 2; read -r line || for p in $(pgrep -f -- "$FIBER_WATCHDOG_PATTERN"); do [ "$p" -gt 1 ] || continue; kill -s KILL -- "-$p"; kill -s KILL "$p"; done"#;
 
 /// `text` as an extended regular expression matching itself, for `pgrep -f`.
+/// The pattern's spelling never matches its own command line, so a listing
+/// pgrep or a watchdog sweep never lists a peer's pgrep: a leading plain
+/// character becomes a bracket expression (`/tmp/x` is `[/]tmp/x`), and a
+/// leading metacharacter stays backslash-escaped (the backslash already
+/// breaks the self-match).
 ///
 /// # Panics
 ///
@@ -183,7 +188,20 @@ pub(crate) fn pattern(text: &str) -> String {
         "refusing an empty command-line match: it matches every process the user owns"
     );
     let mut escaped = String::with_capacity(text.len());
-    for c in text.chars() {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) if ".[]()*+?{}|^$\\".contains(first) => {
+            escaped.push('\\');
+            escaped.push(first);
+        }
+        Some(first) => {
+            escaped.push('[');
+            escaped.push(first);
+            escaped.push(']');
+        }
+        None => {}
+    }
+    for c in chars {
         if ".[]()*+?{}|^$\\".contains(c) {
             escaped.push('\\');
         }

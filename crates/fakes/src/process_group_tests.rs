@@ -391,7 +391,7 @@ fn matching_refuses_an_empty_match() {
 
 #[test]
 fn pattern_escapes_every_regex_metacharacter() {
-    assert_eq!(pattern("/tmp/a-b_c"), "/tmp/a-b_c");
+    assert_eq!(pattern("/tmp/a-b_c"), "[/]tmp/a-b_c");
     assert_eq!(pattern(r".[]()*+?{}|^$\"), r"\.\[\]\(\)\*\+\?\{\}\|\^\$\\");
 }
 
