@@ -133,7 +133,11 @@ fn stages() -> super::Samples {
         20.0,
         2.0,
         5.0,
-        &[("frames_1", 1, 1.5), ("frames_4096", 3, 4.0), ("frames_64", 10, 30.0)],
+        &[
+            ("frames_1", 1, 1.5),
+            ("frames_4096", 3, 4.0),
+            ("frames_64", 10, 30.0),
+        ],
     )
 }
 
@@ -142,7 +146,12 @@ fn stage_rows_reports_every_stage_with_the_fixture_and_log_size() {
     let rows = stages();
     let names: Vec<&str> = rows
         .iter()
-        .map(|(_, sample)| sample.get("stage").and_then(|stage| stage.as_str()).unwrap_or_default())
+        .map(|(_, sample)| {
+            sample
+                .get("stage")
+                .and_then(|stage| stage.as_str())
+                .unwrap_or_default()
+        })
         .collect();
     assert_eq!(
         names,
@@ -162,20 +171,32 @@ fn stage_rows_reports_every_stage_with_the_fixture_and_log_size() {
     }
     let ms: Vec<f64> = rows
         .iter()
-        .map(|(_, sample)| sample.get("ms").and_then(|ms| ms.as_f64()).unwrap_or(f64::NAN))
+        .map(|(_, sample)| {
+            sample
+                .get("ms")
+                .and_then(|ms| ms.as_f64())
+                .unwrap_or(f64::NAN)
+        })
         .collect();
     assert_eq!(ms, [31.0, 20.0, 2.0, 5.0, 1.5, 4.0, 30.0]);
     // A different hub time is a different row, so equal medians never hide
     // a swapped stage.
-    assert_ne!(stages(), stage_rows(
-        "1 MiB",
-        1_050_231,
-        31.0,
-        21.0,
-        2.0,
-        5.0,
-        &[("frames_1", 1, 1.5), ("frames_4096", 3, 4.0), ("frames_64", 10, 30.0)],
-    ));
+    assert_ne!(
+        stages(),
+        stage_rows(
+            "1 MiB",
+            1_050_231,
+            31.0,
+            21.0,
+            2.0,
+            5.0,
+            &[
+                ("frames_1", 1, 1.5),
+                ("frames_4096", 3, 4.0),
+                ("frames_64", 10, 30.0)
+            ],
+        )
+    );
 }
 
 #[test]
@@ -187,11 +208,24 @@ fn stage_rows_counts_the_frames_only_on_the_frame_stages() {
     let counts: Vec<u64> = rows
         .iter()
         .skip(4)
-        .map(|(_, sample)| sample.get("frames").and_then(|frames| frames.as_u64()).unwrap_or(0))
+        .map(|(_, sample)| {
+            sample
+                .get("frames")
+                .and_then(|frames| frames.as_u64())
+                .unwrap_or(0)
+        })
         .collect();
     assert_eq!(counts, [1, 3, 10]);
     // Zero frames still reports its count, rather than dropping the key.
-    let rows = stage_rows("10 MiB", 10_492_016, 88.0, 60.0, 9.0, 20.0, &[("frames_1", 1, 6.0)]);
+    let rows = stage_rows(
+        "10 MiB",
+        10_492_016,
+        88.0,
+        60.0,
+        9.0,
+        20.0,
+        &[("frames_1", 1, 6.0)],
+    );
     assert_eq!(rows.len(), 5);
     assert_eq!(rows[4].1.get("frames"), Some(&json!(1)));
     assert_eq!(rows[0].1.get("frames"), None);

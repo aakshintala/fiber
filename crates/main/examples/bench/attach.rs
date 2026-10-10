@@ -201,9 +201,7 @@ fn sample(
     if let Some(note) = size_note(label, log_bytes) {
         notes.push(note);
     }
-    let terminal_ms = took
-        .as_f64()
-        .ok_or("the attach timing is not a number")?;
+    let terminal_ms = took.as_f64().ok_or("the attach timing is not a number")?;
     let mut samples = vec![(
         fixture.metric,
         json!({"fixture": label, "log_bytes": log_bytes, "ms": took}),
@@ -213,7 +211,13 @@ fn sample(
     // The bench measures real time on the harness's own clock, as the
     // live stages do through `ctx.clock`.
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(crate::run::System);
-    let one = tui::measure_open(&text, OPEN_WIDTH, OPEN_HEIGHT, usize::MAX, Arc::clone(&clock))?;
+    let one = tui::measure_open(
+        &text,
+        OPEN_WIDTH,
+        OPEN_HEIGHT,
+        usize::MAX,
+        Arc::clone(&clock),
+    )?;
     // 4,096 is the loop's HUB_BATCH (`crates/tui/src/event_loop/batch.rs`),
     // the lines each frame folds while the log streams in.
     let batched = tui::measure_open(&text, OPEN_WIDTH, OPEN_HEIGHT, 4096, Arc::clone(&clock))?;
@@ -284,8 +288,9 @@ pub(crate) fn stage_rows(
 /// session is idle with no client for the next sample.
 fn hub_replay(ctx: &Ctx<'_>, home: &Home, id: &str) -> Result<(f64, usize, usize), String> {
     let command = doors::mint("c_");
-    let line = json!({"id": command, "command": "subscribe", "session_id": id, "args": {"level": "full"}})
-        .to_string();
+    let line =
+        json!({"id": command, "command": "subscribe", "session_id": id, "args": {"level": "full"}})
+            .to_string();
     let mut client = Client::connect(&home.hub_socket())?;
     let started = ctx.clock.now();
     client.send(&line)?;
@@ -305,7 +310,12 @@ fn hub_replay(ctx: &Ctx<'_>, home: &Home, id: &str) -> Result<(f64, usize, usize
             break;
         }
     }
-    let took = ctx.clock.now().saturating_duration_since(started).as_secs_f64() * 1000.0;
+    let took = ctx
+        .clock
+        .now()
+        .saturating_duration_since(started)
+        .as_secs_f64()
+        * 1000.0;
     drop(client);
     Ok((took, lines, bytes))
 }

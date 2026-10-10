@@ -162,9 +162,10 @@ pub fn measure_open(
         stages.lines = stages.lines.saturating_add(1);
         since_frame = since_frame.saturating_add(1);
         if since_frame >= frame_every {
-            stages.frame_time = stages
-                .frame_time
-                .saturating_add(draw_frame(&mut screen, &mut app, &clock)?);
+            stages.frame_time =
+                stages
+                    .frame_time
+                    .saturating_add(draw_frame(&mut screen, &mut app, &clock)?);
             stages.frames = stages.frames.saturating_add(1);
             since_frame = 0;
         }
@@ -172,9 +173,10 @@ pub fn measure_open(
     // The final frame, unless the last periodic draw already drew it; an
     // empty log still draws once.
     if stages.frames == 0 || since_frame > 0 {
-        stages.frame_time = stages
-            .frame_time
-            .saturating_add(draw_frame(&mut screen, &mut app, &clock)?);
+        stages.frame_time =
+            stages
+                .frame_time
+                .saturating_add(draw_frame(&mut screen, &mut app, &clock)?);
         stages.frames = stages.frames.saturating_add(1);
     }
     Ok(stages)
@@ -187,9 +189,7 @@ fn draw_frame(
     clock: &Arc<dyn Clock>,
 ) -> Result<Duration, String> {
     let started = clock.now();
-    screen
-        .draw(app, None)
-        .map_err(|error| error.to_string())?;
+    screen.draw(app, None).map_err(|error| error.to_string())?;
     Ok(clock.now().saturating_duration_since(started))
 }
 

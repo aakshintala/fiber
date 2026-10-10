@@ -27,7 +27,10 @@ fn event(kind: &str) -> String {
 
 /// `n` session lines, one envelope per line.
 fn events(n: usize) -> String {
-    (0..n).map(|_| event("turn_started")).collect::<Vec<_>>().join("\n")
+    (0..n)
+        .map(|_| event("turn_started"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A clock that ticks one millisecond per `now()`, so the stages hold
@@ -75,8 +78,8 @@ impl contract::clock::Clock for TickClock {
 #[test]
 fn measure_open_counts_the_lines_and_draws_one_frame_for_usize_max() {
     let clock = fakes::clock::FakeClock::new();
-    let stages =
-        crate::measure_open(&events(5), 60, 12, usize::MAX, clock).unwrap_or_else(|error| panic!("{error}"));
+    let stages = crate::measure_open(&events(5), 60, 12, usize::MAX, clock)
+        .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(stages.lines, 5);
     assert_eq!(stages.frames, 1);
     assert!(stages.parse.is_zero());
@@ -84,8 +87,8 @@ fn measure_open_counts_the_lines_and_draws_one_frame_for_usize_max() {
     assert!(stages.frame_time.is_zero());
     // One line is one frame with the same setting.
     let clock = fakes::clock::FakeClock::new();
-    let one =
-        crate::measure_open(&events(1), 60, 12, usize::MAX, clock).unwrap_or_else(|error| panic!("{error}"));
+    let one = crate::measure_open(&events(1), 60, 12, usize::MAX, clock)
+        .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!((one.lines, one.frames), (1, 1));
 }
 
@@ -108,8 +111,7 @@ fn measure_open_draws_after_every_k_lines_and_once_at_the_end() {
     assert_eq!(every.frames, 4);
     assert_ne!(every.frames, 5);
     let clock = fakes::clock::FakeClock::new();
-    let empty =
-        crate::measure_open("", 60, 12, 3, clock).unwrap_or_else(|error| panic!("{error}"));
+    let empty = crate::measure_open("", 60, 12, 3, clock).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!((empty.lines, empty.frames), (0, 1));
 }
 
@@ -117,7 +119,11 @@ fn measure_open_draws_after_every_k_lines_and_once_at_the_end() {
 fn measure_open_skips_blank_lines_without_counting_them() {
     let clock = fakes::clock::FakeClock::new();
     let stages = crate::measure_open(
-        &format!("{}\n\n   \n{}", event("turn_started"), event("turn_started")),
+        &format!(
+            "{}\n\n   \n{}",
+            event("turn_started"),
+            event("turn_started")
+        ),
         60,
         12,
         usize::MAX,
@@ -137,11 +143,17 @@ fn measure_open_names_the_unreadable_line() {
         usize::MAX,
         clock,
     );
-    assert!(matches!(&error, Err(error) if error.starts_with("line 2:")), "{error:?}");
+    assert!(
+        matches!(&error, Err(error) if error.starts_with("line 2:")),
+        "{error:?}"
+    );
     // The first line failing names line 1, not line 0.
     let clock = fakes::clock::FakeClock::new();
     let error = crate::measure_open("not json", 60, 12, usize::MAX, clock);
-    assert!(matches!(&error, Err(error) if error.starts_with("line 1:")), "{error:?}");
+    assert!(
+        matches!(&error, Err(error) if error.starts_with("line 1:")),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -168,13 +180,15 @@ fn measure_open_times_each_stage_on_a_ticking_clock() {
 #[test]
 fn measure_open_reports_no_stages_for_an_empty_log_but_still_draws() {
     let origin = fakes::clock::FakeClock::new().origin();
-    let stages =
-        crate::measure_open("", 60, 12, usize::MAX, TickClock::clock(origin))
-            .unwrap_or_else(|error| panic!("{error}"));
+    let stages = crate::measure_open("", 60, 12, usize::MAX, TickClock::clock(origin))
+        .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(stages.lines, 0);
     assert_eq!(stages.frames, 1);
     assert!(stages.parse.is_zero());
     assert!(stages.fold.is_zero());
     assert_eq!(stages.frame_time, Duration::from_millis(1));
-    assert_eq!(json!({"lines": stages.lines, "frames": stages.frames}), json!({"lines": 0, "frames": 1}));
+    assert_eq!(
+        json!({"lines": stages.lines, "frames": stages.frames}),
+        json!({"lines": 0, "frames": 1})
+    );
 }
