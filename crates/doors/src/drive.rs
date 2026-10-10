@@ -78,12 +78,11 @@ impl contract::extension::Drive for Driver {
         };
         let classified = match classify(&bytes) {
             Ok(classified) => classified,
-            Err(id) => {
+            Err(_) => {
                 answer.0(Err(Rejection {
                     code: ErrorCode::Malformed,
                     message: client::MALFORMED.to_owned(),
                 }));
-                let _ = id;
                 return;
             }
         };

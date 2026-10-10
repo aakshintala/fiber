@@ -96,9 +96,8 @@ impl Isolation {
     /// test can force the interleaving a session starting in between.
     /// Test-only.
     #[cfg(test)]
-    #[doc(hidden)]
     #[must_use]
-    pub fn with_pause(mut self, pause: Arc<dyn Fn() + Send + Sync>) -> Self {
+    pub(crate) fn with_pause(mut self, pause: Arc<dyn Fn() + Send + Sync>) -> Self {
         self.pause = Some(pause);
         self
     }
