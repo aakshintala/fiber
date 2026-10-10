@@ -9,17 +9,10 @@
 
 use std::process::{Child, ExitStatus};
 #[cfg(test)]
-use std::sync::{Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Mutex, PoisonError};
 
 use rustix::process::Signal;
 use support::group::Listing;
-
-/// Serializes the tests with a live child against a kill of every group:
-/// `support::group::kill_every_group` reaches the whole process-wide list,
-/// so it runs alone while the others share the lock. Production code never
-/// takes it.
-#[cfg(test)]
-static SERIAL: RwLock<()> = RwLock::new(());
 
 /// Every signal sent, in order. Tests read it to prove what went out and
 /// what did not, without racing the kernel.
@@ -96,25 +89,6 @@ pub(crate) fn retire_if_empty(listing: &mut Option<Listing>) -> bool {
         live.unlist(listing);
     }
     true
-}
-
-/// Holds the serial lock shared: other holders keep running while the
-/// group killer waits. Test-only.
-#[cfg(test)]
-pub(crate) fn serial_shared() -> RwLockReadGuard<'static, ()> {
-    SERIAL.read().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// Holds the serial lock alone: every other holder is done first.
-/// Test-only. No caller while no jobs test kills every group; kept with
-/// the seam so that test can run alone when it returns.
-#[cfg(test)]
-#[allow(
-    dead_code,
-    reason = "kept with the seam for a future whole-list kill test"
-)]
-pub(crate) fn serial_exclusive() -> RwLockWriteGuard<'static, ()> {
-    SERIAL.write().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Every signal sent so far, in order. Test-only: the kernel cannot say

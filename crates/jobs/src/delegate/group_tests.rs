@@ -19,7 +19,7 @@ use fakes::Deadline;
 use fakes::{Watchdog, group_empties, kill_group, within};
 use support::group::Listing;
 
-use super::{listed, reap_locked, retire_if_empty, serial_shared, signal};
+use super::{listed, reap_locked, retire_if_empty, signal};
 
 /// How long a test waits on a child before it fails.
 const DEADLINE: Duration = Duration::from_secs(3);
@@ -43,7 +43,6 @@ fn sleeping() -> (std::process::Child, Listing, fakes::Watchdog) {
 
 #[test]
 fn a_spawned_group_is_listed() {
-    let _serial = serial_shared();
     let (mut child, _listing, watchdog) = sleeping();
     let pgid = child.id();
     assert!(listed(pgid));
@@ -70,7 +69,6 @@ fn reap(mut child: std::process::Child, signal: &str) -> std::process::ExitStatu
 
 #[test]
 fn a_live_group_gets_sigterm() {
-    let _serial = serial_shared();
     let (child, _listing, watchdog) = sleeping();
     let pgid = child.id();
     assert!(signal(pgid, rustix::process::Signal::TERM));
@@ -83,7 +81,6 @@ fn a_live_group_gets_sigterm() {
 
 #[test]
 fn a_reaped_group_whose_members_are_gone_leaves_the_list() {
-    let _serial = serial_shared();
     let (mut child, listing, watchdog) = sleeping();
     let pgid = child.id();
     let mut listing = Some(listing);
@@ -101,7 +98,6 @@ fn a_reaped_group_whose_members_are_gone_leaves_the_list() {
 
 #[test]
 fn a_listed_but_empty_group_is_not_signalled() {
-    let _serial = serial_shared();
     // Listed without a member: the guard needs both, so neither part
     // alone sends.
     let pgid = 999_999_007;
@@ -115,7 +111,6 @@ fn a_listed_but_empty_group_is_not_signalled() {
 
 #[test]
 fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
-    let _serial = serial_shared();
     let dir = fakes::TempDir::new("fiber-delegate-member");
     let pidfile = dir.path().join("pid");
     // The member outlives the leader in the same group; the watchdog is
@@ -167,7 +162,6 @@ fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
 
 #[test]
 fn an_unlisted_live_group_is_not_signalled() {
-    let _serial = serial_shared();
     let mut command = Command::new("sleep");
     command
         .arg("60")
@@ -187,7 +181,6 @@ fn an_unlisted_live_group_is_not_signalled() {
 
 #[test]
 fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
-    let _serial = serial_shared();
     let mut command = Command::new("sh");
     command
         .arg("-c")
@@ -252,7 +245,6 @@ fn exited(pid: u32) {
 
 #[test]
 fn a_listed_group_with_a_member_is_not_retired() {
-    let _serial = serial_shared();
     let (mut child, listing, watchdog) = sleeping();
     let pgid = child.id();
     let mut listing = Some(listing);
