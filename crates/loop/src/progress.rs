@@ -134,14 +134,10 @@ impl SharedWake {
         // notifying nobody. The flag is cleared on both paths: taken by
         // the predicate when set, cleared on waking, so one bump asks
         // for exactly one more pass.
-        let guard = support::clock::park(
-            clock,
-            until,
-            None,
-            &self.cv,
-            lock(&self.inner),
-            |state| std::mem::take(&mut state.set),
-        );
+        let guard =
+            support::clock::park(clock, until, None, &self.cv, lock(&self.inner), |state| {
+                std::mem::take(&mut state.set)
+            });
         if let Some(mut guard) = guard {
             guard.set = false;
         }

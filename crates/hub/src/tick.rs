@@ -6,9 +6,9 @@
 //! wait takes [`Tick::hold`] before reading what it checks and keeps that
 //! guard into [`Tick::park`].
 
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use contract::clock::{Clock, Wake};

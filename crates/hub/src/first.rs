@@ -17,9 +17,9 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 
 use crate::connection::{Hub, lock};
-use crate::tick::{Tick, Wait};
 use crate::relay::Relays;
 use crate::start::{self, Held};
+use crate::tick::{Tick, Wait};
 
 /// How long a first prompt waits for the requesting connection's `full`
 /// subscription, from the `start` answer (`docs/invocation.md`, `start`).
