@@ -26,6 +26,7 @@ use contract::inbox::Delivery;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Effects, EffectsError, Output, Tool};
 use extensions::{LuaExtension, LuaTool, SessionExtensions};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder};
 use serde_json::{Map, Value, json};
@@ -45,11 +46,13 @@ fn extension(dir: &Path, short: &str, init: &str, clock: Arc<FakeClock>) -> Arc<
 }
 
 /// The extension's tools, read on a thread under `WAIT`.
+#[track_caller]
 fn tools(ext: &Arc<LuaExtension>) -> Vec<LuaTool> {
     let (tx, rx) = mpsc::channel();
     let ext = Arc::clone(ext);
     std::thread::spawn(move || tx.send(ext.tools()));
-    rx.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&rx)
         .expect("waited for the tools")
         .expect("the entry script ran")
 }
@@ -119,6 +122,7 @@ fn two_loads_of_one_entry_script_give_byte_identical_definitions() {
 const GRACE: Duration = Duration::from_secs(1);
 
 /// The extension's tools by name, each shareable with a calling thread.
+#[track_caller]
 fn by_name(ext: &Arc<LuaExtension>) -> BTreeMap<String, Arc<LuaTool>> {
     tools(ext)
         .into_iter()
@@ -147,11 +151,13 @@ fn run(tool: &Arc<LuaTool>, arguments: Value) -> mpsc::Receiver<Output> {
 }
 
 /// The call's result, under `WAIT`.
-fn ran(rx: &mpsc::Receiver<Output>) -> Output {
-    rx.recv_timeout(WAIT).expect("waited for the tool call")
+#[track_caller]
+fn ran(rx: &mpsc::Receiver<Output>, wait: &Deadline) -> Output {
+    wait.recv(rx).expect("waited for the tool call")
 }
 
 /// `tool`'s effects for `arguments`, on a thread under `WAIT`.
+#[track_caller]
 fn effects(tool: &Arc<LuaTool>, arguments: Value) -> Result<Effects, EffectsError> {
     let tool = Arc::clone(tool);
     fakes::within("the effects call", WAIT, move || {
@@ -241,6 +247,7 @@ fiber.command("count", { timeout = 1000, run = function() return tostring(calls)
 "#;
 
 /// Runs the command `name` on a thread under `WAIT`.
+#[track_caller]
 fn command(ext: &Arc<LuaExtension>, name: &str) -> String {
     let ext = Arc::clone(ext);
     let name = name.to_owned();
@@ -267,7 +274,10 @@ fn static_effects_are_returned_without_starting_a_callback() {
         })
     );
     assert_eq!(command(&ext, "count"), "0");
-    assert_eq!(text(&ran(&run(still, json!({})))), "ran");
+    assert_eq!(
+        text(&ran(&run(still, json!({})), &Deadline::after(WAIT))),
+        "ran"
+    );
     assert_eq!(command(&ext, "count"), "1");
 }
 
@@ -353,11 +363,12 @@ fiber.tool("slow", {
     let slow = Arc::clone(&tools["slow"]);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(slow.effects(&Map::new())));
-    went.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&went)
         .expect("waited for the effects function to start");
     clock.advance(Duration::from_millis(100));
     assert_eq!(
-        rx.recv_timeout(WAIT).expect("waited for the effects call"),
+        Deadline::after(WAIT).recv(&rx).expect("waited for the effects call"),
         Err(EffectsError::Tool(
             "the effects function of the tool `slow` failed: `fiber.test/fx`: `slow.effects` passed its 100 ms timeout and was stopped."
                 .to_owned()
@@ -394,13 +405,17 @@ fn each_return_maps_to_its_result() {
     let dir = fakes::TempDir::new("fiber-lua-tools");
     let ext = extension(dir.path(), "a", RETURNS, FakeClock::new());
     let tools = by_name(&ext);
-    let call = |name: &str| ran(&run(&tools[name], json!({})));
+    let call = |name: &str| ran(&run(&tools[name], json!({})), &Deadline::after(WAIT));
     let plain = call("plain");
     assert_eq!((text(&plain), plain.error), ("3 notes".to_owned(), None));
     let part = call("part");
     assert_eq!((text(&part), part.error), ("hello".to_owned(), None));
     assert_eq!(
-        ran(&run(&tools["args"], json!({ "path": "note.txt" }))).content,
+        ran(
+            &run(&tools["args"], json!({ "path": "note.txt" })),
+            &Deadline::after(WAIT)
+        )
+        .content,
         vec![ContentPart::Text {
             text: "note.txt!".to_owned()
         }]
@@ -469,16 +484,24 @@ fiber.tool("spin", {
     let went = go_module(dir.path(), "spin");
     let tools = by_name(&ext);
     let first = run(&tools["spin"], json!({}));
-    went.recv_timeout(WAIT).expect("waited for spin to start");
+    Deadline::after(WAIT)
+        .recv(&went)
+        .expect("waited for spin to start");
     clock.advance(Duration::from_millis(100));
     assert_eq!(
-        failed(&ran(&first)),
+        failed(&ran(&first, &Deadline::after(WAIT))),
         (
             ErrorCode::Timeout,
             "`fiber.test/slow`: `spin` passed its 100 ms timeout and was stopped.".to_owned()
         )
     );
-    assert_eq!(text(&ran(&run(&tools["spin"], json!({})))), "again");
+    assert_eq!(
+        text(&ran(
+            &run(&tools["spin"], json!({})),
+            &Deadline::after(WAIT)
+        )),
+        "again"
+    );
 }
 
 #[test]
@@ -509,8 +532,8 @@ fiber.tool("wait", {{
     let tools = by_name(&ext);
     let deadline = clock.now().checked_add(Duration::from_millis(100)).unwrap();
     let first = run(&tools["wait"], json!({}));
-    held.accepted
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&held.accepted)
         .expect("waited for the request to reach the server");
     // The caller of a parked call waits to the deadline plus the grace,
     // so the callback is parked under its deadline.
@@ -520,13 +543,19 @@ fiber.tool("wait", {{
     );
     clock.advance(Duration::from_millis(100));
     assert_eq!(
-        failed(&ran(&first)),
+        failed(&ran(&first, &Deadline::after(WAIT))),
         (
             ErrorCode::Timeout,
             "`fiber.test/slow`: `wait` passed its 100 ms timeout and was stopped.".to_owned()
         )
     );
-    assert_eq!(text(&ran(&run(&tools["wait"], json!({})))), "again");
+    assert_eq!(
+        text(&ran(
+            &run(&tools["wait"], json!({})),
+            &Deadline::after(WAIT)
+        )),
+        "again"
+    );
 }
 
 #[test]
@@ -547,17 +576,17 @@ fiber.tool("fetch", {
     );
     let tools = by_name(&ext);
     let first = run(&tools["fetch"], json!({ "url": one.url }));
-    one.accepted
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&one.accepted)
         .expect("waited for the first request");
     let second = run(&tools["fetch"], json!({ "url": two.url }));
-    two.accepted
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&two.accepted)
         .expect("waited for the second request while the first is parked");
     two.release.send(()).unwrap();
-    assert_eq!(text(&ran(&second)), "two");
+    assert_eq!(text(&ran(&second, &Deadline::after(WAIT))), "two");
     one.release.send(()).unwrap();
-    assert_eq!(text(&ran(&first)), "one");
+    assert_eq!(text(&ran(&first, &Deadline::after(WAIT))), "one");
 }
 
 #[test]
@@ -580,12 +609,15 @@ fiber.tool("runs", {
     ext.deliver_to(tx);
     let tools = by_name(&ext);
     let runs = &tools["runs"];
-    assert_eq!(text(&ran(&run(runs, json!({})))), "0");
+    assert_eq!(
+        text(&ran(&run(runs, json!({})), &Deadline::after(WAIT))),
+        "0"
+    );
     // The run's `extension_exec` would be sent before its reply resumes
     // the callback, so it would be here by now.
     assert!(matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)));
     assert!(effects(runs, json!({})).is_ok());
-    match inbox.recv_timeout(WAIT) {
+    match Deadline::after(WAIT).recv(&inbox) {
         Ok(Delivery::ExtensionExec(exec)) => {
             assert_eq!(exec.program, "sh");
             assert_eq!(exec.args, ["-c", "exit 3"]);
@@ -615,7 +647,10 @@ fiber.tool("refresh", {
         FakeClock::new(),
     );
     let tools = by_name(&ext);
-    let said = text(&ran(&run(&tools["refresh"], json!({}))));
+    let said = text(&ran(
+        &run(&tools["refresh"], json!({})),
+        &Deadline::after(WAIT),
+    ));
     let mut lines = said.lines();
     assert_eq!(lines.next(), Some("false"));
     assert_eq!(lines.next(), Some("string"));
@@ -642,6 +677,7 @@ impl contract::files::PathLock for NoLock {
 }
 
 /// The session's extensions, loaded on a thread under `WAIT`.
+#[track_caller]
 fn session(setup: &Setup) -> Arc<SessionExtensions> {
     let config = Config::load(Sources {
         home: setup.home(),
@@ -781,7 +817,7 @@ fiber.tool("probe", {
     let probe = Arc::clone(probe);
     fakes::within("the effects call", WAIT, move || probe.effects(&Map::new()))
         .expect("the effects function ran");
-    match inbox.recv_timeout(WAIT) {
+    match Deadline::after(WAIT).recv(&inbox) {
         Ok(Delivery::ExtensionExec(exec)) => assert_eq!(exec.process.exit_code, Some(4)),
         other => panic!("expected the effects function's extension_exec, got {other:?}"),
     }
@@ -810,9 +846,10 @@ fn cancelled() -> Output {
 }
 
 /// Waits `bound` for nothing: a bounded receive on a channel no one sends on.
+#[track_caller]
 fn pause(bound: Duration) {
     let (_keep, never) = mpsc::channel::<()>();
-    assert!(never.recv_timeout(bound).is_err());
+    assert!(Deadline::after(bound).recv(&never).is_err());
 }
 
 #[test]
@@ -840,15 +877,26 @@ fiber.tool("count", {
     let went = go_module(dir.path(), "spin");
     let tools = by_name(&ext);
     let spinning = run(&tools["spin"], json!({}));
-    went.recv_timeout(WAIT).expect("waited for spin to start");
+    Deadline::after(WAIT)
+        .recv(&went)
+        .expect("waited for spin to start");
     // The thread spins, so this call stays queued.
     let cancel = CancelToken::new();
     let queued = run_cancellable(&tools["count"], &cancel);
     cancel.cancel();
-    assert_eq!(ran(&queued), cancelled());
+    assert_eq!(ran(&queued, &Deadline::after(WAIT)), cancelled());
     clock.advance(Duration::from_millis(100));
-    assert_eq!(failed(&ran(&spinning)).0, ErrorCode::Timeout);
-    assert_eq!(text(&ran(&run(&tools["count"], json!({})))), "1");
+    assert_eq!(
+        failed(&ran(&spinning, &Deadline::after(WAIT))).0,
+        ErrorCode::Timeout
+    );
+    assert_eq!(
+        text(&ran(
+            &run(&tools["count"], json!({})),
+            &Deadline::after(WAIT)
+        )),
+        "1"
+    );
 }
 
 #[test]
@@ -878,12 +926,18 @@ fiber.tool("wait", {{
     let tools = by_name(&ext);
     let cancel = CancelToken::new();
     let first = run_cancellable(&tools["wait"], &cancel);
-    held.accepted
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&held.accepted)
         .expect("waited for the request to reach the server");
     cancel.cancel();
-    assert_eq!(ran(&first), cancelled());
-    assert_eq!(text(&ran(&run(&tools["wait"], json!({})))), "again");
+    assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
+    assert_eq!(
+        text(&ran(
+            &run(&tools["wait"], json!({})),
+            &Deadline::after(WAIT)
+        )),
+        "again"
+    );
 }
 
 #[test]
@@ -910,11 +964,19 @@ fiber.tool("spin", {
     let tools = by_name(&ext);
     let cancel = CancelToken::new();
     let first = run_cancellable(&tools["spin"], &cancel);
-    went.recv_timeout(WAIT).expect("waited for spin to start");
+    Deadline::after(WAIT)
+        .recv(&went)
+        .expect("waited for spin to start");
     cancel.cancel();
-    assert_eq!(ran(&first), cancelled());
+    assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
     // The interrupt is cleared: the next call runs to its own result.
-    assert_eq!(text(&ran(&run(&tools["spin"], json!({})))), "again");
+    assert_eq!(
+        text(&ran(
+            &run(&tools["spin"], json!({})),
+            &Deadline::after(WAIT)
+        )),
+        "again"
+    );
 }
 
 /// An extension whose tool `exec` runs `script` through `sh`, with the
@@ -953,13 +1015,19 @@ fn a_call_parked_on_exec_returns_once_its_group_is_empty() {
     let group = ready.wait(WAIT)[0];
     let watchdog = fakes::Watchdog::group(group);
     cancel.cancel();
-    assert_eq!(ran(&first), cancelled());
+    assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
     assert!(
         !fakes::kill_group(group, "0").unwrap(),
         "the group is empty when the call returns"
     );
     watchdog.stand_down(WAIT);
-    assert_eq!(text(&ran(&run(&tools["exec"], json!({})))), "again");
+    assert_eq!(
+        text(&ran(
+            &run(&tools["exec"], json!({})),
+            &Deadline::after(WAIT)
+        )),
+        "again"
+    );
 }
 
 #[test]
@@ -998,14 +1066,16 @@ fiber.tool("exec", {{
     // The trap's line: SIGTERM arrived and the group runs on.
     ready.wait(WAIT);
     assert!(
-        first.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&first)
+            .is_err(),
         "the call returned while its group still ran"
     );
     // Past the SIGKILL 800 ms after the SIGTERM, and past the call's 500 ms
     // deadline and its grace: a cancelled call waits for its run, not its
     // deadline.
     clock.advance(Duration::from_millis(500) + GRACE);
-    assert_eq!(ran(&first), cancelled());
+    assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
     assert!(
         !fakes::kill_group(group, "0").unwrap(),
         "the group is empty when the call returns"
@@ -1050,7 +1120,8 @@ fiber.tool("other", {
     let asked = clock.now();
     let cancel = CancelToken::new();
     let first = run_cancellable(&tools["find"], &cancel);
-    went.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&went)
         .expect("waited for the callback to pass its clock check");
     cancel.cancel();
     let abandon_at = asked + Duration::from_millis(50) + GRACE;
@@ -1059,8 +1130,8 @@ fiber.tool("other", {
         "waited for the caller to park at the grace"
     );
     clock.advance(Duration::from_millis(50) + GRACE);
-    assert_eq!(ran(&first), cancelled());
-    let later = ran(&run(&tools["other"], json!({})));
+    assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
+    let later = ran(&run(&tools["other"], json!({})), &Deadline::after(WAIT));
     assert_eq!(
         failed(&later),
         (
@@ -1103,17 +1174,20 @@ fiber.tool("find", {{
     let tools = by_name(&ext);
     let cancel = CancelToken::new();
     let waiting = run_cancellable(&tools["wait"], &cancel);
-    held.accepted
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&held.accepted)
         .expect("waited for the request to reach the server");
     let asked = clock.now();
     let stuck = run(&tools["find"], json!({}));
-    went.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&went)
         .expect("waited for the stuck callback to pass its clock check");
     // The thread is stuck in a C call, so it never drops the parked call.
     cancel.cancel();
     assert!(
-        waiting.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&waiting)
+            .is_err(),
         "the parked call returned before the thread dropped it"
     );
     let abandon_at = asked + Duration::from_millis(50) + GRACE;
@@ -1122,8 +1196,11 @@ fiber.tool("find", {{
         "waited for the stuck call's caller to park at the grace"
     );
     clock.advance(Duration::from_millis(50) + GRACE);
-    assert_eq!(failed(&ran(&stuck)).0, ErrorCode::ToolError);
-    assert_eq!(ran(&waiting), cancelled());
+    assert_eq!(
+        failed(&ran(&stuck, &Deadline::after(WAIT))).0,
+        ErrorCode::ToolError
+    );
+    assert_eq!(ran(&waiting, &Deadline::after(WAIT)), cancelled());
 }
 
 #[test]
@@ -1169,7 +1246,8 @@ fiber.tool("find", {{
     let watchdog = fakes::Watchdog::group(group);
     let asked = clock.now();
     let stuck = run(&tools["find"], json!({}));
-    went.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&went)
         .expect("waited for the stuck callback to pass its clock check");
     // The stop's SIGKILL bound anchors at the cancel, so the cancel lands
     // 300 ms into the stuck call's 50 ms timeout plus grace: the abandon
@@ -1178,7 +1256,9 @@ fiber.tool("find", {{
     // The thread is stuck in a C call, so it never drops the parked call.
     cancel.cancel();
     assert!(
-        first.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&first)
+            .is_err(),
         "the parked call returned before the abandon"
     );
     let abandon_at = asked + Duration::from_millis(50) + GRACE;
@@ -1187,7 +1267,10 @@ fiber.tool("find", {{
         "waited for the stuck call's caller to park at the grace"
     );
     clock.advance(Duration::from_millis(750));
-    assert_eq!(failed(&ran(&stuck)).0, ErrorCode::ToolError);
+    assert_eq!(
+        failed(&ran(&stuck, &Deadline::after(WAIT))).0,
+        ErrorCode::ToolError
+    );
     // Abandoned with the VM: the call is still going while its group runs.
     assert!(
         first.try_recv().is_err(),
@@ -1197,13 +1280,15 @@ fiber.tool("find", {{
     // and the group runs on past it.
     ready.wait(WAIT);
     assert!(
-        first.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&first)
+            .is_err(),
         "the call returned while its group still ran"
     );
     // Past the SIGKILL 800 ms after the SIGTERM: the group is killed and
     // drained before the call returns.
     clock.advance(Duration::from_millis(800));
-    assert_eq!(ran(&first), cancelled());
+    assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
     assert!(
         !fakes::kill_group(group, "0").unwrap(),
         "the group is empty when the call returns"

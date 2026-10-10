@@ -19,6 +19,7 @@ use contract::ErrorCode;
 use contract::events::CallStatus;
 use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
 use contract::shapes::Process;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Map, json};
 
@@ -95,10 +96,12 @@ impl Home {
         .unwrap()
     }
 
+    #[track_caller]
     fn load(&self, overrides: &[&str]) -> Arc<SessionExtensions> {
         self.load_with_host(overrides, None)
     }
 
+    #[track_caller]
     fn load_with_host(
         &self,
         overrides: &[&str],
@@ -134,14 +137,18 @@ const WAIT: Duration = Duration::from_secs(5);
 
 /// Runs `f` on its own thread and waits for it under [`WAIT`], so a runtime
 /// that never answers fails the test instead of hanging it.
+#[track_caller]
 fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let _sent = tx.send(f());
     });
-    rx.recv_timeout(WAIT).expect("waited for the extensions")
+    Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("waited for the extensions")
 }
 
+#[track_caller]
 fn after_tool(session: &Arc<SessionExtensions>, content: &str) -> AfterToolAnswer {
     let (session, content) = (Arc::clone(session), content.to_owned());
     bounded(move || {
@@ -1063,13 +1070,13 @@ fn session_seal_drops_late_status_log_and_emit_from_a_parked_command() {
     thread::spawn(move || {
         let _sent = done_tx.send(lua.command("hold", ""));
     });
-    accepted_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&accepted_rx)
         .expect("waited for the command to park on host.http");
     contract::extension::ExtensionDoor::seal(&*session);
     let _sent = release_tx.send(());
-    let result = done_rx
-        .recv_timeout(WAIT)
+    let result = Deadline::after(WAIT)
+        .recv(&done_rx)
         .expect("waited for the parked command to return");
     assert_eq!(result.unwrap(), "ok");
     assert!(
@@ -1135,8 +1142,8 @@ fn drive_to_hands_the_driver_to_each_extension() {
     session.drive_to(Arc::clone(&drive) as Arc<dyn contract::extension::Drive>);
     let lua = Arc::clone(&session.lua[0]);
     assert_eq!(bounded(move || lua.command("go", "")).unwrap(), "drove");
-    called_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&called_rx)
         .expect("waited for the drive to reach the driver");
     assert_eq!(
         drive.calls.lock().unwrap().clone(),
@@ -1164,6 +1171,7 @@ fn crediting(provider: &str) -> String {
 }
 
 /// `start_provider` on its own thread under [`WAIT`].
+#[track_caller]
 fn start(
     home: &Home,
     session: &Arc<SessionExtensions>,

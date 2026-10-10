@@ -15,6 +15,7 @@ use contract::events::{CallStatus, ExtensionExec, ExtensionLog};
 use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
 use contract::inbox::Delivery;
 use extensions::{LuaExtension, SessionExtensions};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Map, json};
 
@@ -57,6 +58,7 @@ fn spinning(on_failure: &str, timeout: u64, short: &str) -> String {
 
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
+#[track_caller]
 fn load(setup: &Setup, overrides: &[&str], clock: Arc<FakeClock>) -> Arc<SessionExtensions> {
     let config = Config::load(Sources {
         home: setup.home(),
@@ -74,7 +76,8 @@ fn load(setup: &Setup, overrides: &[&str], clock: Arc<FakeClock>) -> Arc<Session
         let _sent = tx.send(SessionExtensions::load(&home, &config, clock, locks, None));
     });
     Arc::new(
-        rx.recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&rx)
             .expect("waited for the extensions to load"),
     )
 }
@@ -105,22 +108,25 @@ fn ask(session: &Arc<SessionExtensions>) -> mpsc::Receiver<AfterToolAnswer> {
 /// the caller to park at `timeout` plus the grace, moves the clock by
 /// `timeout`, and returns the answer.
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
+#[track_caller]
 fn timed_out(
     session: &Arc<SessionExtensions>,
     clock: &Arc<FakeClock>,
     went: &mpsc::Receiver<()>,
     timeout: Duration,
+    wait: &Deadline,
 ) -> AfterToolAnswer {
     let asked = clock.now();
     let answer = ask(session);
-    went.recv_timeout(WAIT)
-        .expect("waited for the hook to start");
+    wait.recv(went).expect("waited for the hook to start");
     assert!(
         clock.await_parked(asked + timeout + GRACE, WAIT),
         "waited for the caller to park at the hook's grace"
     );
     clock.advance(timeout);
-    answer.recv_timeout(WAIT).expect("waited for the answer")
+    Deadline::after(WAIT)
+        .recv(&answer)
+        .expect("waited for the answer")
 }
 
 fn content(answer: &AfterToolAnswer) -> Option<&str> {
@@ -146,7 +152,13 @@ fn a_non_blocking_hook_past_its_timeout_is_dropped_and_the_next_extension_still_
     let went = go_module(&dir, "spin");
     let clock = FakeClock::new();
     let session = load(&setup, &[], clock.clone());
-    let answer = timed_out(&session, &clock, &went, Duration::from_millis(50));
+    let answer = timed_out(
+        &session,
+        &clock,
+        &went,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(content(&answer), Some("x|b"));
     assert_eq!(answer.changed_by, ["fiber.test/b"]);
     assert_eq!(answer.notices.len(), 1);
@@ -158,8 +170,8 @@ fn a_non_blocking_hook_past_its_timeout_is_dropped_and_the_next_extension_still_
         answer.notices[0].message
     );
     // The hook stopped the loop and left the VM up: the next call runs it.
-    let again = ask(&session)
-        .recv_timeout(WAIT)
+    let again = Deadline::after(WAIT)
+        .recv(&ask(&session))
         .expect("waited for the second answer");
     assert_eq!(content(&again), Some("x|a|b"));
     assert!(again.notices.is_empty(), "{:?}", again.notices);
@@ -173,7 +185,13 @@ fn a_blocking_hook_past_its_timeout_withholds_the_output() {
     let went = go_module(&dir, "spin");
     let clock = FakeClock::new();
     let session = load(&setup, &[], clock.clone());
-    let answer = timed_out(&session, &clock, &went, Duration::from_millis(50));
+    let answer = timed_out(
+        &session,
+        &clock,
+        &went,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         answer.outcome,
         AfterToolOutcome::Withheld {
@@ -195,7 +213,13 @@ fn hook_timeout_ms_is_the_timeout_the_hook_is_stopped_at() {
         &["extensions.\"fiber.test/a\".hook_timeout_ms=20"],
         clock.clone(),
     );
-    let answer = timed_out(&session, &clock, &went, Duration::from_millis(20));
+    let answer = timed_out(
+        &session,
+        &clock,
+        &went,
+        Duration::from_millis(20),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         answer.outcome,
         AfterToolOutcome::Withheld {
@@ -241,12 +265,13 @@ fn exec_extension(
 /// Runs `command` on its own thread under `WAIT`, so a callback the runtime
 /// fails to stop fails the test instead of hanging it.
 #[allow(clippy::panic, reason = "a test helper; a hang is the test's failure")]
+#[track_caller]
 fn exec_call(ext: &Arc<LuaExtension>, command: &str) -> Result<String, extensions::Error> {
     let (tx, rx) = mpsc::channel();
     let ext = Arc::clone(ext);
     let name = command.to_owned();
     std::thread::spawn(move || tx.send(ext.command(&name, "")));
-    match rx.recv_timeout(WAIT) {
+    match Deadline::after(WAIT).recv(&rx) {
         Ok(result) => result,
         Err(_) => panic!("`{command}` did not return within {WAIT:?}"),
     }
@@ -257,8 +282,9 @@ fn exec_call(ext: &Arc<LuaExtension>, command: &str) -> Result<String, extension
     clippy::panic,
     reason = "a test helper; a missing line is the test's failure"
 )]
-fn next_exec(inbox: &mpsc::Receiver<Delivery>) -> ExtensionExec {
-    match inbox.recv_timeout(WAIT) {
+#[track_caller]
+fn next_exec(inbox: &mpsc::Receiver<Delivery>, wait: &Deadline) -> ExtensionExec {
+    match wait.recv(inbox) {
         Ok(Delivery::ExtensionExec(exec)) => exec,
         Ok(other) => panic!("expected extension_exec, got {other:?}"),
         Err(_) => panic!("waited {WAIT:?} for extension_exec"),
@@ -270,8 +296,9 @@ fn next_exec(inbox: &mpsc::Receiver<Delivery>) -> ExtensionExec {
     clippy::panic,
     reason = "a test helper; a missing line is the test's failure"
 )]
-fn next_log(inbox: &mpsc::Receiver<Delivery>) -> ExtensionLog {
-    match inbox.recv_timeout(WAIT) {
+#[track_caller]
+fn next_log(inbox: &mpsc::Receiver<Delivery>, wait: &Deadline) -> ExtensionLog {
+    match wait.recv(inbox) {
         Ok(Delivery::ExtensionLog(log)) => log,
         Ok(other) => panic!("expected extension_log, got {other:?}"),
         Err(_) => panic!("waited {WAIT:?} for extension_log"),
@@ -306,7 +333,7 @@ fn exec_sends_one_extension_exec_to_the_inbox() {
     let (tx, rx) = mpsc::channel();
     ext.deliver_to(tx);
     exec_call(&ext, "pwd").expect("the pwd command runs");
-    let exec = next_exec(&rx);
+    let exec = next_exec(&rx, &Deadline::after(WAIT));
     assert_eq!(exec.extension, "fiber.test/exec");
     assert_eq!(exec.program, "sh");
     assert_eq!(exec.args, vec!["-c".to_owned(), "pwd".to_owned()]);
@@ -325,7 +352,7 @@ fn a_run_before_deliver_to_is_delivered_after_it() {
     let (tx, rx) = mpsc::channel();
     exec_call(&ext, "pwd").expect("the pwd command runs");
     ext.deliver_to(tx);
-    let exec = next_exec(&rx);
+    let exec = next_exec(&rx, &Deadline::after(WAIT));
     assert_eq!(exec.program, "sh");
     assert_eq!(exec.process.exit_code, Some(0));
 }
@@ -345,7 +372,7 @@ fn log_from_a_command_callback_reaches_the_inbox_as_extension_log() {
     let (tx, rx) = mpsc::channel();
     ext.deliver_to(tx);
     exec_call(&ext, "note").expect("the note command runs");
-    let log = next_log(&rx);
+    let log = next_log(&rx, &Deadline::after(WAIT));
     assert_eq!(log.extension, "fiber.test/log");
     assert_eq!(log.message, "seen");
 }
@@ -363,9 +390,11 @@ fn log_in_init_is_buffered_and_delivered_in_order_with_a_later_exec() {
     let (tx, rx) = mpsc::channel();
     exec_call(&ext, "pwd").expect("the pwd command runs");
     ext.deliver_to(tx);
-    assert_eq!(next_log(&rx).message, "early");
-    assert_eq!(next_log(&rx).message, "late");
-    assert_eq!(next_exec(&rx).program, "sh");
+    // One deadline for the whole wait: the three takes drain one stream.
+    let wait = Deadline::after(WAIT);
+    assert_eq!(next_log(&rx, &wait).message, "early");
+    assert_eq!(next_log(&rx, &wait).message, "late");
+    assert_eq!(next_exec(&rx, &wait).program, "sh");
 }
 
 #[test]
@@ -429,11 +458,11 @@ fn a_session_hooks_run_reaches_the_inbox_deliver_to_gave() {
     let (tx, inbox) = mpsc::channel();
     session.deliver_to(tx);
     let answered = ask(&session);
-    match answered.recv_timeout(WAIT) {
+    match Deadline::after(WAIT).recv(&answered) {
         Ok(answer) => assert_eq!(answer.outcome, AfterToolOutcome::Unchanged),
         Err(_) => panic!("the hook did not return within {WAIT:?}"),
     }
-    let exec = next_exec(&inbox);
+    let exec = next_exec(&inbox, &Deadline::after(WAIT));
     assert_eq!(exec.extension, "fiber.test/deliv");
     assert_eq!(exec.program, "sh");
 }
@@ -472,11 +501,18 @@ fn a_run_ending_after_the_extension_is_dropped_is_not_logged() {
         drop(caller);
         let _sent = loaded_tx.send(result);
     });
-    match loaded_rx.recv_timeout(WAIT) {
+    match Deadline::after(WAIT).recv(&loaded_rx) {
         Ok(result) => assert_eq!(result.unwrap(), "nop"),
         Err(_) => panic!("loading did not return within {WAIT:?}"),
     }
-    assert_eq!(next_line(&started, "the run the timer started"), b"x\n");
+    assert_eq!(
+        next_line(
+            &started,
+            "the run the timer started",
+            &Deadline::after(WAIT)
+        ),
+        b"x\n"
+    );
     assert_eq!(Arc::strong_count(&ext), 1, "the test holds the last handle");
     drop(ext);
     within("releasing the program", move || {
@@ -485,7 +521,7 @@ fn a_run_ending_after_the_extension_is_dropped_is_not_logged() {
             .and_then(|mut released| released.write_all(b"x\n"))
             .is_ok()
     });
-    match inbox.recv_timeout(WAIT) {
+    match Deadline::after(WAIT).recv(&inbox) {
         Err(mpsc::RecvTimeoutError::Disconnected) => {}
         Ok(delivery) => panic!("a run ending after the drop was logged: {delivery:?}"),
         Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -525,12 +561,13 @@ fn timer_fifo(dir: &Path, name: &str) -> PathBuf {
 /// Runs `work` on a worker and returns its answer within `WAIT`: a call
 /// that blocks, such as a `Command::status` or a fifo, is a wait too.
 #[allow(clippy::panic, reason = "a test helper; a hang is the test's failure")]
+#[track_caller]
 fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _sent = tx.send(work());
     });
-    match rx.recv_timeout(WAIT) {
+    match Deadline::after(WAIT).recv(&rx) {
         Ok(answer) => answer,
         Err(_) => panic!("waited {WAIT:?} for {what}"),
     }
@@ -558,8 +595,9 @@ fn read_fifo(path: PathBuf) -> mpsc::Receiver<Vec<u8>> {
     clippy::panic,
     reason = "a test helper; a missing firing is the test's failure"
 )]
-fn next_line(rx: &mpsc::Receiver<Vec<u8>>, what: &str) -> Vec<u8> {
-    match rx.recv_timeout(WAIT) {
+#[track_caller]
+fn next_line(rx: &mpsc::Receiver<Vec<u8>>, what: &str, wait: &Deadline) -> Vec<u8> {
+    match wait.recv(rx) {
         Ok(line) => line,
         Err(_) => panic!("waited {WAIT:?} for {what}"),
     }
@@ -569,9 +607,10 @@ fn next_line(rx: &mpsc::Receiver<Vec<u8>>, what: &str) -> Vec<u8> {
 /// `QUIET` names the listen, so the wait has one named deadline.
 const QUIET: Duration = Duration::from_millis(100);
 
+#[track_caller]
 fn no_line(rx: &mpsc::Receiver<Vec<u8>>, what: &str) {
     assert!(
-        rx.recv_timeout(QUIET).is_err(),
+        Deadline::after(QUIET).recv(rx).is_err(),
         "{what} fired, and it must not have"
     );
 }
@@ -613,7 +652,10 @@ fn a_timer_set_in_init_fires_after_load() {
         "waited {WAIT:?} for the thread to park at the timer due"
     );
     clock.advance(Duration::from_millis(1000));
-    assert_eq!(next_line(&fired, "the init timer"), b"x");
+    assert_eq!(
+        next_line(&fired, "the init timer", &Deadline::after(WAIT)),
+        b"x"
+    );
 }
 
 #[test]
@@ -644,7 +686,10 @@ fn after_fires_once() {
         "waited {WAIT:?} for the thread to park at the timer due"
     );
     clock.advance(Duration::from_millis(1000));
-    assert_eq!(next_line(&fired, "the after timer"), b"x");
+    assert_eq!(
+        next_line(&fired, "the after timer", &Deadline::after(WAIT)),
+        b"x"
+    );
     // Once the one-shot has ended only the sentinel waits: the thread parks
     // at its due, the signal that it waits on the clock before the advance.
     assert!(
@@ -691,7 +736,10 @@ fn a_fired_after_releases_its_function() {
         "waited {WAIT:?} for the thread to park at the timer due"
     );
     clock.advance(Duration::from_millis(1000));
-    assert_eq!(next_line(&fired, "the after timer"), b"x");
+    assert_eq!(
+        next_line(&fired, "the after timer", &Deadline::after(WAIT)),
+        b"x"
+    );
     // `held` runs only after the firing ended and the thread freed it.
     assert_eq!(
         exec_call(&ext, "held").unwrap(),
@@ -726,7 +774,10 @@ fn every_fires_again_ms_after_each_firing_ends() {
         "waited {WAIT:?} for the thread to park at the timer due"
     );
     clock.advance(Duration::from_millis(1000));
-    assert_eq!(next_line(&first, "the first firing"), b"x");
+    assert_eq!(
+        next_line(&first, "the first firing", &Deadline::after(WAIT)),
+        b"x"
+    );
     // The fifo proves the write, not that the firing ended: the thread
     // parks at the rescheduled due only after the firing ends, so awaiting
     // it proves the end before the advance. Advancing earlier would shift
@@ -745,7 +796,10 @@ fn every_fires_again_ms_after_each_firing_ends() {
         "waited {WAIT:?} for the thread to park again at the every's due"
     );
     clock.advance(Duration::from_millis(2));
-    assert_eq!(next_line(&second, "the second firing"), b"x");
+    assert_eq!(
+        next_line(&second, "the second firing", &Deadline::after(WAIT)),
+        b"x"
+    );
 }
 
 #[test]
@@ -812,7 +866,10 @@ fn cancel_inside_its_own_every_callback_stops_it() {
         "waited {WAIT:?} for the thread to park at the timer due"
     );
     clock.advance(Duration::from_millis(1000));
-    assert_eq!(next_line(&first, "the first firing"), b"x");
+    assert_eq!(
+        next_line(&first, "the first firing", &Deadline::after(WAIT)),
+        b"x"
+    );
     // The second firing is due 50 ms after the first one ended: await the
     // rescheduled park, which proves the first firing ended, before the
     // advance.
@@ -822,7 +879,10 @@ fn cancel_inside_its_own_every_callback_stops_it() {
         "waited {WAIT:?} for the first firing to end and park at its every"
     );
     clock.advance(Duration::from_millis(1000));
-    assert_eq!(next_line(&second, "the second firing"), b"x");
+    assert_eq!(
+        next_line(&second, "the second firing", &Deadline::after(WAIT)),
+        b"x"
+    );
     // The fifo proves the write, not that the cancelling firing ended: once
     // it has, only the sentinel waits and the thread parks at its due, the
     // signal that it waits on the clock before the advance.
@@ -855,7 +915,7 @@ fn a_missing_or_bad_timeout_raises_at_the_call() {
         let (tx, rx) = mpsc::channel();
         let ext = Arc::clone(&ext);
         std::thread::spawn(move || tx.send(ext.command("bad", kind)));
-        let err = match rx.recv_timeout(WAIT) {
+        let err = match Deadline::after(WAIT).recv(&rx) {
             Ok(result) => result.unwrap_err(),
             Err(_) => panic!("`bad {kind}` did not return within {WAIT:?}"),
         };
@@ -923,19 +983,36 @@ fn a_queued_command_starts_before_a_due_timer() {
     );
     // Releasing `slow` frees the thread with `quick` queued and the timer
     // due: `quick` starts first.
-    assert_eq!(next_line(&read_fifo(gate), "the slow command's gate"), b"x");
-    match slow_rx.recv_timeout(WAIT) {
+    assert_eq!(
+        next_line(
+            &read_fifo(gate),
+            "the slow command's gate",
+            &Deadline::after(WAIT)
+        ),
+        b"x"
+    );
+    match Deadline::after(WAIT).recv(&slow_rx) {
         Ok(result) => assert_eq!(result.unwrap(), "slow"),
         Err(_) => panic!("the slow command did not return within {WAIT:?}"),
     }
     let bstarted = read_fifo(dir.join("bstarted.fifo"));
-    assert_eq!(next_line(&bstarted, "the quick command"), b"x");
-    match quick_rx.recv_timeout(WAIT) {
+    assert_eq!(
+        next_line(&bstarted, "the quick command", &Deadline::after(WAIT)),
+        b"x"
+    );
+    match Deadline::after(WAIT).recv(&quick_rx) {
         Ok(result) => assert_eq!(result.unwrap(), "done"),
         Err(_) => panic!("the quick command did not return within {WAIT:?}"),
     }
     let tick = read_fifo(dir.join("tick.fifo"));
-    assert_eq!(next_line(&tick, "the timer after the commands"), b"x");
+    assert_eq!(
+        next_line(
+            &tick,
+            "the timer after the commands",
+            &Deadline::after(WAIT)
+        ),
+        b"x"
+    );
 }
 
 #[test]
@@ -984,7 +1061,10 @@ fn a_timer_callback_past_its_timeout_ends_and_every_keeps_firing() {
         "waited {WAIT:?} for the timed-out firing to park at its every"
     );
     clock.advance(Duration::from_millis(500));
-    assert_eq!(next_line(&second, "the second firing"), b"x");
+    assert_eq!(
+        next_line(&second, "the second firing", &Deadline::after(WAIT)),
+        b"x"
+    );
     assert_eq!(exec_call(&ext, "count").unwrap(), "2");
     // The first firing never reached its write.
     no_line(&first, "the timed-out firing's write");
@@ -1021,7 +1101,14 @@ fn a_timer_has_no_provider_credential_to_refresh() {
     clock.advance(Duration::from_millis(1000));
     // The refused refresh ends the firing silently (`docs/extensions.md`:
     // a timer failure is reported nowhere); the `every` keeps firing.
-    assert_eq!(next_line(&first, "the every after the refusal"), b"again");
+    assert_eq!(
+        next_line(
+            &first,
+            "the every after the refusal",
+            &Deadline::after(WAIT)
+        ),
+        b"again"
+    );
 }
 
 // The acceptance case (`docs/extensions.md`, "Host calls"): an `after_tool`
@@ -1058,14 +1145,24 @@ fn a_timer_fires_while_a_hook_waits_on_host_exec() {
     // parked; awaiting the timer due proves the extension thread waits on
     // the clock before the advance. The exec's own parks use `GROUP_POLL`,
     // so the timer due names the thread's wait.
-    assert_eq!(next_line(&started, "the parked hook"), b"x");
+    assert_eq!(
+        next_line(&started, "the parked hook", &Deadline::after(WAIT)),
+        b"x"
+    );
     let due = clock.now() + Duration::from_millis(50);
     assert!(
         clock.await_parked(due, WAIT),
         "waited {WAIT:?} for the thread to park at the timer due"
     );
     clock.advance(Duration::from_millis(1000));
-    assert_eq!(next_line(&tick, "the timer while the hook waits"), b"x");
+    assert_eq!(
+        next_line(
+            &tick,
+            "the timer while the hook waits",
+            &Deadline::after(WAIT)
+        ),
+        b"x"
+    );
     // Releasing the shell ends the exec, and the hook returns unchanged.
     // Opening for writing blocks until the shell's read opens its reader:
     // on a worker under `WAIT`, so a run that never opens it fails the
@@ -1081,12 +1178,12 @@ fn a_timer_fires_while_a_hook_waits_on_host_exec() {
             Ok(()) | Err(_) => {}
         }
     });
-    match release_rx.recv_timeout(WAIT) {
+    match Deadline::after(WAIT).recv(&release_rx) {
         Ok(Ok(())) => {}
         Ok(Err(_)) => panic!("opening hook.fifo for writing"),
         Err(_) => panic!("waited {WAIT:?} for hook.fifo to release the hook"),
     }
-    match answered.recv_timeout(WAIT) {
+    match Deadline::after(WAIT).recv(&answered) {
         Ok(answer) => assert_eq!(answer.outcome, AfterToolOutcome::Unchanged),
         Err(_) => panic!("the hook did not return within {WAIT:?}"),
     }
@@ -1101,6 +1198,7 @@ const CHILD: &str = "FIBER_EXTENSIONS_LUA_HOOKS_TEST_CHILD";
 /// where no other test's group is listed.
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 #[allow(clippy::panic, reason = "a test helper; a hang is the test's failure")]
+#[track_caller]
 fn in_child(name: &str) {
     let child = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", name, "--nocapture", "--test-threads=1"])
@@ -1112,7 +1210,7 @@ fn in_child(name: &str) {
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
-    let Ok(output) = rx.recv_timeout(WAIT) else {
+    let Ok(output) = Deadline::after(WAIT).recv(&rx) else {
         within("kill -KILL on the child", move || {
             drop(fakes::kill_pid(pid, "KILL"));
         });
@@ -1150,7 +1248,10 @@ fn kill_every_group_stops_a_hook_parked_on_a_long_exec() {
     let session = load(&setup, &[], clock);
     let started = read_fifo(timer_fifo(&dir, "started.fifo"));
     let answered = ask(&session);
-    assert_eq!(next_line(&started, "the parked hook"), b"x\n");
+    assert_eq!(
+        next_line(&started, "the parked hook", &Deadline::after(WAIT)),
+        b"x\n"
+    );
     // The pid file names the shell, whose pid is its group's id.
     let pid: u32 = std::fs::read_to_string(dir.join("pid"))
         .unwrap()
@@ -1163,7 +1264,7 @@ fn kill_every_group_stops_a_hook_parked_on_a_long_exec() {
     // The killed run ends the hook: its signal, not an error. The run
     // returns only once it has reaped the shell and seen the group empty,
     // so the probe below cannot meet an unreaped member.
-    match answered.recv_timeout(WAIT) {
+    match Deadline::after(WAIT).recv(&answered) {
         Ok(_) => {}
         Err(_) => panic!("the hook did not return within {WAIT:?}"),
     }

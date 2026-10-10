@@ -16,6 +16,7 @@ use contract::ErrorCode;
 use contract::events::{CommandInfo, CommandResult};
 use contract::extension::Drive;
 use contract::inbox::{Ack, Answer, Rejection};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Map, Value};
 
@@ -27,12 +28,14 @@ const WAIT: Duration = Duration::from_secs(5);
 /// Runs the blocking call `f` on a thread and receives its result with a
 /// deadline: calling code that blocks is a wait too (`docs/testing.md`,
 /// "Waits and timeouts").
+#[track_caller]
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::spawn(move || done_tx.send(f()));
-    done_rx
-        .recv_timeout(WAIT)
-        .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
+    match Deadline::after(WAIT).recv(&done_rx) {
+        Ok(answer) => answer,
+        Err(_) => panic!("the call did not return within {WAIT:?}"),
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -300,14 +303,16 @@ fn drive_parked_past_deadline_drops_the_late_answer() {
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::spawn(move || done_tx.send(caller.command("slow", "")));
     // The drive reached the door, so the callback is parked on it.
-    called
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&called)
         .expect("the drive reached the door");
     // Past its timeout and the grace: the parked call fails by its deadline.
     clock.advance(Duration::from_secs(5));
     assert!(
         matches!(
-            done_rx.recv_timeout(WAIT).expect("the slow call returned"),
+            Deadline::after(WAIT)
+                .recv(&done_rx)
+                .expect("the slow call returned"),
             Err(Error::Timeout { .. })
         ),
         "the parked drive fails at its deadline"
@@ -376,8 +381,8 @@ fn a_provider_runs_while_a_driven_command_is_held() {
     let holder = Arc::clone(&ext);
     let (hold_tx, hold_rx) = mpsc::channel();
     std::thread::spawn(move || hold_tx.send(holder.command("hold", "")));
-    called_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&called_rx)
         .expect("the drive reached the door");
     // A provider callback runs while the driven command is still held.
     let caller = Arc::clone(&ext);
@@ -389,8 +394,8 @@ fn a_provider_runs_while_a_driven_command_is_held() {
     lock(&order).push("provider_done");
     release_tx.send(()).expect("the test releases the drive");
     assert_eq!(
-        hold_rx
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&hold_rx)
             .expect("the held command returned")
             .unwrap(),
         "true"

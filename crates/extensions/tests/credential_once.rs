@@ -13,15 +13,19 @@ use std::time::Duration;
 use common::{Setup, install, manifest, provider, write};
 use config::{Config, ProjectKey, Sources};
 use extensions::{LuaExtension, LuaProvider, Providers};
+use fakes::Deadline;
 use serde_json::json;
 
 const WAIT: Duration = Duration::from_secs(10);
 
+#[track_caller]
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(f()));
-    rx.recv_timeout(WAIT)
-        .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
+    match Deadline::after(WAIT).recv(&rx) {
+        Ok(answer) => answer,
+        Err(_) => panic!("the call did not return within {WAIT:?}"),
+    }
 }
 
 #[test]

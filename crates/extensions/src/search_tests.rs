@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::search::{Domains, SearchBackend};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::*;
@@ -315,10 +316,14 @@ fn a_timeout_maps_to_timeout() {
             &fakes::CancelToken::new(),
         )
     });
-    went.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&went)
         .expect("waited for the backend to start");
     clock.advance(Duration::from_millis(50));
-    let Err(failed) = ran.recv_timeout(WAIT).expect("the search returned") else {
+    let Err(failed) = Deadline::after(WAIT)
+        .recv(&ran)
+        .expect("the search returned")
+    else {
         panic!("a spinning backend did not fail");
     };
     assert_eq!(failed.code, ErrorCode::Timeout);

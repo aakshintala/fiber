@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
 
@@ -36,6 +37,7 @@ fn extension(init: &str) -> (fakes::TempDir, Arc<LuaExtension>) {
 }
 
 /// Runs `read` on the extension's registrations on a thread, under `WAIT`.
+#[track_caller]
 fn registered<T: Send + 'static>(
     ext: &Arc<LuaExtension>,
     read: impl Fn(&super::super::CallbackTimeouts) -> T + Send + 'static,
@@ -43,15 +45,18 @@ fn registered<T: Send + 'static>(
     let (tx, rx) = mpsc::channel();
     let ext = Arc::clone(ext);
     std::thread::spawn(move || tx.send(ext.registered(read)));
-    rx.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&rx)
         .expect("waited for the entry script")
         .expect("the entry script ran")
 }
 
+#[track_caller]
 fn backends(ext: &Arc<LuaExtension>) -> BTreeMap<String, Duration> {
     registered(ext, |timeouts| timeouts.search.clone())
 }
 
+#[track_caller]
 fn problems(ext: &Arc<LuaExtension>) -> Vec<String> {
     registered(ext, |timeouts| timeouts.hooks.problems.clone())
 }
@@ -183,8 +188,8 @@ fn fiber_search_backend_after_the_entry_script_raises_and_registers_nothing() {
     let (tx, rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
     std::thread::spawn(move || tx.send(caller.command("late", "")));
-    let said = rx
-        .recv_timeout(WAIT)
+    let said = Deadline::after(WAIT)
+        .recv(&rx)
         .expect("waited for the command")
         .unwrap();
     assert_eq!(
@@ -261,10 +266,12 @@ fn a_spinning_run_past_its_timeout_returns_a_timeout() {
     let spinning = Arc::clone(&ext);
     let spun =
         on_thread(move || spinning.search_run("spin", json!({}), &fakes::CancelToken::new()));
-    went.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&went)
         .expect("waited for the backend to spin");
     clock.advance(Duration::from_millis(100));
-    let Err(Error::Timeout { callback, .. }) = spun.recv_timeout(WAIT).expect("the run returned")
+    let Err(Error::Timeout { callback, .. }) =
+        Deadline::after(WAIT).recv(&spun).expect("the run returned")
     else {
         panic!("the spinning run did not time out");
     };

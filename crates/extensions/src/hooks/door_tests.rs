@@ -22,6 +22,7 @@ use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{InteractionRequested, ResolvedBy};
 use contract::extension::ExtensionDoor;
 use contract::inbox::{Ack, Delivery};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
 
@@ -70,6 +71,7 @@ impl Home {
         .unwrap();
     }
 
+    #[track_caller]
     fn load(&self) -> Arc<SessionExtensions> {
         let config = Config::load(Sources {
             home: self.home(),
@@ -109,9 +111,9 @@ fn run(
     done_rx
 }
 
-fn interaction(rx: &mpsc::Receiver<Delivery>) -> InteractionRequested {
-    let Delivery::Interaction(requested) = rx.recv_timeout(WAIT).expect("the Interaction arrives")
-    else {
+#[track_caller]
+fn interaction(rx: &mpsc::Receiver<Delivery>, wait: &Deadline) -> InteractionRequested {
+    let Delivery::Interaction(requested) = wait.recv(rx).expect("the Interaction arrives") else {
         panic!("an unexpected delivery arrives");
     };
     requested
@@ -119,12 +121,15 @@ fn interaction(rx: &mpsc::Receiver<Delivery>) -> InteractionRequested {
 
 /// Runs `f` on its own thread and waits for it under [`WAIT`], so a load
 /// that never returns fails the test instead of hanging it.
+#[track_caller]
 fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let _sent = tx.send(f());
     });
-    rx.recv_timeout(WAIT).expect("waited for the extensions")
+    Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("waited for the extensions")
 }
 
 #[test]
@@ -143,8 +148,11 @@ fn the_extension_holding_the_ask_takes_the_reply_in_load_order() {
     let first = run(&session, 0, "go");
     let second = run(&session, 1, "go");
     let mut ids = std::collections::BTreeMap::new();
+    // One deadline for the whole wait: both Interactions arrive on one
+    // stream with nothing between them but a map insert.
+    let wait = Deadline::after(WAIT);
     for _ in 0..2 {
-        let requested = interaction(&rx);
+        let requested = interaction(&rx, &wait);
         ids.insert(
             requested.extension.clone().unwrap_or_default(),
             requested.request_id,
@@ -171,7 +179,9 @@ fn the_extension_holding_the_ask_takes_the_reply_in_load_order() {
             .is_none(),
         "the holding extension takes the reply"
     );
-    let Delivery::Resolved(resolved, ack) = rx.recv_timeout(WAIT).expect("the Resolved arrives")
+    let Delivery::Resolved(resolved, ack) = Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("the Resolved arrives")
     else {
         panic!("a Resolved arrives");
     };
@@ -179,12 +189,14 @@ fn the_extension_holding_the_ask_takes_the_reply_in_load_order() {
     assert_eq!(resolved.by, ResolvedBy::Person);
     (ack.0)(Ok(None));
     assert!(
-        accepted.recv_timeout(WAIT).expect("the reply is answered"),
+        Deadline::after(WAIT)
+            .recv(&accepted)
+            .expect("the reply is answered"),
         "the reply is accepted once the line is in the log"
     );
     assert_eq!(
-        second
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&second)
             .expect("the command returns")
             .unwrap(),
         "true"
@@ -205,13 +217,16 @@ fn the_extension_holding_the_ask_takes_the_reply_in_load_order() {
             )
             .is_none()
     );
-    let Delivery::Resolved(_, ack) = rx.recv_timeout(WAIT).expect("the Resolved arrives") else {
+    let Delivery::Resolved(_, ack) = Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("the Resolved arrives")
+    else {
         panic!("a Resolved arrives");
     };
     (ack.0)(Ok(None));
     assert_eq!(
-        first
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&first)
             .expect("the command returns")
             .unwrap(),
         "false"

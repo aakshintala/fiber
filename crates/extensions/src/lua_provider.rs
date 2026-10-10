@@ -17,6 +17,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use config::{Config, ModelData, ProviderData, Secret};
 use contract::ErrorCode;
 use contract::signing::{self, SignRequest, Signer};
+#[cfg(test)]
+use fakes::Deadline;
 use serde_json::{Map, Value, json};
 
 use crate::host::sha256_hex;
@@ -458,7 +460,7 @@ impl LuaProvider {
                 #[cfg(test)]
                 if let Some(hook) = lock(&self.woke).take() {
                     let _sent = hook.arrived.send(());
-                    let _released = hook.release.recv_timeout(fakes::MUST_SUCCEED_WITHIN);
+                    let _released = Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&hook.release);
                 }
                 tokens = lock(&self.token);
                 waited = true;

@@ -12,6 +12,7 @@
 use std::time::Duration;
 
 use super::*;
+use fakes::Deadline;
 
 /// One parked callback with `id`: the thread is a real Lua coroutine, so
 /// the lookup sees the same entries `settle` holds.
@@ -754,13 +755,13 @@ fn oauth_starts_under_the_admission_lock_so_no_cancel_or_stop_precedes_it() {
                 }
                 // Held until the asserts ran: dropping it frees the port
                 // and ends the wait.
-                match done_rx.recv_timeout(Duration::from_secs(5)) {
+                match Deadline::after(Duration::from_secs(5)).recv(&done_rx) {
                     Ok(()) | Err(_) => {}
                 }
             });
         }
-        let summary: Vec<(u64, bool)> = settled_rx
-            .recv_timeout(Duration::from_secs(5))
+        let summary: Vec<(u64, bool)> = Deadline::after(Duration::from_secs(5))
+            .recv(&settled_rx)
             .unwrap_or_else(|_| {
                 panic!("settle returned for {case}: calling code that blocks is a wait too")
             });
@@ -860,8 +861,8 @@ fn a_failed_oauth_start_delivers_its_failure_after_releasing_the_lock() {
                 }
             });
         }
-        let summary: Vec<(u64, bool)> = settled_rx
-            .recv_timeout(Duration::from_secs(5))
+        let summary: Vec<(u64, bool)> = Deadline::after(Duration::from_secs(5))
+            .recv(&settled_rx)
             .unwrap_or_else(|_| {
                 panic!("settle returned for {request_kind}: it did not deliver under the lock")
             });

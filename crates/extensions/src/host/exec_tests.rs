@@ -14,6 +14,7 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock as _;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::{
@@ -25,16 +26,20 @@ const DRAIN_BOUNDARY_DEADLINE: Duration = Duration::from_secs(4);
 
 /// Runs `work` on a worker and returns its answer within `DEADLINE`: a call
 /// that blocks, such as a `Command::status` or a fifo, is a wait too.
+#[track_caller]
 fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _sent = tx.send(work());
     });
-    rx.recv_timeout(DEADLINE)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for {what}"))
+    match Deadline::after(DEADLINE).recv(&rx) {
+        Ok(answer) => answer,
+        Err(_) => panic!("waited {DEADLINE:?} for {what}"),
+    }
 }
 
 /// Whether the group still holds a process: `kill -0` on a worker.
+#[track_caller]
 fn group_lives(pgid: u32) -> bool {
     within("kill -0 on the group", move || {
         fakes::kill_group(pgid, "0").unwrap()
@@ -42,6 +47,7 @@ fn group_lives(pgid: u32) -> bool {
 }
 
 /// Sends SIGKILL to `pid` on a worker; an already-gone pid is fine.
+#[track_caller]
 fn kill_pid_now(pid: u32) {
     within("kill -KILL on the pid", move || {
         drop(fakes::kill_pid(pid, "KILL"));
@@ -49,6 +55,7 @@ fn kill_pid_now(pid: u32) {
 }
 
 /// A ready fifo in `dir`, made on a worker: `mkfifo` is a `Command::status`.
+#[track_caller]
 fn ready_in(dir: &std::path::Path) -> fakes::children::Ready {
     let dir = dir.to_path_buf();
     within("the ready fifo", move || fakes::children::Ready::new(&dir))
@@ -121,8 +128,8 @@ fn echo_returns_exit_3_and_both_streams() {
         Arc::clone(&clock),
         None,
     );
-    let ran = done
-        .recv_timeout(DEADLINE)
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the echo run")
         .expect("the echo run spawns");
     assert_eq!(ran.exit_code, Some(3), "the echo run exits 3");
@@ -137,8 +144,8 @@ fn a_self_term_reports_sigterm_and_no_exit_code() {
     let (_dir, cwd) = dir("fiber-exec-term");
     let clock = FakeClock::new();
     let (_cancel, done) = spawn(sh("kill -TERM $$", cwd, CAP), Arc::clone(&clock), None);
-    let ran = done
-        .recv_timeout(DEADLINE)
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the term run")
         .expect("the term run spawns");
     assert_eq!(ran.exit_code, None);
@@ -150,8 +157,8 @@ fn the_child_runs_in_its_own_group() {
     let (_dir, cwd) = dir("fiber-exec-group");
     let clock = FakeClock::new();
     let (_cancel, done) = spawn(sh("ps -o pgid= -p $$", cwd, CAP), Arc::clone(&clock), None);
-    let ran = done
-        .recv_timeout(DEADLINE)
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the group run")
         .expect("the group run spawns");
     let printed = String::from_utf8_lossy(&ran.stdout).trim().to_owned();
@@ -168,8 +175,8 @@ fn cwd_is_the_given_directory() {
     let (_dir, cwd) = dir("fiber-exec-cwd");
     let clock = FakeClock::new();
     let (_cancel, done) = spawn(sh("pwd", cwd.clone(), CAP), Arc::clone(&clock), None);
-    let ran = done
-        .recv_timeout(DEADLINE)
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the pwd run")
         .expect("the pwd run spawns");
     let expected = cwd.canonicalize().unwrap();
@@ -187,8 +194,8 @@ fn the_session_environment_is_visible() {
         Arc::clone(&clock),
         None,
     );
-    let ran = done
-        .recv_timeout(DEADLINE)
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the env run")
         .expect("the env run spawns");
     assert_eq!(String::from_utf8_lossy(&ran.stdout), home);
@@ -203,8 +210,8 @@ fn a_missing_program_is_the_spawn_error() {
         Arc::clone(&clock),
         None,
     );
-    let err = done
-        .recv_timeout(DEADLINE)
+    let err = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the missing run")
         .expect_err("a missing program never runs");
     assert_eq!(err.code, contract::ErrorCode::NotFound);
@@ -227,8 +234,8 @@ fn output_past_the_cap_stops_the_run_with_the_cap_error() {
         Arc::clone(&clock),
         None,
     );
-    let err = done
-        .recv_timeout(DEADLINE)
+    let err = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the capped run")
         .expect_err("output past the cap never returns");
     assert_eq!(err.code, contract::ErrorCode::TooLarge);
@@ -268,8 +275,8 @@ fn a_deadline_stop_reports_timed_out() {
         "waited {DEADLINE:?} for the run to park for the 800 ms grace"
     );
     clock.advance(Duration::from_millis(800));
-    let ran = done
-        .recv_timeout(DEADLINE)
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the timed-out run")
         .expect("the timed-out run stops");
     assert_eq!(ran.signal.as_deref(), Some("SIGKILL"));
@@ -304,8 +311,8 @@ fn cancel_sends_term_then_kill_after_800_ms() {
     );
     assert!(group_lives(pgid), "SIGTERM leaves the ignoring group alive");
     clock.advance(Duration::from_millis(800));
-    let ran = done
-        .recv_timeout(DEADLINE)
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the cancelled run")
         .expect("the cancelled run stops");
     assert_eq!(ran.signal.as_deref(), Some("SIGKILL"));
@@ -339,8 +346,8 @@ fn output_held_open_after_the_kill_stops_after_2_s() {
         "waited {DEADLINE:?} for the run to park for the 2 s drain"
     );
     clock.advance(Duration::from_secs(2));
-    let ran = done
-        .recv_timeout(DEADLINE)
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the drained run")
         .expect("the drained run returns");
     assert!(!ran.timed_out);
@@ -358,6 +365,7 @@ const CHILD: &str = "FIBER_EXTENSIONS_EXEC_TEST_CHILD";
 /// Runs the test `name` of this module alone in a child process and asserts
 /// it passed: `kill_every_group` reaches every group this process lists,
 /// so it runs where no other test's group is listed.
+#[track_caller]
 fn in_child(name: &str) {
     use std::os::unix::process::CommandExt as _;
     let module = module_path!().split_once("::").unwrap().1;
@@ -380,7 +388,7 @@ fn in_child(name: &str) {
     let watchdog = fakes::Watchdog::group(pid);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
-    let Ok(output) = rx.recv_timeout(DEADLINE) else {
+    let Ok(output) = Deadline::after(DEADLINE).recv(&rx) else {
         kill_pid_now(pid);
         panic!("waited {DEADLINE:?} for the child running {name}");
     };
@@ -414,8 +422,8 @@ fn kill_every_group_kills_a_listed_live_group() {
     kill_every_group();
     let (done, waited) = mpsc::channel();
     std::thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = waited
-        .recv_timeout(DEADLINE)
+    let status = Deadline::after(DEADLINE)
+        .recv(&waited)
         .expect("waited {DEADLINE:?} for the killed child")
         .unwrap();
     use std::os::unix::process::ExitStatusExt as _;
@@ -463,8 +471,8 @@ fn output_of_exactly_the_cap_returns_and_one_byte_more_is_refused() {
             Arc::clone(&clock),
             None,
         );
-        let ran = done
-            .recv_timeout(DEADLINE)
+        let ran = Deadline::after(DEADLINE)
+            .recv(&done)
             .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the {stream} run at the cap"))
             .unwrap_or_else(|e| panic!("{stream} of exactly the cap returns: {}", e.message));
         let kept = if stream == "stdout" {
@@ -482,8 +490,8 @@ fn output_of_exactly_the_cap_returns_and_one_byte_more_is_refused() {
             Arc::clone(&clock),
             None,
         );
-        let err = done
-            .recv_timeout(DEADLINE)
+        let err = Deadline::after(DEADLINE)
+            .recv(&done)
             .unwrap_or_else(|_| {
                 panic!("waited {DEADLINE:?} for the {stream} run one byte past the cap")
             })
@@ -527,7 +535,8 @@ fn a_member_outliving_the_leader_is_stopped_with_its_group() {
         "the member ignores SIGTERM, so the group lives through the grace"
     );
     clock.advance(Duration::from_millis(800));
-    done.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the stopped run")
         .expect("the stopped run returns");
     assert!(
@@ -564,7 +573,8 @@ fn one_stream_still_open_keeps_the_drain_to_its_bound() {
         "waited {DEADLINE:?} for the run to park for the 2 s drain"
     );
     clock.advance(Duration::from_secs(2));
-    done.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the drained run")
         .expect("the drained run returns");
     for pid in escaped {
@@ -640,8 +650,8 @@ fn a_startup_abort_kills_only_after_the_800_ms_grace() {
         "a live group stays listed"
     );
     clock.advance(Duration::from_millis(800));
-    let err = done
-        .recv_timeout(DEADLINE)
+    let err = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the aborted run");
     assert_eq!(err.message, "host.exec: sh: no reader thread");
     assert_eq!(err.code, contract::ErrorCode::IoFailed);
@@ -668,8 +678,8 @@ fn a_startup_abort_of_a_group_that_ends_on_term_sends_no_kill() {
     let watchdog = fakes::Watchdog::group(pgid);
     let done = abort(child, cwd, Arc::clone(&clock));
     // No clock move: the group ends on SIGTERM inside the grace.
-    let err = done
-        .recv_timeout(DEADLINE)
+    let err = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the aborted run");
     let ran = err.ran.expect("a started run is logged");
     assert_eq!(ran.signal.as_deref(), Some("SIGTERM"));
@@ -732,8 +742,8 @@ fn a_missing_working_directory_is_not_found() {
         Arc::clone(&clock),
         None,
     );
-    let err = done
-        .recv_timeout(DEADLINE)
+    let err = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the missing-cwd run")
         .expect_err("a missing working directory never runs");
     assert_eq!(err.code, contract::ErrorCode::NotFound);
@@ -757,8 +767,8 @@ fn a_pid_mode_run_stays_in_the_test_process_group() {
         Arc::clone(&clock),
         None,
     );
-    let ran = done
-        .recv_timeout(DEADLINE)
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the pid-mode group run")
         .expect("the pid-mode group run spawns");
     let printed = String::from_utf8_lossy(&ran.stdout).trim().to_owned();
@@ -806,7 +816,7 @@ fn a_pid_mode_deadline_stop_signals_only_the_pid() {
     }
     let outcome = match early {
         Some(outcome) => Ok(outcome),
-        None => done.recv_timeout(DEADLINE),
+        None => Deadline::after(DEADLINE).recv(&done),
     };
     if outcome.is_err() {
         kill_pid_now(pid);
@@ -843,7 +853,7 @@ fn a_pid_mode_run_is_never_listed() {
         "a pid-mode run is never listed while it runs"
     );
     drop(cancel);
-    let outcome = done.recv_timeout(DEADLINE);
+    let outcome = Deadline::after(DEADLINE).recv(&done);
     if outcome.is_err() {
         kill_pid_now(pid);
     }
@@ -876,8 +886,8 @@ fn a_pid_mode_missing_program_reports_its_spawn_error() {
         stdout_read: None,
     };
     let (_cancel, done) = spawn(req, Arc::clone(&clock), None);
-    let err = done
-        .recv_timeout(DEADLINE)
+    let err = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("waited {DEADLINE:?} for the missing pid-mode run")
         .expect_err("a missing program never runs");
     assert_eq!(err.code, contract::ErrorCode::NotFound);
@@ -959,7 +969,7 @@ fn stop_pid_signals_a_running_child() {
     // test fails on when the signal never went out.
     let (done, waited) = mpsc::channel();
     std::thread::spawn(move || done.send(child.wait()));
-    match waited.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&waited) {
         Ok(status) => {
             use std::os::unix::process::ExitStatusExt as _;
             assert_eq!(
@@ -1002,12 +1012,12 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
     clock
         .mark_parked(drain_until, DEADLINE)
         .expect("waited {DEADLINE:?} for the pid-mode run to park for the 2 s drain");
-    stdout_read_rx
-        .recv_timeout(DRAIN_BOUNDARY_DEADLINE)
+    Deadline::after(DRAIN_BOUNDARY_DEADLINE)
+        .recv(&stdout_read_rx)
         .expect("waited for stdout to be read before the drain bound");
     let unanswered_before_advance = matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty));
     clock.advance(DRAIN);
-    let outcome = done.recv_timeout(DEADLINE);
+    let outcome = Deadline::after(DEADLINE).recv(&done);
     // The holder keeps the pipe whether the wait ended or not: kill it by
     // its pid file before asserting, so no `sleep` outlives the test.
     let holder: Option<u32> = std::fs::read_to_string(&holder_file)
@@ -1080,8 +1090,8 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
             .unwrap_or_else(|| {
                 panic!("waited {DRAIN_BOUNDARY_DEADLINE:?} for the pid-mode run to park for the 2 s drain ({case})")
             });
-        stdout_read_rx
-            .recv_timeout(DRAIN_BOUNDARY_DEADLINE)
+        Deadline::after(DRAIN_BOUNDARY_DEADLINE)
+            .recv(&stdout_read_rx)
             .unwrap_or_else(|_| {
                 panic!("waited for stdout to be read before the drain bound ({case})")
             });
@@ -1103,7 +1113,7 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
         // exactly at, and just after it. Do not jump past the bound before
         // observing the result.
         clock.advance(step);
-        let outcome = done.recv_timeout(DRAIN_BOUNDARY_DEADLINE);
+        let outcome = Deadline::after(DRAIN_BOUNDARY_DEADLINE).recv(&done);
         // The holder keeps the pipe whether the wait ended or not: kill it
         // by its pid file before asserting, so no `sleep` outlives the test.
         let holder: Option<u32> = std::fs::read_to_string(&holder_file)
@@ -1167,7 +1177,7 @@ fn a_pid_mode_term_stop_reports_sigterm() {
     );
     // Past the deadline the run stops, although nothing dropped its cancel.
     clock.advance(Duration::from_millis(1000));
-    let outcome = done.recv_timeout(DEADLINE);
+    let outcome = Deadline::after(DEADLINE).recv(&done);
     if outcome.is_err() {
         kill_pid_now(pid);
     }
@@ -1224,7 +1234,7 @@ fn a_pid_mode_startup_abort_signals_only_the_pid() {
         );
         let _sent = done_tx.send(err);
     });
-    let outcome = done_rx.recv_timeout(DEADLINE);
+    let outcome = Deadline::after(DEADLINE).recv(&done_rx);
     if outcome.is_err() {
         kill_pid_now(pid);
     }

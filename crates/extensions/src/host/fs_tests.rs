@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
 use contract::files::PathLock;
+use fakes::Deadline;
 use mlua::{Lua, LuaString, Table, Value as LuaValue};
 use serde_json::Value;
 
@@ -132,10 +133,12 @@ impl Setup {
     }
 }
 
+#[track_caller]
 fn eval(lua: &Lua, code: &str) -> Value {
     crate::host::to_json(&lua.load(code).eval::<LuaValue>().unwrap()).unwrap()
 }
 
+#[track_caller]
 fn fails(lua: &Lua, code: &str) -> String {
     lua.load(code).eval::<LuaValue>().unwrap_err().to_string()
 }
@@ -530,7 +533,7 @@ fn a_locked_write_waits_while_the_same_key_is_held() {
         });
     });
     assert!(
-        entered_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&entered_rx).is_ok(),
         "waited {DEADLINE:?} for the holder to be holding the key"
     );
     let (done, done_rx) = mpsc::channel();
@@ -547,7 +550,7 @@ fn a_locked_write_waits_while_the_same_key_is_held() {
         waiting.send(()).unwrap();
     });
     assert!(
-        waiting_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&waiting_rx).is_ok(),
         "waited {DEADLINE:?} for the locked write to be waiting"
     );
     assert!(
@@ -556,7 +559,7 @@ fn a_locked_write_waits_while_the_same_key_is_held() {
     );
     release.send(()).unwrap();
     assert!(
-        done_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "waited {DEADLINE:?} for the locked write to run"
     );
     writer.join().unwrap();
@@ -577,7 +580,7 @@ fn rename_locks_both_keys_sorted_and_an_unlocked_write_asks_for_none() {
         done.send(()).unwrap();
     });
     assert!(
-        done_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "waited {DEADLINE:?} for the locked rename to run"
     );
     assert_eq!(
@@ -597,7 +600,7 @@ fn lock_keys_are_absolute_paths_under_the_workspace() {
         done.send(()).unwrap();
     });
     assert!(
-        done_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "waited {DEADLINE:?} for the locked write to run"
     );
     assert_eq!(setup.locks.calls(), [setup.workspace().join("notes/a.md")]);
@@ -614,7 +617,7 @@ fn a_same_path_rename_takes_the_lock_once_and_returns() {
         done.send(()).unwrap();
     });
     assert!(
-        done_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "waited {DEADLINE:?} for the same-path rename to run"
     );
     assert_eq!(setup.locks.calls(), [setup.workspace().join("a.txt")]);
@@ -637,7 +640,7 @@ fn an_unresolved_alias_pair_rename_holds_both_raw_keys_and_returns() {
         done.send(()).unwrap();
     });
     assert!(
-        done_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "waited {DEADLINE:?} for the alias-pair rename to run"
     );
 }
@@ -685,7 +688,7 @@ host.fs.write("empty.txt", "x", {})"#,
             .unwrap();
         done.send((unlocked, worker.locks.calls())).unwrap();
     });
-    let Ok((unlocked, locked)) = done_rx.recv_timeout(DEADLINE) else {
+    let Ok((unlocked, locked)) = Deadline::after(DEADLINE).recv(&done_rx) else {
         panic!("waited {DEADLINE:?} for the four writes to run");
     };
     assert!(
@@ -708,6 +711,7 @@ fn stat_through_a_regular_file_raises_rather_than_returning_nil() {
 /// The failure a `pcall` of `code` catches: its code and message. The
 /// prelude's `pcall` runs the call in a coroutine of its own, so a failure
 /// the host raises comes back as its table.
+#[track_caller]
 fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
     let (ok, err): (bool, LuaValue) = lua
         .load(format!("return pcall(function() {code} end)"))
@@ -722,6 +726,7 @@ fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
 
 /// The failure a raw `coroutine.resume` of `code` catches: its code and
 /// message. The value is the table at its source, not userdata.
+#[track_caller]
 fn resume_of(lua: &Lua, code: &str) -> (String, String) {
     let (ok, err): (bool, LuaValue) = lua
         .load(format!(

@@ -18,6 +18,7 @@ use contract::shapes::Process;
 use extensions::{
     Error, ExecEntry, ExecReply, HostScript, HttpEntry, LuaExtension, SessionExtensions,
 };
+use fakes::Deadline;
 use fakes::ProviderServer;
 use fakes::clock::FakeClock;
 use serde_json::json;
@@ -78,8 +79,8 @@ fn oauth_script_reaches_pkce_open_show_and_callback_without_external_work() {
     let worker = std::thread::spawn(move || {
         drop(sent.send(extension.command("oauth", "")));
     });
-    let returned = received
-        .recv_timeout(WAIT)
+    let returned = Deadline::after(WAIT)
+        .recv(&received)
         .expect("scripted OAuth command returns")
         .unwrap();
     worker.join().unwrap();
@@ -220,8 +221,8 @@ fiber.provider("host-script", {{ models = {{
             SessionExtensions::load(&home, &config, FakeClock::new(), locks, Some(host_script));
         let _sent = loaded_tx.send(loaded);
     });
-    let extensions = loaded_rx
-        .recv_timeout(WAIT)
+    let extensions = Deadline::after(WAIT)
+        .recv(&loaded_rx)
         .expect("waited for the scripted extension to load");
     let (inbox_tx, inbox_rx) = mpsc::channel();
     extensions.deliver_to(inbox_tx);
@@ -235,15 +236,15 @@ fiber.provider("host-script", {{ models = {{
     std::thread::spawn(move || {
         let _sent = models_tx.send(provider.models());
     });
-    let models = models_rx
-        .recv_timeout(WAIT)
+    let models = Deadline::after(WAIT)
+        .recv(&models_rx)
         .expect("waited for scripted host calls")
         .unwrap();
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].id, "201:entry|200:models|7:out:err");
 
-    let delivery = inbox_rx
-        .recv_timeout(WAIT)
+    let delivery = Deadline::after(WAIT)
+        .recv(&inbox_rx)
         .expect("waited for the scripted exec delivery");
     let Delivery::ExtensionExec(event) = delivery else {
         panic!("host.exec did not deliver extension_exec: {delivery:?}");
@@ -287,8 +288,8 @@ fn an_unscripted_http_call_fails_in_lua_and_is_reported_as_a_miss() {
     std::thread::spawn(move || {
         let _sent = result_tx.send(extension.command("fetch", ""));
     });
-    let error = result_rx
-        .recv_timeout(WAIT)
+    let error = Deadline::after(WAIT)
+        .recv(&result_rx)
         .expect("waited for unscripted host.http to fail")
         .unwrap_err();
     assert_eq!(error.code(), ErrorCode::ExtensionFailed);

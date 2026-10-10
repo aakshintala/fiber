@@ -1,4 +1,5 @@
 use super::*;
+use fakes::Deadline;
 
 fn lua() -> Lua {
     lua_in(PathBuf::from("/nonexistent-fiber-home"), &[])
@@ -40,6 +41,7 @@ fn lua_prelude(home: PathBuf, secrets: &[&str]) -> Lua {
     lua
 }
 
+#[track_caller]
 fn eval(lua: &Lua, code: &str) -> Value {
     to_json(&lua.load(code).eval::<LuaValue>().unwrap()).unwrap()
 }
@@ -348,13 +350,13 @@ fn a_silent_server_past_the_backstop_is_timeout() {
         for _ in 0..polls {
             match listener.accept() {
                 Ok((_held, _)) => {
-                    match held.recv_timeout(GET_WITHIN) {
+                    match Deadline::after(GET_WITHIN).recv(&held) {
                         Ok(()) | Err(_) => {}
                     }
                     return;
                 }
                 Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
-                    match held.recv_timeout(ACCEPT_POLL) {
+                    match Deadline::after(ACCEPT_POLL).recv(&held) {
                         Ok(()) | Err(_) => {}
                     }
                 }
@@ -369,8 +371,8 @@ fn a_silent_server_past_the_backstop_is_timeout() {
         tx.send(get(&url, Some(Duration::from_millis(300))))
             .unwrap_or(());
     });
-    let (code, message) = rx
-        .recv_timeout(GET_WITHIN)
+    let (code, message) = Deadline::after(GET_WITHIN)
+        .recv(&rx)
         .expect("waited {GET_WITHIN:?} for the silent-server get")
         .unwrap_err();
     assert_eq!(code, contract::ErrorCode::Timeout, "{message}");
@@ -378,6 +380,7 @@ fn a_silent_server_past_the_backstop_is_timeout() {
 }
 
 /// The failure a prelude `pcall` of `code` catches: its code and message.
+#[track_caller]
 fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
     let (ok, err): (bool, LuaValue) = lua
         .load(format!("return pcall(function() {code} end)"))
@@ -392,6 +395,7 @@ fn pcall_of(lua: &Lua, code: &str) -> (String, String) {
 
 /// The string a prelude `pcall` of `code` catches: a wrong argument stays
 /// a string error (ruling 17).
+#[track_caller]
 fn pcall_string_of(lua: &Lua, code: &str) -> String {
     let (ok, err): (bool, LuaValue) = lua
         .load(format!("return pcall(function() {code} end)"))

@@ -242,6 +242,7 @@ use std::time::Duration;
 use contract::events::{InteractionRequested, InteractionResolved};
 use contract::inbox::{Ack, Delivery};
 use contract::{ErrorCode, RequestId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 /// Wall-clock bound on a wait for a delivery.
@@ -290,17 +291,17 @@ fn answered() -> (Ack, mpsc::Receiver<bool>) {
     )
 }
 
-fn take_interaction(rx: &mpsc::Receiver<Delivery>) -> InteractionRequested {
-    let Delivery::Interaction(requested) = rx.recv_timeout(WAIT).expect("the Interaction arrives")
-    else {
+#[track_caller]
+fn take_interaction(rx: &mpsc::Receiver<Delivery>, wait: &Deadline) -> InteractionRequested {
+    let Delivery::Interaction(requested) = wait.recv(rx).expect("the Interaction arrives") else {
         panic!("an unexpected delivery arrives");
     };
     requested
 }
 
-fn resolved(rx: &mpsc::Receiver<Delivery>) -> (InteractionResolved, Ack) {
-    let Delivery::Resolved(resolved, ack) = rx.recv_timeout(WAIT).expect("the Resolved arrives")
-    else {
+#[track_caller]
+fn resolved(rx: &mpsc::Receiver<Delivery>, wait: &Deadline) -> (InteractionResolved, Ack) {
+    let Delivery::Resolved(resolved, ack) = wait.recv(rx).expect("the Resolved arrives") else {
         panic!("a Resolved arrives");
     };
     (resolved, ack)
@@ -319,7 +320,7 @@ fn hub_with_inbox() -> (Arc<Hub>, mpsc::Receiver<Delivery>) {
 fn raise_routes_the_interaction_and_holds_the_request() {
     let (hub, rx) = hub_with_inbox();
     raise(&hub, 7, "r_1");
-    let requested = take_interaction(&rx);
+    let requested = take_interaction(&rx, &Deadline::after(WAIT));
     assert_eq!(requested.request_id, RequestId("r_1".into()));
     assert_eq!(requested.extension.as_deref(), Some("ext"));
     assert!(hub.lock().asks.contains_key(&RequestId("r_1".into())));
@@ -329,7 +330,7 @@ fn raise_routes_the_interaction_and_holds_the_request() {
 fn a_fitting_answer_resolves_by_person_then_resumes_the_call() {
     let (hub, rx) = hub_with_inbox();
     raise(&hub, 7, "r_1");
-    let _ = take_interaction(&rx);
+    let _ = take_interaction(&rx, &Deadline::after(WAIT));
     let order = Arc::new(Mutex::new(Vec::new()));
     let recording = Arc::clone(&order);
     let answering = Arc::clone(&hub);
@@ -354,7 +355,7 @@ fn a_fitting_answer_resolves_by_person_then_resumes_the_call() {
         !hub.lock().asks.contains_key(&RequestId("r_1".into())),
         "the ask leaves the registry"
     );
-    let (resolved, ack) = resolved(&rx);
+    let (resolved, ack) = resolved(&rx, &Deadline::after(WAIT));
     assert_eq!(resolved.request_id, RequestId("r_1".into()));
     assert_eq!(resolved.by, contract::events::ResolvedBy::Person);
     assert_eq!(
@@ -377,7 +378,7 @@ fn a_fitting_answer_resolves_by_person_then_resumes_the_call() {
 fn an_unfit_answer_is_rejected_and_stays_pending() {
     let (hub, rx) = hub_with_inbox();
     raise(&hub, 7, "r_1");
-    let _ = take_interaction(&rx);
+    let _ = take_interaction(&rx, &Deadline::after(WAIT));
     let (ack, frequently) = answered();
     let answer = reply(
         "r_1",
@@ -388,8 +389,8 @@ fn an_unfit_answer_is_rejected_and_stays_pending() {
         "an unfit answer is taken, not handed back"
     );
     assert!(
-        !frequently
-            .recv_timeout(WAIT)
+        !Deadline::after(WAIT)
+            .recv(&frequently)
             .expect("the rejection arrives"),
         "the reply is rejected"
     );
@@ -404,7 +405,7 @@ fn an_unfit_answer_is_rejected_and_stays_pending() {
 fn an_unfit_answer_rejects_with_the_loops_sentence() {
     let (hub, rx) = hub_with_inbox();
     raise(&hub, 7, "r_1");
-    let _ = take_interaction(&rx);
+    let _ = take_interaction(&rx, &Deadline::after(WAIT));
     let (tx, rejected) = mpsc::channel();
     let ack = Ack(Box::new(move |answer| {
         let _sent = tx.send(answer);
@@ -414,7 +415,10 @@ fn an_unfit_answer_rejects_with_the_loops_sentence() {
         contract::commands::ReplyAnswer::Text { text: "x".into() },
     );
     assert!(hub.answer(answer, ack).is_none());
-    match rejected.recv_timeout(WAIT).expect("the rejection arrives") {
+    match Deadline::after(WAIT)
+        .recv(&rejected)
+        .expect("the rejection arrives")
+    {
         Err(rejection) => {
             assert_eq!(rejection.code, ErrorCode::InvalidArguments);
             assert_eq!(
@@ -430,7 +434,7 @@ fn an_unfit_answer_rejects_with_the_loops_sentence() {
 fn an_answer_for_an_id_not_held_hands_back() {
     let (hub, rx) = hub_with_inbox();
     raise(&hub, 7, "r_1");
-    let _ = take_interaction(&rx);
+    let _ = take_interaction(&rx, &Deadline::after(WAIT));
     let (ack, _) = answered();
     let answer = reply(
         "r_other",
@@ -447,14 +451,14 @@ fn an_answer_for_an_id_not_held_hands_back() {
 fn decline_after_a_fitting_answer_routes_nothing() {
     let (hub, rx) = hub_with_inbox();
     raise(&hub, 7, "r_1");
-    let _ = take_interaction(&rx);
+    let _ = take_interaction(&rx, &Deadline::after(WAIT));
     let (ack, _) = answered();
     let answer = reply(
         "r_1",
         contract::commands::ReplyAnswer::Confirmed { confirmed: true },
     );
     assert!(hub.answer(answer, ack).is_none());
-    let (_, ack) = resolved(&rx);
+    let (_, ack) = resolved(&rx, &Deadline::after(WAIT));
     (ack.0)(Ok(None));
     decline(&hub, "r_1");
     assert!(rx.try_recv().is_err(), "the loser routes nothing");
@@ -464,9 +468,9 @@ fn decline_after_a_fitting_answer_routes_nothing() {
 fn an_answer_after_a_decline_hands_back() {
     let (hub, rx) = hub_with_inbox();
     raise(&hub, 7, "r_1");
-    let _ = take_interaction(&rx);
+    let _ = take_interaction(&rx, &Deadline::after(WAIT));
     decline(&hub, "r_1");
-    let (_, ack) = resolved(&rx);
+    let (_, ack) = resolved(&rx, &Deadline::after(WAIT));
     (ack.0)(Ok(None));
     let (back, _) = answered();
     let answer = reply(
@@ -486,8 +490,10 @@ fn stop_declines_every_held_ask_once() {
         for n in 0..held {
             raise(&hub, n, &format!("r_{n}"));
         }
+        // One deadline for the whole wait: the loop drains one stream.
+        let wait = Deadline::after(WAIT);
         for _ in 0..held {
-            let _ = take_interaction(&rx);
+            let _ = take_interaction(&rx, &wait);
         }
         let unsent = hub.lock().stop(super::super::hub::StopReason::Abandoned {
             extension: "ext".into(),
@@ -498,8 +504,10 @@ fn stop_declines_every_held_ask_once() {
             hub.lock().asks.is_empty(),
             "no ask stays held past the stop"
         );
+        // One deadline for the whole wait: the loop drains one stream.
+        let wait = Deadline::after(WAIT);
         for _ in 0..held {
-            let (resolved, ack) = resolved(&rx);
+            let (resolved, ack) = resolved(&rx, &wait);
             assert_eq!(resolved.by, contract::events::ResolvedBy::Fiber);
             assert_eq!(
                 resolved.answer,
@@ -544,9 +552,11 @@ fn without_an_inbox_both_lines_buffer_and_flush_in_order() {
     assert!(hub.answer(answer, ack).is_none());
     let (tx, rx) = mpsc::channel();
     hub.set_inbox(tx);
-    let requested = take_interaction(&rx);
+    // One deadline for the whole wait: the pair drains the flushed buffer.
+    let wait = Deadline::after(WAIT);
+    let requested = take_interaction(&rx, &wait);
     assert_eq!(requested.request_id, RequestId("r_1".into()));
-    let (resolved, ack) = resolved(&rx);
+    let (resolved, ack) = resolved(&rx, &wait);
     assert_eq!(resolved.request_id, RequestId("r_1".into()));
     (ack.0)(Ok(None));
 }
@@ -601,7 +611,9 @@ fn a_disconnected_inbox_drops_a_fitting_answer_after_the_lock() {
         );
         assert!(hub.answer(answer, ack).is_none());
         assert_eq!(
-            closed_rx.recv_timeout(WAIT).expect("the drop answers"),
+            Deadline::after(WAIT)
+                .recv(&closed_rx)
+                .expect("the drop answers"),
             "closing",
             "the dropped Resolved is dropped after the lock"
         );
@@ -631,7 +643,9 @@ fn a_disconnected_flush_drops_the_buffer_after_the_lock() {
         drop(rx);
         hub.set_inbox(tx);
         assert_eq!(
-            closed_rx.recv_timeout(WAIT).expect("the drop answers"),
+            Deadline::after(WAIT)
+                .recv(&closed_rx)
+                .expect("the drop answers"),
             "closing",
             "the unsent buffer is dropped after the lock"
         );
@@ -642,7 +656,7 @@ fn a_disconnected_flush_drops_the_buffer_after_the_lock() {
 fn dispose_with_a_held_ask_routes_nothing() {
     let (hub, rx) = hub_with_inbox();
     raise(&hub, 7, "r_1");
-    let _ = take_interaction(&rx);
+    let _ = take_interaction(&rx, &Deadline::after(WAIT));
     hub.dispose("ext");
     assert!(rx.try_recv().is_err(), "the decline is dropped");
     let (ack, _) = answered();

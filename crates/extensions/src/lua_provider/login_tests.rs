@@ -4,6 +4,7 @@
 use std::fs;
 use std::sync::Arc;
 
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
 
@@ -323,6 +324,7 @@ fn waiting_provider(
 
 /// Waits until `port` accepts a connection, within the wall deadline: the
 /// callback listener bound, so the login parks there.
+#[track_caller]
 fn await_listening(port: u16) {
     let deadline = std::time::Duration::from_secs(10);
     fakes::within("the callback to listen", deadline, move || {
@@ -353,8 +355,8 @@ fn stop_while_a_login_waits_on_its_callback_ends_it_and_frees_the_port() {
     });
     await_listening(port);
     provider.stop();
-    let result = finished
-        .recv_timeout(std::time::Duration::from_secs(10))
+    let result = Deadline::after(std::time::Duration::from_secs(10))
+        .recv(&finished)
         .unwrap_or_else(|_| panic!("the waiting login did not return within 10s"));
     assert!(result.is_err(), "{result:?}");
     // The parked callback closed its listener: the port binds again within
@@ -394,8 +396,8 @@ fn a_login_started_after_stop_runs_no_credential() {
             Ok(()) | Err(_) => {}
         },
     );
-    let error = finished
-        .recv_timeout(WAIT)
+    let error = Deadline::after(WAIT)
+        .recv(&finished)
         .unwrap_or_else(|_| panic!("the login after stop did not return within {WAIT:?}"))
         .unwrap_err();
     assert!(

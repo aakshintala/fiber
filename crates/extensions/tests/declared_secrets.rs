@@ -18,6 +18,7 @@ use config::{Config, ProjectKey, Secret, Sources, store_secret};
 use contract::events::CallStatus;
 use contract::hook::{AfterToolCall, AfterToolOutcome, Hooks};
 use extensions::{Providers, SessionExtensions};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Map, json};
 
@@ -54,6 +55,7 @@ fn hook(body: &str) -> String {
     )
 }
 
+#[track_caller]
 fn load(setup: &Setup) -> Arc<SessionExtensions> {
     let config = Config::load(Sources {
         home: setup.home(),
@@ -72,13 +74,15 @@ fn load(setup: &Setup) -> Arc<SessionExtensions> {
         let _sent = tx.send(SessionExtensions::load(&home, &config, clock, locks, None));
     });
     Arc::new(
-        rx.recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&rx)
             .expect("waited for the extensions to load"),
     )
 }
 
 /// The content the hooks return for a completed call, asked on its own
 /// thread under `WAIT`.
+#[track_caller]
 fn content(session: &Arc<SessionExtensions>) -> Option<String> {
     let (tx, rx) = mpsc::channel();
     let session = Arc::clone(session);
@@ -94,7 +98,9 @@ fn content(session: &Arc<SessionExtensions>) -> Option<String> {
         });
         let _sent = tx.send(answer);
     });
-    let answer = rx.recv_timeout(WAIT).expect("waited for the hook");
+    let answer = Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("waited for the hook");
     match answer.outcome {
         AfterToolOutcome::Changed { content, .. } => content,
         AfterToolOutcome::Unchanged | AfterToolOutcome::Withheld { .. } => None,

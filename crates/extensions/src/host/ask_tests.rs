@@ -17,6 +17,7 @@ use contract::RequestId;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{Interaction, InteractionRequested, ResolvedBy};
 use contract::inbox::{Ack, Delivery};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use crate::{Error, LuaExtension};
@@ -27,12 +28,14 @@ const WAIT: Duration = Duration::from_secs(5);
 /// Runs the blocking call `f` on a thread and receives its result with a
 /// deadline: calling code that blocks is a wait too (`docs/testing.md`,
 /// "Waits and timeouts").
+#[track_caller]
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::spawn(move || done_tx.send(f()));
-    done_rx
-        .recv_timeout(WAIT)
-        .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
+    match Deadline::after(WAIT).recv(&done_rx) {
+        Ok(answer) => answer,
+        Err(_) => panic!("the call did not return within {WAIT:?}"),
+    }
 }
 
 /// `clock` as the extension's clock.
@@ -67,9 +70,9 @@ fn command(run: &str) -> String {
     )
 }
 
-fn interaction(rx: &mpsc::Receiver<Delivery>) -> InteractionRequested {
-    let Delivery::Interaction(requested) = rx.recv_timeout(WAIT).expect("the Interaction arrives")
-    else {
+#[track_caller]
+fn interaction(rx: &mpsc::Receiver<Delivery>, wait: &Deadline) -> InteractionRequested {
+    let Delivery::Interaction(requested) = wait.recv(rx).expect("the Interaction arrives") else {
         panic!("an unexpected delivery arrives");
     };
     requested
@@ -77,9 +80,11 @@ fn interaction(rx: &mpsc::Receiver<Delivery>) -> InteractionRequested {
 
 /// Answers `id` and acks the `Resolved`, so the parked call resumes; the
 /// driver's answer follows.
+#[track_caller]
 fn answer(
     ext: &Arc<LuaExtension>,
     rx: &mpsc::Receiver<Delivery>,
+    wait: &Deadline,
     reply: Reply,
 ) -> mpsc::Receiver<bool> {
     let (tx, accepted) = mpsc::channel();
@@ -90,7 +95,7 @@ fn answer(
         ext.answer(reply, ack).is_none(),
         "a held ask takes the answer"
     );
-    let Delivery::Resolved(_, ack) = rx.recv_timeout(WAIT).expect("the Resolved arrives") else {
+    let Delivery::Resolved(_, ack) = wait.recv(rx).expect("the Resolved arrives") else {
         panic!("a Resolved arrives");
     };
     (ack.0)(Ok(None));
@@ -132,7 +137,7 @@ fn an_answerable_confirm_round_trips() {
     std::thread::spawn(move || {
         let _sent = done_tx.send(held.command("go", ""));
     });
-    let requested = interaction(&rx);
+    let requested = interaction(&rx, &Deadline::after(WAIT));
     assert_eq!(requested.extension.as_deref(), Some("ext"));
     assert!(
         requested.request_id.0.starts_with("r_"),
@@ -141,18 +146,21 @@ fn an_answerable_confirm_round_trips() {
     let accepted = answer(
         &ext,
         &rx,
+        &Deadline::after(WAIT),
         Reply {
             request_id: requested.request_id,
             answer: ReplyAnswer::Confirmed { confirmed: true },
         },
     );
     assert!(
-        accepted.recv_timeout(WAIT).expect("the reply is answered"),
+        Deadline::after(WAIT)
+            .recv(&accepted)
+            .expect("the reply is answered"),
         "the reply is accepted once the line is in the log"
     );
     assert_eq!(
-        done_rx
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&done_rx)
             .expect("the command returns")
             .unwrap(),
         "true"
@@ -200,19 +208,20 @@ fn each_kinds_answer_table_round_trips_to_lua() {
         std::thread::spawn(move || {
             let _sent = done_tx.send(held.command("go", ""));
         });
-        let requested = interaction(&rx);
+        let requested = interaction(&rx, &Deadline::after(WAIT));
         let accepted = answer(
             &ext,
             &rx,
+            &Deadline::after(WAIT),
             Reply {
                 request_id: requested.request_id,
                 answer: answered,
             },
         );
-        assert!(accepted.recv_timeout(WAIT).is_ok());
+        assert!(Deadline::after(WAIT).recv(&accepted).is_ok());
         assert_eq!(
-            done_rx
-                .recv_timeout(WAIT)
+            Deadline::after(WAIT)
+                .recv(&done_rx)
                 .expect("the command returns")
                 .unwrap(),
             want,
@@ -242,10 +251,11 @@ fn a_form_answer_with_a_note_round_trips() {
     std::thread::spawn(move || {
         let _sent = done_tx.send(held.command("go", ""));
     });
-    let requested = interaction(&rx);
+    let requested = interaction(&rx, &Deadline::after(WAIT));
     let accepted = answer(
         &ext,
         &rx,
+        &Deadline::after(WAIT),
         Reply {
             request_id: requested.request_id,
             answer: ReplyAnswer::Form {
@@ -262,10 +272,10 @@ fn a_form_answer_with_a_note_round_trips() {
             },
         },
     );
-    assert!(accepted.recv_timeout(WAIT).is_ok());
+    assert!(Deadline::after(WAIT).recv(&accepted).is_ok());
     assert_eq!(
-        done_rx
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&done_rx)
             .expect("the command returns")
             .unwrap(),
         "a/extra/true/n"
@@ -295,15 +305,20 @@ fn a_timed_out_ask_is_declined_by_fiber_and_late_answers_hand_back() {
     std::thread::spawn(move || {
         let _sent = done_tx.send(held.command("go", ""));
     });
-    let requested = interaction(&rx);
+    let requested = interaction(&rx, &Deadline::after(WAIT));
     clock.advance(Duration::from_millis(1000));
-    let Delivery::Resolved(resolved, _) = rx.recv_timeout(WAIT).expect("the decline arrives")
+    let Delivery::Resolved(resolved, _) = Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("the decline arrives")
     else {
         panic!("a decline arrives");
     };
     assert_eq!(resolved.request_id, requested.request_id);
     assert_eq!(resolved.by, ResolvedBy::Fiber);
-    let Err(Error::Timeout { .. }) = done_rx.recv_timeout(WAIT).expect("the command ends") else {
+    let Err(Error::Timeout { .. }) = Deadline::after(WAIT)
+        .recv(&done_rx)
+        .expect("the command ends")
+    else {
         panic!("the command fails timed out");
     };
     let (tx, _) = mpsc::channel();
@@ -338,9 +353,11 @@ fn a_timer_that_asks_and_expires_is_declined_the_same_way() {
     let held = Arc::clone(&ext);
     assert_eq!(within(move || held.command("go", "")).unwrap(), "set");
     clock.advance(Duration::from_millis(60));
-    let requested = interaction(&rx);
+    let requested = interaction(&rx, &Deadline::after(WAIT));
     clock.advance(Duration::from_millis(200));
-    let Delivery::Resolved(resolved, _) = rx.recv_timeout(WAIT).expect("the decline arrives")
+    let Delivery::Resolved(resolved, _) = Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("the decline arrives")
     else {
         panic!("a decline arrives");
     };
@@ -377,7 +394,7 @@ fn two_commands_asking_in_sequence_keep_the_stream() {
     std::thread::spawn(move || {
         let _sent = first_tx.send(first_ext.command("first", ""));
     });
-    let first = interaction(&rx);
+    let first = interaction(&rx, &Deadline::after(WAIT));
     assert!(
         matches!(&first.interaction, Interaction::Confirm { prompt } if prompt == "one?"),
         "the first ask's request is observed before the second starts"
@@ -387,38 +404,42 @@ fn two_commands_asking_in_sequence_keep_the_stream() {
         let _sent = second_tx.send(second_ext.command("second", ""));
     });
     assert!(
-        rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&rx)
+            .is_err(),
         "the second command does not start while the first is parked"
     );
     let accepted = answer(
         &ext,
         &rx,
+        &Deadline::after(WAIT),
         Reply {
             request_id: first.request_id,
             answer: ReplyAnswer::Confirmed { confirmed: true },
         },
     );
-    assert!(accepted.recv_timeout(WAIT).is_ok());
+    assert!(Deadline::after(WAIT).recv(&accepted).is_ok());
     assert_eq!(
-        first_rx
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&first_rx)
             .expect("the first returns")
             .unwrap(),
         "first-true"
     );
-    let second = interaction(&rx);
+    let second = interaction(&rx, &Deadline::after(WAIT));
     let accepted = answer(
         &ext,
         &rx,
+        &Deadline::after(WAIT),
         Reply {
             request_id: second.request_id,
             answer: ReplyAnswer::Confirmed { confirmed: false },
         },
     );
-    assert!(accepted.recv_timeout(WAIT).is_ok());
+    assert!(Deadline::after(WAIT).recv(&accepted).is_ok());
     assert_eq!(
-        second_rx
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&second_rx)
             .expect("the second returns")
             .unwrap(),
         "second-false"
@@ -440,11 +461,11 @@ fn disposing_with_an_ask_held_routes_nothing() {
     std::thread::spawn(move || {
         let _sent = done_tx.send(held.command("go", ""));
     });
-    let _ = interaction(&rx);
+    let _ = interaction(&rx, &Deadline::after(WAIT));
     ext.dispose();
     assert!(
-        done_rx
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&done_rx)
             .expect("the command ends")
             .is_err(),
         "the parked command ends with the dispose"
