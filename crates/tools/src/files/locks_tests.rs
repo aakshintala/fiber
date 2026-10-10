@@ -4,9 +4,11 @@ use std::thread;
 use std::time::Duration;
 
 use super::PathLocks;
+use fakes::Deadline;
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
+#[track_caller]
 fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
@@ -16,7 +18,7 @@ fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
         done.send(()).unwrap();
     });
     assert!(
-        finished.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&finished).is_ok(),
         "waited {DEADLINE:?} for {what}"
     );
 }
@@ -35,7 +37,7 @@ fn a_guard_releases_on_drop() {
         done.send(()).unwrap();
     });
     assert!(
-        done_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "waited {DEADLINE:?} for the lock, release and relock to run"
     );
     handle.join().unwrap();
@@ -55,7 +57,7 @@ fn two_paths_do_not_block_each_other() {
         drop(guard);
     });
     assert!(
-        entered_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&entered_rx).is_ok(),
         "waited {DEADLINE:?} for the first path to be held"
     );
     let other = Arc::clone(&locks);
@@ -66,7 +68,7 @@ fn two_paths_do_not_block_each_other() {
         drop(guard);
     });
     assert!(
-        finished.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&finished).is_ok(),
         "waited {DEADLINE:?} for a lock on a different path"
     );
     release.send(()).unwrap();
@@ -92,7 +94,7 @@ fn a_second_lock_on_a_held_path_blocks_until_the_guard_drops() {
         drop(guard);
     });
     assert!(
-        holding_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&holding_rx).is_ok(),
         "waited {DEADLINE:?} for the first lock to be held"
     );
     let waiting = Arc::clone(&locks);
@@ -111,7 +113,7 @@ fn a_second_lock_on_a_held_path_blocks_until_the_guard_drops() {
     );
     release_first.send(()).unwrap();
     assert!(
-        entered_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&entered_rx).is_ok(),
         "waited {DEADLINE:?} for the second lock to acquire the path"
     );
     holder.join().unwrap();
@@ -130,7 +132,7 @@ fn no_entry_remains_after_release() {
         done.send(()).unwrap();
     });
     assert!(
-        done_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "waited {DEADLINE:?} for the lock and release to run"
     );
     handle.join().unwrap();
@@ -155,7 +157,7 @@ fn a_dyn_hold_blocks_a_second_hold_on_the_same_path() {
         });
     });
     assert!(
-        entered_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&entered_rx).is_ok(),
         "waited {DEADLINE:?} for the first hold to run"
     );
     let second = Arc::clone(&locks);
@@ -175,7 +177,7 @@ fn a_dyn_hold_blocks_a_second_hold_on_the_same_path() {
     release.send(()).unwrap();
     handle.join().unwrap();
     assert!(
-        done_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "waited {DEADLINE:?} for the second hold to run"
     );
     second_handle.join().unwrap();
@@ -198,7 +200,7 @@ fn a_dyn_hold_does_not_block_a_different_path() {
         });
     });
     assert!(
-        entered_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&entered_rx).is_ok(),
         "waited {DEADLINE:?} for the first hold to run"
     );
     let second = Arc::clone(&locks);
@@ -210,7 +212,7 @@ fn a_dyn_hold_does_not_block_a_different_path() {
         });
     });
     assert!(
-        done_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "waited {DEADLINE:?} for the hold on a different path to run"
     );
     release.send(()).unwrap();
@@ -261,7 +263,7 @@ fn an_alias_contends_with_the_built_in_key() {
             drop(guard);
         });
         assert!(
-            holding_rx.recv_timeout(DEADLINE).is_ok(),
+            Deadline::after(DEADLINE).recv(&holding_rx).is_ok(),
             "waited {DEADLINE:?} for the built-in key to be held"
         );
         let waiting = Arc::clone(&locks);
@@ -282,7 +284,7 @@ fn an_alias_contends_with_the_built_in_key() {
         );
         release.send(()).unwrap();
         assert!(
-            done_rx.recv_timeout(DEADLINE).is_ok(),
+            Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
             "waited {DEADLINE:?} for the hold through the alias to acquire the key"
         );
         holder.join().unwrap();
@@ -327,7 +329,7 @@ fn hold_all_dedupes_paths_that_resolve_to_one_key() {
             done.send(()).unwrap();
         });
         assert!(
-            done_rx.recv_timeout(DEADLINE).is_ok(),
+            Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
             "waited {DEADLINE:?} for hold_all on an alias pair to run"
         );
         handle.join().unwrap();

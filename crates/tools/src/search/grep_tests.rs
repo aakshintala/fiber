@@ -10,6 +10,7 @@ use std::io::{self, Cursor, Read, Write};
 use std::os::unix::ffi::OsStringExt;
 
 use super::{Outcome, run};
+use fakes::Deadline;
 
 /// A corpus with byte-exact contents, for binary and invalid UTF-8 too.
 fn bytes_tree(files: &BTreeMap<&str, &[u8]>) -> fakes::TempDir {
@@ -1002,8 +1003,8 @@ fn only_matching_on_a_closed_pipe_stops_before_the_input_ends() {
             .unwrap_or(());
     });
     let deadline = std::time::Duration::from_secs(10);
-    let (code, read, writes, stderr) = finished
-        .recv_timeout(deadline)
+    let (code, read, writes, stderr) = Deadline::after(deadline)
+        .recv(&finished)
         .expect("waited 10s for the bounded generator search to finish");
     assert_eq!(code, 0);
     assert!(stderr.is_empty());
@@ -1164,8 +1165,8 @@ fn a_closed_pipe_stops_before_the_input_ends() {
             .unwrap_or(());
     });
     let deadline = std::time::Duration::from_secs(10);
-    let (code, read, writes, stderr) = finished
-        .recv_timeout(deadline)
+    let (code, read, writes, stderr) = Deadline::after(deadline)
+        .recv(&finished)
         .expect("waited 10s for the bounded generator search to finish");
     // The first line matched, the pipe closed quietly, and most of the
     // megabyte was never read: nothing accumulated until end of input.
@@ -1292,6 +1293,7 @@ fn a_closed_pipe_with_a_zero_count_stays_quiet_despite_skipped_directories() {
 }
 
 /// Whether the runner's grep speaks GNU: only then do outputs compare.
+#[track_caller]
 fn gnu_grep() -> bool {
     use std::os::unix::process::CommandExt;
     let child = std::process::Command::new("grep")
@@ -1314,6 +1316,7 @@ fn gnu_grep() -> bool {
 /// built-in visits files in sorted order where the system's order is
 /// unspecified. Only where the runner's grep is GNU; elsewhere the pinned
 /// literals above carry it.
+#[track_caller]
 fn matches_like_grep(
     files: &BTreeMap<&str, &[u8]>,
     args: &[&str],
@@ -1522,6 +1525,7 @@ fn bracket_files() -> BTreeMap<&'static str, &'static [u8]> {
 /// Every pattern matches, so no skipped-directory notice follows. Each
 /// case below runs through here under its own name, so a mutant changing
 /// one case fails fast under that name instead of hiding in a loop.
+#[track_caller]
 fn bracket_search_matches_grep(args: &[&str]) {
     let files = bracket_files();
     matches_like_grep(&files, args, None, &[], Some(b""), false);

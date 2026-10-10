@@ -10,6 +10,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::Wake;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, TempDir};
 
@@ -48,8 +49,8 @@ fn the_reader_waits_for_output_written_later() {
         let _sent = tx.send(reader.read_exact(&mut seen).map(|()| seen));
     });
     secondary.write_all(b"late\n").unwrap();
-    let seen = rx
-        .recv_timeout(DEADLINE)
+    let seen = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the read to return")
         .unwrap();
     assert_eq!(&seen, b"late\r");
@@ -109,7 +110,8 @@ fn the_first_output_wait_ends_at_250_ms_and_not_before() {
         "the wait ended a millisecond early"
     );
     clock.advance(Duration::from_millis(1));
-    done.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("the wait to end at 250 ms");
 }
 
@@ -118,7 +120,8 @@ fn the_first_output_wait_ends_at_once_on_end_of_file() {
     let (clock, shared, done, due) = waiting();
     assert!(clock.await_parked(due, DEADLINE));
     note_eof(&shared);
-    done.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("the wait to end at end of file");
 }
 
@@ -134,7 +137,8 @@ fn the_first_output_wait_does_not_park_when_the_output_already_ended() {
         wait_first_output(&shared, clock.as_ref(), &CancelToken::new());
         let _sent = tx.send(());
     });
-    rx.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the wait to return at once");
 }
 
@@ -156,7 +160,8 @@ fn output_arriving_does_not_end_the_wait() {
     );
     assert!(done.try_recv().is_err());
     clock.advance(Duration::from_millis(250));
-    done.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("the wait to end at 250 ms");
 }
 
@@ -212,7 +217,7 @@ fn chunks_add_up_to_the_whole_input() {
         FakeClock::new(),
         CancelToken::new(),
     );
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap().unwrap(), 5);
+    assert_eq!(Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap(), 5);
 }
 
 #[test]
@@ -231,7 +236,7 @@ fn a_full_queue_parks_for_ten_ms_on_the_clock_and_tries_again() {
     );
     assert!(rx.try_recv().is_err());
     clock.advance(Duration::from_millis(10));
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap().unwrap(), 5);
+    assert_eq!(Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap(), 5);
 }
 
 #[test]
@@ -242,7 +247,7 @@ fn an_interrupted_write_is_tried_again_at_once() {
         FakeClock::new(),
         CancelToken::new(),
     );
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap().unwrap(), 2);
+    assert_eq!(Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap(), 2);
 }
 
 #[test]
@@ -253,7 +258,7 @@ fn any_other_error_ends_the_write_with_that_error() {
         FakeClock::new(),
         CancelToken::new(),
     );
-    let err = rx.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    let err = Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
 }
 
@@ -265,7 +270,7 @@ fn a_write_of_nothing_is_an_error() {
         FakeClock::new(),
         CancelToken::new(),
     );
-    let err = rx.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    let err = Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::WriteZero);
 }
 
@@ -274,7 +279,7 @@ fn a_cancel_before_the_first_write_writes_nothing() {
     let cancel = CancelToken::new();
     cancel.cancel();
     let rx = chunked(script(vec![Ok(2)]), b"hi", FakeClock::new(), cancel);
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap().unwrap(), 0);
+    assert_eq!(Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap(), 0);
 }
 
 #[test]
@@ -290,7 +295,7 @@ fn a_cancel_while_waiting_for_room_returns_what_was_written() {
     );
     assert!(clock.await_parked(due, DEADLINE));
     cancel.cancel();
-    assert_eq!(rx.recv_timeout(DEADLINE).unwrap().unwrap(), 2);
+    assert_eq!(Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap(), 2);
 }
 
 /// A scratch file standing in for the primary.
@@ -334,7 +339,11 @@ fn a_cancel_before_the_lock_is_waited_on_takes_nothing() {
     thread::spawn(move || {
         let _sent = tx.send(lock_writer(&moved, clock.as_ref(), &cancel).is_some());
     });
-    assert!(!rx.recv_timeout(DEADLINE).expect("the lock wait to return"));
+    assert!(
+        !Deadline::after(DEADLINE)
+            .recv(&rx)
+            .expect("the lock wait to return")
+    );
 }
 
 #[test]
@@ -352,7 +361,11 @@ fn a_held_lock_plus_a_cancel_that_fires_takes_nothing() {
     );
     assert!(rx.try_recv().is_err());
     cancel.cancel();
-    assert!(!rx.recv_timeout(DEADLINE).expect("the lock wait to end"));
+    assert!(
+        !Deadline::after(DEADLINE)
+            .recv(&rx)
+            .expect("the lock wait to end")
+    );
 }
 
 #[test]
@@ -370,7 +383,11 @@ fn a_lock_released_before_the_cancel_is_taken() {
     assert!(rx.try_recv().is_err());
     drop(held);
     clock.advance(Duration::from_millis(10));
-    assert!(rx.recv_timeout(DEADLINE).expect("the lock wait to end"));
+    assert!(
+        Deadline::after(DEADLINE)
+            .recv(&rx)
+            .expect("the lock wait to end")
+    );
 }
 
 #[test]

@@ -4,6 +4,7 @@ use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::process::Command;
 
+use fakes::Deadline;
 use fakes::TempDir;
 
 use super::{
@@ -429,7 +430,7 @@ fn with_locks_shares_one_lock_set_with_outside_holders() {
         drop(guard);
     });
     assert!(
-        holding_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&holding_rx).is_ok(),
         "waited {DEADLINE:?} for the outside holder to be held"
     );
     let through_files = files.locks();
@@ -448,7 +449,7 @@ fn with_locks_shares_one_lock_set_with_outside_holders() {
         seen.send(()).unwrap();
     });
     assert!(
-        seen_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&seen_rx).is_ok(),
         "waited {DEADLINE:?} for the lock through Files to be waiting"
     );
     assert!(
@@ -457,7 +458,7 @@ fn with_locks_shares_one_lock_set_with_outside_holders() {
     );
     release.send(()).unwrap();
     assert!(
-        done_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "waited {DEADLINE:?} for the lock through Files to acquire the path"
     );
     holder.join().unwrap();
