@@ -1576,9 +1576,6 @@ fn journey_prompt_answer_approval_resize_quit() {
     // floor beside the 84-column conversation minimum), so the grid
     // follows to the new size with the conversation still on it.
     run.resize(116, 30);
-    // The panel's Session card ends in its `turns` row at the new
-    // right edge: retained bytes cut to 100 columns end mid-card, so
-    // only a redraw at the new size puts `turns  2` last.
     // The card's handoff row ends mid-card only when cut: retained
     // bytes truncated to 116 columns lose its tail, so the whole phrase
     // plus the cursor parked on the input row only co-occur after a
