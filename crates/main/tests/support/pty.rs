@@ -889,14 +889,32 @@ impl Drop for Run {
 /// socket before it drops its hub and returns. An empty `hub_home` is an
 /// attached run, which waits on no hub. The poll carries what remains of
 /// the deadline into every listing, and stops at zero, so the wait ends
-/// at the deadline however the listing below behaves.
+/// at the deadline however the listing below behaves. The loop lives in
+/// [`until_hub_exits_with`], so tests pin it with a fake lister.
 pub(crate) fn until_hub_exits(deadline: Deadline, socket: &Path, hub_home: &Path, what: &str) {
     let home = hub_home.to_string_lossy();
+    until_hub_exits_with(deadline, socket, &home, what, &mut || {
+        list_processes(deadline.left())
+    });
+}
+
+/// [`until_hub_exits`] with the process listing injected: polls
+/// [`hub_gone`] with `list` until true, panicking naming `what` once the
+/// deadline's remainder is zero. A socket-only loop would return while a
+/// listed hub lives; the counting-lister test in `look.rs` pins that the
+/// loop returns only after the hub row vanishes.
+pub(crate) fn until_hub_exits_with(
+    deadline: Deadline,
+    socket: &Path,
+    home: &str,
+    what: &str,
+    list: &mut dyn FnMut() -> String,
+) {
     loop {
         if deadline.left().is_zero() {
             panic!("waited until the deadline for {what}");
         }
-        if hub_gone(socket, &home, &mut || list_processes(deadline.left())) {
+        if hub_gone(socket, home, list) {
             return;
         }
         thread::yield_now();

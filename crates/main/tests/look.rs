@@ -27,6 +27,7 @@ use support::Setup;
 use support::pty::{
     Colour, FINISHED_TITLE, Grid, HOME_TITLE, MOTION, Reader, Run, Shared, Writer, contains,
     exact_end, hub_gone, hub_pids, list_processes, query_replies, sgr_params, until_hub_exits,
+    until_hub_exits_with,
 };
 
 /// Feeds `bytes` into an attached run's terminal side and returns the
@@ -421,6 +422,53 @@ fn a_hub_alive_without_its_socket_is_not_gone() {
     };
     assert!(hub_gone(&dir.path().join("missing"), "", &mut never));
     assert!(!listed, "an attached run lists no processes");
+}
+
+/// `until_hub_exits_with` returns only after the hub row vanishes: the
+/// counting lister shows the hub three polls running, so a socket-only
+/// loop would return on the first poll without listing at all.
+#[test]
+fn until_hub_exits_with_waits_until_the_hub_row_vanishes() {
+    let dir = fakes::TempDir::new("hub-exits");
+    let home = "/tmp/fiber-hub-home";
+    let hub_row = "4242 python3 -c 'import os, sys  # hub serve' FIBER_HOME=/tmp/fiber-hub-home";
+    let mut calls = 0;
+    let mut list = || {
+        calls += 1;
+        if calls <= 3 {
+            hub_row.to_owned()
+        } else {
+            String::new()
+        }
+    };
+    until_hub_exits_with(
+        Deadline::start(),
+        &dir.path().join("missing"),
+        home,
+        "the fake hub to exit",
+        &mut list,
+    );
+    assert_eq!(calls, 4, "the wait returns only after the hub row vanishes");
+}
+
+/// `until_hub_exits_with` panics naming `what` once the deadline is
+/// gone, even with the hub still listed: the wait ends at the deadline
+/// however the listing behaves.
+#[test]
+#[should_panic(expected = "waited until the deadline for the hub that never exits")]
+fn until_hub_exits_with_panics_naming_what_after_the_deadline() {
+    let clock = Box::leak(Box::new(FakeClock::new()));
+    let deadline = Deadline::on(&**clock);
+    clock.advance(support::WAITS + Duration::from_secs(1));
+    let dir = fakes::TempDir::new("hub-never-exits");
+    let hub_row = "4242 python3 -c 'import os, sys  # hub serve' FIBER_HOME=/tmp/fiber-hub-home";
+    until_hub_exits_with(
+        deadline,
+        &dir.path().join("missing"),
+        "/tmp/fiber-hub-home",
+        "the hub that never exits",
+        &mut || hub_row.to_owned(),
+    );
 }
 
 /// `Run::wait`'s hub wait must outlive the socket: the fake hub removes
