@@ -391,8 +391,8 @@ impl Collect {
         self.keep(hit);
     }
 
-    /// Keeps `hit` while it is among the best `limit`. Past twice `limit`
-    /// hits only the best `limit` are kept, so memory stays bounded while
+    /// Keeps `hit` while it is among the best `limit`. Each time twice
+    /// `limit` hits are held only the best `limit` stay, so memory stays bounded while
     /// the answer depends only on which hits were found, never on the
     /// order they arrived.
     fn keep(&mut self, hit: Hit) {
@@ -401,7 +401,7 @@ impl Collect {
         }
         self.hits.push(hit);
         let cap = self.limit.saturating_mul(2);
-        if self.hits.len() > cap {
+        if self.hits.len() == cap {
             self.hits
                 .select_nth_unstable_by(self.limit, |a, b| key(a).cmp(&key(b)));
             self.hits.truncate(self.limit);

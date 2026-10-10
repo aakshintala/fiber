@@ -307,6 +307,15 @@ fn a_limit_of_zero_keeps_no_hit_while_scanning() {
 }
 
 #[test]
+fn hits_are_held_up_to_twice_the_limit_then_cut_to_the_limit() {
+    let mut out = Collect::new(2);
+    for (pushed, want) in [(1_u64, 1_usize), (2, 2), (3, 3), (4, 2), (5, 3)] {
+        out.hit(hit(Label::Message, 100 - pushed, "s", pushed));
+        assert_eq!(out.hits.len(), want, "after {pushed} hits");
+    }
+}
+
+#[test]
 fn names_reach_the_kept_hits_of_their_session_only() {
     let mut out = Collect::new(10);
     out.hit(hit(Label::Message, 1, "s_a", 1));
