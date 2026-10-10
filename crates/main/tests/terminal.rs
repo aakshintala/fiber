@@ -459,6 +459,29 @@ const CAPABILITIES: [(&[u8], &[u8]); 4] = [
 /// reads: longer than the longest query above.
 const PENDING_KEEP: usize = 16;
 
+/// Whether the grid shows a working line with its elapsed count:
+/// "Working" plus a digit right after its space. The count needs
+/// `turn_started`, which opens the turn, so an Esc sent after it is never
+/// dropped as not-busy; the bare line draws before that and proves nothing.
+fn working_elapsed(contents: &str) -> bool {
+    contents.match_indices("Working ").any(|(at, _)| {
+        contents[at + "Working ".len()..]
+            .chars()
+            .next()
+            .is_some_and(|next| next.is_ascii_digit())
+    })
+}
+
+#[test]
+fn working_elapsed_needs_the_count() {
+    assert!(working_elapsed("Working 0s · esc to interrupt"));
+    assert!(working_elapsed("Working 39s · esc to interrupt"));
+    assert!(working_elapsed("Working 1m 2s · esc to interrupt"));
+    assert!(!working_elapsed("Working · esc to interrupt"));
+    assert!(!working_elapsed("Working"));
+    assert!(!working_elapsed("idle"));
+}
+
 /// The replies for every whole query in `pending`, in stream order,
 /// dropping the bytes through each answered query and keeping the tail
 /// for a query still arriving.
@@ -698,11 +721,13 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
         grid.contents.contains("completed")
     });
     // The second prompt starts a stalled turn; Esc interrupts it. The
-    // working line itself proves the turn runs, so no elapsed count.
-    run.write(b"again\r");
-    run.wait_screen("the working turn", |grid| grid.contents.contains("Working"));
+    // elapsed count proves `turn_started` folded, which opens the turn:
+    // Esc goes out as `cancel` only while the turn is busy, so an Esc on
+    // the bare working line is dropped and strands the stalled turn.
     // With kitty's flags pushed Esc arrives as `CSI 27 u`, never as a
     // lone byte.
+    run.write(b"again\r");
+    run.wait_screen("the running turn", |grid| working_elapsed(&grid.contents));
     run.write(b"\x1b[27u");
     run.wait_screen("the interrupted turn", |grid| {
         grid.alternate_screen && grid.contents.contains("interrupted")
