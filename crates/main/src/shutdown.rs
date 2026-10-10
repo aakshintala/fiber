@@ -22,7 +22,6 @@ pub(crate) fn arm(signals: &Signals) {
             support::group::kill_every_group();
             tools::kill_every_group();
             extensions::kill_every_group();
-            jobs::kill_every_group();
             mcp::kill_every_server();
         }),
     );
@@ -46,7 +45,6 @@ pub(crate) fn arm_isolating(signals: &Signals, reads: &Arc<crate::switch::Reads>
             support::group::kill_every_group();
             tools::kill_every_group();
             extensions::kill_every_group();
-            jobs::kill_every_group();
             mcp::kill_every_server();
         }),
     );
@@ -80,7 +78,6 @@ pub(crate) fn start(
             support::group::kill_every_group();
             tools::kill_every_group();
             extensions::kill_every_group();
-            jobs::kill_every_group();
         }),
     );
     if started.is_some() {
