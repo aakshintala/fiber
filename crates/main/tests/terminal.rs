@@ -482,6 +482,24 @@ fn query_replies(pending: &mut Vec<u8>) -> Vec<u8> {
     replies
 }
 
+#[test]
+fn ingest_applies_a_pending_resize_before_its_chunk_parses() {
+    let mut parser = vt100::Parser::new(32, 120, 0);
+    let pending_size = Mutex::new(Some((40u16, 10u16)));
+    let mut pending = Vec::new();
+    // Fifty cells at 40 columns wrap onto two rows; at 120 they would
+    // sit on one. The cursor tells which size parsed the chunk.
+    ingest(&mut parser, &pending_size, &mut pending, &[b'x'; 50]);
+    assert_eq!(parser.screen().size(), (10, 40));
+    assert_eq!(parser.screen().cursor_position(), (1, 10));
+    // No pending resize: the size stays.
+    ingest(&mut parser, &pending_size, &mut pending, b"x");
+    assert_eq!(parser.screen().size(), (10, 40));
+    // A whole query is answered from the same bytes.
+    let replies = ingest(&mut parser, &pending_size, &mut pending, b"\x1b[?u");
+    assert_eq!(replies, b"\x1b[?1u");
+}
+
 impl Run {
     /// The grid rebuilt from the output so far.
     fn screen(&self) -> Grid {
