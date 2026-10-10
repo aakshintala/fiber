@@ -1,12 +1,14 @@
 //! The screen: ratatui on a fixed viewport sized from the injected tty, the
 //! last frame drawn and its click targets (`docs/tui.md`, "Mouse and
-//! hover"). A frame equal to the last writes nothing.
+//! hover"). A frame equal to the last writes nothing. Every frame is
+//! written inside synchronized output, mode 2026 (`docs/tui.md`,
+//! "Performance").
 //!
 //! Frames are drawn with role markers (`crate::theme`); the frame kept for
 //! the "nothing changed" comparison keeps them, and only the copy written
 //! to the terminal is painted with the look's colours.
 
-use ratatui::backend::{Backend, ClearType, WindowSize};
+use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size};
 use ratatui::style::Style;
@@ -34,12 +36,17 @@ pub(crate) struct Screen<B: Backend> {
 }
 
 impl<B: Backend> Screen<B> {
-    pub(crate) fn new(backend: B, width: u16, height: u16) -> Result<Self, B::Error> {
+    pub(crate) fn new(backend: B, width: u16, height: u16) -> Result<Self, B::Error>
+    where
+        B: SyncEmit,
+    {
         let area = Rect::new(0, 0, width, height);
         let terminal = Terminal::with_options(
             TtySized {
                 inner: backend,
                 size: area.as_size(),
+                open: false,
+                emit: B::emit,
             },
             TerminalOptions {
                 viewport: Viewport::Fixed(area),
@@ -163,14 +170,67 @@ fn themed(area: Rect) -> Buffer {
     Buffer::filled(area, blank)
 }
 
+/// Synchronized output's begin marker (DEC mode 2026): the first byte of a
+/// frame. The same bytes crossterm's `BeginSynchronizedUpdate` writes; they
+/// are written here so no new dependency is needed. A terminal without
+/// support ignores the sequence (`docs/tui.md`, "Performance").
+const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
+/// Synchronized output's end marker (DEC mode 2026): the last byte of a
+/// frame, written on flush.
+const SYNC_END: &[u8] = b"\x1b[?2026l";
+
+/// How one synchronized-output marker reaches the terminal: backends over
+/// a byte sink write mode 2026's markers, every other backend ignores
+/// them. `TestBackend` has no `Write`, so the constructor takes this
+/// bound instead of one on it.
+pub(crate) trait SyncEmit: Backend {
+    fn emit(&mut self, begin: bool) -> Result<(), Self::Error>;
+}
+
+impl<W: std::io::Write> SyncEmit for CrosstermBackend<W> {
+    fn emit(&mut self, begin: bool) -> Result<(), Self::Error> {
+        use std::io::Write as _;
+        self.write_all(if begin { SYNC_BEGIN } else { SYNC_END })
+    }
+}
+
+impl SyncEmit for TestBackend {
+    fn emit(&mut self, _begin: bool) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
 /// A backend that reports the size read from the injected tty. ratatui
 /// asks its backend for the size when it clears a fixed viewport on
 /// resize, and crossterm answers from `/dev/tty`, standard output or
 /// `tput`, never from the injected tty: with none of those, as under a
 /// test harness, the answer is an error and the resize fails.
-struct TtySized<B> {
+///
+/// It also brackets every frame in synchronized output: the begin marker
+/// precedes the frame's first byte and the end marker is written on
+/// flush, so the terminal shows only whole frames. The block stays open
+/// across calls, so a resize's clear and the redraw that follows share
+/// one block; blocks never nest.
+struct TtySized<B: Backend> {
     inner: B,
     size: Size,
+    /// Whether a synchronized-output block is open: the begin marker went
+    /// out and no flush closed it yet.
+    open: bool,
+    /// Writes one synchronized-output marker to the inner backend.
+    emit: fn(&mut B, begin: bool) -> Result<(), B::Error>,
+}
+
+impl<B: Backend> TtySized<B> {
+    /// Opens the frame's synchronized-output block, unless one is open.
+    fn open_block(&mut self) -> Result<(), B::Error> {
+        if !self.open {
+            let emit = self.emit;
+            emit(&mut self.inner, true)?;
+            self.open = true;
+        }
+        Ok(())
+    }
 }
 
 impl<B: Backend> Backend for TtySized<B> {
@@ -180,14 +240,17 @@ impl<B: Backend> Backend for TtySized<B> {
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
+        self.open_block()?;
         self.inner.draw(content)
     }
 
     fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        self.open_block()?;
         self.inner.hide_cursor()
     }
 
     fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        self.open_block()?;
         self.inner.show_cursor()
     }
 
@@ -196,14 +259,17 @@ impl<B: Backend> Backend for TtySized<B> {
     }
 
     fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
+        self.open_block()?;
         self.inner.set_cursor_position(position)
     }
 
     fn clear(&mut self) -> Result<(), Self::Error> {
+        self.open_block()?;
         self.inner.clear()
     }
 
     fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+        self.open_block()?;
         self.inner.clear_region(clear_type)
     }
 
@@ -219,6 +285,11 @@ impl<B: Backend> Backend for TtySized<B> {
     }
 
     fn flush(&mut self) -> Result<(), Self::Error> {
+        if self.open {
+            let emit = self.emit;
+            emit(&mut self.inner, false)?;
+            self.open = false;
+        }
         self.inner.flush()
     }
 }

@@ -112,7 +112,7 @@ impl Write for Sink {
 }
 
 /// A loop at 60x12 on `backend`, with no tty, that records attaches.
-pub(super) fn new_loop<B: Backend>(
+pub(super) fn new_loop<B: Backend + crate::screen::SyncEmit>(
     backend: B,
     tty: Option<File>,
 ) -> (Loop<B>, Arc<Mutex<Vec<String>>>) {
