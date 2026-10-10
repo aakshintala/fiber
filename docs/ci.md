@@ -135,8 +135,6 @@ run: CI opens a flake issue naming the test, or comments on the open one
 On Linux x86_64 alone:
 
 - `cargo fmt --check`
-- the non-test source files over 800 lines are listed (`cargo xtask
-  line-cap`); the list never fails the run (`docs/code-quality.md`, "Size")
 - a process signal appears only in the guarded helpers (`cargo xtask signal-sites`)
 - the compiled-in list matches the files crates compile in, Markdown
   anywhere or any file outside the crate, every include argument is a

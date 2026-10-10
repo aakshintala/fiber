@@ -28,12 +28,7 @@ pub(crate) fn over_cap(files: &[RustFile]) -> Vec<String> {
         .filter(|f| !is_test_file(&f.rel))
         .filter_map(|f| {
             let lines = f.source.matches('\n').count();
-            (lines > LINE_CAP).then(|| {
-                format!(
-                    "{}: {lines} lines, over {LINE_CAP}; file a split ticket",
-                    f.path
-                )
-            })
+            (lines > LINE_CAP).then(|| format!("{}: {lines} lines, over {LINE_CAP}", f.path))
         })
         .collect()
 }

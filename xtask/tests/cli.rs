@@ -427,7 +427,7 @@ fn the_line_cap_lists_a_long_file() {
         xtask(&dir, &["line-cap"], &[], ""),
         (
             0,
-            "line-cap: crates/b/src/long.rs: 801 lines, over 800; file a split ticket\n".to_owned()
+            "line-cap: crates/b/src/long.rs: 801 lines, over 800\n".to_owned()
         )
     );
 }
