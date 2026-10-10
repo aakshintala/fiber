@@ -1638,6 +1638,7 @@ dependencies = [
  "provider",
  "rustix",
  "serde_json",
+ "support",
  "tools",
  "tui",
  "vt100",
@@ -2957,6 +2958,15 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "support"
+version = "0.0.0"
+dependencies = [
+ "fakes",
+ "rustix",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "syn"

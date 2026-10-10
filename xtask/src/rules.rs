@@ -197,6 +197,7 @@ const SIGNAL_ALLOWLIST: &[&str] = &[
     "crates/mcp/src/registry.rs",
     "crates/tui/src/paste_image.rs",
     "crates/tools/src/shell/process_group.rs",
+    "crates/support/src/group.rs",
 ];
 
 /// What counts as a process signal: the pattern, and whether it only counts
