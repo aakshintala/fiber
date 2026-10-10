@@ -1432,7 +1432,8 @@ mod window {
         assert_eq!(folded.window, (0, 0));
         assert_eq!(folded.session, "s_1");
         assert_eq!(folded.workspace, "/w");
-        assert_eq!(folded.model.as_deref(), Some("fake/second"));
+        // A `usage_recorded` names the call's model, not the session's.
+        assert_eq!(folded.model, None);
     }
 
     #[test]
@@ -1474,7 +1475,8 @@ mod window {
         // log named its stage, and failures always counted.
         assert_eq!(folded.session_blocks, 2);
         assert_eq!(folded.ledger.usage().tokens.input, 20);
-        assert_eq!(folded.model.as_deref(), Some("fake/second"));
+        // A `usage_recorded` names the call's model, not the session's.
+        assert_eq!(folded.model, None);
         // Only the job never ended is orphaned.
         let orphans: Vec<&str> = folded
             .orphans
