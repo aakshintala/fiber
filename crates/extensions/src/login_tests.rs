@@ -20,7 +20,10 @@ fn write_record(dir: &std::path::Path) {
     let text = std::fs::read_to_string(dir.join("extension.json")).unwrap();
     let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
     let name = manifest.get("name").and_then(|n| n.as_str()).unwrap();
-    let version = manifest.get("version").and_then(|v| v.as_str()).unwrap_or("1.0.0");
+    let version = manifest
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("1.0.0");
     std::fs::write(
         dir.join(".fiber.json"),
         serde_json::json!({"name": name, "version": version, "requested": true, "source": {"path": "/p"}}).to_string(),

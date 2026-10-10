@@ -201,7 +201,7 @@ pub(crate) fn install(
         failure.clone(),
     ))?;
     let exec_entry = Rc::clone(&entry);
-    let in_entry = lua.create_function(move |_, ()| Ok(exec_entry.get()))?;
+    let in_entry = failure::in_entry(lua, &exec_entry)?;
     lua.load(EXEC).set_name("=host.exec").call::<()>((
         host.clone(),
         tag.clone(),

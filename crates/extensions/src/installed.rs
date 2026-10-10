@@ -151,8 +151,7 @@ pub(crate) struct Entries {
 /// and has already finished any commit that stopped halfway.
 pub(crate) fn read(home: &Path) -> Result<Listing, Error> {
     let entries = read_entries(home)?;
-    let mut installed: Vec<Installed> =
-        entries.found.into_iter().map(|e| e.installed).collect();
+    let mut installed: Vec<Installed> = entries.found.into_iter().map(|e| e.installed).collect();
     let mut damaged = entries.damaged;
     installed.sort_by(|a, b| a.name.cmp(&b.name));
     damaged.sort_by(|a, b| a.name.cmp(&b.name));

@@ -157,7 +157,10 @@ fn placed(setup: &Setup, dir: &str, api: u64, secrets: &[&str]) -> PathBuf {
     let text = std::fs::read_to_string(path.join("extension.json")).unwrap();
     let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
     let name = manifest.get("name").and_then(|n| n.as_str()).unwrap();
-    let version = manifest.get("version").and_then(|v| v.as_str()).unwrap_or("v1.0.0");
+    let version = manifest
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("v1.0.0");
     write(
         &path.join(".fiber.json"),
         &serde_json::json!({"name": name, "version": version, "requested": true, "source": {"path": "/p"}}).to_string(),
