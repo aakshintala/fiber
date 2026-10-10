@@ -48,8 +48,16 @@ const FETCH: Duration = Duration::from_secs(60);
 /// How long a fetch that must time out may take on the wall clock.
 const TIMEOUT_WITHIN: Duration = Duration::from_secs(5);
 
-/// How long the timeout test waits for the watcher's deadline wait.
-const STOP_SIGNAL: Duration = Duration::from_secs(10);
+/// How long each wait inside the timeout test may take on the wall clock:
+/// the watcher parks in milliseconds and the first piece saves in
+/// milliseconds, so this only catches a hang. It stays under the
+/// timed-out fetch's own deadline.
+const STOP_SIGNAL: Duration = Duration::from_secs(4);
+
+/// One download piece in bytes: the Sink saves a piece to the artifact
+/// before pushing it to the converter, so the artifact holding a whole
+/// piece proves the converter was given work.
+const PIECE: u64 = 64 * 1024;
 
 /// A tag with a million distinct short attribute names, under the 10 MiB
 /// download cap: html5ever checks each new attribute against every
@@ -57,8 +65,9 @@ const STOP_SIGNAL: Duration = Duration::from_secs(10);
 /// attribute count. Once the request's 60-second window passes on the
 /// fake clock, the watcher stops the hop, the stop reaches the converter
 /// between 64 KiB pieces, and the fetch fails with `timeout`, leaving
-/// no artifact behind. The clock advances only after the watcher is
-/// seen waiting for its deadline.
+/// no artifact behind. The clock advances only after the watcher is seen
+/// waiting for its deadline and the artifact holds a whole piece, so the
+/// converter is in the tag's work when the stop lands.
 #[test]
 fn a_quadratic_tag_times_out_and_leaves_no_artifact() {
     let mut page = String::from("<a");
@@ -66,6 +75,7 @@ fn a_quadratic_tag_times_out_and_leaves_no_artifact() {
         page.push_str(&format!(" a{n}"));
     }
     page.push_str(">t</a>");
+    let page_len = u64::try_from(page.len()).expect("the page length fits");
     assert!(page.len() < 10 << 20, "the page is under the cap");
     let server = ProviderServer::start([Response {
         status: 200,
@@ -83,27 +93,84 @@ fn a_quadratic_tag_times_out_and_leaves_no_artifact() {
     let mut arguments = Map::new();
     arguments.insert("url".to_owned(), Value::String(url));
     let origin = clock.origin();
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let output = tool.run(&arguments, &CancelToken::new(), &Recorder::default());
-        // The test may have stopped waiting.
-        let _sent = done.send(output);
+    within("the timed-out fetch", TIMEOUT_WITHIN, move || {
+        // The bytes saved at once, watched beside the fetch: the artifact
+        // grows in pieces the Sink saves before pushing each to the
+        // converter, then is removed when the fetch fails. One watcher
+        // reports the first whole piece and the most ever saved.
+        let (reached, first_piece) = std::sync::mpsc::channel::<u64>();
+        let (halt, stop_watch) = std::sync::mpsc::channel::<()>();
+        let (peak, peak_saved) = std::sync::mpsc::channel::<u64>();
+        let watch_dir = artifacts.clone();
+        std::thread::Builder::new()
+            .name("artifact-watch".to_owned())
+            .spawn(move || {
+                let mut max = 0u64;
+                let mut signaled = false;
+                loop {
+                    let mut size = 0u64;
+                    if let Ok(entries) = std::fs::read_dir(&watch_dir) {
+                        for entry in entries.flatten() {
+                            size += entry.metadata().map(|file| file.len()).unwrap_or(0);
+                        }
+                    }
+                    max = max.max(size);
+                    if !signaled && size >= PIECE {
+                        signaled = true;
+                        // The test may have stopped waiting.
+                        let _sent = reached.send(size);
+                    }
+                    if stop_watch.try_recv().is_ok() {
+                        // The test may have stopped waiting.
+                        let _sent = peak.send(max);
+                        return;
+                    }
+                    std::hint::spin_loop();
+                }
+            })
+            .expect("the artifact watcher starts");
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let output = tool.run(&arguments, &CancelToken::new(), &Recorder::default());
+            // The test may have stopped waiting.
+            let _sent = done.send(output);
+        });
+        assert!(
+            clock.await_parked(origin + Duration::from_secs(60), STOP_SIGNAL),
+            "the watcher waits for the request deadline"
+        );
+        let at_stop = first_piece
+            .recv_timeout(STOP_SIGNAL)
+            .expect("the first piece is saved before the stop");
+        // Nothing wakes the watcher but the clock advance below or the
+        // fetch ending, so it is still waiting when the clock moves: the
+        // stop lands while the converter holds the tag's first piece.
+        clock.advance(Duration::from_secs(60));
+        let output = finished
+            .recv_timeout(STOP_SIGNAL)
+            .expect("the fetch finished within its deadline");
+        assert_eq!(
+            output.error.as_ref().map(|error| error.code.clone()),
+            Some(ErrorCode::Timeout),
+            "the quadratic tag times out"
+        );
+        // The watch ends after the fetch: the artifact is already
+        // removed, so the peak is every byte the fetch ever saved.
+        let _halted = halt.send(());
+        let saved = peak_saved
+            .recv_timeout(STOP_SIGNAL)
+            .expect("the artifact watch answers");
+        assert!(
+            saved < page_len,
+            "the fetch saved {saved} of {page_len} bytes, stopping early"
+        );
+        assert!(
+            saved - at_stop <= PIECE,
+            "the converter took no piece after the window: {at_stop} then {saved}"
+        );
+        let left = std::fs::read_dir(&artifacts).map(|entries| entries.count());
+        assert_eq!(left.unwrap_or(0), 0, "no artifact is kept");
     });
-    assert!(
-        clock.await_parked(origin + Duration::from_secs(60), STOP_SIGNAL),
-        "the watcher waits for the request deadline"
-    );
-    clock.advance(Duration::from_secs(60));
-    let output = finished
-        .recv_timeout(TIMEOUT_WITHIN)
-        .expect("the fetch finished within its deadline");
-    assert_eq!(
-        output.error.as_ref().map(|error| error.code.clone()),
-        Some(ErrorCode::Timeout),
-        "the quadratic tag times out"
-    );
-    let left = std::fs::read_dir(&artifacts).map(|entries| entries.count());
-    assert_eq!(left.unwrap_or(0), 0, "no artifact is kept");
 }
 
 /// One fetch of a page, measured.
@@ -115,6 +182,39 @@ struct Fetched {
     addr: usize,
     _dir: TempDir,
     _server: ProviderServer,
+}
+
+/// A page holding `count` distinct short attribute names on a tag that
+/// never closes: the tokenizer still holds the tag at the end of input.
+fn unclosed_tag(count: u32) -> Vec<u8> {
+    let mut page = String::from("<a");
+    for n in 0..count {
+        page.push_str(&format!(" a{n}"));
+    }
+    page.into_bytes()
+}
+
+/// An unclosed tag's attributes held whole: two pages under the cap with
+/// different counts of distinct short attribute names, both converting
+/// to nothing. The working peaks differ by the attributes alone, so
+/// their difference over the count difference is the bytes each
+/// attribute holds beside the output: about 40 bytes plus its name.
+#[test]
+fn an_unclosed_tag_holds_about_forty_five_bytes_per_attribute() {
+    let small = unclosed_tag(8_000);
+    let large = unclosed_tag(16_000);
+    assert!(large.len() < 10 << 20, "the pages are under the cap");
+    let first = fetch("text/html; charset=utf-8", small);
+    assert_markdown_eq("", markdown(&first), "nothing past an unclosed tag");
+    let second = fetch("text/html; charset=utf-8", large);
+    assert_markdown_eq("", markdown(&second), "nothing past an unclosed tag");
+    // Both peaks hold the tag's attributes beside empty output: the
+    // difference over the count difference is the bytes each holds.
+    let per = (working(&second) - working(&first)) / 8_000;
+    assert!(
+        (40..=50).contains(&per),
+        "about 45 bytes per attribute, measured {per}"
+    );
 }
 
 /// Serves `page` as `content_type` and fetches it inside a byte-counting
