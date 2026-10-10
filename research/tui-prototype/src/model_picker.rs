@@ -199,6 +199,8 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case { name: "refreshing", help: "one provider refreshing", check: "openai-codex reads `⟳ refreshing` with a still spinner glyph, the other two `updated … ago`, and a `⟳ refresh all` button sits at the controls row's right end; same panel, bar and legend.", build: || State { refreshing: vec![1], ..base() } },
     // a non-current model focused, the `s` mark applied
     Case { name: "session-only", help: "a model picked for this session only", check: "claude-sonnet-5-5 `›` on the accent bar with `ⓢ this session only · nothing saved` under it and its rebuild cost on its row; same panel and legend.", build: || State { focus: 1, session_only: Some(1), ..base() } },
+    Case { name: "filtered", help: "a typed query narrowing the list, matches underlined", check: "the query `mini` in bold after `›` with a block cursor, four models across openai-codex and google, the matched id chars underlined and bold on and off the accent bar, a `4 of 12 models` chip; same panel and legend.", build: || State { focus: 5, query: "mini".into(), ..base() } },
+    Case { name: "filtered-empty", help: "a query nothing matches", check: "the query `zzz` in bold after `›` with a block cursor, one muted `No models match` line and no provider sections, a `0 of 12 models` chip; same panel and legend.", build: || State { query: "zzz".into(), ..base() } },
 ];
 
 /// `--picker`, for `--help` and `check/model-picker.md`.

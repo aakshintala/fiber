@@ -439,18 +439,20 @@ For `docs/tui.md`: every frame is written inside synchronised output; a frame is
 
 ## Model picker (#1629)
 
-A second swapped view, drawn like the context breakdown: Ctrl+L and `/model` open it over the conversation area, under a "Models /model" header, with the side panel and the input box still there. Typing still goes to the input box. It draws from a fixture in `src/model_picker.rs` (three providers, twelve models): the stream names only the current model, so the roles, thinking levels and rebuild costs are made up. A centred panel on the raised surface; dim provider sections with a blank row between them; the focused model on a full-width accent bar with a `›` marker; the model name in the accent colour, its thinking chips in the attention colour, the rest dim.
+A second swapped view, drawn like the context breakdown: Ctrl+L and `/model` open it over the conversation area, under a "Models /model" header, with the side panel and the input box still there. Typing filters the list while it is open. It draws from a fixture in `src/model_picker.rs` (three providers, twelve models): the stream names only the current model, so the roles, thinking levels and rebuild costs are made up. A centred panel on the raised surface; dim provider sections with a blank row between them; the focused model on a full-width accent bar with a `›` marker; the model name in the accent colour, its thinking chips in the attention colour, the rest dim.
 
 | Case | How to reach it |
 |---|---|
-| `list` | `cargo run --release -- fixtures/idle.jsonl --static --picker list`, or Ctrl+L / `/model` live |
+| `list` | `cargo run --release -- fixtures/idle.jsonl --static --picker list`, or Ctrl+L / `/model` live; the search line reads `Type to search` until typed |
 | `levels` | `cargo run --release -- fixtures/idle.jsonl --static --picker levels`: the current model's thinking chips focused, as after clicking a thinking chip |
 | `scoped` | `cargo run --release -- fixtures/idle.jsonl --static --picker scoped`: the `scoped_models` set, five of twelve, with a show-all toggle |
 | `scoped-all` | `cargo run --release -- fixtures/idle.jsonl --static --picker scoped-all`: all twelve, the scoped five marked |
 | `refreshing` | `cargo run --release -- fixtures/idle.jsonl --static --picker refreshing`: one provider refreshing in the background, the others with an updated-ago age |
 | `session-only` | `cargo run --release -- fixtures/idle.jsonl --static --picker session-only`: a non-current model focused with the `s` mark, "this session only · nothing saved" |
+| `filtered` | `cargo run --release -- fixtures/idle.jsonl --static --picker filtered`: the query `mini`, four matching models across two providers, matched letters underlined |
+| `filtered-empty` | `cargo run --release -- fixtures/idle.jsonl --static --picker filtered-empty`: the query `zzz`, one muted `No models match` line |
 
-Live keys while it is open: ↑/↓ move between models, ←/→ between the focused model's thinking chips, Enter chooses and closes, `s` marks the choice this session only (then nothing is saved), `a` toggles show all when scoped, `r` refreshes every list (cosmetic), Esc closes. Clicking a row focuses it; clicking a chip focuses that chip.
+Live keys while it is open: typing filters the list over provider, id and display name with the matched letters underlined, Backspace edits the query, Esc clears the query first and then closes, Enter on an empty list stays open; ↑/↓ move between models, ←/→ between the focused model's thinking chips, Enter chooses and closes, Ctrl+S marks the choice this session only (then nothing is saved), Tab toggles show all when scoped, Ctrl+R refreshes every list (cosmetic). Clicking a row focuses it; clicking a chip focuses that chip.
 
 ## Completions (#1631)
 
