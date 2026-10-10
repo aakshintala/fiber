@@ -287,9 +287,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     // Anthropic requires `max_tokens`. It is the model's limit, or the
     // model data's own `max_tokens` when that is lower (`docs/errors.md`,
     // "Output tokens").
-    if endpoint.output_limit(request.max_output_tokens).is_some()
-        && let Some(max) = sent
-    {
+    if let Some(max) = sent {
         body.insert("max_tokens".into(), json!(max));
     }
     Value::Object(body).to_string().into_bytes()
