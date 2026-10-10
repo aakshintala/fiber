@@ -37,8 +37,8 @@ const NOBODY_TO_ANSWER: &str = "The session was resumed with nobody to answer.";
 /// What a resume folds back over the session's chain of logs, root
 /// first (`docs/events.md`, "Rewind"): the session, the root the cache
 /// keys are built from, the workspace the own log's first
-/// `session_started` recorded, the model the last `usage_recorded` names,
-/// if any, and the session-wide state a resumed loop restores. The pass
+/// `session_started` recorded, the model the last `preamble_built` or
+/// `model_changed` names, if any, and the session-wide state a resumed loop restores. The pass
 /// also finds the window a resume reads: the lines from the last completed
 /// handoff on (`docs/handoff.md`, "Resume").
 pub struct Resumed {
@@ -53,9 +53,9 @@ pub struct Resumed {
     /// wherever the resume runs (`docs/state.md`, "Sessions and resume").
     /// The own log's, when the session continues another.
     pub workspace: String,
-    /// The model of the last call recorded, or of the last `model_changed`
-    /// when it came later; a late cost's second record of a call is not a
-    /// new call. The session's model, beating `--model`
+    /// The model of the last `preamble_built` or `model_changed`; a
+    /// `usage_recorded` names its call's model, which may be a delegate's
+    /// or a reviewer's. The session's model, beating `--model`
     /// (`docs/model-routing.md`, "Choosing the model"). `None` when the log
     /// holds none.
     pub model: Option<String>,
