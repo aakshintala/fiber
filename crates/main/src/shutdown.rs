@@ -1,8 +1,8 @@
 //! What a signal does to a `fiber ask` session process (`docs/invocation.md`,
 //! "Shutdown"): the callbacks the signals thread runs, wired to the turn's
 //! cancel, the session's jobs, the door side, a switch's credential read,
-//! every listed process group, every command's process group and every MCP
-//! server. A `close` with `now` takes the same path with exit code 0,
+//! and every listed process group, MCP servers' included. A `close` with
+//! `now` takes the same path with exit code 0,
 //! takes the same path with exit code 0, through the hook wired here.
 
 use std::sync::Arc;
@@ -13,15 +13,14 @@ use r#loop::TurnCancel;
 
 /// Arms the signals just before the first child process starts: from now a
 /// signal is recorded, every server still starting is told to stop, and at
-/// the bound every listed process group, every command group and MCP server
-/// still alive is killed.
+/// the bound every listed process group, MCP servers' included, still alive
+/// is killed.
 pub(crate) fn arm(signals: &Signals) {
     signals.arm(
         Box::new(mcp::stop_every_start),
         Box::new(|| {
             support::group::kill_every_group();
             extensions::kill_every_group();
-            mcp::kill_every_server();
         }),
     );
 }
@@ -30,7 +29,7 @@ pub(crate) fn arm(signals: &Signals) {
 /// now a signal is recorded, every server still starting is told to stop,
 /// and the worktree's own reads are cancelled, killing its `git` and the
 /// hook together. At the bound the reads go first, then every listed
-/// process group, every command group and MCP server still alive is killed.
+/// process group, MCP servers' included, still alive is killed.
 pub(crate) fn arm_isolating(signals: &Signals, reads: &Arc<crate::switch::Reads>) {
     let record_reads = Arc::clone(reads);
     let bound_reads = Arc::clone(reads);
@@ -43,7 +42,6 @@ pub(crate) fn arm_isolating(signals: &Signals, reads: &Arc<crate::switch::Reads>
             bound_reads.cancel();
             support::group::kill_every_group();
             extensions::kill_every_group();
-            mcp::kill_every_server();
         }),
     );
 }

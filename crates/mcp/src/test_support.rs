@@ -21,10 +21,9 @@ use crate::start::{DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Se
 ///
 /// The largest round value that keeps every test's serial deadlines within
 /// half of nextest's 120 s kill: the worst test,
-/// `kill_every_server_holds_its_pids_unreaped_while_it_signals`, makes six
-/// (start, signal reached, `await_lock`, `await_gone`, killed and reaped:
-/// 6 x 10 s = 60 s). A passing run never waits on it; it only
-/// bounds a hang.
+/// `a_reap_unlists_under_the_shared_list_lock_before_it_waits`, makes three
+/// (start, the lock wait, and the stop: 3 x 10 s = 30 s). A passing run
+/// never waits on it; it only bounds a hang.
 pub(crate) const WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 /// One real-time poll of a file or a child's exit.
@@ -229,6 +228,16 @@ impl Setup {
     pub(crate) fn pid(&self) -> u32 {
         std::fs::read_to_string(self.dir.path().join("pid.txt"))
             .expect("pid.txt")
+            .trim()
+            .parse()
+            .expect("a pid")
+    }
+
+    /// The fixture's grandchild pid, when the `grandchild` switch is set:
+    /// `<dir>/grandchild.txt` holds it on one line.
+    pub(crate) fn grandchild(&self) -> u32 {
+        std::fs::read_to_string(self.dir.path().join("grandchild.txt"))
+            .expect("grandchild.txt")
             .trim()
             .parse()
             .expect("a pid")

@@ -36,7 +36,12 @@
 # and `prompts/list` answer carry `"nextCursor":"again"`, at once. When
 # the file holds a method name (`tools/list` or `prompts/list`), only
 # that method's list pages forever: one handshake pages tools before
-# prompts, so an endless prompt list needs tools pages to end.
+# prompts, so an endless prompt list needs tools pages to end. A
+# `grandchild` file makes the server start `(trap '' TERM; exec sleep
+# 3600) &` with stdout still on the pipe, before it reads, and write its
+# pid to `grandchild.txt`: the grandchild ignores SIGTERM and holds
+# stdout open past the server's exit, so only a signal to the server's
+# process group takes it with the server.
 #
 # It answers `initialize`, `tools/list`, `tools/call`, `prompts/list`,
 # `prompts/get` and `ping`, appends
@@ -48,6 +53,13 @@ set -u
 dir="$1"
 pwd -P > "$dir/cwd.txt"
 printf '%s\n' "$$" > "$dir/pid.txt"
+# A `grandchild` file starts a child that ignores SIGTERM and holds
+# stdout open, before anything is read: stopping the server must take it
+# with the server, through the server's process group.
+if [ -f "$dir/grandchild" ]; then
+    (trap '' TERM; exec sleep 3600) &
+    printf '%s\n' "$!" > "$dir/grandchild.txt"
+fi
 if [ -f "$dir/fail-start" ]; then
     exit 1
 fi

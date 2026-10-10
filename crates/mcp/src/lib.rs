@@ -23,7 +23,7 @@ mod wait;
 
 pub use effects::Hints;
 pub use prompt::Prompts;
-pub use registry::{kill_every_server, stop_every_start};
+pub use registry::stop_every_start;
 pub use start::{
     DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Servers, Started, start,
 };

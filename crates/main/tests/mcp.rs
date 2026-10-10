@@ -506,6 +506,41 @@ fn the_server_runs_in_the_workspace_and_stops_with_the_session() {
 }
 
 #[test]
+fn a_servers_grandchild_is_gone_after_fiber_exits() {
+    let setup = Setup::new();
+    let dir = setup.fixture(&json!([echo_tool()]), &[]);
+    // The server starts a child that ignores SIGTERM and holds stdout
+    // open: only a signal to the server's process group takes it with
+    // the session.
+    fs::write(dir.join("grandchild"), "").unwrap();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+
+    let run = setup.run(&["ask", "hi"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let server_pid: u32 = fs::read_to_string(dir.join("pid.txt"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let grandchild: u32 = fs::read_to_string(dir.join("grandchild.txt"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // Held until the asserts pass: a failure still kills the server's
+    // group when the watchdog drops.
+    let watchdog = Watchdog::group(server_pid);
+    assert!(
+        fakes::pids_exit(&[grandchild], setup.deadline.left()),
+        "waited until the deadline for grandchild {grandchild} to exit after `fiber`"
+    );
+    watchdog.stand_down(setup.deadline.cleanup());
+}
+
+#[test]
 fn an_error_result_fails_the_call_with_tool_error() {
     let setup = Setup::new();
     let dir = setup.fixture(
