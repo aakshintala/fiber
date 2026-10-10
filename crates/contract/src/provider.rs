@@ -41,6 +41,14 @@ pub trait Provider: Send + Sync {
     fn cost_lookup(&self) -> Option<Arc<dyn CostLookup>> {
         None
     }
+
+    /// Whether `request`, resent with its output capped at one token,
+    /// differs from it only in that cap (`docs/prompt-cache.md`,
+    /// "Warming while idle"). A provider whose request bytes would
+    /// change anything else answers `false`, and no refresh is sent.
+    fn warms(&self, _request: &ModelRequest) -> bool {
+        true
+    }
 }
 
 /// A provider's lookup of a generation's cost, for a call that ended without

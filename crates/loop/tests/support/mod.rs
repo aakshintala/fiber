@@ -675,6 +675,10 @@ impl Provider for Seam {
     fn cost_lookup(&self) -> Option<Arc<dyn contract::provider::CostLookup>> {
         self.inner.cost_lookup()
     }
+
+    fn warms(&self, request: &ModelRequest) -> bool {
+        self.inner.warms(request)
+    }
 }
 
 /// A provider that answers from a scripted provider and fires the
