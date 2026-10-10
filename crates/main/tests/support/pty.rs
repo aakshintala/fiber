@@ -105,7 +105,7 @@ impl Reader {
                             Ok(0) => break,
                             Ok(n) => {
                                 output.lock().unwrap().extend_from_slice(&chunk[..n]);
-                                let _ = wake.send(());
+                                wake.send(()).unwrap_or(());
                             }
                             Err(err) if err == rustix::io::Errno::INTR => {}
                             Err(_) => break,
@@ -119,7 +119,7 @@ impl Reader {
                 break;
             }
         }
-        let _ = done.send(());
+        done.send(()).unwrap_or(());
     }
 
     /// Wakes the reader and waits for its thread, within
@@ -128,7 +128,7 @@ impl Reader {
     /// well as killing the group.
     pub(crate) fn stop(mut self) -> bool {
         use std::io::Write;
-        let _ = self.stop.write_all(b"x");
+        self.stop.write_all(b"x").unwrap_or(());
         self.done.recv_timeout(self.deadline.cleanup()).is_ok()
     }
 }
@@ -242,14 +242,14 @@ impl Run {
             .stderr(terminal.stdio());
         let (child, watchdog) = spawn_watched(&mut command);
         let deadline = setup.deadline;
-        let (reader, output, wakes) =
-            Reader::start(fs::File::from(terminal.main), deadline);
+        let main = fs::File::from(terminal.main);
+        let (reader, output, wakes) = Reader::start(main.try_clone().unwrap(), deadline);
         Self {
             child: Some(child),
             hub_socket: setup.home().join("run").join("hub"),
             watchdog: Some(watchdog),
             sessions,
-            main: terminal.terminal,
+            main,
             reader: Some(reader),
             wakes,
             output,
@@ -324,7 +324,10 @@ impl Run {
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        self.watchdog.take().unwrap().stand_down(self.deadline.cleanup());
+        self.watchdog
+            .take()
+            .unwrap()
+            .stand_down(self.deadline.cleanup());
         until_gone(self.deadline, &self.hub_socket, "the hub to idle out");
         output
     }
@@ -538,10 +541,7 @@ impl Screen {
         Self {
             cols,
             rows,
-            cells: vec![
-                blank;
-                usize::from(cols).saturating_mul(usize::from(rows))
-            ],
+            cells: vec![blank; usize::from(cols).saturating_mul(usize::from(rows))],
             cursor: (0, 0),
             pen: Pen::default(),
             pending: Vec::new(),
@@ -685,7 +685,12 @@ impl Screen {
         } else {
             params
                 .split(|byte| *byte == b';')
-                .map(|digits| std::str::from_utf8(digits).unwrap_or("").parse().unwrap_or(0))
+                .map(|digits| {
+                    std::str::from_utf8(digits)
+                        .unwrap_or("")
+                        .parse()
+                        .unwrap_or(0)
+                })
                 .collect()
         };
         let mut i = 0;
@@ -732,14 +737,10 @@ impl Screen {
                         ),
                         _ => (None, 1),
                     };
-                    if extended == 38 {
-                        if let Some(colour) = colour {
-                            self.pen.fg = colour;
-                        }
-                    } else if extended == 48 {
-                        if let Some(colour) = colour {
-                            self.pen.bg = colour;
-                        }
+                    match (extended, colour) {
+                        (38, Some(colour)) => self.pen.fg = colour,
+                        (48, Some(colour)) => self.pen.bg = colour,
+                        _ => {}
                     }
                     len
                 }
@@ -774,7 +775,10 @@ impl Screen {
 
 /// One SGR parameter: digits, else the default 1.
 fn param(digits: &[u8]) -> u16 {
-    std::str::from_utf8(digits).unwrap_or("").parse().unwrap_or(1)
+    std::str::from_utf8(digits)
+        .unwrap_or("")
+        .parse()
+        .unwrap_or(1)
 }
 
 /// A palette entry: SGR sends bytes.
@@ -790,7 +794,10 @@ pub(crate) fn sgr_params(bytes: &[u8]) -> Vec<Vec<u16>> {
     while i < bytes.len() {
         if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'[') {
             let mut j = i + 2;
-            while bytes.get(j).is_some_and(|byte| (0x20..=0x3F).contains(byte)) {
+            while bytes
+                .get(j)
+                .is_some_and(|byte| (0x20..=0x3F).contains(byte))
+            {
                 j += 1;
             }
             if j < bytes.len() && bytes[j] == b'm' {
@@ -800,7 +807,10 @@ pub(crate) fn sgr_params(bytes: &[u8]) -> Vec<Vec<u16>> {
                     bytes[i + 2..j]
                         .split(|byte| *byte == b';')
                         .map(|digits| {
-                            std::str::from_utf8(digits).unwrap_or("").parse().unwrap_or(0)
+                            std::str::from_utf8(digits)
+                                .unwrap_or("")
+                                .parse()
+                                .unwrap_or(0)
                         })
                         .collect()
                 });
