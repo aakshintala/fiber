@@ -291,6 +291,10 @@ impl Loop {
 
     /// Asks one stage, and once more when its verdict does not read.
     /// `parse` reads a verdict, or says what was wrong.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the call under review, the endpoint, the prompts, the stage's purpose and cap, and the verdict reader are one ask"
+    )]
     fn ask_stage<T>(
         &mut self,
         under: &UnderReview<'_>,
@@ -524,6 +528,10 @@ impl Loop {
     /// the reviewer was doing, so the spend ties to the call under review.
     /// A call that ended without a reply writes what it saw, and a reviewer
     /// reply is not streamed to watchers.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the turn, the endpoint, what the reviewer was doing, and the request are one send"
+    )]
     fn send_review(
         &mut self,
         turn: &TurnId,
