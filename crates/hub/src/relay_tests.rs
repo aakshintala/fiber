@@ -331,6 +331,21 @@ fn hub(held: &fakes::TempDir) -> crate::connection::Hub {
     )
 }
 
+/// Joins a relay thread the test has just ended, failing at the caller's
+/// line instead of hanging when the thread does not end (#1877).
+#[track_caller]
+fn join_within_deadline(thread: std::thread::JoinHandle<()>) {
+    let (ended_tx, ended) = std::sync::mpsc::channel();
+    std::thread::spawn(move || ended_tx.send(thread.join().is_ok()).unwrap_or(()));
+    assert_eq!(
+        Deadline::after(std::time::Duration::from_secs(4))
+            .recv(&ended)
+            .ok(),
+        Some(true),
+        "the relay thread to end after its session closed"
+    );
+}
+
 fn start_relay_thread(
     session: &'static str,
     epoch: u64,
@@ -1545,10 +1560,10 @@ fn forwarding_does_not_wait_for_a_different_epoch_to_retire() {
     let mut text = String::new();
     read.read_line(&mut text)
         .expect("the later acknowledgement is forwarded");
-    session_peer
-        .shutdown(std::net::Shutdown::Both)
-        .unwrap_or(());
-    thread.join().unwrap();
+    // Close, never shut down: on macOS a shutdown can leave the blocked read
+    // waiting (#1877).
+    drop(session_peer);
+    join_within_deadline(thread);
     assert!(timely, "a different epoch must not hold back this forward");
 }
 
@@ -1625,10 +1640,10 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
         std::io::BufReader::new(&mut client_peer)
             .read_line(&mut text)
             .unwrap();
-        session_peer
-            .shutdown(std::net::Shutdown::Both)
-            .unwrap_or(());
-        thread.join().unwrap();
+        // Close, never shut down: on macOS a shutdown can leave the blocked read
+        // waiting (#1877).
+        drop(session_peer);
+        join_within_deadline(thread);
         if expect_pop {
             assert!(matches!(passed, Ok(crate::retire::PassOn::Popped(id)) if id == "c_queued"));
         } else {
@@ -1705,10 +1720,10 @@ fn passing_an_empty_queue_does_not_finish_its_retiring_relay() {
         .entries
         .iter()
         .any(|entry| entry.session == SID && entry.epoch == EPOCH);
-    session_peer
-        .shutdown(std::net::Shutdown::Both)
-        .unwrap_or(());
-    thread.join().unwrap();
+    // Close, never shut down: on macOS a shutdown can leave the blocked read
+    // waiting (#1877).
+    drop(session_peer);
+    join_within_deadline(thread);
     assert!(remains, "pass_on leaves an empty retiring queue in the map");
 }
 
@@ -1746,13 +1761,13 @@ fn a_relay_end_drops_sent_commands_and_clears_only_unsent_commands() {
         Arc::clone(&relays),
         Arc::clone(&kept),
     );
-    session_peer
-        .shutdown(std::net::Shutdown::Both)
-        .unwrap_or(());
+    // Close, never shut down: on macOS a shutdown can leave the blocked read
+    // waiting (#1877).
+    drop(session_peer);
     let passed = Deadline::after(DEADLINE)
         .recv(&passed_rx)
         .expect("the relay end drains and clears its queue");
-    thread.join().unwrap();
+    join_within_deadline(thread);
 
     assert!(matches!(passed, crate::retire::PassOn::Dropped(2)));
     assert!(kept.lock().unwrap().is_empty());
