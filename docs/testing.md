@@ -121,8 +121,19 @@ Input is tested the same way: key presses are fed to the TUI's input handling,
 and the test asserts the commands it sends to the session.
 
 A few tests run the real binary in a pseudo-terminal, for what memory cannot
-show: raw mode, resize, the terminal restored on exit, and one journey that
-types a prompt, sees the answer and cancels a turn.
+show: raw mode, resize, the terminal restored on exit, and two journeys that
+cross features: from a prompt through an approval, a resize and a quit, and
+from a turn through a quit, a resume and a new answer.
+
+A test that drives a pseudo-terminal feeds the bytes it reads into a
+`vt100` parser, which rebuilds the screen as a grid, and asserts on that
+grid: its text, its rows, the cursor position, and the alternate-screen and
+hidden-cursor flags. Each wait is a predicate over the grid with one named
+deadline; a wait the terminal ends before failing shows the last grid. The
+harness pins the size to 120 by 32 and `TERM` to `xterm-256color`, and
+answers the binary's capability queries for a fixed dark terminal. Bytes
+that never reach the cells, such as the OSC 9 desktop notification, are
+asserted on the raw output instead.
 
 A test that drives a pseudo-terminal reads it on a thread from the first frame
 to end of file, and takes the markers it waits for over a channel, as `watch`
