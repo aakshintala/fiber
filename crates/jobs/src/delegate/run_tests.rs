@@ -349,29 +349,54 @@ fn reported_before(rig: &Rig, horizon: Option<std::time::Instant>) -> contract::
     })
 }
 
-/// Wakes the runner by one poll interval at a time, each only once it is
-/// parked on the clock with every deadline ahead of `now()`: it has finished
-/// a pass and waits for the next wake. Stops when it parks `bound` ahead of
-/// `now()`, which only the wait for the drain does: the clock has not moved
-/// since the reap, and an ordinary poll parks at most one interval ahead.
-/// One wall-clock deadline covers the whole loop, so a runner that never
-/// reaches the drain fails the test instead of hanging it.
+/// The loop advances only to a park the runner owns, and the drain wait
+/// is recognised by distance, not by an exact bound: an ordinary poll
+/// parks at most one interval ahead, so a park further ahead is the drain
+/// wait. A scoped driver thread does the advancing; the test thread's
+/// single receive is the wall-clock deadline for the whole wait, so a
+/// runner that never reaches the drain fails the test instead of hanging
+/// it.
 #[track_caller]
-fn wake_until_draining(clock: &Arc<FakeClock>, bound: Duration) {
-    within("the runner waits for the drain", DEADLINE, {
-        let clock = Arc::clone(clock);
-        move || {
+fn wake_until_draining(clock: &Arc<FakeClock>, _bound: Duration) {
+    let stop = Arc::new(AtomicBool::new(false));
+    let driver_stop = Arc::clone(&stop);
+    let driver_clock = Arc::clone(clock);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(move || {
             loop {
-                let parked = clock.parked();
-                let now = clock.now();
-                if parked.iter().flatten().any(|until| *until >= now + bound) {
+                if driver_stop.load(Ordering::Relaxed) {
                     return;
                 }
-                if !parked.is_empty() && parked.iter().flatten().all(|until| *until > now) {
-                    clock.advance(Duration::from_secs(1));
-                } else {
-                    thread::yield_now();
+                match park_ahead(&driver_clock) {
+                    Some(until) => {
+                        let now = driver_clock.now();
+                        match until.checked_duration_since(now) {
+                            Some(gap) if gap > super::POLL => {
+                                let _sent = done_tx.send(());
+                                return;
+                            }
+                            Some(gap) => {
+                                driver_clock.advance(gap);
+                            }
+                            None => thread::yield_now(),
+                        }
+                    }
+                    None => thread::yield_now(),
                 }
+            }
+        });
+        match Deadline::after(DEADLINE).recv(&done_rx) {
+            Ok(()) => {
+                stop.store(true, Ordering::Relaxed);
+            }
+            Err(_) => {
+                stop.store(true, Ordering::Relaxed);
+                panic!(
+                    "the runner did not reach the drain wait; now={:?} parked={:?}",
+                    clock.now(),
+                    clock.parked()
+                );
             }
         }
     });
@@ -641,6 +666,11 @@ fn a_delayed_drain_still_feeds_the_fold() {
     let watchdog = Watchdog::matching(&release.to_string_lossy());
     // The watch never connects: only the drain can carry the line.
     let rig = rig(vec![]);
+    // Forces the interleaving: the clock advances between the drain
+    // deadline being computed and the runner registering its park.
+    let hook_clock = Arc::clone(&rig.clock);
+    super::lock(&super::AFTER_DRAIN_DEADLINE)
+        .replace(Box::new(move || hook_clock.advance(Duration::from_secs(1))));
     rig.start(&shell, Duration::from_secs(30), 1024);
     // The runner is waiting for the drain once it is parked at the stop
     // bound. Each wake is given only after the runner has parked on the
