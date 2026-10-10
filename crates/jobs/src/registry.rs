@@ -26,12 +26,13 @@ use park::{Parked, Parker};
 
 use crate::delegate::outcome::empty;
 
-/// A job's end not yet reported, held by the closure in its [`End`] or
-/// [`Finish`]. Reporting consumes it; dropped unreported, it records the
-/// job failed `indeterminate`, since a runner that returned without
-/// reporting would otherwise leave the job running. A panic aborts the
-/// process; this is not a panic handler.
-struct Unreported {
+/// A job's end not yet reported, held by the closure in its [`End`] or,
+/// for a delegate, by the runner until it reports. Reporting consumes
+/// it; dropped unreported, it records the job failed `indeterminate`,
+/// since a runner that returned without reporting would otherwise leave
+/// the job running. A panic aborts the process; this is not a panic
+/// handler.
+pub(crate) struct Unreported {
     job_id: JobId,
     /// Taken by the one report.
     registry: Option<Arc<Registry>>,
@@ -42,7 +43,9 @@ struct Unreported {
 impl Unreported {
     /// Records `completed` for this job, whatever id the payload names: a
     /// payload that names another id would record the wrong job, or none.
-    fn report(mut self, completed: JobCompleted, delegate: Option<DelegateFinished>) {
+    /// The payload's id is replaced with the recorded one. For a delegate
+    /// the runner passes its finish alongside, when the run produced one.
+    pub(crate) fn report(mut self, completed: JobCompleted, delegate: Option<DelegateFinished>) {
         if let Some(registry) = self.registry.take() {
             registry.finish(
                 JobCompleted {
@@ -75,20 +78,6 @@ impl Drop for Unreported {
                 delegate,
             );
         }
-    }
-}
-
-/// Reports how a delegate ended, once: its completion and, when the run
-/// produced one, its finish. Dropped unreported, it records the job failed
-/// `indeterminate` with an empty finish, as [`End`] does for other jobs.
-/// The runner (task 3.3) is its only caller.
-pub(crate) struct Finish(Unreported);
-
-impl Finish {
-    /// Records the delegate's end. The payload's id is replaced with the
-    /// recorded one, as [`Unreported::report`] does.
-    pub(crate) fn report(self, completed: JobCompleted, delegate: Option<DelegateFinished>) {
-        self.0.report(completed, delegate);
     }
 }
 
@@ -286,7 +275,7 @@ impl Registry {
         description: String,
         output_path: String,
         stop: Stop,
-    ) -> (JobStarted, Finish) {
+    ) -> (JobStarted, Unreported) {
         let started = JobStarted {
             job_id: job_id.clone(),
             tool: Some(tool),
@@ -294,13 +283,13 @@ impl Registry {
             description,
             output_path: output_path.clone(),
         };
-        let finish = Finish(Unreported {
+        let finish = Unreported {
             job_id: job_id.clone(),
             // The caller holds this `Arc`, so the job it records always
             // has a registry to end in.
             registry: Some(Arc::clone(self)),
             delegate: true,
-        });
+        };
         lock(&self.inner).jobs.push(Job::running(
             started.clone(),
             PathBuf::from(output_path),

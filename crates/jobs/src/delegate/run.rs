@@ -22,7 +22,7 @@ use rustix::process::Signal;
 
 use super::group;
 use super::outcome::{Termination, outcome};
-use crate::registry::Finish;
+use crate::registry::Unreported;
 use support::group::Listing;
 
 /// Resolves a `fiber:` model reference to the `provider/model[:level]` the
@@ -348,7 +348,7 @@ impl Runner {
     /// is also where its group retires or its surviving member is
     /// killed: no `waitid` peek is needed, and none is used, because
     /// macOS blocks in `waitid` even with `WNOWAIT`.
-    pub(crate) fn drive(self, mut child: Child, mut listing: Option<Listing>, finish: Finish) {
+    pub(crate) fn drive(self, mut child: Child, mut listing: Option<Listing>, finish: Unreported) {
         // The lifeline: held open and never written to. End of file on it
         // means this parent is gone, so it stays open until the job ends.
         let _lifeline = child.stdin.take();
