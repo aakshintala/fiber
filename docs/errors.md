@@ -323,6 +323,7 @@ the lines that carry it.
 | `stale_file` | tool call | a write would replace a file the session has not seen in its current state |
 | `stale_request` | driver command, hub command | the command names a request, steering message, job or turn that is no longer pending, queued or running, or a `dismiss` names a session that is not a crashed session in the feed, or a cascading `delete`'s `expect` differs from the sessions it would remove; the message names them (`docs/invocation.md`, "Deleting and pruning") |
 | `state_too_large` | extension call | a state value over 64 KiB |
+| `stream_closed` | notice | the hub could not read the open session's log to serve this terminal, so the conversation stops at the last line it received; reopening the session subscribes again (`docs/tui.md`, "Notices") |
 | `stream_incomplete` | model call, turn | the stream ended early or carried an unmatched error |
 | `summary_failed` | driver command | a `rewind` that asked for a summary could not get one, so no new session was created (`docs/events.md`, "Rewind") |
 | `timeout` | extension call, tool call, job | a deadline passed |

@@ -257,6 +257,17 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
         screen.contents
     );
 
+    // Read the observer past the first attach and the close, so the
+    // count read after the reopen is a fresh transition.
+    let clients_is = |count: u64| {
+        move |line: &Value| {
+            line.get("kind").and_then(Value::as_str) == Some("session_status")
+                && line["payload"].get("clients").and_then(Value::as_u64) == Some(count)
+        }
+    };
+    until(&observer, "the first attach's clients count", clients_is(1));
+    until(&observer, "the close's clients count", clients_is(0));
+
     // A send from the composer is rejected `not_subscribed`: the hub's
     // rejection message is `Send `subscribe` first.`
     // (`crates/doors/src/client.rs`), which the terminal pushes as the
