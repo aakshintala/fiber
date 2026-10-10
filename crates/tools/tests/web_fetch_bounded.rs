@@ -27,6 +27,14 @@ static ALLOC: Counting = Counting;
 /// The size of each hostile page: under the 10 MiB download cap.
 const PAGE: usize = 8 << 20;
 
+/// The size of each page that fills the download cap: the cap minus 1 KiB.
+const CAP_PAGE: usize = (10 << 20) - 1024;
+
+/// The working peak a page-sized token may hold beside the output: the
+/// measured peaks below, rounded up to a whole MiB. It stays under the
+/// 24 MiB the busy session's budget leaves for the fetch.
+const HELD_WHOLE: usize = 17 << 20;
+
 /// The converter's own working memory apart from the hidden-element state.
 const WORKING: usize = 256 << 10;
 
@@ -45,6 +53,39 @@ struct Fetched {
     addr: usize,
     _dir: TempDir,
     _server: ProviderServer,
+}
+
+/// A page holding `count` distinct short attribute names on a tag that
+/// never closes: the tokenizer still holds the tag at the end of input.
+fn unclosed_tag(count: u32) -> Vec<u8> {
+    let mut page = String::from("<a");
+    for n in 0..count {
+        page.push_str(&format!(" a{n}"));
+    }
+    page.into_bytes()
+}
+
+/// An unclosed tag's attributes held whole: two pages under the cap with
+/// different counts of distinct short attribute names, both converting
+/// to nothing. The working peaks differ by the attributes alone, so
+/// their difference over the count difference is the bytes each
+/// attribute holds beside the output: about 40 bytes plus its name.
+#[test]
+fn an_unclosed_tag_holds_about_forty_five_bytes_per_attribute() {
+    let small = unclosed_tag(8_000);
+    let large = unclosed_tag(16_000);
+    assert!(large.len() < 10 << 20, "the pages are under the cap");
+    let first = fetch("text/html; charset=utf-8", small);
+    assert_markdown_eq("", markdown(&first), "nothing past an unclosed tag");
+    let second = fetch("text/html; charset=utf-8", large);
+    assert_markdown_eq("", markdown(&second), "nothing past an unclosed tag");
+    // Both peaks hold the tag's attributes beside empty output: the
+    // difference over the count difference is the bytes each holds.
+    let per = (working(&second) - working(&first)) / 8_000;
+    assert!(
+        (40..=50).contains(&per),
+        "about 45 bytes per attribute, measured {per}"
+    );
 }
 
 /// Serves `page` as `content_type` and fetches it inside a byte-counting
@@ -137,6 +178,37 @@ fn assert_markdown_eq(expected: &str, actual: &str, what: &str) {
         expected.len(),
         actual.len(),
         offset.unwrap_or(expected.len().min(actual.len()))
+    );
+}
+
+#[test]
+fn a_page_long_comment_holds_it_whole_within_the_measured_peak() {
+    let overhead = "<!--".len() + "-->".len() + "<p>x</p>".len();
+    let body = "c".repeat(CAP_PAGE - overhead);
+    let html = format!("<!--{body}--><p>x</p>");
+    assert_eq!(html.len(), CAP_PAGE);
+    let fetched = fetch("text/html; charset=utf-8", html.into_bytes());
+    assert_markdown_eq("x\n", markdown(&fetched), "the text past the comment");
+    assert!(
+        working(&fetched) <= HELD_WHOLE,
+        "working {}",
+        working(&fetched)
+    );
+}
+
+#[test]
+fn a_page_long_attribute_value_holds_it_whole_within_the_measured_peak() {
+    let overhead = "<a href=\"".len() + "\">t</a>".len();
+    let value = "v".repeat(CAP_PAGE - overhead);
+    let html = format!("<a href=\"{value}\">t</a>");
+    assert_eq!(html.len(), CAP_PAGE);
+    let fetched = fetch("text/html; charset=utf-8", html.into_bytes());
+    let expected = format!("[t]({value})\n");
+    assert_markdown_eq(&expected, markdown(&fetched), "the link with its href");
+    assert!(
+        working(&fetched) <= HELD_WHOLE,
+        "working {}",
+        working(&fetched)
     );
 }
 
