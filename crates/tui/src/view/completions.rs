@@ -249,9 +249,7 @@ fn body(completions: &Completions, room: usize) -> Vec<Row> {
         Rows::Message(text) => vec![dim_row(text.clone())],
         Rows::Search(_) => Vec::new(),
     };
-    if matches!(completions.rows, Rows::Slash(_) | Rows::Files(_))
-        && let Some(range) = range_text(completions.start, rows.len(), completions.total)
-    {
+    if let Some(range) = range_text(completions.start, rows.len(), completions.total) {
         rows.push(dim_row(range));
     }
     rows
