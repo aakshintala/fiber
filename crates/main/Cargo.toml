@@ -26,6 +26,7 @@ picture = { path = "../picture" }
 provider = { path = "../provider" }
 rustix.workspace = true
 serde_json.workspace = true
+support = { path = "../support" }
 tools = { path = "../tools" }
 tui = { path = "../tui" }
 
