@@ -2,19 +2,12 @@
 //! in a temporary directory, so no test runs a child process.
 
 use super::launch;
-use config::{Config, Sources};
+use config::Config;
 
 /// Loads the configuration for `home` and `workspace`, with `overrides`
 /// as `-c key=value` reads them.
 fn config(home: &std::path::Path, workspace: &std::path::Path, overrides: Vec<String>) -> Config {
-    let project = config::ProjectKey::new("-w").unwrap_or_else(|err| panic!("key: {err}"));
-    Config::load(Sources {
-        home: home.to_path_buf(),
-        workspace: workspace.to_path_buf(),
-        project,
-        overrides,
-    })
-    .unwrap_or_else(|err| panic!("config: {err}"))
+    crate::test_support::load(home, workspace, "-w", overrides)
 }
 
 #[test]

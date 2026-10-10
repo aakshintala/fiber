@@ -10,13 +10,13 @@
     reason = "test code; a failure is the test's"
 )]
 
-use crate::test_support::write_record;
+use crate::test_support::install_extension;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use config::{Config, ProjectKey, Sources};
+use config::Config;
 use contract::commands::ModelArgs;
 use contract::{ErrorCode, ThinkingLevel};
 use extensions::{LuaProvider, Providers};
@@ -56,15 +56,12 @@ fn sh(script: &str) -> serde_json::Value {
 
 /// Writes the data-only extension `name` whose provider data is `data`.
 fn data_extension(home: &Path, name: &str, data: &serde_json::Value) {
-    let dir = home.join("extensions").join(name);
-    std::fs::create_dir_all(dir.join("providers")).unwrap();
-    std::fs::write(
-        dir.join("extension.json"),
-        json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
-    )
-    .unwrap();
-    write_record(&dir);
-    std::fs::write(dir.join(format!("providers/{name}.json")), data.to_string()).unwrap();
+    install_extension(
+        home,
+        &format!("extensions/{name}"),
+        json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        &[(name, data.clone())],
+    );
 }
 
 fn fixture(name: &str) -> Fixture {
@@ -77,102 +74,83 @@ fn fixture(name: &str) -> Fixture {
     let bad_marker = root.path().join("bad-ran");
     let key_file = root.path().join("keys/filed");
     let fake = home.join("extensions/fake");
-    std::fs::create_dir_all(fake.join("providers")).unwrap();
-    std::fs::write(
-        fake.join("extension.json"),
-        json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
-    )
-    .unwrap();
-    write_record(&fake);
-    std::fs::write(
-        fake.join("providers/fake.json"),
-        json!({
-            "name": "fake",
-            "models": [
-                {"id": "m", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 100000},
-                {"id": "n", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
-                 "thinking_levels": ["low", "high"], "thinking_default": "low",
-                 "prompt_addendum": "extra.md"},
-                {"id": "r", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-            ],
-        })
-        .to_string(),
-    )
-    .unwrap();
+    install_extension(
+        &home,
+        "extensions/fake",
+        json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        &[(
+            "fake",
+            json!({
+                "name": "fake",
+                "models": [
+                    {"id": "m", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 100000},
+                    {"id": "n", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
+                     "thinking_levels": ["low", "high"], "thinking_default": "low",
+                     "prompt_addendum": "extra.md"},
+                    {"id": "r", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                ],
+            }),
+        )],
+    );
     std::fs::write(fake.join("extra.md"), "The extra paragraph.\n").unwrap();
-    let claude = home.join("extensions/claude");
-    std::fs::create_dir_all(claude.join("providers")).unwrap();
-    std::fs::write(
-        claude.join("extension.json"),
-        json!({"name": "claude", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
-    )
-    .unwrap();
-    write_record(&claude);
-    std::fs::write(
-        claude.join("providers/claude.json"),
-        json!({
-            "name": "claude",
-            "models": [
-                {"id": "w", "protocol": "anthropic-messages",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 500,
-                 "web_search": "web_search_20250305"},
-            ],
-        })
-        .to_string(),
-    )
-    .unwrap();
-    let other = home.join("extensions/other");
-    std::fs::create_dir_all(other.join("providers")).unwrap();
-    std::fs::write(
-        other.join("extension.json"),
-        json!({"name": "other", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
-    )
-    .unwrap();
-    write_record(&other);
-    std::fs::write(
-        other.join("providers/other.json"),
-        json!({
-            "name": "other",
-            "credential": {"command": sh(&format!(
-                "echo x >> '{}'; echo other-key", marker.display()
-            ))},
-            "models": [
-                {"id": "m", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-                {"id": "m2", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
-                 "thinking_levels": ["low"], "thinking_default": "low"},
-            ],
-        })
-        .to_string(),
-    )
-    .unwrap();
-    let bed = home.join("extensions/bed");
-    std::fs::create_dir_all(bed.join("providers")).unwrap();
-    std::fs::write(
-        bed.join("extension.json"),
-        json!({"name": "bed", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
-    )
-    .unwrap();
-    write_record(&bed);
-    std::fs::write(
-        bed.join("providers/bed.json"),
-        json!({
-            "name": "bed",
-            "credential": {"command": sh(&format!(
-                "echo x >> '{}'; echo bed-key", marker.display()
-            ))},
-            "models": [
-                {"id": "bk", "protocol": "bedrock-converse",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-            ],
-        })
-        .to_string(),
-    )
-    .unwrap();
+    install_extension(
+        &home,
+        "extensions/claude",
+        json!({"name": "claude", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        &[(
+            "claude",
+            json!({
+                "name": "claude",
+                "models": [
+                    {"id": "w", "protocol": "anthropic-messages",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 500,
+                     "web_search": "web_search_20250305"},
+                ],
+            }),
+        )],
+    );
+    install_extension(
+        &home,
+        "extensions/other",
+        json!({"name": "other", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        &[(
+            "other",
+            json!({
+                "name": "other",
+                "credential": {"command": sh(&format!(
+                    "echo x >> '{}'; echo other-key", marker.display()
+                ))},
+                "models": [
+                    {"id": "m", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                    {"id": "m2", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
+                     "thinking_levels": ["low"], "thinking_default": "low"},
+                ],
+            }),
+        )],
+    );
+    install_extension(
+        &home,
+        "extensions/bed",
+        json!({"name": "bed", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        &[(
+            "bed",
+            json!({
+                "name": "bed",
+                "credential": {"command": sh(&format!(
+                    "echo x >> '{}'; echo bed-key", marker.display()
+                ))},
+                "models": [
+                    {"id": "bk", "protocol": "bedrock-converse",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                ],
+            }),
+        )],
+    );
     data_extension(
         &home,
         "bad",
@@ -206,13 +184,7 @@ fn fixture(name: &str) -> Fixture {
 }
 
 fn config(fixture: &Fixture, overrides: &[&str]) -> Config {
-    Config::load(Sources {
-        home: fixture.home.clone(),
-        workspace: fixture.workspace.clone(),
-        project: ProjectKey::new("test").unwrap(),
-        overrides: overrides.iter().map(|o| (*o).to_owned()).collect(),
-    })
-    .unwrap()
+    crate::test_support::load(&fixture.home, &fixture.workspace, "test", overrides)
 }
 
 fn keyed(label: &str) -> (String, crate::lua_providers::KeyAndSigner) {
@@ -771,29 +743,24 @@ fn a_naming_match_joins_a_resolved_match_in_ambiguity() {
 /// Adds extension `lit` naming `n` (low and high, defaulting low) and the
 /// literal `n:high`: a model id ending in a recognised thinking level.
 fn with_literal_provider(fixture: &Fixture) {
-    let lit = fixture.home.join("extensions/lit");
-    std::fs::create_dir_all(lit.join("providers")).unwrap();
-    std::fs::write(
-        lit.join("extension.json"),
-        json!({"name": "lit", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
-    )
-    .unwrap();
-    write_record(&lit);
-    std::fs::write(
-        lit.join("providers/lit.json"),
-        json!({
-            "name": "lit",
-            "models": [
-                {"id": "n", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
-                 "thinking_levels": ["low", "high"], "thinking_default": "low"},
-                {"id": "n:high", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-            ],
-        })
-        .to_string(),
-    )
-    .unwrap();
+    install_extension(
+        &fixture.home,
+        "extensions/lit",
+        json!({"name": "lit", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        &[(
+            "lit",
+            json!({
+                "name": "lit",
+                "models": [
+                    {"id": "n", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
+                     "thinking_levels": ["low", "high"], "thinking_default": "low"},
+                    {"id": "n:high", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                ],
+            }),
+        )],
+    );
 }
 
 #[test]
@@ -869,29 +836,24 @@ fn a_literal_only_the_naming_list_names_falls_back_to_the_suffix() {
 #[test]
 fn an_unconfigured_literal_id_beats_stripped_id_ambiguity() {
     let fixture = fixture("fiber-switch-unconfigured-literal");
-    let lit = fixture.home.join("extensions/lit");
-    std::fs::create_dir_all(lit.join("providers")).unwrap();
-    std::fs::write(
-        lit.join("extension.json"),
-        json!({"name": "lit", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
-    )
-    .unwrap();
-    write_record(&lit);
-    std::fs::write(
-        lit.join("providers/lit.json"),
-        json!({
-            "name": "lit",
-            "placeholders": {"workspace": {}},
-            "models": [
-                {"id": "n", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-                {"id": "n:high", "protocol": "openai-responses",
-                 "base_url": "https://{workspace}/v1", "context_window": 1000},
-            ],
-        })
-        .to_string(),
-    )
-    .unwrap();
+    install_extension(
+        &fixture.home,
+        "extensions/lit",
+        json!({"name": "lit", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        &[(
+            "lit",
+            json!({
+                "name": "lit",
+                "placeholders": {"workspace": {}},
+                "models": [
+                    {"id": "n", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                    {"id": "n:high", "protocol": "openai-responses",
+                     "base_url": "https://{workspace}/v1", "context_window": 1000},
+                ],
+            }),
+        )],
+    );
     let config = config(&fixture, &[]);
     let (providers, _) = Providers::load(&fixture.home).unwrap();
     let credentials: Credentials = [("fake", keyed("default")), ("lit", keyed("default"))]
@@ -931,25 +893,20 @@ fn an_unconfigured_literal_id_beats_stripped_id_ambiguity() {
 #[test]
 fn an_unconfigured_model_counts_toward_ambiguity() {
     let fixture = fixture("fiber-switch-unconfigured");
-    let acme = fixture.home.join("extensions/acme");
-    std::fs::create_dir_all(acme.join("providers")).unwrap();
-    std::fs::write(
-        acme.join("extension.json"),
-        json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
-    )
-    .unwrap();
-    write_record(&acme);
-    std::fs::write(
-        acme.join("providers/acme.json"),
-        json!({
-            "name": "acme",
-            "placeholders": {"workspace": {}},
-            "models": [{"id": "m", "protocol": "openai-responses",
-                        "base_url": "https://{workspace}/v1", "context_window": 1000}],
-        })
-        .to_string(),
-    )
-    .unwrap();
+    install_extension(
+        &fixture.home,
+        "extensions/acme",
+        json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        &[(
+            "acme",
+            json!({
+                "name": "acme",
+                "placeholders": {"workspace": {}},
+                "models": [{"id": "m", "protocol": "openai-responses",
+                            "base_url": "https://{workspace}/v1", "context_window": 1000}],
+            }),
+        )],
+    );
     let config = config(&fixture, &[]);
     let (mut providers, _) = Providers::load(&fixture.home).unwrap();
     let snapshot = providers.clone();
@@ -1194,13 +1151,7 @@ fn lua_fixture_home(
     if let Some(cache) = cache {
         config::write_model_cache(&home, "fixture", &cache).unwrap();
     }
-    let config = Config::load(Sources {
-        home: home.clone(),
-        workspace,
-        project: ProjectKey::new("test").unwrap(),
-        overrides: Vec::new(),
-    })
-    .unwrap();
+    let config = crate::test_support::load(&home, &workspace, "test", Vec::<String>::new());
     (home, config)
 }
 
@@ -1301,26 +1252,21 @@ fn a_suffixed_id_without_a_literal_reports_the_stripped_ambiguity() {
 /// providers share.
 fn with_two_literal_providers(fixture: &Fixture) {
     for name in ["lit1", "lit2"] {
-        let dir = fixture.home.join(format!("extensions/{name}"));
-        std::fs::create_dir_all(dir.join("providers")).unwrap();
-        std::fs::write(
-            dir.join("extension.json"),
-            json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
-        )
-        .unwrap();
-        write_record(&dir);
-        std::fs::write(
-            dir.join(format!("providers/{name}.json")),
-            json!({
-                "name": name,
-                "models": [
-                    {"id": "n:high", "protocol": "openai-responses",
-                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-                ],
-            })
-            .to_string(),
-        )
-        .unwrap();
+        install_extension(
+            &fixture.home,
+            &format!("extensions/{name}"),
+            json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+            &[(
+                name,
+                json!({
+                    "name": name,
+                    "models": [
+                        {"id": "n:high", "protocol": "openai-responses",
+                         "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                    ],
+                }),
+            )],
+        );
     }
 }
 
@@ -1383,13 +1329,7 @@ fn openrouter_home(root: &fakes::TempDir) -> (PathBuf, Config) {
         }]),
     )
     .unwrap();
-    let config = Config::load(Sources {
-        home: home.clone(),
-        workspace,
-        project: ProjectKey::new("test").unwrap(),
-        overrides: Vec::new(),
-    })
-    .unwrap();
+    let config = crate::test_support::load(&home, &workspace, "test", Vec::<String>::new());
     (home, config)
 }
 
@@ -1520,14 +1460,16 @@ fn only_a_web_search_from_another_registrant_stands() {
 /// erroring when `flag` exists.
 fn lua_extension(fixture: &Fixture, counter: &Path, flag: &Path) {
     let src = fixture.root.path().join("src/luax");
-    std::fs::create_dir_all(src.join("providers")).unwrap();
-    std::fs::write(
-        src.join("extension.json"),
-        json!({"name": "fiber.test/luax", "version": "v1.2.3", "fiber": "0.1.0", "api": 1})
-            .to_string(),
-    )
-    .unwrap();
-    write_record(&src);
+    install_extension(
+        &fixture.root.path().join("src"),
+        "luax",
+        json!({"name": "fiber.test/luax", "version": "v1.2.3", "fiber": "0.1.0", "api": 1}),
+        &[(
+            "lp",
+            json!({"name": "lp", "models": [{"id": "lm", "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]}),
+        )],
+    );
     std::fs::write(
         src.join("init.lua"),
         format!(
@@ -1541,13 +1483,6 @@ fn lua_extension(fixture: &Fixture, counter: &Path, flag: &Path) {
             flag = flag.display(),
             counter = counter.display(),
         ),
-    )
-    .unwrap();
-    std::fs::write(
-        src.join("providers/lp.json"),
-        json!({"name": "lp", "models": [{"id": "lm", "protocol": "openai-responses",
-            "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]})
-        .to_string(),
     )
     .unwrap();
     extensions::plan(

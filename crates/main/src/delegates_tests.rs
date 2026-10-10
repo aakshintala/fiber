@@ -8,7 +8,7 @@
     reason = "test code; a failure is the test's"
 )]
 
-use crate::test_support::write_record;
+use crate::test_support::{install_extension, load};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
@@ -23,33 +23,29 @@ use super::{launcher, resolver, watcher};
 fn rig() -> (extensions::Providers, config::Config) {
     let root = fakes::TempDir::new("fd");
     let home = root.path().join("home");
-    let extension = home.join("extensions").join("fake");
-    std::fs::create_dir_all(extension.join("providers")).unwrap();
-    std::fs::write(
-        extension.join("extension.json"),
-        r#"{"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}"#,
-    )
-    .unwrap();
-    write_record(&extension);
-    std::fs::write(
-        extension.join("providers/fake.json"),
-        r#"{"name": "fake", "models": [
+    install_extension(
+        &home,
+        "extensions/fake",
+        serde_json::from_str(
+            r#"{"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}"#,
+        )
+        .unwrap(),
+        &[(
+            "fake",
+            serde_json::from_str(
+                r#"{"name": "fake", "models": [
             {"id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1",
              "context_window": 1000, "thinking_levels": ["low", "high"], "thinking_default": "low"},
             {"id": "plain", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1",
              "context_window": 1000}
         ]}"#,
-    )
-    .unwrap();
+            )
+            .unwrap(),
+        )],
+    );
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
-    let config = config::Config::load(config::Sources {
-        home: home.clone(),
-        workspace,
-        project: config::ProjectKey::new("test").unwrap(),
-        overrides: Vec::new(),
-    })
-    .unwrap();
+    let config = load(&home, &workspace, "test", Vec::<String>::new());
     let (providers, _notices) = extensions::Providers::load(&home).unwrap();
     // `root` is dropped here; the registry and configuration were read.
     (providers, config)

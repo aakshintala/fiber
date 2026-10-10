@@ -7,24 +7,10 @@
 )]
 
 use crate::settings::block_limits;
-use crate::test_support::write_record;
+use crate::test_support;
 
 fn config(overrides: Vec<String>) -> config::Config {
-    let root = fakes::TempDir::new("fiber-reviewer-limits");
-    let home = root.path().join("home");
-    let workspace = root.path().join("workspace");
-    std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&workspace).unwrap();
-    let project = config::ProjectKey::new("test").unwrap();
-    let config = config::Config::load(config::Sources {
-        home,
-        workspace,
-        project,
-        overrides,
-    })
-    .unwrap();
-    // `root` is dropped here; the configuration was already read.
-    config
+    test_support::config("fiber-reviewer-limits", overrides)
 }
 
 #[test]
@@ -58,35 +44,35 @@ fn here() -> crate::Here {
 fn reviewer_lifetime(overrides: &[&str]) -> contract::events::CacheLifetime {
     let root = fakes::TempDir::new("fiber-reviewer-lifetime");
     let home = root.path().join("home");
-    let extension = home.join("extensions").join("fake");
-    std::fs::create_dir_all(extension.join("providers")).unwrap();
-    std::fs::write(
-        extension.join("extension.json"),
-        r#"{"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}"#,
-    )
-    .unwrap();
-    write_record(&extension);
-    std::fs::write(
-        extension.join("providers/fake.json"),
-        r#"{"name": "fake", "models": [
+    test_support::install_extension(
+        &home,
+        "extensions/fake",
+        serde_json::from_str(
+            r#"{"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}"#,
+        )
+        .unwrap(),
+        &[(
+            "fake",
+            serde_json::from_str(
+                r#"{"name": "fake", "models": [
             {"id": "session", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
             {"id": "reviewer", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}
         ]}"#,
-    )
-    .unwrap();
+            )
+            .unwrap(),
+        )],
+    );
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
-    let config = config::Config::load(config::Sources {
-        home: home.clone(),
-        workspace,
-        project: config::ProjectKey::new("test").unwrap(),
-        overrides: ["reviewer.model=fake/reviewer"]
+    let config = test_support::load(
+        &home,
+        &workspace,
+        "test",
+        ["reviewer.model=fake/reviewer"]
             .iter()
             .chain(overrides)
-            .map(|o| (*o).to_owned())
-            .collect(),
-    })
-    .unwrap();
+            .map(|o| (*o).to_owned()),
+    );
     let (providers, _notices) = extensions::Providers::load(&home).unwrap();
     let session = providers.resolve("fake/session").unwrap();
     let here = here();
@@ -175,13 +161,12 @@ fn the_reviewer_connects_with_the_lua_provider_its_access_names() {
     )
     .unwrap();
     let reference = "openrouter/z-ai/glm-5.3-flash";
-    let config = config::Config::load(config::Sources {
-        home: home.clone(),
-        workspace,
-        project: config::ProjectKey::new("test").unwrap(),
-        overrides: vec![format!("reviewer.model={reference}")],
-    })
-    .unwrap();
+    let config = test_support::load(
+        &home,
+        &workspace,
+        "test",
+        [format!("reviewer.model={reference}")],
+    );
     let (providers, _notices) = extensions::Providers::load(&home).unwrap();
     let session_extensions = extensions::SessionExtensions::load(
         &home,

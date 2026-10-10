@@ -1,20 +1,10 @@
 //! `tools."<name>".max_result_bytes` reaches the loop's caps by tool name.
 
 use super::result_caps;
+use crate::test_support;
 
 fn config(overrides: &[&str]) -> config::Config {
-    let root = fakes::TempDir::new("fiber-result-caps-settings");
-    let home = root.path().join("home");
-    let workspace = root.path().join("workspace");
-    std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&workspace).unwrap();
-    config::Config::load(config::Sources {
-        home,
-        workspace,
-        project: config::ProjectKey::new("test").unwrap(),
-        overrides: overrides.iter().map(|o| (*o).to_owned()).collect(),
-    })
-    .unwrap()
+    test_support::config("fiber-result-caps-settings", overrides)
 }
 
 #[test]
