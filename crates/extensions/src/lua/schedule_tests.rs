@@ -898,3 +898,53 @@ fn a_failed_oauth_start_delivers_its_failure_after_releasing_the_lock() {
         );
     }
 }
+
+/// A failed spawn ends the call it was for: `spawn_failed` drops exactly the
+/// callback parked for that call, fails the call with the step's I/O error,
+/// and for an exec also clears its admission. Its body replaced by `()`
+/// leaves the callback parked and the call unfinished, failing here. A real
+/// thread spawn cannot be forced to fail from a test, so the private function
+/// is called directly with the error a failed spawn returns.
+#[test]
+fn a_failed_spawn_drops_its_parked_callback_and_fails_the_call() {
+    let dir = fakes::TempDir::new("fiber-schedule-spawn-failed");
+    for exec in [false, true] {
+        let lua = mlua::Lua::new();
+        let hub = ready_hub();
+        let id = started(&hub);
+        let other = started(&hub);
+        let mut parked = vec![entry(&lua, id), entry(&lua, other)];
+        let mut shared = hub.lock();
+        let _rx = exec.then(|| shared.register_exec(id));
+        spawn_failed(
+            &hub,
+            &mut parked,
+            shared,
+            id,
+            dir.path(),
+            std::io::Error::other("injected"),
+            exec,
+        );
+        assert_eq!(
+            ids(&parked),
+            [other],
+            "only the failed call's callback is dropped (exec={exec})"
+        );
+        let now = hub.clock().now();
+        let mut shared = hub.lock();
+        assert!(
+            !shared.exec_pending(id),
+            "the admission is cleared (exec={exec})"
+        );
+        match shared.judge_tool("fiber.test/t", id, &Target::Tool("t".to_owned()), now, now) {
+            (Some(super::super::Next::Return(Err(Error::Io { path, .. }))), _) => {
+                assert_eq!(
+                    path,
+                    dir.path(),
+                    "the call fails with the spawn's I/O error"
+                );
+            }
+            _ => panic!("the call fails with an I/O error (exec={exec})"),
+        }
+    }
+}
