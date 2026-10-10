@@ -1121,6 +1121,48 @@ fn the_chips_join_with_two_spaces_from_the_box_edge() {
 }
 
 #[test]
+fn a_chip_starting_on_the_box_edge_takes_no_target_at_any_width() {
+    // A chip cut off at the box's right edge keeps its visible cells,
+    // and one starting exactly on that edge draws nothing and takes no
+    // target. The chips start further right with a long model name, so
+    // the sweep runs both: every width from one cell up.
+    for model in [None, Some("acme/a-much-longer-model-name-for-the-row")] {
+        for width in 1..=120 {
+            let mut app = App::new(PathBuf::from("/w"));
+            app.set_home(Launch {
+                workspace: PathBuf::from("/w"),
+                project: "-w".to_owned(),
+                git: true,
+                hover: true,
+                version: "0.0.1".to_owned(),
+                model: model.map(str::to_owned),
+                thinking: None,
+                logo_glyph: "⌇".to_owned(),
+                keys: crate::KeysSetup::default(),
+                rail_share: 15.0,
+                panel_share: 21.0,
+                panel_cards: Vec::new(),
+                ..Default::default()
+            });
+            app.set_size(width, 24);
+            let area = Rect::new(0, 0, width, 24);
+            let mut buf = Buffer::empty(area);
+            let targets = render(&app, area, &mut buf, None);
+            for target in &targets {
+                if let crate::mouse::TargetId::Home(spot) = target.id
+                    && spot.is_chip()
+                {
+                    assert!(
+                        target.rect.width > 0,
+                        "at width {width}, {spot:?} takes a target with no cells"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn the_toggle_does_not_draw_on_the_foot_row() {
     // At ten rows the list has no room past the box: the toggle shows
     // in state, but draws nothing, and the foot hint keeps its row.
