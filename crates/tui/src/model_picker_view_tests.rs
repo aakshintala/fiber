@@ -411,6 +411,16 @@ fn matched_id_runs_draw_bold_and_underlined_on_and_off_the_selection() {
         assert!(!buf[(1, row)].modifier.contains(Modifier::BOLD));
         assert!(!buf[(1, row)].modifier.contains(Modifier::UNDERLINED));
     }
+    // A role-less id matched whole keeps the pad as its own plain run.
+    type_filter(&mut app, "2");
+    let frame = app.model_picker_frame(24).expect("open");
+    assert_eq!(
+        frame.rows[3],
+        vec![
+            ("m2".to_owned(), Some(Spot::Cell(3, 0)), Ink::Match),
+            ("   ".to_owned(), Some(Spot::Cell(3, 0)), Ink::Plain),
+        ]
+    );
 }
 
 #[test]
