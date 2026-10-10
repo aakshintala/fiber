@@ -14,6 +14,8 @@
 
 mod support;
 
+use std::path::{Path, PathBuf};
+
 use support::Setup;
 use support::pty::{Colour, Grid, Run};
 
@@ -45,8 +47,9 @@ fn clear_draft(run: &mut Run) {
     run.write(&vec![b"\x1b[127u".as_slice(); 200].concat());
 }
 
-/// A scripted provider holding each turn open: `fragments` paced every
-/// `every_ms`, then one short reply for a turn a queued message starts.
+/// A scripted provider holding the turn open with fragments paced every
+/// `every_ms`: only the reduced-motion test uses it, where the pacing
+/// drives the animation and each assertion waits on a fragment's bytes.
 fn script(setup: &Setup, fragments: usize, every_ms: u64) {
     let text: Vec<String> = (0..fragments).map(|n| format!("frag{n:02} ")).collect();
     support::write_json(
@@ -58,19 +61,72 @@ fn script(setup: &Setup, fragments: usize, every_ms: u64) {
     );
 }
 
-/// A scripted provider whose turn calls `sleep`, then says done: the
-/// call asks approval, and answering it starts the sleep. Steers sent
-/// while the approval waits queue visibly; answering it runs the tool
-/// with the input box back (`docs/tui.md`, "Steering").
-fn sleep_script(setup: &Setup, secs: u64) {
+/// A scripted provider whose turn calls `shell` with `command`, then says
+/// done: the call asks approval, and answering it runs the command.
+/// Steers sent while the approval waits queue visibly; answering it runs
+/// the tool with the input box back (`docs/tui.md`, "Steering").
+fn shell_script(setup: &Setup, command: &str) {
     support::write_json(
         &setup.workspace().join("s.json"),
         &serde_json::json!({"steps": [
-            {"tool_calls": [{"name": "shell", "arguments": {"command": format!("sleep {secs}")}}]},
+            {"tool_calls": [{"name": "shell", "arguments": {"command": command}}]},
             {"text": ["done."]},
             {"text": ["done."]},
         ]}),
     );
+}
+
+/// A shell command that returns once `hold` is gone. The test creates the
+/// file before the turn starts and removes it when it has read what it
+/// needs, so the tool runs exactly as long as the test says. The loop
+/// stops itself at 120 s (`docs/testing.md`, "Running tests").
+fn hold_command(hold: &Path) -> String {
+    format!(
+        "i=0; while [ -e '{}' ] && [ $i -lt 2400 ]; do sleep 0.05; i=$((i+1)); done",
+        hold.display()
+    )
+}
+
+/// The turn's shell call, held on a marker file the test removes.
+fn held_tool(setup: &Setup) -> PathBuf {
+    let hold = setup.workspace().join("hold");
+    std::fs::write(&hold, "").expect("the hold marker");
+    shell_script(setup, &hold_command(&hold));
+    hold
+}
+
+/// Answers the approval on screen and waits for the held tool to run
+/// with the approval panel gone: the box the windows read is the running
+/// turn's.
+fn run_held_tool(run: &mut Run) {
+    run.wait_screen("the approval", |grid| {
+        grid.rows.iter().any(|row| row.contains("allow once"))
+    });
+    run.write(b"\r");
+    run.wait_screen("the tool running", |grid| {
+        !grid.rows.iter().any(|row| row.contains("allow once")) && session_box(grid).is_some()
+    });
+}
+
+/// Puts the approval aside so the session box shows behind its badge, then
+/// waits for the box.
+fn aside_approval(run: &mut Run) {
+    run.wait_screen("the approval", |grid| {
+        grid.rows.iter().any(|row| row.contains("allow once"))
+    });
+    run.write(ESC);
+    run.wait_screen("the box behind the badge", |grid| {
+        session_box(grid).is_some()
+    });
+}
+
+/// Reopens the approval and answers it, which lets the turn run on.
+fn answer_approval(run: &mut Run) {
+    run.write(ALT_A);
+    run.wait_screen("the reopened approval", |grid| {
+        grid.rows.iter().any(|row| row.contains("allow once"))
+    });
+    run.write(b"\r");
 }
 
 /// The isolated config with the scripted model, and `tui.reduced_motion`
@@ -262,7 +318,7 @@ fn quit(mut run: Run) {
 #[test]
 fn the_working_line_glimmers_and_the_queue_selects() {
     let setup = Setup::new();
-    sleep_script(&setup, 8);
+    let hold = held_tool(&setup);
     config(&setup, false);
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
@@ -300,13 +356,7 @@ fn the_working_line_glimmers_and_the_queue_selects() {
     // the input box comes back with the turn still waiting. Steers typed
     // now queue visibly while the approval waits. The queue's marks tell
     // its rows from the draft they were typed in.
-    run.wait_screen("the approval", |grid| {
-        grid.rows.iter().any(|row| row.contains("allow once"))
-    });
-    run.write(ESC);
-    run.wait_screen("the box behind the badge", |grid| {
-        session_box(grid).is_some()
-    });
+    aside_approval(&mut run);
     run.write(b"first\r");
     run.write(b"second\r");
     grid = run.wait_screen("both queued rows", |grid| {
@@ -335,13 +385,10 @@ fn the_working_line_glimmers_and_the_queue_selects() {
         "footer",
     );
 
-    // Reopening the approval and answering it starts the sleep: the
-    // panel goes for good with the turn still running.
-    run.write(ALT_A);
-    run.wait_screen("the reopened approval", |grid| {
-        grid.rows.iter().any(|row| row.contains("allow once"))
-    });
-    run.write(b"\r");
+    // Reopening the approval and answering it starts the held command:
+    // the panel goes for good with the turn still running, until the test
+    // removes the marker.
+    answer_approval(&mut run);
     run.wait_screen("the tool running", |grid| {
         !grid.rows.iter().any(|row| row.contains("allow once")) && working(grid).is_some()
     });
@@ -456,19 +503,20 @@ fn the_working_line_glimmers_and_the_queue_selects() {
     let (wrap_box, wrap_box_x) = session_box(&grid).expect("the box");
     assert_fill(&grid, wrap_box, wrap_box_x, "session wrapping");
 
-    // The draft clears and the turn ends on its own.
+    // The draft clears and the tool is released: the turn ends.
     clear_draft(&mut run);
+    std::fs::remove_file(&hold).expect("the hold marker");
     run.turn_finished(from);
     quit(run);
 }
 
 /// The empty session box at 160x48 fills edge to edge and shows its
-/// info-coloured prompt mark. A paced reply holds the turn open with no
-/// approval to redraw the box, so the state asserted is the one held.
+/// info-coloured prompt mark. A shell call held on a marker file holds the
+/// turn open, so the state asserted is the one held.
 #[test]
 fn the_empty_session_box_fills_while_the_turn_streams() {
     let setup = Setup::new();
-    script(&setup, 20, 400);
+    let hold = held_tool(&setup);
     config(&setup, false);
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
@@ -478,11 +526,13 @@ fn the_empty_session_box_fills_while_the_turn_streams() {
     });
     let from = run.output().len();
     run.write(b"\r");
+    run_held_tool(&mut run);
     let grid = run.wait_screen("the empty session box", |grid| session_box(grid).is_some());
     let (empty_box, empty_x) = session_box(&grid).expect("the box");
     assert_fill(&grid, empty_box, empty_x, "session empty");
     assert_eq!(grid.cell(empty_x + 2, empty_box).symbol.as_str(), "›");
     assert_eq!(grid.cell(empty_x + 2, empty_box).fg, INFO);
+    std::fs::remove_file(&hold).expect("the hold marker");
     run.turn_finished(from);
     quit(run);
 }
@@ -528,7 +578,7 @@ fn the_reduced_working_line_stays_still() {
 #[test]
 fn the_input_box_fills_at_100x40() {
     let setup = Setup::new();
-    script(&setup, 10, 400);
+    let hold = held_tool(&setup);
     config(&setup, false);
     let mut run = Run::spawn(&setup, 100, 40, &[], &TRUECOLOUR);
     run.ready();
@@ -552,6 +602,7 @@ fn the_input_box_fills_at_100x40() {
     assert_fill(&grid, wrap_100, wrap_100_x, "home wrapping");
     let from = run.output().len();
     run.write(b"\r");
+    run_held_tool(&mut run);
     grid = run.wait_screen("the empty session box", |grid| session_box(grid).is_some());
     let (empty_s, empty_s_x) = session_box(&grid).expect("the box");
     assert_fill(&grid, empty_s, empty_s_x, "session empty");
@@ -571,6 +622,7 @@ fn the_input_box_fills_at_100x40() {
     let (wrap_s, wrap_s_x) = session_box(&grid).expect("the box");
     assert_fill(&grid, wrap_s, wrap_s_x, "session wrapping");
     clear_draft(&mut run);
+    std::fs::remove_file(&hold).expect("the hold marker");
     run.turn_finished(from);
     quit(run);
 }
