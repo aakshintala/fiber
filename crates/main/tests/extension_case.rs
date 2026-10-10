@@ -164,6 +164,30 @@ fn login_labels_and_email_carry_into_the_following_sign() {
 }
 
 #[test]
+fn a_credential_call_reads_the_stored_credential_of_its_label() {
+    let setup = setup(
+        r#"
+        fiber.provider("casefixture", {credential = {timeout = 5000, run = function(arg)
+            local stored = host.oauth.refresh(function(old)
+                assert(old ~= nil, "credential read no stored value for its label")
+                return old
+            end)
+            return {token = stored.token, expires_at = stored.expires_at}
+        end}})
+    "#,
+    );
+    let value = json!({
+        "credentials": {
+            "casefixture/default": {"token": "default-token", "expires_at": 4102444800_u64},
+            "casefixture/work": {"token": "work-token", "expires_at": 4102444800_u64}
+        },
+        "call": {"provider": "casefixture", "function": "credential", "arg": {"label": "work"}},
+        "returns": {"token": "work-token"}
+    });
+    assert_success(&run_case(&setup, "credential-label", &value));
+}
+
+#[test]
 fn sign_cases_forward_the_request_and_match_the_added_headers() {
     let setup = setup(
         r#"
