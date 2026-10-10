@@ -1434,9 +1434,9 @@ fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
   background in the conversation, the turn's tint for a code block inside a
   card, the `panel` tint for a panel card.
 - **A stripe marks state** on the side its surface is anchored to: ▌ on the
-  left for the input box, a running or finished job, an approval, a
-  question form and every overlay's rows; ▐ on the right for the person's prompt bubble. The stripe is one
-  unbroken bar, because ▌ and ▐ fill half of each cell as Ghostty draws them.
+  left for the input box, a running or finished job, an approval and a
+  question form; ▐ on the right for the person's prompt bubble. An overlay
+  has no stripe. The stripe is one unbroken bar, because ▌ and ▐ fill half of each cell as Ghostty draws them.
   Where a terminal cannot draw it unbroken, there is no stripe. Fiber draws
   stripes in Ghostty, WezTerm and kitty, and not inside tmux or screen;
   elsewhere the stripe's cell keeps its tint.
@@ -1483,16 +1483,16 @@ tui       212   9,804
 
 ### Overlays
 
-Every surface drawn over the screen shares one frame, the input box's: the
+Every surface drawn over the screen shares one frame: the
 key map, the quit question, home's delete question and workspace picker, the
 `/login` overlay, the Ctrl+R panel, a notice's whole text, the `/` and `@` completion panels, and
 the model picker inside its view.
 
 - **The frame** is a `surface` slab with a ▄ edge above and a ▀ edge below,
-  and no border glyphs. Each row that holds text opens with a ▌ stripe in
-  `accent` and two blank columns, and ends with two blank columns. One blank
+  and no border glyphs. Each row that holds text opens with two blank
+  columns and ends with two blank columns, with no stripe. One blank
   row sits inside each edge, so no text touches either.
-- **The width** is the content's plus those five columns, kept between 40
+- **The width** is the content's plus those four columns, kept between 40
   and 150 columns and never wider than the screen. Content that wraps is
   wrapped at a preferred width first and the overlay shrinks to what the
   wrapped content needs: 71 columns for a question or notice, 55 for the
@@ -1550,7 +1550,7 @@ The roles, in order, with the dark theme's values:
 |---|---|---|
 | `text` | the full text colour: replies, the draft, anything with no role of its own | the terminal's foreground |
 | `muted` | what the doc calls dim: READY, labels and hints, summary lines and results, the ▣ line, block quote bars, grips, the logo's counters | `text`, dim |
-| `accent` | bullets, the logo's mark, WORKING and the rail's spinner, a running job's stripe, the prompt and input stripes, the model's name, answered questions' headers, a quota bar, an overlay's stripe, title and selection bar | `#6eaafe` |
+| `accent` | bullets, the logo's mark, WORKING and the rail's spinner, a running job's stripe, the prompt and input stripes, the model's name, answered questions' headers, a quota bar, an overlay's title and selection bar | `#6eaafe` |
 | `heading` | markdown headings | `#ff9f43` |
 | `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded, a login's ✓ | `#6eaafe` |
 | `warning` | RETRYING and its spinner, a rail card's context bar from 60% | `#ff9f43` |
