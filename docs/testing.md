@@ -421,8 +421,7 @@ path, including failure and timeout, with SIGKILL through the guarded helper
 in `fakes` (`fakes::process_group::kill_group`, `Watchdog`), because the
 fixtures ignore SIGTERM on purpose ("Fakes"). A binary-level test's
 watchdog, started beside Fiber, kills Fiber's process group when the test
-process dies. A shell test's fixtures bound their own life (120 s at most),
-an EXIT trap reaps them, and the test signals a PID it stored earlier only while the process's start time still matches the one it recorded.
+process dies. A shell test's fixtures stop themselves (a stop file, 120 s at most) and the test signals no process.
 A filter that matches no
 tests fails: nextest exits 4 with "no tests to run", where `cargo test` prints
 "0 passed" and exits 0. Doc-tests run under `cargo test --doc`.
