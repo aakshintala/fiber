@@ -656,10 +656,12 @@ while `x/vttest` = `v0.0.0-20261008172826-faa4adf95555` (2026-10-08),
 4. Scope. One reference example each (btvttest; VHS `browser_e2e_test.go` is
    opt-in behind `VHS_TEST_BROWSER=1`, vhs@24fa2254a980:browser_e2e_test.go:17-19).
    Real-world vttest adopter found via code search: `lkshrk/omni`
-   `integration_tests/tui_integration_test.go` (build tag `integration`) —
-   builds the real binary (`buildOmniBinary`), starts it in `vttest.NewTerminal`,
-   polls `waitForRequiredScreen` (3 s budget) for text predicates, sends keys via
-   `writeTUIKeys`, and asserts screen *text* contains/excludes strings. That is
+   (`omni@0cb8248b100d:integration_tests/tui_integration_test.go`, build tag
+   `integration`, line 1) builds the real binary (`buildOmniBinary`, :577),
+   starts it in `vttest.NewTerminal` (:82), polls `waitForRequiredScreen`
+   (:857; budgets 3 s to 6 s, e.g. :41,47) for text predicates, sends keys via
+   `writeTUIKeys` (:835), and asserts screen *text* contains/excludes strings
+   (:42,53,57). That is
    the closest Go-world analogue to Fiber's current phrase-matching.
 5. Exploration. Not found — no agent/fuzz QA in bubbletea, VHS, or x.
 6. Flakiness. The teatest example documents the failure modes inline: disabled
@@ -850,7 +852,7 @@ These are evidence-backed proposals, not rulings; surveyor turns them into rulin
 4. **The model: the existing scripted `fakes::ProviderServer`.** Scripted replies are what codex (wiremock SSE), gemini-cli (`*.responses` replay) and opencode (fake provider) all use. gemini-cli's `--record-responses` mode and goose's record/playback for MCP are worth copying only if recorded real-provider replies are wanted; Fiber's probe keys already allow that for a ticket that asks. Release streamed chunks on a signal the test waits for, not on a timer.
 5. **Deleting narrow tests: the evidence supports a narrow yes and no more.** No surveyed project replaced narrow PTY tests with journeys; television has 138 narrow PTY tests and codex 15 (plus 4 manual tmux tests). What the evidence does support: the eight `phrase_end_*` tests and the roughly 110 lines of gap helpers in `terminal.rs` (409-525) go when the grid replaces them, and a narrow PTY test may go when a journey snapshot asserts everything it asserts, shown by `cargo-mutants` on CI. Do not delete in-process screen tests: they are the layer that carries layout regressions in every project that has one.
 6. **Exploration.** Do not build model-driven TUI QA now: no precedent, unbounded cost, unauditable failures. If wanted later, `claude plugin eval`'s per-case runs, threshold and `--max-cost-usd` ceiling are the template, kept off the merge path. A `proptest` run over key sequences against a `vt100` grid is a cheap gap nobody has filled; `proptest` is already listed in `docs/dependencies.md`.
-7. **Dependencies against `docs/dependencies.md`.** One new dev-dependency: `vt100` 0.16.2 (MIT, `crates.io` 2025-07-12, 13.6M downloads, MSRV 1.70). Its normal dependencies are `itoa`, `unicode-width` (both already in `Cargo.lock`) and `vte`; it has no async runtime. The "Tests and development tools" table needs one row. `insta` and `proptest` are already listed. Open points for surveyor: whether the admission rules' memory measurement applies to a crate only the test binaries link (the `tui` section says memory is not a reason to refuse a crate that never reaches a session), and `cargo deny check` on the new tree before the ticket's PR.
+7. **Dependencies against `docs/dependencies.md`.** One new dev-dependency: `vt100` 0.16.2 (MIT, `crates.io` 2025-07-12, 13.6M downloads, MSRV 1.70). Its normal dependencies are `itoa`, `unicode-width` (both already in `Cargo.lock`) and `vte`; it has no async runtime. The "Tests and development tools" table needs one row. `insta` and `proptest` are already listed. A dev-dependency has no memory row: `docs/dependencies.md` ("Measuring memory") says dev-dependencies "never reach the shipped binary". The licence, advisory and source checks still apply, so `cargo deny check` runs on the new tree in the ticket's PR.
 8. **First build step: a spike.** Not probed here (no cargo builds in this ticket): how `vt100` renders what Fiber emits (synchronized output, kitty keyboard queries, OSC 9 notifications, alternate screen). Two journeys on the new harness will answer it before any narrow test is deleted.
 
 ## Limits of this survey
