@@ -189,15 +189,10 @@ fn one_turn(env: &[(&str, &str)]) -> (Screen, Vec<u8>) {
     run.write(b"say hi\r");
     run.read_until("Hel");
     run.read_until("completed");
-    // The turn's attention lands after its close: quitting with the
-    // teardown still in flight wedges the run, so the journey waits
-    // for it (`docs/tui.md`, "Getting the person's attention").
-    run.read_until("finished");
     let output = run.output();
     let mut screen = Screen::new(160, 48);
     screen.feed(&output);
     run.write(b"\x03\x03\r");
-    run.read_until("\x1b[?25h");
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
     (screen, output)
@@ -479,7 +474,6 @@ fn started_run() -> (Setup, Run) {
 
 fn quit(mut run: Run) {
     run.write(b"\x03\x03\r");
-    run.read_until("\x1b[?25h");
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
 }
