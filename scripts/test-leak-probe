@@ -80,7 +80,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-FIBER_CHECK_RUN=$nonce FIBER_LEAK_PROBE_DIR=$probe_dir \
+# The default profile: the ci profile's retry and JUnit file belong to the
+# test run before it (docs/ci.md), and this run would overwrite the file.
+env -u NEXTEST_PROFILE FIBER_CHECK_RUN="$nonce" FIBER_LEAK_PROBE_DIR="$probe_dir" \
   cargo nextest run -p main --test leak_probe --run-ignored only
 
 # The shell command backgrounds the leaker, so the PID file lands after
