@@ -932,7 +932,7 @@ websocket for everything it does.
 |---|---|---|
 | `authenticate` | `token` (string) | On the port, the first command: presents a device token ("Remote clients"). |
 | `pair` | `code` (string) | On the port, instead of `authenticate`: exchanges a pairing code for a device token, returned in the acknowledgement. |
-| `feed` | none | Subscribes the connection to the feed: the latest `session_status` of every running or waiting top-level session, and every change after it, then a `session_left` line (`docs/events.md`) when one ends. Crashed sessions not yet dismissed come first: each one's last `session_status`, then its `session_left`. |
+| `feed` | none | Subscribes the connection to the feed: the latest `session_status` of every running or waiting top-level session, and every change after it, then a `session_left` line (`docs/events.md`) when one ends. Crashed sessions not yet dismissed come first: each one's last `session_status`, then its `session_left`. When 1,024 feed lines are queued for a connection that has not read them, the hub closes the connection; the client reconnects and sends `feed` again, which resyncs it. |
 | `dismiss` | `session` (string) | Drops a crashed session from the feed, for every client; its log stays, and it can still be resumed from `recent`. Rejected `stale_request` unless the session is crashed. |
 | `recent` | `before` (string, optional), `project` (string, optional) | Answers with a page of exited sessions from `recent.jsonl`, newest first, skipping delegates, whose row's `status` carries `parent` (`docs/state.md`). `project` is the project's key, the name of its `projects/<key>/` directory. |
 | `sessions` | `project` (string, optional) | Answers once with the latest `session_status` of every running top-level session and the `recent.jsonl` row of every exited one, newest first, delegates skipped, each session once. `project` keeps only that project's sessions, as for `recent`. A hub that has just started answers once it has read `run/` and each session it found there has sent its `session_status` or closed; a session that stays silent holds it for at most one rescan past the read. A session started since the hub last read `run/` can be missing, as it is from the feed. |
@@ -1037,6 +1037,9 @@ top-level session, with a `reason` of `waiting` or `finished` and, when it
 waits, the one-line summary from `session_status`. It sends one when a
 session's `session_status` turns to `waiting`, and when a turn ends and the
 session turns `idle`.
+
+When 1,024 attention lines are queued for a connection that has not read
+them, the hub closes the connection, as it does for the feed.
 
 Attention covers the transitions the hub sees, so it is best effort. The hub
 can miss one in four cases. A session drops `session_status` lines for a hub
