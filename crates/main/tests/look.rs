@@ -64,6 +64,10 @@ fn the_screen_skips_other_sequences() {
     let mut screen = Screen::new(10, 4);
     screen.feed(b"\x1b[?25l");
     screen.feed(b"\x1b[>1u");
+    // A bare bell writes no cell: the finished turn rings one where
+    // no desktop notification goes (`docs/tui.md`, "Getting the
+    // person's attention").
+    screen.feed(b"\x07");
     screen.feed("\x1b]9;Fiber: x\x07".as_bytes());
     screen.feed(b"\x1b]0;t\x1b\\");
     screen.feed("\x1bP…\x1b\\".as_bytes());

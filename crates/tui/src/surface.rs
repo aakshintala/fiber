@@ -164,9 +164,6 @@ pub(crate) fn draw_slab(
 /// Draws one edge row for `rect` in `tint`: above it (`top`) or below
 /// it, where that row sits inside `buf` (`docs/tui.md`, "Look").
 fn draw_edge(buf: &mut Buffer, rect: Rect, tint: Role, top: bool) {
-    if rect.width == 0 {
-        return;
-    }
     let area = buf.area;
     let y = if top {
         if rect.y <= area.y {
