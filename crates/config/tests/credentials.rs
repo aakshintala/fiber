@@ -843,3 +843,40 @@ fn labels_of_an_absent_directory_is_what_the_message_lists() {
         .unwrap_err();
     assert!(err.to_string().contains("are: a-configured."), "{err}");
 }
+
+#[test]
+fn credential_sources_lists_each_configured_label_in_label_order() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"acme": {"credentials": {
+            "f": {"file": "/keys/acme"},
+            "e": {"env": "ACME_KEY"},
+            "c": {"command": ["op", "read", "x"]}}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(
+        config.credentials().credential_sources("acme"),
+        vec![
+            (
+                "c".to_owned(),
+                CredentialSource::Command(vec!["op".into(), "read".into(), "x".into()]),
+            ),
+            ("e".to_owned(), CredentialSource::Env("ACME_KEY".into())),
+            (
+                "f".to_owned(),
+                CredentialSource::File(std::path::PathBuf::from("/keys/acme")),
+            ),
+        ]
+    );
+    assert!(config.credentials().credential_sources("other").is_empty());
+}
+
+#[test]
+fn listed_names_the_labels_or_none() {
+    assert_eq!(config::Credentials::listed(&[]), "none");
+    assert_eq!(
+        config::Credentials::listed(&["default".into(), "work".into()]),
+        "default, work"
+    );
+}
