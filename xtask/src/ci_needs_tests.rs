@@ -16,21 +16,73 @@ fn real_doc() -> String {
 /// A workflow with `select`, the report jobs, `ci` and each of `extra`,
 /// whose bodies only set the runner; `ci`'s body is `ci_body` verbatim.
 fn workflow(extra: &[&str], ci_body: &str) -> String {
+    workflow_with_reports(extra, ci_body, &REPORT_JOBS)
+}
+
+fn workflow_with_reports(extra: &[&str], ci_body: &str, report_jobs: &[&str]) -> String {
     let mut out = String::from("name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n");
     for job in extra {
         out.push_str(&format!("  {job}:\n    runs-on: ubuntu-24.04\n"));
     }
-    out.push_str(
-        "  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  ci:\n",
-    );
+    out.push_str(&report_job_blocks(report_jobs));
+    out.push_str("  ci:\n");
     out.push_str(ci_body);
     out
 }
 
+/// One runner-only job block per report job.
+fn report_job_blocks(report_jobs: &[&str]) -> String {
+    report_jobs
+        .iter()
+        .map(|job| format!("  {job}:\n    runs-on: ubuntu-24.04\n"))
+        .collect()
+}
+
 fn small_doc() -> String {
-    String::from(
-        "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`. Done.\n",
+    small_doc_with_reports(&REPORT_JOBS)
+}
+
+fn small_doc_with_reports(report_jobs: &[&str]) -> String {
+    let jobs = report_jobs
+        .iter()
+        .map(|job| format!("`{job}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report and gate nothing: {jobs}. Done.\n"
     )
+}
+
+/// The workflow with `removed` dropped from the `ci` job's needs, found by
+/// parsing the workflow rather than matching its literal needs line.
+fn without_ci_need(workflow: &str, removed: &str) -> String {
+    let needs = read_workflow(workflow).unwrap().needs;
+    assert!(
+        needs.iter().any(|n| n == removed),
+        "{removed} is not in ci's needs"
+    );
+    let kept = needs
+        .iter()
+        .filter(|name| name.as_str() != removed)
+        .cloned()
+        .collect::<Vec<_>>();
+    let lines = significant(workflow);
+    let ci = lines
+        .iter()
+        .position(|line| line.indent == 2 && line.text == "ci:")
+        .unwrap();
+    let needs_line = lines
+        .iter()
+        .skip(ci + 1)
+        .find(|line| line.indent == 4 && line.text.starts_with("needs:"))
+        .unwrap();
+    let raw = workflow.lines().nth(needs_line.no - 1).unwrap();
+    let replacement = format!(
+        "{}needs: [{}]",
+        " ".repeat(needs_line.indent),
+        kept.join(", ")
+    );
+    workflow.replacen(raw, &replacement, 1)
 }
 
 fn scalar(extra: &[&str], needs: &str) -> String {
@@ -41,6 +93,32 @@ fn scalar(extra: &[&str], needs: &str) -> String {
 }
 
 #[test]
+fn a_fourth_local_report_job_needs_no_builder_edit() {
+    let mut reports = REPORT_JOBS.to_vec();
+    reports.push("fixture_report");
+    let workflow = workflow_with_reports(
+        &[],
+        "    needs: select\n    runs-on: ubuntu-24.04\n",
+        &reports,
+    );
+    // The check reads REPORT_JOBS, so only the three real names are exempt:
+    // the made-up job is a gating job the fixture's ci leaves out of needs.
+    let failures = check(&workflow, &small_doc_with_reports(&REPORT_JOBS)).unwrap();
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(failures[0].contains("job fixture_report is not in the ci job's needs"));
+    // Once ci needs it, the same builders pass with no other edit.
+    let fixed = workflow_with_reports(
+        &[],
+        "    needs: [select, fixture_report]\n    runs-on: ubuntu-24.04\n",
+        &reports,
+    );
+    assert_eq!(
+        check(&fixed, &small_doc_with_reports(&REPORT_JOBS)),
+        Ok(vec![])
+    );
+}
+
+#[test]
 fn passes_on_the_real_files() {
     assert_eq!(check(&real_workflow(), &real_doc()), Ok(vec![]));
 }
@@ -48,9 +126,7 @@ fn passes_on_the_real_files() {
 #[test]
 fn fails_when_a_gating_job_leaves_needs() {
     let workflow = real_workflow();
-    let from = "needs: [select, lint, test, mutants, bug_red, release]";
-    assert!(workflow.contains(from), "the fixture drifted");
-    let changed = workflow.replace(from, "needs: [select, lint, mutants, bug_red, release]");
+    let changed = without_ci_need(&workflow, "test");
     let failures = check(&changed, &real_doc()).unwrap();
     assert_eq!(failures.len(), 1);
     assert!(
@@ -63,9 +139,7 @@ fn fails_when_a_gating_job_leaves_needs() {
 #[test]
 fn fails_when_select_leaves_needs() {
     let workflow = real_workflow();
-    let from = "needs: [select, lint, test, mutants, bug_red, release]";
-    assert!(workflow.contains(from), "the fixture drifted");
-    let changed = workflow.replace(from, "needs: [lint, test, mutants, bug_red, release]");
+    let changed = without_ci_need(&workflow, "select");
     let failures = check(&changed, &real_doc()).unwrap();
     assert_eq!(failures.len(), 1);
     assert!(
