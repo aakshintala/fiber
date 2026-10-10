@@ -4,11 +4,11 @@
 //! secrets and every later state below are made up. Each case draws one
 //! static frame and waits for a key; Esc, q or Ctrl+C quits.
 
-use crate::cases::{Case, Surface};
 use super::input::{Ev, Key};
 use super::overlays;
 use super::{Args, Term};
 use super::{BLUE, RED, dim, fg, fit, left_cut, paint, panel, row, sp, width};
+use crate::cases::{Case, Surface};
 use ratatui::style::Style;
 use std::io::{self, Write};
 
@@ -24,12 +24,36 @@ pub struct Target {
 /// are made up.
 pub fn targets() -> Vec<Target> {
     vec![
-        Target { name: "anthropic", browser: true, secret: false },
-        Target { name: "openai-codex", browser: true, secret: false },
-        Target { name: "cursor", browser: false, secret: false },
-        Target { name: "google", browser: false, secret: false },
-        Target { name: "linear.api_key", browser: false, secret: true },
-        Target { name: "github.token", browser: false, secret: true },
+        Target {
+            name: "anthropic",
+            browser: true,
+            secret: false,
+        },
+        Target {
+            name: "openai-codex",
+            browser: true,
+            secret: false,
+        },
+        Target {
+            name: "cursor",
+            browser: false,
+            secret: false,
+        },
+        Target {
+            name: "google",
+            browser: false,
+            secret: false,
+        },
+        Target {
+            name: "linear.api_key",
+            browser: false,
+            secret: true,
+        },
+        Target {
+            name: "github.token",
+            browser: false,
+            secret: true,
+        },
     ]
 }
 
@@ -56,33 +80,80 @@ pub struct State {
 
 /// Every `--login` case.
 pub(crate) const CASES: &[Case<State>] = &[
-    Case { name: "providers", help: "providers and extension credentials, OAuth told from key", check: "four providers under `Providers` with `browser` or `key` tags telling OAuth from key providers, and two extension credentials under `Secrets`; a centred panel with ▄ ▀ edges and the ▌ stripe, `Log in` bold accent with a dim ✕, the focused row `›` on a full-width accent bar, and a bold-key legend foot.", build: || State { kind: Kind::Providers, focus: 0 } },
-    Case { name: "waiting", help: "the browser-path wait, URL to copy, waiting state", check: "the provider list stays with `Open this URL to log in to anthropic:` below it and the long URL cut from the left keeping its tail, `y` to copy, and a dim `Waiting for the browser…` line; a bold-key `y copy URL · Esc cancel` legend; same panel.", build: || State { kind: Kind::Waiting, focus: 0 } },
-    Case { name: "key", help: "key entry with the key masked", check: "the provider list stays with `Label (--as): default.` and `Key for google:` below it, the key masked as eight dots with a block cursor; a bold-key `Tab key or label · Enter store · Esc cancel` legend; same panel.", build: || State { kind: Kind::Key, focus: 3 } },
-    Case { name: "done", help: "the logged-in outcome", check: "the provider list stays with a `✓ Logged in to anthropic.` outcome line in the success colour; a bold-key `Esc close` legend; same panel.", build: || State { kind: Kind::Done, focus: 0 } },
-    Case { name: "failed", help: "the failed outcome with its reason", check: "the provider list stays with a `Login to anthropic failed: token expired.` outcome line, the reason in the error colour; a bold-key `Esc close` legend; same panel.", build: || State { kind: Kind::Failed, focus: 0 } },
+    Case {
+        name: "providers",
+        help: "providers and extension credentials, OAuth told from key",
+        check: "four providers under `Providers` with `browser` or `key` tags telling OAuth from key providers, and two extension credentials under `Secrets`; a centred panel with ▄ ▀ edges and the ▌ stripe, `Log in` bold accent with a dim ✕, the focused row `›` on a full-width accent bar, and a bold-key legend foot.",
+        build: || State {
+            kind: Kind::Providers,
+            focus: 0,
+        },
+    },
+    Case {
+        name: "waiting",
+        help: "the browser-path wait, URL to copy, waiting state",
+        check: "the provider list stays with `Open this URL to log in to anthropic:` below it and the long URL cut from the left keeping its tail, `y` to copy, and a dim `Waiting for the browser…` line; a bold-key `y copy URL · Esc cancel` legend; same panel.",
+        build: || State {
+            kind: Kind::Waiting,
+            focus: 0,
+        },
+    },
+    Case {
+        name: "key",
+        help: "key entry with the key masked",
+        check: "the provider list stays with `Label (--as): default.` and `Key for google:` below it, the key masked as eight dots with a block cursor; a bold-key `Tab key or label · Enter store · Esc cancel` legend; same panel.",
+        build: || State {
+            kind: Kind::Key,
+            focus: 3,
+        },
+    },
+    Case {
+        name: "done",
+        help: "the logged-in outcome",
+        check: "the provider list stays with a `✓ Logged in to anthropic.` outcome line in the success colour; a bold-key `Esc close` legend; same panel.",
+        build: || State {
+            kind: Kind::Done,
+            focus: 0,
+        },
+    },
+    Case {
+        name: "failed",
+        help: "the failed outcome with its reason",
+        check: "the provider list stays with a `Login to anthropic failed: token expired.` outcome line, the reason in the error colour; a bold-key `Esc close` legend; same panel.",
+        build: || State {
+            kind: Kind::Failed,
+            focus: 0,
+        },
+    },
 ];
 
 /// `--login`, for `--help` and `check/login.md`.
-pub(crate) const SURFACE: Surface = Surface { flag: "--login", file: "login", title: "Login (#1736)", docs: || crate::cases::docs(CASES) };
+pub(crate) const SURFACE: Surface = Surface {
+    flag: "--login",
+    file: "login",
+    title: "Login (#1736)",
+    docs: || crate::cases::docs(CASES),
+};
 
 #[cfg(test)]
 pub fn for_case(case: &str) -> State {
-    crate::cases::lookup(CASES, case).unwrap_or_else(|| {
-        panic!(
-            "--login {}",
-            crate::cases::names(CASES).replace(", ", "|")
-        )
-    })
+    crate::cases::lookup(CASES, case)
+        .unwrap_or_else(|| panic!("--login {}", crate::cases::names(CASES).replace(", ", "|")))
 }
 
 /// The foot legend for the case: keys bold, labels muted, naming panel
 /// keys the body never lists as choices.
 fn footer(s: &State) -> super::Row {
     match s.kind {
-        Kind::Providers => panel::footer_legend(&[("↑↓", "move"), ("Enter", "log in"), ("Esc", "close")]),
+        Kind::Providers => {
+            panel::footer_legend(&[("↑↓", "move"), ("Enter", "log in"), ("Esc", "close")])
+        }
         Kind::Waiting => panel::footer_legend(&[("y", "copy URL"), ("Esc", "cancel")]),
-        Kind::Key => panel::footer_legend(&[("Tab", "key or label"), ("Enter", "store"), ("Esc", "cancel")]),
+        Kind::Key => panel::footer_legend(&[
+            ("Tab", "key or label"),
+            ("Enter", "store"),
+            ("Esc", "cancel"),
+        ]),
         Kind::Done | Kind::Failed => panel::footer_legend(&[("Esc", "close")]),
     }
 }
@@ -93,7 +164,10 @@ fn below(kind: Kind, inner: usize) -> Vec<super::Row> {
     match kind {
         Kind::Providers => vec![],
         Kind::Waiting => vec![
-            row(vec![sp("Open this URL to log in to anthropic:", Style::new())]),
+            row(vec![sp(
+                "Open this URL to log in to anthropic:",
+                Style::new(),
+            )]),
             row(vec![sp(left_cut(URL, inner), fg(BLUE))]),
             row(vec![sp("Waiting for the browser…", dim())]),
         ],
@@ -123,7 +197,9 @@ fn body(s: &State, inner: usize) -> Vec<super::Row> {
         let tag = if t.browser { "browser" } else { "key" };
         let focused = s.focus == idx;
         if focused {
-            out.extend(panel::bar(panel::choice_row(true, t.name, tag, key_w, inner)));
+            out.extend(panel::bar(panel::choice_row(
+                true, t.name, tag, key_w, inner,
+            )));
         } else {
             out.extend(panel::choice_row(false, t.name, tag, key_w, inner));
         }
@@ -134,7 +210,9 @@ fn body(s: &State, inner: usize) -> Vec<super::Row> {
     for t in all.iter().filter(|t| t.secret) {
         let focused = s.focus == idx;
         if focused {
-            out.extend(panel::bar(panel::choice_row(true, t.name, "", key_w, inner)));
+            out.extend(panel::bar(panel::choice_row(
+                true, t.name, "", key_w, inner,
+            )));
         } else {
             out.extend(panel::choice_row(false, t.name, "", key_w, inner));
         }
@@ -155,7 +233,12 @@ pub fn view(s: &State, w: usize) -> Vec<super::Row> {
     let probe = body(s, 10_000);
     let legend = footer(s);
     let legend_w = width(&legend.spans);
-    let natural = probe.iter().map(|r| width(&r.spans)).max().unwrap_or(0).max(legend_w);
+    let natural = probe
+        .iter()
+        .map(|r| width(&r.spans))
+        .max()
+        .unwrap_or(0)
+        .max(legend_w);
     // The legend always fits: the preferred width stretches past the usual
     // cap rather than cutting the foot.
     let prefer = w.saturating_sub(4).min(96).max(legend_w);
@@ -201,7 +284,10 @@ fn frame(s: &State, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
         screen[y0 + k] = vec![Placed {
             x: 0,
             w: cols as u16,
-            row: super::Row { spans: fit(&r.spans, cols), ..r },
+            row: super::Row {
+                spans: fit(&r.spans, cols),
+                ..r
+            },
         }];
     }
     screen
@@ -232,7 +318,10 @@ pub(crate) fn run_login(a: &Args, term: &mut Term) -> io::Result<String> {
     let Some(c) = crate::cases::lookup(CASES, &name) else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("unknown --login case {name:?}; one of: {}", crate::cases::names(CASES)),
+            format!(
+                "unknown --login case {name:?}; one of: {}",
+                crate::cases::names(CASES)
+            ),
         ));
     };
     draw(term, &c)?;
@@ -265,7 +354,13 @@ mod tests {
             .into_iter()
             .map(|ps| {
                 ps.iter()
-                    .map(|p| p.row.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+                    .map(|p| {
+                        p.row
+                            .spans
+                            .iter()
+                            .map(|s| s.content.as_ref())
+                            .collect::<String>()
+                    })
                     .collect::<Vec<_>>()
                     .join("")
             })
@@ -275,7 +370,11 @@ mod tests {
 
     #[test]
     fn every_case_parses_and_unknown_does_not() {
-        assert!(CASES.iter().all(|c| crate::cases::lookup(CASES, c.name).is_some()));
+        assert!(
+            CASES
+                .iter()
+                .all(|c| crate::cases::lookup(CASES, c.name).is_some())
+        );
         assert_eq!(CASES.len(), 5);
         assert!(crate::cases::lookup(CASES, "nope").is_none());
     }
@@ -288,16 +387,34 @@ mod tests {
             assert!(t.contains(name), "the list lost {name}");
         }
         assert!(t.contains("\u{203a} "), "the focus is gone");
-        assert!(t.contains("Open this URL to log in to anthropic:"), "missing the prompt");
-        assert!(t.contains("Waiting for the browser…"), "missing the waiting state");
+        assert!(
+            t.contains("Open this URL to log in to anthropic:"),
+            "missing the prompt"
+        );
+        assert!(
+            t.contains("Waiting for the browser…"),
+            "missing the waiting state"
+        );
         assert!(t.contains("y copy URL · Esc cancel"), "missing the legend");
         // The URL cuts from the left, keeping its tail, and fits its row.
-        let line = t.split('\n').find(|l| l.contains("mode=ssh-fallback")).unwrap();
+        let line = t
+            .split('\n')
+            .find(|l| l.contains("mode=ssh-fallback"))
+            .unwrap();
         let shown = line.trim_start_matches([' ', '\u{258c}']).trim_end();
         assert!(shown.starts_with('…'), "the long URL is not cut: {shown:?}");
-        assert!(shown.ends_with("mode=ssh-fallback"), "the cut lost the tail: {shown:?}");
-        assert!(crate::width(&[sp(shown, Style::new())]) <= panel::inner_w(101), "the cut URL overflows its panel");
-        assert!(URL.chars().count() > shown.chars().count(), "the fixture URL fits uncut");
+        assert!(
+            shown.ends_with("mode=ssh-fallback"),
+            "the cut lost the tail: {shown:?}"
+        );
+        assert!(
+            crate::width(&[sp(shown, Style::new())]) <= panel::inner_w(101),
+            "the cut URL overflows its panel"
+        );
+        assert!(
+            URL.chars().count() > shown.chars().count(),
+            "the fixture URL fits uncut"
+        );
     }
 
     #[test]
@@ -311,8 +428,14 @@ mod tests {
                 .map(|r| crate::width(&r.spans))
                 .max()
                 .unwrap_or(0);
-            let line = rows.iter().map(plain).find(|l| l.contains("mode=ssh-fallback")).unwrap();
-            let shown = line.trim_start_matches([' ', '\u{2584}', '\u{2580}', '\u{258c}']).trim_end();
+            let line = rows
+                .iter()
+                .map(plain)
+                .find(|l| l.contains("mode=ssh-fallback"))
+                .unwrap();
+            let shown = line
+                .trim_start_matches([' ', '\u{2584}', '\u{2580}', '\u{258c}'])
+                .trim_end();
             assert!(shown.starts_with('…'), "uncut at {cols}");
             assert!(w <= cols, "the panel overflows at {cols}");
         }
@@ -323,11 +446,17 @@ mod tests {
         let t = text(&for_case("key"), 160, 48);
         // The list stays above the prompts.
         assert!(t.contains("google"), "the list is gone");
-        assert!(t.contains("Label (--as): default."), "missing the label line");
+        assert!(
+            t.contains("Label (--as): default."),
+            "missing the label line"
+        );
         assert!(t.contains("Key for google:"), "missing the key prompt");
         assert!(t.contains(DOTS), "the key is not masked");
         assert_eq!(DOTS.chars().count(), 8, "the mask is not eight dots");
-        assert!(t.contains("Tab key or label · Enter store · Esc cancel"), "missing the legend");
+        assert!(
+            t.contains("Tab key or label · Enter store · Esc cancel"),
+            "missing the legend"
+        );
         // The mask reads on one row with the block cursor after it.
         let line = t.split('\n').find(|l| l.contains(DOTS)).unwrap();
         assert!(line.trim_end().ends_with('█'), "no cursor after the mask");
@@ -369,8 +498,10 @@ mod tests {
         let prov = lines.iter().position(|l| l.contains("Providers")).unwrap();
         let secs = lines.iter().position(|l| l.contains("Secrets")).unwrap();
         assert!(prov < secs, "the Secrets heading is above Providers");
-        let last_provider =
-            lines.iter().rposition(|l| l.contains("openai-codex") || l.contains("cursor")).unwrap();
+        let last_provider = lines
+            .iter()
+            .rposition(|l| l.contains("openai-codex") || l.contains("cursor"))
+            .unwrap();
         assert!(last_provider < secs, "a provider row leaks below Secrets");
         assert!(t.contains("Log in"), "missing the title");
     }
@@ -402,20 +533,45 @@ mod tests {
     fn done_says_logged_in_and_failed_names_its_reason() {
         let t = text(&for_case("done"), 160, 48);
         assert!(t.contains("anthropic"), "the list is gone");
-        assert!(t.contains("✓ Logged in to anthropic."), "missing the outcome");
+        assert!(
+            t.contains("✓ Logged in to anthropic."),
+            "missing the outcome"
+        );
         assert!(t.contains("Esc close"), "missing the legend");
         let rows = view(&for_case("done"), 160);
-        let line = rows.iter().find(|r| plain(r).contains("Logged in")).unwrap();
+        let line = rows
+            .iter()
+            .find(|r| plain(r).contains("Logged in"))
+            .unwrap();
         let ink = line.spans.iter().find(|s| s.content.contains("✓")).unwrap();
-        assert_eq!(ink.style.fg, Some(crate::BLUE), "the outcome is not the success colour");
+        assert_eq!(
+            ink.style.fg,
+            Some(crate::BLUE),
+            "the outcome is not the success colour"
+        );
         let t = text(&for_case("failed"), 160, 48);
-        assert!(t.contains("Login to anthropic failed: token expired."), "missing the outcome");
+        assert!(
+            t.contains("Login to anthropic failed: token expired."),
+            "missing the outcome"
+        );
         assert!(t.contains("Esc close"), "missing the legend");
         let rows = view(&for_case("failed"), 160);
         let line = rows.iter().find(|r| plain(r).contains("failed")).unwrap();
-        let ink = line.spans.iter().find(|s| s.content.contains("token expired")).unwrap();
-        assert_eq!(ink.style.fg, Some(crate::RED), "the reason is not the error colour");
-        let head = line.spans.iter().find(|s| s.content.contains("Login to")).unwrap();
+        let ink = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("token expired"))
+            .unwrap();
+        assert_eq!(
+            ink.style.fg,
+            Some(crate::RED),
+            "the reason is not the error colour"
+        );
+        let head = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("Login to"))
+            .unwrap();
         assert_ne!(head.style.fg, Some(crate::RED), "the whole line went red");
     }
 
@@ -435,7 +591,11 @@ mod tests {
                 let s = for_case(c.name);
                 for ps in frame(&s, cols, rows) {
                     for p in &ps {
-                        assert!(crate::width(&p.row.spans) <= cols, "{} overflows at {cols}x{rows}", c.name);
+                        assert!(
+                            crate::width(&p.row.spans) <= cols,
+                            "{} overflows at {cols}x{rows}",
+                            c.name
+                        );
                     }
                 }
             }
@@ -455,11 +615,35 @@ mod tests {
         use ratatui::style::Modifier;
         let rows = view(&for_case("providers"), 160);
         let title = rows.iter().find(|r| plain(r).contains("Log in")).unwrap();
-        let ink = title.spans.iter().find(|s| s.content.contains("Log in")).unwrap();
-        assert!(ink.style.add_modifier.contains(Modifier::BOLD), "title not bold");
-        let head = rows.iter().find(|r| plain(r).trim_start_matches([' ', '\u{258c}']).starts_with("Providers")).unwrap();
-        let ink = head.spans.iter().find(|s| s.content.contains("Providers")).unwrap();
-        assert!(ink.style.add_modifier.contains(Modifier::DIM), "heading not dim");
-        assert!(!ink.style.add_modifier.contains(Modifier::BOLD), "heading stands bold beside the title");
+        let ink = title
+            .spans
+            .iter()
+            .find(|s| s.content.contains("Log in"))
+            .unwrap();
+        assert!(
+            ink.style.add_modifier.contains(Modifier::BOLD),
+            "title not bold"
+        );
+        let head = rows
+            .iter()
+            .find(|r| {
+                plain(r)
+                    .trim_start_matches([' ', '\u{258c}'])
+                    .starts_with("Providers")
+            })
+            .unwrap();
+        let ink = head
+            .spans
+            .iter()
+            .find(|s| s.content.contains("Providers"))
+            .unwrap();
+        assert!(
+            ink.style.add_modifier.contains(Modifier::DIM),
+            "heading not dim"
+        );
+        assert!(
+            !ink.style.add_modifier.contains(Modifier::BOLD),
+            "heading stands bold beside the title"
+        );
     }
 }
