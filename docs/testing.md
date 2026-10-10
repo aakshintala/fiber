@@ -428,12 +428,17 @@ tests fails: nextest exits 4 with "no tests to run", where `cargo test` prints
 `scripts/check` exports `FIBER_CHECK_RUN` for the run, and `scripts/leak-scan`
 fails the run when a process still carries it after the tests, listing each
 leak's PID and command. The scan only reports: reaping stays the test's job,
-above. A stress loop (`cargo nextest run --stress-count`) is reaped the same
-way: `FIBER_CHECK_RUN=$(uuidgen) cargo nextest run --stress-count N ...; scripts/leak-scan "$FIBER_CHECK_RUN"`.
+above.
 No fixture clears its environment, so a fixture's leak always carries the
 nonce. On macOS `ps` withholds the environment of some processes, such as
-`sh` and `sleep`, so a leak of one of those is caught by the test's own reap
-above, not the scan.
+`sh` and `sleep`, so the nonce scan cannot name them. After it the scan
+reads the user's processes reparented to init that started after
+`scripts/check` began: one whose executable is under this worktree's
+`target/` fails the check and is named, and one whose command is `sh`,
+`bash` or `sleep` is listed in a warning that says it may belong to another
+run, without changing the exit status. Neither case sends a signal. An
+orphan that is neither is still invisible on macOS: it is caught by the
+test's own reap above, not the scan.
 
 The completion tests need bash, zsh and fish on PATH, on Linux and macOS: they never skip at runtime for a missing shell, so a machine without one fails them.
 
