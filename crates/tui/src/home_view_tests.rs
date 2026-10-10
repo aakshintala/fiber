@@ -168,8 +168,48 @@ fn home_cursor_sits_at_the_draft_cursor_in_the_box() {
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
     // The pad is three rows, then the four-row logo and one blank row,
-    // the ▄ edge and the draft's first row; the cursor sits after "> hi".
+    // the ▄ edge and the draft's first row; the cursor sits after "› hi".
     assert_eq!(cursor(&app, area), Some(Position::new(4, 9)));
+}
+
+#[test]
+fn the_empty_home_prompt_is_info_and_its_text_dim() {
+    let app = home(80, 24);
+    assert!(app.home_screen().is_some_and(|screen| screen.placeholder));
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    // The placeholder's prompt is `info` like a draft's; the rest of
+    // the placeholder stays dim (`docs/tui.md`, "The input box"). The
+    // drawn cursor covers the placeholder's `/` at the caret.
+    let row = (0..24)
+        .find(|y| {
+            (0..80)
+                .map(|x| buf[(x, *y)].symbol().to_owned())
+                .collect::<String>()
+                .contains("? for shortcuts")
+        })
+        .expect("the placeholder row");
+    for x in [0, 1] {
+        assert_eq!(
+            buf[(x, row)].style().fg,
+            Some(crate::theme::Role::Info.color()),
+            "cell {x}"
+        );
+        assert_eq!(
+            buf[(x, row)].bg,
+            crate::theme::Role::Surface.color(),
+            "cell {x}"
+        );
+    }
+    assert_eq!(buf[(2, row)].symbol(), "█");
+    assert!(
+        buf[(3, row)]
+            .style()
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM),
+        "the placeholder text stays dim"
+    );
 }
 
 #[test]

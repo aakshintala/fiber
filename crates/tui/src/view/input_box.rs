@@ -191,34 +191,18 @@ fn draw_editing_hint(
     let text = text_area(area);
     let end = text.x.saturating_add(to_u16(format::width(last)));
     let caret = caret_cell(area, below, rows, cursor_row, cursor_col);
-    // The hint in graphemes: a zero-width character joins the grapheme
-    // before it, so combining marks are never split from their base and
-    // wide glyphs keep their cells. A grapheme draws only on wholly free
-    // cells: past the draft's text, never over the caret, inside the
-    // area (`docs/tui.md`, "Steering").
-    let mut clusters: Vec<(String, u16)> = Vec::new();
-    for ch in EDITING_HINT.chars() {
-        let wide = to_u16(format::width(&ch.to_string()));
-        if wide == 0 {
-            if let Some((glyph, _)) = clusters.last_mut() {
-                glyph.push(ch);
-            }
-            continue;
-        }
-        clusters.push((ch.to_string(), wide));
-    }
+    // The hint is a fixed literal of one-cell characters, drawn
+    // right-aligned only over free cells: past the draft's text, never
+    // over the caret, inside the area (`docs/tui.md`, "Steering").
     let mut x = area
         .right()
         .saturating_sub(to_u16(format::width(EDITING_HINT)));
-    for (glyph, wide) in &clusters {
-        let free = (0..*wide).all(|dx| {
-            let at = x.saturating_add(dx);
-            at >= end && (at, y) != caret && at < area.right()
-        });
-        if free {
-            buf.set_stringn(x, y, glyph, usize::from(*wide), style(Role::Muted));
+    for ch in EDITING_HINT.chars() {
+        let wide = to_u16(format::width(&ch.to_string()));
+        if x >= end && (x, y) != caret && x < area.right() {
+            buf.set_stringn(x, y, ch.to_string(), usize::from(wide), style(Role::Muted));
         }
-        x = x.saturating_add(*wide);
+        x = x.saturating_add(wide.max(1));
     }
 }
 /// The cursor's rows above the column's bottom and its column: the shown

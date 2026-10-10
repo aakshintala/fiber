@@ -228,7 +228,9 @@ impl Steering {
     }
 
     /// One line per row at `width`, oldest first: "↳ <text>", the selected
-    /// row "▸ <text>", each cut to the width.
+    /// row "▸ <text>", each cut to the width. Tests read the queue
+    /// through this; the view lays its own rows out.
+    #[cfg(test)]
     pub(crate) fn lines(&self, width: u16) -> Vec<String> {
         let room = usize::from(width);
         self.rows(width)
@@ -255,7 +257,9 @@ impl App {
 
     /// The steering queue's rows, oldest first: each cut at the column
     /// width, past the indent, the mark and the row's `✕` the view draws
-    /// (`docs/tui.md`, "Steering").
+    /// (`docs/tui.md`, "Steering"). Tests read the queue through this;
+    /// the view lays its own rows out.
+    #[cfg(test)]
     pub(crate) fn steering(&self) -> Vec<String> {
         self.steering.lines(self.column_width())
     }
@@ -270,7 +274,7 @@ impl App {
     /// with the heading above and the footer below them; none while
     /// empty. The view draws exactly these (`docs/tui.md`, "Steering").
     pub(crate) fn steering_below(&self) -> usize {
-        let rows = self.steering().len();
+        let rows = self.steering.rows.len();
         rows.saturating_add(if rows > 0 { 2 } else { 0 })
     }
 

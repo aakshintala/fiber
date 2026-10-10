@@ -126,8 +126,9 @@ fn put(buf: &mut Buffer, area: Rect, x: u16, y: u16, text: &str, max: u16, text_
 }
 
 /// Writes one draft `row` at `x`, `y`, cut to `width`: the prompt in
-/// `info`, the rest on the box's tint (`docs/tui.md`, "The input box").
-fn put_prompt(buf: &mut Buffer, area: Rect, x: u16, y: u16, row: &str, max: u16) {
+/// `info`, the rest on the box's tint, dim while `dim` (`docs/tui.md`,
+/// "The input box").
+fn put_prompt(buf: &mut Buffer, area: Rect, x: u16, y: u16, row: &str, max: u16, dim: bool) {
     if y >= area.bottom() {
         return;
     }
@@ -142,12 +143,17 @@ fn put_prompt(buf: &mut Buffer, area: Rect, x: u16, y: u16, row: &str, max: u16)
         BOX_TINT.fg(Role::Info.color()),
     );
     let room = max.saturating_sub(end.saturating_sub(x));
+    let rest_style = if dim {
+        BOX_TINT.add_modifier(Modifier::DIM)
+    } else {
+        BOX_TINT
+    };
     buf.set_stringn(
         end,
         y,
         cut(&rest, usize::from(room)),
         usize::from(room),
-        BOX_TINT,
+        rest_style,
     );
 }
 
@@ -240,9 +246,10 @@ pub(super) fn render(
         );
         blocker_y = blocker_y.saturating_add(1);
     }
-    // The box's edges above and below its draft and chip rows
-    // (`docs/tui.md`, "Look").
-    crate::surface::draw_edges(
+    // The box's edges above and below its draft and chip rows, with the
+    // rows' surface tint edge to edge, past the placeholder or the
+    // written text (`docs/tui.md`, "Look", "The input box").
+    crate::surface::draw_slab(
         buf,
         ratatui::layout::Rect::new(
             placed.x,
@@ -254,37 +261,17 @@ pub(super) fn render(
                 .saturating_add(1),
         ),
         Role::Surface,
-    );
-    // The box's rows take the surface tint edge to edge, past the
-    // placeholder or the written text (`docs/tui.md`, "The input box").
-    buf.set_style(
-        ratatui::layout::Rect::new(
-            placed.x,
-            placed.draft_top,
-            placed.width,
-            placed
-                .chip
-                .saturating_sub(placed.draft_top)
-                .saturating_add(1),
-        ),
-        BOX_TINT,
+        None,
+        crate::surface::Edges::BOTH,
     );
     for (at, row) in placed.shown.iter().enumerate() {
         let y = placed.draft_top.saturating_add(super::to_u16(at));
         if screen.placeholder && placed.top == 0 && at == 0 {
-            // The placeholder is one style, so its letters are written
-            // together.
-            put(
-                buf,
-                area,
-                placed.x,
-                y,
-                PLACEHOLDER,
-                placed.width,
-                BOX_TINT.add_modifier(Modifier::DIM),
-            );
+            // The placeholder's prompt is `info` like a draft's; the rest
+            // stays dim (`docs/tui.md`, "The input box").
+            put_prompt(buf, area, placed.x, y, PLACEHOLDER, placed.width, true);
         } else {
-            put_prompt(buf, area, placed.x, y, row, placed.width);
+            put_prompt(buf, area, placed.x, y, row, placed.width, false);
         }
     }
     // The cursor is a drawn dim `█` at the draft's cursor while nothing

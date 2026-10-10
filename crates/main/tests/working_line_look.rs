@@ -423,10 +423,17 @@ fn the_working_line_glimmers_and_the_queue_selects() {
     // ⌥↑ selects the newest row: its mark in attention, its text default,
     // the box's stripe in attention, and the dim hint at its right end.
     run.write(b"\x1b[1;3A");
-    screen = run.screen_until(160, 48, "the selected row", |screen| {
+    run.screen_until(160, 48, "the selected row", |screen| {
         text_rows(screen, 160, 48)
             .iter()
             .any(|row| row.contains("▸ second"))
+    });
+    // The hint is right-aligned to the box's width, which settles as
+    // the panel fills in: wait for it whole, not just started.
+    screen = run.screen_until(160, 48, "the full hint", |screen| {
+        text_rows(screen, 160, 48)
+            .iter()
+            .any(|row| row.contains("esc stops"))
     });
     text = text_rows(&screen, 160, 48);
     let selected = find_row(&text, "▸ second").expect("the selected row");
